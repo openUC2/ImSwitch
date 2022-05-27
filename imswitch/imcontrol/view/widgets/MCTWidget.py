@@ -9,108 +9,129 @@ from .basewidgets import NapariHybridWidget
 class MCTWidget(NapariHybridWidget):
     """ Widget containing mct interface. """
 
-    sigMCTDisplayToggled = QtCore.Signal(bool)  # (enabled)
-    sigMCTMonitorChanged = QtCore.Signal(int)  # (monitor)
-    sigPatternID = QtCore.Signal(int)  # (display pattern id)
+
+    sigMCTInitFilterPos = QtCore.Signal(bool)  # (enabled)
+    sigMCTShowLast = QtCore.Signal(bool)  # (enabled)
+    sigMCTStop = QtCore.Signal(bool)  # (enabled)
+    sigMCTStart = QtCore.Signal(bool)  # (enabled)
+
+
+    sigShowToggled = QtCore.Signal(bool)  # (enabled)
+    sigPIDToggled = QtCore.Signal(bool)  # (enabled)
+    sigUpdateRateChanged = QtCore.Signal(float)  # (rate)
+    
+    
+    sigSliderLaser2ValueChanged = QtCore.Signal(float)  # (value)
+    sigSliderLaser1ValueChanged = QtCore.Signal(float)  # (value)
+
+
 
     def __post_init__(self):
         #super().__init__(*args, **kwargs)
 
-        self.mctDisplay = None
 
         self.mctFrame = pg.GraphicsLayoutWidget()
-        self.vb = self.mctFrame.addViewBox(row=1, col=1)
-        self.img = pg.ImageItem()
-        self.img.setImage(np.zeros((792, 600)), autoLevels=True, autoDownsample=True,
-                          autoRange=True)
-        self.vb.addItem(self.img)
-        self.vb.setAspectLocked(True)
-
-        # Button for showing MCT display and spinbox for monitor selection
-        self.mctDisplayLayout = QtWidgets.QHBoxLayout()
-
-        self.mctDisplayButton = guitools.BetterPushButton('Show MCT display (fullscreen)')
-        self.mctDisplayButton.setCheckable(True)
-        self.mctDisplayButton.toggled.connect(self.sigMCTDisplayToggled)
-        self.mctDisplayLayout.addWidget(self.mctDisplayButton, 1)
-
-        self.mctMonitorLabel = QtWidgets.QLabel('Screen:')
-        self.mctDisplayLayout.addWidget(self.mctMonitorLabel)
-
-        self.mctMonitorBox = QtWidgets.QSpinBox()
-        self.mctMonitorBox.valueChanged.connect(self.sigMCTMonitorChanged)
-        self.mctDisplayLayout.addWidget(self.mctMonitorBox)
-
-        # Button to apply changes
-        self.applyChangesButton = guitools.BetterPushButton('Apply changes')
         
-        self.startMCTAcquisition = guitools.BetterPushButton('Start MCT')
-        self.stopMCTAcquisition = guitools.BetterPushButton('Stop MCT')
+        # initialize all GUI elements
         
+        # period
+        self.mctLabelTimePeriod  = QtWidgets.QLabel('Period T (s):')
+        self.mctValueTimePeriod = QtWidgets.QLineEdit('5')
 
-        # Control panel with most buttons
-        self.controlPanel = QtWidgets.QFrame()
-        self.controlPanel.choiceInterfaceLayout = QtWidgets.QGridLayout()
-        self.controlPanel.choiceInterface = QtWidgets.QWidget()
-        self.controlPanel.choiceInterface.setLayout(self.controlPanel.choiceInterfaceLayout)
-
-        # Buttons for saving, loading, and controlling the various phase patterns
-        self.controlPanel.saveButton = guitools.BetterPushButton("Save")
-        self.controlPanel.loadButton = guitools.BetterPushButton("Load")
+        # z-stack
+        self.mctLabelZStack  = QtWidgets.QLabel('Z-Stack (min,max,steps):')        
+        self.mctValueZmin = QtWidgets.QLineEdit('0')
+        self.mctValueZmax = QtWidgets.QLineEdit('100')
+        self.mctValueZsteps = QtWidgets.QLineEdit('10')
         
-        # Display patterns
-        self.patternIDLabel = QtWidgets.QLabel('Pattern ID:')
-        self.mctDisplayLayout.addWidget(self.patternIDLabel)
+        # Laser 1
+        valueDecimalsLaser = 1
+        valueRangeLaser = (0,2**15)
+        tickIntervalLaser = 1
+        singleStepLaser = 1
+        
+        self.mctLabelLaser1  = QtWidgets.QLabel('Intensity (Laser 1):')        
+        self.mctLabelLaser2  = QtWidgets.QLabel('Intensity (Laser 2):')        
+        
+        valueRangeMinLaser, valueRangeMaxLaser = valueRangeLaser
+        self.sliderLaser1 = guitools.FloatSlider(QtCore.Qt.Horizontal, self, allowScrollChanges=False,
+                                        decimals=valueDecimalsLaser)
+        self.sliderLaser1.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.sliderLaser1.setMinimum(valueRangeMinLaser)
+        self.sliderLaser1.setMaximum(valueRangeMaxLaser)
+        self.sliderLaser1.setTickInterval(tickIntervalLaser)
+        self.sliderLaser1.setSingleStep(singleStepLaser)
+        self.sliderLaser1.setValue(0)
+        
+        self.sliderLaser1.valueChanged.connect(
+            lambda value: self.sigSliderLaser1ValueChanged.emit(value)
+        )
+                        
+        self.sliderLaser2 = guitools.FloatSlider(QtCore.Qt.Horizontal, self, allowScrollChanges=False,
+                                        decimals=valueDecimalsLaser)
+        self.sliderLaser2.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.sliderLaser2.setMinimum(valueRangeMinLaser)
+        self.sliderLaser2.setMaximum(valueRangeMaxLaser)
+        self.sliderLaser2.setTickInterval(tickIntervalLaser)
+        self.sliderLaser2.setSingleStep(singleStepLaser)
+        self.sliderLaser2.setValue(0)
+        self.sliderLaser2.valueChanged.connect(
+            lambda value: self.sigSliderLaser2ValueChanged.emit(value)
+        )
+        
+        self.mctLabelFileName  = QtWidgets.QLabel('FileName:')
+        self.mctEditFileName  = QtWidgets.QLabel('Test')
+        self.mctNImages  = QtWidgets.QLabel('Number of images: ')
 
-        self.patternIDBox = QtWidgets.QSpinBox()
-        self.patternIDBox.valueChanged.connect(self.sigPatternID)
-        self.mctDisplayLayout.addWidget(self.patternIDBox)
+        self.mctStartButton = guitools.BetterPushButton('Start')
+        self.mctStartButton.setCheckable(False)
+        self.mctStartButton.toggled.connect(self.sigMCTStart)
 
+        self.mctStopButton = guitools.BetterPushButton('Stop')
+        self.mctStopButton.setCheckable(False)
+        self.mctStopButton.toggled.connect(self.sigMCTStop)
 
+        self.mctShowLastButton = guitools.BetterPushButton('Show Last')
+        self.mctShowLastButton.setCheckable(False)
+        self.mctShowLastButton.toggled.connect(self.sigMCTShowLast)
+
+        self.mctInitFilterButton = guitools.BetterPushButton('Init Filter Pos.')
+        self.mctInitFilterButton.setCheckable(False)
+        self.mctInitFilterButton.toggled.connect(self.sigMCTInitFilterPos)
+
+        # enable
+        self.mctDoBrightfield = QtWidgets.QCheckBox('Perform Brightfield')
+        self.mctDoBrightfield.setCheckable(True)
+        
+        self.mctDoZStack = QtWidgets.QCheckBox('Perform Z-Stack')
+        self.mctDoZStack.setCheckable(True)
+        
         # Defining layout
-        self.controlPanel.arrowsFrame = QtWidgets.QFrame()
-        self.controlPanel.arrowsLayout = QtWidgets.QGridLayout()
-        self.controlPanel.arrowsFrame.setLayout(self.controlPanel.arrowsLayout)
-
-        self.controlPanel.arrowsLayout.addWidget(self.controlPanel.loadButton, 0, 3)
-        self.controlPanel.arrowsLayout.addWidget(self.controlPanel.saveButton, 1, 3)
-
-        # Definition of the box layout:
-        self.controlPanel.boxLayout = QtWidgets.QVBoxLayout()
-        self.controlPanel.setLayout(self.controlPanel.boxLayout)
-
-        #self.controlPanel.boxLayout.addWidget(self.controlPanel.choiceInterface)
-        self.controlPanel.boxLayout.addWidget(self.controlPanel.arrowsFrame)
-
         self.grid = QtWidgets.QGridLayout()
         self.setLayout(self.grid)
 
-        self.grid.addWidget(self.mctFrame, 0, 0, 1, 2)
-        #self.grid.addWidget(self.paramtreeDockArea, 1, 0, 2, 1)
-        self.grid.addWidget(self.applyChangesButton, 3, 0, 1, 1)
-        self.grid.addWidget(self.startMCTAcquisition, 1, 0, 1, 1)
-        self.grid.addWidget(self.stopMCTAcquisition, 2, 0, 1, 1)
-        self.grid.addLayout(self.mctDisplayLayout, 3, 1, 1, 1)
-        self.grid.addWidget(self.controlPanel, 1, 1, 2, 1)
+        self.grid.addWidget(self.mctLabelTimePeriod, 0, 0, 1, 1)
+        self.grid.addWidget(self.mctValueTimePeriod, 0, 1, 1, 1)
+        self.grid.addWidget(self.mctDoZStack, 0, 2, 1, 1)
+        self.grid.addWidget(self.mctDoBrightfield, 0, 3, 1, 1)
+        self.grid.addWidget(self.mctLabelZStack, 1, 0, 1, 1)
+        self.grid.addWidget(self.mctValueZmin, 1, 1, 1, 1)
+        self.grid.addWidget(self.mctValueZmax, 1, 2, 1, 1)
+        self.grid.addWidget(self.mctValueZsteps, 1, 3, 1, 1)
+        self.grid.addWidget(self.mctLabelLaser1, 2, 0, 1, 1)
+        self.grid.addWidget(self.sliderLaser1, 2, 1, 1, 3)
+        self.grid.addWidget(self.mctLabelLaser2, 3, 0, 1, 1)
+        self.grid.addWidget(self.sliderLaser2, 3, 1, 1, 3)        
+        self.grid.addWidget(self.mctLabelFileName, 4, 0, 1, 1)
+        self.grid.addWidget(self.mctEditFileName, 4, 1, 1, 1)
+        self.grid.addWidget(self.mctNImages, 4, 2, 1, 1)
+        self.grid.addWidget(self.mctStartButton, 5, 0, 1, 1)
+        self.grid.addWidget(self.mctStopButton, 5, 1, 1, 1)
+        self.grid.addWidget(self.mctShowLastButton,5, 2, 1, 1)
+        self.grid.addWidget(self.mctInitFilterButton,5, 3, 1, 1)
         
-        self.layer = None
-
-    def initMCTDisplay(self, monitor):
-        from imswitch.imcontrol.view import MCTDisplay
-        self.mctDisplay = MCTDisplay(self, monitor)
-        self.mctDisplay.sigClosed.connect(lambda: self.sigMCTDisplayToggled.emit(False))
-        self.mctMonitorBox.setValue(monitor)
-
-    def updateMCTDisplay(self, imgArr):
-        self.mctDisplay.updateImage(imgArr)
-
-    def setMCTDisplayVisible(self, visible):
-        self.mctDisplay.setVisible(visible)
-        self.mctDisplayButton.setChecked(visible)
-
-    def setMCTDisplayMonitor(self, monitor):
-        self.mctDisplay.setMonitor(monitor, updateImage=True)
-
+        
+        
     def getImage(self):
         if self.layer is not None:
             return self.img.image
@@ -120,7 +141,36 @@ class MCTWidget(NapariHybridWidget):
             self.layer = self.viewer.add_image(im, rgb=False, name="MCT Reconstruction", blending='additive')
         self.layer.data = im
         
-
+        
+    def getZStackValues(self):
+        valueZmin = float(self.mctValueZmin.text())
+        valueZmax = float(self.mctValueZmax.text())
+        valueZsteps = float(self.mctValueZsteps.text())
+        valueZenabled = bool(self.mctDoZStack.isChecked())
+        
+        return valueZmin, valueZmax, valueZsteps, valueZenabled
+ 
+    def getTimelapseValues(self):
+        mctValueTimePeriod = float(self.mctValueTimePeriod.text())
+        return mctValueTimePeriod
+     
+    def getBrightfieldEnabled(self):
+        valueBrightfield = bool(self.mctDoBrightfield.isChecked())
+        return valueBrightfield
+    
+    def getFilename(self):
+        mctEditFileName = self.mctEditFileName.text()
+        from datetime import datetime
+        date = datetime. now(). strftime("%Y_%m_%d-%I-%M-%S_%p")
+        
+        return f"{date}_mctEditFileName"
+    
+    def setNImages(self, nImages):
+        self.mctNImages.setText('Number of images: '+str(nImages))
+    
+    
+    
+        
 # Copyright (C) 2020-2021 ImSwitch developers
 # This file is part of ImSwitch.
 #

@@ -128,6 +128,8 @@ class SLMInfo:
     at various wavelengths. A combination will be chosen based on the
     wavelength. """
 
+
+
 @dataclass(frozen=True)
 class SIMInfo:
     monitorIdx: int
@@ -155,6 +157,9 @@ class SIMInfo:
     """ Directory of .bmp images provided by Hamamatsu for flatness correction
     at various wavelengths. A combination will be chosen based on the
     wavelength. """
+
+    isSimulation: bool
+    
 
 @dataclass(frozen=True)
 class MCTInfo:
@@ -237,6 +242,18 @@ class ScanInfo:
 
 
 @dataclass(frozen=True)
+class EtSTEDInfo:
+    detectorFast: str
+    """ Name of the STED detector to use. """
+
+    detectorSlow: str
+    """ Name of the widefield detector to use. """
+
+    laserFast: str
+    """ Name of the widefield laser to use. """
+
+
+@dataclass(frozen=True)
 class NidaqInfo:
     timerCounterChannel: Optional[Union[str, int]] = None
     """ Output for Counter for timing purposes. If an integer is specified, it
@@ -313,6 +330,9 @@ class SetupInfo:
 
     scan: Optional[ScanInfo] = field(default_factory=lambda: None)
     """ Scan settings. Required to be defined to use scan functionality. """
+
+    etSTED: Optional[EtSTEDInfo] = field(default_factory=lambda: None)
+    """ EtSTED settings. Required to be defined to use etSTED functionality. """
 
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """

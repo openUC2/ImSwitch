@@ -11,6 +11,7 @@ class ImScrMainViewController(ImScrWidgetController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        '''
         self.filesController = self._factory.createController(FilesController,
                                                               self._widget.files)
         self.editorController = self._factory.createController(EditorController,
@@ -25,7 +26,7 @@ class ImScrMainViewController(ImScrWidgetController):
         self._widget.sigOpenFile.connect(self._commChannel.sigOpenFile)
         self._widget.sigSaveFile.connect(self._commChannel.sigSaveFile)
         self._widget.sigSaveAsFile.connect(self._commChannel.sigSaveAsFile)
-
+        '''
 
 # Copyright (C) 2020-2021 ImSwitch developers
 # This file is part of ImSwitch.

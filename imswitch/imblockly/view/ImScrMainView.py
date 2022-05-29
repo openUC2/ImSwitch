@@ -1,14 +1,9 @@
 from pyqtgraph.dockarea import Dock, DockArea
 from qtpy import QtCore, QtWidgets
 
-from .ConsoleView import ConsoleView
-from .EditorView import EditorView
-from .FilesView import FilesView
-from .OutputView import OutputView
-
-
+from .BlocklyView import BlocklyView
 class ImScrMainView(QtWidgets.QMainWindow):
-    """ Main view of imscripting. """
+    """ Main view of imblockly. """
 
     sigNewFile = QtCore.Signal()
     sigOpenFile = QtCore.Signal()
@@ -45,25 +40,11 @@ class ImScrMainView(QtWidgets.QMainWindow):
         self.dockArea = DockArea()
         self.setCentralWidget(self.dockArea)
 
-        self.editor = EditorView()
+        self.editor = BlocklyView()
         self.editorDock = Dock('Script Editor')
         self.editorDock.addWidget(self.editor)
         self.dockArea.addDock(self.editorDock)
 
-        self.files = FilesView()
-        self.filesDock = Dock('Files')
-        self.filesDock.addWidget(self.files)
-        self.dockArea.addDock(self.filesDock, 'left', self.editorDock)
-
-        self.console = ConsoleView()
-        self.consoleDock = Dock('Console')
-        self.consoleDock.addWidget(self.console)
-        self.dockArea.addDock(self.consoleDock, 'right', self.editorDock)
-
-        self.output = OutputView()
-        self.outputDock = Dock('Output')
-        self.outputDock.addWidget(self.output)
-        self.dockArea.addDock(self.outputDock, 'bottom', self.editorDock)
 
         self.editorDock.setStretch(20, 30)
 

@@ -4,7 +4,7 @@ import os
 from send2trash import send2trash
 
 from imswitch.imcommon.model import dirtools, ostools
-from imswitch.imscripting.view import guitools
+from imswitch.imblockly.view import guitools
 from .basecontrollers import ImScrWidgetController
 
 

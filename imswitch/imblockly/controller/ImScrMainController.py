@@ -1,13 +1,13 @@
 from imswitch.imcommon.controller import MainController
 from imswitch.imcommon.model import generateAPI, pythontools
-from imswitch.imscripting.model import getActionsScope
+from imswitch.imblockly.model import getActionsScope
 from .CommunicationChannel import CommunicationChannel
 from .ImScrMainViewController import ImScrMainViewController
 from .basecontrollers import ImScrWidgetControllerFactory
 
 
 class ImScrMainController(MainController):
-    """ Main controller of imscripting. """
+    """ Main controller of imblockly. """
 
     def __init__(self, mainView, moduleCommChannel, multiModuleWindowController,
                  moduleMainControllers):

@@ -7,6 +7,11 @@ from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModule
 from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
 from imswitch.imcommon.view import MultiModuleWindow, ModuleLoadErrorView
 
+# experimental for Blockly:
+try:
+    from PyQt5.QtWebEngineWidgets import *
+except:
+    pass
 
 def main():
     logger = initLogger('main')

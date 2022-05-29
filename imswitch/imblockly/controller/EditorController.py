@@ -1,8 +1,8 @@
 import os
 
 from imswitch.imcommon.model import dirtools
-from imswitch.imscripting.model import ScriptExecutor, ScriptStore, ScriptEntry
-from imswitch.imscripting.view import guitools
+from imswitch.imblockly.model import ScriptExecutor, ScriptStore, ScriptEntry
+from imswitch.imblockly.view import guitools
 from .basecontrollers import ImScrWidgetController
 
 

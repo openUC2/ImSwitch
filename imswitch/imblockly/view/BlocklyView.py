@@ -31,7 +31,7 @@ class BlocklyView(QtWidgets.QTabWidget):
         )
         '''
         
-        self.url = "http://0.0.0.0:8000/"
+        self.url = "http://0.0.0.0:8080/imblockly/view/static/index.html"
         self.browser = QWebEngineView()
         self.browser.setUrl(QUrl(self.url))
 

@@ -1,6 +1,54 @@
 __imswitch_module__ = True
 __title__ = 'Blockly'
 
+from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
+
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import os
+import threading
+import asyncio
+
+# SRC: https://code-maven.com/static-server-in-python
+class StaticServer(BaseHTTPRequestHandler):
+ 
+    def do_GET(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        if self.path == '/':
+            filename = root + '/index.html'
+        else:
+            filename = root + self.path
+ 
+        self.send_response(200)
+        if filename[-4:] == '.css':
+            self.send_header('Content-type', 'text/css')
+        elif filename[-5:] == '.json':
+            self.send_header('Content-type', 'application/javascript')
+        elif filename[-3:] == '.js':
+            self.send_header('Content-type', 'application/javascript')
+        elif filename[-4:] == '.ico':
+            self.send_header('Content-type', 'image/x-icon')
+        else:
+            self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        with open(filename, 'rb') as fh:
+            html = fh.read()
+            #html = bytes(html, 'utf8')
+            self.wfile.write(html)
+ 
+def start_server(httpd):
+    #print('Starting httpd')
+    httpd.serve_forever()
+     
+def run(server_class=HTTPServer, handler_class=StaticServer, port=8080):
+    server_address = ('', port)
+    httpd = server_class(server_address, handler_class)
+    t = threading.Thread(target=start_server, args=(httpd,))
+    t.start()
+    #print('httpd started on port {}'.format(port))
+
+run()
+ 
 
 def getMainViewAndController(moduleCommChannel, multiModuleWindowController, moduleMainControllers,
                              *_args, **_kwargs):

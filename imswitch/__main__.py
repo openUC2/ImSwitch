@@ -19,9 +19,6 @@ def main():
 
     app = prepareApp()
     enabledModuleIds = modulesconfigtools.getEnabledModuleIds()
-    if 'imblockly' in enabledModuleIds:
-        # Ensure th at imblockly is added last ?
-        enabledModuleIds.append(enabledModuleIds.pop(enabledModuleIds.index('imblockly')))
 
     if 'imscripting' in enabledModuleIds:
         # Ensure th at imscripting is added last

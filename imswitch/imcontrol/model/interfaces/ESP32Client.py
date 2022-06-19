@@ -70,15 +70,18 @@ class ESP32Client(object):
     is_connected = False
 
     microsteppingfactor_filter=16 # run more smoothly
-    filter_pos_1 = 1000*microsteppingfactor_filter
-    filter_pos_2 = 0*microsteppingfactor_filter
+    filter_pos_1 = 1000*microsteppingfactor_filter # GFP
+    filter_pos_2 = 0*microsteppingfactor_filter # AF647/SIR
     filter_pos_3 = 500*microsteppingfactor_filter
+    filter_pos_LED = filter_pos_1 # GFP / Brightfield
     filter_pos_init = -1250*microsteppingfactor_filter
     filter_speed = microsteppingfactor_filter * 500
+    filter_position_now = 0
 
     backlash_x = 0
     backlash_y = 0
     backlash_z = 0
+    backlash_t = 0
     is_driving = False
     is_sending = False
 
@@ -93,6 +96,7 @@ class ESP32Client(object):
     steps_last_0 = 0
     steps_last_1 = 0
     steps_last_2 = 0
+    steps_last_3 = 0
 
     def __init__(self, host=None, port=31950, serialport=None, baudrate=115200):
         '''
@@ -113,6 +117,9 @@ class ESP32Client(object):
         # initialize galvos
         self.galvo1 = galvo(channel=1)
         self.galvo2 = galvo(channel=2)
+        
+        self.serialport = serialport
+        self.baudrate = baudrate
 
 
         # connect to wifi or usb
@@ -126,49 +133,54 @@ class ESP32Client(object):
             self.is_connected = self.isConnected()
             if IS_IMSWITCH: self.__logger.debug(f"Connecting to microscope {self.host}:{self.port}")
 
-        elif serialport is not None:
-            # use client in wired mode
-            self.serialport = serialport # e.g.'/dev/cu.SLAB_USBtoUART'
-            self.is_serial = True
-
-            if IS_IMSWITCH: self.__logger.debug(f'Searching for SERIAL devices...')
-            self.is_connected = False
-            try:
-                self.serialdevice = serial.Serial(port=self.serialport, baudrate=baudrate, timeout=1)
-                self.is_connected = True
-                time.sleep(2) # let it warm up
-            except:
-                # try to find the PORT
-                _available_ports = serial.tools.list_ports.comports(include_links=False)
-                for iport in _available_ports:
-                    # list of possible serial ports
-                    if IS_IMSWITCH: self.__logger.debug(iport.device)
-                    portslist = ("COM", "/dev/tt", "/dev/a", "/dev/cu.SLA","/dev/cu.wchusb", "/dev/cu.usbserial") # TODO: Hardcoded :/
-                    descriptionlist = ("CH340")
-                    if iport.device.startswith(portslist) or iport.description.find(descriptionlist) != -1:
-                        try:
-                            self.serialdevice = serial.Serial(port=iport.device, baudrate=baudrate, timeout=1)
-                            self.is_connected = True # attempting to initiliaze connection
-                            time.sleep(2)
-                            _state = self.get_state()
-                            _identifier_name = _state["identifier_name"]
-                            self.set_state(debug=False)
-                            if _identifier_name == "UC2_Feather":
-                                self.serialport = iport.device
-                                self.__logger.debug("We are connected: "+str(self.is_connected) + " on port: "+iport.device)
-                                return
-
-                        except Exception as e:
-                            if IS_IMSWITCH:
-                                self.__logger.debug("Trying out port "+iport.device+" failed")
-                                self.__logger.error(e)
-                            self.is_connected = False
+        elif self.serialport is not None:
+            self.initSerial(self.serialport,self.baudrate)
+            
         else:
             self.is_connected = False
             if IS_IMSWITCH: self.__logger.error("No ESP32 device is connected - check IP or Serial port!")
 
         self.__logger.debug("We are connected: "+str(self.is_connected))
 
+
+    def initSerial(self,serialport,baudrate):
+        # use client in wired mode
+        self.serialport = serialport # e.g.'/dev/cu.SLAB_USBtoUART'
+        self.is_serial = True
+
+        if IS_IMSWITCH: self.__logger.debug(f'Searching for SERIAL devices...')
+        self.is_connected = False
+        try:
+            self.serialdevice = serial.Serial(port=self.serialport, baudrate=baudrate, timeout=1)
+            self.is_connected = True
+            time.sleep(2) # let it warm up
+        except:
+            # try to find the PORT
+            _available_ports = serial.tools.list_ports.comports(include_links=False)
+            for iport in _available_ports:
+                # list of possible serial ports
+                if IS_IMSWITCH: self.__logger.debug(iport.device)
+                portslist = ("COM", "/dev/tt", "/dev/a", "/dev/cu.SLA","/dev/cu.wchusb", "/dev/cu.usbserial") # TODO: Hardcoded :/
+                descriptionlist = ("CH340")
+                if iport.device.startswith(portslist) or iport.description.find(descriptionlist) != -1:
+                    try:
+                        self.serialdevice = serial.Serial(port=iport.device, baudrate=baudrate, timeout=1)
+                        self.is_connected = True # attempting to initiliaze connection
+                        time.sleep(2)
+                        _state = self.get_state()
+                        _identifier_name = _state["identifier_name"]
+                        self.set_state(debug=False)
+                        if _identifier_name == "UC2_Feather":
+                            self.serialport = iport.device
+                            self.__logger.debug("We are connected: "+str(self.is_connected) + " on port: "+iport.device)
+                            return
+
+                    except Exception as e:
+                        if IS_IMSWITCH:
+                            self.__logger.debug("Trying out port "+iport.device+" failed")
+                            self.__logger.error(e)
+                        self.is_connected = False
+                        
     def isConnected(self):
         # check if client is connected to the same network
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -215,7 +227,7 @@ class ESP32Client(object):
         else:
             return None
 
-    def post_json(self, path, payload={}, headers=None, timeout=1):
+    def post_json(self, path, payload={}, headers=None, isInit=False, timeout=1):
         """Make an HTTP POST request and return the JSON response"""
         if self.is_connected and self.is_wifi:
             if not path.startswith("http"):
@@ -236,29 +248,49 @@ class ESP32Client(object):
                 # not connected
                 return None
 
-        elif self.is_connected and self.is_serial:
-            try:
-                payload["task"]
-            except:
-                payload["task"] = path
-            try:
-                is_blocking = payload['isblock']
-            except:
-                is_blocking = True
-            self.writeSerial(payload)
-            #self.__logger.debug(payload)
-            returnmessage = self.readSerial(is_blocking=is_blocking, timeout=timeout)
-            return returnmessage
-        else:
-            return -1
+        elif self.is_serial:
+            if self.is_connected or isInit:
+
+                try:
+                    payload["task"]
+                except:
+                    payload["task"] = path
+                try:
+                    is_blocking = payload['isblock']
+                except:
+                    is_blocking = True
+                self.writeSerial(payload)
+                #self.__logger.debug(payload)
+                returnmessage = self.readSerial(is_blocking=is_blocking, timeout=timeout)
+                return returnmessage
+            else:
+                # nothing is connected
+                return -1
 
     def writeSerial(self, payload):
         """Write JSON document to serial device"""
-        self.serialdevice.flushInput()
-        self.serialdevice.flushOutput()
+        try:
+            self.serialdevice.flushInput()
+            self.serialdevice.flushOutput()
+        except Exception as e:
+            self.__logger.error(e)
+            del self.serialdevice
+            self.is_connected=False
+            # attempt to reconnect?
+            try:
+                self.initSerial(self.serialport, self.baudrate)
+            except:
+                return -1
+        
         if type(payload)==dict:
             payload = json.dumps(payload)
-        self.serialdevice.write(payload.encode(encoding='UTF-8'))
+        try:
+            self.serialdevice.write(payload.encode(encoding='UTF-8'))
+        except Exception as e:
+            self.__logger.error(e)
+
+            
+            
 
     def readSerial(self, is_blocking=True, timeout = 15): # TODO: hardcoded timeout - not code
         """Receive and decode return message"""
@@ -288,31 +320,38 @@ class ESP32Client(object):
     HIGH-LEVEL Functions that rely on basic REST-API functions
     ################################################################################################################################################'''
 
-    def move_x(self, steps=100, speed=1000, is_blocking=False, is_absolute=False, is_enabled=False):
-        r = self.move_stepper(steps=(steps,0,0), speed=speed, timeout=1, backlash=(self.backlash_x,0,0), is_blocking=is_blocking, is_absolute=is_absolute, is_enabled=is_enabled)
+    def move_x(self, steps=100, speed=1000, is_blocking=False, is_absolute=False, is_enabled=True):
+        r = self.move_stepper(steps=(steps,0,0,0), speed=speed, timeout=1, backlash=(self.backlash_x,0,0,0), is_blocking=is_blocking, is_absolute=is_absolute, is_enabled=is_enabled)
         return r
 
-    def move_y(self, steps=100, speed=1000, is_blocking=False, is_absolute=False, is_enabled=False):
-        r = self.move_stepper(steps=(0,steps,0), speed=speed, timeout=1, backlash=(0,self.backlash_y,0), is_blocking=is_blocking, is_absolute=is_absolute, is_enabled=is_enabled)
+    def move_y(self, steps=100, speed=1000, is_blocking=False, is_absolute=False, is_enabled=True):
+        r = self.move_stepper(steps=(0,steps,0,0), speed=speed, timeout=1, backlash=(0,self.backlash_y,0,0), is_blocking=is_blocking, is_absolute=is_absolute, is_enabled=is_enabled)
         return r
 
-    def move_z(self, steps=100, speed=1000, is_blocking=False, is_absolute=False, is_enabled=False):
-        r = self.move_stepper(steps=(0,0,steps), speed=speed, timeout=1, backlash=(0,0,self.backlash_z), is_blocking=is_blocking, is_absolute=is_absolute, is_enabled=is_enabled)
+    def move_z(self, steps=100, speed=1000, is_blocking=False, is_absolute=False, is_enabled=True):
+        r = self.move_stepper(steps=(0,0,steps,0), speed=speed, timeout=1, backlash=(0,0,self.backlash_z,0), is_blocking=is_blocking, is_absolute=is_absolute, is_enabled=is_enabled)
         return r
 
-    def move_xyz(self, steps=(10,10,10), speed=(1000,1000,1000), speed1=None, speed2=None, speed3=None, is_blocking=False, is_absolute=False, is_enabled=False):
+    def move_xyz(self, steps=(0,0,0), speed=(1000,1000,1000), is_blocking=False, is_absolute=False, is_enabled=True):
         if len(speed)!= 3:
             speed = (speed,speed,speed)
 
-        r = self.move_stepper(steps=steps, speed=speed, timeout=1, backlash=(self.backlash_x,self.backlash_y,self.backlash_z), is_blocking=is_blocking, is_absolute=is_absolute, is_enabled=is_enabled)
+        r = self.move_xyzt(steps=(steps[0],steps[1],steps[2],0), speed=(speed[0],speed[1],speed[2],0), is_blocking=is_blocking, is_absolute=is_absolute, is_enabled=is_enabled)
         return r
 
-    def init_filter(self, nSteps, speed=250, filter_axis=-1, is_blocking = True):
-        self.move_filter(steps=nSteps, speed=speed, filter_axis=filter_axis, is_blocking=is_blocking)
-        self.is_filter_init = True
-        self.filter_position = 0
+    def move_xyzt(self, steps=(0,0,0,0), speed=(1000,1000,1000,1000), is_blocking=False, is_absolute=False, is_enabled=True):
+        if len(speed)!= 4:
+            speed = (speed,speed,speed,speed)
 
-    def switch_filter(self, laserid=1, filter_axis=-1, timeout=20, is_filter_init=None, speed=None, is_blocking=True):
+        r = self.move_stepper(steps=steps, speed=speed, timeout=1, backlash=(self.backlash_x,self.backlash_y,self.backlash_z,self.backlash_t), is_blocking=is_blocking, is_absolute=is_absolute, is_enabled=is_enabled)
+        return r
+
+    def init_filter(self, nSteps, speed=250, filter_axis=-1, is_blocking = True, is_enabled=False):
+        self.move_filter(steps=nSteps, speed=speed, filter_axis=filter_axis, is_blocking=is_blocking, is_enabled = is_enabled)
+        self.is_filter_init = True
+        self.filter_position_now = 0
+
+    def switch_filter(self, filter_pos=0, filter_axis=-1, timeout=20, is_filter_init=None, speed=None, is_enabled=False, is_blocking=True):
 
         # switch off all lasers first!
         self.set_laser(1, 0)
@@ -328,25 +367,16 @@ class ESP32Client(object):
             self.init_filter(nSteps=self.filter_pos_init, speed=speed, filter_axis=filter_axis, is_blocking = True)
 
         # measured in steps from zero position
+        steps = filter_pos - self.filter_position_now
+        self.filter_position_now = filter_pos
 
-        steps = 0
-        if laserid==1:
-            steps = self.filter_pos_1 - self.filter_position
-            self.filter_position = self.filter_pos_1
-        if laserid==2:
-            steps = self.filter_pos_2 - self.filter_position
-            self.filter_position = self.filter_pos_2
-        if laserid==3:
-            steps = self.filter_pos_3 - self.filter_position
-            self.filter_position = self.filter_pos_3
-
-        self.move_filter(steps=steps, speed=speed, filter_axis=filter_axis, is_blocking=is_blocking, timeout=timeout)
+        self.move_filter(steps=steps, speed=speed, filter_axis=filter_axis, is_blocking=is_blocking, timeout=timeout, is_enabled=is_enabled)
 
 
-    def move_filter(self, steps=100, speed=200, filter_axis=-1, timeout=25, is_blocking=False, axis=2):
-        steps_xyz = np.zeros(3)
-        steps_xyz[filter_axis] = steps
-        r = self.move_stepper(steps=steps_xyz, speed=speed, timeout=timeout, is_blocking=is_blocking)
+    def move_filter(self, steps=100, speed=200, filter_axis=-1, timeout=10, is_enabled=False, is_blocking=False):
+        steps_xyzt = np.zeros(4)
+        steps_xyzt[filter_axis] = steps
+        r = self.move_stepper(steps=steps_xyzt, speed=speed, timeout=timeout, is_enabled=is_enabled, is_blocking=is_blocking)
         return r
 
 
@@ -555,6 +585,15 @@ class ESP32Client(object):
         except:
             return False
 
+    def espRestart(self,timeout=1):
+        # if isController =True=> only PS jjoystick will be accepted
+        path = "/state_act"
+        payload = {
+            "restart":1
+            }
+        r = self.post_json(path, payload, timeout=timeout)
+        return r
+
     def setControllerMode(self, isController=False, timeout=1):
         # if isController =True=> only PS jjoystick will be accepted
         path = "/state_act"
@@ -603,12 +642,12 @@ class ESP32Client(object):
 
         return r
 
-    def move_stepper(self, steps=(0,0,0), speed=(1000,1000,1000), is_absolute=False, timeout=1, backlash=(0,0,0), is_blocking=True, is_enabled=False):
+    def move_stepper(self, steps=(0,0,0,0), speed=(1000,1000,1000,1000), is_absolute=False, timeout=1, backlash=(0,0,0,0), is_blocking=True, is_enabled=True):
         '''
         This tells the motor to run at a given speed for a specific number of steps; Multiple motors can run simultaneously
         '''
         if type(speed)!=list and type(speed)!=tuple  :
-            speed = (speed,speed,speed)
+            speed = (speed,speed,speed,speed)
 
         path = "/motor_act"
 
@@ -625,14 +664,20 @@ class ESP32Client(object):
             # we want to overshoot a bit
             steps_2 =  steps[2] + (np.sign(steps[2])*backlash[2])
         else: steps_2 = steps[2]
+        if np.sign(self.steps_last_3) != np.sign(steps[3]):
+            # we want to overshoot a bit
+            steps_3 =  steps[3] + (np.sign(steps[3])*backlash[3])
+        else: steps_3 = steps[3]
 
         payload = {
             "task":"/motor_act",
+            "pos0": np.int(steps_3),
             "pos1": np.int(steps_0),
             "pos2": np.int(steps_1),
             "pos3": np.int(steps_2),
             "isblock": int(is_blocking),
             "isabs": int(is_absolute),
+            "speed0": np.int(speed[3]),
             "speed1": np.int(speed[0]),
             "speed2": np.int(speed[1]),
             "speed3": np.int(speed[2]),
@@ -641,14 +686,13 @@ class ESP32Client(object):
         self.steps_last_0 = steps_0
         self.steps_last_1 = steps_1
         self.steps_last_2 = steps_2
+        self.steps_last_3 = steps_3
+
         # drive motor
         r = self.post_json(path, payload, timeout=timeout)
 
         #if PSwasActive:
         #    self.setControllerMode(isController=True)
-
-
-
         # wait until job has been done
         time0=time.time()
         if is_blocking:
@@ -843,7 +887,7 @@ class ESP32Client(object):
         payload = {
             "task":path
         }
-        r = self.post_json(path, payload, timeout=timeout)
+        r = self.post_json(path, payload, isInit=True, timeout=timeout)
         return r
 
     def set_state(self, debug=False, timeout=1):
@@ -857,7 +901,10 @@ class ESP32Client(object):
         return r
 
 
-    def set_laser(self, channel=1, value=0, auto_filterswitch=False, filter_axis=-1, timeout=20, is_blocking = True):
+    def set_laser(self, channel=1, value=0, auto_filterswitch=False, 
+                        filter_axis=-1, filter_position = None,
+                        despeckleAmplitude = 0.1, 
+                        despecklePeriod=10, timeout=20, is_blocking = True):
         if channel not in (0,1,2,3):
             if channel=="R":
                 channel = 1
@@ -867,7 +914,19 @@ class ESP32Client(object):
                 channel = 3
 
         if auto_filterswitch and value >0:
-            self.switch_filter(channel, filter_axis=filter_axis, timeout=timeout,is_blocking=is_blocking)
+            if filter_position is None:
+                if channel==1:
+                    filter_position_toGo = self.filter_pos_1 
+                if channel==2:
+                    filter_position_toGo = self.filter_pos_2 
+                if channel==3:
+                    filter_position_toGo = self.filter_pos_3 
+                if channel=="LED":
+                    filter_position_toGo = self.filter_pos_LED
+            else:
+                filter_position_toGo = filter_position
+
+            self.switch_filter(filter_pos=filter_position_toGo, filter_axis=filter_axis, timeout=timeout,is_blocking=is_blocking)
 
         path = '/laser_act'
 
@@ -875,7 +934,9 @@ class ESP32Client(object):
             "task": path,
             "LASERid": channel,
             "LASERval": value,
-            "LASERDdespeckle": int(value*.1)
+            "LASERdespeckle": int(value*despeckleAmplitude),
+            "LASERdespecklePeriod": int(despecklePeriod),
+            
         }
 
         r = self.post_json(path, payload)

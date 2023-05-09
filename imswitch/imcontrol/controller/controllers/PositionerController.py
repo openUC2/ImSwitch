@@ -48,11 +48,6 @@ class PositionerController(ImConWidgetController):
     def getSpeed(self):
         return self._master.positionersManager.execOnAll(lambda p: p.speed)
 
-<<<<<<< Updated upstream
-    def move(self, positionerName, axis, dist):
-        """ Moves positioner by dist micrometers in the specified axis. """
-        self._master.positionersManager[positionerName].move(dist, axis)
-=======
     def move(self, positionerName, axis, dist, speed=None, isAbsolute=None, isBlocking=False):
         """ Moves positioner by dist micrometers in the specified axis. """
         if positionerName is None:
@@ -66,7 +61,6 @@ class PositionerController(ImConWidgetController):
             self._master.positionersManager[positionerName].move(dist, axis, isAbsolute, isBlocking)
         except:
             self._master.positionersManager[positionerName].move(dist, axis)
->>>>>>> Stashed changes
         self.updatePosition(positionerName, axis)
 
     def setPos(self, positionerName, axis, position):

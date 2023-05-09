@@ -34,7 +34,7 @@ class PositionerController(ImConWidgetController):
         # Connect PositionerWidget signals
         self._widget.sigStepUpClicked.connect(self.stepUp)
         self._widget.sigStepDownClicked.connect(self.stepDown)
-        self._widget.sigsetSpeedClicked.connect(self.setSpeedGUI)
+        #self._widget.sigsetSpeedClicked.connect(self.setSpeedGUI)
 
     def closeEvent(self):
         self._master.positionersManager.execOnAll(
@@ -56,7 +56,7 @@ class PositionerController(ImConWidgetController):
         # get all speed values from the GUI        
         if speed is None:
             speed = self._widget.getSpeed(positionerName, axis)
-        self.setSpeed(positionerName=positionerName, speed=speed, axis=axis)
+        self.setSpeed(positionerName=positionerName, speed=speed)
         try:
             self._master.positionersManager[positionerName].move(dist, axis, isAbsolute, isBlocking)
         except:
@@ -69,10 +69,10 @@ class PositionerController(ImConWidgetController):
         self.updatePosition(positionerName, axis)
 
     def stepUp(self, positionerName, axis):
-        self.move(positionerName, axis, self._widget.getStepSize(positionerName, axis))
+        self.move(positionerName, axis, self._widget.getStepSize(positionerName, axis), False, False)
 
     def stepDown(self, positionerName, axis):
-        self.move(positionerName, axis, -self._widget.getStepSize(positionerName, axis))
+        self.move(positionerName, axis, -self._widget.getStepSize(positionerName, axis), False, False)
 
     def setSpeedGUI(self):
         positionerName = self.getPositionerNames()[0]
@@ -134,11 +134,11 @@ class PositionerController(ImConWidgetController):
         self._widget.setStepSize(positionerName, stepSize)
 
     @APIExport(runOnUIThread=True)
-    def movePositioner(self, positionerName: str, axis: str, dist: float) -> None:
+    def movePositioner(self, positionerName: str, axis: str, dist: float, speed: float, isAbsolute: bool, isBlocking: bool) -> None:
         """ Moves the specified positioner axis by the specified number of
         micrometers. """
-        self.move(positionerName, axis, dist)
-
+        self.move(positionerName, axis, dist, speed, isAbsolute, isBlocking)
+        
     @APIExport(runOnUIThread=True)
     def setPositioner(self, positionerName: str, axis: str, position: float) -> None:
         """ Moves the specified positioner axis to the specified position. """

@@ -3,6 +3,7 @@ import time
 import numpy as np
 import scipy.ndimage as ndi
 import threading
+import cv2 
 
 from imswitch.imcommon.framework import Thread, Timer
 from imswitch.imcommon.model import initLogger, APIExport
@@ -98,7 +99,7 @@ class AutofocusController(ImConWidgetController):
             # 0 move focus to initial position
             self.stages.move(value=allfocuspositions[0], axis="Z", is_absolute=True, is_blocking=True)
             
-        def trackFocus(zPosToGo, zSpeed = 30):
+        def trackFocus(z1, z2, zSpeed = 30):
             frameStack = []
 
             # alternative route - measure while moving
@@ -109,14 +110,14 @@ class AutofocusController(ImConWidgetController):
             
 
             # measure forward move
-            time.sleep(.2) # let stage settle
-            threading.Thread(target=moveBackground, args=(zPosToGo,zSpeed,), daemon=True).start()
+            
+            threading.Thread(target=moveBackground, args=(z2,zSpeed,), daemon=True).start()
 
             tStart = time.time()
             tLastFrame = 0
             # capture images until we arrive at the destination 
             while not self.doneMovingBackground:
-                if (time.time()-tLastFrame)>.1: # limit frame rate? and guarantee constant frame rate? 
+                if (time.time()-tLastFrame)>.05: # limit frame rate? and guarantee constant frame rate? 
                     frameStack.append(cv2.resize(self.grabCameraFrame(), None, None, fx=.1, fy=.1))
                     tLastFrame = time.time()
                     
@@ -138,32 +139,34 @@ class AutofocusController(ImConWidgetController):
             
             # identify position with max focus
             indexMaxFocus = np.argmax(np.array(focusMetric))
-            maxFocusPosition = allfocuspositions[0]+np.abs(allfocuspositions[-1]-allfocuspositions[0])/len(focusMetric)*indexMaxFocus
+            maxFocusPosition = z1+(z1-z2)/len(focusMetric)*indexMaxFocus
             #self.stages.move(value=maxFocusPosition, axis="Z", is_absolute=True, is_blocking=True)
 
         
             # We are done!
-            self._commChannel.sigAutoFocusRunning.emit(False) # inidicate that we are running the autofocus
-            self.isAutofusRunning = False
+            
 
             self._widget.focusButton.setText('Autofocus')
-            allfocuspositions = np.linspace(allfocuspositions[0],allfocuspositions[-1],len(focusMetric))
+            allfocuspositions = np.linspace(z1,z2,len(focusMetric))
             allfocusvals = np.array(focusMetric)
             self._widget.focusPlotCurve.setData(allfocuspositions,allfocusvals)
 
             return maxFocusPosition
         
         # move from lowest to highest
-        maxFocus1 = trackFocus(allfocuspositions[-1], zSpeed = 30)    
-
+        self._logger.debug("Move up") 
+        maxFocus1 = trackFocus(z1=allfocuspositions[0], z2=allfocuspositions[-1], zSpeed = 30)    
         # move from highest to lowest
-        maxFocus2 = trackFocus(allfocuspositions[0], zSpeed = 30)    
-
+        self._logger.debug("Move down") 
+        maxFocus2 = trackFocus(z1=allfocuspositions[-1], z2=allfocuspositions[0], zSpeed = 30)    
         #compare
         maxFocusPosition = (maxFocus1+maxFocus2)/2
-        
+
+        # more to average position between up/downwards move
         self.stages.move(value=maxFocusPosition, axis="Z", is_absolute=True, is_blocking=True)
 
+        self._commChannel.sigAutoFocusRunning.emit(False) # inidicate that we are running the autofocus
+        self.isAutofusRunning = False
 
         '''
         else:

@@ -81,9 +81,7 @@ class AutofocusController(ImConWidgetController):
     def doAutofocusBackground(self, rangez=100, resolutionz=10):
         self._commChannel.sigAutoFocusRunning.emit(True) # inidicate that we are running the autofocus
 
-        allfocusvals = []
         allfocuspositions = []
-
 
         # get current position
         initialPosition = self.stages.getPosition()["Z"]
@@ -100,52 +98,62 @@ class AutofocusController(ImConWidgetController):
             self.stages.move(value=allfocuspositions[0], axis="Z", is_absolute=True, is_blocking=True)
             
         def trackFocus(z1, z2, zSpeed = 30):
-            frameStack = []
 
             # alternative route - measure while moving
             self.doneMovingBackground = False
+            self.tStartStageMove=0
             def moveBackground(zPosition, speed):
+                time.sleep(.2)# let evertyhing settle
+                self._logger.debug("Start moving")
+                self.tStartStageMove=time.time()
                 self.stages.move(value=zPosition, axis="Z", speed=speed, is_absolute=True, is_blocking=True)
-                self.doneMovingBackground = True
-            
+                self.tStopStageMove = time.time()
+                self.stageBusy = False
+                self._logger.debug("Stop moving")
 
-            # measure forward move
-            
+            def captureBackground():
+                self._logger.debug("Start frame capturing")
+                tFrame = 0
+                while True:
+                    if time.time()-tFrame > .05: # lower framerate
+                        self.frameTimestamp.append(time.time())
+                        self.frameStack.append(cv2.resize(self.grabCameraFrame(), None, None, fx=.1, fy=.1))
+                        if not self.stageBusy:
+                            self._logger.debug("Stop frame acquisition")
+                            break
+                        tFrame = time.time()
+
+            # start the recording process
+            # start the moving process
+            # sync time stamps of frames/movements afterwards
+            self.stageBusy = True
+            self.frameStack = []
+            self.frameTimestamp = []
+            threading.Thread(target=captureBackground, args=(), daemon=True).start()
             threading.Thread(target=moveBackground, args=(z2,zSpeed,), daemon=True).start()
-
-            tStart = time.time()
-            tLastFrame = 0
-            # capture images until we arrive at the destination 
-            while not self.doneMovingBackground:
-                if (time.time()-tLastFrame)>.05: # limit frame rate? and guarantee constant frame rate? 
-                    frameStack.append(cv2.resize(self.grabCameraFrame(), None, None, fx=.1, fy=.1))
-                    tLastFrame = time.time()
-                    
-            tEnd = time.time()
-            frameStack = np.array(frameStack)
-    
-            # move back to initial position
-            #self.stages.move(value=allfocuspositions[0], axis="Z", is_absolute=True, is_blocking=True)
+            # wait until frames have been acquired
+            while self.stageBusy:
+                time.sleep(0.01) # don't overwhelm cpu and don't blcok ui thread
+           
+            t0 = np.argmin(np.abs(np.array(self.frameTimestamp)-self.tStartStageMove))
+            # remove non-moving frames
+            self.frameStack=self.frameStack[t0:]
 
             # compute best focus and relate to the timing
             focusMetric = []
-            for iFrame in frameStack:
+            for iFrame in self.frameStack:
                 # blur
                 imagearraygf = ndi.filters.gaussian_filter(iFrame, 3)
 
                 # compute focus metric
                 focusquality = np.mean(ndi.filters.laplace(imagearraygf))
                 focusMetric.append(focusquality)
-            
+
             # identify position with max focus
             indexMaxFocus = np.argmax(np.array(focusMetric))
             maxFocusPosition = z1+(z1-z2)/len(focusMetric)*indexMaxFocus
-            #self.stages.move(value=maxFocusPosition, axis="Z", is_absolute=True, is_blocking=True)
-
-        
+            self.stages.move(value=maxFocusPosition, axis="Z", speed=1000, is_absolute=True, is_blocking=True)
             # We are done!
-            
-
             self._widget.focusButton.setText('Autofocus')
             allfocuspositions = np.linspace(z1,z2,len(focusMetric))
             allfocusvals = np.array(focusMetric)

@@ -66,7 +66,7 @@ class MCTController(ImConWidgetController):
         self._widget.mctStartButton.clicked.connect(self.startMCT)
         self._widget.mctStopButton.clicked.connect(self.stopMCT)
         self._widget.mctShowLastButton.clicked.connect(self.showLast)
-        
+
         self._widget.sigSliderLaser1ValueChanged.connect(self.valueLaser1Changed)
         self._widget.sigSliderLaser2ValueChanged.connect(self.valueLaser2Changed)
         self._widget.sigSliderLEDValueChanged.connect(self.valueLEDChanged)
@@ -315,14 +315,14 @@ class MCTController(ImConWidgetController):
                 self.stages.setSpeed(speed=10000, axis="X")
                 self.stages.setSpeed(speed=10000, axis="Y")
                 self.stages.setSpeed(speed=1000, axis="Z")
-                
+
                 # ensure motors are enabled
                 self.stages.enalbeMotors(enable=True)
 
                 try:
                     # want to do autofocus?
                     autofocusParams = self._widget.getAutofocusValues()
-                    
+
                     if self._widget.isAutofocus() and np.mod(self.nImagesTaken, int(autofocusParams['valuePeriod'])) == 0:
                         self._widget.setnImagesTaken("Autofocusing...")
                         # turn on illuimination
@@ -445,15 +445,17 @@ class MCTController(ImConWidgetController):
                 frameNumber = self.detector.getFrameNumber()
             else:
                 frameNumber = -nFrameSyncWait
-                
+
             # if not stack acquisition, we want to test writing OME TIFFs
             if not self.zStackEnabled:
                 # ashlar uses `PhysicalSizeX/Y` for pixel unit conversion
                 tifw = tif.TiffWriter('ashlar_generated.ome.tif', bigtiff=True)
-                
-            
+
+
             # perform a z-stack
+
             imgStack = []
+            turnOffIlluInBetween=True
             for iZ in zStepsAbsolute:
                 # move to each position
                 if self.zStackEnabled:
@@ -517,11 +519,11 @@ class MCTController(ImConWidgetController):
                         self.LastStackLED.append(lastFrame.copy())
                     except:
                         pass
-                
+
                 if not self.zStackEnabled
                     # write out OME-TIF per XY coordinate if channels are available
                     imgStack = np.array(imgStack)
-                    cPosXYZ = self.stages.getPosition() 
+                    cPosXYZ = self.stages.getPosition()
                     metadata = {
                         'Pixels': {
                             'PhysicalSizeX': pixel_size,

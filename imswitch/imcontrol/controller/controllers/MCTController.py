@@ -449,6 +449,7 @@ class MCTController(ImConWidgetController):
 
 
             # perform a z-stack
+            turnOffIlluInBetween=True
             for iZ in zStepsAbsolute:
                 # move to each position
                 if self.zStackEnabled:

@@ -445,10 +445,15 @@ class MCTController(ImConWidgetController):
                 frameNumber = self.detector.getFrameNumber()
             else:
                 frameNumber = -nFrameSyncWait
-
-
-
+                
+            # if not stack acquisition, we want to test writing OME TIFFs
+            if not self.zStackEnabled:
+                # ashlar uses `PhysicalSizeX/Y` for pixel unit conversion
+                tifw = tif.TiffWriter('ashlar_generated.ome.tif', bigtiff=True)
+                
+            
             # perform a z-stack
+            imgStack = []
             for iZ in zStepsAbsolute:
                 # move to each position
                 if self.zStackEnabled:
@@ -469,6 +474,9 @@ class MCTController(ImConWidgetController):
                     #while self.detector.getFrameNumber()<(frameNumber+nFrameSyncWait):time.sleep(0.05)
                     #TODO: USE self._master.recordingManager.snap()
                     tif.imwrite(filePath, lastFrame, append=True)
+                    if not self.zStackEnabled:
+                        # prepare stack for OME-TIF
+                        imgStack.append(lastFrame)
                     if turnOffIlluInBetween: self.lasers[0].setEnabled(False)
                     self.LastStackLaser1.append(lastFrame.copy())
 
@@ -482,6 +490,9 @@ class MCTController(ImConWidgetController):
                     time.sleep(.05)
                     lastFrame = self.detector.getLatestFrame()
                     tif.imwrite(filePath, lastFrame, append=True)
+                    if not self.zStackEnabled:
+                        # prepare stack for OME-TIF
+                        imgStack.append(lastFrame)
                     if turnOffIlluInBetween: self.lasers[1].setEnabled(False)
                     self.LastStackLaser2.append(lastFrame.copy())
 
@@ -499,10 +510,36 @@ class MCTController(ImConWidgetController):
                         time.sleep(.1)
                         lastFrame = self.detector.getLatestFrame()
                         tif.imwrite(filePath, lastFrame, append=True)
+                        if not self.zStackEnabled:
+                            # prepare stack for OME-TIF
+                            imgStack.append(lastFrame)
                         if turnOffIlluInBetween: self.leds[0].setEnabled(False)
                         self.LastStackLED.append(lastFrame.copy())
                     except:
                         pass
+                
+                if not self.zStackEnabled
+                    # write out OME-TIF per XY coordinate if channels are available
+                    imgStack = np.array(imgStack)
+                    cPosXYZ = self.stages.getPosition() 
+                    metadata = {
+                        'Pixels': {
+                            'PhysicalSizeX': pixel_size,
+                            'PhysicalSizeXUnit': 'µm',
+                            'PhysicalSizeY': pixel_size,
+                            'PhysicalSizeYUnit': 'µm',
+                            'PhysicalSizeZ': pixel_size_z,
+                            'PhysicalSizeZUnit': 'µm'
+                        },
+                        # a mock 10% overlap therefore each step is 27 pixels
+                        'Plane': {
+                            'PositionX': cPosXYZ[0],
+                            'PositionY': cPosXYZ[1],
+                            'PositionZ': cPosXYZ[2]
+                        }
+                    }
+                    tifw.write(imgStack, metadata=metadata)
+
 
 
                 imageIndex += 1

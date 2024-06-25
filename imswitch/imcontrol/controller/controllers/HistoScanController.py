@@ -16,7 +16,7 @@ from collections import deque
 from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QImage, QPixmap
 import ast
-        
+
 
 # todo: better have it relative?
 from  imswitch.imcontrol.controller.controllers.camera_stage_mapping import OFMStageMapping
@@ -52,7 +52,7 @@ class HistoScanController(LiveUpdatedController):
         # read default values from previously loaded config file
         offsetX = self._master.HistoScanManager.offsetX
         offsetY = self._master.HistoScanManager.offsetY
-        self.tSettle = 0.05
+        self.tSettle = 0.5
     
         self.histoscanTask = None
         self.histoscanStack = np.ones((1,1,1))
@@ -161,7 +161,7 @@ class HistoScanController(LiveUpdatedController):
             self._widget.buttonTurnOnLEDArray.clicked.connect(self.turnOnLEDArray)
             self._widget.buttonTurnOffLEDArray.clicked.connect(self.turnOffLEDArray)
         
-    def computeOptimalScanStepSize(self, overlap = 0.75):
+    def computeOptimalScanStepSize(self, overlap = 0.85):
         mFrameSize = self.microscopeDetector.getLatestFrame().shape
         bestScanSizeX = mFrameSize[1]*self.microscopeDetector.pixelSizeUm[-1]*overlap
         bestScanSizeY = mFrameSize[0]*self.microscopeDetector.pixelSizeUm[-1]*overlap     
@@ -277,7 +277,7 @@ class HistoScanController(LiveUpdatedController):
         img_height = NpixY * pixelSizeMicroscopeDetector
         
         # compute snake scan coordinates
-        mOverlap = 0.75
+        mOverlap = 0.85
         self.mCamScanCoordinates = self.generate_snake_scan_coordinates(minPosXReal, minPosYReal, maxPosXReal, maxPosYReal, img_width, img_height, mOverlap)
         nTilesX = int((maxPosXReal-minPosXReal)/(img_width*mOverlap))
         nTilesY = int((maxPosYReal-minPosYReal)/(img_height*mOverlap))
@@ -319,7 +319,7 @@ class HistoScanController(LiveUpdatedController):
         img_height = NpixY * self.microscopeDetector.pixelSizeUm[-1]
         
         # compute snake scan coordinates
-        mOverlap = 0.75
+        mOverlap = 0.85
         self.mCamScanCoordinates = self.generate_snake_scan_coordinates(minPosX, minPosY, maxPosX, maxPosY, img_width, img_height, mOverlap)
         nTilesX = int((maxPosX-minPosX)/(img_width*mOverlap))
         nTilesY = int((maxPosY-minPosY)/(img_height*mOverlap))
@@ -516,7 +516,7 @@ class HistoScanController(LiveUpdatedController):
         self._widget.stopButton.setText("Stop") 
         self._widget.stopButton.setStyleSheet("background-color: red")
         self._widget.startButton.setStyleSheet("background-color: green")
-        overlap = 0.75
+        overlap = 0.85
         illuSource = self._widget.getIlluminationSource()
         # start stage scanning without provision of stage coordinate list
         self.startStageScanning(minPosX, maxPosX, minPosY, maxPosY, overlap, nTimes, tPeriod, illuSource)
@@ -685,7 +685,7 @@ class HistoScanController(LiveUpdatedController):
             nChannels = 1
         else:
             nChannels = mFrame.shape[-1]
-            
+        
         # perform timelapse imaging
         for i in range(nTimes):
             tz = datetime.timezone.utc

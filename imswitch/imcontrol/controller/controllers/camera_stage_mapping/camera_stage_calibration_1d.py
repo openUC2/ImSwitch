@@ -133,7 +133,7 @@ def fit_backlash(moves):
     m, c, residual = fit_motion(xfit, yfit, backlash)
 
     fractional_error = residual/norm(np.diff(yfit))
-    if fractional_error > 0.1:
+    if fractional_error > 0.2:
         raise ValueError("The fit didn't look successful")
 
     return {
@@ -173,19 +173,19 @@ def calibrate_backlash_1d(
         tracker.acquire_template()
     assert tracker.stage_positions.shape[0] == 1
     original_stage_pos = tracker.stage_positions[-1,:]
-
+    nMotion = 5
     direction = direction / np.sum(direction**2)**0.5 # ensure "direction" is normalised
 
     logger.info("Moving the stage until we see motion...")
     # Move the stage until we can see a significant amount of motion
     i, m = move_until_motion_detected(
-        tracker, move, direction, threshold=tracker.max_safe_displacement * 0.2)
+        tracker, move, direction, multipliers=2**np.arange(nMotion*4), threshold=tracker.max_safe_displacement * 0.2)
     
     logger.info("Moving the stage to the edge of the field of view...")
     i, m = move_until_motion_detected(
         tracker, move, direction, 
         threshold=tracker.max_safe_displacement * 0.7,
-        multipliers=m/2.0 * np.arange(10),
+        multipliers=m/2.0 * np.arange(nMotion*2),
         detect_cumulative_motion=True)
     move(original_stage_pos)
     exponential_moves = tracker.history

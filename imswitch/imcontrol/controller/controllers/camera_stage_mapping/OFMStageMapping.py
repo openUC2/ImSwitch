@@ -166,10 +166,7 @@ class OFMStageScanClass(object):
             cal_y["stage_axis"] = self._stageOrder[1]
         except Exception as e:
             self._logger.error("Calibration failed. Try reordering the stage axes. Error: %s", e)
-            cal_x = None
-            cal_y = None
-            if cal_x is None or cal_y is None:
-                raise ValueError("Calibration failed. Try reordering the stage axes. Or move to a different position and try again.")        
+            return 
         # Combine X and Y calibrations to make a 2D calibration
         cal_xy = image_to_stage_displacement_from_1d([cal_x, cal_y])
         

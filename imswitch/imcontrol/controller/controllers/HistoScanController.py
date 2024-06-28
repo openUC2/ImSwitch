@@ -499,7 +499,7 @@ class HistoScanController(LiveUpdatedController):
         # now we need to calculate the offset here
         self._master.HistoScanManager.writeConfig({"offsetX":offsetX, "offsetY":offsetY})
         self._widget.ScanSelectViewWidget.setOffset(offsetX,offsetY)
-        
+
     def startHistoScanCoordinatebased(self):
         '''
         Start an XY scan that was triggered from the Figure-based Scan Tab
@@ -615,7 +615,7 @@ class HistoScanController(LiveUpdatedController):
         minPosY = np.min(positionList[:,1])
         return self.startStageScanning(minPosX=minPosX, maxPosX=maxPosX, minPosY=minPosY, maxPosY=maxPosY, overlap=None, 
                                 nTimes=nTimes, tPeriod=tPeriod, illuSource=illuSource, positionList=positionList)
-            
+
     def startStageScanning(self, minPosX:float=None, maxPosX:float=None, minPosY:float=None, maxPosY:float=None, 
                            overlap:float=None, nTimes:int=1, tPeriod:int=0, illuSource:str=None, positionList:list=None, 
                            isStitchAshlar:bool=False, isStitchAshlarFlipX:bool=False, isStitchAshlarFlipY:bool=False):
@@ -633,19 +633,29 @@ class HistoScanController(LiveUpdatedController):
         
     def generate_snake_scan_coordinates(self, posXmin, posYmin, posXmax, posYmax, img_width, img_height, overlap):
         # Calculate the number of steps in x and y directions
-        steps_x = int((posXmax - posXmin) / (img_width*overlap))
-        steps_y = int((posYmax - posYmin) / (img_height*overlap))
-        
-        coordinates = []
+        x_overlap_size = overlap * img_width
+        y_overlap_size = overlap * img_height
+        x_figure_size = posXmax - posXmin
+        y_figure_size = posYmax - posYmin
+
+        steps_x = int((x_figure_size + 1) / x_overlap_size)
+        steps_y = int((y_figure_size + 1) / y_overlap_size)
+
+        step_size = (1 - overlap)
+        self._logger.debug("Figure drawn of size ({}, {}) pixel".format(x_figure_size, y_figure_size))
 
         # Loop over the positions in a snake pattern
+        coords = lambda x_step, y_step: (posXmin + x_step * img_width * step_size, posYmin + y_step * img_height * step_size)
+        coordinates = []
         for y in range(steps_y):
             if y % 2 == 0:  # Even rows: left to right
                 for x in range(steps_x):
-                    coordinates.append((posXmin + x * img_width *overlap, posYmin + y * img_height *overlap))
+                    coordinates.append(coords(x, y))
             else:  # Odd rows: right to left
                 for x in range(steps_x - 1, -1, -1):  # Starting from the last position, moving backwards
-                    coordinates.append((posXmin + x * img_width *overlap, posYmin + y * img_height *overlap))
+                    coordinates.append(coords(x, y))
+
+        self._logger.debug("Coordinates for snake scan: {}".format(coordinates))
         
         return coordinates
 
@@ -653,9 +663,9 @@ class HistoScanController(LiveUpdatedController):
     def getStatusScanRunning(self):
         return {"ishistoscanRunning": bool(self.ishistoscanRunning)}
         
-    def histoscanThread(self, minPosX, maxPosX, minPosY, maxPosY, overlap=0.75, nTimes=1, 
+    def histoscanThread(self, minPosX, maxPosX, minPosY, maxPosY, overlap=0.85, nTimes=1,
                         tPeriod=0, illuSource=None, positionList=None,
-                        flipX=False, flipY=False, tSettle=0.05, 
+                        flipX=False, flipY=False, tSettle=0.5,
                         isStitchAshlar=False):
         self._logger.debug("histoscan thread started.")
         
@@ -685,16 +695,15 @@ class HistoScanController(LiveUpdatedController):
             nChannels = 1
         else:
             nChannels = mFrame.shape[-1]
-        
-        # perform timelapse imaging
+
         for i in range(nTimes):
+
             tz = datetime.timezone.utc
             ft = "%Y-%m-%dT%H_%M_%S"
             t = datetime.datetime.now(tz=tz).strftime(ft)
-            file_name = "test_"+t
+            file_name = "image_tiles_" + t
             extension = ".ome.tif"
-            folder = self._widget.getDefaulSavePath()
-
+            folder = self._widget.getDefaultSavePath()
             t0 = time.time()
             
             # create a new image stitcher          
@@ -707,7 +716,7 @@ class HistoScanController(LiveUpdatedController):
                                      flipX=flipX, flipY=flipY, isStitchAshlar=isStitchAshlar, pixel_size=self.microscopeDetector.pixelSizeUm[0])
             
             # move to the first position
-            self.stages.move(value=positionList[0], axis="XY", is_absolute=True, is_blocking=True, acceleration=(self.acceleration,self.acceleration))
+            self.stages.move(value=positionList[0], axis="XY", is_absolute=True, is_blocking=True, acceleration=(self.acceleration, self.acceleration))
             # move to all coordinates and take an image   
             if illuSource is not None: 
                 self._master.lasersManager[illuSource].setEnabled(1)
@@ -734,7 +743,7 @@ class HistoScanController(LiveUpdatedController):
                         import tifffile as tif
                         tif.imsave("test.tif", mFrame, append=True)
                         
-                        lastStagePositionX = currentPosX
+            #             lastStagePositionX = currentPosX
                         
             # Scan over all positions in XY 
             for iPos in positionList:
@@ -766,7 +775,7 @@ class HistoScanController(LiveUpdatedController):
 
                 except Exception as e:
                     self._logger.error(e)
-            # we are done and switch off the ligth
+            # we are done and switch off the light
             if illuSource is not None:
                 self._master.lasersManager[illuSource].setEnabled(0)
 
@@ -787,8 +796,8 @@ class HistoScanController(LiveUpdatedController):
         # get stitched result
         def getStitchedResult():
             largeImage = stitcher.get_stitched_image()
-            tifffile.imsave("stitchedImage.tif", largeImage, append=False) 
-            # display result 
+            tifffile.imsave("stitchedImage.ome.tif", largeImage, append=False)
+            # display result  
             self.setImageForDisplay(largeImage, "histoscanStitch")
         threading.Thread(target=getStitchedResult).start()
         
@@ -828,18 +837,13 @@ class HistoScanController(LiveUpdatedController):
         # other tabs
         self.stophistoscanTilebased()
         self.stophistoscanCamerabased()
-        
-    
-        
-
-
 
 
 class ImageStitcher:
 
     def __init__(self, parent, min_coords, max_coords,  folder, file_name, extension, 
                  subsample_factor=.25, nChannels = 3, flatfieldImage=None, 
-                 flipX=True, flipY=True, isStitchAshlar=False, pixel_size = -1):
+                 flipX=True, flipY=True, isStitchAshlar=False, pixel_size=-1):
         # Initial min and max coordinates 
         self._parent = parent
         self.isStichAshlar = isStitchAshlar
@@ -876,17 +880,16 @@ class ImageStitcher:
             self.nY = self.max_coords[1] - self.min_coords[1]
             self.nX = self.max_coords[0] - self.min_coords[0]
             self.stitched_image = np.zeros((self.nY, self.nX, nChannels), dtype=np.float32)
-            self.stitched_image_shape= self.stitched_image.shape
+            self.stitched_image_shape = self.stitched_image.shape
             
             # get the background image
             if flatfieldImage is not None:
                 self.flatfieldImage = cv2.resize(np.copy(flatfieldImage), None, fx=self.subsample_factor, fy=self.subsample_factor, interpolation=cv2.INTER_NEAREST)  
             else:
                 self.flatfieldImage = np.ones((self.nY, self.nX, nChannels), dtype=np.float32)
-            
 
 
-    def process_ashlar(self, arrays, position_list, pixel_size, output_filename='ashlar_output_numpy.tif', maximum_shift_microns=10, flip_x=False, flip_y=False):
+    def process_ashlar(self, arrays, position_list, pixel_size, output_filename='ashlar_stitch.ome.tif', maximum_shift_microns=30, flip_x=False, flip_y=False, pyramid=True):
         '''
         install from here: https://github.com/openUC2/ashlar
         arrays => 4d numpy array (n_images, n_channels, height, width)
@@ -907,9 +910,9 @@ class ImageStitcher:
                         maximum_shift=maximum_shift_microns,
                         stitch_alpha=0.01,
                         maximum_error=None,
-                        filter_sigma=0,
+                        filter_sigma=3,
                         filename_format='cycle_{cycle}_channel_{channel}.tif',
-                        pyramid=False,
+                        pyramid=pyramid,
                         tile_size=1024,
                         ffp=None,
                         dfp=None,
@@ -937,8 +940,8 @@ class ImageStitcher:
                     tif.write(data=img, metadata=metadata)
             
 
-    def _place_on_canvas(self, img, coords, flipX=True, flipY=True):
-        # 
+    def _place_on_canvas(self, img, coords, flipX=True, flipY=True):                
+        
         if self.isStichAshlar:
             # in case we want to process it with ASHLAR later on
             self.ashlarImageList.append(img)
@@ -976,10 +979,10 @@ class ImageStitcher:
     def get_stitched_image(self):
         with self.lock:
             if self.isStichAshlar:
-                # convert the image and positionlist 
+                # convert the image and positionlist
                 arrays = [np.expand_dims(np.array(self.ashlarImageList),1)]  # (num_images, num_channels, height, width)
                 position_list = np.array(self.ashlarPositionList)
-                self.process_ashlar(arrays, position_list, self.pixel_size, output_filename=self.file_path, maximum_shift_microns=100, flip_x=self.flipX, flip_y=self.flipY)
+                self.process_ashlar(arrays, position_list, self.pixel_size, output_filename="/Users/franziskaniemeyer/Downloads/stiched.ome.tif", maximum_shift_microns=30, flip_x=self.flipX, flip_y=self.flipY)
                 # reload the image
                 stitched = tifffile.imread(self.file_path)
                 return stitched
@@ -992,13 +995,13 @@ class ImageStitcher:
                     stitched = np.uint8(stitched*255)
                 '''
                 self.isRunning = False
-                return stitched 
+                return stitched
 
     def save_stitched_image(self, filename):
         stitched = self.get_stitched_image()
         imsave(filename, stitched)
-    
-    
+
+
 
 class MovementController:
     def __init__(self, stages):

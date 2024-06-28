@@ -339,7 +339,7 @@ class HistoScanWidget(NapariHybridWidget):
         self.savePath = path
         self.lineeditSelectPath.setText(path)
 
-    def getDefaulSavePath(self):
+    def getDefaultSavePath(self):
         return self.savePath
 
     def handleSelectPath(self):

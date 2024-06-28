@@ -2,8 +2,6 @@ from imswitch.imcommon.model import initLogger
 from .PositionerManager import PositionerManager
 import time
 import numpy as np
-from imswitch.imcommon.model import APIExport, generateAPI, initLogger
-import threading
 
 MAX_ACCEL = 500000
 PHYS_FACTOR = 1
@@ -135,8 +133,11 @@ class ESP32StageManager(PositionerManager):
 
         # optional: hom on startup:
         if self.homeOnStartX: self.home_x()
+        time.sleep(0.5)
         if self.homeOnStartY: self.home_y()
+        time.sleep(0.5)
         if self.homeOnStartZ: self.home_z()
+        time.sleep(0.5)
 
         # set speed for all axes
         self._speed = {"X": positionerInfo.managerProperties.get('speedX', 10000),
@@ -222,6 +223,7 @@ class ESP32StageManager(PositionerManager):
             if axis == "XYZ": acceleration = (self.acceleration["X"], self.acceleration["Y"], self.acceleration["Z"])
         if axis == 'X' and speed >0:
             # don't move to negative positions
+            if not is_absolute and value == 0: return
             if self.limitXenabled and is_absolute and value < 0: return
             elif self.limitXenabled and not is_absolute and self._position[axis] + value < 0: return
             self._motor.move_x(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout)
@@ -229,6 +231,7 @@ class ESP32StageManager(PositionerManager):
             else: self._position[axis] = value
         elif axis == 'Y' and speed >0:
             # don't move to negative positions
+            if not is_absolute and value == 0: return
             if self.limitYenabled and is_absolute and value < 0: return
             elif self.limitYenabled and not is_absolute and self._position[axis] + value < 0: return
             self._motor.move_y(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout)
@@ -236,6 +239,7 @@ class ESP32StageManager(PositionerManager):
             else: self._position[axis] = value
         elif axis == 'Z' and speed >0:
             # don't move to negative positions
+            if not is_absolute and value == 0: return
             if self.limitZenabled and is_absolute and value < 0: return
             elif self.limitZenabled and not is_absolute and self._position[axis] + value < 0: return
             self._motor.move_z(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, is_dualaxis=self.isDualAxis, timeout=timeout)
@@ -245,6 +249,7 @@ class ESP32StageManager(PositionerManager):
             # don't move to negative positions
             #if is_absolute and value < 0: return
             #elif not is_absolute and self._position[axis] + value < 0: return
+            if not is_absolute and value == 0: return
             self._motor.move_a(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
@@ -310,11 +315,11 @@ class ESP32StageManager(PositionerManager):
         self.setPosition(value, axis)
         self._motor.set_position(axis, value)
 
-    def setPositionFromDevice(self, poitionArray: np.array):
+    def setPositionFromDevice(self, positionArray: np.array):
         ''' mostly used for he position callback 
         If new positions are coming from the device they will be updated in ImSwitch too'''
         for iAxis, axisName in enumerate(["A", "X", "Y", "Z"]):
-            self.setPosition(poitionArray[iAxis]*self.stepSizes[axisName], axisName)
+            self.setPosition(positionArray[iAxis]*self.stepSizes[axisName], axisName)
         self._commChannel.sigUpdateMotorPosition.emit()
         
         

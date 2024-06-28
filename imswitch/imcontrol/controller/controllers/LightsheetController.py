@@ -196,7 +196,9 @@ class LightsheetController(ImConWidgetController):
         #allPositions = self.stages.getPosition() # TODO: Necesllary?
         #mPositionsXYZ = (allPositions["X"], allPositions["Y"], allPositions["Z"])
         #self._widget.updatePosition(mPositionsXYZ)
-        self._commChannel.sigUpdateMotorPosition.emit()
+        #self._commChannel.sigUpdateMotorPosition.emit()
+        pass 
+        #TODO: This needs an update!
         
     def displayImage(self):
         # a bit weird, but we cannot update outside the main thread
@@ -237,7 +239,8 @@ class LightsheetController(ImConWidgetController):
     @APIExport()
     def performScanningRecording(self, minPos=0, maxPos=1000, speed=1000, axis="A", illusource=None, illuvalue=512):
         if not self.isLightsheetRunning:
-            
+            if maxPos - minPos <= 0: return
+            if speed < 100: speed = 100 
             # check parameters
             if axis not in ("A", "X", "Y", "Z"):
                 axis = "A"
@@ -273,16 +276,6 @@ class LightsheetController(ImConWidgetController):
         iFrame = 0
         allFrames = []
         while self.isLightsheetRunning:
-            '''
-            from juliacall import Main as jl 
-            jl.seval('import Pkg; Pkg.add("FourierTools")')
-            # jl.seval("Pkg.add(\"FourierTools\")") 
-            jl.seval("using FourierTools") 
-            jl.tofft = jl.copy(frame) 
-            fftImage = np.array(jl.seval("abs.(log10.(abs.(ft(tofft))))")) 
-            print(fftImage) 
-            jl.println("hello from Julia")
-            '''
             # Todo: Need to ensure thatwe have the right pattern displayed and the buffer is free - this heavily depends on the exposure time..
             mFrame = None
             lastFrameNumber = -1

@@ -158,7 +158,12 @@ class HistoScanController(LiveUpdatedController):
             self._widget.buttonTurnOffLEDArray.clicked.connect(self.turnOffLEDArray)
         
     def computeOptimalScanStepSize(self, overlap = 0.75):
-        mFrameSize = (self.microscopeDetector._camera.SensorHeight, self.microscopeDetector._camera.SensorWidth)
+        try: # TODO: we need to ensure that the camera has the correct pixelsize on loadup
+            mFrame = self.microscopeDetector.getLatestFrame()
+            NpixX, NpixY = mFrame.shape[1], mFrame.shape[0]
+        except:
+            NpixX, NpixY = 1000,1000 # TODO: Better dummy variables!
+        mFrameSize = (NpixY, NpixX)
         bestScanSizeX = mFrameSize[1]*self.microscopeDetector.pixelSizeUm[-1]*overlap
         bestScanSizeY = mFrameSize[0]*self.microscopeDetector.pixelSizeUm[-1]*overlap     
         return bestScanSizeX, bestScanSizeY
@@ -703,7 +708,7 @@ class HistoScanController(LiveUpdatedController):
             t = datetime.datetime.now(tz=tz).strftime(ft)
             file_name = "test_"+t
             extension = ".ome.tif"
-            folder = self._widget.getDefaulSavePath()
+            folder = self._widget.getDefaultSavePath()
             t0 = time.time()
             
             # create a new image stitcher          
@@ -760,7 +765,7 @@ class HistoScanController(LiveUpdatedController):
                     lastFrameNumber=-1
                     while(1):
                         # get frame and frame number to get one that is newer than the one with illumination off eventually
-                        mFrame, currentFrameNumber = self.detector.getLatestFrame(returnFrameNumber=True)
+                        mFrame, currentFrameNumber = self.microscopeDetector.getLatestFrame(returnFrameNumber=True)
                         if lastFrameNumber==-1:
                             # first round
                             lastFrameNumber = currentFrameNumber

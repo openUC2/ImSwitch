@@ -19,8 +19,6 @@ class ImSwitchRESTLaserManager(LaserManager):
         self.channel_index = laserInfo.managerProperties['channel_index']
         self._laser_manager = self._imswitch_client.lasersManager
         self.power = 0
-        self.wavelength = laserInfo.wavelength
-        self.laser_name = laserInfo.managerProperties['laser_name']
         self.enabled = False
         self.setEnabled(self.enabled)
         self.__logger = initLogger(self, instanceName=name)

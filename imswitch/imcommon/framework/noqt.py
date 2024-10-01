@@ -1,9 +1,13 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, List
 from psygnal import SignalInstance, emit_queued
+import psygnal
+
 from functools import lru_cache
 import asyncio
 import threading
 import imswitch.imcommon.framework.base as abstract
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Any, Union
@@ -20,13 +24,74 @@ class Mutex(abstract.Mutex):
     def unlock(self) -> None:
         self.__lock.release()
 
-class Signal(SignalInstance, abstract.Signal):
-    """ `psygnal` implementation of the `base.Signal` abstract class.
-    """
 
-    def __init__(self, *argtypes: 'Any', info: str = "ImSwitch signal") -> None:
-        SignalInstance.__init__(self, signature=argtypes)
-        self._info = info
+
+app = FastAPI()
+
+# List to keep track of connected clients
+connected_clients: List[WebSocket] = []
+
+class FastAPIWebSocketManager:
+    """Manages connected WebSocket clients and broadcasts messages."""
+    def __init__(self):
+        self.clients: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        """Add a new client to the list and accept the connection."""
+        await websocket.accept()
+        self.clients.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        """Remove the client from the list when they disconnect."""
+        self.clients.remove(websocket)
+
+    async def broadcast(self, message: str):
+        """Send a message to all connected clients."""
+        for client in self.clients:
+            try:
+                await client.send_text(message)
+            except Exception as e:
+                print(f"Error sending message to client: {e}")
+
+# Instantiate the WebSocket manager
+ws_manager = FastAPIWebSocketManager()
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive; no need to receive from client in this case
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+
+
+class SignalInstance(psygnal.SignalInstance):
+    async def emit(
+        self, *args: Any, check_nargs: bool = False, check_types: bool = False
+    ) -> None:
+        super().emit(*args, check_nargs=check_nargs, check_types=check_types)
+        print("Signal emitted:", self, args)
+        # Send data to all connected WebSocket clients
+        if connected_clients:
+            message = f"Signal emitted with args: {args}"
+            await ws_manager.broadcast(message)
+        # add your custom websocket code here if you want to emit the signal to a
+        # websocket AFTER the signal has been emitted to all python listeners
+
+    def _run_emit_loop(self, args: tuple[Any, ...]) -> None:
+        # add your custom websocket code here if you want to emit the signal to a
+        # websocket BEFORE the signal has been emitted to all python listeners
+        return super()._run_emit_loop(args)
+
+
+class Signal(psygnal.Signal):      
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)  
+        self._signal_instance_class = SignalInstance
+        self._info = "ImSwitch signal"
+        
 
     def connect(self, func: 'Union[Callable, abstract.Signal]') -> None:
         if isinstance(func, abstract.Signal):
@@ -40,8 +105,10 @@ class Signal(SignalInstance, abstract.Signal):
             super().disconnect()
         super().disconnect(func)
     
-    def emit(self, *args) -> None:
-        super().emit(*args)
+    def emit(self, *args) -> None:        
+        # super().emit(*args)
+        instance = self._signal_instance_class(*args)
+        asyncio.create_task(instance.emit(*args))
     
     @property
     @lru_cache
@@ -51,12 +118,6 @@ class Signal(SignalInstance, abstract.Signal):
     @property
     def info(self) -> str:
         return self._info
-
-class SignalInterface(abstract.SignalInterface):
-    """ Base implementation of `abstract.SignalInterface`.
-    """
-    def __init__(self) -> None:
-        ...
 
 class Worker(abstract.Worker):
     def __init__(self) -> None:

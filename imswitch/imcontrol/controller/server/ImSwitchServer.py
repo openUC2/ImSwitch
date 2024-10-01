@@ -7,8 +7,9 @@ from imswitch.imcommon.framework import Worker
 from imswitch.imcommon.model import initLogger
 from ._serialize import register_serializers
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 import imswitch
 import uvicorn
@@ -32,7 +33,8 @@ from fastapi.openapi.docs import (
 from fastapi.staticfiles import StaticFiles
 
 try:
-    from arkitekt_next import easy
+    pass
+#    from arkitekt_next import easy
 except ImportError:
     print("Arkitekt not found")
 
@@ -130,28 +132,6 @@ class ImSwitchServer(Worker):
         self.server_thread.start()
         self.__logger.debug("Started server with URI -> PYRO:" + self._name + "@" + self._host + ":" + str(self._port))
 
-        return
-        try:
-            Pyro5.config.SERIALIZER = "msgpack"
-
-            def print_exposed_methods(obj):
-                if hasattr(obj, '__pyroExposed__'):
-                    for method in obj.__pyroExposed__:
-                        print(method)
-            print("Exposed methods:")
-            print_exposed_methods(self)
-            register_serializers()
-            Pyro5.server.serve(
-                {self: self._name},
-                use_ns=False,
-                host=self._host,
-                port=self._port,
-            )
-
-        except Exception as e:
-            self.__logger.error("Couldn't start server.")
-        self.__logger.debug("Loop Finished")
-
 
     def stop(self):
         self.__logger.debug("Stopping ImSwitchServer")
@@ -171,10 +151,6 @@ class ImSwitchServer(Worker):
         finally:
             s.close()
         return IP
-    #@expose: FIXME: Remove
-    def testMethod(self):
-        return "Hello World"
-
 
     @app.get("/docs", include_in_schema=False)
     async def custom_swagger_ui_html():
@@ -185,6 +161,21 @@ class ImSwitchServer(Worker):
             swagger_js_url="/static/swagger-ui-bundle.js",
             swagger_css_url="/static/swagger-ui.css",
         )
+        
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket):
+        await websocket.accept()
+        try:
+            while True:
+                data = await websocket.receive_text()
+                print(f"Message received: {data}")
+                #await websocket.send_text(f"Message sent: {data}")
+        except WebSocketDisconnect:
+            print("Connection closed")
+        except Exception as e:
+            print(f"Connection closed: {e}")
+            
+
 
     @app.get("/")
     def createAPI(self):

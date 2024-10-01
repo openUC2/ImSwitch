@@ -33,12 +33,12 @@ class ImSwitchRESTStageManager(PositionerManager):
         Move the stage to a specified position.
         '''
         if is_absolute:
-            self._imswitch_client.positionersManager.movePositioner(self.positioner_name, axis, value, is_absolute=True, is_blocking=is_blocking)
+            self._imswitch_client.positionersManager.movePositioner(self.positioner_name, axis, value, is_absolute=is_absolute, is_blocking=is_blocking)
             new_position = value
         else:
             new_position = self._position[axis]  + value
-            self._imswitch_client.positionersManager.movePositioner(self.positioner_name, axis, value, is_absolute=True, is_blocking=is_blocking)
-        self._position[axis] = value
+            self._imswitch_client.positionersManager.movePositioner(self.positioner_name, axis, value, is_absolute=is_absolute, is_blocking=is_blocking)
+        self._position[axis] = new_position
         
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
         self._motor.move_forever(speed=speed, is_stop=is_stop)

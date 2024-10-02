@@ -162,20 +162,6 @@ class ImSwitchServer(Worker):
             swagger_css_url="/static/swagger-ui.css",
         )
         
-    @app.websocket("/ws")
-    async def websocket_endpoint(websocket: WebSocket):
-        await websocket.accept()
-        try:
-            while True:
-                data = await websocket.receive_text()
-                print(f"Message received: {data}")
-                #await websocket.send_text(f"Message sent: {data}")
-        except WebSocketDisconnect:
-            print("Connection closed")
-        except Exception as e:
-            print(f"Connection closed: {e}")
-            
-
 
     @app.get("/")
     def createAPI(self):

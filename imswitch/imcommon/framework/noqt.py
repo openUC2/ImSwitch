@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Any, List
-from psygnal import SignalInstance, emit_queued
+from psygnal import emit_queued
 import psygnal
+import uvicorn
 
 from functools import lru_cache
 import asyncio
@@ -28,9 +29,6 @@ class Mutex(abstract.Mutex):
 
 app = FastAPI()
 
-# List to keep track of connected clients
-connected_clients: List[WebSocket] = []
-
 class FastAPIWebSocketManager:
     """Manages connected WebSocket clients and broadcasts messages."""
     def __init__(self):
@@ -43,7 +41,8 @@ class FastAPIWebSocketManager:
 
     def disconnect(self, websocket: WebSocket):
         """Remove the client from the list when they disconnect."""
-        self.clients.remove(websocket)
+        if websocket in self.clients:
+            self.clients.remove(websocket)
 
     async def broadcast(self, message: str):
         """Send a message to all connected clients."""
@@ -52,6 +51,8 @@ class FastAPIWebSocketManager:
                 await client.send_text(message)
             except Exception as e:
                 print(f"Error sending message to client: {e}")
+                # Optionally handle client disconnects here
+
 
 # Instantiate the WebSocket manager
 ws_manager = FastAPIWebSocketManager()
@@ -61,30 +62,45 @@ async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive; no need to receive from client in this case
+            # Keep the connection alive, no need to receive from client
             await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
+        
+        
+class SignalInterface(abstract.SignalInterface):
+    """ Base implementation of `abstract.SignalInterface`.
+    """
+    def __init__(self) -> None:
+        ...
 
 
 class SignalInstance(psygnal.SignalInstance):
-    async def emit(
+    def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
     ) -> None:
+        """Synchronous emit function that creates an asynchronous task for WebSocket communication."""
         super().emit(*args, check_nargs=check_nargs, check_types=check_types)
         print("Signal emitted:", self, args)
-        # Send data to all connected WebSocket clients
-        if connected_clients:
-            message = f"Signal emitted with args: {args}"
-            await ws_manager.broadcast(message)
-        # add your custom websocket code here if you want to emit the signal to a
-        # websocket AFTER the signal has been emitted to all python listeners
 
+        # Send data to all connected WebSocket clients asynchronously
+        message = f"Signal emitted with args: {args}"
+        
+            
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(self._send_websocket_message(message))
+        else:
+            loop.run_until_complete(self._send_websocket_message(message))
+
+
+    async def _send_websocket_message(self, message: str) -> None:
+        """Asynchronously sends a WebSocket message to all connected clients."""
+        await ws_manager.broadcast(message)
+        
     def _run_emit_loop(self, args: tuple[Any, ...]) -> None:
-        # add your custom websocket code here if you want to emit the signal to a
-        # websocket BEFORE the signal has been emitted to all python listeners
+        # You can add custom pre-emit logic here if needed
         return super()._run_emit_loop(args)
-
 
 class Signal(psygnal.Signal):      
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -226,3 +242,17 @@ class FrameworkUtils(abstract.FrameworkUtils):
     @staticmethod
     def processPendingEventsCurrThread():
         emit_queued()
+        
+        
+        
+# Function to run FastAPI with Uvicorn in a separate thread
+def run_uvicorn():
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# Launch Uvicorn in a separate thread to avoid blocking the main application
+def start_websocket_server():
+    server_thread = threading.Thread(target=run_uvicorn, daemon=True)
+    server_thread.start()
+
+# Call this function in the main application to start the WebSocket server
+start_websocket_server()

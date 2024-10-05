@@ -131,19 +131,20 @@ class UC2ConfigController(ImConWidgetController):
 
     def reconnectThread(self, baudrate=None):
         self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
-        self._widget.reconnectDeviceLabel.setText("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
+        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
 
     def closeConnection(self):
         self._master.UC2ConfigManager.closeSerial()
-        self._widget.reconnectDeviceLabel.setText("Connection to ESP32 closed.")
+        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Connection to ESP32 closed.")
 
     @APIExport(runOnUIThread=True)
     def reconnect(self):
         self._logger.debug('Reconnecting to ESP32 device.')
-        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Reconnecting to ESP32 device.")
-        baudrate = self._widget.getBaudRateGui()
-        if baudrate not in (115200, 500000):
-            baudrate = None
+        baudrate = None
+        if not IS_HEADLESS: 
+            self._widget.reconnectDeviceLabel.setText("Reconnecting to ESP32 device.")
+            if self._widget.getBaudRateGui() in (115200, 500000):
+                baudrate = self._widget.getBaudRateGui()
         mThread = threading.Thread(target=self.reconnectThread, args=(baudrate,))
         mThread.start()
 

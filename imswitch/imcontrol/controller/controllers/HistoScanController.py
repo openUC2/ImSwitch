@@ -460,13 +460,14 @@ class HistoScanController(LiveUpdatedController):
         #self.turnOffLED()
 
         self.ishistoscanRunning = False
+        self._logger.debug("histoscan scanning stopped.")
+        if IS_HEADLESS: return
         self._widget.startButton3.setEnabled(True)
         self._widget.stopButton3.setEnabled(False)
         self._widget.startButton3.setText("Start")
         self._widget.stopButton3.setText("Stopped")
         self._widget.stopButton3.setStyleSheet("background-color: green")
         self._widget.startButton3.setStyleSheet("background-color: red")
-        self._logger.debug("histoscan scanning stopped.")
     
     def updateAllPositionGUI(self):
         allPositions = self.stages.position
@@ -483,6 +484,7 @@ class HistoScanController(LiveUpdatedController):
             
     def displayImage(self):
         # a bit weird, but we cannot update outside the main thread
+        if IS_HEADLESS: return
         name = self.histoScanStackName
         # subsample stack 
         isRGB = self.histoscanStack.shape[-1]==3
@@ -617,7 +619,18 @@ class HistoScanController(LiveUpdatedController):
                                 isStitchAshlar=isStitchAshlar, isStitchAshlarFlipX=isStitchAshlarFlipX, isStitchAshlarFlipY=isStitchAshlarFlipY,
                                 resizeFactor=resizeFactor)
         
+    def stophistoscanMain(self):
+        if IS_HEADLESS: return
+        self._widget.startButton.setEnabled(True)
+        self._widget.stopButton.setEnabled(False)
+        self._widget.startButton.setText("Start")
+        self._widget.stopButton.setText("Stopped")
+        self._widget.stopButton.setStyleSheet("background-color: green")
+        self._widget.startButton.setStyleSheet("background-color: red")
+        self._logger.debug("histoscan scanning stopped.")
+        
     def stophistoscanTilebased(self):
+        if IS_HEADLESS: return
         self.ishistoscanRunning = False
         self._widget.startButton2.setEnabled(True)
         self._widget.stopButton2.setEnabled(False)
@@ -772,13 +785,12 @@ class HistoScanController(LiveUpdatedController):
             ft = "%Y-%m-%dT%H_%M_%S"
             HistoDate = datetime.datetime.now(tz=tz).strftime(ft)
             file_name = "test_"+HistoDate
-            extension = ".ome.tif"
+            extension = "ome.tif"
             if IS_HEADLESS: 
-                fileExtension = "tif"
-                folder = self.getSaveFilePath(date=HistoDate,
+                filePath = self.getSaveFilePath(date=HistoDate,
                                         filename=file_name,
                                         extension=extension)
-                
+                folder = os.path.dirname(filePath)
             else: folder = self._widget.getDefaulSavePath()
             t0 = time.time()
             
@@ -932,15 +944,10 @@ class HistoScanController(LiveUpdatedController):
     def stophistoscan(self):
         # update GUI elements
         self.ishistoscanRunning = False
-        self._widget.startButton.setEnabled(True)
-        self._widget.stopButton.setEnabled(False)
-        self._widget.startButton.setText("Start")
-        self._widget.stopButton.setText("Stopped")
-        self._widget.stopButton.setStyleSheet("background-color: green")
-        self._widget.startButton.setStyleSheet("background-color: red")
-        self._logger.debug("histoscan scanning stopped.")
-        
+    
+
         # other tabs
+        self.stophistoscanMain()
         self.stophistoscanTilebased()
         self.stophistoscanCamerabased()
         

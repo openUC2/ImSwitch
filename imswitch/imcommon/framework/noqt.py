@@ -87,7 +87,12 @@ class SignalInstance(psygnal.SignalInstance):
         message = f"Signal emitted with args: {args}"
         
             
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:  # If there is no event loop in the current thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
         if loop.is_running():
             asyncio.create_task(self._send_websocket_message(message))
         else:
@@ -247,7 +252,7 @@ class FrameworkUtils(abstract.FrameworkUtils):
         
 # Function to run FastAPI with Uvicorn in a separate thread
 def run_uvicorn():
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8002)
 
 # Launch Uvicorn in a separate thread to avoid blocking the main application
 def start_websocket_server():

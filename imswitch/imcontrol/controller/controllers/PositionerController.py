@@ -142,8 +142,10 @@ class PositionerController(ImConWidgetController):
         if not IS_HEADLESS: self._widget.updateSpeed(positionerName, axis, newSpeed)
 
     @APIExport(runOnUIThread=True)
-    def homeAxis(self, positionerName, axis, isBlocking=False):
+    def homeAxis(self, positionerName=None, axis="X", isBlocking=False):
         self.__logger.debug(f"Homing axis {axis}")
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0] 
         self._master.positionersManager[positionerName].doHome(axis, isBlocking=isBlocking)
         self.updatePosition(positionerName, axis)
         self._commChannel.sigUpdateMotorPosition.emit()

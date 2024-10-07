@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Union
 from PIL import Image
 import io
+from fastapi import Header
             
 try:
     from ashlar.scripts.ashlar import process_images
@@ -52,6 +53,18 @@ class HistoScanController(LiveUpdatedController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
+        
+        # check if we are on remote HTTP version
+        if kwargs['master'].rs232sManager.getAllDeviceNames()[0]:
+            try:
+                self.IS_HTTP = True
+                httpManager = kwargs['master'].rs232sManager[kwargs['master'].rs232sManager.getAllDeviceNames()[0]]
+                self.remoteHistoManager = httpManager._imswitch_client.histoscanManager
+            except Exception as e:
+                self._logger.error(f"Could not connect to remote histo manager: {e}")
+                self.IS_HTTP = False
+        else:
+            self.IS_HTTP = False
         # read default values from previously loaded config file
         offsetX = self._master.HistoScanManager.offsetX
         offsetY = self._master.HistoScanManager.offsetY
@@ -587,7 +600,8 @@ class HistoScanController(LiveUpdatedController):
             self._logger.debug("histoscan scanning stopped.")
 
     @APIExport()
-    def startHistoScanTileBasedByParameters(self, numberTilesX:int=2, numberTilesY:int=2, stepSizeX:int=100, stepSizeY:int=100, nTimes:int=1, tPeriod:int=1, initPosX:Optional[Union[int, str]] = None, initPosY:Optional[Union[int, str]] = None, 
+    def startHistoScanTileBasedByParameters(self, numberTilesX:int=2, numberTilesY:int=2, stepSizeX:int=100, stepSizeY:int=100, 
+                                            nTimes:int=1, tPeriod:int=1, initPosX:Optional[Union[int, str]] = None, initPosY:Optional[Union[int, str]] = None, 
                                             isStitchAshlar:bool=False, isStitchAshlarFlipX:bool=False, isStitchAshlarFlipY:bool=False, resizeFactor:float=0.25):
         def computePositionList(numberTilesX, numberTilesY, stepSizeX, stepSizeY, initPosX, initPosY):
             positionList = []
@@ -615,6 +629,9 @@ class HistoScanController(LiveUpdatedController):
         maxPosY = np.max(positionList, axis=0)[1]
         
         # start stage scanning with positionlist 
+        #def startHistoScanTileBasedByParameters(self, numberTilesX, numberTilesY, stepSizeX, stepSizeY, initPosX, initPosY, nTimes=1, tPeriod=1):
+        if self.IS_HTTP:
+            self.startStageScanning = self.remoteHistoManager.startStageScanning
         self.startStageScanning(minPosX=minPosX, minPosY=minPosY, maxPosX=maxPosX, maxPosY=maxPosY, positionList=positionList, nTimes=nTimes, tPeriod=tPeriod, 
                                 isStitchAshlar=isStitchAshlar, isStitchAshlarFlipX=isStitchAshlarFlipX, isStitchAshlarFlipY=isStitchAshlarFlipY,
                                 resizeFactor=resizeFactor)
@@ -657,10 +674,27 @@ class HistoScanController(LiveUpdatedController):
         return self.startStageScanning(minPosX=minPosX, maxPosX=maxPosX, minPosY=minPosY, maxPosY=maxPosY, overlap=None, 
                                 nTimes=nTimes, tPeriod=tPeriod, positionList=positionList)
             
+    @APIExport()
     def startStageScanning(self, minPosX:float=None, maxPosX:float=None, minPosY:float=None, maxPosY:float=None, 
-                           overlap:float=None, nTimes:int=1, tPeriod:int=0, positionList:list=None, 
+                           overlap:float=None, nTimes:int=1, tPeriod:int=0, positionList: Optional[Union[list, str]] = None, 
                            isStitchAshlar:bool=False, isStitchAshlarFlipX:bool=False, isStitchAshlarFlipY:bool=False, 
                            resizeFactor=0.25):
+        '''
+        Start A stage scanning based on the provided parameters (position list will be generated based on the min/max positions)
+        minPosX: minimum X position
+        maxPosX: maximum X position
+        minPosY: minimum Y position
+        maxPosY: maximum Y position
+        overlap: overlap between the images
+        nTimes: number of times to repeat the scan
+        tPeriod: time between scans
+        positionList: list of tuples with X/Y positions - if provided, the min/max positions are ignored
+        isStitchAshlar: stitch the images using ashlar, default is numpy based stitching (tiling)
+        isStitchAshlarFlipX: flip the images in X direction
+        isStitchAshlarFlipY: flip the images in Y direction
+        resizeFactor: resize the images
+        
+        '''
         if not self.ishistoscanRunning:
             self.ishistoscanRunning = True
             if self.histoscanTask is not None:
@@ -751,7 +785,7 @@ class HistoScanController(LiveUpdatedController):
                         flipX=False, flipY=False, tSettle=0.05, 
                         isStitchAshlar=False, resizeFactor=0.25):
         self._logger.debug("histoscan thread started.")
-        
+        positionList
         initialPosition = self.stages.getPosition()
         initPosX = initialPosition["X"]
         initPosY = initialPosition["Y"]

@@ -21,7 +21,6 @@ class ImScrMainController(MainController):
 
         # Connect signals from ModuleCommunicationChannel
         if IS_HEADLESS:
-            
             return
         self.__mainView.sigClosing.connect(self.closeEvent)
 

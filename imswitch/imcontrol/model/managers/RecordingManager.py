@@ -15,7 +15,7 @@ import cv2
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal, SignalInterface, Thread, Worker
 from imswitch.imcommon.model import initLogger
-from ome_zarr.writer import write_multiscales_metadata
+from ome_zarr.writer import write_multiscales_metadata # TODO: This fails with newer numpy versions!
 from ome_zarr.format import format_from_version
 import abc
 import logging

@@ -71,7 +71,7 @@ setup(
         "jupyter",
         "python-multipart >= 0.0.5",
         "piexif >= 1.1.3",
-        "NanoImagingPack==2.1.3.dev1",
+        "NanoImagingPack==2.1.4.dev1",
         "pymba==0.3.7",
         "ashlarUC2",
         "imjoy-rpc==0.5.59"

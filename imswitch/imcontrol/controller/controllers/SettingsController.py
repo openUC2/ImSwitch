@@ -527,6 +527,16 @@ class SettingsController(ImConWidgetController):
         self.updateSharedAttrs()
 
     @APIExport(runOnUIThread=True)
+    def setDetectorMode(self, detectorName: str=None, isAuto: bool=True) -> None:
+        """ Sets the detector mode for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        try:
+            self.setDetectorParameter(detectorName, 'mode', 'Auto' if isAuto else 'Manual')
+        except Exception as e:
+            pass
+        
+    @APIExport(runOnUIThread=True)
     def setDetectorExposureTime(self, detectorName: str=None, exposureTime: float=1) -> None:
         """ Sets the exposure time for the specified detector. """
         if detectorName is None:

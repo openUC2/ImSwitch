@@ -229,7 +229,9 @@ class CameraHIK:
         else:
             self.__logger.warning("Exposure mode not recognized")
 
-
+    def set_camera_mode(self, isAutomatic):
+        self.set_exposure_mode("auto" if isAutomatic else "manual")
+        
     def set_gain(self,gain):
         self.gain = gain
         self.camera.MV_CC_SetFloatValue("Gain", self.gain)
@@ -371,6 +373,8 @@ class CameraHIK:
             self.set_flatfielding(property_value)
         elif property_name == "trigger_source":
             self.setTriggerSource(property_value)
+        elif property_name == 'mode':
+            self.set_camera_mode(property_value)
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
             return False

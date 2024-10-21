@@ -45,6 +45,7 @@ class VirtualCameraManager(DetectorManager):
                         editable=False),
             'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
                                     editable=True),
+            'mode': DetectorBooleanParameter(group='Misc', value=True, editable=True),
             'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),            
             'binning': DetectorNumberParameter(group="Misc", value=1, valueUnits="arb.u.", editable=True),
             'trigger_source': DetectorListParameter(group='Acquisition mode',

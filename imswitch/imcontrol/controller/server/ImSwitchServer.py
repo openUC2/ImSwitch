@@ -39,9 +39,6 @@ except ImportError:
     print("Arkitekt not found")
 
  
-
-import logging
-
 PORT = __httpport__
 IS_SSL = __ssl__
 
@@ -51,6 +48,7 @@ imswitchapp_dir = os.path.join(_baseDataFilesDir,  'static', 'imswitch')
 app = FastAPI(docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")  # serve static files such as the swagger UI
 app.mount("/imswitch", StaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
+
 
 
 #arpp = easy()
@@ -88,7 +86,8 @@ class ServerThread(threading.Thread):
                 host="0.0.0.0",
                 port=PORT,
                 ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if IS_SSL else None,
-                ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None
+                ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None, 
+                timeout_keep_alive=2,
             )
             self.server = uvicorn.Server(config)
             self.server.run()

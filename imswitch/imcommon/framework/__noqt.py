@@ -81,12 +81,11 @@ class SignalInstance(psygnal.SignalInstance):
     ) -> None:
         """Synchronous emit function that creates an asynchronous task for WebSocket communication."""
         super().emit(*args, check_nargs=check_nargs, check_types=check_types)
-        print("Signal emitted:", self, args)
+        # print("Signal emitted:", self, args)
 
         # Send data to all connected WebSocket clients asynchronously
         message = f"Signal emitted with args: {args}"
         
-            
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:  # If there is no event loop in the current thread
@@ -96,7 +95,8 @@ class SignalInstance(psygnal.SignalInstance):
         if loop.is_running():
             asyncio.create_task(self._send_websocket_message(message))
         else:
-            loop.run_until_complete(self._send_websocket_message(message))
+            try:loop.run_until_complete(self._send_websocket_message(message))
+            except Exception as e: print(e)
 
 
     async def _send_websocket_message(self, message: str) -> None:

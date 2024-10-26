@@ -1,9 +1,16 @@
-from typing import TYPE_CHECKING
-from psygnal import SignalInstance, emit_queued
+from typing import TYPE_CHECKING, Any, List
+from psygnal import emit_queued
+import psygnal
+import uvicorn
+from imswitch import __ssl__
+
 from functools import lru_cache
 import asyncio
 import threading
 import imswitch.imcommon.framework.base as abstract
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Any, Union
@@ -20,13 +27,104 @@ class Mutex(abstract.Mutex):
     def unlock(self) -> None:
         self.__lock.release()
 
-class Signal(SignalInstance, abstract.Signal):
-    """ `psygnal.SignalInstance` implementation of the `base.Signal` abstract class.
-    """
 
-    def __init__(self, *argtypes: 'Any', info: str = "ImSwitch signal") -> None:
-        SignalInstance.__init__(self, signature=argtypes)
-        self._info = info
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or specify exact origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class FastAPIWebSocketManager:
+    """Manages connected WebSocket clients and broadcasts messages."""
+    def __init__(self):
+        self.clients: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        """Add a new client to the list and accept the connection."""
+        await websocket.accept()
+        self.clients.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        """Remove the client from the list when they disconnect."""
+        if websocket in self.clients:
+            self.clients.remove(websocket)
+
+    async def broadcast(self, message: str):
+        """Send a message to all connected clients."""
+        for client in self.clients:
+            try:
+                await client.send_text(message)
+            except Exception as e:
+                print(f"Error sending message to client: {e}")
+                # Optionally handle client disconnects here
+
+
+# Instantiate the WebSocket manager
+ws_manager = FastAPIWebSocketManager()
+
+@app.get("/")
+async def read_root():
+    return {"message": "Hello World"}
+    
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    print(websocket.headers)  # Inspect headers for debugging
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            # Keep the connection alive, no need to receive from client
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+        
+        
+class SignalInterface(abstract.SignalInterface):
+    """ Base implementation of `abstract.SignalInterface`.
+    """
+    def __init__(self) -> None:
+        ...
+
+
+class SignalInstance(psygnal.SignalInstance):
+    def emit(
+        self, *args: Any, check_nargs: bool = False, check_types: bool = False
+    ) -> None:
+        """Synchronous emit function that creates an asynchronous task for WebSocket communication."""
+        super().emit(*args, check_nargs=check_nargs, check_types=check_types)
+        # print("Signal emitted:", self, args)
+        if not args:
+            return        
+        message = f"{args}"
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:  # If there is no event loop in the current thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        if loop.is_running():
+            asyncio.create_task(self._send_websocket_message(message))
+        else:
+            loop.run_until_complete(self._send_websocket_message(message))
+
+
+    async def _send_websocket_message(self, message: str) -> None:
+        """Asynchronously sends a WebSocket message to all connected clients."""
+        await ws_manager.broadcast(message)
+        
+    def _run_emit_loop(self, args: tuple[Any, ...]) -> None:
+        # You can add custom pre-emit logic here if needed
+        return super()._run_emit_loop(args)
+
+class Signal(psygnal.Signal):      
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)  
+        self._signal_instance_class = SignalInstance
+        self._info = "ImSwitch signal"
+        
 
     def connect(self, func: 'Union[Callable, abstract.Signal]') -> None:
         if isinstance(func, abstract.Signal):
@@ -40,8 +138,10 @@ class Signal(SignalInstance, abstract.Signal):
             super().disconnect()
         super().disconnect(func)
     
-    def emit(self, *args) -> None:
-        super().emit(*args)
+    def emit(self, *args) -> None:        
+        # super().emit(*args)
+        instance = self._signal_instance_class(*args)
+        asyncio.create_task(instance.emit(*args))
     
     @property
     @lru_cache
@@ -52,15 +152,7 @@ class Signal(SignalInstance, abstract.Signal):
     def info(self) -> str:
         return self._info
 
-class SignalInterface(abstract.SignalInterface):
-    """ Base implementation of `abstract.SignalInterface`.
-    """
-    def __init__(self) -> None:
-        ...
-
 class Worker(abstract.Worker):
-    """ Base implementation of `abstract.Worker` using `threading` module.
-    """
     def __init__(self) -> None:
         self._thread = None
 
@@ -69,8 +161,6 @@ class Worker(abstract.Worker):
         thread._worker = self
 
 class Thread(abstract.Thread):
-    """ Base implementation of `abstract.Thread` using `asyncio` and `threading` modules.
-    """
     
     _started = Signal()
     _finished = Signal()
@@ -122,8 +212,6 @@ class Thread(abstract.Thread):
         return self._finished
 
 class Timer(abstract.Timer):
-    """ Base implementation of `abstract.Timer` using `asyncio` and `threading` modules.
-    """
     
     _timeout = Signal()
     
@@ -171,3 +259,32 @@ class FrameworkUtils(abstract.FrameworkUtils):
     @staticmethod
     def processPendingEventsCurrThread():
         emit_queued()
+        
+        
+        
+# Function to run FastAPI with Uvicorn in a separate thread
+def run_uvicorn():
+    #uvicorn.run(app, host="0.0.0.0", port=8002)
+    try:
+        import os
+        import imswitch
+        _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(imswitch.__file__)), '_data')
+        config = uvicorn.Config(
+            app,
+            host="0.0.0.0",
+            port=8002,
+            ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if __ssl__ else None,
+            ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if __ssl__ else None, 
+            timeout_keep_alive=2,
+        )
+        uvicorn.Server(config).run()
+    except Exception as e:
+        print(f"Couldn't start server: {e}")
+        
+# Launch Uvicorn in a separate thread to avoid blocking the main application
+def start_websocket_server():
+    server_thread = threading.Thread(target=run_uvicorn, daemon=True)
+    server_thread.start()
+
+# Call this function in the main application to start the WebSocket server
+start_websocket_server()

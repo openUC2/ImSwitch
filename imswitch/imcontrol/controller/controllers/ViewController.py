@@ -58,7 +58,10 @@ class ViewController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def setLiveViewActive(self, active: bool) -> None:
         """ Sets whether the LiveView is active and updating. """
-        if not IS_HEADLESS: self._widget.setLiveViewActive(active)
+        if IS_HEADLESS: 
+            self.liveview(active)
+        else:
+            self._widget.setLiveViewActive(active)
 
     @APIExport(runOnUIThread=True)
     def setLiveViewGridVisible(self, visible: bool) -> None:

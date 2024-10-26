@@ -1,22 +1,21 @@
 import numpy as np
-
 try:
     import NanoImagingPack as nip
     isNIP = True
 except:
     isNIP = False
 
-
+from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from imswitch.imcontrol.view import guitools
 from imswitch.imcommon.model import initLogger
 from ..basecontrollers import LiveUpdatedController
-
+import cv2
 
 class HistogrammController(LiveUpdatedController):
     """ Linked to HistogrammWidget."""
 
-    sigImageReceived = Signal()
+    sigHistogramComputed = Signal(np.ndarray, np.ndarray)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -27,17 +26,23 @@ class HistogrammController(LiveUpdatedController):
         # Connect CommunicationChannel signals
         self._commChannel.sigUpdateImage.connect(self.update)
 
-    def update(self, detectorName, im, init, isCurrentDetector):
+
+    def update(self, detectorName, image, init, isCurrentDetector):
         """ Update with new detector frame. """
-
-
-        # compute histogramm and show
-        nBins = 100
-        hist, bins = np.histogram(im[:], bins=nBins)
-        units = np.linspace(0, 2**10, nBins)
-        # display the curve
-        self._widget.setHistogrammData(units,hist)
         
+        # bin image to reduce the number of pixels and off-load CPU usage
+        binned_image = cv2.resize(image, (0, 0), fx=0.25, fy=0.25)
+
+        # Now calculate the histogram for the binned image
+        nBins = 256
+        hist, bins = np.histogram(binned_image.astype(np.uint8).ravel(), bins=nBins)
+        units = np.linspace(0, 2**10, nBins)
+        self.sigHistogramComputed.emit(units, hist)
+
+        # display the curve
+        if not IS_HEADLESS:
+            self._widget.setHistogrammData(units,hist)
+    
 
 
 

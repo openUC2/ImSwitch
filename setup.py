@@ -74,7 +74,8 @@ setup(
         "NanoImagingPack==2.1.4",
         "pymba==0.3.7",
         "ashlarUC2",
-        "imjoy-rpc==0.5.59"
+        "imjoy-rpc==0.5.59", 
+        "psygnal@https://github.com/pyapp-kit/psygnal/archive/refs/tags/v0.11.1.tar.gz" # ensure we have --no-binary
     ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

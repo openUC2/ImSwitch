@@ -450,7 +450,8 @@ class RecordingController(ImConWidgetController):
                 self.manager.put(encodedImage)
         except:
             self.streamRunning = False
-                
+            
+
     def streamer(self):
         from multiprocessing import Queue
         if not self.streamstarted:
@@ -458,13 +459,14 @@ class RecordingController(ImConWidgetController):
             self.manager = Queue(maxsize=10)
             self.streamRunning = True
             threading.Thread(target=self.start_stream).start()
-        try:
 
-            while self.manager:
+        try:
+            while self.streamRunning:
                 yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
                     bytearray(self.manager.get()) + b'\r\n')
         except GeneratorExit:
-            self.__logger.debug("cancelled")
+            self.__logger.debug("Stream connection closed by client.")
+            self.stop_stream()  # Ensure stream is stopped when client disconnects
 
 
     @APIExport(runOnUIThread=False)
@@ -473,9 +475,17 @@ class RecordingController(ImConWidgetController):
         return a generator that converts frames into jpeg's reads to stream
         '''
         if startStream:
-            return StreamingResponse(self.streamer(), media_type="multipart/x-mixed-replace;boundary=frame")
+            # start the live video feed 
+            self._commChannel.sigStartLiveAcquistion.emit(True)
+            headers = {
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Keep-Alive": "timeout=1, max=100"  # Set timeout to 1 seconds
+                }
+            return StreamingResponse(self.streamer(), media_type="multipart/x-mixed-replace;boundary=frame", headers=headers)
         else:
             self.stop_stream()
+            self._commChannel.sigStartLiveAcquistion.emit(False)
             return "stream stopped"
 
     #@app.post("/execute-function/")

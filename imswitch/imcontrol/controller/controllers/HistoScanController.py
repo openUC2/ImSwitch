@@ -38,7 +38,16 @@ try:
 except ImportError:
     IS_ASHLAR_AVAILABLE = False
 
-        
+class ScanParameters(object):
+    def __init__(self, name="Wellplate", physDimX=164, physDimY=109, physOffsetX=0, physOffsetY=0, imagePath="imswitch/_data/images/WellplateAdapter3Slides.png"):
+        self.name = name
+        self.physDimX = physDimX*1e3 # mm
+        self.physDimY = physDimY*1e3 # mm
+        self.physOffsetX = physOffsetX
+        self.physOffsetY =  physOffsetY
+        self.imagePath = imagePath
+
+
 class StitchedImageResponse(BaseModel):
     imageList: List[List[float]]
     image: str
@@ -134,6 +143,13 @@ class HistoScanController(LiveUpdatedController):
             self.flatfieldManager = None
         
 
+        # define scan parameter per sample and populate into GUI later
+        self.allScanParameters = []
+        mFWD = os.path.dirname(os.path.realpath(__file__)).split("imswitch")[0]
+        self.allScanParameters.append(ScanParameters("6 Wellplate", 126, 86, 0, 0, mFWD+"imswitch/_data/images/Wellplate6.png"))
+        self.allScanParameters.append(ScanParameters("24 Wellplate", 126, 86, 0, 0, mFWD+"imswitch/_data/images/Wellplate24.png"))
+        self.allScanParameters.append(ScanParameters("3-Slide Wellplateadapter", 164, 109, 0, 0, mFWD+"imswitch/_data/images/WellplateAdapter3Slides.png"))
+
         if not IS_HEADLESS:
             '''
             Set up the GUI
@@ -185,6 +201,11 @@ class HistoScanController(LiveUpdatedController):
             self._widget.buttonTurnOnLEDArray.clicked.connect(self.turnOnLEDArray)
             self._widget.buttonTurnOffLEDArray.clicked.connect(self.turnOffLEDArray)
         
+            # set combobox with all samples
+            self._widget.setSampleLayouts(self.allScanParameters)
+            self._widget.samplePicker.currentIndexChanged.connect(self.loadSampleLayout)
+            self._widget.loadSampleLayout(0, self.allScanParameters)
+
     def computeOptimalScanStepSize(self, overlap = 0.75):
         mFrameSize = (self.microscopeDetector._camera.SensorHeight, self.microscopeDetector._camera.SensorWidth)
         bestScanSizeX = mFrameSize[1]*self.microscopeDetector.pixelSizeUm[-1]*overlap
@@ -350,6 +371,32 @@ class HistoScanController(LiveUpdatedController):
         nTilesY = int((maxPosY-minPosY)/(img_height*mOverlap))
         self._widget.setCameraScanParameters(nTilesX, nTilesY, minPosX, maxPosX, minPosY, maxPosY)
         
+    @APIExport(runOnUIThread=False)
+    def fetchStageMap(self, resizeFactor=1, mapID=0):
+        '''return the image that represents the stage mapping'''
+    
+        # Create a 2D NumPy array representing the image
+        image = cv2.imread(self.allScanParameters[mapID].imagePath)
+
+        # eventually resize image to save bandwidth
+        if resizeFactor <1:
+            image = self.resizeImage(image, resizeFactor)
+        
+        # using an in-memory image
+        im = Image.fromarray(image)
+        
+        # save image to an in-memory bytes buffer
+        # save image to an in-memory bytes buffer
+        with io.BytesIO() as buf:
+            im = im.convert('L')  # convert image to 'L' mode
+            im.save(buf, format='PNG')
+            im_bytes = buf.getvalue()
+            
+        headers = {'Content-Disposition': 'inline; filename="test.png"'}
+        return Response(im_bytes, headers=headers, media_type='image/png')
+
+    
+    
     @APIExport(runOnUIThread=False)
     def startStageMapping(self, mumPerStep: int=1, calibFilePath: str = "calibFile.json") -> str:
         self.stageMappingResult = None

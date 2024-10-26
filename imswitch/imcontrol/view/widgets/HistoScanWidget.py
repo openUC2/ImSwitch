@@ -16,15 +16,6 @@ from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
 import os
 
-class ScanParameters(object):
-    def __init__(self, name="Wellplate", physDimX=164, physDimY=109, physOffsetX=0, physOffsetY=0, imagePath="imswitch/_data/images/WellplateAdapter3Slides.png"):
-        self.name = name
-        self.physDimX = physDimX*1e3 # mm
-        self.physDimY = physDimY*1e3 # mm
-        self.physOffsetX = physOffsetX
-        self.physOffsetY =  physOffsetY
-        self.imagePath = imagePath
-
 
 
 class HistoScanWidget(NapariHybridWidget):
@@ -123,21 +114,10 @@ class HistoScanWidget(NapariHybridWidget):
         self.grid.addWidget(self.startButton, 14, 0, 1, 1)
         self.grid.addWidget(self.stopButton, 14, 1, 1, 1)
 
-        # define scan parameter per sample
-        self.allScanParameters = []
-        mFWD = os.path.dirname(os.path.realpath(__file__)).split("imswitch")[0]
-        self.allScanParameters.append(ScanParameters("6 Wellplate", 126, 86, 0, 0, mFWD+"imswitch/_data/images/Wellplate6.png"))
-        self.allScanParameters.append(ScanParameters("24 Wellplate", 126, 86, 0, 0, mFWD+"imswitch/_data/images/Wellplate24.png"))
-        self.allScanParameters.append(ScanParameters("3-Slide Wellplateadapter", 164, 109, 0, 0, mFWD+"imswitch/_data/images/WellplateAdapter3Slides.png"))
 
         # load sample layout
         self.ScanSelectViewWidget = None
-        self.loadSampleLayout(0)
         self.grid.addWidget(self.ScanSelectViewWidget, 12, 0, 2, 2)
-
-        # set combobox with all samples
-        self.setSampleLayouts(self.allScanParameters)
-        self.samplePicker.currentIndexChanged.connect(self.loadSampleLayout)
 
         # Create a scroll area and set the second tab widget as its content
         firstTabscrollArea = QtWidgets.QScrollArea()
@@ -386,12 +366,12 @@ class HistoScanWidget(NapariHybridWidget):
             self.setDefaultSavePath(os.path.join(path, "histoScan"))
             os.makedirs(os.path.join(path, "histoScan"), exist_ok=True)
 
-    def loadSampleLayout(self, index):
+    def loadSampleLayout(self, index, allScanParameters):
         if self.ScanSelectViewWidget is None:
-            self.ScanSelectViewWidget = ScanSelectView(self, self.allScanParameters[index])
+            self.ScanSelectViewWidget = ScanSelectView(self, allScanParameters[index])
         else:
-            self.ScanSelectViewWidget.updateParams(self.allScanParameters[index])
-        self.ScanSelectViewWidget.setPixmap(QtGui.QPixmap(self.allScanParameters[index].imagePath))
+            self.ScanSelectViewWidget.updateParams(allScanParameters[index])
+        self.ScanSelectViewWidget.setPixmap(QtGui.QPixmap(allScanParameters[index].imagePath))
 
 
     def setSampleLayouts(self, sampleLayoutList):

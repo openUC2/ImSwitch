@@ -236,6 +236,7 @@ class Timer(abstract.Timer):
         if self._task:
             self._task.cancel()
             self._task = None
+            self._loop.stop()
 
     async def _run(self):
         await asyncio.sleep(self._interval)

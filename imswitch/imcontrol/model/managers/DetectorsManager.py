@@ -177,6 +177,7 @@ class LVWorker(Worker):
         self._vtimer = None
 
     def run(self):
+        print("start lvworker")
         self._detectorsManager.execOnAll(lambda c: c.updateLatestFrame(False),
                                          condition=lambda c: c.forAcquisition)
         self._vtimer = Timer()
@@ -187,6 +188,7 @@ class LVWorker(Worker):
         self._vtimer.start(self._updatePeriod)
 
     def stop(self):
+        print("stop lvworker")
         if self._vtimer is not None:
             self._vtimer.stop()
 

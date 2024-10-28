@@ -1,5 +1,6 @@
 from setuptools import setup, find_packages
 
+
 # Version will be read from your package's __init__.py
 # Make sure __version__ is defined in imswitch/__init__.py
 def get_version():
@@ -74,8 +75,8 @@ setup(
         "NanoImagingPack==2.1.4",
         "pymba==0.3.7",
         "ashlarUC2",
-        "imjoy-rpc==0.5.59", 
-        "psygnal@https://github.com/pyapp-kit/psygnal/archive/refs/tags/v0.11.1.tar.gz" # ensure we have --no-binary
+        "imjoy-rpc==0.5.59",
+        "psygnal @ git+https://github.com/pyapp-kit/psygnal.git@v0.11.1#egg=psygnal"  # ensure we have --no-binary
     ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

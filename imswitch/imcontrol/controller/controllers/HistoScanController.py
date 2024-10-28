@@ -154,6 +154,7 @@ class HistoScanController(LiveUpdatedController):
             '''
             Set up the GUI
             '''
+            self._widget.loadSampleLayout(0, self.allScanParameters)
             self._widget.setOffset(offsetX, offsetY)
             ## update optimal scan parameters for tile-based scan
             try:
@@ -203,8 +204,7 @@ class HistoScanController(LiveUpdatedController):
         
             # set combobox with all samples
             self._widget.setSampleLayouts(self.allScanParameters)
-            self._widget.samplePicker.currentIndexChanged.connect(self.loadSampleLayout)
-            self._widget.loadSampleLayout(0, self.allScanParameters)
+            self._widget.samplePicker.currentIndexChanged.connect(self._widget.loadSampleLayout)
 
     def computeOptimalScanStepSize(self, overlap = 0.75):
         mFrameSize = (self.microscopeDetector._camera.SensorHeight, self.microscopeDetector._camera.SensorWidth)

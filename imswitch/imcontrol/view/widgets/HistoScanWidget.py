@@ -1,7 +1,4 @@
 import numpy as np
-import pyqtgraph as pg
-import cv2
-import copy
 from qtpy import QtCore, QtWidgets, QtGui, QtWidgets
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout

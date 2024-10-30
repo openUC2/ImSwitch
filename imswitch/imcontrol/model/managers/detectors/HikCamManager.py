@@ -99,8 +99,6 @@ class HikCamManager(DetectorManager):
         self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)
 
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
-        subscripte("/image/raw")
-        convert()
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
         
     def setParameter(self, name, value):

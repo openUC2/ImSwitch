@@ -77,8 +77,8 @@ setup(
         "ashlarUC2",
         "imjoy-rpc==0.5.59",
         "imswitchclient=>0.1.2",
-        "psygnal @ git+https://github.com/pyapp-kit/psygnal.git@v0.11.1#egg=psygnal"  # ensure we have --no-binary
-    ],
+        "psygnal"
+        ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
         'PyQt5': [

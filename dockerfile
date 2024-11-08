@@ -174,6 +174,10 @@ RUN cd /tmp/ImSwitch && \
     git pull && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/ImSwitch"
 
+# we want psygnal to be installed without binaries - so first remove it 
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"
+
 # Install UC2-REST
 RUN cd /tmp/UC2-REST && \
     git pull && \

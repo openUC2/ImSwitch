@@ -171,7 +171,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
     except Exception as e:
         logging.error(traceback.format_exc())
 
-Bujah!!! You have successfully created a main function that can be called from the command line. You can now run the main function by calling the main function in the __main__.py file.
+
 if __name__ == '__main__':
     main()
 

@@ -76,7 +76,7 @@ setup(
         "pymba==0.3.7",
         "ashlarUC2",
         "imjoy-rpc==0.5.59",
-        "imswitchclient=>0.1.2",
+        "imswitchclient>=0.1.2",  
         "psygnal"
         ],
 

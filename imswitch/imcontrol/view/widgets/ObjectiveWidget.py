@@ -9,8 +9,8 @@ from .basewidgets import NapariHybridWidget
 
 
 
-class ObjectiveRevolverWidget(NapariHybridWidget):
-    """ Displays the ObjectiveRevolver transform of the image. """
+class ObjectiveWidget(NapariHybridWidget):
+    """ Displays the Objective transform of the image. """
 
     def __post_init__(self):
         # Create widgets

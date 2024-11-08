@@ -479,8 +479,7 @@ class RecordingController(ImConWidgetController):
             self._commChannel.sigStartLiveAcquistion.emit(True)
             headers = {
                 "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Keep-Alive": "timeout=1, max=100"  # Set timeout to 1 seconds
+                "Connection": "keep-alive"
                 }
             return StreamingResponse(self.streamer(), media_type="multipart/x-mixed-replace;boundary=frame", headers=headers)
         else:

@@ -18,7 +18,7 @@ if not IS_HEADLESS:
     from .HoliSheetWidget import HoliSheetWidget
     from .FlowStopWidget import FlowStopWidget
 
-    from .ObjectiveRevolverWidget import ObjectiveRevolverWidget
+    from .ObjectiveWidget import ObjectiveWidget
     from .TemperatureWidget import TemperatureWidget
     from .LEDMatrixWidget import LEDMatrixWidget
     from .WellPlateWidget import WellPlateWidget

@@ -37,7 +37,22 @@ class VirtualStageManager(PositionerManager):
             self._position[axes] = self._positioner.position[axes]
         self._commChannel.sigUpdateMotorPosition.emit() # TODO: This is a hacky workaround to force Imswitch to update the motor positions in the gui..
 
-        
+    def setPositionOnDevice(self, axis, value):
+        if axis == "X":
+            self._positioner.move(x=value, is_absolute=True)
+        if axis == "Y":
+            self._positioner.move(y=value, is_absolute=True)
+        if axis == "Z":
+            self._positioner.move(z=value, is_absolute=True)
+        if axis == "A":
+            self._positioner.move(a=value, is_absolute=True)
+        if axis == "XYZ":
+            self._positioner.move(x=value[0], y=value[1], z=value[2], is_absolute=True)
+        if axis == "XY":
+            self._positioner.move(x=value[0], y=value[1], is_absolute=True)
+        for axes in ["A","X","Y","Z"]:
+            self._position[axes] = self._positioner.position[axes]
+        self._commChannel.sigUpdateMotorPosition.emit() 
 
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
         pass

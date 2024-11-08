@@ -52,24 +52,28 @@ class ImConMainController(MainController):
         self.controllers = {}
 
         for widgetKey, widget in self.__mainView.widgets.items():
-            try:
+            self.__logger.debug(f'Creating controller for widget {widgetKey}')
+            
+            # Check if the controller is available
+            controller_name = f'{widgetKey}Controller'
+            if widgetKey == 'Scan':
+                controller_name = f'{widgetKey}Controller{self.__setupInfo.scan.scanWidgetType}'
+            
+            if hasattr(controllers, controller_name):
+                # Controller ist vorhanden
                 self.controllers[widgetKey] = self.__factory.createController(
-                    (getattr(controllers, f'{widgetKey}Controller')
-                    if widgetKey != 'Scan' else
-                    getattr(controllers, f'{widgetKey}Controller{self.__setupInfo.scan.scanWidgetType}')), widget
-                )
-            except Exception as e:
-                #try to get it from the plugins
-                foundPluginController = False
-                for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
-                    if entry_point.name == f'{widgetKey}_controller':
-                        packageController = entry_point.load()
-                        self.controllers[widgetKey] = self.__factory.createController(packageController, widget)
-                        foundPluginController = True
-                        break
-                if not foundPluginController:
+                       getattr(controllers, controller_name), widget)
+            else:
+                try:
+                    mPlugin = self.loadPlugin(widgetKey)
+                    if mPlugin is None:
+                        raise ValueError(f'No controller found for widget {widgetKey}')
+                    self.controllers[widgetKey] = self.__factory.createController(
+                        mPlugin, widget)
+                except Exception as e:
                     self.__logger.debug(e)
                     raise ValueError(f'No controller found for widget {widgetKey}')
+                    
         # Generate API
         self.__api = None
         apiObjs = list(self.controllers.values()) + [self.__commChannel]
@@ -91,6 +95,17 @@ class ImConMainController(MainController):
         self._thread = threading.Thread(target=self._serverWorker.run)
         self._thread.start()
 
+
+    def loadPlugin(self, widgetKey):
+        # try to get it from the plugins
+        foundPluginController = False
+        for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
+            if entry_point.name == f'{widgetKey}_controller':
+                packageController = entry_point.load()
+                return packageController
+        self.__logger.error(f'No controller found for widget {widgetKey}')
+        return None
+        
     @property
     def api(self):
         return self.__api

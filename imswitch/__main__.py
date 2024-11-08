@@ -90,6 +90,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         if imswitch.IS_HEADLESS:
             os.environ["DISPLAY"] = ":0"
             os.environ["QT_QPA_PLATFORM"] = "offscreen"
+            app = None
         else:
             app = prepareApp()
         enabledModuleIds = modulesconfigtools.getEnabledModuleIds()
@@ -125,7 +126,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         else:
             multiModuleWindow = None
             multiModuleWindowController = None
-        
 
         # Register modules
         for modulePkg in modulePkgs:
@@ -167,12 +167,11 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
                     multiModuleWindow.updateLoadingProgress(i / len(modulePkgs))
                     app.processEvents()  # Draw window before continuing
         logger.info(f'init done')
-        if not imswitch.IS_HEADLESS:
-            launchApp(app, multiModuleWindow, moduleMainControllers.values())
+        launchApp(app, multiModuleWindow, moduleMainControllers.values())
     except Exception as e:
         logging.error(traceback.format_exc())
 
-
+Bujah!!! You have successfully created a main function that can be called from the command line. You can now run the main function by calling the main function in the __main__.py file.
 if __name__ == '__main__':
     main()
 

@@ -278,7 +278,10 @@ def run_uvicorn():
             ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if __ssl__ else None, 
             timeout_keep_alive=2,
         )
-        uvicorn.Server(config).run()
+        try:
+            uvicorn.Server(config).run()
+        except Exception as e:
+            print(f"Couldn't start server: {e}")
     except Exception as e:
         print(f"Couldn't start server: {e}")
         

@@ -76,6 +76,7 @@ setup(
         "pymba==0.3.7",
         "ashlarUC2",
         "imjoy-rpc==0.5.59",
+        "imswitchclient=>0.1.2",
         "psygnal @ git+https://github.com/pyapp-kit/psygnal.git@v0.11.1#egg=psygnal"  # ensure we have --no-binary
     ],
 

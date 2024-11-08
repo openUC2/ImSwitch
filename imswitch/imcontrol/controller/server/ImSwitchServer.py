@@ -1,8 +1,6 @@
 import threading
-import Pyro5
 import Pyro5.server
 from Pyro5.api import expose
-import multiprocessing
 from imswitch.imcommon.framework import Worker
 from imswitch.imcommon.model import initLogger
 from ._serialize import register_serializers
@@ -86,8 +84,7 @@ class ServerThread(threading.Thread):
                 host="0.0.0.0",
                 port=PORT,
                 ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if IS_SSL else None,
-                ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None, 
-                timeout_keep_alive=2,
+                ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None
             )
             self.server = uvicorn.Server(config)
             self.server.run()

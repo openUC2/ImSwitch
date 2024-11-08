@@ -113,7 +113,7 @@ class ImConMainView(QMainWindow):
             'STORMRecon': _DockInfo(name='STORM Recon Tool', yPosition=2),
             'HoliSheet': _DockInfo(name='HoliSheet Tool', yPosition=3),
             'FlowStop': _DockInfo(name='FlowStop Tool', yPosition=3),
-            'ObjectiveRevolver': _DockInfo(name='Objective Revolver', yPosition=3),
+            'Objective': _DockInfo(name='Objective Revolver', yPosition=3),
             'Temperature': _DockInfo(name='Temperature Controller', yPosition=3),
             'SquidStageScan': _DockInfo(name='SquidStageScan Tool', yPosition=3),
             'WellPlate': _DockInfo(name='Wellplate Tool', yPosition=1),
@@ -266,71 +266,11 @@ class ImConMainViewNoQt(object):
         self.viewSetupInfo = viewSetupInfo
 
         # Dock area
-        allDockKeys = {
-            'Autofocus': _DockInfo(name='Autofocus', yPosition=1),
-            'FocusLock': _DockInfo(name='Focus Lock', yPosition=0),
-            'FOVLock': _DockInfo(name='FOV Lock', yPosition=0),
-            'SLM': _DockInfo(name='SLM', yPosition=0),
-            'UC2Config': _DockInfo(name='UC2Config', yPosition=0),
-            'SIM': _DockInfo(name='SIM', yPosition=0),
-            'DPC': _DockInfo(name='DPC', yPosition=0),
-            'MCT': _DockInfo(name='MCT', yPosition=0),
-            'ROIScan': _DockInfo(name='ROIScan', yPosition=0),
-            'Lightsheet': _DockInfo(name='Lightsheet', yPosition=0),
-            'WebRTC': _DockInfo(name='WebRTC', yPosition=0),
-            'Hypha': _DockInfo(name='Hypha', yPosition=0),
-            'MockXX': _DockInfo(name='MockXX', yPosition=0),
-            'JetsonNano': _DockInfo(name='JetsonNano', yPosition=0),
-            'HistoScan': _DockInfo(name='HistoScan', yPosition=1),
-            'Flatfield': _DockInfo(name='Flatfield', yPosition=1),
-            'PixelCalibration': _DockInfo(name='PixelCalibration', yPosition=1),
-            'ISM': _DockInfo(name='ISM', yPosition=0),
-            'Laser': _DockInfo(name='Laser Control', yPosition=0),
-            'LED': _DockInfo(name='LED Control', yPosition=0),
-            'EtSTED': _DockInfo(name='EtSTED', yPosition=0),
-            'Positioner': _DockInfo(name='Positioner', yPosition=1),
-            'Rotator': _DockInfo(name='Rotator', yPosition=1),
-            'MotCorr': _DockInfo(name='Motorized Correction Collar', yPosition=1),
-            'StandaPositioner': _DockInfo(name='StandaPositioner', yPosition=1),
-            'StandaStage': _DockInfo(name='StandaStage', yPosition=1),
-            'SLM': _DockInfo(name='SLM', yPosition=2),
-            'Scan': _DockInfo(name='Scan', yPosition=2),
-            'RotationScan': _DockInfo(name='RotationScan', yPosition=2),
-            'BeadRec': _DockInfo(name='Bead Rec', yPosition=3),
-            'AlignmentLine': _DockInfo(name='Alignment Tool', yPosition=3),
-            'AlignAverage': _DockInfo(name='Axial Alignment Tool', yPosition=3),
-            'AlignXY': _DockInfo(name='Rotational Alignment Tool', yPosition=3),
-            'ULenses': _DockInfo(name='uLenses Tool', yPosition=3),
-            'FFT': _DockInfo(name='FFT Tool', yPosition=3),
-            'Holo': _DockInfo(name='Holo Tool', yPosition=3),
-            'Joystick': _DockInfo(name='Joystick Tool', yPosition=3),
-            'Histogramm': _DockInfo(name='Histogramm Tool', yPosition=3),
-            'STORMRecon': _DockInfo(name='STORM Recon Tool', yPosition=2),
-            'HoliSheet': _DockInfo(name='HoliSheet Tool', yPosition=3),
-            'FlowStop': _DockInfo(name='FlowStop Tool', yPosition=3),
-            'FLIMLabs': _DockInfo(name='FLIMLabs Tool', yPosition=3),
-            'ObjectiveRevolver': _DockInfo(name='Objective Revolver', yPosition=3),
-            'Temperature': _DockInfo(name='Temperature Controller', yPosition=3),
-            'SquidStageScan': _DockInfo(name='SquidStageScan Tool', yPosition=3),
-            'WellPlate': _DockInfo(name='Wellplate Tool', yPosition=1),
-            'Deck': _DockInfo(name="Deck Tool", yPosition=1),
-            'DeckScan': _DockInfo(name="Deck Scanner", yPosition=1),
-            'LEDMatrix': _DockInfo(name='LEDMatrix Tool', yPosition=0),
-            'Watcher': _DockInfo(name='File Watcher', yPosition=3),
-            'Tiling': _DockInfo(name='Tiling', yPosition=3),
-            'Settings': _DockInfo(name='Detector Settings', yPosition=0),
-            'View': _DockInfo(name='Image Controls', yPosition=1),
-            'Recording': _DockInfo(name='Recording', yPosition=2),
-            'Console': _DockInfo(name='Console', yPosition=3)
-        }
+        # add widgets that are enabled but not in allDockKeys
         enabledDockKeys = self.viewSetupInfo.availableWidgets
-        if enabledDockKeys is False:
-            enabledDockKeys = []
-        elif enabledDockKeys is True:
-            enabledDockKeys = allDockKeys
-        self._addWidget(
-            {k: v for k, v in allDockKeys.items() if k in enabledDockKeys}
-        )
+        disabledKeys = ["Image"]
+        widget_keys = {key: _DockInfo(name=key, yPosition=1) for key in enabledDockKeys if key not in disabledKeys}
+        self._addWidget(widget_keys)
 
 
     def closeEvent(self, event):

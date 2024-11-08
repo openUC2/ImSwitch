@@ -51,17 +51,22 @@ def prepareApp():
 
 def launchApp(app, mainView, moduleMainControllers):
     """ Launches the app. The program will exit when the app is exited. """
+    logger = initLogger('launchApp')
     if IS_HEADLESS:
         """We won't have any GUI, so we don't need to prepare the app."""
-        return None
-
-    logger = initLogger('launchApp')
-
-    # Show app
-    if mainView is not None:
-        mainView.showMaximized()
-        mainView.show()
-    exitCode = app.exec_()
+        # Keep python running
+        while True: # TODO: have webserver signal somehow?
+            try:
+                import time
+                time.sleep(1)
+            except KeyboardInterrupt:
+                break
+    else:
+        # Show app
+        if mainView is not None:
+            mainView.showMaximized()
+            mainView.show()
+        exitCode = app.exec_()
 
     # Clean up
     for controller in moduleMainControllers:

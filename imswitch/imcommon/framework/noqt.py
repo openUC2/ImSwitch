@@ -3,12 +3,12 @@ from psygnal import emit_queued
 import psygnal
 import uvicorn
 from imswitch import __ssl__
-
+import json
 from functools import lru_cache
 import asyncio
 import threading
 import imswitch.imcommon.framework.base as abstract
-
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -89,6 +89,7 @@ class SignalInterface(abstract.SignalInterface):
         ...
 
 
+
 class SignalInstance(psygnal.SignalInstance):
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
@@ -97,8 +98,13 @@ class SignalInstance(psygnal.SignalInstance):
         super().emit(*args, check_nargs=check_nargs, check_types=check_types)
         # print("Signal emitted:", self, args)
         if not args:
-            return        
-        message = f"{args}"
+            return   
+        # we form a json string based on the arguments and the self.name of the signal
+        try:
+            message = self._generate_json_message(args) #json.dumps({"name": self.name, "args": args}) #
+        except Exception as e:
+            print(f"Error creating JSON message: {e}")
+            message = {}
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:  # If there is no event loop in the current thread
@@ -109,6 +115,24 @@ class SignalInstance(psygnal.SignalInstance):
             asyncio.create_task(self._send_websocket_message(message))
         else:
             loop.run_until_complete(self._send_websocket_message(message))
+
+    def _generate_json_message(self, args):
+        # Extract parameter names and match them with args
+        param_names = list(self.signature.parameters.keys())
+        data = {"name": self.name, "args": {}}
+
+        for i, arg in enumerate(args):
+            param_name = param_names[i] if i < len(param_names) else f"arg{i}"
+            
+            # Handle specific types based on parameter hints
+            if isinstance(arg, np.ndarray):
+                data["args"][param_name] = arg.tolist()  # Convert numpy arrays to lists for JSON compatibility
+            elif isinstance(arg, (str, int, float, bool)):
+                data["args"][param_name] = arg  # JSON compatible types
+            else:
+                data["args"][param_name] = str(arg)  # Fallback to string representation for unknown types
+
+        return json.dumps(data)
 
 
     async def _send_websocket_message(self, message: str) -> None:

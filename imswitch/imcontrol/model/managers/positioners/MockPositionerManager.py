@@ -29,7 +29,7 @@ class MockPositionerManager(PositionerManager):
     def get_position(self):
         return [p for p in self._position.values()]
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

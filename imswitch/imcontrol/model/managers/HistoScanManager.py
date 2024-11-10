@@ -39,7 +39,12 @@ class HistoScanManager(SignalInterface):
             self.offsetX = 0
             self.offsetY = 0
 
+    
+    def startHistoScan(self, HistoScanInfo):
+        self.__logger.debug(f"Starting HistoScan with {HistoScanInfo}")
+        self.update()
         
+    
     def writeConfig(self, data):
         with open(os.path.join(self.defaultConfigPath, self.histoConfigFilename), "w") as outfile:
             json.dump(data, outfile, indent=4)
@@ -47,7 +52,7 @@ class HistoScanManager(SignalInterface):
     def update(self):
         return None
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

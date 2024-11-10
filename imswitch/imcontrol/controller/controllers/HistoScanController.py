@@ -832,7 +832,7 @@ class HistoScanController(LiveUpdatedController):
                         flipX=False, flipY=False, tSettle=0.05, 
                         isStitchAshlar=False, resizeFactor=0.25):
         self._logger.debug("histoscan thread started.")
-        positionList
+        
         initialPosition = self.stages.getPosition()
         initPosX = initialPosition["X"]
         initPosY = initialPosition["Y"]
@@ -988,8 +988,9 @@ class HistoScanController(LiveUpdatedController):
             os.makedirs(dirPath, exist_ok=True)
             tifffile.imsave(os.path.join(dirPath, "stitchedImage.tif"), largeImage, append=False) 
             self.setImageForDisplay(largeImage, "histoscanStitch"+mDate)
+            self._commChannel.sigOnResultTileBasedTileScanning(self, largeImage)
         threading.Thread(target=getStitchedResult).start()
-    
+        
     def getSaveFilePath(self, date, filename, extension):
         mFilename =  f"{date}_{filename}.{extension}"
         dirPath  = os.path.join(dirtools.UserFileDirs.Data, 'recordings', date)
@@ -1025,7 +1026,7 @@ class HistoScanController(LiveUpdatedController):
     def stophistoscan(self):
         # update GUI elements
         self.ishistoscanRunning = False
-    
+        self._logger.debug("histoscan scanning stopped.")
 
         # other tabs
         self.stophistoscanMain()

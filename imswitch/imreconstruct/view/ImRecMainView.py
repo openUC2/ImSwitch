@@ -304,7 +304,7 @@ class BtnFrame(QtWidgets.QFrame):
         layout.addWidget(self.updateBtn, 2, 0, 1, 2)
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

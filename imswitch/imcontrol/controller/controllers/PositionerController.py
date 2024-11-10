@@ -89,7 +89,7 @@ class PositionerController(ImConWidgetController):
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)
             self._master.positionersManager[positionerName].move(dist, axis)
-        self._commChannel.sigUpdateMotorPosition.emit()
+        self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
         #self.updatePosition(positionerName, axis)
 
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
@@ -268,7 +268,7 @@ _speedAttr = "Speed"
 _homeAttr = "Home"
 _stopAttr = "Stop"
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

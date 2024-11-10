@@ -111,7 +111,7 @@ class CommunicationChannel(SignalInterface):
 
     sigUpdateRotatorPosition = Signal(str, str)  # (rotatorName)
     
-    sigUpdateMotorPosition = Signal()  # # TODO: Just forcely update the positoin in the GUI
+    sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI
 
     sigSetSyncInMovementSettings = Signal(str, float)  # (rotatorName, position)
 
@@ -133,6 +133,7 @@ class CommunicationChannel(SignalInterface):
     # scanning-related signals
     sigStartTileBasedTileScanning = Signal(int, int, int, int, int, int, str, int, int, bool, bool, bool) # (numb erTilesX, numberTilesY, stepSizeX, stepSizeY, nTimes, tPeriod, illuSource, initPosX, initPosY, isStitchAshlar, isStitchAshlarFlipX, isStitchAshlarFlipY)
     sigStopTileBasedTileScanning = Signal()
+    sigOnResultTileBasedTileScanning = Signal(np.ndarray) # (result)
     
     
     @property

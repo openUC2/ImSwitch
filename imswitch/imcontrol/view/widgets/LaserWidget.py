@@ -440,7 +440,7 @@ class LaserModule(QtWidgets.QWidget):
         self.modulationDutyCycleSlider.setValue(value)
 
 
-# Copyright (C) 2017 Federico Barabas 2020-2023 ImSwitch developers
+# Copyright (C) 2017 Federico Barabas 2020-2024 ImSwitch developers
 # This file is part of Tormenta and ImSwitch.
 #
 # Tormenta and ImSwitch are free software: you can redistribute it and/or modify

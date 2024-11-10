@@ -35,7 +35,8 @@ class VirtualStageManager(PositionerManager):
             self._positioner.move(x=value[0], y=value[1], is_absolute=is_absolute)
         for axes in ["A","X","Y","Z"]:
             self._position[axes] = self._positioner.position[axes]
-        self._commChannel.sigUpdateMotorPosition.emit() # TODO: This is a hacky workaround to force Imswitch to update the motor positions in the gui..
+            
+        self.getPosition() # update position in GUI
 
     def setPositionOnDevice(self, axis, value):
         if axis == "X":
@@ -52,7 +53,7 @@ class VirtualStageManager(PositionerManager):
             self._positioner.move(x=value[0], y=value[1], is_absolute=True)
         for axes in ["A","X","Y","Z"]:
             self._position[axes] = self._positioner.position[axes]
-        self._commChannel.sigUpdateMotorPosition.emit() 
+        #self._commChannel.sigUpdateMotorPosition.emit() 
 
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
         pass
@@ -67,7 +68,7 @@ class VirtualStageManager(PositionerManager):
         # load position from device
         # t,x,y,z
         allPositionsDict = self._positioner.get_position()
-        self._commChannel.sigUpdateMotorPosition.emit() # TODO: This is a hacky workaround to force Imswitch to update the motor positions in the gui..
+        #self._commChannel.sigUpdateMotorPosition.emit(allPositionsDict) # TODO: This is a hacky workaround to force Imswitch to update the motor positions in the gui..
 
         return allPositionsDict
 

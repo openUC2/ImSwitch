@@ -170,7 +170,7 @@ class ObjectiveLensMover(object):
         self.positioner.move(value=mPos, speed=self.speed, axis=self.revolverAxis, is_absolute=True, is_blocking=False)
         self.currentObjective = objectiveID
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

@@ -815,7 +815,7 @@ Crosscolleration based drift correction
                     #save values
                     #make sure not to have too large travelrange after last (e.g. initial position + 2*shift))
 '''
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

@@ -92,7 +92,7 @@ class ESP32LEDLaserManager(LaserManager):
             channel=channel, frequency=frequency, offset=offset, amplitude=amplitude, clk_div=clk_div, 
             phase=phase, invert=invert, timeout=timeout)
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

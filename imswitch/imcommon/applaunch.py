@@ -60,7 +60,9 @@ def launchApp(app, mainView, moduleMainControllers):
                 import time
                 time.sleep(1)
             except KeyboardInterrupt:
+                exitCode = 0
                 break
+        
     else:
         # Show app
         if mainView is not None:
@@ -80,7 +82,7 @@ def launchApp(app, mainView, moduleMainControllers):
     sys.exit(exitCode)
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

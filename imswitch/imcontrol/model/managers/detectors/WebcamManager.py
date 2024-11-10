@@ -128,7 +128,7 @@ class WebcamManager(DetectorManager):
         except:
             raise ValueError(f"Camera does not support {hsize}x{vsize} resolution")
 
-# Copyright (C) ImSwitch developers 2023
+# Copyright (C) ImSwitch developers 2024
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

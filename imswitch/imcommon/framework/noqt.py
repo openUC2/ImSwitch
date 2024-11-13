@@ -100,11 +100,14 @@ class SignalInstance(psygnal.SignalInstance):
         if not args:
             return   
         # we form a json string based on the arguments and the self.name of the signal
+        if self.name == "sigUpdateImage" or self.name == "sigImageUpdated":         # filter frames as they are too big for transfer
+            return
         try:
-            message = self._generate_json_message(args) #json.dumps({"name": self.name, "args": args}) #
+            message = self._generate_json_message(args) 
         except Exception as e:
             print(f"Error creating JSON message: {e}")
             message = {}
+
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:  # If there is no event loop in the current thread
@@ -116,17 +119,17 @@ class SignalInstance(psygnal.SignalInstance):
         else:
             loop.run_until_complete(self._send_websocket_message(message))
 
-    def _generate_json_message(self, args):
+    def _generate_json_message(self, args): # better use msgpack
         # Extract parameter names and match them with args
         param_names = list(self.signature.parameters.keys())
         data = {"name": self.name, "args": {}}
-
+            
         for i, arg in enumerate(args):
             param_name = param_names[i] if i < len(param_names) else f"arg{i}"
             
             # Handle specific types based on parameter hints
             if isinstance(arg, np.ndarray):
-                data["args"][param_name] = arg.tolist()  # Convert numpy arrays to lists for JSON compatibility
+                data["args"][param_name] = arg.tolist().copy()  # Convert numpy arrays to lists for JSON compatibility
             elif isinstance(arg, (str, int, float, bool)):
                 data["args"][param_name] = arg  # JSON compatible types
             else:

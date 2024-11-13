@@ -26,7 +26,7 @@ class LightsheetController(ImConWidgetController):
 
         self.lightsheetTask = None
         self.lightsheetStack = np.ones((1,1,1))
-        
+        self.mFilePath = None
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
@@ -247,14 +247,14 @@ class LightsheetController(ImConWidgetController):
         self.performScanningRecording(minPos, maxPos, speed, stageAxis, illuSource, 0)
 
     @APIExport()
-    def performScanningRecording(self, minPos=0, maxPos=1000, speed=1000, axis="A", illusource=None, illuvalue=512):
+    def performScanningRecording(self, minPos:int=0, maxPos:int=1000, speed:int=1000, axis:str="A", illusource:int=-1, illuvalue:int=512):
         if not self.isLightsheetRunning:
             
             # check parameters
             if axis not in ("A", "X", "Y", "Z"):
                 axis = "A"
             # use default illumination source if not selectd 
-            if illusource is None or illusource=="None" or illusource not in self._master.lasersManager.getAllDeviceNames():
+            if illusource is None or illusource==-1 or illusource not in self._master.lasersManager.getAllDeviceNames():
                 illusource = self._master.lasersManager.getAllDeviceNames()[0]
         
             #initialPosition = self.stages.getPosition()[axis]
@@ -266,8 +266,14 @@ class LightsheetController(ImConWidgetController):
             self.lightsheetTask = threading.Thread(target=self.lightsheetThread, args=(minPos, maxPos, None, None, speed, axis, illusource, illuvalue))
             self.lightsheetTask.start()
         
+    @APIExport()
+    def returnLastLightsheetStackPath(self) -> str:
+        '''Returns the path of the last saved lightsheet stack.'''
+        if self.mFilePath is not None:
+            return self.mFilePath
         
     def lightsheetThread(self, minPosZ, maxPosZ, posX=None, posY=None, speed=10000, axis="A", illusource=None, illuvalue=None, isSave=True):
+        '''Performs a lightsheet scan.'''
         self._logger.debug("Lightsheet thread started.")
         # TODO Have button for is save
         if posX is not None:
@@ -336,9 +342,9 @@ class LightsheetController(ImConWidgetController):
                 mDate = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
                 mExtension = "tif"
                 mFileName = "lightsheet_stack_x_{posX}_y_{posY}_z_{posZ}_pz_{pixelSizeZ}_pxy_{pixelSizeXY}"
-                mFilePath = self.getSaveFilePath(mDate, mFileName, mExtension)
-                self._logger.info(f"Saving lightsheet stack to {mFilePath}")
-                tif.imsave(mFilePath, self.lightsheetStack)
+                self.mFilePath = self.getSaveFilePath(mDate, mFileName, mExtension)
+                self._logger.info(f"Saving lightsheet stack to {self.mFilePath}")
+                tif.imsave(self.mFilePath, self.lightsheetStack)
         saveImageThread = threading.Thread(target=displayAndSaveImageStack, args =(isSave,))
         saveImageThread.start()
         self.stopLightsheet()

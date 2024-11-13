@@ -24,7 +24,8 @@ class FlowStopController(LiveUpdatedController):
     """ Linked to FlowStopWidget."""
 
     sigImageReceived = Signal()
-
+    sigImagesTaken = Signal(int)
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self, tryInheritParent=False)
@@ -41,6 +42,7 @@ class FlowStopController(LiveUpdatedController):
         self.pumpAxis = self._master.FlowStopManager.defaultConfig["defaultAxisFlow"]
         self.focusAxis = self._master.FlowStopManager.defaultConfig["defaultAxisFocus"]
         self.defaultDelayTimeAfterRestart = self._master.FlowStopManager.defaultConfig["defaultDelayTimeAfterRestart"]
+        self.mExperimentParameters = self._master.FlowStopManager.defaultConfig
         self.tSettle = 0.05
         self.imagesTaken = 0
         # select detectors
@@ -146,7 +148,6 @@ class FlowStopController(LiveUpdatedController):
         if not IS_HEADLESS:
             self.mExperimentParameters = self._widget.getAutomaticImagingParameters()
         else:
-            self.mExperimentParameters = self._master.FlowStopManager.defaultConfig
             self.mExperimentParameters["timeStamp"] = datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
         return self.mExperimentParameters 
     
@@ -155,6 +156,37 @@ class FlowStopController(LiveUpdatedController):
         return self.is_measure
     
     @APIExport(runOnUIThread=True)
+    def startFlowStopExperimentFastAPI(self, timeStamp: str, experimentName: str, experimentDescription: str,
+                                        uniqueId: str, numImages: int, volumePerImage: float, timeToStabilize: float,
+                                        delayToStart: float=1, frameRate: float=1, filePath: str="./",
+                                        fileFormat: str= "JPG", isRecordVideo: bool = True,
+                                        pumpSpeed: float = 10000):
+        try:uniqueId = int(uniqueId)
+        except:uniqueId = np.random.randint(0, 2**16)
+        
+        # Store the parameters
+        self.mExperimentParameters = {
+            'timeStamp': timeStamp,
+            'experimentName': experimentName,
+            'experimentDescription': experimentDescription,
+            'uniqueId': uniqueId,
+            'numImages': numImages,
+            'volumePerImage': volumePerImage,
+            'timeToStabilize': timeToStabilize,
+            'delayToStart': delayToStart,
+            'frameRate': frameRate,
+            'filePath': filePath,
+            'fileFormat': fileFormat,
+            'isRecordVideo': isRecordVideo,
+            'pumpSpeed': pumpSpeed
+        }
+        """ Start FlowStop experiment. """
+        self.startFlowStopExperiment(timeStamp, experimentName, experimentDescription,
+                                        uniqueId, numImages, volumePerImage, timeToStabilize,
+                                        delayToStart, frameRate, filePath, fileFormat, isRecordVideo,
+                                        pumpSpeed)
+        return self.mExperimentParameters
+    
     def startFlowStopExperiment(self, timeStamp: str, experimentName: str, experimentDescription: str, 
                                 uniqueId: str, numImages: int, volumePerImage: float, timeToStabilize: float, 
                                 delayToStart: float=1, frameRate: float=1, filePath: str="./", 
@@ -256,6 +288,7 @@ class FlowStopController(LiveUpdatedController):
         while True:
             currentTime = time.time()
             self.imagesTaken += 1
+            self.sigImagesTaken.emit(self.imagesTaken)
             if self.imagesTaken > numImages: break
             if self.is_measure:
                 stepsToMove = volumePerImage

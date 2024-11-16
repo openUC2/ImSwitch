@@ -3,9 +3,10 @@ import os
 import threading
 from imswitch import IS_HEADLESS
 import numpy as np
-from imswitch.imcommon.model import APIExport, initLogger
+from imswitch.imcommon.model import APIExport, initLogger, ostools
 from ..basecontrollers import ImConWidgetController
-
+from imswitch.imcontrol.model import configfiletools
+import dataclasses
 
 class UC2ConfigController(ImConWidgetController):
     """Linked to UC2ConfigWidget."""
@@ -19,8 +20,6 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error("No Stages found in the config file? " +e )
             self.stages = None
-        # update the gui elements
-        self._commChannel.sigUpdateMotorPosition.emit()
 
         '''
         # force updating the position
@@ -38,7 +37,6 @@ class UC2ConfigController(ImConWidgetController):
             self.stages.move(1, "A", is_absolute=False, is_blocking=True)
             self.stages.move(-1, "A", is_absolute=False, is_blocking=True)
         '''
-        self._commChannel.sigUpdateMotorPosition.emit()
 
 
         # register the callback to take a snapshot triggered by the ESP32
@@ -160,7 +158,29 @@ class UC2ConfigController(ImConWidgetController):
         mThread.join()
         if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Bring the PS controller into pairing mode")
 
-
+    @APIExport(runOnUIThread=False, asyncExecution=False)
+    def returnAvailableSetups(self):
+        """
+        Returns a list of available setups in the config file.
+        """
+        _, _ = configfiletools.loadOptions()
+        setup_list = configfiletools.getSetupList()
+        return {"available_setups": setup_list}
+    
+    @APIExport(runOnUIThread=False)
+    def setSetupFileName(self, setupFileName: str) -> str:
+        '''Sets the setup file name in the options file.'''
+        if setupFileName is  None:
+            return "No setup file name provided."
+        if setupFileName not in configfiletools.getSetupList():
+            self.__logger.error(f"Setup file {setupFileName} does not exist.")
+            return f"Setup file {setupFileName} does not exist."
+        options, _ = configfiletools.loadOptions()
+        options = dataclasses.replace(options, setupFileName=setupFileName)
+        configfiletools.saveOptions(options)
+        ostools.restartSoftware()
+        return f"Setup file {setupFileName} set successfully."
+        
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

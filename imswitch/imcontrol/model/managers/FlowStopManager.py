@@ -19,10 +19,10 @@ class FlowStopManager(SignalInterface):
         self.__logger = initLogger(self)
 
         self.flowStopConfigFilename = "config.json"
-        self.allParameterKeys = ["wasRunning", "defaultFlowRate", "defaultNumberOfFrames",
-                                 "defaultExperimentName","defaultFrameRate","defaultSavePath",
-                                 "defaultFileFormat", "defaultAxisFocus", 
-                                 "defaultAxisFlow", "defaultDelayTimeAfterRestart", "defaultIsRecordVideo"]
+        self.allParameterKeys = ["wasRunning", "flowRate", "dnumberOfFrames",
+                                 "experimentName","frameRate","savePath",
+                                 "fileFormat", "axisFocus", 
+                                 "axisFlow", "delayTimeAfterRestart", "isRecordVideo"]
         
         # get default configs
         self.defaultConfigPath = os.path.join(dirtools.UserFileDirs.Root, "flowStopController")
@@ -44,16 +44,16 @@ class FlowStopManager(SignalInterface):
             self.__logger.error(f"Could not load default config from {self.defaultConfigPath}: {e}")
             self.defaultConfig = {}
             self.defaultConfig["wasRunning"] = True
-            self.defaultConfig["defaultFlowRate"] = 100
-            self.defaultConfig["defaultNumberOfFrames"] = -1
-            self.defaultConfig["defaultExperimentName"] = "FlowStopExperiment"
-            self.defaultConfig["defaultFrameRate"] = 1
-            self.defaultConfig["defaultSavePath"] = "./"
-            self.defaultConfig["defaultFileFormat"] = "JPG"
-            self.defaultConfig["defaultAxisFlow"] = "X"
-            self.defaultConfig["defaultAxisFocus"] = "Z"
-            self.defaultConfig["defaultDelayTimeAfterRestart"]=1
-            self.defaultConfig["defaultIsRecordVideo"]=True
+            self.defaultConfig["flowRate"] = 100
+            self.defaultConfig["numberOfFrames"] = -1
+            self.defaultConfig["experimentName"] = "FlowStopExperiment"
+            self.defaultConfig["frameRate"] = 1
+            self.defaultConfig["savePath"] = "./"
+            self.defaultConfig["fileFormat"] = "JPG"
+            self.defaultConfig["axisFlow"] = "X"
+            self.defaultConfig["axisFocus"] = "Z"
+            self.defaultConfig["delayTimeAfterRestart"]=1
+            self.defaultConfig["isRecordVideo"]=True
             self.writeConfig(self.defaultConfig)
                 
     def updateConfig(self, parameterName, value):

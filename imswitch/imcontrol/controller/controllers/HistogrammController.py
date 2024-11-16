@@ -9,6 +9,7 @@ from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from imswitch.imcontrol.view import guitools
 from imswitch.imcommon.model import initLogger
+from imswitch.imcommon.model import APIExport
 from ..basecontrollers import LiveUpdatedController
 import cv2
 
@@ -43,7 +44,10 @@ class HistogrammController(LiveUpdatedController):
         if not IS_HEADLESS:
             self._widget.setHistogrammData(units,hist)
     
-
+    @APIExport(runOnUIThread=False)
+    def histogrammActive(self):
+        '''just a dummy endpoint to check if the histogramm is active'''
+        return True
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

@@ -58,7 +58,7 @@ class ObjectiveController(LiveUpdatedController):
         self._widget.btnMovePlus.clicked.connect(self.onMovePlusClicked)
         self._widget.btnMoveMinus.clicked.connect(self.onMoveMinusClicked)
         self._widget.btnSetPosObj1.clicked.connect(self.onSetPosObj1Clicked)
-        self._widget.btnSetPosObj2.clicked.connect(self.onSetPosObj2Clicked)
+        #self._widget.btnSetPosObj2.clicked.connect(self.onSetPosObj2Clicked)
         
         
     @APIExport(runOnUIThread=True)
@@ -75,7 +75,7 @@ class ObjectiveController(LiveUpdatedController):
         self.objectiveLensMover.moveToObjectiveID(objectiveID)
         # update the pixelsize_eff
         self.detector.setPixelSizeUm(self.objectiveStorer.getObjectiveByID(objectiveID).pixelsize_eff)
-        self._master._MasterController__commChannel.sigPixelSizeChange.emit()
+        # self._master._MasterController__commChannel.sigPixelSizeChange.emit()
         if not IS_HEADLESS: self._widget.setCurrentObjectiveInfo(self.currentObjective)
         
     @APIExport(runOnUIThread=True)

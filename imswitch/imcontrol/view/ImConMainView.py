@@ -24,7 +24,6 @@ import importlib
 class ImConMainView(QMainWindow):
     sigLoadParamsFromHDF5 = Signal()
     sigPickSetup = Signal()
-    sigPickConfig = Signal()
     sigClosing = Signal()
 
     def __init__(self, options, viewSetupInfo, *args, **kwargs):
@@ -58,9 +57,6 @@ class ImConMainView(QMainWindow):
             self.pickSetupAction.triggered.connect(self.sigPickSetup)
             tools.addAction(self.pickSetupAction)
 
-            self.pickConfigAction = QtWidgets.QAction('Pick hardware config', self)
-            self.pickConfigAction.triggered.connect(self.sigPickConfig)
-            tools.addAction(self.pickConfigAction)
 
             # Window
             self.setWindowTitle('ImSwitch')

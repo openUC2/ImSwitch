@@ -139,7 +139,7 @@ class ESP32StageManager(PositionerManager):
         self.setupMotor(self.minA, self.maxA, self.stepSizes["A"], self.backlashA, "A")
 
         # Dummy move to get the motor to the right position
-        for iAxis in ("A", "X", "Y", "Z"):
+        for iAxis in positionerInfo.axes:
             self.move(value=-1, speed=1000, axis=iAxis, is_absolute=False, is_blocking=True, isEnable=True, timeout=0.2)
             self.move(value=1, speed=1000, axis=iAxis, is_absolute=False, is_blocking=True, isEnable=True, timeout=0.2)
         
@@ -334,7 +334,7 @@ class ESP32StageManager(PositionerManager):
         If new positions are coming from the device they will be updated in ImSwitch too'''
         for iAxis, axisName in enumerate(["A", "X", "Y", "Z"]):
             self.setPosition(positionArray[iAxis]*self.stepSizes[axisName], axisName)
-        self._commChannel.sigUpdateMotorPosition.emit()
+        self._commChannel.sigUpdateMotorPosition.emit(positionArray)
         
         
     def closeEvent(self):

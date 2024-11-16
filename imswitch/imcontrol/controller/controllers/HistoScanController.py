@@ -988,7 +988,7 @@ class HistoScanController(LiveUpdatedController):
             os.makedirs(dirPath, exist_ok=True)
             tifffile.imsave(os.path.join(dirPath, "stitchedImage.tif"), largeImage, append=False) 
             self.setImageForDisplay(largeImage, "histoscanStitch"+mDate)
-            self._commChannel.sigOnResultTileBasedTileScanning(self, largeImage)
+            self._commChannel.sigOnResultTileBasedTileScanning(largeImage)
         threading.Thread(target=getStitchedResult).start()
         
     def getSaveFilePath(self, date, filename, extension):

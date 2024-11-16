@@ -39,7 +39,7 @@ setup(
     include_package_data=True,
     python_requires=">=3.9",
     install_requires=[
-        "pydantic ==1.10.16",
+        "pydantic >=1.10.16",
         "coloredlogs >= 15",
         "colour-science >= 0.3",
         "dataclasses-json >= 0.5",

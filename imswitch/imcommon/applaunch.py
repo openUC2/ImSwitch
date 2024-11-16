@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import traceback
+import time
 
 from .model import dirtools, pythontools, initLogger
 from imswitch import IS_HEADLESS
@@ -10,6 +11,8 @@ if not IS_HEADLESS:
     from .view.guitools import getBaseStyleSheet
     from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QApplication
+else:
+    from psygnal import emit_queued
 
 
 def prepareApp():
@@ -57,8 +60,8 @@ def launchApp(app, mainView, moduleMainControllers):
         # Keep python running
         while True: # TODO: have webserver signal somehow?
             try:
-                import time
-                time.sleep(1)
+                emit_queued()
+                time.sleep(.1)
             except KeyboardInterrupt:
                 exitCode = 0
                 break

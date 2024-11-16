@@ -32,16 +32,16 @@ class FlowStopController(LiveUpdatedController):
         
         # load from config file in User/Documents/ImSwitchConfig
         self.wasRunning = self._master.FlowStopManager.defaultConfig["wasRunning"]
-        self.defaultFlowRate = self._master.FlowStopManager.defaultConfig["defaultFlowRate"]
-        self.defaultNumberOfFrames = self._master.FlowStopManager.defaultConfig["defaultNumberOfFrames"]
-        self.defaultExperimentName = self._master.FlowStopManager.defaultConfig["defaultExperimentName"]
-        self.defaultFrameRate = self._master.FlowStopManager.defaultConfig["defaultFrameRate"]
-        self.defaultSavePath = self._master.FlowStopManager.defaultConfig["defaultSavePath"]
-        self.defaultFileFormat = self._master.FlowStopManager.defaultConfig["defaultFileFormat"]
-        self.defaultIsRecordVideo = self._master.FlowStopManager.defaultConfig["defaultIsRecordVideo"]
-        self.pumpAxis = self._master.FlowStopManager.defaultConfig["defaultAxisFlow"]
-        self.focusAxis = self._master.FlowStopManager.defaultConfig["defaultAxisFocus"]
-        self.defaultDelayTimeAfterRestart = self._master.FlowStopManager.defaultConfig["defaultDelayTimeAfterRestart"]
+        self.defaultFlowRate = self._master.FlowStopManager.defaultConfig["flowRate"]
+        self.defaultNumberOfFrames = self._master.FlowStopManager.defaultConfig["numberOfFrames"]
+        self.defaultExperimentName = self._master.FlowStopManager.defaultConfig["experimentName"]
+        self.defaultFrameRate = self._master.FlowStopManager.defaultConfig["frameRate"]
+        self.defaultSavePath = self._master.FlowStopManager.defaultConfig["savePath"]
+        self.defaultFileFormat = self._master.FlowStopManager.defaultConfig["fileFormat"]
+        self.defaultIsRecordVideo = self._master.FlowStopManager.defaultConfig["isRecordVideo"]
+        self.pumpAxis = self._master.FlowStopManager.defaultConfig["axisFlow"]
+        self.focusAxis = self._master.FlowStopManager.defaultConfig["axisFocus"]
+        self.defaultDelayTimeAfterRestart = self._master.FlowStopManager.defaultConfig["delayTimeAfterRestart"]
         self.mExperimentParameters = self._master.FlowStopManager.defaultConfig
         self.tSettle = 0.05
         self.imagesTaken = 0

@@ -132,7 +132,6 @@ class DetectorManager(SignalInterface):
     def updateLatestFrame(self, init):
         """ :meta private: """
         try:
-            print("updateLatestFrame")
             self.__image = self.getLatestFrame()
         except Exception:
             self.__logger.error(traceback.format_exc())

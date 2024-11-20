@@ -45,6 +45,8 @@ class RecordingController(ImConWidgetController):
         self._commChannel.sigSnapImgPrev.connect(self.snapImagePrev)
         self._commChannel.sigStartRecordingExternal.connect(self.startRecording)
         self._commChannel.sigRequestScanFreq.connect(self.sendScanFreq)
+        self._commChannel.sigStartLiveAcquistion.connect(self.setLiveStreamStart)
+        self._commChannel.sigAcquisitionStopped.connect(self.setLiveStreamStop)
         if 0: #IS_HEADLESS:IS_HEADLESS: 
             self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged, check_nargs=False)
             return
@@ -412,14 +414,19 @@ class RecordingController(ImConWidgetController):
 
     def getTimelapseFreq(self):
         return self._widget.getTimelapseFreq()
+    
+    def setLiveStreamStart(self):
+        self.streamRunning = True
+        
+    def setLiveStreamStop(self):
+        self.streamRunning = False
 
-
-    def stop_stream(self):
+    def stopStream(self):
         self.streamRunning = False
         self.streamstarted = False
-        self.manager = None
+        self.streamQueue = None
         
-    def start_stream(self):
+    def startStream(self):
         '''
         return a generator that converts frames into jpeg's reads to stream
         '''
@@ -428,7 +435,12 @@ class RecordingController(ImConWidgetController):
         detectorNum1 = detectorManager[detectorNum1Name]
         detectorNum1.startAcquisition()
         
-        self.fx = self.fy = .1
+        # adaptive resize: Keep them below 640x480
+        output_frame = detectorNum1.getLatestFrame()
+        if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
+            everyNthsPixel = np.min([output_frame.shape[0]//640, output_frame.shape[1]//480])
+        else:
+            everyNthsPixel = 1
         
         try:
             while self.streamRunning:
@@ -436,18 +448,13 @@ class RecordingController(ImConWidgetController):
                 if output_frame is None:
                     continue
                 try:
-                    # adaptive resize: Keep them below 640x480
-                    if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
-                        self.fx = self.fy = min(640/output_frame.shape[0], 480/output_frame.shape[1])
-                    else:
-                        self.fx = self.fy = 1
-                    output_frame = cv2.resize(output_frame, dsize=None, fx=self.fx,fy=self.fx)
+                    output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
                 except: 
                     output_frame = np.zeros((640,460))
                 (flag, encodedImage) = cv2.imencode(".jpg", output_frame)
                 if not flag:
                     continue
-                self.manager.put(encodedImage)
+                self.streamQueue.put(encodedImage)
         except:
             self.streamRunning = False
             
@@ -456,17 +463,17 @@ class RecordingController(ImConWidgetController):
         from multiprocessing import Queue
         if not self.streamstarted:
             import threading
-            self.manager = Queue(maxsize=10)
+            self.streamQueue = Queue(maxsize=10)
             self.streamRunning = True
-            threading.Thread(target=self.start_stream).start()
+            threading.Thread(target=self.startStream).start()
 
         try:
             while self.streamRunning:
                 yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
-                    bytearray(self.manager.get()) + b'\r\n')
+                    bytearray(self.streamQueue.get()) + b'\r\n')
         except GeneratorExit:
             self.__logger.debug("Stream connection closed by client.")
-            self.stop_stream()  # Ensure stream is stopped when client disconnects
+            self.stopStream()  # Ensure stream is stopped when client disconnects
 
 
     @APIExport(runOnUIThread=False)
@@ -483,7 +490,7 @@ class RecordingController(ImConWidgetController):
                 }
             return StreamingResponse(self.streamer(), media_type="multipart/x-mixed-replace;boundary=frame", headers=headers)
         else:
-            self.stop_stream()
+            self.stopStream()
             self._commChannel.sigStartLiveAcquistion.emit(False)
             return "stream stopped"
 

@@ -76,7 +76,7 @@ RUN if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
 ENV PATH=/opt/conda/bin:$PATH
 
 # Create conda environment and install packages
-RUN /opt/conda/bin/conda create -y --name imswitch python=3.10
+RUN /opt/conda/bin/conda create -y --name imswitch python=3.11
 
 RUN /opt/conda/bin/conda install -n imswitch -y -c conda-forge h5py numcodecs && \
     conda clean --all -f -y

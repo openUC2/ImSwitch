@@ -978,6 +978,8 @@ class HistoScanController(LiveUpdatedController):
         
         # move back to initial position
         self.stophistoscan()
+        mTileList, mPositionList = stitcher.get_tile_list()
+        self._commChannel.sigOnResultTileBasedTileScanning(mTileList, np.array(mPositionList))
 
         # get stitched result
         def getStitchedResult():
@@ -988,7 +990,6 @@ class HistoScanController(LiveUpdatedController):
             os.makedirs(dirPath, exist_ok=True)
             tifffile.imsave(os.path.join(dirPath, "stitchedImage.tif"), largeImage, append=False) 
             self.setImageForDisplay(largeImage, "histoscanStitch"+mDate)
-            self._commChannel.sigOnResultTileBasedTileScanning(largeImage)
         threading.Thread(target=getStitchedResult).start()
         
     def getSaveFilePath(self, date, filename, extension):
@@ -1150,6 +1151,11 @@ class ImageStitcher:
             pos = np.round((coords-self.origin_coords)*self.resolution_scale)
             utils.paste(self.stitched_image, img, pos, np.maximum)
 
+    def get_tile_list(self):
+        '''
+        return the list of unstitched images and their positions
+        '''
+        return self.ashlarImageList, self.ashlarPositionList
 
     def get_stitched_image(self):
         # introduce a little delay to free the queue ? # TODO

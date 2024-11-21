@@ -61,8 +61,6 @@ setup(
         "fastAPI >= 0.86.0",
         "uvicorn[standard] >= 0.19.0",
         "matplotlib >= 3.6",
-        "websockets >= 10.0",
-        "websocket-client >= 1.2",
         "opencv-python",
         "imjoy_rpc",
         "imjoy",
@@ -77,7 +75,10 @@ setup(
         "ashlarUC2",
         "imjoy-rpc==0.5.59",
         "imswitchclient>=0.1.2",  
-        "psygnal"
+        "psygnal",
+        "python-socketio[asyncio]", 
+        "fastapi-socketio"
+
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

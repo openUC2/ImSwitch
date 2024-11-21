@@ -133,7 +133,7 @@ class CommunicationChannel(SignalInterface):
     # scanning-related signals
     sigStartTileBasedTileScanning = Signal(int, int, int, int, int, int, str, int, int, bool, bool, bool) # (numb erTilesX, numberTilesY, stepSizeX, stepSizeY, nTimes, tPeriod, illuSource, initPosX, initPosY, isStitchAshlar, isStitchAshlarFlipX, isStitchAshlarFlipY)
     sigStopTileBasedTileScanning = Signal()
-    sigOnResultTileBasedTileScanning = Signal(np.ndarray) # (result)
+    sigOnResultTileBasedTileScanning = Signal(np.ndarray, np.ndarray) # (tiles, postions)
     
     
     @property

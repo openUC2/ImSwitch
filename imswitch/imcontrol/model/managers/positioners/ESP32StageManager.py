@@ -138,6 +138,17 @@ class ESP32StageManager(PositionerManager):
         self.setupMotor(self.minZ, self.maxZ, self.stepSizes["Z"], self.backlashZ, "Z")
         self.setupMotor(self.minA, self.maxA, self.stepSizes["A"], self.backlashA, "A")
 
+        # Setup Motor drivers (TMC - if available)
+        #    def set_tmc_parameters(self, axis=0, msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
+        if positionerInfo.managerProperties.get('mstepsX', 16) is not None:
+            self.setupMotorDriver(axis="X", msteps=positionerInfo.managerProperties.get('mstepsX', 16), rms_current=positionerInfo.managerProperties.get('rms_currentX', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsX', 10), semin=positionerInfo.managerProperties.get('seminX', 5), semax=positionerInfo.managerProperties.get('semaxX', 2), blank_time=positionerInfo.managerProperties.get('blank_timeX', 24), toff=positionerInfo.managerProperties.get('toffX', 3), timeout=1)
+        if positionerInfo.managerProperties.get('mstepsY', 16) is not None:
+            self.setupMotorDriver(axis="Y", msteps=positionerInfo.managerProperties.get('mstepsY', 16), rms_current=positionerInfo.managerProperties.get('rms_currentY', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsY', 10), semin=positionerInfo.managerProperties.get('seminY', 5), semax=positionerInfo.managerProperties.get('semaxY', 2), blank_time=positionerInfo.managerProperties.get('blank_timeY', 24), toff=positionerInfo.managerProperties.get('toffY', 3), timeout=1)  
+        if positionerInfo.managerProperties.get('mstepsZ', 16) is not None:
+            self.setupMotorDriver(axis="Z", msteps=positionerInfo.managerProperties.get('mstepsZ', 16), rms_current=positionerInfo.managerProperties.get('rms_currentZ', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsZ', 10), semin=positionerInfo.managerProperties.get('seminZ', 5), semax=positionerInfo.managerProperties.get('semaxZ', 2), blank_time=positionerInfo.managerProperties.get('blank_timeZ', 24), toff=positionerInfo.managerProperties.get('toffZ', 3), timeout=1)
+        if positionerInfo.managerProperties.get('mstepsA', 16) is not None:
+            self.setupMotorDriver(axis="A", msteps=positionerInfo.managerProperties.get('mstepsA', 16), rms_current=positionerInfo.managerProperties.get('rms_currentA', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsA', 10), semin=positionerInfo.managerProperties.get('seminA', 5), semax=positionerInfo.managerProperties.get('semaxA', 2), blank_time=positionerInfo.managerProperties.get('blank_timeA', 24), toff=positionerInfo.managerProperties.get('toffA', 3), timeout=1)
+        
         # Dummy move to get the motor to the right position
         for iAxis in positionerInfo.axes:
             self.move(value=-1, speed=1000, axis=iAxis, is_absolute=False, is_blocking=True, isEnable=True, timeout=0.2)
@@ -205,6 +216,9 @@ class ESP32StageManager(PositionerManager):
     def setupMotor(self, minPos, maxPos, stepSize, backlash, axis):
         self._motor.setup_motor(axis=axis, minPos=minPos, maxPos=maxPos, stepSize=stepSize, backlash=backlash)
 
+    def setupMotorDriver(self, axis="X", msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
+        self._motor.set_tmc_parameters(axis=axis, msteps=msteps, rms_current=rms_current, stall_value=stall_value, sgthrs=sgthrs, semin=semin, semax=semax, blank_time=blank_time, toff=toff, timeout=timeout)
+        
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=gTIMEOUT):
         '''
         Move the motor to a new position

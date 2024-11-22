@@ -180,7 +180,7 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal
 
 # fix the version of OME-ZARR 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/ome/ome-zarr-py/archive/refs/heads/master.zip"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install scikit --upgrade"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install --upgrade scikit-image"
 
 # Install UC2-REST
 RUN cd /tmp/UC2-REST && \

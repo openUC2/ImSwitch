@@ -178,6 +178,9 @@ RUN cd /tmp/ImSwitch && \
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"
 
+# fix the version of OME-ZARR 
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install --upgrade ome-zarr"
+
 # Install UC2-REST
 RUN cd /tmp/UC2-REST && \
     git pull && \

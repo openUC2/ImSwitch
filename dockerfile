@@ -163,7 +163,7 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygn
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"
 
 # fix the version of OME-ZARR 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome_zarr=0.9.0"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install scikit-image==0.19.3"
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
 

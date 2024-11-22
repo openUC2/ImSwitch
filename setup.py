@@ -72,7 +72,6 @@ setup(
         "piexif >= 1.1.3",
         "NanoImagingPack==2.1.4",
         "pymba==0.3.7",
-        "ashlarUC2",
         "imjoy-rpc==0.5.59",
         "imswitchclient>=0.1.2",  
         "psygnal",
@@ -90,6 +89,9 @@ setup(
             "napari[pyqt5] == 0.4.19",
             "lantzdev[qt] >= 0.5.2",
             "qtpy >= 1.9"
+        ],
+        'Ashlar': [
+            "ashlarUC2",
         ],
         'arkitet':
             [

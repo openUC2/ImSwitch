@@ -148,7 +148,7 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0] 
         self._master.positionersManager[positionerName].doHome(axis, isBlocking=isBlocking)
         self.updatePosition(positionerName, axis)
-        self._commChannel.sigUpdateMotorPosition.emit()
+        self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
 
     @APIExport()
     def stopAxis(self, positionerName=None, axis="X"):

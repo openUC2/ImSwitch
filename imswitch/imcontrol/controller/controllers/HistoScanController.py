@@ -19,7 +19,6 @@ import ast
 import skimage.transform
 import skimage.util
 import skimage
-from ashlarUC2 import utils
 import datetime 
 import numpy as np
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
@@ -33,6 +32,7 @@ import io
 from fastapi import Header
             
 try:
+    from ashlarUC2 import utils
     from ashlar.scripts.ashlar import process_images
     IS_ASHLAR_AVAILABLE = True
 except ImportError:

@@ -41,7 +41,7 @@ class FlowStopManager(SignalInterface):
                     pass
                     
         except Exception as e:
-            self.__logger.error(f"Could not load default config from {self.defaultConfigPath}: {e}")
+            self.__logger.error(f"s {self.defaultConfigPath}: {e}")
             self.defaultConfig = {}
             self.defaultConfig["wasRunning"] = True
             self.defaultConfig["flowRate"] = 100

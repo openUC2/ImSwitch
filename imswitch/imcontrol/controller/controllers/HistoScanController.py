@@ -954,7 +954,7 @@ class HistoScanController(LiveUpdatedController):
                                 'PositionX': positionList[0],
                                 'PositionY': positionList[1]
                         }, }
-                        self._commChannel.sigUpdateMotorPosition.emit()
+                        self._commChannel.sigUpdateMotorPosition.emit(list(positionList))
                         posY_pix_value = (float(positionList[1])-minPosY)/self.microscopeDetector.pixelSizeUm[-1]
                         posX_pix_value = (float(positionList[0])-minPosX)/self.microscopeDetector.pixelSizeUm[-1]
                         iPosPix = (posX_pix_value, posY_pix_value)

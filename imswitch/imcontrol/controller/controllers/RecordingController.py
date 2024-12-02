@@ -438,7 +438,7 @@ class RecordingController(ImConWidgetController):
         # adaptive resize: Keep them below 640x480
         output_frame = detectorNum1.getLatestFrame()
         if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
-            everyNthsPixel = np.min([output_frame.shape[0]//640, output_frame.shape[1]//480])
+            everyNthsPixel = np.min([output_frame.shape[0]//480, output_frame.shape[1]//640])
         else:
             everyNthsPixel = 1
         
@@ -451,10 +451,14 @@ class RecordingController(ImConWidgetController):
                     output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
                 except: 
                     output_frame = np.zeros((640,460))
-                (flag, encodedImage) = cv2.imencode(".jpg", output_frame)
+                # adjust the parameters of the jpeg compression
+                quality = 90  # Set the desired quality level (0-100)
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+                flag, encodedImage = cv2.imencode(".jpg", output_frame, encode_params)
                 if not flag:
                     continue
                 self.streamQueue.put(encodedImage)
+                time.sleep(0.1) # 10 fps
         except:
             self.streamRunning = False
             

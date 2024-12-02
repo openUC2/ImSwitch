@@ -45,10 +45,10 @@ class MasterController:
         self.LEDsManager = LEDsManager(self.__setupInfo.LEDs)
         #self.scanManager = ScanManager(self.__setupInfo)
         self.recordingManager = RecordingManager(self.detectorsManager)
-        self.slmManager = SLMManager(self.__setupInfo.slm)
+        if "SLM" in self.__setupInfo.availableWidgets: self.slmManager = SLMManager(self.__setupInfo.slm)
         self.UC2ConfigManager = UC2ConfigManager(self.__setupInfo.uc2Config, lowLevelManagers)
-        self.simManager = SIMManager(self.__setupInfo.sim)
-        self.dpcManager = DPCManager(self.__setupInfo.dpc)
+        if "SIM" in self.__setupInfo.availableWidgets: self.simManager = SIMManager(self.__setupInfo.sim)
+        if "DPC" in self.__setupInfo.availableWidgets: self.dpcManager = DPCManager(self.__setupInfo.dpc)
         self.mctManager = MCTManager(self.__setupInfo.mct)
         self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
         self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
@@ -57,13 +57,13 @@ class MasterController:
         self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
         self.MockXXManager = MockXXManager(self.__setupInfo.mockxx)
         self.jetsonnanoManager = JetsonNanoManager(self.__setupInfo.jetsonnano)
-        self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
-        self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
-        self.FlatfieldManager = FlatfieldManager(self.__setupInfo.Flatfield)
-        self.PixelCalibrationManager = PixelCalibrationManager(self.__setupInfo.PixelCalibration)
-        self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)
-        self.FOVLockManager = FOVLockManager(self.__setupInfo.fovLock)
-        self.ismManager = ISMManager(self.__setupInfo.ism)
+        if "HistoScan" in self.__setupInfo.availableWidgets: self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
+        if "FlowStop" in self.__setupInfo.availableWidgets: self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
+        if "FlatField" in self.__setupInfo.availableWidgets: self.FlatfieldManager = FlatfieldManager(self.__setupInfo.Flatfield)
+        if "PixelCalibration" in self.__setupInfo.availableWidgets: self.PixelCalibrationManager = PixelCalibrationManager(self.__setupInfo.PixelCalibration)
+        if "AutoFocus" in self.__setupInfo.availableWidgets: self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)
+        if "FOV" in self.__setupInfo.availableWidgets: self.FOVLockManager = FOVLockManager(self.__setupInfo.fovLock)
+        if "ISM" in self.__setupInfo.availableWidgets: self.ismManager = ISMManager(self.__setupInfo.ism)
         # load all implugin-related managers and add them to the class
         # try to get it from the plugins
         # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the 
@@ -124,8 +124,9 @@ class MasterController:
         self.recordingManager.sigMemorySnapAvailable.connect(cc.sigMemorySnapAvailable)
         self.recordingManager.sigMemoryRecordingAvailable.connect(self.memoryRecordingAvailable) 
             
-        self.slmManager.sigSLMMaskUpdated.connect(cc.sigSLMMaskUpdated)
-        self.simManager.sigSIMMaskUpdated.connect(cc.sigSIMMaskUpdated)
+        if "SLM" in self.__setupInfo.availableWidgets:
+            self.slmManager.sigSLMMaskUpdated.connect(cc.sigSLMMaskUpdated)
+            self.simManager.sigSIMMaskUpdated.connect(cc.sigSIMMaskUpdated)
 
     def memoryRecordingAvailable(self, name, file, filePath, savedToDisk):
         self.__moduleCommChannel.memoryRecordings[name] = VFileItem(

@@ -460,6 +460,7 @@ class CameraHIK:
                             self.timestamp = time.time()
                             self.frame_buffer.append(self.frame)
                             self.frameid_buffer.append(self.frameNumber)
+                            #print("frame number: ", self.frameNumber)
 
                         except Exception as e:
                             self.__logger.error(e)
@@ -487,6 +488,8 @@ class CameraHIK:
                         self.timestamp = time.time()
                         self.frame_buffer.append(self.frame)
                         self.frameid_buffer.append(self.lastFrameId)
+                        print("frame number: ", self.frameNumber)
+                        
                     else:
                         pass
                     if self.g_bExit == True:
@@ -543,7 +546,7 @@ class CameraHIK:
 
                             data = np.frombuffer(img_buff, count=int(nRGBSize),dtype=np.uint8)
                             self.frame = data.reshape((stDeviceList.nHeight, stDeviceList.nWidth, -1))
-
+                            self.lastFrameId = stDeviceList.nFrameNum
 
                     except:
                         pass
@@ -557,7 +560,7 @@ class CameraHIK:
                 self.frameNumber = stDeviceList.nFrameNum
                 self.timestamp = time.time()
                 self.frame_buffer.append(self.frame)
-                self.frameid_buffer.append(self.lastFrameId)
+                self.frameid_buffer.append(self.frameNumber)
 
                 if self.g_bExit == True:
                     break

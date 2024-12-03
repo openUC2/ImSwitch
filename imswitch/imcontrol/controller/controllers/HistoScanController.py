@@ -31,6 +31,12 @@ from PIL import Image
 import io
 from fastapi import Header
             
+import zarr
+from ome_zarr.writer import write_image
+from ome_zarr.io import parse_url
+from ome_zarr.format import CurrentFormat
+isZARR=True
+
 try:
     from ashlarUC2 import utils
     from ashlar.scripts.ashlar import process_images
@@ -85,7 +91,20 @@ class HistoScanController(LiveUpdatedController):
         # read offset between cam and microscope from config file in µm
         self.offsetCamMicroscopeX = -2500 #  self._master.HistoScanManager.offsetCamMicroscopeX
         self.offsetCamMicroscopeY = 2500 #  self._master.HistoScanManager.offsetCamMicroscopeY
-        
+        self.currentOverlap = 0.85
+        self.currentNY = 2
+        self.currentNX = 2
+        self.currentStepSizeX = None    
+        self.currentStepSizeY = None
+        self.currentNtimes = 1
+        self.currentIinitialPosX = 0
+        self.currentIinitialPosY = 0
+        self.currentTimeInterval = 0
+        self.currentAshlarStitching = False
+        self.currentAshlarFlipX = False
+        self.currentAshlarFlipY = False
+        self.currentResizeFactor = 0.25 
+                
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.microscopeDetector = self._master.detectorsManager[allDetectorNames[0]] # FIXME: This is hardcoded, need to be changed through the GUI
@@ -128,6 +147,7 @@ class HistoScanController(LiveUpdatedController):
         self.currentPosition = (0,0)
         self.positionList = []
         self.mScanIndex = 0
+        self.initialOverlap = 0.85
         
         # camera-based scanning coordinates   (select from napari layer)      
         self.mCamScanCoordinates = None
@@ -135,14 +155,12 @@ class HistoScanController(LiveUpdatedController):
         # select stage
         self.stages = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
         
-        
         # get flatfield manager
         if hasattr(self._master, "FlatfieldManager"):
             self.flatfieldManager = self._master.FlatfieldManager
         else: 
             self.flatfieldManager = None
         
-
         # define scan parameter per sample and populate into GUI later
         self.allScanParameters = []
         mFWD = os.path.dirname(os.path.realpath(__file__)).split("imswitch")[0]
@@ -150,6 +168,9 @@ class HistoScanController(LiveUpdatedController):
         self.allScanParameters.append(ScanParameters("24 Wellplate", 126, 86, 0, 0, mFWD+"imswitch/_data/images/Wellplate24.png"))
         self.allScanParameters.append(ScanParameters("3-Slide Wellplateadapter", 164, 109, 0, 0, mFWD+"imswitch/_data/images/WellplateAdapter3Slides.png"))
 
+        # compute optimal scan step size based on camera resolution and pixel size
+        self.bestScanSizeX, self.bestScanSizeY = self.computeOptimalScanStepSize(overlap = self.initialOverlap)
+        
         if not IS_HEADLESS:
             '''
             Set up the GUI
@@ -158,8 +179,7 @@ class HistoScanController(LiveUpdatedController):
             self._widget.setOffset(offsetX, offsetY)
             ## update optimal scan parameters for tile-based scan
             try:
-                bestScanSizeX, bestScanSizeY = self.computeOptimalScanStepSize()
-                self._widget.setTilebasedScanParameters((bestScanSizeX, bestScanSizeY))
+                self._widget.setTilebasedScanParameters((self.bestScanSizeX, self.bestScanSizeY))
             except Exception as e:
                 self._logger.error(e)
                 
@@ -206,11 +226,12 @@ class HistoScanController(LiveUpdatedController):
             self._widget.setSampleLayouts(self.allScanParameters)
             self._widget.samplePicker.currentIndexChanged.connect(self._widget.loadSampleLayout)
 
-    def computeOptimalScanStepSize(self, overlap = 0.75):
+    @APIExport()
+    def computeOptimalScanStepSize(self, overlap: float = 0.75):
         mFrameSize = (self.microscopeDetector._camera.SensorHeight, self.microscopeDetector._camera.SensorWidth)
         bestScanSizeX = mFrameSize[1]*self.microscopeDetector.pixelSizeUm[-1]*overlap
         bestScanSizeY = mFrameSize[0]*self.microscopeDetector.pixelSizeUm[-1]*overlap     
-        return bestScanSizeX, bestScanSizeY
+        return (bestScanSizeX, bestScanSizeY)
 
     def turnOnLED(self):
         if self.led is not None:
@@ -646,19 +667,22 @@ class HistoScanController(LiveUpdatedController):
             self._widget.startButton.setStyleSheet("background-color: red")
             self._logger.debug("histoscan scanning stopped.")
 
+
+
     @APIExport()
     def startHistoScanTileBasedByParameters(self, numberTilesX:int=2, numberTilesY:int=2, stepSizeX:int=100, stepSizeY:int=100, 
                                             nTimes:int=1, tPeriod:int=1, initPosX:Optional[Union[int, str]] = None, initPosY:Optional[Union[int, str]] = None, 
-                                            isStitchAshlar:bool=False, isStitchAshlarFlipX:bool=False, isStitchAshlarFlipY:bool=False, resizeFactor:float=0.25):
+                                            isStitchAshlar:bool=False, isStitchAshlarFlipX:bool=False, isStitchAshlarFlipY:bool=False, resizeFactor:float=0.25, 
+                                            overlap:float=0.75):
         def computePositionList(numberTilesX, numberTilesY, stepSizeX, stepSizeY, initPosX, initPosY):
             positionList = []
-            for i in range(numberTilesX):
-                if i % 2 == 0:  # X-Position ist gerade
+            for ix in range(numberTilesX):
+                if ix % 2 == 0:  # X-Position ist gerade
                     rangeY = range(numberTilesY)
                 else:  # X-Position ist ungerade
                     rangeY = range(numberTilesY - 1, -1, -1)
-                for j in rangeY:
-                    positionList.append((i*stepSizeX+initPosX-numberTilesX//2*stepSizeX, j*stepSizeY+initPosY-numberTilesY//2*stepSizeY))
+                for iy in rangeY:
+                    positionList.append((ix*stepSizeX+initPosX-numberTilesX//2*stepSizeX, iy*stepSizeY+initPosY-numberTilesY//2*stepSizeY, ix, iy))
             return positionList
         # compute optimal step size if not provided
         if stepSizeX<=0 or stepSizeX is None:
@@ -669,6 +693,23 @@ class HistoScanController(LiveUpdatedController):
             initPosX = self.stages.getPosition()["X"]
         if initPosY is None or type(initPosY)==str:    
             initPosY = self.stages.getPosition()["Y"]
+            
+        # assign parameters for status feedback 
+        self.currentOverlap = overlap
+        self.currentNX = numberTilesX
+        self.currentNY = numberTilesY
+        self.currentStepSizeX = stepSizeX
+        self.currentStepSizeY = stepSizeY
+        self.currentNtimes = nTimes
+        self.currentIinitialPosX = initPosX
+        self.currentIinitialPosY = initPosY
+        self.currentTimeInterval = tPeriod
+        self.currentAshlarStitching = isStitchAshlar
+        self.currentAshlarFlipX = isStitchAshlarFlipX
+        self.currentAshlarFlipY = isStitchAshlarFlipY
+        self.currentResizeFactor = resizeFactor
+        
+        # compute the scan-grid
         positionList = computePositionList(numberTilesX, numberTilesY, stepSizeX, stepSizeY, initPosX, initPosY)
         minPosX = np.min(positionList, axis=0)[0]
         maxPosX = np.max(positionList, axis=0)[0]
@@ -765,10 +806,10 @@ class HistoScanController(LiveUpdatedController):
         for y in range(steps_y):
             if y % 2 == 0:  # Even rows: left to right
                 for x in range(steps_x):
-                    coordinates.append((posXmin + x * img_width *overlap, posYmin + y * img_height *overlap))
+                    coordinates.append((posXmin + x * img_width *overlap, posYmin + y * img_height *overlap), x, y)
             else:  # Odd rows: right to left
                 for x in range(steps_x - 1, -1, -1):  # Starting from the last position, moving backwards
-                    coordinates.append((posXmin + x * img_width *overlap, posYmin + y * img_height *overlap))
+                    coordinates.append((posXmin + x * img_width *overlap, posYmin + y * img_height *overlap), x, y)
         
         return coordinates
 
@@ -780,6 +821,24 @@ class HistoScanController(LiveUpdatedController):
         statusDict["stitchResultAvailable"] = bool(self.histoscanStack is not None)
         statusDict["mScanIndex"] = self.mScanIndex
         statusDict["mScanCount"] = len(self.positionList)
+        statusDict["currentStepSizeX"] = self.currentStepSizeX if self.currentStepSizeX is not None else self.bestScanSizeX
+        statusDict["currentStepSizeY"] = self.currentStepSizeY if self.currentStepSizeY is not None else self.bestScanSizeY
+        statusDict["currentNX"] = self.currentNX
+        statusDict["currentNY"] = self.currentNY
+        statusDict["currentOverlap"] = self.currentOverlap
+        statusDict["currentAshlarStitching"] = self.currentAshlarStitching
+        statusDict["currentAshlarFlipX"] = self.currentAshlarFlipX
+        statusDict["currentAshlarFlipY"] = self.currentAshlarFlipY
+        statusDict["currentResizeFactor"] = self.currentResizeFactor
+        mCurrentPositions = self.stages.getPosition()
+        statusDict["currentIinitialPosX"] = mCurrentPositions["X"]
+        statusDict["currentIinitialPosY"] = mCurrentPositions["Y"]
+        statusDict["currentTimeInterval"] = self.currentTimeInterval
+        statusDict["currentNtimes"] = self.currentNtimes
+        #statusDict["currentIlluSource"] = self.currentIlluSource
+        #statusDict["currentIlluValue"] = self.currentIlluValue
+        statusDict["pixelSize"] = self.microscopeDetector.pixelSizeUm[-1]
+        
         #statusDict["positionList"] = self.positionList
         return statusDict
         
@@ -850,6 +909,11 @@ class HistoScanController(LiveUpdatedController):
         # precompute the position list in advance 
         if positionList is None:
             positionList = self.generate_snake_scan_coordinates(minPosX, minPosY, maxPosX, maxPosY, img_width, img_height, overlap)
+            nStepsX = int((maxPosX - minPosX) / (img_width*overlap))
+            nStepsY = int((maxPosY - maxPosY) / (img_height*overlap))
+        else:
+            nStepsX = np.ptp(np.array(positionList)[:, 2])+1
+            nStepsY = np.ptp(np.array(positionList)[:, 3])+1
 
         maxPosPixY = int((maxPosY-minPosY)/self.microscopeDetector.pixelSizeUm[-1])
         maxPosPixX = int((maxPosX-minPosX)/self.microscopeDetector.pixelSizeUm[-1])
@@ -866,7 +930,11 @@ class HistoScanController(LiveUpdatedController):
             ft = "%Y-%m-%dT%H_%M_%S"
             HistoDate = datetime.datetime.now(tz=tz).strftime(ft)
             file_name = "test_"+HistoDate
-            extension = "ome.tif"
+            if isZARR:
+                extension = ".zarr"
+            else:
+                extension = ".ome.tif"
+                
             if IS_HEADLESS: 
                 filePath = self.getSaveFilePath(date=HistoDate,
                                         filename=file_name,
@@ -882,8 +950,8 @@ class HistoScanController(LiveUpdatedController):
                 flatfieldImage = None
             stitcher = ImageStitcher(self, origin_coords=(0,0), max_coords=(maxPosPixX, maxPosPixY), folder=folder, image_dims=image_dims,
                                      nChannels=nChannels, file_name=file_name, extension=extension, flatfieldImage=flatfieldImage,
-                                     flipX=flipX, flipY=flipY, isStitchAshlar=isStitchAshlar, pixel_size=self.microscopeDetector.pixelSizeUm[0], 
-                                     resolution_scale=resizeFactor)
+                                     flipX=flipX, flipY=flipY, isStitchAshlar=isStitchAshlar, pixel_size=self.microscopeDetector.pixelSizeUm[1], 
+                                     resolution_scale=resizeFactor, tile_shape=(1, nStepsX, nStepsY, NpixY, NpixX))
             
             # move to the first position
             self.stages.move(value=positionList[0], axis="XY", is_absolute=True, is_blocking=True, acceleration=(self.acceleration,self.acceleration))
@@ -952,7 +1020,9 @@ class HistoScanController(LiveUpdatedController):
 
                             'Plane': {
                                 'PositionX': positionList[0],
-                                'PositionY': positionList[1]
+                                'PositionY': positionList[1], 
+                                'IndexX': positionList[2],
+                                'IndexY': positionList[3]
                         }, }
                         self._commChannel.sigUpdateMotorPosition.emit()
                         posY_pix_value = (float(positionList[1])-minPosY)/self.microscopeDetector.pixelSizeUm[-1]
@@ -971,15 +1041,16 @@ class HistoScanController(LiveUpdatedController):
                     break
                 if not self.ishistoscanRunning:
                     return
-                time.sleep(1)
+                time.sleep(.1)
         # return to initial position
         self.stages.move(value=(initPosX,initPosY), axis="XY", is_absolute=True, is_blocking=False, acceleration=(self.acceleration,self.acceleration))
         self._commChannel.sigUpdateMotorPosition.emit()
         
         # move back to initial position
         self.stophistoscan()
-        mTileList, mPositionList = stitcher.get_tile_list()
-        self._commChannel.sigOnResultTileBasedTileScanning(mTileList, np.array(mPositionList))
+        if isStitchAshlar and IS_ASHLAR_AVAILABLE:
+            mTileList, mPositionList = stitcher.get_tile_list()
+            self._commChannel.sigOnResultTileBasedTileScanning(mTileList, np.array(mPositionList))
 
         # get stitched result
         def getStitchedResult():
@@ -1044,14 +1115,18 @@ class ImageStitcher:
 
     def __init__(self, parent, origin_coords, max_coords,  folder, file_name, extension, 
                  resolution_scale=.25, nChannels = 3, flatfieldImage=None, image_dims=None,
-                 flipX=True, flipY=True, isStitchAshlar=False, pixel_size = -1):
+                 flipX=True, flipY=True, isStitchAshlar=False, pixel_size = -1, 
+                 tile_shape=(1,1), dtype=np.uint16):
         # Initial min and max coordinates 
         self._parent = parent
         self.isStitchAshlar = isStitchAshlar
         self.flipX = flipX
         self.flipY = flipY
         self.pixel_size = pixel_size
-
+        self.tile_shape = tile_shape[-2:] # tile_shape -> (channels, rows, columns, height, width)
+        self.grid_shape = tile_shape[1:3] # (rows, columns)
+        self.dtype = dtype
+        
         # determine write location
         self.file_name = file_name
         self.file_path = os.sep.join([folder, file_name + extension])
@@ -1072,12 +1147,12 @@ class ImageStitcher:
             self.ashlarImageList = []
             self.ashlarPositionList = []
         else:
-            self.resolution_scale = resolution_scale
-            self.origin_coords = np.int32(np.array(origin_coords))
-            image_width, image_height = image_dims[0], image_dims[1]
-            size = np.array((max_coords[1]+image_height,max_coords[0]+image_width))/pixel_size # pixels; Y X
-            mshape = np.int32(np.ceil(size)*self.resolution_scale)
-            self.stitched_image = np.zeros(mshape.T, dtype=np.uint16) 
+            self.resolution_scale = resolution_scale                        # how much we want to downscale the result to save memory?
+            self.origin_coords = np.int32(np.array(origin_coords))          # origin coordinate of the stage (e.g. x=0, y=0)
+            image_width, image_height = image_dims[0], image_dims[1]        # physical size of the image in microns
+            size = np.array((max_coords[1]+image_height,max_coords[0]+image_width))/pixel_size # size of the final image that contains all tiles in microns
+            mshape = np.int32(np.ceil(size)*self.resolution_scale*pixel_size)          # size of the final image in pixels (i.e. canvas)
+            self.stitched_image = np.zeros(mshape.T, dtype=np.uint16)       # create a canvas for the stitched image
             
 
     def process_ashlar(self, arrays, position_list, pixel_size, output_filename='ashlar_output_numpy.tif', maximum_shift_microns=10, flip_x=False, flip_y=False):
@@ -1120,18 +1195,47 @@ class ImageStitcher:
             self.queue.append((img, coords, metadata))
 
     def _process_queue(self):
-        with tifffile.TiffWriter(self.file_path, bigtiff=True, append=True) as tif:
-            while self.isRunning:
-                if not self.queue:
-                    time.sleep(.02) # unload CPU
-                    continue
-                img, coords, metadata = self.queue.popleft()
-                self._place_on_canvas(img, coords, flipX=self.flipX, flipY=self.flipY)
-
-                # write image to disk
-                tif.write(data=img, metadata=metadata)
+        if isZARR:
+            import os
+            from tempfile import TemporaryDirectory
+            import numpy as np
+            from iohub.ngff import open_ome_zarr
             
+            tmp_dir = TemporaryDirectory()  
+            store_path = os.path.join(tmp_dir.name, "tiled.zarr")
+            print("Zarr store path", store_path)
+            
+            # define grid 
+            with open_ome_zarr(store_path, layout="tiled", mode="a", channel_names=["Mono"]) as dataset:
+                tiles = dataset.make_tiles(
+                    "tiled_raw", grid_shape=self.grid_shape, tile_shape=self.tile_shape, dtype=self.dtype
+                )
+                while self.isRunning:
+                    if not self.queue:
+                        time.sleep(.02) # unload CPU
+                        continue
+                    img, coords, metadata = self.queue.popleft()
+                    self._place_on_canvas(img, coords, flipX=self.flipX, flipY=self.flipY)
 
+                    # write image to disk
+                    # tif.write(data=img, metadata=metadata)                
+                    row = metadata['Plane']['IndexX']
+                    column = metadata['Plane']['IndexY']
+                    tiles.write_tile(img, row, column)
+
+        
+        else:
+            with tifffile.TiffWriter(self.file_path, bigtiff=True, append=True) as tif:
+                while self.isRunning:
+                    if not self.queue:
+                        time.sleep(.02) # unload CPU
+                        continue
+                    img, coords, metadata = self.queue.popleft()
+                    self._place_on_canvas(img, coords, flipX=self.flipX, flipY=self.flipY)
+
+                    # write image to disk
+                    tif.write(data=img, metadata=metadata)
+                
     def _place_on_canvas(self, img, coords, flipX=True, flipY=True):
         if self.isStitchAshlar and IS_ASHLAR_AVAILABLE:
             # in case we want to process it with ASHLAR later on

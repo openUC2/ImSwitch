@@ -75,7 +75,8 @@ setup(
         "imjoy-rpc==0.5.59",
         "imswitchclient>=0.1.2",  
         "psygnal",
-        "python-socketio[asyncio]==5.11.4"
+        "python-socketio[asyncio]==5.11.4",
+        "ashlarUC2"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

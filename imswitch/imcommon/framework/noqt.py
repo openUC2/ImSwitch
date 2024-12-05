@@ -79,6 +79,20 @@ class SignalInstance(psygnal.SignalInstance):
             # Schedule the emit coroutine in the server's event loop
             sio.start_background_task(sio.emit, "signal", json.dumps(message))
         except Exception as e:
+            '''
+            try:
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    #loop.run_forever()
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(sio.emit("signal", json.dumps(message)), loop)
+                else:
+                    sio.start_background_task(sio.emit, "signal", json.dumps(message))
+            except Exception as e:
+            '''
             print(f"Error broadcasting message via Socket.IO: {e}")
 
 class Signal(psygnal.Signal):

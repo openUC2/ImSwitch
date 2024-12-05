@@ -113,7 +113,7 @@ class HistoScanWidget(NapariHybridWidget):
 
 
         # load sample layout
-        self.ScanSelectViewWidget = None
+        self.ScanSelectViewWidget = ScanSelectView(self)
         self.grid.addWidget(self.ScanSelectViewWidget, 12, 0, 2, 2)
 
         # Create a scroll area and set the second tab widget as its content
@@ -363,12 +363,11 @@ class HistoScanWidget(NapariHybridWidget):
             self.setDefaultSavePath(os.path.join(path, "histoScan"))
             os.makedirs(os.path.join(path, "histoScan"), exist_ok=True)
 
-    def loadSampleLayout(self, index, allScanParameters):
-        if self.ScanSelectViewWidget is None:
-            self.ScanSelectViewWidget = ScanSelectView(self, allScanParameters[index])
-        else:
-            self.ScanSelectViewWidget.updateParams(allScanParameters[index])
-        self.ScanSelectViewWidget.setPixmap(QtGui.QPixmap(allScanParameters[index].imagePath))
+    def loadSampleLayout(self, index=0, allScanParameters=None):
+        if allScanParameters is not None:
+            self.allScanParameters = allScanParameters # save all scan parameters
+        self.ScanSelectViewWidget.updateParams(self.allScanParameters[index])
+        self.ScanSelectViewWidget.setPixmap(QtGui.QPixmap(self.allScanParameters[index].imagePath))
 
 
     def setSampleLayouts(self, sampleLayoutList):
@@ -541,8 +540,9 @@ COLORS = ['#000000', '#ffffff']
 
 
 class ScanSelectView(QtWidgets.QGraphicsView):
-    def __init__(self, parent, scanParameters):
+    def __init__(self, parent):
         super().__init__(parent)
+        self.name = "ScanSelectView"
         scene = QtWidgets.QGraphicsScene(self)
         self._logger = initLogger(self)
         self.setScene(scene)
@@ -555,10 +555,10 @@ class ScanSelectView(QtWidgets.QGraphicsView):
         self.parent = parent
 
         # real-world coordinates for the scan region that is represented by the image
-        self.physDimX = scanParameters.physDimX
-        self.physDimY = scanParameters.physDimY
-        self.physOffsetX = scanParameters.physOffsetX
-        self.physOffsetY = scanParameters.physOffsetY
+        self.physDimX = 0
+        self.physDimY = 0
+        self.physOffsetX = 0
+        self.physOffsetY = 0
         self.clickedCoordinates = (0,0)
         self._logger = initLogger(self)
         

@@ -214,6 +214,8 @@ class ImConMainView(QMainWindow):
         prevDock = None
         prevDockYPosition = -1
         for widgetKey, dockInfo in dockInfoDict.items():
+            if widgetKey == "ImSwitchServer":
+                continue
             try:
                 self.widgets[widgetKey] = self.factory.createWidget(
                     getattr(widgets, f'{widgetKey}Widget')

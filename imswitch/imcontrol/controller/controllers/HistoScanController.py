@@ -30,7 +30,10 @@ from typing import List, Optional, Union
 from PIL import Image
 import io
 from fastapi import Header
-            
+import os
+from tempfile import TemporaryDirectory
+import numpy as np
+from iohub.ngff import open_ome_zarr
 import zarr
 from ome_zarr.writer import write_image
 from ome_zarr.io import parse_url
@@ -1196,11 +1199,7 @@ class ImageStitcher:
 
     def _process_queue(self):
         if isZARR:
-            import os
-            from tempfile import TemporaryDirectory
-            import numpy as np
-            from iohub.ngff import open_ome_zarr
-            
+           
             tmp_dir = TemporaryDirectory()  
             store_path = os.path.join(tmp_dir.name, "tiled.zarr")
             print("Zarr store path", store_path)

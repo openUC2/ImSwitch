@@ -93,7 +93,11 @@ class SignalInstance(psygnal.SignalInstance):
                     sio.start_background_task(sio.emit, "signal", json.dumps(message))
             except Exception as e:
             '''
-            print(f"Error broadcasting message via Socket.IO: {e}")
+            try:
+                print(f"Error broadcasting message via Socket.IO: {e}")
+                asyncio.run_coroutine_threadsafe(sio.emit("signal", json.dumps(message)), asyncio.new_event_loop())
+            except Exception as e:
+                print(f"Error broadcasting message via Socket.IO: {e}")
 
 class Signal(psygnal.Signal):
     def __init__(self, *args: Any, **kwargs: Any) -> None:

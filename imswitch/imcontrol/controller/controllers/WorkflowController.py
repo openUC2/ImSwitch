@@ -372,7 +372,7 @@ class WorkflowController(LiveUpdatedController):
         channel: str = Query("Mono")
     ):
         
-        if self.workflow_manager.get_status()["status"] in ["running", "paused", "stopping"]:
+        if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
             raise HTTPException(status_code=400, detail="Another workflow is already running.")
         
         # Compute the scan positions
@@ -525,6 +525,12 @@ class WorkflowController(LiveUpdatedController):
     @APIExport()
     def workflow_status(self):
         return self.workflow_manager.get_status()
+    
+    @APIExport()
+    def force_stop_workflow(self):
+        self.workflow_manager.stop_workflow()
+        del self.workflow_manager
+        self.workflow_manager = WorkflowsManager()
 
 # With a properly structured JSON config, you can load various workflows dynamically. 
 # This addresses automating workflow generation for different imaging applications.

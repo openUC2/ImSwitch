@@ -1,0 +1,100 @@
+{
+    "ScanParameters": {
+        "name": "6 Well Plate",
+        "pixelImageX": 1509,
+        "pixelImageY": 1010,
+        "physDimX": 127.7,
+        "physDimY": 85.5,
+        "note_on_offset": "the offset is measured from the left lower corner",
+        "physOffsetX": 0,
+        "physOffsetY": 0,
+        "imagePath": "images/samplelayouts/6wellplate_1509x1010.png",
+        "well_radius": 17.5,
+        "wells": [
+            {
+                "wellID": "A1",
+                "positionX": 24.85,
+                "positionY": 23.25,
+                "positionXpx": 293.6464369616288,
+                "positionYpx": 274.64912280701753,
+                "idX": 0,
+                "idY": 0,
+                "idN": 0,
+                "positionXmin": 7.350000000000001,
+                "positionXmax": 42.35,
+                "positionYmin": 5.75,
+                "positionYmax": 40.75
+            },
+            {
+                "wellID": "B1",
+                "positionX": 24.85,
+                "positionY": 62.25,
+                "positionXpx": 293.6464369616288,
+                "positionYpx": 735.3508771929825,
+                "idX": 0,
+                "idY": 1,
+                "idN": 1,
+                "positionXmin": 7.350000000000001,
+                "positionXmax": 42.35,
+                "positionYmin": 44.75,
+                "positionYmax": 79.75
+            },
+            {
+                "wellID": "A2",
+                "positionX": 63.85,
+                "positionY": 23.25,
+                "positionXpx": 754.5,
+                "positionYpx": 274.64912280701753,
+                "idX": 1,
+                "idY": 0,
+                "idN": 2,
+                "positionXmin": 46.35,
+                "positionXmax": 81.35,
+                "positionYmin": 5.75,
+                "positionYmax": 40.75
+            },
+            {
+                "wellID": "B2",
+                "positionX": 63.85,
+                "positionY": 62.25,
+                "positionXpx": 754.5,
+                "positionYpx": 735.3508771929825,
+                "idX": 1,
+                "idY": 1,
+                "idN": 3,
+                "positionXmin": 46.35,
+                "positionXmax": 81.35,
+                "positionYmin": 44.75,
+                "positionYmax": 79.75
+            },
+            {
+                "wellID": "A3",
+                "positionX": 102.85,
+                "positionY": 23.25,
+                "positionXpx": 1215.353563038371,
+                "positionYpx": 274.64912280701753,
+                "idX": 2,
+                "idY": 0,
+                "idN": 4,
+                "positionXmin": 85.35,
+                "positionXmax": 120.35,
+                "positionYmin": 5.75,
+                "positionYmax": 40.75
+            },
+            {
+                "wellID": "B3",
+                "positionX": 102.85,
+                "positionY": 62.25,
+                "positionXpx": 1215.353563038371,
+                "positionYpx": 735.3508771929825,
+                "idX": 2,
+                "idY": 1,
+                "idN": 5,
+                "positionXmin": 85.35,
+                "positionXmax": 120.35,
+                "positionYmin": 44.75,
+                "positionYmax": 79.75
+            }
+        ]
+    }
+}

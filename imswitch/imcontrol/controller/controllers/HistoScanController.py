@@ -56,6 +56,37 @@ class ScanParameters(object):
         self.physOffsetY =  physOffsetY
         self.imagePath = imagePath
 
+from pydantic import BaseModel
+from typing import List, Optional, Union, Tuple
+
+class HistoStatus(BaseModel):
+    currentPosition: Optional[Tuple[float, float]] = None
+    ishistoscanRunning: bool = False
+    stitchResultAvailable: bool = False
+    mScanIndex: int = 0
+    mScanCount: int = 0
+    currentStepSizeX: Optional[float] = None
+    currentStepSizeY: Optional[float] = None
+    currentNX: int = 0
+    currentNY: int = 0
+    currentOverlap: float = 0.75
+    currentAshlarStitching: bool = False
+    currentAshlarFlipX: bool = False
+    currentAshlarFlipY: bool = False
+    currentResizeFactor: float = 0.25
+    currentIinitialPosX: Optional[float] = None
+    currentIinitialPosY: Optional[float] = None
+    currentTimeInterval: Optional[float] = None
+    currentNtimes: int = 1
+    pixelSize: float = 1.0
+
+    @staticmethod
+    def from_dict(status_dict: dict) -> "HistoStatus":
+        return HistoStatus(**status_dict)
+
+    def to_dict(self) -> dict:
+        return self.dict()
+
 
 class StitchedImageResponse(BaseModel):
     imageList: List[List[float]]
@@ -396,7 +427,7 @@ class HistoScanController(LiveUpdatedController):
         self._widget.setCameraScanParameters(nTilesX, nTilesY, minPosX, maxPosX, minPosY, maxPosY)
         
     @APIExport(runOnUIThread=False)
-    def fetchStageMap(self, resizeFactor=1, mapID=0):
+    def fetchStageMap(self, resizeFactor:float=1, mapID:int=0):
         '''return the image that represents the stage mapping'''
     
         # Create a 2D NumPy array representing the image
@@ -419,7 +450,21 @@ class HistoScanController(LiveUpdatedController):
         headers = {'Content-Disposition': 'inline; filename="test.png"'}
         return Response(im_bytes, headers=headers, media_type='image/png')
 
-    
+    @APIExport(runOnUIThread=False)
+    def getSampleLayoutFilePaths(self):
+        # return the paths of the sample layouts
+        # images are provided via imswitchserver
+        import imswitch
+        _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(imswitch.__file__)), '_data')
+        images_dir =  os.path.join(_baseDataFilesDir, 'images')
+        # create list of all image files in folder and subfolders 
+        image_files = []
+        for root, dirs, files in os.walk(images_dir):
+            for file in files:
+                if file.lower().endswith(('.json')):
+                    image_files.append(os.path.join(root.split("_data/")[-1], file))
+        return image_files
+
     
     @APIExport(runOnUIThread=False)
     def startStageMapping(self, mumPerStep: int=1, calibFilePath: str = "calibFile.json") -> str:
@@ -815,7 +860,7 @@ class HistoScanController(LiveUpdatedController):
                     coordinates.append((posXmin + x * img_width *overlap, posYmin + y * img_height *overlap), x, y)
         
         return coordinates
-
+    '''
     @APIExport()
     def getHistoStatus(self) -> dict: 
         statusDict = {}
@@ -845,6 +890,95 @@ class HistoScanController(LiveUpdatedController):
         #statusDict["positionList"] = self.positionList
         return statusDict
         
+    @APIExport()
+    def setHistoStatus(self, statusDict:dict) -> bool:
+        if "currentPosition" in statusDict:
+            self.currentPosition = statusDict["currentPosition"]
+        if "ishistoscanRunning" in statusDict:
+            self.ishistoscanRunning = statusDict["ishistoscanRunning"]
+        if "stitchResultAvailable" in statusDict:
+            self.stitchResultAvailable = statusDict["stitchResultAvailable"]
+        if "mScanIndex" in statusDict:
+            self.mScanIndex = statusDict["mScanIndex"]
+        if "mScanCount" in statusDict:
+            self.mScanCount = statusDict["mScanCount"]
+        if "currentStepSizeX" in statusDict:
+            self.currentStepSizeX = statusDict["currentStepSizeX"]
+        if "currentStepSizeY" in statusDict:
+            self.currentStepSizeY = statusDict["currentStepSizeY"]
+        if "currentNX" in statusDict:
+            self.currentNX = statusDict["currentNX"]
+        if "currentNY" in statusDict:
+            self.currentNY = statusDict["currentNY"]
+        if "currentOverlap" in statusDict:
+            self.currentOverlap = statusDict["currentOverlap"]
+        if "currentAshlarStitching" in statusDict:
+            self.currentAshlarStitching = statusDict["currentAshlarStitching"]
+        if "currentAshlarFlipX" in statusDict:
+            self.currentAshlarFlipX = statusDict["currentAshlarFlipX"]
+        if "currentAshlarFlipY" in statusDict:
+            self.currentAshlarFlipY = statusDict["currentAshlarFlipY"]
+        if "currentResizeFactor" in statusDict:
+            self.currentResizeFactor = statusDict["currentResizeFactor"]
+        if "currentIinitialPosX" in statusDict:
+            self.currentIinitialPosX = statusDict["currentIinitialPosX"]
+        if "currentIinitialPosY" in statusDict:
+            self.currentIinitialPosY = statusDict["currentIinitialPosY"]
+        if "currentTimeInterval" in statusDict:
+            self.currentTimeInterval = statusDict["currentTimeInterval"]
+        if "currentNtimes" in statusDict:
+            self.currentNtimes = statusDict["currentNtimes"]
+        #if "currentIlluSource" in statusDict:
+        #    self.currentIlluSource = statusDict["currentIlluSource"]
+    
+    '''
+    
+    @APIExport()
+    def getHistoStatus(self) -> HistoStatus:
+        statusDict = {
+            "currentPosition": self.currentPosition,
+            "ishistoscanRunning": bool(self.ishistoscanRunning),
+            "stitchResultAvailable": bool(self.histoscanStack is not None),
+            "mScanIndex": self.mScanIndex,
+            "mScanCount": len(self.positionList),
+            "currentStepSizeX": self.currentStepSizeX or self.bestScanSizeX,
+            "currentStepSizeY": self.currentStepSizeY or self.bestScanSizeY,
+            "currentNX": self.currentNX,
+            "currentNY": self.currentNY,
+            "currentOverlap": self.currentOverlap,
+            "currentAshlarStitching": self.currentAshlarStitching,
+            "currentAshlarFlipX": self.currentAshlarFlipX,
+            "currentAshlarFlipY": self.currentAshlarFlipY,
+            "currentResizeFactor": self.currentResizeFactor,
+            "currentIinitialPosX": self.currentIinitialPosX,
+            "currentIinitialPosY": self.currentIinitialPosY,
+            "currentTimeInterval": self.currentTimeInterval,
+            "currentNtimes": self.currentNtimes,
+            "pixelSize": self.microscopeDetector.pixelSizeUm[-1],
+        }
+        return HistoStatus.from_dict(statusDict)
+
+    @APIExport()
+    def setHistoStatus(self, status: HistoStatus) -> bool:
+        self.currentPosition = status.currentPosition
+        self.ishistoscanRunning = status.ishistoscanRunning
+        self.stitchResultAvailable = status.stitchResultAvailable
+        self.mScanIndex = status.mScanIndex
+        self.currentStepSizeX = status.currentStepSizeX
+        self.currentStepSizeY = status.currentStepSizeY
+        self.currentNX = status.currentNX
+        self.currentNY = status.currentNY
+        self.currentOverlap = status.currentOverlap
+        self.currentAshlarStitching = status.currentAshlarStitching
+        self.currentAshlarFlipX = status.currentAshlarFlipX
+        self.currentAshlarFlipY = status.currentAshlarFlipY
+        self.currentResizeFactor = status.currentResizeFactor
+        self.currentIinitialPosX = status.currentIinitialPosX
+        self.currentIinitialPosY = status.currentIinitialPosY
+        self.currentTimeInterval = status.currentTimeInterval
+        self.currentNtimes = status.currentNtimes
+        return True
+
     @APIExport()
     def getLastStitchedRawList(self) -> StitchedImageResponse:
         histoscanStack = self.histoscanStack.copy()

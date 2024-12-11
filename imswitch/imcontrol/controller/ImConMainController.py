@@ -58,6 +58,8 @@ class ImConMainController(MainController):
             controller_name = f'{widgetKey}Controller'
             if widgetKey == 'Scan':
                 controller_name = f'{widgetKey}Controller{self.__setupInfo.scan.scanWidgetType}'
+            if widgetKey == 'ImSwitchServer':
+                continue
             
             if hasattr(controllers, controller_name):
                 # Controller ist vorhanden

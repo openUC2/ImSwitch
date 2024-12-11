@@ -259,6 +259,10 @@ class HistoScanInfo:
     pass
 
 @dataclass(frozen=True)
+class WorkflowInfo:
+    pass
+    
+@dataclass(frozen=True)
 class FlowStopInfo:
     pass
 
@@ -524,6 +528,9 @@ class SetupInfo:
     HistoScan: Optional[HistoScanInfo] = field(default_factory=lambda: None)
     """ HistoScan settings. Required to be defined to use HistoScan functionality. """
 
+    Workflow: Optional[WorkflowInfo] = field(default_factory=lambda: None)
+    """ Workflow settings. Required to be defined to use Workflow functionality. """
+    
     FlowStop:  Optional[FlowStopInfo] = field(default_factory=lambda: None)
     """ FlowStop settings. Required to be defined to use FlowStop functionality. """
 

@@ -324,7 +324,8 @@ class WorkflowController(LiveUpdatedController):
             metadata["IndexX"] = col
             metadata["IndexY"] = row    
         self._logger.debug(f"Saving frame tile at row={row}, column={col}")
-        zarr_writer["tiles"].write_tile(img, row, col)
+        try:zarr_writer["tiles"].write_tile(img, row, col)
+        except:zarr_writer["tiles"].write_tile(img.T, row, col)
         metadata["frame_saved"] = True
         
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
@@ -376,7 +377,7 @@ class WorkflowController(LiveUpdatedController):
             raise HTTPException(status_code=400, detail="Another workflow is already running.")
         
         # Start the detector if not already running
-        if not self.microscopeDetector._running: self.microscopeDetector.startAcquisition()
+        if not self.mDetector._running: self.mDetector.startAcquisition()
         
         # Compute the scan positions
         xs, ys = self.compute_scan_positions(x_min, x_max, y_min, y_max, x_step, y_step)
@@ -391,9 +392,9 @@ class WorkflowController(LiveUpdatedController):
         # Calculate grid shape based on the number of xy positions
         grid_shape = (len(ys), len(xs))
         tile_shape = (self.mDetector._camera.SensorHeight, self.mDetector._camera.SensorWidth)
+        if self.mDetector._camera.SensorHeight>self.mDetector._camera.SensorWidth: tile_shape = (self.mDetector._camera.SensorWidth, self.mDetector._camera.SensorHeight)
         dtype = "uint16"
         tiles = dataset.make_tiles("tiled_raw", grid_shape=grid_shape, tile_shape=tile_shape, dtype=dtype)
-
         # Create workflow steps
         # Autofocus mode:
         # if autofocus_on == True: run autofocus before every XY move
@@ -421,6 +422,11 @@ class WorkflowController(LiveUpdatedController):
         frames = [0]  # single frame index for simplicity
 
         for y_i, y_pos in enumerate(ys):
+            # we want to have snake scan pattern
+            if y_i % 2 == 0:
+                xs = xs
+            else:
+                xs = xs[::-1]
             for x_i, x_pos in enumerate(xs):
                 # Move XY
                 workflowSteps.append(WorkflowStep(

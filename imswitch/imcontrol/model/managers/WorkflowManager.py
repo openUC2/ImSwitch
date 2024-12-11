@@ -198,7 +198,12 @@ class WorkflowsManager:
 
     def start_workflow(self, wf: Workflow, context: WorkflowContext):
         if self.current_workflow is not None:
-            raise RuntimeError("A workflow is already running. Stop or wait before starting another one.")
+            if self.get_status()["status"] == "stopping":
+                self.current_workflow = None
+                self.current_context = None
+                self.current_thread = None
+            else:
+                raise RuntimeError("A workflow is already running. Stop or wait before starting another one.")
         self.current_workflow = wf
         self.current_context, self.current_thread = wf.run_in_background(context)
         return {"status": "started"}

@@ -375,6 +375,9 @@ class WorkflowController(LiveUpdatedController):
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
             raise HTTPException(status_code=400, detail="Another workflow is already running.")
         
+        # Start the detector if not already running
+        if not self.microscopeDetector._running: self.microscopeDetector.startAcquisition()
+        
         # Compute the scan positions
         xs, ys = self.compute_scan_positions(x_min, x_max, y_min, y_max, x_step, y_step)
 

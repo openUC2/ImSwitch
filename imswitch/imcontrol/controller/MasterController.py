@@ -7,7 +7,7 @@ from imswitch.imcontrol.model import (
     RecordingManager, RS232sManager, SLMManager, SIMManager, DPCManager, LEDMatrixsManager, MCTManager, ROIScanManager, MockXXManager, WebRTCManager, HyphaManager,
     ISMManager, UC2ConfigManager, AutofocusManager, HistoScanManager, PixelCalibrationManager, LightsheetManager, NidaqManager, FOVLockManager,
     StandManager, RotatorsManager, JetsonNanoManager, LEDsManager, ScanManagerBase, ScanManagerPointScan, ScanManagerMoNaLISA, FlatfieldManager, 
-    FlowStopManager
+    FlowStopManager, WorkflowManager
 )
 
 
@@ -64,6 +64,7 @@ class MasterController:
         if "AutoFocus" in self.__setupInfo.availableWidgets: self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)
         if "FOV" in self.__setupInfo.availableWidgets: self.FOVLockManager = FOVLockManager(self.__setupInfo.fovLock)
         if "ISM" in self.__setupInfo.availableWidgets: self.ismManager = ISMManager(self.__setupInfo.ism)
+        if "Workflow" in self.__setupInfo.availableWidgets: self.workflowManager = WorkflowManager()
         # load all implugin-related managers and add them to the class
         # try to get it from the plugins
         # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the 

@@ -44,6 +44,7 @@ from .WebRTCController import WebRTCController
 from .HyphaController import HyphaController
 from .JetsonNanoController import JetsonNanoController
 from .HistoScanController import HistoScanController
+from .WorkflowController import WorkflowController
 from .FlatfieldController import FlatfieldController
 from .PixelCalibrationController import PixelCalibrationController
 from .ISMController import ISMController

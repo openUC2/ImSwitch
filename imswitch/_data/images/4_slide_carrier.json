@@ -1,0 +1,72 @@
+{
+    "ScanParameters": {
+        "name": "4 Slide Carrier",
+        "pixelImageX": 1509,
+        "pixelImageY": 1010,
+        "physDimX": 127.7,
+        "physDimY": 85.5,
+        "note_on_offset": "the offset is measured from the left lower corner",
+        "physOffsetX": 0,
+        "physOffsetY": 0,
+        "imagePath": "images/samplelayouts/4slidecarrier_1509x1010.png",
+        "well_radius": 10,
+        "wells": [
+            {
+                "wellID": "A1",
+                "positionX": 17.35,
+                "positionY": 42.75,
+                "positionXpx": 205.02075176194205,
+                "positionYpx": 505.0,
+                "idX": 0,
+                "idY": 0,
+                "idN": 0,
+                "positionXmin": 7.350000000000001,
+                "positionXmax": 27.35,
+                "positionYmin": 32.75,
+                "positionYmax": 52.75
+            },
+            {
+                "wellID": "A2",
+                "positionX": 48.35,
+                "positionY": 42.75,
+                "positionXpx": 571.340250587314,
+                "positionYpx": 505.0,
+                "idX": 1,
+                "idY": 0,
+                "idN": 1,
+                "positionXmin": 38.35,
+                "positionXmax": 58.35,
+                "positionYmin": 32.75,
+                "positionYmax": 52.75
+            },
+            {
+                "wellID": "A3",
+                "positionX": 79.35,
+                "positionY": 42.75,
+                "positionXpx": 937.6597494126859,
+                "positionYpx": 505.0,
+                "idX": 2,
+                "idY": 0,
+                "idN": 2,
+                "positionXmin": 69.35,
+                "positionXmax": 89.35,
+                "positionYmin": 32.75,
+                "positionYmax": 52.75
+            },
+            {
+                "wellID": "A4",
+                "positionX": 110.35,
+                "positionY": 42.75,
+                "positionXpx": 1303.9792482380578,
+                "positionYpx": 505.0,
+                "idX": 3,
+                "idY": 0,
+                "idN": 3,
+                "positionXmin": 100.35,
+                "positionXmax": 120.35,
+                "positionYmin": 32.75,
+                "positionYmax": 52.75
+            }
+        ]
+    }
+}

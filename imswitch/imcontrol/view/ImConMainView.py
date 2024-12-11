@@ -83,6 +83,7 @@ class ImConMainView(QMainWindow):
             'MockXX': _DockInfo(name='MockXX', yPosition=0),
             'JetsonNano': _DockInfo(name='JetsonNano', yPosition=0),
             'HistoScan': _DockInfo(name='HistoScan', yPosition=1),
+            'Workflow': _DockInfo(name='Workflow', yPosition=1),
             'Flatfield': _DockInfo(name='Flatfield', yPosition=1),
             'PixelCalibration': _DockInfo(name='PixelCalibration', yPosition=1),
             'ISM': _DockInfo(name='ISM', yPosition=0),

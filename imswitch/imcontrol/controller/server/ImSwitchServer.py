@@ -43,13 +43,11 @@ IS_SSL = __ssl__
 _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(imswitch.__file__)), '_data')
 static_dir = os.path.join(_baseDataFilesDir,  'static')
 imswitchapp_dir = os.path.join(_baseDataFilesDir,  'static', 'imswitch')
+images_dir =  os.path.join(_baseDataFilesDir, 'images')
 app = FastAPI(docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")  # serve static files such as the swagger UI
 app.mount("/imswitch", StaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
-
-
-
-#arpp = easy()
+app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
 
 
 if IS_SSL:
@@ -169,6 +167,8 @@ class ImSwitchServer(Worker):
                 @app.get(str) # TODO: Perhaps we want POST instead?
                 @wraps(func)
                 async def wrapper(*args, **kwargs):
+                    import importlib
+                    #importlib.reload(my_module)
                     return await func(*args, **kwargs) # sometimes we need to return a future 
             else:
                 @app.get(str) # TODO: Perhaps we want POST instead?

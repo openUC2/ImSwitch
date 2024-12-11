@@ -48,6 +48,7 @@ if not IS_HEADLESS:
     from .MockXXWidget import MockXXWidget
     from .JetsonNanoWidget import JetsonNanoWidget
     from .HistoScanWidget import HistoScanWidget
+    from .WorkflowWidget import WorkflowWidget
     from .FlatfieldWidget import FlatfieldWidget
     from .PixelCalibrationWidget import PixelCalibrationWidget
     from .SquidStageScanWidget import SquidStageScanWidget

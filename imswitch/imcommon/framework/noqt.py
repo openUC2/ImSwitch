@@ -11,6 +11,8 @@ from socketio import AsyncServer, ASGIApp
 import uvicorn
 import imswitch.imcommon.framework.base as abstract
 from imswitch import __ssl__
+import cv2 
+import base64
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
@@ -48,6 +50,7 @@ class SignalInstance(psygnal.SignalInstance):
 
         # Skip large data signals
         if self.name in ["sigUpdateImage", "sigImageUpdated"]:
+            self._handle_image_signal(args)
             return
 
         try:
@@ -58,6 +61,25 @@ class SignalInstance(psygnal.SignalInstance):
 
         self._safe_broadcast_message(message)
         
+    def _handle_image_signal(self, args):
+        """Compress and broadcast image signals."""
+        try:
+            for arg in args:
+                if isinstance(arg, np.ndarray):
+                    # Compress image using JPEG format
+                    _, compressed = cv2.imencode('.jpg', arg, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    encoded_image = base64.b64encode(compressed).decode('utf-8')
+
+                    # Create a minimal message
+                    message = {
+                        "name": self.name,
+                        "image": encoded_image,
+                        "format": "jpeg"
+                    }
+                    self._safe_broadcast_message(message)
+        except Exception as e:
+            print(f"Error processing image signal: {e}")
+                    
     def _generate_json_message(self, args):  # Consider using msgpack for efficiency
         param_names = list(self.signature.parameters.keys())
         data = {"name": self.name, "args": {}}

@@ -2,7 +2,7 @@ import json
 import os
 import base64
 from fastapi import FastAPI, Response, HTTPException
-from imswitch import IS_HEADLESS
+from imswitch import IS_HEADLESS, __file__
 from  imswitch.imcontrol.controller.controllers.camera_stage_mapping import OFMStageMapping
 from imswitch.imcommon.model import initLogger, ostools
 import numpy as np
@@ -98,6 +98,7 @@ class HistoScanController(LiveUpdatedController):
     sigImageReceived = Signal()
     sigUpdatePartialImage = Signal()
     sigUpdateLoadingBar = Signal(int, int) # current, total
+    sigUpdateScanCoordinatesLayout = Signal(list)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -168,9 +169,13 @@ class HistoScanController(LiveUpdatedController):
         else:
             self.ledMatrix = None 
         
+        # this is the list of scan coordinates e.g. for a well 
+        self.scanPositionList = []
+        
         # connect signals
         self.sigImageReceived.connect(self.displayImage)
         self.sigUpdatePartialImage.connect(self.updatePartialImage)
+        self.sigUpdateScanCoordinatesLayout.connect(self.setScanCoordinatesLayout)
         self._commChannel.sigUpdateMotorPosition.connect(self.updateAllPositionGUI)
         self._commChannel.sigStartTileBasedTileScanning.connect(self.startHistoScanTileBasedByParameters)
         self._commChannel.sigStopTileBasedTileScanning.connect(self.stophistoscanTilebased)
@@ -454,8 +459,7 @@ class HistoScanController(LiveUpdatedController):
     def getSampleLayoutFilePaths(self):
         # return the paths of the sample layouts
         # images are provided via imswitchserver
-        import imswitch
-        _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(imswitch.__file__)), '_data')
+        _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)), '_data')
         images_dir =  os.path.join(_baseDataFilesDir, 'images')
         # create list of all image files in folder and subfolders 
         image_files = []
@@ -465,7 +469,82 @@ class HistoScanController(LiveUpdatedController):
                     image_files.append(os.path.join(root.split("_data/")[-1], file))
         return image_files
 
+    def computeScanCoordinatesWellplate(self, samplelayoutfilepath:str) -> list:
+        '''load json configurtion file and compute the scan coordinates'''
+        #%% compute the positions of wells in a wellplate 
+        # read in the json file with the coordinates 
+        pixelsize_eff = self.microscopeDetector.pixelSizeUm[-1] # um from camera
+        overlap = self.currentOverlap # e.g. 25% overlap
+        n_pix_x, n_pix_y = self.microscopeDetector._camera.SensorWidth, self.microscopeDetector._camera.SensorHeight
+        with open(samplelayoutfilepath) as f:
+            data = json.load(f)
+        n_pix_x, n_pix_y = 4000,3000
+        # iterate over all wells and compute the positions
+        well_positions = []
+        pixelToMMFactor = data['ScanParameters']['pixelImageY']/data['ScanParameters']['physDimY']
+        fovX = n_pix_x*pixelsize_eff*(overlap)/1e3
+        fovY = n_pix_y*pixelsize_eff*(overlap)/1e3
+        radius = data['ScanParameters']['well_radius'] # mm
+        fov_physical_x = pixelsize_eff*n_pix_x*(overlap)/1e3
+        fov_physical_y = pixelsize_eff*n_pix_y*(overlap)/1e3
+        # compute positions of radius
+        n_tiles_x = int(2*radius/fov_physical_x) # number of pixels in the radius
+        n_tiles_y = int(2*radius/fov_physical_y) # number of pixels in the radius
+
+        # % create xx/yy meshgrid 
+        xx,yy = np.meshgrid(fov_physical_x*np.arange(-n_tiles_x//2,n_tiles_x//2)+1,fov_physical_y*np.arange(-n_tiles_y//2,n_tiles_y//2)+1)
+        circle = ((xx)**2+(yy)**2) < radius**2
+        well_scan_locations = (xx[circle].flatten(),yy[circle].flatten())
+        well_positions = []
+        DEBUG=1
+        for well in data['ScanParameters']['wells']:
+            center_x, center_y = well['positionX'], well['positionY']
+            well_positions.append((((well_scan_locations[0]+center_x).astype(int)), ((well_scan_locations[1]+center_y).astype(int))))
+            # for debugging:
+            if DEBUG:
+                import matplotlib.pyplot as plt
+                import matplotlib
+                matplotlib.use('Agg')
+
+                plt.plot(well_scan_locations[0]+center_x,well_scan_locations[1]+center_y,'r.')
+        if DEBUG:
+            plt.savefig("well_positions.png")
+            plt.close()
+        well_positions = np.array(well_positions)
+        well_positions_list = well_positions.tolist()
+        return {"shape": list(well_positions.shape), "data": well_positions_list, "units": "um", "pixelToMMFactor": pixelToMMFactor, "fovX": fovX, "fovY": fovY}
     
+    @APIExport(runOnUIThread=False)
+    def setActiveSampleLayoutFilePath(self, filePath:str):
+        # set the active sample layout file path
+        if filePath in self.getSampleLayoutFilePaths():
+            _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)), '_data')
+            filePath =  os.path.join(_baseDataFilesDir, filePath)
+            # check if file exists
+            if os.path.exists(filePath):
+                self.activeSampleLayoutFilePath = filePath
+                mPositionList = self.computeScanCoordinatesWellplate(filePath)
+                # transfer the coordinates to the GUI
+                self.sigUpdateScanCoordinatesLayout.emit(mPositionList)
+                return {"coordinates":mPositionList}
+        return None
+    
+    
+    @APIExport(runOnUIThread=False)
+    def process_list(self):
+        try:
+                        
+            # List of lists
+            data = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+
+            # Encode it into JSON
+            json_data = json.dumps(data)
+            # Decode JSON-encoded list of lists
+            decoded_data = json.loads(data)
+            return {"received_data": decoded_data, "status": "success"}
+        except json.JSONDecodeError:
+            return {"status": "error", "message": "Invalid JSON format"}
+            
     @APIExport(runOnUIThread=False)
     def startStageMapping(self, mumPerStep: int=1, calibFilePath: str = "calibFile.json") -> str:
         self.stageMappingResult = None
@@ -611,6 +690,10 @@ class HistoScanController(LiveUpdatedController):
         if currentPosition["X"]==newPosition["X"] and currentPosition["Y"]==newPosition["Y"]:
             self._logger.error("Could not move to position - check if coordinates are within the allowed range or if the stage is homed properly.")
             
+    def setScanCoordinatesLayout(self, mPositionList):
+        # set the scan coordinates in the GUI
+        self.scanPositionList = mPositionList
+        
     def displayImage(self):
         # a bit weird, but we cannot update outside the main thread
         if IS_HEADLESS: return
@@ -794,15 +877,42 @@ class HistoScanController(LiveUpdatedController):
         self._logger.debug("histoscan scanning stopped.")
 
     @APIExport()
-    def startStageScanningPositionlistbased(self, positionList:str, nTimes:int=1, tPeriod:int=0):
+    def startStageScanningWellplatePositionlistbased(self, wells:str='1,2'):
+        '''
+        first compute the scan positions based on the wellplate layout and then start the scan
+        This has to be done by selecting the json file that holds the parameters and coordinates
+        '''
+        if self.scanPositionList is None or len(self.scanPositionList)==0:
+            return
+        if wells == []:
+            return
+        if wells.find(",")>0:
+            wells = wells.split(",")
+            # convert wells to indices 
+            wells = [int(w)-1 for w in wells] 
+        else:
+            wells = int(wells)    
+        
+        # return the lists based on the selected wells
+        positionList = []
+        for well in wells:
+            positionList.append(self.scanPositionList['data'][well])
+        
+        # merge the lists along the 0th axis
+        positionList = np.hstack(positionList)
+        
+        self.startStageScanningPositionlistbased(positionList = self.scanPositionList['data'][well], nTimes=1, tPeriod=0)
+            
+    @APIExport()
+    def startStageScanningPositionlistbased(self, positionList: Union[str, List], nTimes: int = 1, tPeriod: int = 0):
         '''
         Start a stage scanning based on a list of positions
         positionList: list of tuples with X/Y positions (e.g. "[(10, 10, 100), (100, 100, 100)]")
         nTimes: number of times to repeat the scan
         tPeriod: time between scans
         '''
-        
-        positionList = np.array(ast.literal_eval(positionList))
+        if type(positionList)==str:
+            positionList = np.array(ast.literal_eval(positionList))
         maxPosX = np.max(positionList[:,0])
         minPosX = np.min(positionList[:,0])
         maxPosY = np.max(positionList[:,1])

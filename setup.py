@@ -77,7 +77,7 @@ setup(
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "ashlarUC2", 
-        "https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
+        "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

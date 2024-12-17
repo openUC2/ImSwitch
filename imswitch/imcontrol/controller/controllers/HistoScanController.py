@@ -33,12 +33,16 @@ from fastapi import Header
 import os
 from tempfile import TemporaryDirectory
 import numpy as np
-from iohub.ngff import open_ome_zarr
 import zarr
 from ome_zarr.writer import write_image
 from ome_zarr.io import parse_url
 from ome_zarr.format import CurrentFormat
 isZARR=True
+try:
+    from iohub.ngff import open_ome_zarr
+    IS_IOHUB = True
+except ImportError:
+    IS_IOHUB = False
 
 try:
     from ashlarUC2 import utils

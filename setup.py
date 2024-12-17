@@ -77,7 +77,7 @@ setup(
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "ashlarUC2", 
-        "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
+        "pip install iohub==0.2.0a1"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

@@ -46,9 +46,13 @@ from pydantic import BaseModel
 from fastapi import FastAPI, Query
 from collections import deque
 from tempfile import TemporaryDirectory
-from iohub.ngff import open_ome_zarr
-import uvicorn
 import os 
+try:
+    from iohub.ngff import open_ome_zarr
+    IS_IOHUB = True
+except ImportError:
+    IS_IOHUB = False
+
 
 isZARR=True
 

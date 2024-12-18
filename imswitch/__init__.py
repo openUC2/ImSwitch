@@ -10,6 +10,7 @@ IS_HEADLESS = False
 DEFAULT_SETUP_FILE = None
 DEFAULT_CONFIG_PATH = None
 DEFAULT_DATA_PATH = None
+SOCKET_STREAM = True           # Stream Images via socket ?
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

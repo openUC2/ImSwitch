@@ -292,7 +292,7 @@ class FlowStopController(LiveUpdatedController):
             if self.imagesTaken > numImages: break
             if self.is_measure:
                 stepsToMove = volumePerImage
-                self.positioner.move(value=stepsToMove, speed=pumpSpeed, axis=self.pumpAxis, is_absolute=False, is_blocking=True)
+                self.positioner.move(value=stepsToMove, speed=pumpSpeed, axis=self.pumpAxis, is_absolute=False, is_blocking=True, timeout=1)
                 time.sleep(timeToStabilize)
                 metaData = {
                     'timeStamp': timeStamp,

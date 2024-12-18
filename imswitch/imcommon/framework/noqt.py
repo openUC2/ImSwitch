@@ -13,6 +13,7 @@ import imswitch.imcommon.framework.base as abstract
 from imswitch import __ssl__
 import cv2 
 import base64
+from imswitch import SOCKET_STREAM
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
@@ -39,6 +40,9 @@ class SignalInterface(abstract.SignalInterface):
         ...
 
 class SignalInstance(psygnal.SignalInstance):
+    last_emit_time = 0
+    emit_interval = 0.05  # Emit at most every 100ms
+
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
     ) -> None:
@@ -50,7 +54,8 @@ class SignalInstance(psygnal.SignalInstance):
 
         # Skip large data signals
         if self.name in ["sigUpdateImage", "sigImageUpdated"]:
-            self._handle_image_signal(args)
+            if SOCKET_STREAM:
+                self._handle_image_signal(args)
             return
 
         try:
@@ -60,14 +65,28 @@ class SignalInstance(psygnal.SignalInstance):
             return
 
         self._safe_broadcast_message(message)
+        del message
         
     def _handle_image_signal(self, args):
         """Compress and broadcast image signals."""
         try:
             for arg in args:
                 if isinstance(arg, np.ndarray):
+                    output_frame = np.ascontiguousarray(arg)  # Avoid memory fragmentation
+                    if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
+                        everyNthsPixel = np.min([output_frame.shape[0]//480, output_frame.shape[1]//640])
+                    else:
+                        everyNthsPixel = 1
+                                
+                    try:
+                        output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
+                    except: 
+                        output_frame = np.zeros((640,460))
+                    # adjust the parameters of the jpeg compression
+                    quality = 80  # Set the desired quality level (0-100)
+                    encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
                     # Compress image using JPEG format
-                    _, compressed = cv2.imencode('.jpg', arg, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
                     encoded_image = base64.b64encode(compressed).decode('utf-8')
 
                     # Create a minimal message
@@ -77,6 +96,7 @@ class SignalInstance(psygnal.SignalInstance):
                         "format": "jpeg"
                     }
                     self._safe_broadcast_message(message)
+                    del message
         except Exception as e:
             print(f"Error processing image signal: {e}")
                     
@@ -115,6 +135,18 @@ class SignalInstance(psygnal.SignalInstance):
                     sio.start_background_task(sio.emit, "signal", json.dumps(message))
             except Exception as e:
             '''
+            
+        def _safe_broadcast_message(self, message: dict) -> None:
+            """Throttle the emit to avoid task buildup."""
+            now = time.time()
+            if now - self.last_emit_time < self.emit_interval:
+                return  # Skip if emit interval hasn't passed
+            self.last_emit_time = now
+
+            try:
+                sio.start_background_task(sio.emit, "signal", json.dumps(message))
+            except Exception as e:
+                print(f"Error broadcasting message via Socket.IO: {e}")            
             try:
                 print(f"Error broadcasting message via Socket.IO: {e}")
                 asyncio.run_coroutine_threadsafe(sio.emit("signal", json.dumps(message)), asyncio.new_event_loop())

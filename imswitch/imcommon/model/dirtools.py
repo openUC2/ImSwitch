@@ -2,7 +2,7 @@ import glob
 import os
 from abc import ABC
 from pathlib import Path
-from shutil import copy2
+from shutil import copy2, disk_usage
 from imswitch import IS_HEADLESS, __file__, DEFAULT_CONFIG_PATH, DEFAULT_DATA_PATH
 
 
@@ -33,6 +33,24 @@ def getSystemUserDir():
 _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)), '_data')
 _baseUserFilesDir = os.path.join(getSystemUserDir(), 'ImSwitchConfig')
 
+
+
+def getDiskusage():
+    """
+    Checks if the available disk space is above the threshold percentage.
+    Returns True if disk is above the threshold occupied.
+    """
+    # Get the current working directory's drive (cross-platform compatibility)
+    current_drive = os.path.abspath(os.sep)
+
+    # Get disk usage statistics
+    total, used, free = disk_usage(current_drive)
+
+    # Calculate percentage used
+    percent_used = (used / total) 
+
+    # Check if it exceeds the threshold
+    return percent_used
 
 def initUserFilesIfNeeded():
     """ Initializes all directories that will be used to store user data and

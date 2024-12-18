@@ -14,7 +14,7 @@ from imswitch import __ssl__
 import cv2 
 import base64
 from imswitch import SOCKET_STREAM
-
+import time 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
 
@@ -85,6 +85,7 @@ class SignalInstance(psygnal.SignalInstance):
                     # adjust the parameters of the jpeg compression
                     quality = 80  # Set the desired quality level (0-100)
                     encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+                    
                     # Compress image using JPEG format
                     flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
                     encoded_image = base64.b64encode(compressed).decode('utf-8')
@@ -115,40 +116,21 @@ class SignalInstance(psygnal.SignalInstance):
 
         return data
 
+
+        
     def _safe_broadcast_message(self, message: dict) -> None:
-        """Ensure that the emit is scheduled properly."""
+        """Throttle the emit to avoid task buildup."""
+        now = time.time()
+        if now - self.last_emit_time < self.emit_interval:
+            print("too fast")
+            return  # Skip if emit interval hasn't passed
+        self.last_emit_time = now
+
         try:
-            # Schedule the emit coroutine in the server's event loop
             sio.start_background_task(sio.emit, "signal", json.dumps(message))
         except Exception as e:
-            '''
+            print(f"Error broadcasting message via Socket.IO: {e}")            
             try:
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    #loop.run_forever()
-                if loop.is_running():
-                    asyncio.run_coroutine_threadsafe(sio.emit("signal", json.dumps(message)), loop)
-                else:
-                    sio.start_background_task(sio.emit, "signal", json.dumps(message))
-            except Exception as e:
-            '''
-            
-        def _safe_broadcast_message(self, message: dict) -> None:
-            """Throttle the emit to avoid task buildup."""
-            now = time.time()
-            if now - self.last_emit_time < self.emit_interval:
-                return  # Skip if emit interval hasn't passed
-            self.last_emit_time = now
-
-            try:
-                sio.start_background_task(sio.emit, "signal", json.dumps(message))
-            except Exception as e:
-                print(f"Error broadcasting message via Socket.IO: {e}")            
-            try:
-                print(f"Error broadcasting message via Socket.IO: {e}")
                 asyncio.run_coroutine_threadsafe(sio.emit("signal", json.dumps(message)), asyncio.new_event_loop())
             except Exception as e:
                 print(f"Error broadcasting message via Socket.IO: {e}")

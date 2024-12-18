@@ -286,6 +286,9 @@ class FlowStopController(LiveUpdatedController):
             self.video_safe.start()
                 
         while True:
+            if dirtools.getDiskusage()>.95:
+                self.is_measure = False
+                self._logger.error("DISK IS FULL. PLEASE DELETE FILES!!!")
             currentTime = time.time()
             self.imagesTaken += 1
             self.sigImagesTaken.emit(self.imagesTaken)

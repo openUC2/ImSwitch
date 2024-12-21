@@ -118,7 +118,7 @@ class SignalInstance(psygnal.SignalInstance):
 
 
         
-    def _safe_broadcast_message(self, message: dict) -> None:
+    def _safe_broadcast_message(self, mMessage: dict) -> None:
         """Throttle the emit to avoid task buildup."""
         now = time.time()
         if now - self.last_emit_time < self.emit_interval:
@@ -127,13 +127,27 @@ class SignalInstance(psygnal.SignalInstance):
         self.last_emit_time = now
 
         try:
-            sio.start_background_task(sio.emit, "signal", json.dumps(message))
+            sio.start_background_task(sio.emit, "signal", json.dumps(mMessage))
         except Exception as e:
             print(f"Error broadcasting message via Socket.IO: {e}")            
             try:
-                asyncio.run_coroutine_threadsafe(sio.emit("signal", json.dumps(message)), asyncio.new_event_loop())
+                def thread_worker(message):
+                    # Eigene Event Loop erstellen
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    # Korrekt asynchron aufrufen
+                    loop.run_until_complete(sio.emit("signal", json.dumps(message)))
+                
+                def send_message(message):
+                    t = threading.Thread(target=thread_worker, args=(message,))
+                    t.start()
+                send_message(mMessage)
+                #asyncio.run_coroutine_threadsafe(send_message(), asyncio.new_event_loop())
+                #asyncio.run_coroutine_threadsafe(sio.emit("signal", json.dumps(mMessage)), asyncio.new_event_loop())
             except Exception as e:
                 print(f"Error broadcasting message via Socket.IO: {e}")
+        del mMessage
 
 class Signal(psygnal.Signal):
     def __init__(self, *args: Any, **kwargs: Any) -> None:

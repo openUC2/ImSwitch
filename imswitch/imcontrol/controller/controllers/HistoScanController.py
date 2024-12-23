@@ -503,7 +503,7 @@ class HistoScanController(LiveUpdatedController):
         DEBUG=1
         for well in data['ScanParameters']['wells']:
             center_x, center_y = well['positionX'], well['positionY']
-            well_positions.append((((well_scan_locations[0]+center_x).astype(int)), ((well_scan_locations[1]+center_y).astype(int))))
+            well_positions.append((((well_scan_locations[0]+center_x)), ((well_scan_locations[1]+center_y))))
             # for debugging:
             if DEBUG:
                 import matplotlib.pyplot as plt
@@ -516,7 +516,7 @@ class HistoScanController(LiveUpdatedController):
             plt.close()
         well_positions = np.array(well_positions)
         well_positions_list = well_positions.tolist()
-        return {"shape": list(well_positions.shape), "data": well_positions_list, "units": "um", "pixelToMMFactor": pixelToMMFactor, "fovX": fovX, "fovY": fovY}
+        return {"shape": list(well_positions.shape), "data": well_positions_list, "units": "um", "pixelToMMFactor": pixelToMMFactor, "fovX": fovX, "fovY": fovY, "pixelImageX":  data['ScanParameters']['pixelImageX'], "pixelImageY":  data['ScanParameters']['pixelImageY']}
     
     @APIExport(runOnUIThread=False)
     def setActiveSampleLayoutFilePath(self, filePath:str):

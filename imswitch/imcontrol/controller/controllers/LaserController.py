@@ -262,6 +262,17 @@ class LaserController(ImConWidgetController):
         passed to other laser-related functions. """
         return self._master.lasersManager.getAllDeviceNames()
 
+    @APIExport()
+    def getLaserValue(self, laserName: str) -> Union[int, float]:
+        """ Returns the value of the specified laser, in the units that the
+        laser uses. """
+        if not IS_HEADLESS: return self._widget.getValue(laserName)
+        else: 
+            try:
+                return self.laserModules[laserName].value
+            except KeyError:
+                return None
+        
     @APIExport(runOnUIThread=True)
     def setLaserActive(self, laserName: str, active: bool) -> None:
         """ Sets whether the specified laser is powered on. """

@@ -349,8 +349,15 @@ class ESP32StageManager(PositionerManager):
         If new positions are coming from the device they will be updated in ImSwitch too'''
         for iAxis, axisName in enumerate(["A", "X", "Y", "Z"]):
             self.setPosition(positionArray[iAxis]*self.stepSizes[axisName], axisName)
-        self._commChannel.sigUpdateMotorPosition.emit(positionArray)
-        
+        posDict = {
+            'ESP32Stage': {
+                'A': positionArray[0],
+                'X': positionArray[1],
+                'Y': positionArray[2],
+                'Z': positionArray[3]
+            }
+        }
+        self._commChannel.sigUpdateMotorPosition.emit(posDict)
         
     def closeEvent(self):
         pass

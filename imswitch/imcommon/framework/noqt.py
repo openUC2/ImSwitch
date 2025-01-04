@@ -129,7 +129,7 @@ class SignalInstance(psygnal.SignalInstance):
         try:
             sio.start_background_task(sio.emit, "signal", json.dumps(mMessage))
         except Exception as e:
-            print(f"Error broadcasting message via Socket.IO: {e}")            
+            print(f"Error broadcasting message via Socket.IO (first attempt): {e}")            
             try:
                 def thread_worker(message):
                     # Eigene Event Loop erstellen
@@ -146,7 +146,7 @@ class SignalInstance(psygnal.SignalInstance):
                 #asyncio.run_coroutine_threadsafe(send_message(), asyncio.new_event_loop())
                 #asyncio.run_coroutine_threadsafe(sio.emit("signal", json.dumps(mMessage)), asyncio.new_event_loop())
             except Exception as e:
-                print(f"Error broadcasting message via Socket.IO: {e}")
+                print(f"Error broadcasting message via Socket.IO (second attempt): {e}")
         del mMessage
 
 class Signal(psygnal.Signal):

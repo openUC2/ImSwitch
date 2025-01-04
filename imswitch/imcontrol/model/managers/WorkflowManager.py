@@ -22,6 +22,7 @@ class WorkflowContext:
     def __init__(self):
         self.data: Dict[str, Any] = {}
         self.should_stop = False
+        self.should_pause = False
         self.current_step_index = 0
         self.event_listeners: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
         self.objects: Dict[str, Any] = {}  # Storage for arbitrary objects
@@ -57,6 +58,8 @@ class WorkflowContext:
     def request_stop(self):
         self.should_stop = True
 
+    def request_pause(self):
+        self.should_pause = True
 
 class WorkflowStep:
     def __init__(
@@ -145,21 +148,18 @@ class WorkflowStep:
         return metadata["result"]
 
 class Workflow:
-    def __init__(self, steps: List[WorkflowStep]):
+    def __init__(self, steps: List[WorkflowStep], manager: Optional["WorkflowManager"] = None):
         self.steps = steps
+        self.manager = manager  # so we know who to notify
 
     def run(self, context: Optional[WorkflowContext] = None):
-        # Either use the given context or create a new one
         context = context or WorkflowContext()
-
-        # Resume from current_step_index if previously stopped
         for i in range(context.current_step_index, len(self.steps)):
-            step = self.steps[i]
             if context.should_stop:
                 break
+            step = self.steps[i]
             step.run(context)
-            context.current_step_index = i + 1  # Update progress for resume
-
+            context.current_step_index = i + 1
         return context
 
     def run_in_background(self, context: Optional[WorkflowContext] = None):
@@ -168,13 +168,11 @@ class Workflow:
             try:
                 self.run(context)
             finally:
-                # Mark workflow as finished
-                WorkflowsManager.instance().workflow_finished()
-
+                if self.manager:
+                    self.manager.workflow_finished(self, context)
         t = threading.Thread(target=background_run)
         t.start()
         return context, t
-    
     
 
 
@@ -226,13 +224,17 @@ class WorkflowsManager:
         self.current_context.request_stop()
         return {"status": "stopping"}
 
-    def workflow_finished(self):
-        self.current_workflow = None
-        self.current_context = None
-        self.current_thread = None
+    def workflow_finished(self, workflow: Workflow, context: WorkflowContext):
+        # Check if the finished workflow is the current one
+        if self.current_workflow == workflow:
+            self.current_workflow = None
+            self.current_context = None
+            self.current_thread = None
+        # Possibly do more cleanup if needed
+
 
     def get_status(self):
-        if self.current_context is None:
+        if not hasattr(self, "current_context") or self.current_context is None:
             return {"status": "idle"}
         if self.current_context.should_stop:
             return {"status": "stopping"}

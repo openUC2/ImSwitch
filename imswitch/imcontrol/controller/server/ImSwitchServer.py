@@ -163,19 +163,30 @@ class ImSwitchServer(Worker):
         functions = api_dict.keys()
 
         def includeAPI(str, func):
-            if hasattr(func, '._APIAsyncExecution') and func._APIAsyncExecution:
-                @app.get(str) # TODO: Perhaps we want POST instead?
-                @wraps(func)
-                async def wrapper(*args, **kwargs):
-                    import importlib
-                    #importlib.reload(my_module)
-                    return await func(*args, **kwargs) # sometimes we need to return a future 
+            if hasattr(func, '_APIAsyncExecution') and func._APIAsyncExecution:
+                if hasattr(func, '_APIRequestType') and func._APIRequestType == "POST":
+                    @app.post(str)
+                    @wraps(func)
+                    async def wrapper(*args, **kwargs):
+                        return await func(*args, **kwargs)
+                else:
+                    @app.get(str) # TODO: Perhaps we want POST instead?
+                    @wraps(func)
+                    async def wrapper(*args, **kwargs):
+                        import importlib #importlib.reload(my_module)
+                        return await func(*args, **kwargs) # sometimes we need to return a future 
             else:
-                @app.get(str) # TODO: Perhaps we want POST instead?
-                @wraps(func)
-                #@register
-                async def wrapper(*args, **kwargs):
-                    return func(*args, **kwargs)
+                if hasattr(func, '_APIRequestType') and func._APIRequestType == "POST":
+                    @app.post(str)
+                    @wraps(func)
+                    def wrapper(*args, **kwargs):
+                        return func(*args, **kwargs)
+                else:
+                    @app.get(str) # TODO: Perhaps we want POST instead?
+                    @wraps(func)
+                    #@register
+                    async def wrapper(*args, **kwargs):
+                        return func(*args, **kwargs)
             return wrapper
 
         def includePyro(func):

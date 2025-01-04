@@ -64,6 +64,15 @@ except ImportError:
     IS_ASHLAR_AVAILABLE = False
 
 
+class MCTWorkflowParams(BaseModel):
+    nTimes: int = 1
+    tPeriod: int = 1
+    illuSources: List[str] = ["LED", "Laser"]
+    channels: List[str] = ["Mono"]
+    exposureTimes: List[float] = [0.1]
+    gain: List[float] = [1.0]
+    autofocus_on: bool = False
+
 class ScanParameters(BaseModel):
     x_min: float
     x_max: float
@@ -116,7 +125,9 @@ class WorkflowController(LiveUpdatedController):
     sigImageReceived = Signal()
     sigUpdatePartialImage = Signal()
     sigUpdateWorkflowState = Signal(str)
-
+    sigStartHistoWorkflow = Signal(float, float, float, float, float, float, bool, list)
+    sigStartMultiColorTimelapseWorkflow = Signal(int, int, list, list, list, list, bool)
+        
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
@@ -158,6 +169,8 @@ class WorkflowController(LiveUpdatedController):
         self.mStage = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
             
         # connect signals
+        self.sigStartHistoWorkflow.connect(self.start_xyz_histo_workflow)
+        self.sigStartMultiColorTimelapseWorkflow.connect(self.start_multicolour_timelapse_workflow)
         '''
         self.sigImageReceived.connect(self.displayImage)
         self.sigUpdatePartialImage.connect(self.updatePartialImage)
@@ -300,6 +313,10 @@ class WorkflowController(LiveUpdatedController):
         self._logger.debug(f"Setting laser power to {power} for channel {channel}")
         return power
 
+    def dummy_main_func(self):
+        self._logger.debug("Dummy main function called")
+        return True
+    
     def acquire_frame(self, channel: str):
         self._logger.debug(f"Acquiring frame on channel {channel}")
         mFrame = self.mDetector.getLatestFrame()
@@ -335,7 +352,6 @@ class WorkflowController(LiveUpdatedController):
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
         import time
         time.sleep(seconds)
-        metadata["waited"] = seconds
         
     def addFrametoFile(self, frame:np.ndarray, context: WorkflowContext, metadata: Dict[str, Any]):
         self._logger.debug(f"Adding frame to file for step {metadata['step_id']}...")
@@ -363,10 +379,8 @@ class WorkflowController(LiveUpdatedController):
     # Histo-Slide Scanner Interface
     ########################################
 
-
-
     @APIExport()
-    def start_workflow(self,
+    def start_xyz_histo_workflow(self,
         x_min: float = Query(...),
         x_max: float = Query(...),
         y_min: float = Query(...),
@@ -404,6 +418,8 @@ class WorkflowController(LiveUpdatedController):
         # if autofocus_on == True: run autofocus before every XY move
         # else no autofocus pre-func
         pre_for_xy = [self.autofocus] if autofocus_on else []
+        
+        illuSources = ["LED", "Laser"]
 
         workflowSteps = []
         step_id = 0
@@ -454,29 +470,30 @@ class WorkflowController(LiveUpdatedController):
                 ))
                 step_id += 1
 
-                # Set laser power (arbitrary, could be parameterized)
-                workflowSteps.append(WorkflowStep(
-                    name=f"Set laser power",
-                    step_id=str(step_id),
-                    main_func=self.set_laser_power,
-                    main_params={"power": 10, "channel": channel},
-                    pre_funcs=[],
-                    post_funcs=[]
-                ))
-                step_id += 1
-
-                for fr in frames:
-                    # Acquire frame with a short wait, process data, and save frame
+                for illu in illuSources:
+                    # Set laser power (arbitrary, could be parameterized)
                     workflowSteps.append(WorkflowStep(
-                        name=f"Acquire frame {channel}",
+                        name=f"Set laser power",
                         step_id=str(step_id),
-                        main_func=self.acquire_frame,
-                        main_params={"channel": channel},
-                        pre_funcs=[self.wait_time],
-                        pre_params={"seconds": .1},
-                        post_funcs=[self.process_data, self.save_frame_zarr],
+                        main_func=self.set_laser_power,
+                        main_params={"power": 10, "channel": illu},
+                        pre_funcs=[],
+                        post_funcs=[]
                     ))
                     step_id += 1
+
+                    for fr in frames:
+                        # Acquire frame with a short wait, process data, and save frame
+                        workflowSteps.append(WorkflowStep(
+                            name=f"Acquire frame {channel}",
+                            step_id=str(step_id),
+                            main_func=self.acquire_frame,
+                            main_params={"channel": channel},
+                            pre_funcs=[self.wait_time],
+                            pre_params={"seconds": .1},
+                            post_funcs=[self.process_data, self.save_frame_zarr],
+                        ))
+                        step_id += 1
         
         # Close Zarr dataset at the end
         workflowSteps.append(WorkflowStep(
@@ -490,7 +507,7 @@ class WorkflowController(LiveUpdatedController):
             self.sigUpdateWorkflowState.emit(payload)
             
         # Create a workflow and context
-        wf = Workflow(workflowSteps)
+        wf = Workflow(steps=workflowSteps, workflow=self.workflow_manager)
         context = WorkflowContext()
         # Insert the zarr writer object into context so `save_frame` can use it
         context.set_object("zarr_writer", {"tiles": tiles})
@@ -509,6 +526,93 @@ class WorkflowController(LiveUpdatedController):
 
         # Return the store path to the client so they know where data is stored
         return {"status": "completed", "zarr_store_path": store_path}#, "results": context.data}
+
+
+    @APIExport(requestType="POST")
+    def start_multicolour_timelapse_workflow(
+            self,
+            params: MCTWorkflowParams
+        ):
+        nTimes = params.nTimes
+        tPeriod = params.tPeriod
+        illuSources = params.illuSources
+        channels = params.channels
+        exposureTimes = params.exposureTimes
+        gains = params.gain
+        autofocus_on = params.autofocus_on
+        
+        # ensure parameters are lists 
+        if not isinstance(illuSources, list): illuSources = [illuSources]
+        if not isinstance(channels, list): channels = [channels]
+        if not isinstance(exposureTimes, list): exposureTimes = [exposureTimes]
+        if not isinstance(gains, list): gains = [gains]
+        
+        # Check if another workflow is running
+        if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
+            raise HTTPException(status_code=400, detail="Another workflow is already running.")
+        # Start the detector if not already running
+        if not self.mDetector._running: 
+            self.mDetector.startAcquisition()
+        
+        # construct the workflow steps
+        workflowSteps = []
+        step_id = 0
+        # tiff image writer 
+        tiff_writer = tifffile.TiffWriter("timelapse.tif")
+        # In this simplified example, we only do a single Z position (z=0)
+        # and a single frame per position. You can easily extend this.
+        z_pos = 0
+        frames = [0]  # single frame index for simplicity
+        for t in range(nTimes):
+            for illu in illuSources:
+                for channel, exposure, gain in zip(channels, exposureTimes, gains):
+                    # Set laser power (arbitrary, could be parameterized)
+                    workflowSteps.append(WorkflowStep(
+                        name=f"Set laser power",
+                        step_id=str(step_id),
+                        main_func=self.set_laser_power,
+                        main_params={"power": 10, "channel": illu},
+                        pre_funcs=[],
+                        post_funcs=[]
+                    ))
+                    step_id += 1
+
+                    for fr in frames:
+                        # Acquire frame with a short wait, process data, and save frame
+                        workflowSteps.append(WorkflowStep(
+                            name=f"Acquire frame {channel}",
+                            step_id=str(step_id),
+                            main_func=self.acquire_frame,
+                            main_params={"channel": channel},
+                            post_funcs=[self.process_data, self.save_frame],
+                            pre_funcs=[]
+                        ))
+                        # add delay between frames 
+                        workflowSteps.append(WorkflowStep(
+                            name=f"Wait for next frame",
+                            step_id=str(step_id),
+                            main_func=self.dummy_main_func,
+                            main_params={}, 
+                            pre_funcs=[self.wait_time],
+                            pre_params={"seconds": tPeriod}  
+                        ))
+                        step_id += 1
+        
+        def sendProgress(payload):
+            self.sigUpdateWorkflowState.emit(payload)
+            
+        # Create a workflow and context
+        wf = Workflow(workflowSteps, self.workflow_manager)
+        context = WorkflowContext()
+        # Insert the zarr writer object into context so `save_frame` can use it
+        context.on("progress", sendProgress)
+        # Run the workflow
+        # context = wf.run_in_background(context)
+        self.workflow_manager.start_workflow(wf, context)
+
+        # return the store path to the client so they know where data is stored
+        return {"status": "completed"}
+            
 
 
     @APIExport()

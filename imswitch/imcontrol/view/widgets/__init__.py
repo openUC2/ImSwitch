@@ -42,6 +42,7 @@ if not IS_HEADLESS:
     from .SIMWidget import SIMWidget
     from .DPCWidget import DPCWidget
     from .MCTWidget import MCTWidget
+    from .TimelapseWidget import TimelapseWidget
     from .ROIScanWidget import ROIScanWidget
     from .LightsheetWidget import LightsheetWidget
     from .WebRTCWidget import WebRTCWidget

@@ -1,27 +1,18 @@
-import enum
-import glob
-import cv2
-import os
-
 import numpy as np
-from PIL import Image
-from scipy import signal as sg
+import pyqtgraph as pg
+from qtpy import QtCore, QtWidgets
 
-from imswitch.imcommon.framework import Signal, SignalInterface
-from imswitch.imcommon.model import initLogger
+from imswitch.imcontrol.view import guitools
+from .basewidgets import NapariHybridWidget
 
 
-class HyphaManager(SignalInterface):
-
-    def __init__(self, hyphaInfo, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.__logger = initLogger(self)
-
-        self.update()
-
-    def update(self):
-        return None
-
+class TimelapseWidget(NapariHybridWidget):
+    """ Widget containing mct interface. """
+    
+    def __post_init__(self):
+        # initialize all GUI elements
+        mainWidget = QtWidgets.QWidget()
+            
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

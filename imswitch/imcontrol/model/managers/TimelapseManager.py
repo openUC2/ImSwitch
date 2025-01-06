@@ -1,26 +1,19 @@
-import enum
-import glob
-import cv2
-import os
-
-import numpy as np
-from PIL import Image
-from scipy import signal as sg
-
 from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import initLogger
 
+class TimelapseManager(SignalInterface):
+    sigTimelapseMaskUpdated = Signal(object)  # (maskCombined)
 
-class HyphaManager(SignalInterface):
-
-    def __init__(self, hyphaInfo, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
+        self.tWait = 0.1
 
         self.update()
 
+
     def update(self):
-        return None
+        return None 
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

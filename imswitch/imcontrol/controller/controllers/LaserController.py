@@ -269,7 +269,7 @@ class LaserController(ImConWidgetController):
         if not IS_HEADLESS: return self._widget.getValue(laserName)
         else: 
             try:
-                return self.laserModules[laserName].value
+                return self._master.lasersManager[laserName].power
             except KeyError:
                 return None
         

@@ -47,6 +47,10 @@ from fastapi import FastAPI, Query
 from collections import deque
 from tempfile import TemporaryDirectory
 import os 
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any, Optional
+import uuid
+
 try:
     from iohub.ngff import open_ome_zarr
     IS_IOHUB = True
@@ -64,14 +68,6 @@ except ImportError:
     IS_ASHLAR_AVAILABLE = False
 
 
-class MCTWorkflowParams(BaseModel):
-    nTimes: int = 1
-    tPeriod: int = 1
-    illuSources: List[str] = ["LED", "Laser"]
-    channels: List[str] = ["Mono"]
-    exposureTimes: List[float] = [0.1]
-    gain: List[float] = [1.0]
-    autofocus_on: bool = False
 
 class ScanParameters(BaseModel):
     x_min: float
@@ -115,6 +111,23 @@ class HistoStatus(BaseModel):
         return self.dict()
 
 
+class WorkflowStepDefinition(BaseModel):
+    id: str
+    stepName: str
+    mainFuncName: str
+    mainParams: Dict[str, Any] = Field(default_factory=dict)
+    preFuncs: List[str] = Field(default_factory=list)
+    preParams: Dict[str, Any] = Field(default_factory=dict)
+    postFuncs: List[str] = Field(default_factory=list)
+    postParams: Dict[str, Any] = Field(default_factory=dict)
+
+class WorkflowDefinition(BaseModel):
+    steps: List[WorkflowStepDefinition] = Field(default_factory=list)
+    # optionally add other metadata fields if needed
+    
+class StartWorkflowRequest(BaseModel):
+    workflow_id: str
+
 class StitchedImageResponse(BaseModel):
     imageList: List[List[float]]
     image: str
@@ -128,6 +141,9 @@ class WorkflowController(LiveUpdatedController):
     sigStartHistoWorkflow = Signal(float, float, float, float, float, float, bool, list)
     sigStartMultiColorTimelapseWorkflow = Signal(int, int, list, list, list, list, bool)
         
+    
+    WORKFLOW_STORAGE: Dict[str, WorkflowDefinition] = {}
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
@@ -170,92 +186,46 @@ class WorkflowController(LiveUpdatedController):
             
         # connect signals
         self.sigStartHistoWorkflow.connect(self.start_xyz_histo_workflow)
-        self.sigStartMultiColorTimelapseWorkflow.connect(self.start_multicolour_timelapse_workflow)
-        '''
-        self.sigImageReceived.connect(self.displayImage)
-        self.sigUpdatePartialImage.connect(self.updatePartialImage)
-        self._commChannel.sigUpdateMotorPosition.connect(self.updateAllPositionGUI)
-        self._commChannel.sigStartTileBasedTileScanning.connect(self.startWorkflowTileBasedByParameters)
-        self._commChannel.sigStopTileBasedTileScanning.connect(self.stopWorkflowTilebased)
-        '''
-        
         self.workflow_manager = WorkflowsManager()
 
-        
         # define scan parameter per sample and populate into GUI later
         self.allScanParameters = []
         mFWD = os.path.dirname(os.path.realpath(__file__)).split("imswitch")[0]
-        '''
-        self.allScanParameters.append(ScanParameters("6 Wellplate", 126, 86, 0, 0, mFWD+"imswitch/_data/images/Wellplate6.png"))
-        self.allScanParameters.append(ScanParameters("24 Wellplate", 126, 86, 0, 0, mFWD+"imswitch/_data/images/Wellplate24.png"))
-        self.allScanParameters.append(ScanParameters("3-Slide Wellplateadapter", 164, 109, 0, 0, mFWD+"imswitch/_data/images/WellplateAdapter3Slides.png"))
-        '''
+
         # compute optimal scan step size based on camera resolution and pixel size
         self.bestScanSizeX, self.bestScanSizeY = self.computeOptimalScanStepSize2(overlap = self.initialOverlap)
 
-    @APIExport()
-    def computeOptimalScanStepSize2(self, overlap: float = 0.75):
-        mFrameSize = (self.mDetector._camera.SensorHeight, self.mDetector._camera.SensorWidth)
-        bestScanSizeX = mFrameSize[1]*self.mDetector.pixelSizeUm[-1]*overlap
-        bestScanSizeY = mFrameSize[0]*self.mDetector.pixelSizeUm[-1]*overlap     
-        return (bestScanSizeX, bestScanSizeY)
+        # define function registry for workflow steps in API
+        self.function_registry = {
+            "move_stage_xy": self.move_stage_xy,
+            "acquire_frame": self.acquire_frame,
+            "set_laser_power": self.set_laser_power,
+            "process_data": self.process_data,
+            "save_frame_zarr": self.save_frame_zarr,
+            "wait_time": self.wait_time,
+            "autofocus": self.autofocus,
+            "close_zarr": self.close_zarr,
+            "save_frame": self.save_frame,
+            "set_exposure_time_gain": self.set_exposure_time_gain,
+            "dummy_main_func": self.dummy_main_func,
+            "addFrametoFile": self.addFrametoFile,
+            "append_data": self.append_data,
+            "save_data": self.save_data,
+            "save_frame_tiff": self.save_frame_tiff,
+            "close_tiff_writer": self.close_tiff_writer
+        }
 
-    def turnOnLED(self):
-        if self.led is not None:
-            self.led.setEnabled(1)
-            self.led.setValue(255)
+    ########################################
+    # Helper Functions
+    ########################################
     
-    def turnOffLED(self):
-        if self.led is not None:
-            self.led.setEnabled(0)
+    def compute_scan_positions(self, x_min, x_max, y_min, y_max, x_step, y_step):
+        # Compute a grid of (x,y) positions
+        xs = [x_min + i * x_step for i in range(int((x_max - x_min) / x_step) + 1)]
+        ys = [y_min + j * y_step for j in range(int((y_max - y_min) / y_step) + 1)]
+        return xs, ys
 
-    
-    def updateAllPositionGUI(self):
-        allPositions = self.mStage.position
-        if not IS_HEADLESS: self._widget.updateBoxPosition(allPositions["X"], allPositions["Y"])
 
-    def valueIlluChanged(self):
-        illuSource = self._widget.getIlluminationSource()
-        illuValue = self._widget.illuminationSlider.value()
-        self._master.lasersManager
-        if not self._master.lasersManager[illuSource].enabled:
-            self._master.lasersManager[illuSource].setEnabled(1)
-        
-        illuValue = illuValue/100*self._master.lasersManager[illuSource].valueRangeMax
-        self._master.lasersManager[illuSource].setValue(illuValue)
-
-        
-    @APIExport()
-    def stopWorkflow(self):
-        self.isWorkflowRunning = False
-        
-
-    @APIExport()
-    def startWorkflowTileBasedByParameters(self, numberTilesX:int=2, numberTilesY:int=2, stepSizeX:int=100, stepSizeY:int=100, 
-                                            nTimes:int=1, tPeriod:int=1, initPosX:Optional[Union[int, str]] = None, initPosY:Optional[Union[int, str]] = None, 
-                                            isStitchAshlar:bool=False, isStitchAshlarFlipX:bool=False, isStitchAshlarFlipY:bool=False, resizeFactor:float=0.25, 
-                                            overlap:float=0.75):
-        def computePositionList(numberTilesX, numberTilesY, stepSizeX, stepSizeY, initPosX, initPosY):
-            positionList = []
-            for ix in range(numberTilesX):
-                if ix % 2 == 0:  # X-Position ist gerade
-                    rangeY = range(numberTilesY)
-                else:  # X-Position ist ungerade
-                    rangeY = range(numberTilesY - 1, -1, -1)
-                for iy in rangeY:
-                    positionList.append((ix*stepSizeX+initPosX-numberTilesX//2*stepSizeX, iy*stepSizeY+initPosY-numberTilesY//2*stepSizeY, ix, iy))
-            return positionList
-        # compute optimal step size if not provided
-        if stepSizeX<=0 or stepSizeX is None:
-            stepSizeX, _ = self.computeOptimalScanStepSize2()
-        if stepSizeY<=0 or stepSizeY is None:
-            _, stepSizeY = self.computeOptimalScanStepSize2()          
-        if initPosX is None or type(initPosX)==str :
-            initPosX = self.mStage.getPosition()["X"]
-        if initPosY is None or type(initPosY)==str:    
-            initPosY = self.mStage.getPosition()["Y"]
-            
-            
     def generate_snake_scan_coordinates(self, posXmin, posYmin, posXmax, posYmax, img_width, img_height, overlap):
         # Calculate the number of steps in x and y directions
         steps_x = int((posXmax - posXmin) / (img_width*overlap))
@@ -275,17 +245,16 @@ class WorkflowController(LiveUpdatedController):
         return coordinates
     
     @APIExport()
-    def getWorkflowStatus(self):
-        return True
+    def computeOptimalScanStepSize2(self, overlap: float = 0.75):
+        mFrameSize = (self.mDetector._camera.SensorHeight, self.mDetector._camera.SensorWidth)
+        bestScanSizeX = mFrameSize[1]*self.mDetector.pixelSizeUm[-1]*overlap
+        bestScanSizeY = mFrameSize[0]*self.mDetector.pixelSizeUm[-1]*overlap     
+        return (bestScanSizeX, bestScanSizeY)
 
-    @APIExport()
-    def setWorkflowStatus(self, status: HistoStatus) -> bool:
-        return True
-
-
-    '''
-    Device Functions
-    '''
+    ########################################
+    # Workflow Functions
+    ########################################
+    
     def move_stage_xy(self, posX: float, posY: float, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
         self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
@@ -310,6 +279,13 @@ class WorkflowController(LiveUpdatedController):
         context.update_metadata(metadata["step_id"], "saved", True)
 
     def set_laser_power(self, power: float, channel: str):
+        mLaserNames = self._master.lasersManager.getAllDeviceNames()
+        if channel not in mLaserNames:
+            self._logger.error(f"Channel {channel} not found in available lasers: {mLaserNames}")
+            return None
+        self._master.lasersManager[channel].setValue(power)
+        if self._master.lasersManager[channel].enabled == 0:
+            self._master.lasersManager[channel].setEnabled(1)
         self._logger.debug(f"Setting laser power to {power} for channel {channel}")
         return power
 
@@ -322,6 +298,11 @@ class WorkflowController(LiveUpdatedController):
         mFrame = self.mDetector.getLatestFrame()
         return mFrame
 
+    def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
+        self._logger.debug(f"Setting exposure time to {exposure_time}")
+        return exposure_time
+    
+    
     def process_data(self, context: WorkflowContext, metadata: Dict[str, Any]):
         self._logger.debug(f"Processing data for step {metadata['step_id']}...")
         metadata["processed"] = True
@@ -330,6 +311,23 @@ class WorkflowController(LiveUpdatedController):
         self._logger.debug(f"Saving frame for step {metadata['step_id']}...")
         metadata["frame_saved"] = True
         
+    def save_frame_tiff(self, context: WorkflowContext, metadata: Dict[str, Any]):
+        # Retrieve the TIFF writer and write the tile
+        tiff_writer = context.get_object("tiff_writer")
+        if tiff_writer is None:
+            self._logger.debug("No TIFF writer found in context!")
+            return
+        img = metadata["result"]
+        # append the image to the tiff file
+        tiff_writer.save(img)
+        metadata["frame_saved"] = True
+        
+    def close_tiff_writer(self):
+        if self.tiff_writer is not None:
+            self.tiff_writer.close()
+        else:
+            raise ValueError("TIFF writer is not initialized.")
+
     def save_frame_zarr(self, context: "WorkflowContext", metadata: Dict[str, Any]):
         # Retrieve the Zarr writer and write the tile
         zarr_writer = context.get_object("zarr_writer")
@@ -362,12 +360,6 @@ class WorkflowController(LiveUpdatedController):
         if obj is not None:
             obj.append(metadata["result"])
 
-    def compute_scan_positions(self, x_min, x_max, y_min, y_max, x_step, y_step):
-        # Compute a grid of (x,y) positions
-        xs = [x_min + i * x_step for i in range(int((x_max - x_min) / x_step) + 1)]
-        ys = [y_min + j * y_step for j in range(int((y_max - y_min) / y_step) + 1)]
-        return xs, ys
-
     def close_zarr(self, context: WorkflowContext, metadata: Dict[str, Any]):
         zarr_writer = context.get_object("zarr_writer")
         if zarr_writer is not None:
@@ -375,8 +367,140 @@ class WorkflowController(LiveUpdatedController):
             context.remove_object("zarr_writer")
             metadata["zarr_closed"] = True
 
+    
     ########################################
-    # Histo-Slide Scanner Interface
+    # Control Flow Functions
+    ########################################
+     
+    @APIExport()
+    def stopWorkflow(self):
+        self.isWorkflowRunning = False
+        
+    @APIExport()
+    def startWorkflowTileBasedByParameters(self, numberTilesX:int=2, numberTilesY:int=2, stepSizeX:int=100, stepSizeY:int=100, 
+                                            nTimes:int=1, tPeriod:int=1, initPosX:Optional[Union[int, str]] = None, initPosY:Optional[Union[int, str]] = None, 
+                                            isStitchAshlar:bool=False, isStitchAshlarFlipX:bool=False, isStitchAshlarFlipY:bool=False, resizeFactor:float=0.25, 
+                                            overlap:float=0.75):
+        def computePositionList(numberTilesX, numberTilesY, stepSizeX, stepSizeY, initPosX, initPosY):
+            positionList = []
+            for ix in range(numberTilesX):
+                if ix % 2 == 0:  # X-Position ist gerade
+                    rangeY = range(numberTilesY)
+                else:  # X-Position ist ungerade
+                    rangeY = range(numberTilesY - 1, -1, -1)
+                for iy in rangeY:
+                    positionList.append((ix*stepSizeX+initPosX-numberTilesX//2*stepSizeX, iy*stepSizeY+initPosY-numberTilesY//2*stepSizeY, ix, iy))
+            return positionList
+        # compute optimal step size if not provided
+        if stepSizeX<=0 or stepSizeX is None:
+            stepSizeX, _ = self.computeOptimalScanStepSize2()
+        if stepSizeY<=0 or stepSizeY is None:
+            _, stepSizeY = self.computeOptimalScanStepSize2()          
+        if initPosX is None or type(initPosX)==str :
+            initPosX = self.mStage.getPosition()["X"]
+        if initPosY is None or type(initPosY)==str:    
+            initPosY = self.mStage.getPosition()["Y"]
+
+    @APIExport()
+    def pause_workflow(self):
+        status = self.workflow_manager.get_status()["status"]
+        if status == "running":
+            return self.workflow_manager.pause_workflow()
+        else:
+            raise HTTPException(status_code=400, detail=f"Cannot pause in current state: {status}")
+
+    @APIExport()
+    def resume_workflow(self):
+        status = self.workflow_manager.get_status()["status"]
+        if status == "paused":
+            return self.workflow_manager.resume_workflow()
+        else:
+            raise HTTPException(status_code=400, detail=f"Cannot resume in current state: {status}")
+
+    @APIExport()
+    def stop_workflow(self):
+        status = self.workflow_manager.get_status()["status"]
+        if status in ["running", "paused"]:
+            return self.workflow_manager.stop_workflow()
+        else:
+            raise HTTPException(status_code=400, detail=f"Cannot stop in current state: {status}")
+
+    @APIExport()
+    def workflow_status(self):
+        return self.workflow_manager.get_status()
+    
+    @APIExport()
+    def force_stop_workflow(self):
+        self.workflow_manager.stop_workflow()
+        del self.workflow_manager
+        self.workflow_manager = WorkflowsManager()
+
+    @APIExport()
+    def setWorkflowStatus(self, status: HistoStatus) -> bool:
+        return True
+
+
+    ########################################
+    # Transmit Worflow Definition via API
+    ########################################
+    
+    @APIExport(requestType="POST")
+    def create_workflow_definition_api(self, definition: WorkflowDefinition):
+        workflow_id = str(uuid.uuid4())
+        self.WORKFLOW_STORAGE[workflow_id] = definition
+        return {"workflow_id": workflow_id, "status": "stored"}
+
+    @APIExport(requestType="POST")
+    def start_workflow_api(self, request: StartWorkflowRequest):
+        workflow_id = request.workflow_id
+        definition = self.WORKFLOW_STORAGE.get(workflow_id)
+        if not definition:
+            raise HTTPException(status_code=404, detail="Workflow definition not found")
+
+        # Convert to actual WorkflowSteps
+        steps = []
+        for step_def in definition.steps:
+            main_func = self.function_registry.get(step_def.mainFuncName)
+            if not main_func:
+                raise HTTPException(status_code=400, detail=f"Unknown function {step_def.mainFuncName}")
+
+            pre_funcs = [self.function_registry[f] for f in step_def.preFuncs if f in self.function_registry]
+            post_funcs = [self.function_registry[f] for f in step_def.postFuncs if f in self.function_registry]
+
+            step = WorkflowStep(
+                name=step_def.stepName,
+                main_func=main_func,
+                main_params=step_def.mainParams,
+                step_id=step_def.id,
+                pre_funcs=pre_funcs,
+                pre_params=step_def.preParams,
+                post_funcs=post_funcs,
+                post_params=step_def.postParams
+            )
+            steps.append(step)
+
+        # (Edges might define ordering or concurrency—this is up to you 
+        #  how to interpret or linearize them. For a simple linear workflow, 
+        #  you might just rely on the array order or define a topological sort.)
+        def sendProgress(payload):
+            self.sigUpdateWorkflowState.emit(payload)
+            
+        wf = Workflow(steps, self.workflow_manager)
+        context = WorkflowContext()
+        
+        # Insert the tiff writer object into context so `save_frame` can use it
+        tiff_writer = tifffile.TiffWriter("timelapse.tif")
+        context.set_object("tiff_writer", tiff_writer)
+        context.on("progress", sendProgress)
+        # Run the workflow
+        # context = wf.run_in_background(context)
+        self.workflow_manager.start_workflow(wf, context)
+        
+        return {"status": "started", "workflow_id": workflow_id}
+
+
+    ########################################
+    # Example Workflow for Histo-Slide Scanner Interface
     ########################################
 
     @APIExport()
@@ -528,126 +652,4 @@ class WorkflowController(LiveUpdatedController):
         return {"status": "completed", "zarr_store_path": store_path}#, "results": context.data}
 
 
-    @APIExport(requestType="POST")
-    def start_multicolour_timelapse_workflow(
-            self,
-            params: MCTWorkflowParams
-        ):
-        nTimes = params.nTimes
-        tPeriod = params.tPeriod
-        illuSources = params.illuSources
-        channels = params.channels
-        exposureTimes = params.exposureTimes
-        gains = params.gain
-        autofocus_on = params.autofocus_on
-        
-        # ensure parameters are lists 
-        if not isinstance(illuSources, list): illuSources = [illuSources]
-        if not isinstance(channels, list): channels = [channels]
-        if not isinstance(exposureTimes, list): exposureTimes = [exposureTimes]
-        if not isinstance(gains, list): gains = [gains]
-        
-        # Check if another workflow is running
-        if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
-            raise HTTPException(status_code=400, detail="Another workflow is already running.")
-        # Start the detector if not already running
-        if not self.mDetector._running: 
-            self.mDetector.startAcquisition()
-        
-        # construct the workflow steps
-        workflowSteps = []
-        step_id = 0
-        # tiff image writer 
-        tiff_writer = tifffile.TiffWriter("timelapse.tif")
-        # In this simplified example, we only do a single Z position (z=0)
-        # and a single frame per position. You can easily extend this.
-        z_pos = 0
-        frames = [0]  # single frame index for simplicity
-        for t in range(nTimes):
-            for illu in illuSources:
-                for channel, exposure, gain in zip(channels, exposureTimes, gains):
-                    # Set laser power (arbitrary, could be parameterized)
-                    workflowSteps.append(WorkflowStep(
-                        name=f"Set laser power",
-                        step_id=str(step_id),
-                        main_func=self.set_laser_power,
-                        main_params={"power": 10, "channel": illu},
-                        pre_funcs=[],
-                        post_funcs=[]
-                    ))
-                    step_id += 1
 
-                    for fr in frames:
-                        # Acquire frame with a short wait, process data, and save frame
-                        workflowSteps.append(WorkflowStep(
-                            name=f"Acquire frame {channel}",
-                            step_id=str(step_id),
-                            main_func=self.acquire_frame,
-                            main_params={"channel": channel},
-                            post_funcs=[self.process_data, self.save_frame],
-                            pre_funcs=[]
-                        ))
-                        # add delay between frames 
-                        workflowSteps.append(WorkflowStep(
-                            name=f"Wait for next frame",
-                            step_id=str(step_id),
-                            main_func=self.dummy_main_func,
-                            main_params={}, 
-                            pre_funcs=[self.wait_time],
-                            pre_params={"seconds": tPeriod}  
-                        ))
-                        step_id += 1
-        
-        def sendProgress(payload):
-            self.sigUpdateWorkflowState.emit(payload)
-            
-        # Create a workflow and context
-        wf = Workflow(workflowSteps, self.workflow_manager)
-        context = WorkflowContext()
-        # Insert the zarr writer object into context so `save_frame` can use it
-        context.on("progress", sendProgress)
-        # Run the workflow
-        # context = wf.run_in_background(context)
-        self.workflow_manager.start_workflow(wf, context)
-
-        # return the store path to the client so they know where data is stored
-        return {"status": "completed"}
-            
-
-
-    @APIExport()
-    def pause_workflow(self):
-        status = self.workflow_manager.get_status()["status"]
-        if status == "running":
-            return self.workflow_manager.pause_workflow()
-        else:
-            raise HTTPException(status_code=400, detail=f"Cannot pause in current state: {status}")
-
-    @APIExport()
-    def resume_workflow(self):
-        status = self.workflow_manager.get_status()["status"]
-        if status == "paused":
-            return self.workflow_manager.resume_workflow()
-        else:
-            raise HTTPException(status_code=400, detail=f"Cannot resume in current state: {status}")
-
-    @APIExport()
-    def stop_workflow(self):
-        status = self.workflow_manager.get_status()["status"]
-        if status in ["running", "paused"]:
-            return self.workflow_manager.stop_workflow()
-        else:
-            raise HTTPException(status_code=400, detail=f"Cannot stop in current state: {status}")
-
-    @APIExport()
-    def workflow_status(self):
-        return self.workflow_manager.get_status()
-    
-    @APIExport()
-    def force_stop_workflow(self):
-        self.workflow_manager.stop_workflow()
-        del self.workflow_manager
-        self.workflow_manager = WorkflowsManager()
-
-# With a properly structured JSON config, you can load various workflows dynamically. 
-# This addresses automating workflow generation for different imaging applications.

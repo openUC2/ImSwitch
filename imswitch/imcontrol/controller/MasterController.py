@@ -7,7 +7,7 @@ from imswitch.imcontrol.model import (
     RecordingManager, RS232sManager, SLMManager, SIMManager, DPCManager, LEDMatrixsManager, MCTManager, ROIScanManager, MockXXManager, WebRTCManager, HyphaManager,
     ISMManager, UC2ConfigManager, AutofocusManager, HistoScanManager, PixelCalibrationManager, LightsheetManager, NidaqManager, FOVLockManager,
     StandManager, RotatorsManager, JetsonNanoManager, LEDsManager, ScanManagerBase, ScanManagerPointScan, ScanManagerMoNaLISA, FlatfieldManager, 
-    FlowStopManager, WorkflowManager
+    FlowStopManager, WorkflowManager, TimelapseManager
 )
 
 
@@ -50,11 +50,12 @@ class MasterController:
         if "SIM" in self.__setupInfo.availableWidgets: self.simManager = SIMManager(self.__setupInfo.sim)
         if "DPC" in self.__setupInfo.availableWidgets: self.dpcManager = DPCManager(self.__setupInfo.dpc)
         self.mctManager = MCTManager(self.__setupInfo.mct)
+        self.timelapseManager = TimelapseManager()
         self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
         self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
         self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
         self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
-        self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
+        if "Timelapse" in self.__setupInfo.availableWidgets: self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
         self.MockXXManager = MockXXManager(self.__setupInfo.mockxx)
         self.jetsonnanoManager = JetsonNanoManager(self.__setupInfo.jetsonnano)
         if "HistoScan" in self.__setupInfo.availableWidgets: self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)

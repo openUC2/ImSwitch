@@ -10,14 +10,15 @@ import numpy as np
 from socketio import AsyncServer, ASGIApp
 import uvicorn
 import imswitch.imcommon.framework.base as abstract
-from imswitch import __ssl__
 import cv2 
 import base64
 from imswitch import SOCKET_STREAM
 import time 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
-
+import os
+import imswitch
+from imswitch import __ssl__, __socketport__
 class Mutex(abstract.Mutex):
     """Wrapper around the `threading.Lock` class."""
     def __init__(self) -> None:
@@ -286,13 +287,11 @@ class FrameworkUtils(abstract.FrameworkUtils):
 # Function to run Uvicorn server with Socket.IO app
 def run_uvicorn():
     try:
-        import os
-        import imswitch
         _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(imswitch.__file__)), '_data')
         config = uvicorn.Config(
             app,
             host="0.0.0.0",
-            port=8002,
+            port=__socketport__,
             ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if __ssl__ else None,
             ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if __ssl__ else None, 
             timeout_keep_alive=2,

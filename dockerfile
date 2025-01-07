@@ -194,7 +194,7 @@ RUN cd /tmp/UC2-REST && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/UC2-REST"
 
 # Expose FTP, SSH port and HTTP port
-EXPOSE  21 22 8001 8002
+EXPOSE  21 22 8001 8002 8003
 
 ADD entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

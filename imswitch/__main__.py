@@ -5,7 +5,7 @@ import argparse
 import os
 
 import imswitch
-def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
+def main(is_headless:bool=None, default_config:str=None, http_port:int=None, socket_port:int=None, ssl:bool=None, config_folder:str=None,
          data_folder: str=None):
     '''
     To start imswitch in headless using the arguments, you can call the main file with the following arguments:
@@ -28,6 +28,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
             parser.add_argument('--http-port', dest='http_port', type=int, default=8001,
                                 help='specify http port')
 
+            # specify socket port 
+            parser.add_argument('--socket-port', dest='socket_port', type=int, default=8002,
+                                help='specify socket port')
             # specify ssl
             parser.add_argument('--no-ssl', dest='ssl', default=True, action='store_false',
                                 help='specify ssl')
@@ -44,6 +47,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
             imswitch.IS_HEADLESS = args.headless            # if True, no QT will be loaded   
             imswitch.__httpport__ = args.http_port          # e.g. 8001
             imswitch.__ssl__ = args.ssl                     # if True, ssl will be used (e.g. https)
+            imswitch.__socketport__ = args.socket_port      # e.g. 8002
             
             if type(args.config_file)==str and args.config_file.find("json")>=0:  # e.g. example_virtual_microscope.json
                 imswitch.DEFAULT_SETUP_FILE = args.config_file  
@@ -65,6 +69,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         if http_port is not None:
             print("We use the user-provided http port: " + str(http_port))
             imswitch.__httpport__ = http_port
+        if socket_port is not None:
+            print("We use the user-provided socket port: " + str(socket_port))
+            imswitch.__socketport__ = socket_port
         if ssl is not None:
             print("We use the user-provided ssl: " + str(ssl))
             imswitch.__ssl__ = ssl

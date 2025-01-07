@@ -271,10 +271,8 @@ class TimelapseController(ImConWidgetController):
         # return the store path to the client so they know where data is stored
         return {"status": "completed", "store_path": "timelapse.tif"}
             
-
-
     @APIExport()
-    def pause_workflow(self):
+    def pause_workflow_tl(self):
         status = self.workflow_manager.get_status()["status"]
         if status == "running":
             return self.workflow_manager.pause_workflow()
@@ -282,7 +280,7 @@ class TimelapseController(ImConWidgetController):
             raise HTTPException(status_code=400, detail=f"Cannot pause in current state: {status}")
 
     @APIExport()
-    def resume_workflow(self):
+    def resume_workflow_tl(self):
         status = self.workflow_manager.get_status()["status"]
         if status == "paused":
             return self.workflow_manager.resume_workflow()
@@ -290,7 +288,7 @@ class TimelapseController(ImConWidgetController):
             raise HTTPException(status_code=400, detail=f"Cannot resume in current state: {status}")
 
     @APIExport()
-    def stop_workflow(self):
+    def stop_workflow_tl(self):
         status = self.workflow_manager.get_status()["status"]
         if status in ["running", "paused"]:
             return self.workflow_manager.stop_workflow()
@@ -298,11 +296,11 @@ class TimelapseController(ImConWidgetController):
             raise HTTPException(status_code=400, detail=f"Cannot stop in current state: {status}")
 
     @APIExport()
-    def workflow_status(self):
+    def workflow_status_tl(self):
         return self.workflow_manager.get_status()
     
     @APIExport()
-    def force_stop_workflow(self):
+    def force_stop_workflow_tl(self):
         self.workflow_manager.stop_workflow()
         del self.workflow_manager
         self.workflow_manager = WorkflowsManager()

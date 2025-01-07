@@ -124,7 +124,7 @@ class TimelapseController(ImConWidgetController):
         
     def set_laser_power(self, power: float, channel: str):
         if channel not in self.allIlluNames:
-            self._logger.error(f"Channel {channel} not found in available lasers: {mLaserNames}")
+            self._logger.error(f"Channel {channel} not found in available lasers: {self.allIlluNames}")
             return None
         self._master.lasersManager[channel].setValue(power)
         if self._master.lasersManager[channel].enabled == 0:

@@ -1,15 +1,15 @@
 {
   "files": {
-    "main.css": "/imswitch/static/css/main.d3c7bb36.css",
-    "main.js": "/imswitch/static/js/main.4ebe96dd.js",
+    "main.css": "/imswitch/static/css/main.851a8413.css",
+    "main.js": "/imswitch/static/js/main.9c67f4d9.js",
     "static/js/787.8bed3ce4.chunk.js": "/imswitch/static/js/787.8bed3ce4.chunk.js",
     "index.html": "/imswitch/index.html",
-    "main.d3c7bb36.css.map": "/imswitch/static/css/main.d3c7bb36.css.map",
-    "main.4ebe96dd.js.map": "/imswitch/static/js/main.4ebe96dd.js.map",
+    "main.851a8413.css.map": "/imswitch/static/css/main.851a8413.css.map",
+    "main.9c67f4d9.js.map": "/imswitch/static/js/main.9c67f4d9.js.map",
     "787.8bed3ce4.chunk.js.map": "/imswitch/static/js/787.8bed3ce4.chunk.js.map"
   },
   "entrypoints": [
-    "static/css/main.d3c7bb36.css",
-    "static/js/main.4ebe96dd.js"
+    "static/css/main.851a8413.css",
+    "static/js/main.9c67f4d9.js"
   ]
 }

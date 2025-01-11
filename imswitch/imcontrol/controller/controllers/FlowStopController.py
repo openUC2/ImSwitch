@@ -25,6 +25,7 @@ class FlowStopController(LiveUpdatedController):
 
     sigImageReceived = Signal()
     sigImagesTaken = Signal(int)
+    sigIsRunning = Signal(bool)
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -238,6 +239,7 @@ class FlowStopController(LiveUpdatedController):
 
     @APIExport(runOnUIThread=True)
     def stopFlowStopExperiment(self):
+        self.sigIsRunning.emit(False)
         self.is_measure=False
         if not IS_HEADLESS:
             self._widget.buttonStart.setEnabled(True)
@@ -284,7 +286,7 @@ class FlowStopController(LiveUpdatedController):
         if self.isRecordVideo:
             self.video_safe = VideoSafe(self.detectorFlowCam.getLatestFrame, output_folder=dirPath, frame_rate=videoFrameRate, bitrate=videoBitrate)
             self.video_safe.start()
-                
+        self.sigIsRunning.emit(True)
         while True:
             if dirtools.getDiskusage()>.95:
                 self.is_measure = False
@@ -313,6 +315,7 @@ class FlowStopController(LiveUpdatedController):
                 mFileName = f'{timeStamp}_{experimentName}_{uniqueId}_{self.imagesTaken}'
                 mFilePath = os.path.join(dirPath, mFileName)
                 self.snapImageFlowCam(mFilePath, metaData, fileFormat=fileFormat)
+                self.sigImagesTaken.emit(self.imagesTaken)
                 self._logger.debug(f"Image {self.imagesTaken} saved to {mFilePath}.{fileFormat}")
 
                 # maintain framerate

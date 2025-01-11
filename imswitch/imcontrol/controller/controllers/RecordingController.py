@@ -498,6 +498,8 @@ class RecordingController(ImConWidgetController):
             self._commChannel.sigStartLiveAcquistion.emit(False)
             return "stream stopped"
 
+    #
+
     #@app.post("/execute-function/")
     ''' TODO: Maybe a little bit of a security risk, but it's a nice feature
     @APIExport(runOnUIThread=False)

@@ -26,6 +26,8 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._activeAcqsMutex = Mutex()
 
         self._currentDetectorName = None
+        
+        
         for detectorName, detectorInfo in detectorInfos.items():
             if not self._subManagers[detectorName].forAcquisition:
                 continue
@@ -35,6 +37,17 @@ class DetectorsManager(MultiManager, SignalInterface):
                     detectorName, image, init, scale, detectorName==self._currentDetectorName
                 )
             )
+            # TODO: Use this instead?
+            '''
+            def update_image(detectorName, image, init, scale):
+            self.sigImageUpdated.emit(
+                detectorName,
+                image,
+                init,
+                scale,
+                detectorName == self._currentDetectorName
+            )
+            '''
             self._subManagers[detectorName].sigNewFrame.connect(lambda: self.sigNewFrame.emit())
 
             # Set as default if first detector
@@ -48,6 +61,7 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._thread.started.connect(self._lvWorker.run)
         self._thread.finished.connect(self._lvWorker.stop)
 
+    
     def __del__(self):
         self._lvWorker.stop()
         if hasattr(super(), '__del__'):

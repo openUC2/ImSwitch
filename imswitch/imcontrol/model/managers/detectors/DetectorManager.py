@@ -2,7 +2,7 @@ import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-
+import cv2 
 import numpy as np
 
 from imswitch.imcommon.framework import Signal, SignalInterface
@@ -109,6 +109,9 @@ class DetectorManager(SignalInterface):
         self.__flatfieldImage = None
         self.__isFlatfielding = False
         
+        self._minValueFramePreview = -1
+        self._maxValueFramePreview = -1
+        
         self.__fullShape = fullShape
         self.__supportedBinnings = supportedBinnings
         self.__image = np.array([])
@@ -125,8 +128,6 @@ class DetectorManager(SignalInterface):
         except:
             isRGB = False
         self.setRGB(isRGB)
-    
-
         self.setBinning(supportedBinnings[0])
 
     def updateLatestFrame(self, init):
@@ -137,17 +138,42 @@ class DetectorManager(SignalInterface):
             self.__logger.error(traceback.format_exc())
         else:
             if self.__image is not None:
+                '''
+                eventually manipulate the image before sending it
+                we have 255 levels of gray, so we can use the min and max values to scale the image
+                '''
+                def stretch_pixels(image_12bit, lower_clip, upper_clip):
+                    # Clamping to the range [lower_clip, upper_clip]
+                    clamped = np.clip(image_12bit, lower_clip, upper_clip)
+                    # Mapping the clamped values to [0, 255]
+                    scaled = (clamped - lower_clip) * 255.0 / (upper_clip - lower_clip)
+                    # Converting to 8-bit
+                    return np.clip(scaled, 0, 255).astype(np.uint8)
+                if self._maxValueFramePreview != -1 and self._minValueFramePreview != -1:
+                    self.__image = stretch_pixels(self.__image, self._minValueFramePreview, self._maxValueFramePreview)
                 self.sigImageUpdated.emit(self.__image, init, self.scale)
 
+    def setMinValueFramePreview(self, value):
+        """ Sets the minimum value for the frame preview to display via a jpeg image """
+        self._minValueFramePreview = value
+        
+    def setMaxValueFramePreview(self, value):
+        """ Sets the maximum value for the frame preview to display via a jpeg image """
+        self._maxValueFramePreview = value
+        
     def setParameter(self, name: str, value: Any) -> Dict[str, DetectorParameter]:
         """ Sets a parameter value and returns the updated list of parameters.
         If the parameter doesn't exist, i.e. the parameters field doesn't
         contain a key with the specified parameter name, an AttributeError will
         be raised. """
-
+        if name == 'previewMinValue':
+            self.setMinValueFramePreview(value)
+            return
+        elif name == 'previewMaxValue':
+            self.setMaxValueFramePreview(value)
+            return
         if name not in self.__parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
-
         self.__parameters[name].value = value
         return self.parameters
 

@@ -512,7 +512,7 @@ class SettingsController(ImConWidgetController):
     def setDetectorParameter(self, detectorName: str, parameterName: str, value: Any) -> None:
         """ Sets the specified detector-specific parameter to the specified
         value. """
-
+        
         if (parameterName in ['Trigger source'] and
                 self.getCurrentParams().allDetectorsFrame.value()):
             # Special case for certain parameters that will follow the "update all detectors" option
@@ -544,12 +544,35 @@ class SettingsController(ImConWidgetController):
         self.setDetectorParameter(detectorName, 'exposure', exposureTime)
         
     @APIExport(runOnUIThread=True)
+    def setDetectorPreviewMinMaxValue(self, detectorName: str=None, minValue: int=0, maxValue: int = 1024) -> None:
+        """ Sets the preview minimum value for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        self.setDetectorParameter(detectorName, 'previewMinValue', minValue)
+        self.setDetectorParameter(detectorName, 'previewMaxValue', maxValue)
+        
+
+    @APIExport(runOnUIThread=True)
     def setDetectorGain(self, detectorName: str=None, gain: float=0) -> None:
         """ Sets the gain for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'gain', gain)
 
+    @APIExport(runOnUIThread=True)
+    def setDetectorPreviewMinValue(self, detectorName: str=None, minValue: int=0) -> None:
+        """ Sets the preview minimum value for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        self.setDetectorParameter(detectorName, 'previewMinValue', minValue)
+        
+    @APIExport(runOnUIThread=True)
+    def setDetectorPreviewMaxValue(self, detectorName: str=None, maxValue: int=4095) -> None:
+        """ Sets the preview maximum value for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        self.setDetectorParameter(detectorName, 'previewMaxValue', maxValue)
+        
 _attrCategory = 'Detector'
 _modelAttr = 'Model'
 _pixelSizeAttr = 'Pixel size'

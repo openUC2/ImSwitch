@@ -254,6 +254,16 @@ class TimelapseController(ImConWidgetController):
             main_params={"tiff_writer": tif.TiffWriter("timelapse.tif")},
         ))
         
+        # add final step to notify completion
+        workflowSteps.append(WorkflowStep(
+                name=f"Done",
+                step_id=str(step_id),
+                main_func=self.dummy_main_func,
+                main_params={}, 
+                pre_funcs=[self.wait_time],
+                pre_params={"seconds": 0.1}  
+            ))
+        
         def sendProgress(payload):
             self.sigTimelapseWorkflowUpdate.emit(payload)
             

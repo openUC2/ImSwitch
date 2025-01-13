@@ -2,10 +2,8 @@ import threading
 import Pyro5.server
 from Pyro5.api import expose
 from imswitch.imcommon.framework import Worker
-from imswitch.imcommon.model import initLogger
-from ._serialize import register_serializers
+from imswitch.imcommon.model import dirtools, initLogger
 from fastapi.middleware.cors import CORSMiddleware
-import asyncio
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from pydantic import BaseModel
 from typing import List
@@ -83,7 +81,7 @@ app.add_middleware(
 '''Add Endpoints for Filemanager'''
 
 # Base upload directory
-BASE_DIR = os.path.curdir
+BASE_DIR = dirtools.UserFileDirs.Data
 if not os.path.exists(BASE_DIR):
     os.makedirs(BASE_DIR)
 

@@ -8,6 +8,7 @@ import skimage.transform as transform
 import tifffile as tif
 from pydantic import BaseModel
 from typing import Any, List, Optional, Dict, Any
+import os 
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
@@ -271,7 +272,16 @@ class TimelapseController(ImConWidgetController):
         wf = Workflow(workflowSteps, self.workflow_manager)
         context = WorkflowContext()
         # Insert the tiff writer object into context so `save_frame` can use it
-        tiff_writer = tif.TiffWriter("timelapse.tif")
+        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        drivePath = dirtools.UserFileDirs.Data
+        dirPath = os.path.join(drivePath, 'recordings', timeStamp)
+        if not os.path.exists(dirPath):
+            os.makedirs(dirPath)        
+        self._logger.debug("Save TIF at: " + dirPath)
+        experimentName = "Timelapse"
+        mFileName = f'{timeStamp}_{experimentName}'
+        mFilePath = os.path.join(dirPath, mFileName+ ".tif")
+        tiff_writer = tif.TiffWriter(mFilePath)
         context.set_object("tiff_writer", tiff_writer)
         context.on("progress", sendProgress)
         # Run the workflow

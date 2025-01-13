@@ -299,7 +299,7 @@ class RecordingManager(SignalInterface):
             self.__logger.error(f'Failed to snap image: {e}')
 
         finally:
-            self.__detectorsManager.stopAcquisition(acqHandle)
+            # self.__detectorsManager.stopAcquisition(acqHandle)
             if saveMode == SaveMode.Numpy:
                 return images
 

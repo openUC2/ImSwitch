@@ -34,6 +34,10 @@ import os
 from tempfile import TemporaryDirectory
 import numpy as np
 import zarr
+from fastapi.responses import StreamingResponse
+import numpy as np
+from io import BytesIO
+from PIL import Image
 from ome_zarr.writer import write_image
 from ome_zarr.io import parse_url
 from ome_zarr.format import CurrentFormat
@@ -123,7 +127,8 @@ class HistoScanController(LiveUpdatedController):
         offsetX = self._master.HistoScanManager.offsetX
         offsetY = self._master.HistoScanManager.offsetY
         self.tSettle = 0.05
-    
+        self.flipX = True
+        self.flipY = True
         self.histoscanTask = None
         self.histoscanStack = np.ones((1,1,1))
 
@@ -482,7 +487,7 @@ class HistoScanController(LiveUpdatedController):
         n_pix_x, n_pix_y = self.microscopeDetector._camera.SensorWidth, self.microscopeDetector._camera.SensorHeight
         with open(samplelayoutfilepath) as f:
             data = json.load(f)
-        n_pix_x, n_pix_y = 4000,3000
+        n_pix_x, n_pix_y = 4000,3000 
         # iterate over all wells and compute the positions
         well_positions = []
         pixelToMMFactor = data['ScanParameters']['pixelImageY']/data['ScanParameters']['physDimY']
@@ -1357,6 +1362,101 @@ class HistoScanController(LiveUpdatedController):
         self.stophistoscanCamerabased()
         
     
+    # Assuming a tile size of 256 pixels and a known pixel size in microns:
+    # pixel_size_microns = <microns per pixel at zoom level 0>
+    # stage_width_microns, stage_height_microns = total size of the sample in microns
+    # max_zoom_levels = number of zoom levels you want (e.g., 6, 7, etc.)
+
+    def compute_tile_coordinates(self, stage_extent, tile_size, zoom_level, x_tile, y_tile):
+        # Stage extent
+        min_x, min_y, max_x, max_y = stage_extent
+
+        # Resolution at zoom level 0
+        base_resolution = (max_x - min_x) / tile_size
+
+        # Resolution at the current zoom level
+        resolution = base_resolution / (2 ** zoom_level)
+
+        # Physical dimensions of the tile
+        tile_width = tile_size * resolution
+        tile_height = tile_size * resolution
+
+        # Calculate physical coordinates of the tile
+        x_min = min_x + x_tile * tile_width
+        y_min = min_y + y_tile * tile_height
+        x_max = x_min + tile_width
+        y_max = y_min + tile_height
+
+        # Calculate tile center
+        x_center = (x_min + x_max) / 2
+        y_center = (y_min + y_max) / 2
+
+        return {
+            "tile_extent": [x_min, y_min, x_max, y_max],
+            "tile_size": [tile_width, tile_height],
+            "tile_center": [x_center, y_center],
+            "resolution": resolution,
+            "xy_tile": [x_tile, y_tile],
+            "zoom_level": zoom_level,
+        }
+
+    # For a request like: GET /microscope/tiles/{z}/{x}/{y}.png
+    # Convert (z, x, y) to an image tile from the mosaic or request a stage move for capturing.
+    @APIExport()
+    def get_tile(self, z:float, x:float, y:float):
+        """
+        1) Determine lens from zoom level z
+        2) Switch lens (set pixel_size, do stage's internal configuration)
+        3) Calculate physical stage area from (x,y,z)
+        4) Move stage to cover that region (coarse or fine)
+        5) Acquire an image from the camera
+        6) Crop/scale image to 256x256 tile
+        7) Return PNG
+        """
+        LENS_CONFIG = {
+            '4x':  (1.6, (2048, 2048)),  
+            '10x': (0.64, (2048, 2048)),
+            '20x': (0.32, (2048, 2048)),
+        }
+        # The range of stage motion in microns
+        STAGE_LIMIT_X = 1024  # 0 <= X <= 100000 mm
+        STAGE_LIMIT_Y = 1024  # 0 <= Y <= 100000 mm
+        stage_extent = (0, 0, STAGE_LIMIT_X, STAGE_LIMIT_Y)
+        tile_size = 256  # 256x256 pixel tiles 
+        zoom_level = int(z)
+        x_tile = int(x)
+        y_tile = int(y)
+        mPixelSizeEff = self.microscopeDetector.pixelSizeUm[-1]
+        mPixelX, mPixelY = 400,300
+        x_tile_pos = x_tile*mPixelSizeEff*mPixelX
+        y_tile_pos = y_tile*mPixelSizeEff*mPixelY
+        #mCoordinates = self.compute_tile_coordinates(stage_extent, tile_size, zoom_level, x_tile, y_tile)
+        #print(mCoordinates)
+
+        # Move the stage (absolute movement)
+        print("PosX: ", x_tile_pos+tile_size//2, "PosY: ", y_tile_pos+tile_size//2)
+        self.stages.move(value=(x_tile_pos+tile_size//2, y_tile_pos+tile_size//2), axis="XY", is_absolute=True, is_blocking=True)
+        mFrame = self.microscopeDetector.getLatestFrame() # NxM array
+
+        if len(mFrame.shape)==2:
+            mFrame = np.repeat(mFrame[:,:,np.newaxis], 3, axis=2)
+        
+        # crop center region of the image
+        #mFrame = mFrame[int(mPixelY/2-tile_size/2):int(mPixelY/2+tile_size/2), int(mPixelX/2-tile_size/2):int(mPixelX/2+tile_size/2)]
+        # flip in X 
+        if self.flipX: mFrame = np.flip(mFrame, axis=1)
+        # flip in Y
+        if self.flipY: mFrame = np.flip(mFrame, axis=0)
+        
+        # Convert to PNG 
+        try:
+            img = Image.fromarray(np.uint8(mFrame), 'RGB')
+            buffer = BytesIO()
+            img.save(buffer, format="PNG")
+            buffer.seek(0)        
+            return StreamingResponse(buffer , media_type="image/png")
+        except Exception as e:
+            return {"error": str(e)}
         
 
 
@@ -1533,7 +1633,7 @@ class ImageStitcher:
     def save_stitched_image(self, filename):
         stitched = self.get_stitched_image()
         imsave(filename, stitched)
-    
+        
     
 
 class MovementController:

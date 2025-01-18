@@ -565,6 +565,7 @@ class WorkflowController(LiveUpdatedController):
         z_pos = 0
         frames = [0]  # single frame index for simplicity
 
+        
         for y_i, y_pos in enumerate(ys):
             # we want to have snake scan pattern
             if y_i % 2 == 0:

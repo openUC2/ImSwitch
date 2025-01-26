@@ -174,7 +174,11 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install scikit-
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
 
 # remove the temporary files to reduce the image size
-RUN apt-get update && apt-get install -y [...] \
+RUN apt-get update && \
+    apt-get install -y \
+    curl \
+    wget \
+    vim \
     && rm -rf /var/lib/apt/lists/* /tmp/*
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories

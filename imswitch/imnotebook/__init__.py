@@ -23,7 +23,8 @@ def getMainViewAndController(moduleCommChannel, multiModuleWindowController, mod
             view,
             moduleCommChannel=moduleCommChannel,
             multiModuleWindowController=multiModuleWindowController,
-            moduleMainControllers=moduleMainControllers
+            moduleMainControllers=moduleMainControllers, 
+            webaddr=webaddr
         )
     except Exception as e:
         if not IS_HEADLESS: view.close()

@@ -4,7 +4,7 @@ import subprocess
 import threading
 import signal
 import time
-
+from imswitch import __jupyter_port__
 from .logger import log
 
 _process = None
@@ -16,12 +16,12 @@ def testnotebook(notebook_executable="jupyter-notebook"):
     # if the notebook executable is not found, return False
     return 0 == os.system("%s --version" % notebook_executable)
 
-def startnotebook(notebook_executable="jupyter-notebook", port=8888, directory='',
-                  configfile=os.path.join(os.path.dirname(__file__), 'jupyterqt_notebook_config.py')):
+def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, directory='',
+                  configfile=os.path.join(os.path.dirname(__file__), 'jupyter_notebook_config.py')):
     global _process, _monitor, _webaddr
     if _process is not None:
-        raise ValueError("Cannot start notebook: one is already running in this module")
-    log("Starting Jupyter notebook process")
+        raise ValueError("Cannot start jupyter lab: one is already running in this module")
+    log("Starting Jupyter lab process")
     # it is necessary to redirect all 3 outputs or .app does not open
     notebookp = subprocess.Popen([notebook_executable,
                             "--port=%s" % port,

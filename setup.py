@@ -77,7 +77,8 @@ setup(
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "ashlarUC2", 
-        "iohub==0.2.0a1"
+        "iohub==0.2.0a1", 
+        "jupyterlab==3.2.0",
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

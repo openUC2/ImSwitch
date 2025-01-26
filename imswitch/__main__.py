@@ -156,6 +156,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                     moduleMainControllers=moduleMainControllers
                 )
                 logger.info(f'initialize module {moduleId}')
+                
             except Exception as e:
                 logger.error(f'Failed to initialize module {moduleId}')
                 logger.error(e)
@@ -166,8 +167,13 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                     multiModuleWindow.addModule(moduleId, moduleName, ModuleLoadErrorView(e))
             else:
                 # Add module to window
-                if not imswitch.IS_HEADLESS: multiModuleWindow.addModule(moduleId, moduleName, view)
+                if not imswitch.IS_HEADLESS: 
+                    multiModuleWindow.addModule(moduleId, moduleName, view)
                 moduleMainControllers[moduleId] = controller
+                
+                # in case of the imnotebook, spread the notebook url 
+                if moduleId == 'imnotebook':
+                    imswitch.jupyternotebookurl = controller.webaddr
 
                 # Update loading progress
                 if not imswitch.IS_HEADLESS:

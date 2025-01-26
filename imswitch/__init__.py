@@ -3,6 +3,8 @@ __version__ = "2.1.0"
 __httpport__ = 8001
 __socketport__ = 8002
 __ssl__ = True
+__jupyter_port__ = 8888
+jupyternotebookurl = ""
 
 ''' 
 These are flags to ensure headless operation and side-loading of the config file 

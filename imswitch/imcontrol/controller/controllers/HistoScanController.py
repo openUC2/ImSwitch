@@ -68,7 +68,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Union, Tuple
 
 class HistoStatus(BaseModel):
-    currentPosition: Optional[Tuple[float, float]] = None
+    currentPosition: Optional[Tuple[float, float, int, int]] = None # X, Y, nX, nY
     ishistoscanRunning: bool = False
     stitchResultAvailable: bool = False
     mScanIndex: int = 0

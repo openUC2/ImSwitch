@@ -17,7 +17,7 @@ class LaunchNotebookServer:
     def startServer(self):
 
         python_exec_path = os.path.dirname(sys.executable)
-        execname = os.path.join(python_exec_path, 'jupyter-notebook')
+        execname = os.path.join(python_exec_path, 'jupyter-lab')
         
         # check if jupyter notebook is installed
         if not testnotebook(execname):

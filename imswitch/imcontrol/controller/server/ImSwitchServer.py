@@ -363,6 +363,10 @@ class ImSwitchServer(Worker):
             swagger_css_url="/static/swagger-ui.css",
         )
         
+    @app.get("/jupyternotebookurl")
+    def get_jupyter_notebook_url():
+        from imswitch import jupyternotebookurl # import it here to get the one after the notebook has been actually launched
+        return {"url": jupyternotebookurl}
 
     @app.get("/")
     def createAPI(self):

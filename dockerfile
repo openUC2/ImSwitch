@@ -124,8 +124,9 @@ fi
 ENV LD_LIBRARY_PATH="/usr/lib:/tmp/Galaxy_Linux-armhf_Gige-U3_32bits-64bits_1.5.2303.9202:$LD_LIBRARY_PATH"
 
 # Source the bashrc file
-RUN echo "source ~/.bashrc" >> ~/.bashrc
-RUN /bin/bash -c "source ~/.bashrc"
+ENV PATH=/opt/conda/bin:$PATH
+# RUN echo "source ~/.bashrc" >> ~/.bashrc
+# RUN /bin/bash -c "source ~/.bashrc"
 RUN mkdir -p /opt/MVS/bin/fonts
 
 # Set environment variable for MVCAM_COMMON_RUNENV
@@ -172,6 +173,10 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zar
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install scikit-image==0.19.3"
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
 
+# remove the temporary files to reduce the image size
+RUN apt-get update && apt-get install -y [...] \
+    && rm -rf /var/lib/apt/lists/* /tmp/*
+
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
@@ -194,8 +199,8 @@ RUN cd /tmp/UC2-REST && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/UC2-REST"
 
 # Expose FTP, SSH port and HTTP port
-EXPOSE  21 22 8001 8002 8003
+EXPOSE  21 22 8001 8002 8003 8888
 
-ADD entrypoint.sh /entrypoint.sh
+ADD docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]

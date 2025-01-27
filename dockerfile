@@ -80,6 +80,7 @@ RUN /opt/conda/bin/conda create -y --name imswitch python=3.11
 RUN /opt/conda/bin/conda install -n imswitch -y -c conda-forge h5py numcodecs && \
     conda clean --all -f -y
 
+
 # Download and install the appropriate Hik driver based on architecture
 RUN cd /tmp && \
 wget https://www.hikrobotics.com/cn2/source/support/software/MVS_STD_GML_V2.1.2_231116.zip && \
@@ -145,10 +146,11 @@ RUN echo "listen=YES" >> /etc/vsftpd.conf && \
 
 # install numcodecs via conda
 RUN /opt/conda/bin/conda install numcodecs=0.15.0
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
+    conda install scikit-image=0.19.3 -c conda-forge"
 
 # fix the version of OME-ZARR 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install scikit-image==0.19.3"
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
 
 
@@ -158,6 +160,11 @@ RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/UC2-REST"
 
 
+# first install all the dependencies not not to install them again in a potential "breaking update"
+# Clone the repository and install dependencies
+RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
+    cd /tmp/ImSwitch && \
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/ImSwitch"
 
 # Clone the config folder
 RUN git clone https://github.com/openUC2/ImSwitchConfig /root/ImSwitchConfig
@@ -182,6 +189,11 @@ RUN echo "Building on ${BUILD_DATE}"
 # Clone the config folder
 RUN cd /root/ImSwitchConfig && \
     git pull
+
+# now update potential breaking changes
+RUN cd /tmp/ImSwitch && \
+    git pull && \
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/ImSwitch"
 
 
 # Install UC2-REST

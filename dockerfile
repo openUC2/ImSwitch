@@ -179,8 +179,8 @@ RUN apt-get update && \
     curl \
     wget \
     vim \
-    && rm -rf /var/lib/apt/lists/* /tmp/*
-
+    && rm -rf /var/lib/apt/lists/* 
+    
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE

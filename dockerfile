@@ -39,7 +39,6 @@
 
 
 # Use an appropriate base image for multi-arch support
-# Use an appropriate base image for multi-arch support
 FROM ubuntu:22.04
 
 ARG TARGETPLATFORM
@@ -147,31 +146,26 @@ RUN echo "listen=YES" >> /etc/vsftpd.conf && \
 # install numcodecs via conda
 RUN /opt/conda/bin/conda install numcodecs=0.15.0
 
+# fix the version of OME-ZARR 
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install scikit-image==0.19.3"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
+
+
 # Install UC2-REST first - as it will be installed via ImSwitch again
 RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \
     cd /tmp/UC2-REST && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/UC2-REST"
 
 
-# first install all the dependencies not not to install them again in a potential "breaking update"
-# Clone the repository and install dependencies
-RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
-    cd /tmp/ImSwitch && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/ImSwitch"
 
 # Clone the config folder
 RUN git clone https://github.com/openUC2/ImSwitchConfig /root/ImSwitchConfig
-
-
 
 # we want psygnal to be installed without binaries - so first remove it 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"
 
-# fix the version of OME-ZARR 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install scikit-image==0.19.3"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
 
 # remove the temporary files to reduce the image size
 RUN apt-get update && \

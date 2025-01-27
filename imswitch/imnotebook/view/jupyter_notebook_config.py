@@ -5,5 +5,6 @@ try:
             'Content-Security-Policy': "frame-ancestors *"
         }
     }
+    c.NotebookApp.ip = '0.0.0.0' # listen on all IPs 
 except NameError:
     pass

@@ -31,6 +31,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
                             "--port=%s" % port,
                             "--allow-root",
                             "--no-browser",
+                            "--ip=0.0.0.0",
                             "--config=\"%s\"" % configfile,
                             "--notebook-dir=%s" % directory], bufsize=1,
                             stderr=subprocess.PIPE)

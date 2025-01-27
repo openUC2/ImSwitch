@@ -144,6 +144,9 @@ RUN echo "listen=YES" >> /etc/vsftpd.conf && \
     echo "chroot_local_user=YES" >> /etc/vsftpd.conf && \
     echo "allow_writeable_chroot=YES" >> /etc/vsftpd.conf
 
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
+    pip install scikit-image==0.19.3"
+
 # first install all the dependencies not not to install them again in a potential "breaking update"
 # Clone the repository and install dependencies
 RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
@@ -176,11 +179,9 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==
 # remove the temporary files to reduce the image size
 RUN apt-get update && \
     apt-get install -y \
-    curl \
     wget \
-    vim \
     && rm -rf /var/lib/apt/lists/* 
-    
+
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE

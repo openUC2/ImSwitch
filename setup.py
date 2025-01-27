@@ -53,7 +53,7 @@ setup(
         "psutil >= 5.4.8",
         "pyserial >= 3.4",
         "requests >= 2.25",
-        "scikit-image",
+        "scikit-image=0.19.3",
         "Send2Trash >= 1.8",
         "tifffile >= 2020.11.26",
         "ome_zarr >= 0.9.0",

@@ -50,7 +50,7 @@ except ImportError:
 
 try:
     from ashlarUC2 import utils
-    from ashlar.scripts.ashlar import process_images
+    from ashlarUC2.scripts.ashlar import process_images
     IS_ASHLAR_AVAILABLE = True
 except ImportError:
     IS_ASHLAR_AVAILABLE = False

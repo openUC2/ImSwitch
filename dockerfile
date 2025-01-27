@@ -152,11 +152,6 @@ RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \
     cd /tmp/UC2-REST && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/UC2-REST"
 
-# install IOHub - as it will be installed via ImSwitch again
-#         "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
-RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
-cd /root/iohub && \
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /root/iohub"
 
 # first install all the dependencies not not to install them again in a potential "breaking update"
 # Clone the repository and install dependencies

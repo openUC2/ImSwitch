@@ -77,7 +77,6 @@ setup(
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "ashlarUC2", 
-        "iohub==0.2.0a1", 
         "jupyterlab==3.2.0",
         ],
 

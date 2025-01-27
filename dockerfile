@@ -173,6 +173,11 @@ RUN git clone https://github.com/openUC2/ImSwitchConfig /root/ImSwitchConfig
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"
 
+# fix the version of OME-ZARR 
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install zarr==2.11.3"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
+
 
 # remove the temporary files to reduce the image size
 RUN apt-get update && \

@@ -21,16 +21,20 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
     global _process, _monitor, _webaddr
     if _process is not None:
         raise ValueError("Cannot start jupyter lab: one is already running in this module")
-    log("Starting Jupyter lab process")
+    print("Starting Jupyter lab process")
+    print("Notebook executable: %s" % notebook_executable)
+    # check if the notebook executable is available
+    if not testnotebook(notebook_executable):
+        print("Notebook executable not found")
     # it is necessary to redirect all 3 outputs or .app does not open
     notebookp = subprocess.Popen([notebook_executable,
                             "--port=%s" % port,
                             "--config=\"%s\"" % configfile,
                             "--notebook-dir=%s" % directory], bufsize=1,
                             stderr=subprocess.PIPE)
-
-    log("Waiting for server to start...")
+    print("Waiting for server to start...")
     webaddr = None
+    time0 = time.time()
     while webaddr is None:
         line = notebookp.stderr.readline().decode('utf-8').strip()
         log(line)
@@ -39,7 +43,10 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
             # end = line.find("/", start+len("http://")) new notebook
             # needs a token which is at the end of the line
             webaddr = line[start:]
-    log("Server found at %s, migrating monitoring to listener thread" % webaddr)
+        if time.time() - time0 > 10:
+            print("Timeout waiting for server to start")
+            return None
+    print("Server found at %s, migrating monitoring to listener thread" % webaddr)
 
     # pass monitoring over to child thread
     def process_thread_pipe(process):

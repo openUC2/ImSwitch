@@ -1054,6 +1054,9 @@ class HistoScanController(LiveUpdatedController):
     
     @APIExport()
     def getHistoStatus(self) -> HistoStatus:
+        # ensure currentPosition is a tuple of 4 elements
+        if not isinstance(self.currentPosition, tuple) or len(self.currentPosition)!=4:
+            self.currentPosition = (self.currentPosition[0], self.currentPosition[1],0,0,0)
         statusDict = {
             "currentPosition": self.currentPosition,
             "ishistoscanRunning": bool(self.ishistoscanRunning),

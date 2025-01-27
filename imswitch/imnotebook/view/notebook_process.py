@@ -29,6 +29,8 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
     # it is necessary to redirect all 3 outputs or .app does not open
     notebookp = subprocess.Popen([notebook_executable,
                             "--port=%s" % port,
+                            "--allow-root",
+                            "--no-browser",
                             "--config=\"%s\"" % configfile,
                             "--notebook-dir=%s" % directory], bufsize=1,
                             stderr=subprocess.PIPE)

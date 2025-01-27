@@ -183,11 +183,6 @@ RUN echo "Building on ${BUILD_DATE}"
 RUN cd /root/ImSwitchConfig && \
     git pull
 
-# now update potential breaking changes
-RUN cd /tmp/ImSwitch && \
-    git pull && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/ImSwitch"
-
 
 # Install UC2-REST
 RUN cd /tmp/UC2-REST && \

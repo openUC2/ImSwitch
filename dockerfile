@@ -144,8 +144,19 @@ RUN echo "listen=YES" >> /etc/vsftpd.conf && \
     echo "chroot_local_user=YES" >> /etc/vsftpd.conf && \
     echo "allow_writeable_chroot=YES" >> /etc/vsftpd.conf
 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
-    pip install scikit-image==0.19.3"
+# install numcodecs via conda
+RUN /opt/conda/bin/conda install numcodecs=0.15.0
+
+# Install UC2-REST first - as it will be installed via ImSwitch again
+RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \
+    cd /tmp/UC2-REST && \
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/UC2-REST"
+
+# install IOHub - as it will be installed via ImSwitch again
+#         "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
+RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
+cd /root/iohub && \
+/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /root/iohub"
 
 # first install all the dependencies not not to install them again in a potential "breaking update"
 # Clone the repository and install dependencies
@@ -156,16 +167,7 @@ RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
 # Clone the config folder
 RUN git clone https://github.com/openUC2/ImSwitchConfig /root/ImSwitchConfig
 
-# Install UC2-REST
-RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \
-    cd /tmp/UC2-REST && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/UC2-REST"
 
-# install IOHub
-#         "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
-RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
-    cd /root/iohub && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /root/iohub"
 
 # we want psygnal to be installed without binaries - so first remove it 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"

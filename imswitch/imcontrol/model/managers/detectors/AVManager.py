@@ -56,9 +56,8 @@ class AVManager(DetectorManager):
             'image_width': DetectorNumberParameter(group='Misc', value=fullShape[0], valueUnits='arb.u.',
                         editable=False),
             'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
-                        editable=False),
-            'pixel_format': DetectorListParameter(group='Misc', value='Mono12', options=['Mono8','Mono12'], editable=True)
-            }            
+                        editable=False)
+                                                }            
 
         # Prepare actions
         actions = {

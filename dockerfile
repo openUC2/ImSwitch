@@ -206,6 +206,41 @@ RUN cd /tmp/UC2-REST && \
     git pull && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/UC2-REST"
 
+
+# TMP: Install Vimba 
+
+
+# Download, extract, and install Vimba
+RUN wget https://downloads.alliedvision.com/Vimba64_v6.0_Linux.tgz && \
+    tar -xzf Vimba64_v6.0_Linux.tgz -C /opt && \
+    rm Vimba64_v6.0_Linux.tgz && \
+    mkdir -p /etc/udev/rules.d && \
+    cd /opt/Vimba_6_0/VimbaUSBTL && \
+    ./Install.sh
+
+# Install Python bindings (pymba / VimbaPython)
+RUN cd /opt/Vimba_6_0/VimbaPython/Source && \
+    python -m pip install .
+
+# Optionally remove unneeded files/folders to reduce image size
+RUN cd /opt/Vimba_6_0 && \
+    rm -rf VimbaGigETL \
+           VimbaCPP \
+           VimbaC/DynamicLib/x86_32bit \
+           VimbaCPP/DynamicLib/x86_32bit \
+           VimbaImageTransform/DynamicLib/x86_32bit \
+           Tools/Viewer \
+           Tools/VimbaClassGenerator/Bin/x86_32bit \
+           Tools/FirmwareUpdater/Bin/x86_32bit \
+           VimbaC/Examples/Bin/x86_32bit \
+           VimbaCPP/Examples/Bin/x86_32bit \
+           VimbaUSBTL/CTI/x86_32bit \
+           VimbaGigETL/CTI/x86_32bit
+
+# Set environment variable so that Vimba's transport layer is found
+ENV GENICAM_GENTL64_PATH=$GENICAM_GENTL64_PATH:/opt/Vimba_6_0/VimbaUSBTL/CTI/x86_64bit
+
+
 # Expose FTP, SSH port and HTTP port
 EXPOSE  21 22 8001 8002 8003 8888
 

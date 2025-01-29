@@ -78,7 +78,6 @@ setup(
         "python-socketio[asyncio]==5.11.4",
         "ashlarUC2", 
         "jupyterlab==4.2.5",
-        "VimbaPython==1.2.1"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

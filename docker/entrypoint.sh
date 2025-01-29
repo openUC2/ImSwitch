@@ -106,6 +106,7 @@ then
     echo "${params[@]}"
     python3 /tmp/ImSwitch/main.py $params
 else
+    source /opt/conda/bin/activate imswitch
     echo 'Starting the container in terminal mode'
     exec bash
 fi

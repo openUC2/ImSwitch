@@ -21,6 +21,10 @@
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22  -e UPDATE_INSTALL_GIT=1  -e PIP_PACKAGES="arkitekt UC2-REST"  -e CONFIG_PATH=/Users/bene/Downloads  -e DATA_PATH=/Users/bene/Downloads  -v ~/Documents/imswitch_docker/imswitch_git:/tmp/ImSwitch-changes  -v ~/Documents/imswitch_docker/imswitch_pip:/persistent_pip_packages  -v /media/uc2/SD2/:/dataset  -v ~/Downloads:/config  --privileged imswitch_hik
 # sudo docker pull docker pull ghcr.io/openuc2/imswitch-noqt-x64:latest
 
+# sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -v ~:/config  -e CONFIG_PATH=/config -e CONFIG_FILE=example_uc2_vimba.json -e UPDATE_GIT=0 -e UPDATE_CONFIG=0 --privileged ghcr.io/openuc2/imswitch-noqt-x64:latest
+
+
+
 # Witht he following configuration we can do the following:
 # 1. Update the ImSwitch repository and install the changes and make them persistent by mounting a volume to /tmp/ImSwitch-changes and /persistent_pip_packages respectively
 # both of which are mounted to the host machine directories
@@ -215,10 +219,10 @@ RUN wget https://downloads.alliedvision.com/Vimba_v6.0_ARM64.tgz -O /tmp/Vimba_a
     cd /opt/Vimba_6_0/VimbaUSBTL && \
     ./Install.sh
 
-# Install Python bindings and pymba
+# Install Python bindings and VimbaPython   
 RUN cd /opt/Vimba_6_0/VimbaPython/Source && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ." && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install pymba"
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/alliedvision/VimbaPython/archive/refs/heads/master.zip"
 
 # Set environment variable for GenTL detection
 ENV GENICAM_GENTL64_PATH="${GENICAM_GENTL64_PATH}:/opt/Vimba_6_0/VimbaUSBTL/CTI/arm_64bit"

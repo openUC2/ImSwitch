@@ -322,7 +322,7 @@ class SettingsController(ImConWidgetController):
 
     def updateParamsFromDetector(self, *, detector):
         """ Update the parameter values from the detector. """
-
+        if IS_HEADLESS: return
         params = self.allParams[detector.name]
 
         # Detector parameters

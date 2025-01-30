@@ -12,6 +12,7 @@ from .HistogrammController import HistogrammController
 from .STORMReconController import STORMReconController
 from .HoliSheetController import HoliSheetController
 from .FlowStopController import FlowStopController
+from .LepmonController import LepmonController
 from .ObjectiveController import ObjectiveController
 from .TemperatureController import TemperatureController
 from .SquidStageScanController import SquidStageScanController

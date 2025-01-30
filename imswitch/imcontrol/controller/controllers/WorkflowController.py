@@ -67,6 +67,14 @@ try:
 except ImportError:
     IS_ASHLAR_AVAILABLE = False
 
+from pydantic import BaseModel
+from typing import List, Tuple, Dict
+
+class XYZScanRequest(BaseModel):
+    coords: List[Tuple[float, float, float]]
+    illuminations: List[Dict[str, float]]  # e.g. [{"LED": 100}, {"Laser": 50}]
+    file_name: str
+    autofocus_on: bool = False
 
 
 class ScanParameters(BaseModel):
@@ -654,3 +662,148 @@ class WorkflowController(LiveUpdatedController):
 
 
 
+
+
+
+    @APIExport(requestType="POST")
+    def start_xyz_histo_workflow_by_list(self,
+        req: XYZScanRequest,  # The pydantic model above
+    ):
+        if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
+            raise HTTPException(status_code=400, detail="Another workflow is already running.")
+
+        if not self.mDetector._running:
+            self.mDetector.startAcquisition()
+
+        coords = req.coords
+        illuminations = req.illuminations
+        file_name = req.file_name
+        autofocus_on = req.autofocus_on
+
+        # Either use `file_name` directly, or create a temporary directory
+        # For example, if file_name is just a base, store a .zarr there:
+        store_path = file_name + str(np.random.randint(0,100000))
+        self._logger.debug("Zarr store path: " + store_path)
+
+        dataset = open_ome_zarr(store_path, layout="tiled", mode="a", channel_names=["Mono"])
+        # If the shape is unknown beforehand, you can guess or wait until images come in.
+        # For demonstration, let's define a 512 x 512 tile shape:
+        tile_shape = (512, 512)
+        dtype = "uint16"
+        # If you know how many positions exist, you could do:
+        # grid_shape = (len(coords), len(illuminations)) # or something more advanced
+        # but if it's purely 2D, you can do 1D scanning in "tiles"
+        tiles = dataset.make_tiles("tiled_raw", grid_shape=(len(coords), len(illuminations)), tile_shape=tile_shape, dtype=dtype)
+
+        # Build workflow steps
+        workflowSteps = []
+        step_id = 0
+
+        # If we want to run autofocus before every XY move:
+        pre_for_xy = [self.autofocus] if autofocus_on else []
+
+        def update_tile_indices(context: WorkflowContext, metadata: Dict[str, Any]):
+            """
+            Example: If you want to store tile indices in metadata, do so here.
+            This depends on how you want to map coords + illuminations to tile row/col.
+            For simplicity, let row = index of coords, col = index of illumination
+            stored in metadata.
+            """
+            row = metadata.get("coord_index", 0)
+            col = metadata.get("illum_index", 0)
+            metadata["IndexX"] = col
+            metadata["IndexY"] = row
+            context.update_metadata("global", "last_col", col)
+            context.update_metadata("global", "last_row", row)
+
+        for c_i, (x, y, z) in enumerate(coords):
+            # Move XY
+            workflowSteps.append(WorkflowStep(
+                name=f"Move XY to ({x}, {y})",
+                step_id=str(step_id),
+                main_func=self.move_stage_xy,
+                main_params={"posX": x, "posY": y, "relative": False},
+                pre_funcs=pre_for_xy,
+                post_funcs=[]
+            ))
+            step_id += 1
+
+            # Move Z
+            workflowSteps.append(WorkflowStep(
+                name=f"Move Z to {z}",
+                step_id=str(step_id),
+                main_func=self.move_stage_z,
+                main_params={"posZ": z, "relative": False},
+                pre_funcs=[],
+                post_funcs=[]
+            ))
+            step_id += 1
+
+            for ill_i, illum_dict in enumerate(illuminations):
+                # e.g. illum_dict = {"LED": 100} or {"Laser": 50, "AnotherChannel": 80}
+                for channel_name, power in illum_dict.items():
+                    # set laser power
+                    workflowSteps.append(WorkflowStep(
+                        name=f"Set {channel_name} power to {power}",
+                        step_id=str(step_id),
+                        main_func=self.set_laser_power,
+                        main_params={"power": power, "channel": channel_name},
+                        pre_funcs=[],
+                        post_funcs=[]
+                    ))
+                    step_id += 1
+
+                    # Acquire frame
+                    # Possibly define a function that sets 'coord_index' and 'illum_index' in the metadata
+                    # so you can compute tile positions in update_tile_indices
+                    
+                    # have a seperate step to udpate indicees
+                    def set_indices(context: WorkflowContext, metadata: Dict[str, Any]):
+                        metadata["coord_index"] = c_i
+                        metadata["illum_index"] = ill_i
+                    
+                    workflowSteps.append(WorkflowStep(
+                        name=f"Update indices",
+                        main_func=self.dummy_main_func,
+                        main_params={},
+                        step_id=str(step_id),
+                        pre_funcs=[set_indices],
+                    ))
+
+                    workflowSteps.append(WorkflowStep(
+                        name=f"Acquire frame {channel_name}",
+                        step_id=str(step_id),
+                        main_func=self.acquire_frame,
+                        main_params={"channel": "Mono"},  # or channel_name if your camera channel naming matches
+                        pre_funcs=[self.wait_time],
+                        pre_params={"seconds": 0.1},
+                        post_funcs=[self.process_data, self.save_frame_zarr, update_tile_indices],
+                    ))
+                    step_id += 1
+
+                    # Optionally turn off the illumination after acquiring
+                    workflowSteps.append(WorkflowStep(
+                        name=f"Turn off {channel_name}",
+                        step_id=str(step_id),
+                        main_func=self.set_laser_power,
+                        main_params={"power": 0, "channel": channel_name},
+                    ))
+                    step_id += 1
+
+        # Close Zarr dataset
+        workflowSteps.append(WorkflowStep(
+            name="Close Zarr dataset",
+            step_id=str(step_id),
+            main_func=self.close_zarr,
+            main_params={},
+        ))
+
+        # Create Workflow & Context
+        wf = Workflow(workflowSteps)
+        context = WorkflowContext()
+        context.set_object("zarr_writer", {"tiles": tiles})
+        context.set_object("data_buffer", deque())
+        # Start the workflow
+        self.workflow_manager.start_workflow(wf, context)
+
+        return {"status": "started", "store_path": store_path}

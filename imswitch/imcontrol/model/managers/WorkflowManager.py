@@ -153,14 +153,20 @@ class Workflow:
         self.manager = manager  # so we know who to notify
 
     def run(self, context: Optional[WorkflowContext] = None):
-        context = context or WorkflowContext()
-        for i in range(context.current_step_index, len(self.steps)):
-            if context.should_stop:
-                break
-            step = self.steps[i]
-            step.run(context)
-            context.current_step_index = i + 1
-        return context
+        try:
+            context = context or WorkflowContext()
+            for i in range(context.current_step_index, len(self.steps)):
+                if context.should_stop:
+                    break
+                step = self.steps[i]
+                step.run(context)
+                context.current_step_index = i + 1
+            return context
+        except Exception as e:
+            print(e)
+            context.emit_event("progress", {"status": "failed", "error": str(e), "traceback": traceback.format_exc()})
+            # stop the workflow if an exception occurs
+            return context
 
     def run_in_background(self, context: Optional[WorkflowContext] = None):
         context = context or WorkflowContext()

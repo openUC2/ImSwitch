@@ -35,6 +35,7 @@ from .JetsonNanoManager import JetsonNanoManager
 from .HistoScanManager import HistoScanManager
 from .WorkflowManager import WorkflowManager
 from .FlowStopManager import FlowStopManager
+from .LepmonManager import LepmonManager
 from .FlatfieldManager import FlatfieldManager
 from .PixelCalibrationManager import PixelCalibrationManager
 from .ISMManager import ISMManager

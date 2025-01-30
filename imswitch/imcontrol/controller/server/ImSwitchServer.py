@@ -23,8 +23,7 @@ import uvicorn
 from functools import wraps
 import os
 import socket
-import os
-
+from typing import List, Dict
 from imswitch import IS_HEADLESS, __ssl__, __httpport__
 
 import socket
@@ -120,37 +119,28 @@ class FileSystemItem(BaseModel):
 
 
 # Utility: List files/folders
-import os
-
-def list_items(base_path: str) -> List[dict]:
-    """
-    List files and directories under the given base path.
-    Appends '/' at the start of paths and generates preview URLs.
-    """
+def list_items(base_path: str) -> List[Dict]:
     items = []
-    for root, dirs, files in os.walk(base_path):
-        for name in dirs + files:
-            # Full path and relative path
-            full_path = os.path.join(root, name)
-            relative_path = os.path.relpath(full_path, BASE_DIR)
 
-            # Add '/' at the start of the path
-            formatted_path = f"/{relative_path.replace(os.path.sep, '/')}"  
+    def scan_directory(path):
+        with os.scandir(path) as it:
+            for entry in it:
+                full_path = entry.path
+                rel_path = f"/{os.path.relpath(full_path, BASE_DIR).replace(os.path.sep, '/')}"
+                preview_url = f"/preview{rel_path}" if entry.is_file() else None
+                items.append({
+                    "name": entry.name,
+                    "isDirectory": entry.is_dir(),
+                    "path": rel_path,
+                    "size": entry.stat().st_size if entry.is_file() else None,
+                    "filePreviewPath": preview_url
+                })
+                if entry.is_dir():
+                    scan_directory(full_path)
 
-            # Generate file preview URL if it's a file
-            preview_url = None
-            if os.path.isfile(full_path):  # Skip unsupported files
-                preview_url = "/preview"+formatted_path
-
-            # Append file/folder details to the list
-            items.append({
-                "name": name,
-                "isDirectory": os.path.isdir(full_path),
-                "path": formatted_path,  # Path starts with '/'
-                "size": os.path.getsize(full_path) if os.path.isfile(full_path) else None,
-                "filePreviewPath": preview_url  # Optional preview URL for supported files
-            })
+    scan_directory(base_path)
     return items
+
 
 
 @app.get("/preview/{file_path:path}")

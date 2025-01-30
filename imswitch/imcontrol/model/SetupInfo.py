@@ -267,6 +267,10 @@ class FlowStopInfo:
     pass
 
 @dataclass(frozen=True)
+class LepmonInfo:
+    pass
+
+@dataclass(frozen=True)
 class FlatfieldInfo:
     pass
 
@@ -534,6 +538,9 @@ class SetupInfo:
     FlowStop:  Optional[FlowStopInfo] = field(default_factory=lambda: None)
     """ FlowStop settings. Required to be defined to use FlowStop functionality. """
 
+    Lepmon: Optional[LepmonInfo] = field(default_factory=lambda: None)
+    """ Lepmon settings. Required to be defined to use Lepmon functionality. """
+    
     Flatfield: Optional[FlatfieldInfo] = field(default_factory=lambda: None)
     """ Flatfield settings. Required to be defined to use Flatfield functionality. """
     

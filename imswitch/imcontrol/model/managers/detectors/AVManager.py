@@ -13,7 +13,7 @@ class AVManager(DetectorManager):
     - ``cameraListIndex`` -- the camera's index in the Allied Vision camera list (list
       indexing starts at 0); set this string to an invalid value, e.g. the
       string "mock" to load a mocker
-    - ``av`` -- dictionary of Allied Vision camera properties
+    - ``avcam`` -- dictionary of Allied Vision camera properties
     """
 
     def __init__(self, detectorInfo, name, **_lowLevelManagers):

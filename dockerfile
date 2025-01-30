@@ -207,9 +207,9 @@ ENV GENICAM_GENTL64_PATH="${GENICAM_GENTL64_PATH}:/opt/Vimba_6_0/VimbaUSBTL/CTI/
 
 # install IOHub - as it will be installed via ImSwitch again
 #         "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
-RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
-cd /root/iohub && \
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /root/iohub"
+#RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
+#cd /root/iohub && \
+#/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /root/iohub"
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching

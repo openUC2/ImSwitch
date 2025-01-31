@@ -64,7 +64,7 @@ setup(
         "opencv-python",
         "imjoy_rpc",
         "imjoy",
-        "aiortc >= 1.3.0",
+        "aiortc == 1.9.0",
         "UC2-REST",
         "tk >= 0.1.0",
         "jupyter",
@@ -77,10 +77,7 @@ setup(
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "ashlarUC2", 
-        "jupyterlab==4.2.5",
-        "iohub==0.2.0a1", 
-
-        ],
+        "jupyterlab==4.2.5",        ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
         'PyQt5': [
@@ -96,6 +93,8 @@ setup(
         ],
         'Ashlar': [
             "ashlarUC2",
+            "iohub==0.2.0a1", 
+
         ],
         'arkitet':
             [

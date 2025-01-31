@@ -207,9 +207,24 @@ ENV GENICAM_GENTL64_PATH="${GENICAM_GENTL64_PATH}:/opt/Vimba_6_0/VimbaUSBTL/CTI/
 
 # install IOHub - as it will be installed via ImSwitch again
 #         "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
+RUN /opt/conda/bin/conda install -n imswitch -y -c conda-forge \
+    pandas>=1.5.2 \
+    pydantic>=2.8.2 \
+    pydantic_extra_types>=2.9.0 \
+    tifffile>=2024.1.30 \
+    natsort>=7.1.1 \
+    ndtiff>=2.2.1 \
+    zarr>=2.17.0,<3 \
+    tqdm \
+    pillow>=9.4.0 \
+    blosc2 \
+    xarray>=2024.1.1 \
+    dask
+# Then install iohub WITHOUT letting pip build or reinstall deps:
 RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
-cd /root/iohub && \
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /root/iohub"
+    cd /root/iohub && \
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && \
+                  pip install --no-deps --no-build-isolation /root/iohub"
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching

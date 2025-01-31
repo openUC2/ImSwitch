@@ -161,14 +161,14 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==
 # Install UC2-REST first - as it will be installed via ImSwitch again
 RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \
     cd /tmp/UC2-REST && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/UC2-REST"
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
 
 
 # first install all the dependencies not not to install them again in a potential "breaking update"
 # Clone the repository and install dependencies
 RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
     cd /tmp/ImSwitch && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/ImSwitch"
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
 
 # Clone the config folder
 RUN git clone https://github.com/openUC2/ImSwitchConfig /root/ImSwitchConfig
@@ -207,9 +207,9 @@ ENV GENICAM_GENTL64_PATH="${GENICAM_GENTL64_PATH}:/opt/Vimba_6_0/VimbaUSBTL/CTI/
 
 # install IOHub - as it will be installed via ImSwitch again
 #         "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
-#RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
-#cd /root/iohub && \
-#/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /root/iohub"
+RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
+cd /root/iohub && \
+/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /root/iohub"
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching
@@ -223,12 +223,12 @@ RUN cd /root/ImSwitchConfig && \
 # now update potential breaking changes
 RUN cd /tmp/ImSwitch && \
     git pull && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/ImSwitch"
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
 
 # Install UC2-REST
 RUN cd /tmp/UC2-REST && \
     git pull && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install -e /tmp/UC2-REST"
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
 
 # Expose FTP, SSH port and HTTP port
 EXPOSE  21 22 8001 8002 8003 8888 8889

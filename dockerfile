@@ -207,7 +207,7 @@ ENV GENICAM_GENTL64_PATH="${GENICAM_GENTL64_PATH}:/opt/Vimba_6_0/VimbaUSBTL/CTI/
 
 # install IOHub - as it will be installed via ImSwitch again
 #         "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
-RUN /opt/conda/bin/conda install -n imswitch -y -c conda-forge \
+RUN /opt/conda/bin/conda install -c conda-forge \
     pandas>=1.5.2 \
     pydantic>=2.8.2 \
     pydantic_extra_types>=2.9.0 \

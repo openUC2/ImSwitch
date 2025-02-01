@@ -152,6 +152,7 @@ RUN echo "listen=YES" >> /etc/vsftpd.conf && \
 RUN /opt/conda/bin/conda install numcodecs=0.15.0
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
     conda install scikit-image=0.19.3 -c conda-forge"
+    
 
 # fix the version of OME-ZARR 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
@@ -207,6 +208,7 @@ ENV GENICAM_GENTL64_PATH="${GENICAM_GENTL64_PATH}:/opt/Vimba_6_0/VimbaUSBTL/CTI/
 
 # install IOHub - as it will be installed via ImSwitch again
 #         "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install --no-cache-dir Cython"
 RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
     cd /root/iohub && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && \

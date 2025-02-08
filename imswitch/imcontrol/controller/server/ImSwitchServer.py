@@ -87,7 +87,7 @@ if not os.path.exists(BASE_DIR):
 # Pydantic Model for folder creation
 class CreateFolderRequest(BaseModel):
     name: str
-    parentId: str | None = None  # Optional parent folder
+    parentId: Optional[str] = None
 
 # 📁 Create a Folder
 @app.post("/folder")

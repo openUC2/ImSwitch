@@ -74,8 +74,7 @@ class ImConMainController(MainController):
                         mPlugin, widget)
                 except Exception as e:
                     self.__logger.debug(e)
-                    raise ValueError(f'No controller found for widget {widgetKey}')
-                    
+                    _
         # Generate API
         self.__api = None
         apiObjs = list(self.controllers.values()) + [self.__commChannel]

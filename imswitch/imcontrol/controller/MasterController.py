@@ -60,7 +60,7 @@ class MasterController:
         self.jetsonnanoManager = JetsonNanoManager(self.__setupInfo.jetsonnano)
         if "HistoScan" in self.__setupInfo.availableWidgets: self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "FlowStop" in self.__setupInfo.availableWidgets: self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
-        if "Lepmon" in self.__setupInfo.availableWidgets: self.LepMonController = LepmonManager(self.__setupInfo.Lepmon)
+        if "Lepmon" in self.__setupInfo.availableWidgets: self.LepmonManager = LepmonManager(self.__setupInfo.Lepmon)
         if "FlatField" in self.__setupInfo.availableWidgets: self.FlatfieldManager = FlatfieldManager(self.__setupInfo.Flatfield)
         if "PixelCalibration" in self.__setupInfo.availableWidgets: self.PixelCalibrationManager = PixelCalibrationManager(self.__setupInfo.PixelCalibration)
         if "AutoFocus" in self.__setupInfo.availableWidgets: self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)

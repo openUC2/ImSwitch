@@ -141,8 +141,7 @@ class SignalInstance(psygnal.SignalInstance):
 
                     # Korrekt asynchron aufrufen
                     try:
-                        message_to_send = json.loads(message)
-                        loop.run_until_complete(sio.emit("signal", message_to_send))
+                        loop.run_until_complete(sio.emit("signal", message))
                     except Exception as e:
                         print(f"Error loading message: {e}")
                         return

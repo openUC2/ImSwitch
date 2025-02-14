@@ -89,7 +89,8 @@ class PositionerController(ImConWidgetController):
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)
             self._master.positionersManager[positionerName].move(dist, axis)
-        self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
+        if isBlocking: # push signal immediately
+            self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
         #self.updatePosition(positionerName, axis)
 
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):

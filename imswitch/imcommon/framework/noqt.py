@@ -54,7 +54,7 @@ class SignalInstance(psygnal.SignalInstance):
             return
 
         # Skip large data signals
-        if self.name in ["sigUpdateImage", "sigImageUpdated"]:
+        if self.name in ["sigUpdateImage"]: #, "sigImageUpdated"]:
             if SOCKET_STREAM:
                 self._handle_image_signal(args)
             return
@@ -70,6 +70,7 @@ class SignalInstance(psygnal.SignalInstance):
         
     def _handle_image_signal(self, args):
         """Compress and broadcast image signals."""
+        detectorName = args[0]
         try:
             for arg in args:
                 if isinstance(arg, np.ndarray):
@@ -94,8 +95,9 @@ class SignalInstance(psygnal.SignalInstance):
                     # Create a minimal message
                     message = {
                         "name": self.name,
+                        "detectorname": detectorName,
+                        "format": "jpeg", 
                         "image": encoded_image,
-                        "format": "jpeg"
                     }
                     self._safe_broadcast_message(message)
                     del message
@@ -123,7 +125,7 @@ class SignalInstance(psygnal.SignalInstance):
         """Throttle the emit to avoid task buildup."""
         now = time.time()
         if now - self.last_emit_time < self.emit_interval:
-            print("too fast")
+            # print("too fast")
             return  # Skip if emit interval hasn't passed
         self.last_emit_time = now
 
@@ -138,11 +140,19 @@ class SignalInstance(psygnal.SignalInstance):
                     asyncio.set_event_loop(loop)
 
                     # Korrekt asynchron aufrufen
-                    loop.run_until_complete(sio.emit("signal", json.dumps(message)))
+                    try:
+                        message_to_send = json.loads(message)
+                        loop.run_until_complete(sio.emit("signal", message_to_send))
+                    except Exception as e:
+                        print(f"Error loading message: {e}")
+                        return
+                        
                 
                 def send_message(message):
                     t = threading.Thread(target=thread_worker, args=(message,))
                     t.start()
+                if type(mMessage) == dict:
+                    mMessage = json.dumps(mMessage)
                 send_message(mMessage)
                 #asyncio.run_coroutine_threadsafe(send_message(), asyncio.new_event_loop())
                 #asyncio.run_coroutine_threadsafe(sio.emit("signal", json.dumps(mMessage)), asyncio.new_event_loop())

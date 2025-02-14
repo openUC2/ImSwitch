@@ -274,6 +274,39 @@ class HistoScanController(LiveUpdatedController):
             self._widget.setSampleLayouts(self.allScanParameters)
             self._widget.samplePicker.currentIndexChanged.connect(self._widget.loadSampleLayout)
 
+
+    @APIExport(runOnUIThread=False)
+    def getPreviewCameraImage(self, resizeFactor: float=1) -> Response:
+        '''
+        Taking a snap and return it as a FastAPI Response object.
+        detectorName: the name of the detector to take the snap from. If None, take the snap from the first detector.
+        resizeFactor: the factor by which to resize the image. If <1, the image will be downscaled, if >1, nothing will happen.
+        '''
+        # Create a 2D NumPy array representing the image
+        frame = self.webCamDetector.getLatestFrame() # X,Y,C, uint8 numpy array
+        if frame is None: 
+            return
+        if len(frame.shape)==2:
+            frame = np.repeat(frame[:,:,np.newaxis], 3, axis=2)
+
+        # eventually resize image to save bandwidth
+        if resizeFactor <1:
+            image = cv2.resize(frame, (0,0), fx=resizeFactor, fy=resizeFactor)
+        else:
+            image = frame   
+        # using an in-memory image
+        im = Image.fromarray(image)
+        
+        # save image to an in-memory bytes buffer
+        # save image to an in-memory bytes buffer
+        with io.BytesIO() as buf:
+            im = im.convert('L')  # convert image to 'L' mode
+            im.save(buf, format='PNG')
+            im_bytes = buf.getvalue()
+            
+        headers = {'Content-Disposition': 'inline; filename="test.png"'}
+        return Response(im_bytes, headers=headers, media_type='image/png')
+    
     @APIExport()
     def computeOptimalScanStepSize(self, overlap: float = 0.75):
         mFrameSize = (self.microscopeDetector._camera.SensorHeight, self.microscopeDetector._camera.SensorWidth)

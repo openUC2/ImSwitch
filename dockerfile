@@ -140,7 +140,7 @@ ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/li
 RUN apt-get update && apt-get install -y vsftpd
 
 # Configure vsftpd
-RUN echo "listen=YES" >> /etc/vsftpd.conf && \
+RUN echo "listen=YES"  >> /etc/vsftpd.conf && \
     echo "anonymous_enable=YES" >> /etc/vsftpd.conf && \
     echo "anon_root=/dataset" >> /etc/vsftpd.conf && \
     echo "local_enable=YES" >> /etc/vsftpd.conf && \

@@ -155,7 +155,7 @@ class CameraOpenCV:
         from sys import platform
         if self.camera is not None:
             self.camera.release()
-        if platform == "linux" or platform == "linux2":
+        if platform == "linux" or platform == "linux2" or platform == "darwin":
             self.camera = cv2.VideoCapture(cameraindex)
         else:
             self.camera = cv2.VideoCapture(cameraindex, cv2.CAP_DSHOW)

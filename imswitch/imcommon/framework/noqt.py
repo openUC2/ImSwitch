@@ -43,6 +43,8 @@ class SignalInterface(abstract.SignalInterface):
 class SignalInstance(psygnal.SignalInstance):
     last_emit_time = 0
     emit_interval = 0.05  # Emit at most every 100ms
+    last_image_emit_time = 0
+    image_emit_interval = 0.2  # Emit at most every 200ms
 
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
@@ -55,8 +57,10 @@ class SignalInstance(psygnal.SignalInstance):
 
         # Skip large data signals
         if self.name in ["sigUpdateImage"]:  #, "sigImageUpdated"]:
-            if SOCKET_STREAM:
+            now = time.time()
+            if SOCKET_STREAM and (now - self.last_image_emit_time > self.image_emit_interval):
                 self._handle_image_signal(args)
+                self.last_image_emit_time = now
             return
 
         try:

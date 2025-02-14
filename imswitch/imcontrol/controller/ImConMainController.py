@@ -74,7 +74,7 @@ class ImConMainController(MainController):
                         mPlugin, widget)
                 except Exception as e:
                     self.__logger.debug(e)
-                    _
+                    
         # Generate API
         self.__api = None
         apiObjs = list(self.controllers.values()) + [self.__commChannel]

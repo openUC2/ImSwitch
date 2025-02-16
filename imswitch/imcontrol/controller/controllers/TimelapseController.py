@@ -30,6 +30,7 @@ class TimelapseWorkflowParams(BaseModel):
     exposureTimes: List[float] = []
     gain: List[float] = []
     autofocus_every_n_frames: int = 0 # -1 means never
+    isPreview: bool = False
 
     
 class TimelapseController(ImConWidgetController):
@@ -123,6 +124,28 @@ class TimelapseController(ImConWidgetController):
         tiff_writer.save(img)
         metadata["frame_saved"] = True
         
+    def append_frame_to_stack(self, context: WorkflowContext, metadata: Dict[str, Any]):
+        # Retrieve the stack writer and append the frame
+        # if we have one stack "full", we need to reset the stack
+        stack_writer = context.get_object("stack_writer")
+        if stack_writer is None:
+            self._logger.debug("No stack writer found in context!")
+            return
+        img = metadata["result"]
+        stack_writer.append(img)
+        context.set_object("stack_writer", stack_writer)
+        metadata["frame_saved"] = True
+        
+    def emit_rgb_stack(self, context: WorkflowContext, metadata: Dict[str, Any]):
+        stack_writer = context.get_object("stack_writer")
+        if stack_writer is None:
+            self._logger.debug("No stack writer found in context!")
+            return
+        rgb_stack = np.stack(stack_writer, axis=-1)
+        context.emit_event("rgb_stack", {"rgb_stack": rgb_stack})
+        stack_writer = []
+        context.set_object("stack_writer", stack_writer)
+        
     def set_laser_power(self, power: float, channel: str):
         if channel not in self.allIlluNames:
             self._logger.error(f"Channel {channel} not found in available lasers: {self.allIlluNames}")
@@ -157,6 +180,7 @@ class TimelapseController(ImConWidgetController):
         exposureTimes: List[float] = [0.1, 0.1]
         gain: List[float] = [1.0, 1.0]
         autofocus_on: bool = False
+        isPreview: bool = False -> if we use preview mode, we do not save the data, we only show it via Socket Updates
         '''
         
         # assign parameters to global variables
@@ -168,6 +192,7 @@ class TimelapseController(ImConWidgetController):
         gains = params.gain
         intensities = params.illuIntensities
         autofocus_every_nth_frame = params.autofocus_every_n_frames
+        isPreview = params.isPreview
         
         # ensure parameters are lists 
         if not isinstance(illuSources, list): illuSources = [illuSources]
@@ -200,7 +225,7 @@ class TimelapseController(ImConWidgetController):
                     main_params={"power": intensity, "channel": illu},
                     pre_funcs=[],
                     post_funcs=[self.wait_time], # add a short wait
-                    post_params={"seconds": 0.1}
+                    post_params={"seconds": 0.05}
                 ))
                 
                 # Acquire frame with a short wait, process data, and save frame
@@ -209,7 +234,7 @@ class TimelapseController(ImConWidgetController):
                     step_id=str(step_id),
                     main_func=self.acquire_frame,
                     main_params={"channel": "Mono"},
-                    post_funcs=[self.save_frame_tiff],
+                    post_funcs=[self.save_frame_tiff] if not isPreview else [self.append_frame_to_stack],
                     pre_funcs=[self.set_exposure_time_gain],
                     pre_params={"exposure_time": exposure, "gain": gain}
                 ))
@@ -236,16 +261,26 @@ class TimelapseController(ImConWidgetController):
                 ))
                                         
             # add delay between frames 
-            workflowSteps.append(WorkflowStep(
-                name=f"Wait for next frame",
-                step_id=str(step_id),
-                main_func=self.dummy_main_func,
-                main_params={}, 
-                pre_funcs=[self.wait_time],
-                pre_params={"seconds": tPeriod}  
-            ))
+            if isPreview:
+                workflowSteps.append(WorkflowStep(
+                    name=f"Display frame",
+                    step_id=str(step_id),
+                    main_func=self.dummy_main_func,
+                    main_params={}, 
+                    pre_funcs=[self.emit_rgb_stack],
+                    pre_params={}  
+                ))
+            else:
+                workflowSteps.append(WorkflowStep(
+                    name=f"Wait for next frame",
+                    step_id=str(step_id),
+                    main_func=self.dummy_main_func,
+                    main_params={}, 
+                    pre_funcs=[self.wait_time],
+                    pre_params={"seconds": tPeriod}  
+                ))
 
-            step_id += 1
+                step_id += 1
         
         # Close TIFF writer at the end
         workflowSteps.append(WorkflowStep(
@@ -271,19 +306,37 @@ class TimelapseController(ImConWidgetController):
         # Create a workflow and context
         wf = Workflow(workflowSteps, self.workflow_manager)
         context = WorkflowContext()
-        # Insert the tiff writer object into context so `save_frame` can use it
-        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.Data
-        dirPath = os.path.join(drivePath, 'recordings', timeStamp)
-        if not os.path.exists(dirPath):
-            os.makedirs(dirPath)        
-        self._logger.debug("Save TIF at: " + dirPath)
-        experimentName = "Timelapse"
-        mFileName = f'{timeStamp}_{experimentName}'
-        mFilePath = os.path.join(dirPath, mFileName+ ".tif")
-        tiff_writer = tif.TiffWriter(mFilePath)
-        context.set_object("tiff_writer", tiff_writer)
+        # set meta data of the workflow
+        context.set_metadata("nTimes", nTimes)
+        context.set_metadata("tPeriod", tPeriod)
+        context.set_metadata("illuSources", illuSources)
+        context.set_metadata("illuIntensities", intensities)
+        context.set_metadata("exposureTimes", exposureTimes)
+        context.set_metadata("gains", gains)
+        context.set_metadata("autofocus_every_nth_frame", autofocus_every_nth_frame)
+        context.set_metadata("isPreview", isPreview)
+        
+        if isPreview:
+            # we assume that we are in preview mode and do not save the data
+            # but we want to show it via Socket Updates
+            # therefore, we accumulate n frames in a list and display them as an RGB image
+            stack_writer = []
+            context.set_object("stack_writer", stack_writer)
+        else:
+            # Insert the tiff writer object into context so `save_frame` can use it
+            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            drivePath = dirtools.UserFileDirs.Data
+            dirPath = os.path.join(drivePath, 'recordings', timeStamp)
+            if not os.path.exists(dirPath):
+                os.makedirs(dirPath)        
+            self._logger.debug("Save TIF at: " + dirPath)
+            experimentName = "Timelapse"
+            mFileName = f'{timeStamp}_{experimentName}'
+            mFilePath = os.path.join(dirPath, mFileName+ ".tif")
+            tiff_writer = tif.TiffWriter(mFilePath)
+            context.set_object("tiff_writer", tiff_writer)
         context.on("progress", sendProgress)
+        context.on("rgb_stack", sendProgress)
         # Run the workflow
         # context = wf.run_in_background(context)
         self.workflow_manager.start_workflow(wf, context)

@@ -42,9 +42,9 @@ class SignalInterface(abstract.SignalInterface):
 
 class SignalInstance(psygnal.SignalInstance):
     last_emit_time = 0
-    emit_interval = 0.05  # Emit at most every 100ms
+    emit_interval = 0.0  # Emit at most every 100ms
     last_image_emit_time = 0
-    image_emit_interval = 0.2  # Emit at most every 200ms
+    image_emit_interval = 0.0  # Emit at most every 200ms
 
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
@@ -75,6 +75,7 @@ class SignalInstance(psygnal.SignalInstance):
     def _handle_image_signal(self, args):
         """Compress and broadcast image signals."""
         detectorName = args[0]
+        pixelSize = np.min(args[3])
         try:
             for arg in args:
                 if isinstance(arg, np.ndarray):
@@ -100,6 +101,7 @@ class SignalInstance(psygnal.SignalInstance):
                     message = {
                         "name": self.name,
                         "detectorname": detectorName,
+                        "pixelsize": pixelSize,
                         "format": "jpeg", 
                         "image": encoded_image,
                     }

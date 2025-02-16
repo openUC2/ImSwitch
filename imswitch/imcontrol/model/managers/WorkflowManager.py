@@ -27,6 +27,9 @@ class WorkflowContext:
         self.event_listeners: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
         self.objects: Dict[str, Any] = {}  # Storage for arbitrary objects
     
+    def set_metadata(self, key: str, value: Any):
+        self.data[key] = value
+    
     def set_object(self, key: str, obj: Any):
         self.objects[key] = obj
     

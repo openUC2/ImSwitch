@@ -6,7 +6,8 @@ from .ConsoleView import ConsoleView
 try:
     from .EditorView import EditorView
     editorViewAvailable = True
-except:
+except Exception as e:
+    print(e)
     editorViewAvailable = False
 from .FilesView import FilesView
 from .OutputView import OutputView

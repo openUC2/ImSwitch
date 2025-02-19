@@ -120,6 +120,8 @@ class SignalInstance(psygnal.SignalInstance):
                 data["args"][param_name] = arg.tolist().copy()
             elif isinstance(arg, (str, int, float, bool)):
                 data["args"][param_name] = arg
+            elif isinstance(arg, dict):
+                data["args"][param_name] = arg.copy()
             else:
                 data["args"][param_name] = str(arg)
 

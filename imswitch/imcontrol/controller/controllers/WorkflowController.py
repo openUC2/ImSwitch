@@ -91,8 +91,8 @@ class ScanParameters(BaseModel):
     
 
 class HistoStatus(BaseModel):
-    currentPosition: Optional[Tuple[float, float]] = None
-    isWorkflowRunning: bool = False
+    currentPosition: Optional[Tuple[float, float, int, int]] = None  # X, Y, nX, nY
+    ishistoscanRunning: bool = False
     stitchResultAvailable: bool = False
     mScanIndex: int = 0
     mScanCount: int = 0
@@ -110,6 +110,34 @@ class HistoStatus(BaseModel):
     currentTimeInterval: Optional[float] = None
     currentNtimes: int = 1
     pixelSize: float = 1.0
+    
+    # GUI-Specific Parameters
+    illuminationSources: List[str] = ["Brightfield", "Darkfield", "Laser", "DPC"]
+    selectedIllumination: Optional[str] = "Brightfield"
+    laserWavelengths: List[float] = [405, 488, 532, 635, 785, 10]  # in nm
+    selectedLaserWavelength: float = 488.0
+    
+    # Time-lapse parameters
+    timeLapsePeriod: float = 330.4  # s
+    timeLapsePeriodMin: float = 1.0
+    timeLapsePeriodMax: float = 1000.0
+    numberOfImages: int = 652
+    numberOfImagesMin: int = 1
+    numberOfImagesMax: int = 1000
+    
+    # Autofocus parameters
+    autofocusMinFocusPosition: float = 0.0
+    autofocusMaxFocusPosition: float = 0.0
+    autofocusStepSize: float = 0.1
+    autofocusStepSizeMin: float = 0.01
+    autofocusStepSizeMax: float = 10.0
+    
+    # Z-Stack parameters
+    zStackMinFocusPosition: float = 0.0
+    zStackMaxFocusPosition: float = 0.0
+    zStackStepSize: float = 0.1
+    zStackStepSizeMin: float = 0.01
+    zStackStepSizeMax: float = 10.0
 
     @staticmethod
     def from_dict(status_dict: dict) -> "HistoStatus":
@@ -447,6 +475,9 @@ class WorkflowController(LiveUpdatedController):
     def setWorkflowStatus(self, status: HistoStatus) -> bool:
         return True
 
+    @APIExport()
+    def getWorkflowStatus(self) -> HistoStatus:
+        return HistoStatus.from_dict(self.status.to_dict())
 
     ########################################
     # Transmit Worflow Definition via API

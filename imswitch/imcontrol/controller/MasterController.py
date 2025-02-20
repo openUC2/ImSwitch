@@ -7,7 +7,7 @@ from imswitch.imcontrol.model import (
     RecordingManager, RS232sManager, SLMManager, SIMManager, DPCManager, LEDMatrixsManager, MCTManager, ROIScanManager, MockXXManager, WebRTCManager, HyphaManager,
     ISMManager, UC2ConfigManager, AutofocusManager, HistoScanManager, PixelCalibrationManager, LightsheetManager, NidaqManager, FOVLockManager,
     StandManager, RotatorsManager, JetsonNanoManager, LEDsManager, ScanManagerBase, ScanManagerPointScan, ScanManagerMoNaLISA, FlatfieldManager, 
-    FlowStopManager, WorkflowManager, TimelapseManager, LepmonManager
+    FlowStopManager, WorkflowManager, TimelapseManager, LepmonManager, ExperimentManager
 )
 
 
@@ -49,15 +49,15 @@ class MasterController:
         self.UC2ConfigManager = UC2ConfigManager(self.__setupInfo.uc2Config, lowLevelManagers)
         if "SIM" in self.__setupInfo.availableWidgets: self.simManager = SIMManager(self.__setupInfo.sim)
         if "DPC" in self.__setupInfo.availableWidgets: self.dpcManager = DPCManager(self.__setupInfo.dpc)
-        self.mctManager = MCTManager(self.__setupInfo.mct)
-        self.timelapseManager = TimelapseManager()
+        if "MCT" in self.__setupInfo.availableWidgets: self.mctManager = MCTManager(self.__setupInfo.mct)
         self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
         self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
-        self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
-        self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
-        if "Timelapse" in self.__setupInfo.availableWidgets: self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
+        if "Lightsheet" in self.__setupInfo.availableWidgets: self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
+        if "WebRTC" in self.__setupInfo.availableWidgets: self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
+        if "Timelapse" in self.__setupInfo.availableWidgets: self.timelapseManager = TimelapseManager()
         self.MockXXManager = MockXXManager(self.__setupInfo.mockxx)
-        self.jetsonnanoManager = JetsonNanoManager(self.__setupInfo.jetsonnano)
+        if "Experiment" in self.__setupInfo.availableWidgets: self.experimentManager = ExperimentManager()
+        if "JetsonNano" in self.__setupInfo.availableWidgets: self.jetsonnanoManager = JetsonNanoManager(self.__setupInfo.jetsonnano)
         if "HistoScan" in self.__setupInfo.availableWidgets: self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "FlowStop" in self.__setupInfo.availableWidgets: self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
         if "Lepmon" in self.__setupInfo.availableWidgets: self.LepmonManager = LepmonManager(self.__setupInfo.Lepmon)

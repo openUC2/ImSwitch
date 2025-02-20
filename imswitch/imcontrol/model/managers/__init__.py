@@ -26,6 +26,7 @@ from .SIMManager import SIMManager
 from .DPCManager import DPCManager
 from .MCTManager import MCTManager
 from .TimelapseManager import TimelapseManager
+from .ExperimentManager import ExperimentManager
 from .ROIScanManager import ROIScanManager
 from .LightsheetManager import LightsheetManager
 from .WebRTCManager import WebRTCManager

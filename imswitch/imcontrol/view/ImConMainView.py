@@ -77,6 +77,7 @@ class ImConMainView(QMainWindow):
             'DPC': _DockInfo(name='DPC', yPosition=0),
             'MCT': _DockInfo(name='MCT', yPosition=0),
             'Timelapse': _DockInfo(name='Timelapse', yPosition=0),
+            'Experiment': _DockInfo(name='Experiment', yPosition=0),
             'ROIScan': _DockInfo(name='ROIScan', yPosition=0),
             'Lightsheet': _DockInfo(name='Lightsheet', yPosition=0),
             'WebRTC': _DockInfo(name='WebRTC', yPosition=0),

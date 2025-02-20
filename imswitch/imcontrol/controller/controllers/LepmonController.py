@@ -165,7 +165,7 @@ class LepmonController(LiveUpdatedController):
         return {"success": True, "message": "Experiment started", "lat": deviceLat, "lng": deviceLng}
 
     @APIExport(requestType="POST")
-    def stopExperiment(self) -> dict:
+    def stopLepmonExperiment(self) -> dict:
         """
         Called by the frontend to stop any running experiment.
         """

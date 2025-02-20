@@ -440,7 +440,7 @@ class ExperimentController(ImConWidgetController):
         return {"status": "completed", "store_path": "Experiment.tif"}
             
     @APIExport()
-    def pause_workflow_tl(self):
+    def pauseWorkflow(self):
         status = self.workflow_manager.get_status()["status"]
         if status == "running":
             return self.workflow_manager.pause_workflow()
@@ -448,7 +448,7 @@ class ExperimentController(ImConWidgetController):
             raise HTTPException(status_code=400, detail=f"Cannot pause in current state: {status}")
 
     @APIExport()
-    def resume_workflow_tl(self):
+    def resumeExperiment(self):
         status = self.workflow_manager.get_status()["status"]
         if status == "paused":
             return self.workflow_manager.resume_workflow()
@@ -456,7 +456,7 @@ class ExperimentController(ImConWidgetController):
             raise HTTPException(status_code=400, detail=f"Cannot resume in current state: {status}")
 
     @APIExport()
-    def stop_workflow_tl(self):
+    def stopExperiment(self):
         status = self.workflow_manager.get_status()["status"]
         if status in ["running", "paused"]:
             return self.workflow_manager.stop_workflow()
@@ -464,11 +464,11 @@ class ExperimentController(ImConWidgetController):
             raise HTTPException(status_code=400, detail=f"Cannot stop in current state: {status}")
 
     @APIExport()
-    def workflow_status_tl(self):
+    def getExperimentStatus(self):
         return self.workflow_manager.get_status()
     
     @APIExport()
-    def force_stop_workflow_tl(self):
+    def forceStopExperiment(self):
         self.workflow_manager.stop_workflow()
         del self.workflow_manager
         self.workflow_manager = WorkflowsManager()

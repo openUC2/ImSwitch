@@ -18,7 +18,7 @@ from ..basecontrollers import ImConWidgetController
 
 class LightsheetController(ImConWidgetController):
     """Linked to LightsheetWidget."""
-    sigImageReceived = Signal()
+    sigImageReceived = Signal(np.ndarray)
     sigSliderIlluValueChanged = Signal(float)
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -205,16 +205,16 @@ class LightsheetController(ImConWidgetController):
         pass 
         #TODO: This needs an update!
         
-    def displayImage(self):
+    def displayImage(self, lightsheetStack):
         # a bit weird, but we cannot update outside the main thread
         name = "Lightsheet Stack"
         # subsample stack 
         # if the stack is too large, we have to subsample it 
-        if self.lightsheetStack.shape[0] > 200:
+        if lightsheetStack.shape[0] > 200:
             subsample = 10
-            self.lightsheetStack = self.lightsheetStack[::subsample,:,:]
+            lightsheetStack = lightsheetStack[::subsample,:,:]
         if not IS_HEADLESS: 
-            return self._widget.setImage(np.uint16(self.lightsheetStack ), colormap="gray", name=name, pixelsize=(20,1,1), translation=(0,0,0))
+            return self._widget.setImage(np.uint16(lightsheetStack ), colormap="gray", name=name, pixelsize=(20,1,1), translation=(0,0,0))
 
     def valueIlluChanged(self):
         if IS_HEADLESS: 
@@ -325,11 +325,6 @@ class LightsheetController(ImConWidgetController):
         
         # do something with the frames 
         def displayAndSaveImageStack(isSave):
-            if len(allFrames) == 0:
-                self._logger.error("No frames captured.")
-                return
-            self.lightsheetStack = np.array(allFrames).copy()
-            self.sigImageReceived.emit()
             # retreive positions and store the data if necessary
             pixelSizeZ = (maxPosZ-minPosZ)/len(allFrames)
             pixelSizeXY = self.detector.pixelSizeUm[-1]
@@ -345,8 +340,14 @@ class LightsheetController(ImConWidgetController):
                 self.mFilePath = self.getSaveFilePath(mDate, mFileName, mExtension)
                 self._logger.info(f"Saving lightsheet stack to {self.mFilePath}")
                 tif.imsave(self.mFilePath, self.lightsheetStack)
+
+        if len(allFrames) == 0:
+            self._logger.error("No frames captured.")
+            return
+        self.lightsheetStack = np.array(allFrames).copy()
         saveImageThread = threading.Thread(target=displayAndSaveImageStack, args =(isSave,))
         saveImageThread.start()
+        self.sigImageReceived.emit(self.lightsheetStack)
         self.stopLightsheet()
         
     def getSaveFilePath(self, date, filename, extension):

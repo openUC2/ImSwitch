@@ -52,7 +52,7 @@ try:
     from ashlarUC2 import utils
     from ashlarUC2.scripts.ashlar import process_images
     IS_ASHLAR_AVAILABLE = True
-except ImportError:
+except Exception as e:
     IS_ASHLAR_AVAILABLE = False
 
 class ScanParameters(object):

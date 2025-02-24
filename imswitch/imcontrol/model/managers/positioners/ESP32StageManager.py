@@ -162,6 +162,8 @@ class ESP32StageManager(PositionerManager):
         time.sleep(0.5)
         if self.homeOnStartZ: self.home_z()
         time.sleep(0.5)
+        if self.homeOnStartA: self.home_a()
+        time.sleep(0.5)
 
         # set speed for all axes
         self._speed = {"X": positionerInfo.managerProperties.get('speedX', 10000),

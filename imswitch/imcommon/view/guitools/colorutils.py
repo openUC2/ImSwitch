@@ -1,11 +1,13 @@
-import colour
-
+try:
+    import colour
+except:
+    pass
 
 def wavelengthToHex(wavelength: float, gamma: float = 2.4):
     """
     Converts a wavelength (in nanometres) to a gamma corrected RGB tuple with values [0, 255].
     Returns white if the wavelength is outside the visible spectrum or any other error occurs.
-    """
+    """ 
 
     try:
         xyz = colour.wavelength_to_XYZ(wavelength)

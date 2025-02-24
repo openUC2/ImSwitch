@@ -488,7 +488,7 @@ class CameraHIK:
                         self.timestamp = time.time()
                         self.frame_buffer.append(self.frame)
                         self.frameid_buffer.append(self.lastFrameId)
-                        print("frame number: ", self.frameNumber)
+                        #print("frame number: ", self.frameNumber)
                         
                     else:
                         pass

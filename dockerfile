@@ -57,7 +57,6 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     mesa-utils \
-    openssh-server \
     libhdf5-dev \
     nano \
     usbutils \
@@ -218,8 +217,8 @@ RUN cd /tmp/UC2-REST && \
     git pull && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
 
-# Expose FTP, SSH port and HTTP port
-EXPOSE  21 22 8001 8002 8003 8888 8889
+# Expose FTP port and HTTP port
+EXPOSE  8001 8002 8003 8888 8889
 
 ADD docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

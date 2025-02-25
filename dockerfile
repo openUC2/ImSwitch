@@ -79,21 +79,23 @@ RUN if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
 ENV PATH=/opt/conda/bin:$PATH
 
 # Create conda environment and install packages
-RUN /opt/conda/bin/conda create -y --name imswitch python=3.11
-
-RUN /opt/conda/bin/conda install -n imswitch -y -c conda-forge h5py numcodecs && \
-    conda clean --all -f -y
-
+RUN /opt/conda/bin/conda create -y --name imswitch python=3.11 && \
+    /opt/conda/bin/conda install -n imswitch -y -c conda-forge h5py numcodecs && \
+    /opt/conda/bin/conda clean --all -f -y && \
+    rm -rf /opt/conda/pkgs/*
 
 # Download and install the appropriate Hik driver based on architecture
 RUN cd /tmp && \
-wget https://www.hikrobotics.com/cn2/source/support/software/MVS_STD_GML_V2.1.2_231116.zip && \
-unzip MVS_STD_GML_V2.1.2_231116.zip && \
-if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
-    dpkg -i MVS-2.1.2_aarch64_20231116.deb; \
-elif [ "${TARGETPLATFORM}" = "linux/amd64" ]; then \
-    dpkg -i MVS-2.1.2_x86_64_20231116.deb; \
-fi
+    wget https://www.hikrobotics.com/cn2/source/support/software/MVS_STD_GML_V2.1.2_231116.zip && \
+    unzip MVS_STD_GML_V2.1.2_231116.zip && \
+    if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
+        dpkg -i MVS-2.1.2_aarch64_20231116.deb && \
+        rm -f MVS-2.1.2_aarch64_20231116.deb; \
+    elif [ "${TARGETPLATFORM}" = "linux/amd64" ]; then \
+        dpkg -i MVS-2.1.2_x86_64_20231116.deb && \
+        rm -f MVS-2.1.2_x86_64_20231116.deb; \
+    fi && \
+    rm -rf /tmp/MVS_STD_GML_V2.1.2_231116.zip /tmp/MVS_STD_GML_V2.1.2_231116/
 
 ## Install Daheng Camera 
 # Create the udev rules directory
@@ -136,17 +138,6 @@ RUN mkdir -p /opt/MVS/bin/fonts
 # Set environment variable for MVCAM_COMMON_RUNENV
 ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32:$LD_LIBRARY_PATH
 
-# Install vsftpd
-RUN apt-get update && apt-get install -y vsftpd
-
-# Configure vsftpd
-RUN echo "listen=YES"  >> /etc/vsftpd.conf && \
-    echo "anonymous_enable=YES" >> /etc/vsftpd.conf && \
-    echo "anon_root=/dataset" >> /etc/vsftpd.conf && \
-    echo "local_enable=YES" >> /etc/vsftpd.conf && \
-    echo "write_enable=YES" >> /etc/vsftpd.conf && \
-    echo "chroot_local_user=YES" >> /etc/vsftpd.conf && \
-    echo "allow_writeable_chroot=YES" >> /etc/vsftpd.conf
 
 # install numcodecs via conda
 RUN /opt/conda/bin/conda install numcodecs=0.15.0
@@ -184,19 +175,13 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zar
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
 
 
-# remove the temporary files to reduce the image size
-RUN apt-get update && \
-    apt-get install -y \
-    wget \
-    && rm -rf /var/lib/apt/lists/* 
-
 # TMP: Install Vimba 
 # Download, extract, and install Vimba
 RUN wget https://downloads.alliedvision.com/Vimba_v6.0_ARM64.tgz -O /tmp/Vimba_arm64.tgz && \
 tar -xzf /tmp/Vimba_arm64.tgz -C /opt && \
 rm /tmp/Vimba_arm64.tgz && \
 cd /opt/Vimba_6_0/VimbaUSBTL && \
-./Install.sh
+./Install.sh 
 
 # Install Python bindings and VimbaPython   
 RUN cd /opt/Vimba_6_0/VimbaPython/Source && \

@@ -110,7 +110,7 @@ class SignalInstance(psygnal.SignalInstance):
         except Exception as e:
             print(f"Error processing image signal: {e}")
                     
-    def _generate_json_message(self, args):  # Consider using msgpack for efficiency
+    def _generate_json_message(self, args):  # Consider using msgpspec for efficiency
         param_names = list(self.signature.parameters.keys())
         data = {"name": self.name, "args": {}}
 

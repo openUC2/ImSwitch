@@ -389,6 +389,8 @@ source ~/.bashrc
 
 ```
 sudo usermod -a -G dialout $USER
+newgrp dialout
+ls -l /dev/ttyUSB0
 ```
 
 ## Install on Raspberry PI

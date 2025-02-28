@@ -17,8 +17,12 @@ from sys import platform
 if platform == "linux" or platform == "linux2":
     try:
         MvCamCtrldll = ctypes.cdll.LoadLibrary("/opt/MVS/lib/aarch64/libMvCameraControl.so")
-    except OSError as e:
+    except Exception as e:
         print(e);
+        try:
+            MvCamCtrldll = ctypes.cdll.LoadLibrary("/opt/MVS/lib/64/libMvCameraControl.so")
+        except Exception as e:
+            print(e)
 elif platform == "darwin":
     MvCamCtrldll = ctypes.cdll.LoadLibrary("/usr/local/lib/libMvCameraControl.dylib")
 

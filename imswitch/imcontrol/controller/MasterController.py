@@ -7,7 +7,7 @@ from imswitch.imcontrol.model import (
     RecordingManager, RS232sManager, SLMManager, SIMManager, DPCManager, LEDMatrixsManager, MCTManager, ROIScanManager, MockXXManager, WebRTCManager, HyphaManager,
     ISMManager, UC2ConfigManager, AutofocusManager, HistoScanManager, PixelCalibrationManager, LightsheetManager, NidaqManager, FOVLockManager,
     StandManager, RotatorsManager, JetsonNanoManager, LEDsManager, ScanManagerBase, ScanManagerPointScan, ScanManagerMoNaLISA, FlatfieldManager, 
-    FlowStopManager, WorkflowManager, TimelapseManager, LepmonManager, ExperimentManager
+    FlowStopManager, WorkflowManager, TimelapseManager, LepmonManager, ExperimentManager, ObjectiveManager
 )
 
 
@@ -57,6 +57,7 @@ class MasterController:
         if "Timelapse" in self.__setupInfo.availableWidgets: self.timelapseManager = TimelapseManager()
         self.MockXXManager = MockXXManager(self.__setupInfo.mockxx)
         if "Experiment" in self.__setupInfo.availableWidgets: self.experimentManager = ExperimentManager()
+        if "Objective" in self.__setupInfo.availableWidgets: self.objectiveManager = ObjectiveManager(self.__setupInfo.objective)
         if "JetsonNano" in self.__setupInfo.availableWidgets: self.jetsonnanoManager = JetsonNanoManager(self.__setupInfo.jetsonnano)
         if "HistoScan" in self.__setupInfo.availableWidgets: self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "FlowStop" in self.__setupInfo.availableWidgets: self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)

@@ -225,6 +225,20 @@ class DPCInfo:
     n: float
 
     rotations: List[int]
+    
+@dataclass(frozen=True)
+class ObjectiveInfo:
+    pixelsizes: List 
+    NAs: List
+    magnifications: List
+    objectiveNames: List
+    objectivePositions: List
+    homeDirection: int = -1
+    homePolarity: int = 1
+    homeSpeed: int = 20000
+    homeAcceleration: int = 20000
+    calibrateOnStart: bool = True
+    
 @dataclass(frozen=True)
 class MCTInfo:
     tWait: int
@@ -505,6 +519,9 @@ class SetupInfo:
     dpc: Optional[DPCInfo] = field(default_factory=lambda: None)
     """ DPC settings. Required to be defined to use DPC functionality. """
 
+    objective: Optional[ObjectiveInfo] = field(default_factory=lambda: None)
+    """ Objective settings. Required to be defined to use Objective functionality. """
+    
     mct: Optional[MCTInfo] = field(default_factory=lambda: None)
     """ MCT settings. Required to be defined to use MCT functionality. """
 

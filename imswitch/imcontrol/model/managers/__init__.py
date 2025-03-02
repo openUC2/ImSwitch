@@ -34,6 +34,7 @@ from .HyphaManager import HyphaManager
 from .MockXXManager import MockXXManager
 from .JetsonNanoManager import JetsonNanoManager
 from .HistoScanManager import HistoScanManager
+from .ObjectiveManager import ObjectiveManager
 from .WorkflowManager import WorkflowManager
 from .FlowStopManager import FlowStopManager
 from .LepmonManager import LepmonManager

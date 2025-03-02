@@ -76,7 +76,6 @@ class SignalInstance(psygnal.SignalInstance):
         
     def _handle_image_signal(self, args):
         """Compress and broadcast image signals."""
-        print("start handle image")
         detectorName = args[0]
         pixelSize = np.min(args[3])
         try:

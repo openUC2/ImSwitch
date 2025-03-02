@@ -44,7 +44,7 @@ class SignalInstance(psygnal.SignalInstance):
     last_emit_time = 0
     emit_interval = 0.0  # Emit at most every 100ms
     last_image_emit_time = 0
-    image_emit_interval = 0.0  # Emit at most every 200ms
+    image_emit_interval = .10  # Emit at most every 200ms
 
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
@@ -62,6 +62,8 @@ class SignalInstance(psygnal.SignalInstance):
                 self._handle_image_signal(args)
                 self.last_image_emit_time = now
             return
+        elif self.name in ["sigImageUpdated"]:
+            return # ignore for now TODO:
 
         try:
             message = self._generate_json_message(args)
@@ -74,6 +76,7 @@ class SignalInstance(psygnal.SignalInstance):
         
     def _handle_image_signal(self, args):
         """Compress and broadcast image signals."""
+        print("start handle image")
         detectorName = args[0]
         pixelSize = np.min(args[3])
         try:
@@ -147,7 +150,7 @@ class SignalInstance(psygnal.SignalInstance):
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
 
-                    # Korrekt asynchron aufrufen
+
                     try:
                         loop.run_until_complete(sio.emit("signal", message))
                     except Exception as e:

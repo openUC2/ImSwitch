@@ -200,8 +200,9 @@ class CameraHIK:
 
     def suspend_live(self):
         if self.is_streaming:
-        # start data acquisition
+            self.g_bExit = True
             try:
+                self.hThreadHandle.join()
                # Stop grab image
                 ret = self.camera.MV_CC_StopGrabbing()
             except:

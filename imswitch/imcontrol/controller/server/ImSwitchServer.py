@@ -1,6 +1,4 @@
 import threading
-import Pyro5.server
-from Pyro5.api import expose
 from imswitch.imcommon.framework import Worker
 from imswitch.imcommon.model import dirtools, initLogger
 from fastapi.middleware.cors import CORSMiddleware
@@ -321,7 +319,7 @@ class ImSwitchServer(Worker):
         # Create and start the server thread
         self.server_thread = ServerThread()
         self.server_thread.start()
-        self.__logger.debug("Started server with URI -> PYRO:" + self._name + "@" + self._host + ":" + str(self._port))
+        self.__logger.debug("Started server with URI -> Fastapi:" + self._name + "@" + self._host + ":" + str(self._port))
 
 
     def stop(self):
@@ -390,11 +388,6 @@ class ImSwitchServer(Worker):
                         return func(*args, **kwargs)
             return wrapper
 
-        def includePyro(func):
-            @expose
-            def wrapper(*args, **kwargs):
-                return func(*args, **kwargs)
-            return wrapper
 
         for f in functions:
             func = api_dict[f]
@@ -402,7 +395,7 @@ class ImSwitchServer(Worker):
                 module = func.module
             else:
                 module = func.__module__.split('.')[-1]
-            self.func = includePyro(includeAPI("/"+module+"/"+f, func))
+            self.func = includeAPI("/"+module+"/"+f, func)
 
 
 

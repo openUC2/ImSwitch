@@ -146,9 +146,9 @@ class ExperimentController(ImConWidgetController):
         # select stage
         self.allPositionerNames = self._master.positionersManager.getAllDeviceNames()[0]
         try:
-            self.positioner = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
+            self.mStage = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
         except:
-            self.positioner = None
+            self.mStage = None
             
         # define Experiment parameters as ExperimentWorkflowParams
         self.ExperimentParams = ExperimentWorkflowParams()
@@ -175,11 +175,155 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
-        message = {"message": "Experiment received"}
-        
-        mParameters = mExperiment.parameterValue
-        print(mParameters)
-        return message
+        # Extract key parameters
+        exp_name = mExperiment.name
+        p = mExperiment.parameterValue
+        nTimes = p.numberOfImages
+        tPeriod = p.timeLapsePeriod
+        isAutoFocus = p.autoFocus
+        zStackOn = p.zStack
+
+        # Example usage of a single illumination source
+        illuSource = p.illumination
+        laserWaveLength = p.laserWaveLength
+
+        # Check if another workflow is running
+        if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
+            raise HTTPException(status_code=400, detail="Another workflow is already running.")
+
+        # Start the detector if not already running
+        if not self.mDetector._running:
+            self.mDetector.startAcquisition()
+
+        workflowSteps = []
+        step_id = 0
+
+        # Example: Move to each point, take images, possibly do autofocus or z-stack
+        for t in range(nTimes):
+            # Loop over the list of points
+            for mPointList in mExperiment.pointList:
+                # for every point create a single-point or neighboring-points list to loop over
+                if len(mPointList.neighborPointList)>0:
+                    pointList = mPointList.neighborPointList
+                else:
+                    pointList = [mPointList]
+                
+                for point in pointList:
+                    
+                    try:
+                        name = f"Move to point {point.id}"
+                    except:
+                        name = f"Move to point {point.x}, {point.y}"
+                    
+                    # Move stage to each point.x, point.y
+                    workflowSteps.append(WorkflowStep(
+                        name=name,
+                        step_id=str(step_id),
+                        main_func=self.move_stage_xy,
+                        main_params={"posX": point.x, "posY": point.y, "relative": False},
+                    ))
+                    step_id += 1
+
+                    # Turn on illumination (example with "illumination" parameter)
+                    workflowSteps.append(WorkflowStep(
+                        name="Turn on illumination",
+                        step_id=str(step_id),
+                        main_func=self.set_laser_power,
+                        main_params={"power": laserWaveLength, "channel": illuSource},
+                        post_funcs=[self.wait_time],
+                        post_params={"seconds": 0.05},
+                    ))
+                    step_id += 1
+
+                    # Acquire frame
+                    workflowSteps.append(WorkflowStep(
+                        name="Acquire frame",
+                        step_id=str(step_id),
+                        main_func=self.acquire_frame,
+                        main_params={"channel": "Mono"},
+                        post_funcs=[self.save_frame_tiff], # or self.append_frame_to_stack if preview
+                        pre_funcs=[self.set_exposure_time_gain],
+                        pre_params={"exposure_time": 0.1, "gain": 1.0}
+                    ))
+                    step_id += 1
+
+                    # Turn off illumination
+                    workflowSteps.append(WorkflowStep(
+                        name="Turn off illumination",
+                        step_id=str(step_id),
+                        main_func=self.set_laser_power,
+                        main_params={"power": 0, "channel": illuSource},
+                    ))
+                    step_id += 1
+
+            # (Optional) Perform autofocus once per loop, if enabled
+            if isAutoFocus:
+                workflowSteps.append(WorkflowStep(
+                    name="Autofocus",
+                    step_id=str(step_id),
+                    main_func=self.autofocus,
+                    main_params={},
+                ))
+                step_id += 1
+
+            # (Optional) Add a wait period between each loop
+            workflowSteps.append(WorkflowStep(
+                name="Wait for next frame",
+                step_id=str(step_id),
+                main_func=self.wait_time,
+                main_params={"seconds": tPeriod},
+            ))
+            step_id += 1
+
+        # Close TIFF writer at the end
+        workflowSteps.append(WorkflowStep(
+            name="Close TIFF writer",
+            step_id=str(step_id) + "_done",
+            main_func=self.close_tiff_writer,
+            main_params={"tiff_writer": tif.TiffWriter("Experiment.tif")},
+        ))
+
+        # Final step: mark done
+        workflowSteps.append(WorkflowStep(
+            name="Done",
+            step_id=str(step_id) + "_done2",
+            main_func=self.dummy_main_func,
+            main_params={},
+            pre_funcs=[self.wait_time],
+            pre_params={"seconds": 0.1}
+        ))
+
+        def sendProgress(payload):
+            self.sigExperimentWorkflowUpdate.emit(payload)
+
+        # Create workflow and context
+        wf = Workflow(workflowSteps, self.workflow_manager)
+        context = WorkflowContext()
+
+        # Set metadata (optional – store whatever data you want)
+        context.set_metadata("experimentName", exp_name)
+        context.set_metadata("nTimes", nTimes)
+        context.set_metadata("tPeriod", tPeriod)
+
+        # Prepare TIFF writer
+        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        drivePath = dirtools.UserFileDirs.Data
+        dirPath = os.path.join(drivePath, 'recordings', timeStamp)
+        if not os.path.exists(dirPath):
+            os.makedirs(dirPath)
+        mFileName = f"{timeStamp}_{exp_name}"
+        mFilePath = os.path.join(dirPath, mFileName + ".tif")
+        tiff_writer = tif.TiffWriter(mFilePath)
+        context.set_object("tiff_writer", tiff_writer)
+
+        context.on("progress", sendProgress)
+        context.on("rgb_stack", sendProgress)
+
+        # Start the workflow
+        self.workflow_manager.start_workflow(wf, context)
+
+        return {"status": "running", "store_path": mFilePath}
+
 
 
 
@@ -256,8 +400,28 @@ class ExperimentController(ImConWidgetController):
             tiff_writer.close()
         else:
             raise ValueError("TIFF writer is not initialized.")
-    
+
         
+    def move_stage_xy(self, posX: float, posY: float, relative: bool = False):
+        # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
+        self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
+        self.mStage.move(value=(posX, posY), axis="XY", is_absolute=not relative, is_blocking=True)
+        newPosition = self.mStage.getPosition()
+        self._commChannel.sigUpdateMotorPosition.emit([newPosition["X"], newPosition["Y"]])
+        return (newPosition["X"], newPosition["Y"])
+
+    def move_stage_z(self, posZ: float, relative: bool = False):
+        self._logger.debug(f"Moving stage to Z={posZ}")
+        self.mStage.move(value=posZ, axis="Z", is_absolute=not relative, is_blocking=True)
+        newPosition = self.mStage.getPosition()
+        self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
+        return newPosition["Z"]
+
+    def autofocus(self, context: WorkflowContext, metadata: Dict[str, Any]):
+        self._logger.debug("Performing autofocus...")
+        metadata["autofocus_done"] = True
+
+
     ########################################
     # Example Workflow for Multicolour Experiment
     ########################################
@@ -458,7 +622,7 @@ class ExperimentController(ImConWidgetController):
     @APIExport()
     def stopExperiment(self):
         status = self.workflow_manager.get_status()["status"]
-        if status in ["running", "paused"]:
+        if status in ["running", "paused", "stopping"]:
             return self.workflow_manager.stop_workflow()
         else:
             raise HTTPException(status_code=400, detail=f"Cannot stop in current state: {status}")

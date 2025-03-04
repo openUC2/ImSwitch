@@ -26,7 +26,7 @@ DEFAULT_CONFIG = {
     "isRunning": False,
     "wasRunning": False,
     "numberOfFrames": 10,
-    "experimentName": "SepMonTest",
+    "experimentName": "LepMonTest",
     "axislepmon": "Z",
     "axisFocus": "X",
     "isRecordVideo": True,
@@ -78,7 +78,34 @@ class LepmonController(LiveUpdatedController):
         self.sensorThread = Thread(target=self._pullSensorData, args=(10,))
         self.sensorThread.start()
         
+        # initialize temperature and humidity
+        self.innerTemp = np.round(np.random.uniform(20, 25), 2)
+        self.outerTemp = np.round(np.random.uniform(15, 20), 2)
+        self.humidity = np.round(np.random.uniform(40, 50), 2)
+        
+        
     # ---------------------- GET-Like Endpoints ---------------------- #
+
+    @APIExport(requestType="POST")
+    def setSensorData(self, sensorData: dict) -> dict: 
+        """
+        A GET-like endpoint that sets the inner and outer temperature and humidity.
+        {"innerTemp": 25.0, "outerTemp": 20.0, "humidity": 45.0}   
+        """
+        try:
+            innerTemp = sensorData["innerTemp"]
+            outerTemp = sensorData["outerTemp"]
+            humidity = sensorData["humidity"]
+            self.innerTemp = innerTemp
+            self.outerTemp = outerTemp
+            self.humidity = humidity
+            sensor_data = {"innerTemp": self.innerTemp, "outerTemp": self.outerTemp, "humidity": self.humidity}
+            self.temperatureUpdate.emit(sensor_data)
+            return {"success": True, "message": "Sensor data updated."}
+        except Exception as e:
+            self._logger.error(f"Could not update sensor data: {e}")
+            return {"success": False, "message": "Could not update sensor data:"}
+        
 
     @APIExport()
     def getStatus(self) -> dict:
@@ -142,7 +169,7 @@ class LepmonController(LiveUpdatedController):
         self.mExperimentParameters["numImages"] = -1
         self.mExperimentParameters["fileFormat"] = "TIF"
         self.mExperimentParameters["frameRate"] = timelapsePeriod
-        self.mExperimentParameters["experimentName"] = "SepMonTest" 
+        self.mExperimentParameters["experimentName"] = "LepMonTest" 
         self.mExperimentParameters["uniqueId"] = np.random.randint(0, 1000),
         
         # Start thread
@@ -316,9 +343,6 @@ class LepmonController(LiveUpdatedController):
             # self.sigSensorData.emit(sensor_data)
             time.sleep(interval)
             # simulate inner/outer temperature and humidity
-            self.innerTemp = np.round(np.random.uniform(20, 25), 2)
-            self.outerTemp = np.round(np.random.uniform(15, 20), 2)
-            self.humidity = np.round(np.random.uniform(40, 50), 2)
             # join them in dictionary 
             sensor_data = {"innerTemp": self.innerTemp, "outerTemp": self.outerTemp, "humidity": self.humidity}
             self.temperatureUpdate.emit(sensor_data)

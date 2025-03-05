@@ -106,6 +106,21 @@ class ObjectiveController(LiveUpdatedController):
 
     def onCalibrateClicked(self):
         self.calibrateObjective()
+        
+    @APIExport(runOnUIThread=True)
+    def setPositions(self, x1:float=None, x2:float=None, isBlocking:bool=False):
+        '''
+        overwrite the positions for objective 1 and 2 in the EEPROMof the ESP32
+        '''
+        return self._objective.setPositions(x1, x2, isBlocking)
+
+    @APIExport(runOnUIThread=True)
+    def getstatus(self):
+        '''
+        get the positions for objective 1 and 2 from the EEPROMof the ESP32
+        '''
+        return self._objective.getstatus()
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

@@ -5,6 +5,7 @@ __socketport__ = 8002
 __ssl__ = True
 __jupyter_port__ = 8888
 jupyternotebookurl = ""
+__argparse__ = None
 
 ''' 
 These are flags to ensure headless operation and side-loading of the config file 

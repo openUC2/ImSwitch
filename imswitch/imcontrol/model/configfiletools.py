@@ -4,7 +4,8 @@ from pathlib import Path
 import json
 from imswitch.imcommon.model import dirtools
 from .Options import Options
-
+from imswitch import DEFAULT_SETUP_FILE
+import dataclasses
 
 def getSetupList():
     return [Path(file).name for file in glob.glob(os.path.join(_setupFilesDir, '*.json'))]
@@ -40,10 +41,12 @@ def loadOptions():
         try:
             with open(_optionsFilePath, 'r') as optionsFile:
                 _options = Options.from_json(optionsFile.read(), infer_missing=True)
+                if _options.setupFileName not in getSetupList():
+                    _options = dataclasses.replace(_options, setupFileName="example_virtual_microscope.json")
         except json.decoder.JSONDecodeError:
             # create a warning message as a popup
             print("Warning: The options file was corrupted and has been reset to default values.")
-            
+
     return _options, optionsDidNotExist
 
 def saveOptions(options):

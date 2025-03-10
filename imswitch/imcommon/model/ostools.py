@@ -1,8 +1,8 @@
 import os
 import subprocess
 import sys
-
-
+from imswitch import IS_HEADLESS
+import imswitch
 def openFolderInOS(folderPath):
     """ Open a folder in the OS's default file browser. """
     try:
@@ -16,9 +16,48 @@ def openFolderInOS(folderPath):
         raise OSToolsError(err)
 
 
-def restartSoftware(module='imswitch'):
+def restartSoftware(module='imswitch', forceConfigFile=False):
     """ Restarts the software. """
-    os.execv(sys.executable, ['"' + sys.executable + '"', '-m', module])
+    if IS_HEADLESS:
+        # we read the args from __argparse__ and restart the software using the same arguments
+        # we need to add the module name to the arguments
+        from imswitch import __argparse__
+        
+        '''
+        in docker: 
+        params+=" --http-port ${HTTP_PORT:-8001}"
+        params+=" --socket-port ${SOCKET_PORT:-8002}"
+        params+=" --config-folder ${CONFIG_PATH:-None}"
+        params+=" --config-file ${CONFIG_FILE:-None}"
+        params+=" --ext-data-folder ${DATA_PATH:-None}"
+        python3 /tmp/ImSwitch/main.py $params
+        '''
+        headless = str(imswitch.IS_HEADLESS)
+        http_port = str(imswitch.__httpport__)
+        socket_port = str(imswitch.__socketport__)
+        config_folder = str(imswitch.DEFAULT_CONFIG_PATH)
+        config_file = str(imswitch.DEFAULT_SETUP_FILE)
+        is_ssl = str(imswitch.__ssl__)
+        # Erstellen der Argumentliste
+        args = [
+            sys.executable,
+            os.path.abspath(sys.argv[0]),
+            '--http-port', http_port,
+            '--socket-port', socket_port,
+            '--config-folder', config_folder,
+        ]
+        if forceConfigFile:
+            args.append('--config-file')
+            args.append(config_file)
+        if headless == 'True':
+            args.append('--headless')
+        if is_ssl == 'False':
+            args.append('--no-ssl')
+
+        # Ausführen des Skripts mit den neuen Argumenten
+        os.execv(sys.executable, args)
+    else:
+        os.execv(sys.executable, ['"' + sys.executable + '"', '-m', module])
 
 
 class OSToolsError(Exception):

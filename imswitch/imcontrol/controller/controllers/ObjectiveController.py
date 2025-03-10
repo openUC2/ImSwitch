@@ -10,7 +10,7 @@ from imswitch import IS_HEADLESS
 
 
 class ObjectiveController(LiveUpdatedController):
-    sigObjectiveChanged = Signal(float, float, float, str) # pixelsize, NA, magnification, objectiveName
+    sigObjectiveChanged = Signal(float, float, float, str, float, float) # pixelsize, NA, magnification, objectiveName, FOVx, FOVy
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -32,6 +32,7 @@ class ObjectiveController(LiveUpdatedController):
         self.homeAcceleration = self._master.objectiveManager.homeAcceleration
         self.calibrateOnStart = self._master.objectiveManager.calibrateOnStart
         
+        self.detectorWidth, self.detectorHeight = self.detector._camera.SensorWidth, self.detector._camera.SensorHeight
         self.currentObjective = None  # Will be set after calibration
 
         # Create new objective instance (expects a parent with post_json)
@@ -89,12 +90,16 @@ class ObjectiveController(LiveUpdatedController):
         self.sigObjectiveChanged.emit(self.pixelsizes[self.currentObjective - 1],
                                       self.NAs[self.currentObjective - 1],
                                       self.magnifications[self.currentObjective - 1],
-                                      self.objectiveNames[self.currentObjective
-                                      - 1])
+                                      self.objectiveNames[self.currentObjective - 1], 
+                                      self.pixelsizes[self.currentObjective - 1]*self.detectorHeight,
+                                      self.pixelsizes[self.currentObjective - 1]*self.detectorWidth)
         if self.currentObjective == 1:
             self.detector.setPixelSizeUm(self.pixelsizes[0])
         elif self.currentObjective == 2:
             self.detector.setPixelSizeUm(self.pixelsizes[1])
+            
+        #objective_params["objective"]["FOV"] = self.pixelsizes[0] * (self.detectorWidth, self.detectorHeight)
+        #objective_params["objective"]["pixelsize"] = self.detector.pixelSizeUm[-1]
 
     def onObj1Clicked(self):
         if self.currentObjective != 1:
@@ -119,7 +124,12 @@ class ObjectiveController(LiveUpdatedController):
         '''
         get the positions for objective 1 and 2 from the EEPROMof the ESP32
         '''
-        return self._objective.getstatus()
+        # retreive parameters from objective
+        objective_params = self._objective.getstatus()
+        # compute the FOV and pixelsize and return it
+        objective_params["FOV"] = (self.pixelsizes[self.currentObjective - 1]*self.detectorWidth, self.pixelsizes[self.currentObjective - 1]*self.detectorHeight)
+        objective_params["pixelsize"] = self.detector.pixelSizeUm[-1]
+        return objective_params
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

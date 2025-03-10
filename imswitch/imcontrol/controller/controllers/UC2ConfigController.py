@@ -4,13 +4,21 @@ import threading
 from imswitch import IS_HEADLESS
 import numpy as np
 from imswitch.imcommon.model import APIExport, initLogger, ostools
+from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcontrol.model import configfiletools
 import dataclasses
-
+import imswitch
+from imswitch.imcontrol.model import Options
+from imswitch.imcontrol.view.guitools import ViewSetupInfo
 class UC2ConfigController(ImConWidgetController):
     """Linked to UC2ConfigWidget."""
-
+    
+    sigUC2SerialReadMessage = Signal(str)
+    sigUC2SerialWriteMessage = Signal(str)
+    sigUC2SerialIsConnected = Signal(bool)
+    
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
@@ -21,26 +29,18 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.error("No Stages found in the config file? " +e )
             self.stages = None
 
-        '''
-        # force updating the position
-        # move motors by 1 step to get the current position #FIXME: This is a bug!
-        if "X" in self.stages.speed.keys():
-            self.stages.move(1, "X", is_absolute=False, is_blocking=True)
-            self.stages.move(-1, "X", is_absolute=False, is_blocking=True)
-        if "Y" in self.stages.speed.keys():
-            self.stages.move(1, "Y", is_absolute=False, is_blocking=True)
-            self.stages.move(-1, "Y", is_absolute=False, is_blocking=True)
-        if "Z" in self.stages.speed.keys():
-            self.stages.move(1, "Z", is_absolute=False, is_blocking=True)
-            self.stages.move(-1, "Z", is_absolute=False, is_blocking=True)
-        if "A" in self.stages.speed.keys():
-            self.stages.move(1, "A", is_absolute=False, is_blocking=True)
-            self.stages.move(-1, "A", is_absolute=False, is_blocking=True)
-        '''
-
-
+        #
         # register the callback to take a snapshot triggered by the ESP32
         self.registerCaptureCallback()
+        
+        # register the callbacks for emitting serial-related signals
+        if hasattr(self._master.UC2ConfigManager, "ESP32"):
+            try:
+                self._master.UC2ConfigManager.ESP32.serial.setWriteCallback(self.processSerialWriteMessage)
+                self._master.UC2ConfigManager.ESP32.serial.setReadCallback(self.processSerialReadMessage)
+            except Exception as e:
+                self._logger.error(f"Could not register serial callbacks: {e}")
+
 
         # Connect buttons to the logic handlers
         if IS_HEADLESS:
@@ -58,6 +58,11 @@ class UC2ConfigController(ImConWidgetController):
         self._widget.btpairingButton.clicked.connect(self.btpairing)
         self._widget.stopCommunicationButton.clicked.connect(self.interruptSerialCommunication)
 
+    def processSerialWriteMessage(self, message):
+        self.sigUC2SerialWriteMessage.emit(message)
+        
+    def processSerialReadMessage(self, message):    
+        self.sigUC2SerialReadMessage.emit(message)
 
     def registerCaptureCallback(self):
         # This will capture an image based on a signal coming from the ESP32
@@ -129,7 +134,11 @@ class UC2ConfigController(ImConWidgetController):
 
     def reconnectThread(self, baudrate=None):
         self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
-        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
+        if not IS_HEADLESS: 
+            self._widget.reconnectDeviceLabel.setText("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
+        else:
+            self.__logger.debug("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
+            self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
 
     def closeConnection(self):
         self._master.UC2ConfigManager.closeSerial()
@@ -145,6 +154,10 @@ class UC2ConfigController(ImConWidgetController):
                 baudrate = self._widget.getBaudRateGui()
         mThread = threading.Thread(target=self.reconnectThread, args=(baudrate,))
         mThread.start()
+    
+    @APIExport(runOnUIThread=True)
+    def writeSerial(self, payload):
+        return self._master.UC2ConfigManager.ESP32.serial.writeSerial(payload)
 
     @APIExport(runOnUIThread=True)
     def is_connected(self):
@@ -168,7 +181,15 @@ class UC2ConfigController(ImConWidgetController):
         return {"available_setups": setup_list}
     
     @APIExport(runOnUIThread=False)
-    def setSetupFileName(self, setupFileName: str) -> str:
+    def getCurrentSetupFilename(self):
+        """
+        Returns the current setup filename.
+        """  
+        options, _ = imswitch.DEFAULT_SETUP_FILE # configfiletools.loadOptions()
+        return {"current_setup": options.setupFileName}
+    
+    @APIExport(runOnUIThread=False)
+    def setSetupFileName(self, setupFileName: str, restartSoftware: bool=False) -> str:
         '''Sets the setup file name in the options file.'''
         if setupFileName is  None:
             return "No setup file name provided."
@@ -178,8 +199,41 @@ class UC2ConfigController(ImConWidgetController):
         options, _ = configfiletools.loadOptions()
         options = dataclasses.replace(options, setupFileName=setupFileName)
         configfiletools.saveOptions(options)
-        ostools.restartSoftware()
+        if restartSoftware: ostools.restartSoftware()
         return f"Setup file {setupFileName} set successfully."
+        
+    @APIExport(runOnUIThread=False)
+    def readSetupFile(self, setupFileName: str=None) -> dict:
+        '''Reads the setup file. If setupFileName is None, reads the current setup file.'''
+        if setupFileName is None:
+            # get current setup file name
+            options, _ = configfiletools.loadOptions()
+            setupFileName = options.setupFileName
+        if setupFileName.split("/")[-1] not in configfiletools.getSetupList():
+            self.__logger.error(f"Setup file {setupFileName} does not exist.")
+            return f"Setup file {setupFileName} does not exist."
+        mOptions = Options(setupFileName=setupFileName)
+        setup_dict = configfiletools.loadSetupInfo(mOptions, ViewSetupInfo)
+        return setup_dict
+    
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def writeNewSetupFile(self, setupFileName: str, setupDict: dict, setAsCurrentConfig: bool = True, restart: bool = False, overwrite: bool = False) -> str:
+        '''Writes a new setup file. and set as new setup file if needed on next boot.'''
+        if setupFileName is None:
+            return "No setup file name provided."
+        if setupFileName in configfiletools.getSetupList() and not overwrite:
+            self.__logger.error(f"Setup file {setupFileName} already exists.")
+            return f"Setup file {setupFileName} already exists."
+        mOptions = Options(
+            setupFileName=setupFileName
+        )
+        setupInfo = ViewSetupInfo.from_dict(setupDict)
+        configfiletools.saveSetupInfo(mOptions, setupInfo)
+        if setAsCurrentConfig:
+            self.setSetupFileName(setupFileName)
+        if restart:
+            ostools.restartSoftware(forceConfigFile=setAsCurrentConfig)
+        return f"Setup file {setupFileName} written successfully."
         
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

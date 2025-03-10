@@ -59,7 +59,7 @@ def getMainViewAndController(moduleCommChannel, *_args,
         else:
             try:
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
-            except FileNotFoundError:
+            except Exception as e:
                 # Have user pick setup anyway
                 options = pickSetup(options)
                 configfiletools.saveOptions(options)

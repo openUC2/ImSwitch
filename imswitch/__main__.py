@@ -82,6 +82,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
             print("We use the user-provided data path: " + data_folder)
             imswitch.DEFAULT_DATA_PATH = data_folder
 
+
+        
         # FIXME: !!!! This is because the headless flag is loaded after commandline input
         from imswitch.imcommon import prepareApp, launchApp
         from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController

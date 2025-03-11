@@ -8,6 +8,8 @@ import coloredlogs
 baseLogger = logging.getLogger('imswitch')
 coloredlogs.install(level='DEBUG', logger=baseLogger,
                     fmt='%(asctime)s %(levelname)s %(message)s')
+coloredlogs.install(level='INFO', logger=baseLogger,
+                    fmt='%(asctime)s %(levelname)s %(message)s')
 objLoggers = {}
 
 

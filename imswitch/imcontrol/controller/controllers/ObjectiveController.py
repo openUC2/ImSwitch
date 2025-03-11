@@ -36,7 +36,16 @@ class ObjectiveController(LiveUpdatedController):
         self.currentObjective = None  # Will be set after calibration
 
         # Create new objective instance (expects a parent with post_json)
-        self._objective = self._master.rs232sManager["ESP32"]._esp32.objective
+        try:
+            self._objective = self._master.rs232sManager["ESP32"]._esp32.objective
+        except:
+            class dummyObjective:
+                def __init__(self):
+                    self.move = lambda slot, isBlocking: None
+                    self.home = lambda direction, endstoppolarity, isBlocking: None
+                    self.getstatus = lambda: {}
+                    self.setPositions = lambda x1, x2, isBlocking: None
+            self._objective = dummyObjective()
 
         if self.calibrateOnStart:
             self.calibrateObjective()

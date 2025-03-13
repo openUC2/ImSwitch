@@ -141,7 +141,7 @@ def list_items(base_path: str) -> List[Dict]:
 
 
 
-@app.get("/preview/{file_path:path}")
+@app.get("/FileManager/preview/{file_path:path}")
 def preview_file(file_path: str):
     """
     Provides file previews by serving the file from disk.
@@ -163,7 +163,7 @@ def preview_file(file_path: str):
     return FileResponse(absolute_path, filename=absolute_path.name)
 
 # 📂 Get All Files/Folders
-@app.get("/")
+@app.get("/FileManager/")
 def get_items(path: str = ""):
     directory = os.path.join(BASE_DIR, path)
     if not os.path.exists(directory):
@@ -244,7 +244,7 @@ def delete_item(paths: List[str]):
 
 
 # ⬇️ Download File(s) or Folder(s)
-@app.get("/download//{path:path}")
+@app.get("/FileManager/download//{path:path}")
 def download_file(path: str):
     target = os.path.join(BASE_DIR, path.lstrip("/"))
     if not os.path.exists(target):
@@ -341,7 +341,7 @@ class ImSwitchServer(Worker):
             s.close()
         return IP
 
-    @app.get("/docs", include_in_schema=False)
+    @app.get("/FileManager/docs", include_in_schema=False)
     async def custom_swagger_ui_html():
         return get_swagger_ui_html(
             openapi_url=app.openapi_url,

@@ -9,8 +9,26 @@ from imswitch.imcommon.model import APIExport, initLogger
 from imswitch import IS_HEADLESS
 
 
+from pydantic import BaseModel
+from typing import Tuple
+
+class ObjectiveStatusModel(BaseModel):
+    x1: float
+    x2: float
+    z1: float
+    z2: float
+    pos: float
+    isHomed: bool
+    state: int
+    isRunning: bool
+    FOV: Tuple[float, float]
+    pixelsize: float
+    objectiveName: str
+    NA: float
+    magnification: int
+
 class ObjectiveController(LiveUpdatedController):
-    sigObjectiveChanged = Signal(float, float, float, str, float, float) # pixelsize, NA, magnification, objectiveName, FOVx, FOVy
+    sigObjectiveChanged = Signal(dict) # pixelsize, NA, magnification, objectiveName, FOVx, FOVy
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -93,19 +111,17 @@ class ObjectiveController(LiveUpdatedController):
         return self.currentObjective, name
 
     def _updatePixelSize(self):
-        # Update the detector's effective pixel size based on the current objective
         if self.currentObjective is None or self.currentObjective not in [1, 2]:
             return
-        self.sigObjectiveChanged.emit(self.pixelsizes[self.currentObjective - 1],
-                                      self.NAs[self.currentObjective - 1],
-                                      self.magnifications[self.currentObjective - 1],
-                                      self.objectiveNames[self.currentObjective - 1], 
-                                      self.pixelsizes[self.currentObjective - 1]*self.detectorHeight,
-                                      self.pixelsizes[self.currentObjective - 1]*self.detectorWidth)
-        if self.currentObjective == 1:
-            self.detector.setPixelSizeUm(self.pixelsizes[0])
-        elif self.currentObjective == 2:
-            self.detector.setPixelSizeUm(self.pixelsizes[1])
+
+        # update information based on the current objective
+        mStatus = self.getstatus()
+
+        # Über das Signal als dict senden
+        self.sigObjectiveChanged.emit(mStatus)
+
+        # Setzen der Pixelgröße in der Detector-Objekt
+        self.detector.setPixelSizeUm(mStatus["pixelsize"])
             
         #objective_params["objective"]["FOV"] = self.pixelsizes[0] * (self.detectorWidth, self.detectorHeight)
         #objective_params["objective"]["pixelsize"] = self.detector.pixelSizeUm[-1]
@@ -122,23 +138,56 @@ class ObjectiveController(LiveUpdatedController):
         self.calibrateObjective()
         
     @APIExport(runOnUIThread=True)
-    def setPositions(self, x1:float=None, x2:float=None, isBlocking:bool=False):
+    def setPositions(self, x1:float=None, x2:float=None, z1:float=None, z2:float=None, isBlocking:bool=False):
         '''
         overwrite the positions for objective 1 and 2 in the EEPROMof the ESP32
         '''
-        return self._objective.setPositions(x1, x2, isBlocking)
+        return self._objective.setPositions(x1, x2, z1, z2, isBlocking)
+
 
     @APIExport(runOnUIThread=True)
     def getstatus(self):
-        '''
-        get the positions for objective 1 and 2 from the EEPROMof the ESP32
-        '''
-        # retreive parameters from objective
-        objective_params = self._objective.getstatus()
-        # compute the FOV and pixelsize and return it
-        objective_params["FOV"] = (self.pixelsizes[self.currentObjective - 1]*self.detectorWidth, self.pixelsizes[self.currentObjective - 1]*self.detectorHeight)
-        objective_params["pixelsize"] = self.detector.pixelSizeUm[-1]
-        return objective_params
+        """
+        Get the current status of the objective.
+        
+        """
+        # default status
+        status = {
+            "x1": 0,
+            "x2": 0,
+            "z1": 0,
+            "z2": 0,
+            "pos": 0,
+            "isHomed": 0,
+            "state": 0,
+            "isRunning": 0, 
+            "FOV": (100,100),
+            "pixelsize": 1,
+            "objectiveName": "TEST",
+            "NA": 1.0,
+            "magnification": 1,
+        }
+
+        # get the status from the objective
+        objective_raw = self._objective.getstatus()
+        status.update(objective_raw)
+
+        # calculate the field of view and pixel size
+        fov_x = self.pixelsizes[self.currentObjective - 1] * self.detectorWidth
+        fov_y = self.pixelsizes[self.currentObjective - 1] * self.detectorHeight
+        current_pixelsize = self.pixelsizes[self.currentObjective - 1]
+        current_NA = self.NAs[self.currentObjective - 1]
+        current_magnification = self.magnifications[self.currentObjective - 1]
+        current_objective_name = self.objectiveNames[self.currentObjective-1]
+
+        status["FOV"] = (fov_x, fov_y)
+        status["pixelsize"] = current_pixelsize
+        status["NA"] = current_NA
+        status["magnification"] = current_magnification
+        status["objectiveName"] = current_objective_name
+        
+        # return the data as a dictionary
+        return status
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

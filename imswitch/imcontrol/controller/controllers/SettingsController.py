@@ -480,6 +480,41 @@ class SettingsController(ImConWidgetController):
                 self.setSharedAttr(dName, parameterName, parameter.value, isDetectorParameter=True)
 
     @APIExport()
+    def getDetectorParameters(self) -> dict:
+        """ Returns the current parameters of the current detector. """
+        # collect exposure time
+        try: mExposureTime = self._master.detectorsManager.getCurrentDetector().parameters['exposure'].value
+        except: mExposureTime = 1
+        # collect gain
+        try: mGain = self._master.detectorsManager.getCurrentDetector().parameters['gain'].value
+        except: mGain = 0
+        # collect pixelSize 
+        try: mPixelSize = self._master.detectorsManager.getCurrentDetector().pixelSizeUm[-1]
+        except: mPixelSize = 1
+        # collect binning
+        try: mBinning = self._master.detectorsManager.getCurrentDetector().binning
+        except: mBinning = 1
+        # get Black Level
+        try: mBlacklevel = self._master.detectorsManager.getCurrentDetector().parameters['blacklevel'].value
+        except: mBlacklevel = 0
+        # get rgb 
+        try: mRGB = self._master.detectorsManager.getCurrentDetector()._isRGB
+        except: mRGB = 0
+        # collect mode (auto/manual)
+        try: camMode = self._master.detectorsManager.getCurrentDetector().parameters['exposure_mode'].value
+        except: camMode = 'manual'
+        mParameterDict = {
+            'exposure': mExposureTime,
+            'gain': mGain,
+            'pixelSize': mPixelSize,
+            'binning': mBinning,
+            'blacklevel': mBlacklevel,
+            'isRGB': mRGB,
+            'mode': camMode
+        }
+        return mParameterDict
+    
+    @APIExport()
     def getDetectorNames(self) -> List[str]:
         """ Returns the device names of all detectors. These device names can
         be passed to other detector-related functions. """

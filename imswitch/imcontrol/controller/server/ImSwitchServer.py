@@ -244,7 +244,7 @@ def delete_item(paths: List[str]):
 
 
 # ⬇️ Download File(s) or Folder(s)
-@app.get("/FileManager/download//{path:path}")
+@app.get("/FileManager/download/{path:path}")
 def download_file(path: str):
     target = os.path.join(BASE_DIR, path.lstrip("/"))
     if not os.path.exists(target):

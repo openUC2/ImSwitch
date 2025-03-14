@@ -59,7 +59,10 @@ class UC2ConfigManager(SignalInterface):
         return self.ESP32.closeSerial()
 
     def isConnected(self):
-        return self.ESP32.serial.is_connected
+        try:
+            return self.ESP32.serial.is_connected
+        except:
+            return False
 
     def interruptSerialCommunication(self):
         self.ESP32.serial.interruptCurrentSerialCommunication()

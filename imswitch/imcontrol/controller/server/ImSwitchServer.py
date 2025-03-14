@@ -4,6 +4,10 @@ from imswitch.imcommon.model import dirtools, initLogger
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from pydantic import BaseModel
+from imswitch.imcontrol.model import Options
+from imswitch.imcommon.model import APIExport, initLogger, ostools
+from imswitch.imcontrol.view.guitools import ViewSetupInfo
+import dataclasses
 from typing import List
 import os
 import shutil
@@ -23,6 +27,7 @@ import os
 import socket
 from typing import List, Dict
 from imswitch import IS_HEADLESS, __ssl__, __httpport__
+from imswitch.imcontrol.model import configfiletools
 
 import socket
 from fastapi.middleware.cors import CORSMiddleware
@@ -396,6 +401,72 @@ class ImSwitchServer(Worker):
             else:
                 module = func.__module__.split('.')[-1]
             self.func = includeAPI("/"+module+"/"+f, func)
+
+
+    # The reason why it's still called UC2ConfigController is because we don't want to change the API
+    @app.get("/UC2ConfigController/returnAvailableSetups")
+    def returnAvailableSetups():
+        """
+        Returns a list of available setups in the config file.
+        """
+        _, _ = configfiletools.loadOptions()
+        setup_list = configfiletools.getSetupList()
+        return {"available_setups": setup_list}
+    
+    @app.get("/UC2ConfigController/getCurrentSetupFilename")
+    def getCurrentSetupFilename():
+        """
+        Returns the current setup filename.
+        """  
+        options, _ = imswitch.DEFAULT_SETUP_FILE # configfiletools.loadOptions()
+        return {"current_setup": options.setupFileName}
+    
+    @app.get("/UC2ConfigController/setSetupFileName")
+    def setSetupFileName(setupFileName: str, restartSoftware: bool=False) -> str:
+        '''Sets the setup file name in the options file.'''
+        if setupFileName is  None:
+            return "No setup file name provided."
+        if setupFileName not in configfiletools.getSetupList():
+            print(f"Setup file {setupFileName} does not exist.")
+            return f"Setup file {setupFileName} does not exist."
+        options, _ = configfiletools.loadOptions()
+        options = dataclasses.replace(options, setupFileName=setupFileName)
+        configfiletools.saveOptions(options)
+        if restartSoftware: ostools.restartSoftware()
+        return f"Setup file {setupFileName} set successfully."
+        
+    @app.get("/UC2ConfigController/readSetupFile")
+    def readSetupFile(setupFileName: str=None) -> dict:
+        '''Reads the setup file. If setupFileName is None, reads the current setup file.'''
+        if setupFileName is None:
+            # get current setup file name
+            options, _ = configfiletools.loadOptions()
+            setupFileName = options.setupFileName
+        if setupFileName.split("/")[-1] not in configfiletools.getSetupList():
+            print(f"Setup file {setupFileName} does not exist.")
+            return f"Setup file {setupFileName} does not exist."
+        mOptions = Options(setupFileName=setupFileName)
+        setup_dict = configfiletools.loadSetupInfo(mOptions, ViewSetupInfo)
+        return setup_dict
+    
+    @app.post("/UC2ConfigController/writeNewSetupFile")    
+    def writeNewSetupFile(setupFileName: str, setupDict: dict, setAsCurrentConfig: bool = True, restart: bool = False, overwrite: bool = False) -> str:
+        '''Writes a new setup file. and set as new setup file if needed on next boot.'''
+        if setupFileName is None:
+            return "No setup file name provided."
+        if setupFileName in configfiletools.getSetupList() and not overwrite:
+            print(f"Setup file {setupFileName} already exists.")
+            return f"Setup file {setupFileName} already exists."
+        mOptions = Options(
+            setupFileName=setupFileName
+        )
+        setupInfo = ViewSetupInfo.from_dict(setupDict)
+        configfiletools.saveSetupInfo(mOptions, setupInfo)
+        if setAsCurrentConfig:
+            pass #self.setSetupFileName(setupFileName) # TODO: This is not working
+        if restart:
+            ostools.restartSoftware(forceConfigFile=setAsCurrentConfig)
+        return f"Setup file {setupFileName} written successfully."
 
 
 

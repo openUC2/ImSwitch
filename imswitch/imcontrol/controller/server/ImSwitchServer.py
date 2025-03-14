@@ -341,7 +341,7 @@ class ImSwitchServer(Worker):
             s.close()
         return IP
 
-    @app.get("/FileManager/docs", include_in_schema=False)
+    @app.get("/docs", include_in_schema=False)
     async def custom_swagger_ui_html():
         return get_swagger_ui_html(
             openapi_url=app.openapi_url,

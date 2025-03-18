@@ -23,6 +23,13 @@ from typing import Optional, Tuple, List
 import h5py
 import numpy as np
 
+try:
+    from ashlarUC2 import utils
+    from ashlarUC2.scripts.ashlar import process_images
+    IS_ASHLAR_AVAILABLE = True
+except Exception as e:
+    IS_ASHLAR_AVAILABLE = False
+
 class ExperimentWorkflowParams(BaseModel):
     currentPosition: Optional[Tuple[float, float]] = None  # X, Y, nX, nY
     currentIndexPosition: Optional[Tuple[int, int]] = None  # iX, iY
@@ -110,6 +117,8 @@ class ParameterValue(BaseModel):
     zStackMin: float
     zStackMax: float
     zStackStepSize: float
+    exposureTime: float=None
+    gain: float=None
 
 class Experiment(BaseModel):
     name: str
@@ -205,6 +214,10 @@ class ExperimentController(ImConWidgetController):
             allPoints = [(centerPoint.x, centerPoint.y)] + [
                 (n.x, n.y) for n in centerPoint.neighborPointList
             ]
+            
+            # also add center point to the list
+            allPoints.append((centerPoint.x, centerPoint.y))
+            
             # Sort by y, then by x (i.e. raster)
             allPoints.sort(key=lambda coords: (coords[1], coords[0]))
 
@@ -214,7 +227,7 @@ class ExperimentController(ImConWidgetController):
             iTile = 0
             for iY in range(num_y_steps):
                 for iX in range(num_x_steps):
-                    if iY % 2 == 1:
+                    if iY % 2 == 1 and num_x_steps!=1:
                         # odd
                         mIdex = iY*num_y_steps + num_x_steps - 1 - iX
                     else: 
@@ -258,8 +271,13 @@ class ExperimentController(ImConWidgetController):
 
         workflowSteps = []
         step_id = 0
-
+        # Generate the list of points to scan based on snake scan
         snake_tiles = self.generate_snake_tiles(mExperiment)
+        # determin min/max scan range
+        minX = min([mPoint["x"] for mPoint in snake_tiles])
+        maxX = max([mPoint["x"] for mPoint in snake_tiles])
+        minY = min([mPoint["y"] for mPoint in snake_tiles])
+        maxY = max([mPoint["y"] for mPoint in snake_tiles])
 
         # Example: Move to each point, take images, possibly do autofocus or z-stack
         for t in range(nTimes):
@@ -292,14 +310,21 @@ class ExperimentController(ImConWidgetController):
                 step_id += 1
 
                 # Acquire frame
+                try:exposure = p.exposureTime
+                except: exposure = 0.1
+                try:gain = p.gain   
+                except: gain = 1.0
+                isPreview = False
                 workflowSteps.append(WorkflowStep(
                     name="Acquire frame",
                     step_id=str(step_id),
                     main_func=self.acquire_frame,
                     main_params={"channel": "Mono"},
-                    post_funcs=[self.save_frame_tiff], # or self.append_frame_to_stack if preview
+                    post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
                     pre_funcs=[self.set_exposure_time_gain],
-                    pre_params={"exposure_time": 0.1, "gain": 1.0}
+                    pre_params={"exposure_time": exposure, "gain": gain},
+                    # Hier übergeben wir posX, posY an das Metadata-Dict
+                    post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
                 ))
                 step_id += 1
 
@@ -355,7 +380,6 @@ class ExperimentController(ImConWidgetController):
         # Create workflow and context
         wf = Workflow(workflowSteps, self.workflow_manager)
         context = WorkflowContext()
-
         # Set metadata (optional – store whatever data you want)
         context.set_metadata("experimentName", exp_name)
         context.set_metadata("nTimes", nTimes)
@@ -371,7 +395,19 @@ class ExperimentController(ImConWidgetController):
         mFilePath = os.path.join(dirPath, mFileName + ".tif")
         tiff_writer = tif.TiffWriter(mFilePath)
         context.set_object("tiff_writer", tiff_writer)
-
+        '''
+        image_width, image_height = image_dims[0], image_dims[1]        # physical size of the image in microns
+        size = np.array((max_coords[1]+image_height,max_coords[0]+image_width))/pixel_size # size of the final image that contains all tiles in microns
+        mshape = np.int32(np.ceil(size)*self.resolution_scale*pixel_size)          # size of the final image in pixels (i.e. canvas)
+        self.stitched_image = np.zeros(mshape.T, dtype=np.uint16)       # create a canvas for the stitched image
+        ''' 
+        if self.mDetector._isRGB:
+            context.set_object("canvas", np.zeros((2048, 2048, 3), dtype=np.uint8))
+        else:
+            context.set_object("canvas", np.zeros((2048, 2048), dtype=np.uint16))
+        context.on("progress", sendProgress)
+        context.on("rgb_stack", sendProgress)
+        
         context.on("progress", sendProgress)
         context.on("rgb_stack", sendProgress)
 
@@ -392,9 +428,9 @@ class ExperimentController(ImConWidgetController):
         return mFrame
     
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
-        if gain >=0:
+        if gain and gain >=0:
             self._logger.error(f"Setting gain to {gain}")
-        if exposure_time >=0:
+        if exposure_time and exposure_time >=0:
             self._logger.error(f"Setting exposure time to {exposure_time}")
         
     def dummy_main_func(self):
@@ -408,7 +444,7 @@ class ExperimentController(ImConWidgetController):
         import time
         time.sleep(seconds)
 
-    def save_frame_tiff(self, context: WorkflowContext, metadata: Dict[str, Any]):
+    def save_frame_tiff(self, context: WorkflowContext, metadata: Dict[str, Any], **kwargs):
         # Retrieve the TIFF writer and write the tile
         tiff_writer = context.get_object("tiff_writer")
         if tiff_writer is None:
@@ -419,6 +455,24 @@ class ExperimentController(ImConWidgetController):
         tiff_writer.save(img)
         metadata["frame_saved"] = True
         
+    def add_image_to_canvas(self, context: WorkflowContext, metadata: Dict[str, Any], **kwargs):
+        # Retrieve the canvas and add the image
+        canvas = context.get_object("canvas")
+        if canvas is None:
+            self._logger.debug("No canvas found in context!")
+            return        
+        img = metadata["result"] # After acquire_frame runs, its return (the frame) goes into metadata["result"]. Then each post-func—save_frame_tiff, add_image_to_canvas, etc.—can read it from metadata["result"].
+        if img is None:
+            self._logger.debug("No image found in metadata!")
+            return
+        posX, posY = kwargs['posX'], kwargs['posY']
+        minX,minY,maxX,maxY = kwargs['minX'], kwargs['minY'], kwargs['maxX'], kwargs['maxY']
+        mPixelSize = self.detectorPixelSize
+        posPixels = ((((posY-minY)/mPixelSize[-1]), (posX-minX)/mPixelSize[-1]))
+        utils.paste(canvas, img, posPixels, np.maximum)
+        context.set_object("canvas", canvas)
+        metadata["frame_saved"] = True
+    
     def append_frame_to_stack(self, context: WorkflowContext, metadata: Dict[str, Any]):
         # Retrieve the stack writer and append the frame
         # if we have one stack "full", we need to reset the stack
@@ -478,186 +532,6 @@ class ExperimentController(ImConWidgetController):
         metadata["autofocus_done"] = True
 
 
-    ########################################
-    # Example Workflow for Multicolour Experiment
-    ########################################
-    
-    @APIExport(requestType="POST")
-    def start_multicolour_Experiment_workflow(
-            self,
-            params: ExperimentWorkflowParams
-        ):
-        '''
-        nTimes: int = 1
-        tPeriod: int = 1
-        illuSources: List[str] = ["LED", "Laser"]
-        illuIntensities: List[int] = [10, 10]
-        exposureTimes: List[float] = [0.1, 0.1]
-        gain: List[float] = [1.0, 1.0]
-        autofocus_on: bool = False
-        isPreview: bool = False -> if we use preview mode, we do not save the data, we only show it via Socket Updates
-        '''
-        
-        # assign parameters to global variables
-        self.ExperimentParams = params
-        nTimes = params.nTimes
-        tPeriod = params.tPeriod
-        illuSources = params.illuSourcesSelected
-        exposureTimes = params.exposureTimes
-        gains = params.gain
-        intensities = params.illuIntensities
-        autofocus_every_nth_frame = params.autofocus_every_n_frames
-        isPreview = params.isPreview
-        
-        # ensure parameters are lists 
-        if not isinstance(illuSources, list): illuSources = [illuSources]
-        if not isinstance(intensities, list): intensities = [intensities]
-        if not isinstance(exposureTimes, list): exposureTimes = [exposureTimes]
-        if not isinstance(gains, list): gains = [gains]
-        
-        # Check if another workflow is running
-        if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
-            raise HTTPException(status_code=400, detail="Another workflow is already running.")
-        # Start the detector if not already running
-        if not self.mDetector._running: 
-            self.mDetector.startAcquisition()
-        
-        # construct the workflow steps
-        workflowSteps = []
-        step_id = 0
-
-        # In this simplified example, we only do a single Z position (z=0)
-        # and a single frame per position. You can easily extend this.
-        z_pos = 0
-        frames = [0]  # single frame index for simplicity
-        for t in range(nTimes):
-            for illu, intensity, exposure, gain in zip(illuSources, intensities, exposureTimes, gains):
-                # Set laser power (arbitrary, could be parameterized)
-                workflowSteps.append(WorkflowStep(
-                    name=f"Set laser power",
-                    step_id=str(step_id),
-                    main_func=self.set_laser_power,
-                    main_params={"power": intensity, "channel": illu},
-                    pre_funcs=[],
-                    post_funcs=[self.wait_time], # add a short wait
-                    post_params={"seconds": 0.05}
-                ))
-                
-                # Acquire frame with a short wait, process data, and save frame
-                workflowSteps.append(WorkflowStep(
-                    name=f"Acquire frame",
-                    step_id=str(step_id),
-                    main_func=self.acquire_frame,
-                    main_params={"channel": "Mono"},
-                    post_funcs=[self.save_frame_tiff] if not isPreview else [self.append_frame_to_stack],
-                    pre_funcs=[self.set_exposure_time_gain],
-                    pre_params={"exposure_time": exposure, "gain": gain}
-                ))
-                
-                # Set laser power off
-                workflowSteps.append(WorkflowStep(
-                    name=f"Set laser power",
-                    step_id=str(step_id),
-                    main_func=self.set_laser_power,
-                    main_params={"power": 0, "channel": illu},
-                    pre_funcs=[],
-                    post_funcs=[self.wait_time], # add a short wait
-                    post_params={"seconds": 0}
-                ))
-
-
-            # Add autofocus step every nth frame
-            if autofocus_every_nth_frame > 0 and t % autofocus_every_nth_frame == 0:
-                workflowSteps.append(WorkflowStep(
-                    name=f"Autofocus",
-                    step_id=str(step_id),
-                    main_func=self.autofocus,
-                    main_params={},
-                ))
-                                        
-            # add delay between frames 
-            if isPreview:
-                workflowSteps.append(WorkflowStep(
-                    name=f"Display frame",
-                    step_id=str(step_id),
-                    main_func=self.dummy_main_func,
-                    main_params={}, 
-                    pre_funcs=[self.emit_rgb_stack],
-                    pre_params={}  
-                ))
-            else:
-                workflowSteps.append(WorkflowStep(
-                    name=f"Wait for next frame",
-                    step_id=str(step_id),
-                    main_func=self.dummy_main_func,
-                    main_params={}, 
-                    pre_funcs=[self.wait_time],
-                    pre_params={"seconds": tPeriod}  
-                ))
-
-                step_id += 1
-        
-        # Close TIFF writer at the end
-        workflowSteps.append(WorkflowStep(
-            name="Close TIFF writer",
-            step_id=str(step_id)+"_done",
-            main_func=self.close_tiff_writer,
-            main_params={"tiff_writer": tif.TiffWriter("Experiment.tif")},
-        ))
-        
-        # add final step to notify completion
-        workflowSteps.append(WorkflowStep(
-                name=f"Done",
-                step_id=str(step_id),
-                main_func=self.dummy_main_func,
-                main_params={}, 
-                pre_funcs=[self.wait_time],
-                pre_params={"seconds": 0.1}  
-            ))
-        
-        def sendProgress(payload):
-            self.sigExperimentWorkflowUpdate.emit(payload)
-            
-        # Create a workflow and context
-        wf = Workflow(workflowSteps, self.workflow_manager)
-        context = WorkflowContext()
-        # set meta data of the workflow
-        context.set_metadata("nTimes", nTimes)
-        context.set_metadata("tPeriod", tPeriod)
-        context.set_metadata("illuSources", illuSources)
-        context.set_metadata("illuIntensities", intensities)
-        context.set_metadata("exposureTimes", exposureTimes)
-        context.set_metadata("gains", gains)
-        context.set_metadata("autofocus_every_nth_frame", autofocus_every_nth_frame)
-        context.set_metadata("isPreview", isPreview)
-        
-        if isPreview:
-            # we assume that we are in preview mode and do not save the data
-            # but we want to show it via Socket Updates
-            # therefore, we accumulate n frames in a list and display them as an RGB image
-            stack_writer = []
-            context.set_object("stack_writer", stack_writer)
-        else:
-            # Insert the tiff writer object into context so `save_frame` can use it
-            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            drivePath = dirtools.UserFileDirs.Data
-            dirPath = os.path.join(drivePath, 'recordings', timeStamp)
-            if not os.path.exists(dirPath):
-                os.makedirs(dirPath)        
-            self._logger.debug("Save TIF at: " + dirPath)
-            experimentName = "Experiment"
-            mFileName = f'{timeStamp}_{experimentName}'
-            mFilePath = os.path.join(dirPath, mFileName+ ".tif")
-            tiff_writer = tif.TiffWriter(mFilePath)
-            context.set_object("tiff_writer", tiff_writer)
-        context.on("progress", sendProgress)
-        context.on("rgb_stack", sendProgress)
-        # Run the workflow
-        # context = wf.run_in_background(context)
-        self.workflow_manager.start_workflow(wf, context)
-
-        # return the store path to the client so they know where data is stored
-        return {"status": "completed", "store_path": "Experiment.tif"}
             
     @APIExport()
     def pauseWorkflow(self):

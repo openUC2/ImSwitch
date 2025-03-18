@@ -1578,6 +1578,12 @@ class ImageStitcher:
                         pixel_size=pixel_size)
 
     def add_image(self, img, coords, metadata):
+        '''
+        Add an image to the queue for processing
+        img - 2/3D numpy array (grayscale or RGB)
+        coords - tuple of (x, y) stage coordinates in pixels
+        metadata - dictionary of metadata
+        '''
         with self.lock:
             self.queue.append((img, coords, metadata))
 

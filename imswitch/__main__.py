@@ -51,9 +51,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
             
             if type(args.config_file)==str and args.config_file.find("json")>=0:  # e.g. example_virtual_microscope.json
                 imswitch.DEFAULT_SETUP_FILE = args.config_file  
-            if os.path.isdir(args.config_folder):
+            if args.config_folder and os.path.isdir(args.config_folder):
                 imswitch.DEFAULT_CONFIG_PATH = args.config_folder # e.g. /Users/USER/ in case an alternative path is used
-            if os.path.isdir(args.data_folder):
+            if args.data_folder and os.path.isdir(args.data_folder):
                 imswitch.DEFAULT_DATA_PATH = args.data_folder # e.g. /Users/USER/ in case an alternative path is used
             
         except Exception as e:

@@ -130,6 +130,8 @@ class ExperimentController(ImConWidgetController):
     """Linked to ExperimentWidget."""
 
     sigExperimentWorkflowUpdate = Signal()
+    sigExperimentImageUpdate = Signal(str, np.ndarray, bool, list, bool)  # (detectorName, image, init, scale, isCurrentDetector)
+
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -229,7 +231,7 @@ class ExperimentController(ImConWidgetController):
                 for iX in range(num_x_steps):
                     if iY % 2 == 1 and num_x_steps!=1:
                         # odd
-                        mIdex = iY*num_y_steps + num_x_steps - 1 - iX
+                        mIdex = iY*num_x_steps + num_x_steps - 1 - iX
                     else: 
                         #even
                         mIdex = iTile 
@@ -278,7 +280,7 @@ class ExperimentController(ImConWidgetController):
         maxX = max([mPoint["x"] for mPoint in snake_tiles])
         minY = min([mPoint["y"] for mPoint in snake_tiles])
         maxY = max([mPoint["y"] for mPoint in snake_tiles])
-
+        mPixelSize = self.detectorPixelSize[-1]  # Pixelgröße in µm
         # Example: Move to each point, take images, possibly do autofocus or z-stack
         for t in range(nTimes):
             # Loop over the list of points
@@ -351,8 +353,10 @@ class ExperimentController(ImConWidgetController):
             workflowSteps.append(WorkflowStep(
                 name="Wait for next frame",
                 step_id=str(step_id),
-                main_func=self.wait_time,
-                main_params={"seconds": tPeriod},
+                main_func=self.dummy_main_func,
+                main_params={},
+                pre_funcs=[self.wait_time],
+                pre_params={"seconds": 0.1}
             ))
             step_id += 1
 
@@ -364,6 +368,17 @@ class ExperimentController(ImConWidgetController):
             main_params={"tiff_writer": tif.TiffWriter("Experiment.tif")},
         ))
 
+        # Emit final canvas
+        workflowSteps.append(WorkflowStep(
+            name="Emit Final Canvas",
+            step_id=str(step_id),
+            main_func=self.dummy_main_func,
+            main_params={},
+            pre_funcs=[self.emit_final_canvas],
+            pre_params={}
+        ))
+        step_id += 1
+
         # Final step: mark done
         workflowSteps.append(WorkflowStep(
             name="Done",
@@ -373,6 +388,7 @@ class ExperimentController(ImConWidgetController):
             pre_funcs=[self.wait_time],
             pre_params={"seconds": 0.1}
         ))
+        
 
         def sendProgress(payload):
             self.sigExperimentWorkflowUpdate.emit(payload)
@@ -401,10 +417,18 @@ class ExperimentController(ImConWidgetController):
         mshape = np.int32(np.ceil(size)*self.resolution_scale*pixel_size)          # size of the final image in pixels (i.e. canvas)
         self.stitched_image = np.zeros(mshape.T, dtype=np.uint16)       # create a canvas for the stitched image
         ''' 
+        
+        def compute_canvas_dimensions(minX, maxX, minY, maxY, pixelSize):
+            width_pixels = int(np.ceil((maxX - minX) / pixelSize))
+            height_pixels = int(np.ceil((maxY - minY) / pixelSize))
+            return width_pixels, height_pixels
+        canvas_width, canvas_height = compute_canvas_dimensions(minX, maxX, minY, maxY, mPixelSize)
+
         if self.mDetector._isRGB:
-            context.set_object("canvas", np.zeros((2048, 2048, 3), dtype=np.uint8))
+            canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
         else:
-            context.set_object("canvas", np.zeros((2048, 2048), dtype=np.uint16))
+            canvas = np.zeros((canvas_height, canvas_width), dtype=np.uint16)
+        context.set_object("canvas", canvas)
         context.on("progress", sendProgress)
         context.on("rgb_stack", sendProgress)
         
@@ -455,7 +479,7 @@ class ExperimentController(ImConWidgetController):
         tiff_writer.save(img)
         metadata["frame_saved"] = True
         
-    def add_image_to_canvas(self, context: WorkflowContext, metadata: Dict[str, Any], **kwargs):
+    def add_image_to_canvas(self, context: WorkflowContext, metadata: Dict[str, Any], emitCurrentProgress=True, **kwargs):
         # Retrieve the canvas and add the image
         canvas = context.get_object("canvas")
         if canvas is None:
@@ -472,7 +496,18 @@ class ExperimentController(ImConWidgetController):
         utils.paste(canvas, img, posPixels, np.maximum)
         context.set_object("canvas", canvas)
         metadata["frame_saved"] = True
-    
+        if emitCurrentProgress:
+            #Signal(str, np.ndarray, bool, list, bool)  # (detectorName, image, init, scale, isCurrentDetector)
+            self.sigExperimentImageUpdate.emit("canvas", canvas, True, 1, 0)  
+
+    def emit_final_canvas(self, context: WorkflowContext, metadata: Dict[str, Any]):
+        final_canvas = context.get_object("canvas")
+        if final_canvas is not None:
+            self.sigExperimentImageUpdate.emit("canvas", final_canvas, True, 1, 0)  
+            tif.imsave("final_canvas.tif", final_canvas)  
+        else:
+            print("No final canvas found!")
+            
     def append_frame_to_stack(self, context: WorkflowContext, metadata: Dict[str, Any]):
         # Retrieve the stack writer and append the frame
         # if we have one stack "full", we need to reset the stack

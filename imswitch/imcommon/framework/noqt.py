@@ -56,9 +56,9 @@ class SignalInstance(psygnal.SignalInstance):
             return
 
         # Skip large data signals
-        if self.name in ["sigUpdateImage"]:  #, "sigImageUpdated"]:
+        if self.name in ["sigUpdateImage", "sigExperimentImageUpdate"]:  #, "sigImageUpdated"]:
             now = time.time()
-            if SOCKET_STREAM and (now - self.last_image_emit_time > self.image_emit_interval):
+            if SOCKET_STREAM and (now - self.last_image_emit_time > self.image_emit_interval) or self.name == "sigExperimentImageUpdate":
                 self._handle_image_signal(args)
                 self.last_image_emit_time = now
             return
@@ -77,7 +77,8 @@ class SignalInstance(psygnal.SignalInstance):
     def _handle_image_signal(self, args):
         """Compress and broadcast image signals."""
         detectorName = args[0]
-        pixelSize = np.min(args[3])
+        try:pixelSize = np.min(args[3])
+        except:pixelSize = 1
         try:
             for arg in args:
                 if isinstance(arg, np.ndarray):
@@ -103,7 +104,7 @@ class SignalInstance(psygnal.SignalInstance):
                     message = {
                         "name": self.name,
                         "detectorname": detectorName,
-                        "pixelsize": pixelSize,
+                        "pixelsize": int(pixelSize), # must not be int64
                         "format": "jpeg", 
                         "image": encoded_image,
                     }

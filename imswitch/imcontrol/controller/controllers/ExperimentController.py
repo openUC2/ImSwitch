@@ -476,8 +476,12 @@ class ExperimentController(ImConWidgetController):
             return
         img = metadata["result"]
         # append the image to the tiff file
-        tiff_writer.save(img)
-        metadata["frame_saved"] = True
+        try:
+            tiff_writer.save(img)
+            metadata["frame_saved"] = True
+        except Exception as e:
+            self._logger.error(f"Error saving TIFF: {e}")
+            metadata["frame_saved"] = False
         
     def add_image_to_canvas(self, context: WorkflowContext, metadata: Dict[str, Any], emitCurrentProgress=True, **kwargs):
         # Retrieve the canvas and add the image

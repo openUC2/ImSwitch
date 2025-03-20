@@ -141,6 +141,10 @@ class ExperimentController(ImConWidgetController):
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
 
+        self.SPEED_Y = 10000
+        self.SPEED_X = 10000
+        self.SPEED_Z = 10000
+        
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.mDetector = self._master.detectorsManager[allDetectorNames[0]]
@@ -477,7 +481,7 @@ class ExperimentController(ImConWidgetController):
         img = metadata["result"]
         # append the image to the tiff file
         try:
-            tiff_writer.save(img)
+            tiff_writer.write(img)
             metadata["frame_saved"] = True
         except Exception as e:
             self._logger.error(f"Error saving TIFF: {e}")
@@ -554,14 +558,14 @@ class ExperimentController(ImConWidgetController):
     def move_stage_xy(self, posX: float, posY: float, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
         self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
-        self.mStage.move(value=(posX, posY), axis="XY", is_absolute=not relative, is_blocking=True)
+        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True)
         newPosition = self.mStage.getPosition()
         self._commChannel.sigUpdateMotorPosition.emit([newPosition["X"], newPosition["Y"]])
         return (newPosition["X"], newPosition["Y"])
 
     def move_stage_z(self, posZ: float, relative: bool = False):
         self._logger.debug(f"Moving stage to Z={posZ}")
-        self.mStage.move(value=posZ, axis="Z", is_absolute=not relative, is_blocking=True)
+        self.mStage.move(value=posZ, speed=self.SPEED_Z, axis="Z", is_absolute=not relative, is_blocking=True)
         newPosition = self.mStage.getPosition()
         self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
         return newPosition["Z"]

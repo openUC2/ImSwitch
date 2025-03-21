@@ -210,6 +210,7 @@ class ExperimentController(ImConWidgetController):
 
         return num_x_steps, num_y_steps
 
+    '''
     def generate_snake_tiles(self, mExperiment):
         """
         Generates Snake Scan coordinates based on a list of central and neighbouring points coming from the GUI
@@ -252,6 +253,38 @@ class ExperimentController(ImConWidgetController):
         def flatten(xss):
             return [x for xs in xss for x in xs]            
         return flatten(tiles)
+    '''
+    def generate_snake_tiles(self, mExperiment):
+        tiles = []
+        for iCenter, centerPoint in enumerate(mExperiment.pointList):
+            # Collect central and neighbour points (without duplicating the center)
+            allPoints = [(centerPoint.x, centerPoint.y)] + [
+                (n.x, n.y) for n in centerPoint.neighborPointList
+            ]
+            # Sort by y then by x (i.e., raster order)
+            allPoints.sort(key=lambda coords: (coords[1], coords[0]))
+
+            num_x_steps, num_y_steps = self.get_num_xy_steps(centerPoint.neighborPointList)
+            allPointsSnake = [0] * (num_x_steps * num_y_steps)
+            iTile = 0
+            for iY in range(num_y_steps):
+                for iX in range(num_x_steps):
+                    if iY % 2 == 1 and num_x_steps != 1:
+                        mIdex = iY * num_x_steps + num_x_steps - 1 - iX
+                    else:
+                        mIdex = iTile
+                    allPointsSnake[mIdex] = {
+                        "iterator": iTile,
+                        "centerIndex": iCenter,
+                        "iX": iX,
+                        "iY": iY,
+                        "x": allPoints[iTile][0],
+                        "y": allPoints[iTile][1],
+                    }
+                    iTile += 1
+            tiles.append(allPointsSnake)
+        return tiles
+
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
@@ -279,69 +312,69 @@ class ExperimentController(ImConWidgetController):
         step_id = 0
         # Generate the list of points to scan based on snake scan
         snake_tiles = self.generate_snake_tiles(mExperiment)
-        # determin min/max scan range
-        minX = min([mPoint["x"] for mPoint in snake_tiles])
-        maxX = max([mPoint["x"] for mPoint in snake_tiles])
-        minY = min([mPoint["y"] for mPoint in snake_tiles])
-        maxY = max([mPoint["y"] for mPoint in snake_tiles])
-        mPixelSize = self.detectorPixelSize[-1]  # Pixelgröße in µm
-        # Example: Move to each point, take images, possibly do autofocus or z-stack
+        # Flatten all point dictionaries from all tiles to compute scan range
+        all_points = [pt for tile in snake_tiles for pt in tile]
+
+        minX = min(pt["x"] for pt in all_points)
+        maxX = max(pt["x"] for pt in all_points)
+        minY = min(pt["y"] for pt in all_points)
+        maxY = max(pt["y"] for pt in all_points)
+        mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
+
         for t in range(nTimes):
-            # Loop over the list of points
-            for mIndex, mPoint in enumerate(snake_tiles):
-                # for every point create a single-point or neighboring-points list to loop over
-                try:
-                    name = f"Move to point {mPoint['iterator']}"
-                except:
-                    name = f"Move to point { mPoint['x']}, { mPoint['y']}"
-                
-                # Move stage to each  mPoint["x"],  mPoint["y"]
-                workflowSteps.append(WorkflowStep(
-                    name=name,
-                    step_id=str(step_id),
-                    main_func=self.move_stage_xy,
-                    main_params={"posX":  mPoint["x"], "posY":  mPoint["y"], "relative": False},
-                ))
-                step_id += 1
+            # Loop over each tile (each central point and its neighbors)
+            for tile in snake_tiles:
+                for mIndex, mPoint in enumerate(tile):
+                    try:
+                        name = f"Move to point {mPoint['iterator']}"
+                    except Exception:
+                        name = f"Move to point {mPoint['x']}, {mPoint['y']}"
+                    
+                    workflowSteps.append(WorkflowStep(
+                        name=name,
+                        step_id=str(step_id),
+                        main_func=self.move_stage_xy,
+                        main_params={"posX": mPoint["x"], "posY": mPoint["y"], "relative": False},
+                    ))
+                    step_id += 1
+                    # Turn on illumination (example with "illumination" parameter)
+                    workflowSteps.append(WorkflowStep(
+                        name="Turn on illumination",
+                        step_id=str(step_id),
+                        main_func=self.set_laser_power,
+                        main_params={"power": laserWaveLength, "channel": illuSource},
+                        post_funcs=[self.wait_time],
+                        post_params={"seconds": 0.05},
+                    ))
+                    step_id += 1
 
-                # Turn on illumination (example with "illumination" parameter)
-                workflowSteps.append(WorkflowStep(
-                    name="Turn on illumination",
-                    step_id=str(step_id),
-                    main_func=self.set_laser_power,
-                    main_params={"power": laserWaveLength, "channel": illuSource},
-                    post_funcs=[self.wait_time],
-                    post_params={"seconds": 0.05},
-                ))
-                step_id += 1
+                    # Acquire frame
+                    try:exposure = p.exposureTime
+                    except: exposure = 0.1
+                    try:gain = p.gain   
+                    except: gain = 1.0
+                    isPreview = False
+                    workflowSteps.append(WorkflowStep(
+                        name="Acquire frame",
+                        step_id=str(step_id),
+                        main_func=self.acquire_frame,
+                        main_params={"channel": "Mono"},
+                        post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
+                        pre_funcs=[self.set_exposure_time_gain],
+                        pre_params={"exposure_time": exposure, "gain": gain},
+                        # Hier übergeben wir posX, posY an das Metadata-Dict
+                        post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
+                    ))
+                    step_id += 1
 
-                # Acquire frame
-                try:exposure = p.exposureTime
-                except: exposure = 0.1
-                try:gain = p.gain   
-                except: gain = 1.0
-                isPreview = False
-                workflowSteps.append(WorkflowStep(
-                    name="Acquire frame",
-                    step_id=str(step_id),
-                    main_func=self.acquire_frame,
-                    main_params={"channel": "Mono"},
-                    post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
-                    pre_funcs=[self.set_exposure_time_gain],
-                    pre_params={"exposure_time": exposure, "gain": gain},
-                    # Hier übergeben wir posX, posY an das Metadata-Dict
-                    post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
-                ))
-                step_id += 1
-
-                # Turn off illumination
-                workflowSteps.append(WorkflowStep(
-                    name="Turn off illumination",
-                    step_id=str(step_id),
-                    main_func=self.set_laser_power,
-                    main_params={"power": 0, "channel": illuSource},
-                ))
-                step_id += 1
+                    # Turn off illumination
+                    workflowSteps.append(WorkflowStep(
+                        name="Turn off illumination",
+                        step_id=str(step_id),
+                        main_func=self.set_laser_power,
+                        main_params={"power": 0, "channel": illuSource},
+                    ))
+                    step_id += 1
 
             # (Optional) Perform autofocus once per loop, if enabled
             if isAutoFocus:

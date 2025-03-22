@@ -88,6 +88,9 @@ class SignalInstance(psygnal.SignalInstance):
                     else:
                         everyNthsPixel = 1
                                 
+                    # convert 16 bit to 8 bit for visualization 
+                    if output_frame.dtype == np.uint16:
+                        output_frame = cv2.normalize(output_frame, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
                     try:
                         output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
                     except: 

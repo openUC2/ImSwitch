@@ -319,6 +319,9 @@ class ExperimentController(ImConWidgetController):
         maxX = max(pt["x"] for pt in all_points)
         minY = min(pt["y"] for pt in all_points)
         maxY = max(pt["y"] for pt in all_points)
+        # compute step between two adjacent points in X/Y
+        diffX = np.diff(np.unique([pt["x"] for pt in all_points])).min()
+        diffY = np.diff(np.unique([pt["y"] for pt in all_points])).min()
         mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
 
         for t in range(nTimes):
@@ -455,16 +458,16 @@ class ExperimentController(ImConWidgetController):
         self.stitched_image = np.zeros(mshape.T, dtype=np.uint16)       # create a canvas for the stitched image
         ''' 
         
-        def compute_canvas_dimensions(minX, maxX, minY, maxY, pixelSize):
-            width_pixels = int(np.ceil((maxX - minX) / pixelSize))
-            height_pixels = int(np.ceil((maxY - minY) / pixelSize))
+        def compute_canvas_dimensions(minX, maxX, minY, maxY, diffX, diffY, pixelSize):
+            width_pixels = int(np.ceil((maxX - minX + diffX) / pixelSize))
+            height_pixels = int(np.ceil((maxY - minY + diffY) / pixelSize))
             return width_pixels, height_pixels
-        canvas_width, canvas_height = compute_canvas_dimensions(minX, maxX, minY, maxY, mPixelSize)
+        canvas_width, canvas_height = compute_canvas_dimensions(minX, maxX, minY, maxY, diffX, diffY,  mPixelSize)
 
         if self.mDetector._isRGB:
             canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
         else:
-            canvas = np.zeros((canvas_height, canvas_width), dtype=np.uint16)
+            canvas = np.zeros((canvas_height, canvas_width), dtype=np.uint16) # numpy assigns y,x,z
         context.set_object("canvas", canvas)
         context.on("progress", sendProgress)
         context.on("rgb_stack", sendProgress)
@@ -539,7 +542,11 @@ class ExperimentController(ImConWidgetController):
         metadata["frame_saved"] = True
         if emitCurrentProgress:
             #Signal(str, np.ndarray, bool, list, bool)  # (detectorName, image, init, scale, isCurrentDetector)
-            self.sigExperimentImageUpdate.emit("canvas", canvas, True, 1, 0)  
+            def mSendCanvas(canvas, init, scale):
+                mCanvas = np.copy(canvas)
+                self.sigExperimentImageUpdate.emit("canvas", mCanvas, init, scale, True)
+            import threading
+            threading.Thread(target=mSendCanvas, args=(canvas, False, 1)).start()
 
     def emit_final_canvas(self, context: WorkflowContext, metadata: Dict[str, Any]):
         final_canvas = context.get_object("canvas")

@@ -70,7 +70,8 @@ class VirtualStageManager(PositionerManager):
         allPositionsDict = self._positioner.get_position()
         posDict= {}
         posDict["VirtualStage"] = allPositionsDict
-        self._commChannel.sigUpdateMotorPosition.emit(posDict) # TODO: This is a hacky workaround to force Imswitch to update the motor positions in the gui..
+        try:self._commChannel.sigUpdateMotorPosition.emit(posDict)
+        except: pass # Should be a list TODO: This is a hacky workaround to force Imswitch to update the motor positions in the gui..
         return allPositionsDict
 
     def forceStop(self, axis):

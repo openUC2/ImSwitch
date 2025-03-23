@@ -50,7 +50,7 @@ class LepmonController(LiveUpdatedController):
     sigImagesTaken = Signal(int)      # e.g. "imageCounter" WS message
     sigIsRunning = Signal(bool)       # e.g. "isRunning" WS message
     sigFocusSharpness = Signal(float) # e.g. "focusSharpness" WS message
-    temperatureUpdate = Signal(list)  # e.g. "temperatureUpdate" WS message
+    temperatureUpdate = Signal(dict)  # e.g. "temperatureUpdate" WS message
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

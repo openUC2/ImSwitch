@@ -76,6 +76,8 @@ class ImConMainView(QMainWindow):
             'SIM': _DockInfo(name='SIM', yPosition=0),
             'DPC': _DockInfo(name='DPC', yPosition=0),
             'MCT': _DockInfo(name='MCT', yPosition=0),
+            'Lepmon': _DockInfo(name='Lepmon', yPosition=0),
+            'Experiment': _DockInfo(name='Experiment', yPosition=0),
             'Timelapse': _DockInfo(name='Timelapse', yPosition=0),
             'Experiment': _DockInfo(name='Experiment', yPosition=0),
             'ROIScan': _DockInfo(name='ROIScan', yPosition=0),
@@ -237,7 +239,8 @@ class ImConMainView(QMainWindow):
                 if not foundPluginController:
                     self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
             self.docks[widgetKey] = Dock(dockInfo.name, size=(1, 1))
-            try:self.docks[widgetKey].addWidget(self.widgets[widgetKey])
+            try:
+                self.docks[widgetKey].addWidget(self.widgets[widgetKey])
             except:
                 self.__logger.error(f"Could not add widget {widgetKey} to dock {dockInfo.name}")
                 continue

@@ -32,9 +32,10 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
                             "--allow-root",
                             "--no-browser",
                             "--ip=0.0.0.0",
-                            "--config=\"%s\"" % configfile,
-                            "--notebook-dir=%s" % directory], bufsize=1,
-                            stderr=subprocess.PIPE)
+                            "--config=%s" % configfile,
+                            "--notebook-dir=%s" % directory
+                            ], bufsize=1, stderr=subprocess.PIPE)
+    print("STarting jupyter with: %s" % notebookp.args)
     print("Waiting for server to start...")
     webaddr = None
     time0 = time.time()
@@ -45,7 +46,13 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
             start = line.find("http://")
             # end = line.find("/", start+len("http://")) new notebook
             # needs a token which is at the end of the line
+            # replace hostname.local with localhost 
             webaddr = line[start:]
+            if ".local" in webaddr:
+                # replace hostname.local with localhost # TODO: Not good!
+                webaddr = "http://localhost"+webaddr.split(".local")[1]
+                break 
+                
         if time.time() - time0 > 10:
             print("Timeout waiting for server to start")
             return None

@@ -333,10 +333,15 @@ class LepmonController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Could not set gain: {e}")
 
+    def closeEvent(self):
+        self._pullSensorDataActive = False
+        if hasattr(super(), '__del__'):
+            super().__del__()
     # ---------------------- Helper functions -------------------------- #
     
     def _pullSensorData(self, interval):
-        while True:
+        self._pullSensorDataActive = True
+        while self._pullSensorDataActive:
             # Get sensor data
             # e.g. temperature, humidity, pressure, etc.
             # sensor_data = getSensorData()

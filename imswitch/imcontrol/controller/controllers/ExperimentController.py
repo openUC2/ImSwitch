@@ -29,6 +29,27 @@ try:
     IS_ASHLAR_AVAILABLE = True
 except Exception as e:
     IS_ASHLAR_AVAILABLE = False
+    
+    
+# Attempt to use OME-Zarr
+try:
+    import dask.array as da
+    import zarr
+    import ome_zarr
+    from ome_zarr.io import parse_url
+    from ome_zarr.writer import write_image
+    from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
+    from imswitch.imcontrol.controller.controllers.experiment_controller.experimentmodel import ExperimentModel
+    
+    IS_OMEZARR_AVAILABLE = True
+    
+
+except Exception as e:
+    IS_OMEZARR_AVAILABLE = False
+
+
+
+
 
 class ExperimentWorkflowParams(BaseModel):
     currentPosition: Optional[Tuple[float, float]] = None  # X, Y, nX, nY
@@ -289,12 +310,18 @@ class ExperimentController(ImConWidgetController):
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
         # Extract key parameters
+        
+
+
+ 
         exp_name = mExperiment.name
         p = mExperiment.parameterValue
         nTimes = p.numberOfImages
         tPeriod = p.timeLapsePeriod
         isAutoFocus = p.autoFocus
         zStackOn = p.zStack
+        
+        
 
         # Example usage of a single illumination source
         illuSource = p.illumination
@@ -307,6 +334,35 @@ class ExperimentController(ImConWidgetController):
         # Start the detector if not already running
         if not self.mDetector._running:
             self.mDetector.startAcquisition()
+
+
+        # Prepare TIFF writer
+        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        drivePath = dirtools.UserFileDirs.Data
+        dirPath = os.path.join(drivePath, 'recordings', timeStamp)
+        if not os.path.exists(dirPath):
+            os.makedirs(dirPath)
+        mFileName = f"{timeStamp}_{exp_name}"
+        mFilePath = os.path.join(dirPath, mFileName + ".tif")
+        tiff_writer = tif.TiffWriter(mFilePath)
+       
+        
+        # Prepare OME-Zarr writer (new)
+        # fill ome model
+        if IS_OMEZARR_AVAILABLE:
+            #zarr_path = os.path.join(dirPath, mFileName + ".ome.zarr")
+            #ome_store = parse_url(zarr_path, mode="w").store
+            
+            myModel = ExperimentModel(x_pixels = self.mDetector._shape[-1], y_pixels = self.mDetector._shape[-2]) # reads config
+            ome_store = None
+            zarr_path = "my_experiment.ome.zarr"
+            ome_store = MinimalZarrDataSource(file_name=zarr_path, mode="w")
+            # Configure it from your model
+            ome_store.set_metadata_from_configuration_experiment(myModel.configuration)
+            
+        else:
+            self._logger.error("OME-ZARR not available or not installed.")
+
 
         workflowSteps = []
         step_id = 0
@@ -357,6 +413,7 @@ class ExperimentController(ImConWidgetController):
                     try:gain = p.gain   
                     except: gain = 1.0
                     isPreview = False
+                    '''
                     workflowSteps.append(WorkflowStep(
                         name="Acquire frame",
                         step_id=str(step_id),
@@ -367,6 +424,25 @@ class ExperimentController(ImConWidgetController):
                         pre_params={"exposure_time": exposure, "gain": gain},
                         # Hier übergeben wir posX, posY an das Metadata-Dict
                         post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
+                    ))
+                    '''
+                    
+                    workflowSteps.append(WorkflowStep(
+                        name="Acquire frame",
+                        step_id=str(step_id),
+                        main_func=self.acquire_frame,
+                        main_params={"channel": "Mono"},
+                        post_funcs=[self.save_frame_tiff, self.save_frame_ome_zarr, self.add_image_to_canvas],
+                        pre_funcs=[self.set_exposure_time_gain],
+                        pre_params={"exposure_time": exposure, "gain": gain},
+                        post_params={
+                            "posX": mPoint["x"],
+                            "posY": mPoint["y"],
+                            "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
+                            "channel": illuSource,
+                            "time_index": t,       # or whatever loop index
+                            "tile_index": mIndex   # or snake-tile index
+                        },
                     ))
                     step_id += 1
 
@@ -405,9 +481,19 @@ class ExperimentController(ImConWidgetController):
             name="Close TIFF writer",
             step_id=str(step_id) + "_done",
             main_func=self.close_tiff_writer,
-            main_params={"tiff_writer": tif.TiffWriter("Experiment.tif")},
+            main_params={"tiff_writer": tiff_writer},
         ))
 
+        if IS_OMEZARR_AVAILABLE:
+            # Close OME-Zarr store at the end (new)
+            workflowSteps.append(WorkflowStep(
+                name="Close OME-Zarr store",
+                step_id=str(step_id) + "_close_omezarr",
+                main_func=self.close_ome_zarr_store,
+                main_params={"omezarr_store": ome_store},
+            ))
+            step_id += 1
+        
         # Emit final canvas
         workflowSteps.append(WorkflowStep(
             name="Emit Final Canvas",
@@ -441,16 +527,10 @@ class ExperimentController(ImConWidgetController):
         context.set_metadata("nTimes", nTimes)
         context.set_metadata("tPeriod", tPeriod)
 
-        # Prepare TIFF writer
-        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.Data
-        dirPath = os.path.join(drivePath, 'recordings', timeStamp)
-        if not os.path.exists(dirPath):
-            os.makedirs(dirPath)
-        mFileName = f"{timeStamp}_{exp_name}"
-        mFilePath = os.path.join(dirPath, mFileName + ".tif")
-        tiff_writer = tif.TiffWriter(mFilePath)
         context.set_object("tiff_writer", tiff_writer)
+        if IS_OMEZARR_AVAILABLE:
+            context.set_object("omezarr_store", ome_store)
+
         '''
         image_width, image_height = image_dims[0], image_dims[1]        # physical size of the image in microns
         size = np.array((max_coords[1]+image_height,max_coords[0]+image_width))/pixel_size # size of the final image that contains all tiles in microns
@@ -523,6 +603,46 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Error saving TIFF: {e}")
             metadata["frame_saved"] = False
         
+    def close_ome_zarr_store(self, omeZarrStore):
+        # If you need to do anything special (like flush) for the store, do it here.
+        # Otherwise, Zarr’s FS-store or disk-store typically closes on its own.
+        # This function can be effectively a no-op if you do not require extra steps.
+        try:
+            if omeZarrStore:
+                omeZarrStore.close()
+            else:
+                self._logger.debug("OME-Zarr store not found in context.")
+            return
+        except Exception as e:
+            self._logger.error(f"Error closing OME-Zarr store: {e}")
+            raise e
+    
+    def save_frame_ome_zarr(self, context: Dict[str, Any], metadata: Dict[str, Any], **kwargs):
+        """
+        Saves a single frame (tile) to an OME-Zarr store, handling coordinate transformation mismatch.
+
+        Args:
+            context: A dictionary containing the OME-Zarr store and other relevant data.
+            metadata: A dictionary containing the image data and other metadata.
+            **kwargs: Additional keyword arguments, including tile position, channel, etc.
+        """
+        omeZarrStore = context.get_object("omezarr_store")
+        if omeZarrStore is None:
+            raise ValueError("OME-Zarr store not found in context.")
+
+        img = metadata.get("result")
+        if img is None:
+            return
+
+        posX = kwargs.get("posX", 0)
+        posY = kwargs.get("posY", 0)
+        posZ = kwargs.get("posZ", 0)
+        channel_str = kwargs.get("channel", "Mono")
+        
+        # 3) Write the frame with stage coords:
+        omeZarrStore.write(img, x=posX, y=posY, z=posZ)
+        time.sleep(0.01)
+
     def add_image_to_canvas(self, context: WorkflowContext, metadata: Dict[str, Any], emitCurrentProgress=True, **kwargs):
         # Retrieve the canvas and add the image
         canvas = context.get_object("canvas")
@@ -650,18 +770,4 @@ class ExperimentController(ImConWidgetController):
         del self.workflow_manager
         self.workflow_manager = WorkflowsManager()
 
-# Copyright (C) 2020-2024 ImSwitch developers
-# This file is part of ImSwitch.
-#
-# ImSwitch is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# ImSwitch is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# Copyright (C) 2025 Benedict Diederich

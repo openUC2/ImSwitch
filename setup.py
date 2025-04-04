@@ -58,6 +58,7 @@ setup(
         "tifffile >= 2020.11.26",
         "ome_zarr >= 0.9.0",
         "Pyro5 >= 5.14",
+        "dask[complete] >= 2024.11.2",
         "fastAPI >= 0.86.0",
         "uvicorn[standard] >= 0.19.0",
         "matplotlib >= 3.6",

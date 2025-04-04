@@ -26,10 +26,8 @@ class LEDMatrixManager(ABC):
         self.valueRangeMax = 255
         self.valueRangeStep = 1
         self.valueUnits = ""
+        self.__currentState = None
         
-        self.__freqRangeMin = None
-        self.__freqRangeMax = None
-        self.__freqRangeInit = None
       
     def name(self) -> str:
         """ Unique LEDMatrix name, defined in the LEDMatrix's setup info. """
@@ -64,6 +62,25 @@ class LEDMatrixManager(ABC):
         pass
     
     def setValue(self, value) -> None:
+        """ Sets the value of the LEDMatrix. """
+        pass
+    
+    def getState(self) -> Union[None, str]:
+        """ Returns the state of the LEDMatrix. """
+        return self.__currentState
+    
+    def setState(self, state) -> None:
+        """ Sets the state of the LEDMatrix. """
+        
+    def setRing(self, radius: int, intensity: int) -> None:
+        """ Sets the value of the LEDMatrix. """
+        pass
+    
+    def setCircle(self, radius: int, intensity: int) -> None:
+        """ Sets the value of the LEDMatrix. """
+        pass
+    
+    def setHalves(self, intensity: int, region: str) -> None:
         """ Sets the value of the LEDMatrix. """
         pass
     

@@ -1,16 +1,19 @@
 {
   "files": {
     "main.css": "/imswitch/static/css/main.abbf531a.css",
-    "main.js": "/imswitch/static/js/main.5be6169b.js",
+    "main.js": "/imswitch/static/js/main.f68f0314.js",
     "static/js/787.862870cf.chunk.js": "/imswitch/static/js/787.862870cf.chunk.js",
+    "static/media/illumination_ring.png": "/imswitch/static/media/illumination_ring.54bd2afbc0dad2fd423a.png",
+    "static/media/illumination_circle.png": "/imswitch/static/media/illumination_circle.60984d7405fab18873e8.png",
+    "static/media/illumination_halves.png": "/imswitch/static/media/illumination_halves.27b029147851ccf5b1b4.png",
     "static/media/ouc2_logo_qaudratic.png": "/imswitch/static/media/ouc2_logo_qaudratic.88c949fc97cf84facafc.png",
     "index.html": "/imswitch/index.html",
     "main.abbf531a.css.map": "/imswitch/static/css/main.abbf531a.css.map",
-    "main.5be6169b.js.map": "/imswitch/static/js/main.5be6169b.js.map",
+    "main.f68f0314.js.map": "/imswitch/static/js/main.f68f0314.js.map",
     "787.862870cf.chunk.js.map": "/imswitch/static/js/787.862870cf.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.abbf531a.css",
-    "static/js/main.5be6169b.js"
+    "static/js/main.f68f0314.js"
   ]
 }

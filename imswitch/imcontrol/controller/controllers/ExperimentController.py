@@ -30,88 +30,25 @@ try:
 except Exception as e:
     IS_ASHLAR_AVAILABLE = False
     
-    
 # Attempt to use OME-Zarr
 try:
-    import dask.array as da
-    import zarr
-    import ome_zarr
-    from ome_zarr.io import parse_url
-    from ome_zarr.writer import write_image
     from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
-    from imswitch.imcontrol.controller.controllers.experiment_controller.experimentmodel import ExperimentModel
-    
     IS_OMEZARR_AVAILABLE = True
-    
-
 except Exception as e:
     IS_OMEZARR_AVAILABLE = False
 
+from pydantic import BaseModel, Field
+from typing import List, Optional, Tuple, Dict
+import uuid
 
-
-
-
-class ExperimentWorkflowParams(BaseModel):
-    currentPosition: Optional[Tuple[float, float]] = None  # X, Y, nX, nY
-    currentIndexPosition: Optional[Tuple[int, int]] = None  # iX, iY
-    isExpiermentRunning: bool = False
-    stitchResultAvailable: bool = False
-    currentStepSizeX: Optional[float] = None
-    currentStepSizeY: Optional[float] = None
-    currentNX: int = 0
-    currentNY: int = 0
-    currentOverlap: float = 0.75
-    currentAshlarStitching: bool = False
-    currentAshlarFlipX: bool = False
-    currentAshlarFlipY: bool = False
-    currentResizeFactor: float = 0.25
-    currentIinitialPosX: Optional[float] = None
-    currentIinitialPosY: Optional[float] = None
-    currentTimeInterval: Optional[float] = None
-    currentNtimes: int = 1
-    pixelSize: float = 1.0
-    
-    # GUI-Specific Parameters
-    illuminationSources: List[str] = ["Brightfield", "Darkfield", "Laser", "DPC"]
-    selectedIllumination: Optional[str] = "Brightfield"
-    laserWavelengths: List[float] = [405, 488, 532, 635, 785, 10]  # in nm
-    selectedLaserWavelength: float = 488.0
-    
-    # Time-lapse parameters
-    timeLapsePeriod: float = 330.4  # s
-    timeLapsePeriodMin: float = 1.0
-    timeLapsePeriodMax: float = 1000.0
-    numberOfImages: int = 652
-    numberOfImagesMin: int = 1
-    numberOfImagesMax: int = 1000
-    
-    # Autofocus parameters
-    autofocusMinFocusPosition: float = 0.0
-    autofocusMaxFocusPosition: float = 0.0
-    autofocusStepSize: float = 0.1
-    autofocusStepSizeMin: float = 0.01
-    autofocusStepSizeMax: float = 10.0
-    
-    # Z-Stack parameters
-    zStackMinFocusPosition: float = 0.0
-    zStackMaxFocusPosition: float = 0.0
-    zStackStepSize: float = 0.1
-    zStackStepSizeMin: float = 0.01
-    zStackStepSizeMax: float = 10.0
-
-    @classmethod
-    def from_dict(cls, data: dict):
-        return cls(**data)
-
-    def to_dict(self):
-        return self.dict()
-
-
+# -----------------------------------------------------------
+# Reuse your existing sub-models:
+# -----------------------------------------------------------
 class NeighborPoint(BaseModel):
     x: float
     y: float
     iX: int
-    iY: int    
+    iY: int
 
 class Point(BaseModel):
     id: uuid.UUID
@@ -138,15 +75,65 @@ class ParameterValue(BaseModel):
     zStackMin: float
     zStackMax: float
     zStackStepSize: float
-    exposureTime: float=None
-    gain: float=None
+    exposureTime: float = None
+    gain: float = None
 
 class Experiment(BaseModel):
+    # From your old "Experiment" BaseModel:
     name: str
     parameterValue: ParameterValue
     pointList: List[Point]
 
-
+    # From your old "ExperimentModel":
+    number_z_steps: int = Field(0, description="Number of Z slices")
+    timepoints: int = Field(1, description="Number of timepoints for time-lapse")
+    x_pixels: int = Field(0, description="Image width in pixels")
+    y_pixels: int = Field(0, description="Image height in pixels")
+    microscope_name: str = Field("FRAME", description="Name of the microscope")
+    is_multiposition: bool = Field(False, description="Whether multiple positions are used")
+    channels: Dict[str, Dict[str, float]] = Field(
+        description="Channel definitions, typically keys like 'Ch0', 'Ch1' etc.",
+        default_factory=lambda: {
+        "Ch0": {"is_selected": True, "camera_exposure_time": 0}
+    })
+    multi_positions: Dict[str, Dict[str, float]] = Field(
+        description="Multi-position definitions if is_multiposition=True",
+        default_factory=lambda: {
+            '''
+            "pos1": {"x": 0, "y": 0, "z": 0},
+            "pos2": {"x": 10000, "y": 20000, "z": 5000},
+            '''
+        }
+    )
+    
+    # -----------------------------------------------------------
+    # A helper to produce the "configuration" dict 
+    # -----------------------------------------------------------
+    def to_configuration(self) -> dict:
+        """
+        Convert this Experiment into a dict structure that your Zarr writer or
+        scanning logic can easily consume.
+        """
+        config = {
+            "experiment": {
+                "MicroscopeState": {
+                    "microscope_name": self.microscope_name,
+                    "number_z_steps": self.number_z_steps,
+                    "is_multiposition": self.is_multiposition,
+                    "timepoints": self.timepoints,
+                    "channels": self.channels,
+                },
+                "CameraParameters": {
+                    self.microscope_name: {
+                        "x_pixels": self.x_pixels,
+                        "y_pixels": self.y_pixels,
+                    }
+                },
+            },
+            "multi_positions": self.multi_positions,
+        }
+        return config
+    
 class ExperimentController(ImConWidgetController):
     """Linked to ExperimentWidget."""
 
@@ -190,19 +177,18 @@ class ExperimentController(ImConWidgetController):
         except:
             self.mStage = None
             
+        '''
         # define Experiment parameters as ExperimentWorkflowParams
         self.ExperimentParams = ExperimentWorkflowParams()
         
         
         # TODO: Adjust parameters 
-        '''
         self.ExperimentParams.illuSources = self.allIlluNames
         self.ExperimentParams.illuSourceMinIntensities = [0]*len(self.ExperimentParams.illuSourcesSelected)
         self.ExperimentParams.illuSourceMaxIntensities = [100]*len(self.ExperimentParams.illuSourcesSelected)
         self.ExperimentParams.illuIntensities = [0]*len(self.allIlluNames)
         self.ExperimentParams.exposureTimes = [0]*len(self.allIlluNames)
         self.ExperimentParams.gain = [0]*len(self.allIlluNames)
-        '''
         
     @APIExport(requestType="GET")
     def getCurrentExperimentParameters(self):
@@ -213,6 +199,7 @@ class ExperimentController(ImConWidgetController):
         self.ExperimentParams = params
         return self.ExperimentParams
 
+        '''
 
     def get_num_xy_steps(self, pointList):
         # we don't consider the center point as this .. well in the center
@@ -310,19 +297,15 @@ class ExperimentController(ImConWidgetController):
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
         # Extract key parameters
-        
-
-
  
         exp_name = mExperiment.name
         p = mExperiment.parameterValue
         nTimes = p.numberOfImages
         tPeriod = p.timeLapsePeriod
         isAutoFocus = p.autoFocus
-        zStackOn = p.zStack
+        nZSteps = int((mExperiment.parameterValue.zStackMax-mExperiment.parameterValue.zStackMin)//mExperiment.parameterValue.zStackStepSize)+1
+        isZStack = p.zStack
         
-        
-
         # Example usage of a single illumination source
         illuSource = p.illumination
         laserWaveLength = p.laserWaveLength
@@ -335,7 +318,6 @@ class ExperimentController(ImConWidgetController):
         if not self.mDetector._running:
             self.mDetector.startAcquisition()
 
-
         # Prepare TIFF writer
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         drivePath = dirtools.UserFileDirs.Data
@@ -345,21 +327,20 @@ class ExperimentController(ImConWidgetController):
         mFileName = f"{timeStamp}_{exp_name}"
         mFilePath = os.path.join(dirPath, mFileName + ".tif")
         tiff_writer = tif.TiffWriter(mFilePath)
-       
         
         # Prepare OME-Zarr writer (new)
         # fill ome model
         if IS_OMEZARR_AVAILABLE:
-            #zarr_path = os.path.join(dirPath, mFileName + ".ome.zarr")
-            #ome_store = parse_url(zarr_path, mode="w").store
-            
-            myModel = ExperimentModel(x_pixels = self.mDetector._shape[-1], y_pixels = self.mDetector._shape[-2]) # reads config
             ome_store = None
-            zarr_path = "my_experiment.ome.zarr"
+            zarr_path = os.path.join(dirPath, mFileName + ".ome.zarr")
+            self._logger.debug(f"OME-Zarr path: {zarr_path}")
             ome_store = MinimalZarrDataSource(file_name=zarr_path, mode="w")
             # Configure it from your model
-            ome_store.set_metadata_from_configuration_experiment(myModel.configuration)
-            
+            mExperiment.x_pixels, mExperiment.y_pixels=self.mDetector._shape[-2],self.mDetector._shape[-1]
+            mExperiment.number_z_steps = nZSteps
+            mExperiment.timepoints = nTimes
+            exp_config = mExperiment.to_configuration()
+            ome_store.set_metadata_from_configuration_experiment(exp_config)
         else:
             self._logger.error("OME-ZARR not available or not installed.")
 
@@ -603,13 +584,13 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Error saving TIFF: {e}")
             metadata["frame_saved"] = False
         
-    def close_ome_zarr_store(self, omeZarrStore):
+    def close_ome_zarr_store(self, omezarr_store):
         # If you need to do anything special (like flush) for the store, do it here.
         # Otherwise, Zarr’s FS-store or disk-store typically closes on its own.
         # This function can be effectively a no-op if you do not require extra steps.
         try:
-            if omeZarrStore:
-                omeZarrStore.close()
+            if omezarr_store:
+                omezarr_store.close()
             else:
                 self._logger.debug("OME-Zarr store not found in context.")
             return

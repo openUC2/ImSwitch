@@ -95,22 +95,22 @@ class LEDMatrixController(ImConWidgetController):
     @APIExport()
     def setRing(self, ringRadius: int, intensity: int) -> None:
         """ Sets the value of the LEDMatrix. """
-        self.setIntensity(intensity=intensity)
+        #self.setIntensity(intensity=intensity)
         self.ledMatrix.setRing(radius=ringRadius, intensity=intensity)
         if not IS_HEADLESS: self._widget.leds[str(ringRadius)].setChecked(True)
         
     @APIExport()
     def setCircle(self, circleRadius: int, intensity: int) -> None:
         """ Sets the value of the LEDMatrix. """
-        self.setIntensity(intensity=intensity)
+        #self.setIntensity(intensity=intensity)
         self.ledMatrix.setCircle(radius=circleRadius, intensity=intensity)
         if not IS_HEADLESS: self._widget.leds[str(circleRadius)].setChecked(True)
         
     @APIExport()
     def setHalves(self, intensity: int, direction: str) -> None:
         """ Sets the value of the LEDMatrix. """
-        self.setIntensity(intensity=intensity)
-        self.ledMatrix.setHalve(intensity=intensity, region=direction)
+        #self.setIntensity(intensity=intensity)
+        self.ledMatrix.setHalves(intensity=intensity, region=direction)
         if not IS_HEADLESS: self._widget.leds[str(intensity)].setChecked(True)
         
     

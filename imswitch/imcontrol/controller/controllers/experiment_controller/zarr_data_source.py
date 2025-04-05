@@ -61,7 +61,6 @@ class MinimalZarrDataSource:
         self.shape_x = cp["x_pixels"]
         self.shape_y = cp["y_pixels"]
 
-
         # do we let z vary faster or c vary faster
         self.per_stack = ms.get("stack_cycling_mode", "per_stack") == "per_stack"
 

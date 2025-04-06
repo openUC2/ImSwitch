@@ -33,6 +33,7 @@ except Exception as e:
 # Attempt to use OME-Zarr
 try:
     from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
+    from imswitch.imcontrol.controller.controllers.experiment_controller.single_multiscale_zarr_data_source import SingleMultiscaleZarrWriter
     IS_OMEZARR_AVAILABLE = True
 except Exception as e:
     IS_OMEZARR_AVAILABLE = False
@@ -318,6 +319,21 @@ class ExperimentController(ImConWidgetController):
         if not self.mDetector._running:
             self.mDetector.startAcquisition()
 
+        # Generate the list of points to scan based on snake scan
+        snake_tiles = self.generate_snake_tiles(mExperiment)
+        # Flatten all point dictionaries from all tiles to compute scan range
+        all_points = [pt for tile in snake_tiles for pt in tile]
+
+        minX = min(pt["x"] for pt in all_points)
+        maxX = max(pt["x"] for pt in all_points)
+        minY = min(pt["y"] for pt in all_points)
+        maxY = max(pt["y"] for pt in all_points)
+        # compute step between two adjacent points in X/Y
+        diffX = np.diff(np.unique([pt["x"] for pt in all_points])).min()
+        diffY = np.diff(np.unique([pt["y"] for pt in all_points])).min()
+        mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
+
+
         # Prepare TIFF writer
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         drivePath = dirtools.UserFileDirs.Data
@@ -334,32 +350,30 @@ class ExperimentController(ImConWidgetController):
             ome_store = None
             zarr_path = os.path.join(dirPath, mFileName + ".ome.zarr")
             self._logger.debug(f"OME-Zarr path: {zarr_path}")
-            ome_store = MinimalZarrDataSource(file_name=zarr_path, mode="w")
-            # Configure it from your model
-            mExperiment.x_pixels, mExperiment.y_pixels=self.mDetector._shape[-2],self.mDetector._shape[-1]
-            mExperiment.number_z_steps = nZSteps
-            mExperiment.timepoints = nTimes
-            exp_config = mExperiment.to_configuration()
-            ome_store.set_metadata_from_configuration_experiment(exp_config)
+            if 0:
+                ome_store = MinimalZarrDataSource(file_name=zarr_path, mode="w")
+                # Configure it from your model
+                mExperiment.x_pixels, mExperiment.y_pixels=self.mDetector._shape[-2],self.mDetector._shape[-1]
+                mExperiment.number_z_steps = nZSteps
+                mExperiment.timepoints = nTimes
+                exp_config = mExperiment.to_configuration()
+                ome_store.set_metadata_from_configuration_experiment(exp_config)
+            else:
+                ome_store = SingleMultiscaleZarrWriter(zarr_path, "w")
+                # compute max coordinates for x/y
+                fovX = int(maxX - minX + diffX)
+                fovY = int(maxY - minY + diffY)
+                
+                ome_store.set_metadata(t=nTimes, c=1, z=nZSteps, bigY=fovY, bigX=fovX)
+                ome_store.open_store()
+
+            
         else:
             self._logger.error("OME-ZARR not available or not installed.")
 
 
         workflowSteps = []
         step_id = 0
-        # Generate the list of points to scan based on snake scan
-        snake_tiles = self.generate_snake_tiles(mExperiment)
-        # Flatten all point dictionaries from all tiles to compute scan range
-        all_points = [pt for tile in snake_tiles for pt in tile]
-
-        minX = min(pt["x"] for pt in all_points)
-        maxX = max(pt["x"] for pt in all_points)
-        minY = min(pt["y"] for pt in all_points)
-        maxY = max(pt["y"] for pt in all_points)
-        # compute step between two adjacent points in X/Y
-        diffX = np.diff(np.unique([pt["x"] for pt in all_points])).min()
-        diffY = np.diff(np.unique([pt["y"] for pt in all_points])).min()
-        mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
 
         for t in range(nTimes):
             # Loop over each tile (each central point and its neighbors)
@@ -621,7 +635,11 @@ class ExperimentController(ImConWidgetController):
         channel_str = kwargs.get("channel", "Mono")
         
         # 3) Write the frame with stage coords:
-        omeZarrStore.write(img, x=posX, y=posY, z=posZ)
+        if 0:
+            omeZarrStore.write(img, x=posX, y=posY, z=posZ)
+        else:
+            omeZarrStore.write_tile(img, t=0, c=0, z=0, y_start=posY, x_start=posX)
+
         time.sleep(0.01)
 
     def add_image_to_canvas(self, context: WorkflowContext, metadata: Dict[str, Any], emitCurrentProgress=True, **kwargs):

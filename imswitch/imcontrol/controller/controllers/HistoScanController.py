@@ -41,12 +41,13 @@ from PIL import Image
 from ome_zarr.writer import write_image
 from ome_zarr.io import parse_url
 from ome_zarr.format import CurrentFormat
-isZARR=True
 try:
     from iohub.ngff import open_ome_zarr
     IS_IOHUB = True
 except ImportError:
     IS_IOHUB = False
+    isZARR=False
+isZARR=False
 
 try:
     from ashlarUC2 import utils
@@ -1320,7 +1321,6 @@ class HistoScanController(LiveUpdatedController):
                         posY_pix_value = (float(positionList[1])-minPosY)/self.microscopeDetector.pixelSizeUm[-1]
                         posX_pix_value = (float(positionList[0])-minPosX)/self.microscopeDetector.pixelSizeUm[-1]
                         iPosPix = (posX_pix_value, posY_pix_value)
-                        #stitcher._place_on_canvas(np.copy(mFrame), np.copy(iPosPix))
                         stitcher.add_image(np.copy(mFrame), np.copy(iPosPix), metadata.copy())
                     threading.Thread(target=addImage, args=(mFrame,iPos)).start()
 
@@ -1351,7 +1351,7 @@ class HistoScanController(LiveUpdatedController):
             largeImage = stitcher.get_stitched_image()
             dirPath  = os.path.join(dirtools.UserFileDirs.Root, 'recordings', mDate)
             os.makedirs(dirPath, exist_ok=True)
-            tifffile.imsave(os.path.join(dirPath, "stitchedImage.tif"), largeImage, append=False) 
+            tifffile.imwrite(os.path.join(dirPath, "stitchedImage.tif"), largeImage, append=False) 
             self.setImageForDisplay(largeImage, "histoscanStitch"+mDate)
         threading.Thread(target=getStitchedResult).start()
         
@@ -1604,7 +1604,13 @@ class ImageStitcher:
                         time.sleep(.02) # unload CPU
                         continue
                     img, coords, metadata = self.queue.popleft()
-                    self._place_on_canvas(img, coords, flipX=self.flipX, flipY=self.flipY)
+                    
+                    # flip image if needed
+                    if self.flipX:
+                        img = np.fliplr(img)
+                    if self.flipY:
+                        img = np.flipud(img)
+                    self._place_on_canvas(img, coords)
 
                     # write image to disk
                     # tif.write(data=img, metadata=metadata)                
@@ -1620,12 +1626,19 @@ class ImageStitcher:
                         time.sleep(.02) # unload CPU
                         continue
                     img, coords, metadata = self.queue.popleft()
-                    self._place_on_canvas(img, coords, flipX=self.flipX, flipY=self.flipY)
-
+                    
+                    # flip image if needed
+                    if self.flipX:
+                        img = np.fliplr(img)
+                    if self.flipY:
+                        img = np.flipud(img)
+                    
+                    self._place_on_canvas(img, coords)
                     # write image to disk
+                    #metadata e.g. {"Pixels": {"PhysicalSizeX": 0.2, "PhysicalSizeXUnit": "\\u00b5m", "PhysicalSizeY": 0.2, "PhysicalSizeYUnit": "\\u00b5m"}, "Plane": {"PositionX": -100, "PositionY": -100, "IndexX": 0, "IndexY": 0}}
                     tif.write(data=img, metadata=metadata)
                 
-    def _place_on_canvas(self, img, coords, flipX=True, flipY=True):
+    def _place_on_canvas(self, img, coords):
         if self.isStitchAshlar and IS_ASHLAR_AVAILABLE:
             # in case we want to process it with ASHLAR later on
             self.ashlarImageList.append(img)
@@ -1635,10 +1648,8 @@ class ImageStitcher:
             coords = np.flip(coords) # YX
             img = skimage.transform.rescale(img, self.resolution_scale, anti_aliasing=False)
             if len(img.shape)==3: img = np.mean(img, axis=-1)  # RGB
-            if flipX:
-                img = np.fliplr(img)
-            if flipY:
-                img = np.flipud(img)
+            if img.dtype != np.float64 or img.dtype != np.float32:
+                img = np.abs(img)*(img<1)
             img = skimage.img_as_uint(img)
             # Round position so paste will skip the expensive subpixel shift.
             pos = np.round((coords-self.origin_coords)*self.resolution_scale)

@@ -353,6 +353,9 @@ class FlowStopController(LiveUpdatedController):
                 return
             if not cv2.imwrite(fileName+".jpg", mFrame):
                 self._logger.warning("Frame could not be saved using cv2 jpeg")
+                self._logger.warning("mFrame is None: "+str(mFrame is None))
+                try:self._logger.warning("mFrame shape: "+str(mFrame.shape))
+                except: pass
                 return
         elif fileFormat == "PNG":
             pngFormat = SaveFormat.PNG

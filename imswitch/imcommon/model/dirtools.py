@@ -3,7 +3,7 @@ import os
 from abc import ABC
 from pathlib import Path
 from shutil import copy2, disk_usage
-from imswitch import IS_HEADLESS, __file__, DEFAULT_CONFIG_PATH, DEFAULT_DATA_PATH, SCAN_EXT_DATA_FOLDER
+from imswitch import IS_HEADLESS, __file__, DEFAULT_CONFIG_PATH, DEFAULT_DATA_PATH, SCAN_EXT_DATA_FOLDER, EXT_DRIVE_MOUNT
 import platform
 import subprocess
 
@@ -78,7 +78,8 @@ def initUserFilesIfNeeded():
 
     # Initialize directories
     for userFileDir in UserFileDirs.list():
-        os.makedirs(userFileDir, exist_ok=True)
+        if userFileDir is not None:
+            os.makedirs(userFileDir, exist_ok=True)
 
     # Copy default user files
     for file in glob.glob(os.path.join(DataFileDirs.UserDefaults, '**'), recursive=True):
@@ -129,21 +130,18 @@ class UserFileDirs(FileDirs):
     Data = _baseUserFilesDir
     if DEFAULT_DATA_PATH is not None:
         Data = DEFAULT_DATA_PATH
-    if SCAN_EXT_DATA_FOLDER and DEFAULT_DATA_PATH is not None:
+    if SCAN_EXT_DATA_FOLDER and EXT_DRIVE_MOUNT is not None:
         # TODO: This is a testing workaround
         '''
         Basic idea: We provide ImSwitch (most likely runing inside docker) with the path to the external mounts for external drives (e.g. /media or /Volumes)
         ImSwitch now has to pick the external drive and check if it is mounted and use this as a data storage 
         '''
         # If SCAN_EXT_DATA_FOLDER or user sets default_data_path, pick the subfolder
-        chosen_mount = pick_first_external_mount(DEFAULT_DATA_PATH)
+        chosen_mount = pick_first_external_mount(EXT_DRIVE_MOUNT)
         if chosen_mount:
             Data = chosen_mount
         
-        
     
-    
-
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

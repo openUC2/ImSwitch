@@ -6,11 +6,23 @@ import os
 
 import imswitch
 def main(is_headless:bool=None, default_config:str=None, http_port:int=None, socket_port:int=None, ssl:bool=None, config_folder:str=None,
-         data_folder: str=None, scan_ext_data_folder:bool=None):
+         data_folder: str=None, scan_ext_data_folder:bool=None, ext_drive_mount:str=None):
     '''
+    is_headless: bool => start with or without qt
+    default_config: str => path to the config file 
+    http_port: int => port number (default: 8001)
+    socket_port: int => port number (default: 8002)
+    ssl: bool => use ssl (default: True)
+    config_folder: str => path to the config folder (default: None, pointing to Documents/ImSwitch)
+    data_folder: str => path to the data folder (default: None, pointing to Documents/ImSwitchConfig)
+    scan_ext_data_folder: bool => if True, we will scan the ext_drive_mount for usb drives and use this for data storage
+    ext_drive_mount: str => path to the external drive mount point (default: None, optionally pointing to e.g. /Volumes or /media)
+    
+    
+    
     To start imswitch in headless using the arguments, you can call the main file with the following arguments:
         python main.py --headless or
-        python -m imswitch --headless 1 --config-file example_virtual_microscope.json --config-folder /Users/bene/Dowynloads --scan-ext-data-folder true --ext-data-folder /Volumes
+        python -m imswitch --headless 1 --config-file example_virtual_microscope.json --config-folder /Users/bene/Downloads --scan-ext-drive-mount true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes
     '''
     try:
         try: # Google Colab does not support argparse
@@ -40,10 +52,15 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                                 help='specify config folder')
             
             parser.add_argument('--ext-data-folder', dest='data_folder', type=str, default=None, 
-                                help='point to a folder to store the data. This overrides the ImSwitchConfig, useful for docker volumes')
+                                help='point to a folder to store the data. This is the default location for the data folder. If not specified, the default location will be used.')
 
-            parser.add_argument('--scan-ext-data-folder', dest='scan_ext_data_folder', default=False, action='store_true',
+            parser.add_argument('--scan-ext-drive-mount', dest='scan_ext_data_folder', default=False, action='store_true',
                                 help='scan the external mount (linux only) if we have a USB drive to save to')
+            
+            parser.add_argument('--ext-drive-mount', dest='ext_drive_mount', type=str, default=None,
+                                help='specify the external drive mount point (e.g. /Volumes or /media)')
+            
+            
             
             args = parser.parse_args()
             
@@ -60,6 +77,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 imswitch.DEFAULT_DATA_PATH = args.data_folder # e.g. /Users/USER/ in case an alternative path is used
             if args.scan_ext_data_folder:
                 imswitch.SCAN_EXT_DATA_FOLDER = args.scan_ext_data_folder
+            if args.ext_drive_mount:
+                imswitch.EXT_DRIVE_MOUNT = args.ext_drive_mount
             
         except Exception as e:
             print(e)
@@ -89,7 +108,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         if scan_ext_data_folder is not None:
             print("We use the user-provided scan_ext_data_folder: " + str(scan_ext_data_folder))
             imswitch.SCAN_EXT_DATA_FOLDER = scan_ext_data_folder
-
+        if ext_drive_mount is not None:
+            print("We use the user-provided ext_drive_mount: " + str(ext_drive_mount))
+            imswitch.EXT_DRIVE_MOUNT = ext_drive_mount
 
         # FIXME: !!!! This is because the headless flag is loaded after commandline input
         from imswitch.imcommon import prepareApp, launchApp

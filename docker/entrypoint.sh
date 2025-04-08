@@ -101,8 +101,9 @@ then
     params+=" --config-folder ${CONFIG_PATH:-None}"
     params+=" --config-file ${CONFIG_FILE:-None}"
     params+=" --ext-data-folder ${DATA_PATH:-None}"
-    params+=" --scan-ext-data-folder $(SCAN_EXT_DATA_FOLDER:-false)"
-    
+    params+=" --scan-ext-drive-mount $(SCAN_EXT_DATA_FOLDER:-false)"
+    params+=" --ext-drive-mount ${EXT_DRIVE_MOUNT:-None}"
+        
     echo 'Starting Imswitch with the following parameters:'
     echo "${params[@]}"
     python3 /tmp/ImSwitch/main.py $params

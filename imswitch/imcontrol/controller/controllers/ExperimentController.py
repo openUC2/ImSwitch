@@ -77,7 +77,7 @@ class ParameterValue(BaseModel):
     zStack: bool
     zStackMin: float
     zStackMax: float
-    zStackStepSize: float
+    zStackStepSize: float = 1.
     exposureTime: float = None
     gain: float = None
 
@@ -137,6 +137,26 @@ class Experiment(BaseModel):
         }
         return config
     
+    
+class ExperimentWorkflowParams(BaseModel):
+    """Parameters for the experiment workflow."""
+    # Comments in English
+
+    # Illumination parameters
+    illuSources: List[str] = Field(default_factory=list, description="List of illumination sources")
+    illuSourceMinIntensities: List[float] = Field(default_factory=list, description="Minimum intensities for each source")
+    illuSourceMaxIntensities: List[float] = Field(default_factory=list, description="Maximum intensities for each source")
+    illuIntensities: List[float] = Field(default_factory=list, description="Intensities for each source")
+
+    # Camera parameters
+    exposureTimes: List[float] = Field(default_factory=list, description="Exposure times for each source")
+    gain: List[float] = Field(default_factory=list, description="Gain settings for each source")
+
+    # Feature toggles
+    isDPCpossible: bool = Field(False, description="Whether DPC is possible")
+    isDarkfieldpossible: bool = Field(False, description="Whether darkfield is possible")
+
+
 class ExperimentController(ImConWidgetController):
     """Linked to ExperimentWidget."""
 
@@ -180,29 +200,21 @@ class ExperimentController(ImConWidgetController):
         except:
             self.mStage = None
             
-        '''
-        # define Experiment parameters as ExperimentWorkflowParams
-        self.ExperimentParams = ExperimentWorkflowParams()
-        
-        
         # TODO: Adjust parameters 
+        # define changeable Experiment parameters as ExperimentWorkflowParams
+        self.ExperimentParams = ExperimentWorkflowParams()
         self.ExperimentParams.illuSources = self.allIlluNames
-        self.ExperimentParams.illuSourceMinIntensities = [0]*len(self.ExperimentParams.illuSourcesSelected)
-        self.ExperimentParams.illuSourceMaxIntensities = [100]*len(self.ExperimentParams.illuSourcesSelected)
+        self.ExperimentParams.illuSourceMinIntensities = [0]*len(self.allIlluNames)
+        self.ExperimentParams.illuSourceMaxIntensities = [1023]*len(self.allIlluNames)
         self.ExperimentParams.illuIntensities = [0]*len(self.allIlluNames)
-        self.ExperimentParams.exposureTimes = [0]*len(self.allIlluNames)
-        self.ExperimentParams.gain = [0]*len(self.allIlluNames)
+        self.ExperimentParams.exposureTimes = 1000000 # TODO: FIXME
+        self.ExperimentParams.gain = 23 # TODO: FIXME
+        self.ExperimentParams.isDPCpossible = False
+        self.ExperimentParams.isDarkfieldpossible = False
         
     @APIExport(requestType="GET")
-    def getCurrentExperimentParameters(self):
+    def getHardwareParameters(self):
         return self.ExperimentParams
-    
-    @APIExport(requestType="POST")
-    def setCurrentExperimentParameters(self, params: ExperimentWorkflowParams):
-        self.ExperimentParams = params
-        return self.ExperimentParams
-
-        '''
 
     def get_num_xy_steps(self, pointList):
         # we don't consider the center point as this .. well in the center
@@ -256,14 +268,32 @@ class ExperimentController(ImConWidgetController):
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
         # Extract key parameters
- 
         exp_name = mExperiment.name
         p = mExperiment.parameterValue
+        
+        # Timelapse-related
         nTimes = p.numberOfImages
         tPeriod = p.timeLapsePeriod
-        isAutoFocus = p.autoFocus
+        
+        # Z-steps -related
         nZSteps = int((mExperiment.parameterValue.zStackMax-mExperiment.parameterValue.zStackMin)//mExperiment.parameterValue.zStackStepSize)+1
         isZStack = p.zStack
+        
+        # Illumination-related
+        isDarkfield = p.darkfield
+        illumination = p.illumination
+        isBrightfield = p.brightfield
+        isDPC = p.differentialPhaseContrast
+        
+        # camera-related
+        gain = p.gain
+        exposureTime = p.exposureTime
+        
+        # Autofocus Related
+        isAutoFocus = p.autoFocus
+        autofocusMax = p.autoFocusMax
+        autofocusMin = p.autoFocusMin
+        autofocusStepSize = p.autoFocusStepSize
         
         # Example usage of a single illumination source
         illuSource = p.illumination

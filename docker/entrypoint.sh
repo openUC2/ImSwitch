@@ -101,6 +101,7 @@ then
     params+=" --config-folder ${CONFIG_PATH:-None}"
     params+=" --config-file ${CONFIG_FILE:-None}"
     params+=" --ext-data-folder ${DATA_PATH:-None}"
+    params+=" --scan-ext-data-folder $(SCAN_EXT_DATA_FOLDER:-false)"
     
     echo 'Starting Imswitch with the following parameters:'
     echo "${params[@]}"

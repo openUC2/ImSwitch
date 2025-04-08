@@ -6,11 +6,11 @@ import os
 
 import imswitch
 def main(is_headless:bool=None, default_config:str=None, http_port:int=None, socket_port:int=None, ssl:bool=None, config_folder:str=None,
-         data_folder: str=None):
+         data_folder: str=None, scan_ext_data_folder:bool=None):
     '''
     To start imswitch in headless using the arguments, you can call the main file with the following arguments:
         python main.py --headless or
-        python -m imswitch --headless 1 --config-file example_virtual_microscope.json --config-folder /Users/bene/Dowynloads
+        python -m imswitch --headless 1 --config-file example_virtual_microscope.json --config-folder /Users/bene/Dowynloads --scan-ext-data-folder true --ext-data-folder /Volumes
     '''
     try:
         try: # Google Colab does not support argparse
@@ -42,6 +42,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
             parser.add_argument('--ext-data-folder', dest='data_folder', type=str, default=None, 
                                 help='point to a folder to store the data. This overrides the ImSwitchConfig, useful for docker volumes')
 
+            parser.add_argument('--scan-ext-data-folder', dest='scan_ext_data_folder', default=False, action='store_true',
+                                help='scan the external mount (linux only) if we have a USB drive to save to')
+            
             args = parser.parse_args()
             
             imswitch.IS_HEADLESS = args.headless            # if True, no QT will be loaded   
@@ -55,6 +58,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 imswitch.DEFAULT_CONFIG_PATH = args.config_folder # e.g. /Users/USER/ in case an alternative path is used
             if args.data_folder and os.path.isdir(args.data_folder):
                 imswitch.DEFAULT_DATA_PATH = args.data_folder # e.g. /Users/USER/ in case an alternative path is used
+            if args.scan_ext_data_folder:
+                imswitch.SCAN_EXT_DATA_FOLDER = args.scan_ext_data_folder
             
         except Exception as e:
             print(e)
@@ -81,9 +86,11 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         if data_folder is not None:
             print("We use the user-provided data path: " + data_folder)
             imswitch.DEFAULT_DATA_PATH = data_folder
+        if scan_ext_data_folder is not None:
+            print("We use the user-provided scan_ext_data_folder: " + str(scan_ext_data_folder))
+            imswitch.SCAN_EXT_DATA_FOLDER = scan_ext_data_folder
 
 
-        
         # FIXME: !!!! This is because the headless flag is loaded after commandline input
         from imswitch.imcommon import prepareApp, launchApp
         from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController

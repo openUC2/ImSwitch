@@ -30,6 +30,7 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
         params+=" --config-folder ${CONFIG_PATH:-None}"
         params+=" --config-file ${CONFIG_FILE:-None}"
         params+=" --ext-data-folder ${DATA_PATH:-None}"
+        params+=" --scan-ext-data-folder $(SCAN_EXT_DATA_FOLDER:-false)"
         python3 /tmp/ImSwitch/main.py $params
         '''
         headless = str(imswitch.IS_HEADLESS)

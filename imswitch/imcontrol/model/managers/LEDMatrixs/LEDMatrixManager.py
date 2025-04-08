@@ -84,6 +84,11 @@ class LEDMatrixManager(ABC):
         """ Sets the value of the LEDMatrix. """
         pass
     
+    def setStatus(self, status:str="idle") -> None:
+        """ Sets the value of the LEDMatrix (e.g. for error indication). """
+        pass
+
+    
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

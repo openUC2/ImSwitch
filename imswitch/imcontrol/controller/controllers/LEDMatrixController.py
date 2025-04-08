@@ -113,7 +113,11 @@ class LEDMatrixController(ImConWidgetController):
         self.ledMatrix.setHalves(intensity=intensity, region=direction)
         if not IS_HEADLESS: self._widget.leds[str(intensity)].setChecked(True)
         
-    
+    @APIExport()
+    def setStatus(self, status:str="idle") -> None:
+        """ Sets the value of the LEDMatrix. """
+        self.ledMatrix.setStatus(status=status)
+        if not IS_HEADLESS: self._widget.leds[str(status)].setChecked(True)
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

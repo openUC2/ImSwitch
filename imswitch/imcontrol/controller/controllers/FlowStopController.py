@@ -64,9 +64,6 @@ class FlowStopController(LiveUpdatedController):
         # start live and adjust camera settings to auto exposure
         self.changeAutoExposureTime('auto')
         
-        # detect potential external drives
-        self.externalDrives = self.detect_external_drives()
-
         # Connect FlowStopWidget signals
         if not IS_HEADLESS:
             # Connect CommunicationChannel signals
@@ -270,11 +267,6 @@ class FlowStopController(LiveUpdatedController):
         if numImages < 0: numImages = np.inf
         self.imagesTaken = 0
         drivePath = dirtools.UserFileDirs.Data
-        if filePath == "extern":
-            # try to find an externally connected hard drive and store images on that  one 
-            if len(self.externalDrives)>0:
-                self._logger.debug("Create folder on an external drive")
-                drivePath = self.externalDrives[0]
         dirPath = os.path.join(drivePath, 'recordings', timeStamp)
         self._logger.debug(dirPath)
         if not os.path.exists(dirPath):
@@ -416,51 +408,6 @@ class FlowStopController(LiveUpdatedController):
         self._widget.setImage(im)
 
     
-    def detect_external_drives(self):
-        system = platform.system()
-
-        external_drives = []
-
-        if system == "Linux" or system == "Darwin":  # Darwin is the system name for macOS
-            # Run 'df' command to get disk usage and filter only mounted devices
-            df_result = subprocess.run(['df', '-h'], stdout=subprocess.PIPE)
-            output = df_result.stdout.decode('utf-8')
-
-            # Split the output by lines
-            lines = output.splitlines()
-
-            # Iterate through each line
-            for line in lines:
-                # Check if the line contains '/media' or '/Volumes' (common mount points for external drives)
-                if '/media/' in line or '/Volumes/' in line:
-                    # Split the line by spaces and get the mount point
-                    drive_info = line.split()
-                    if system == "Darwin":
-                        mount_point = " ".join(drive_info[8:])  # Assuming the mount point is at index 8
-                    else:
-                        mount_point = " ".join(drive_info[5:])  # Assuming the mount point is at index 5
-                    # Filter out mount points that contain 'System' for macOS
-                    if system == "Darwin" and "System" in mount_point:
-                        continue
-                    external_drives.append(mount_point)
-        elif system == "Windows":
-            # Run 'wmic logicaldisk get caption,description' to get logical disks
-            wmic_result = subprocess.run(['wmic', 'logicaldisk', 'get', 'caption,description'], stdout=subprocess.PIPE)
-            output = wmic_result.stdout.decode('utf-8')
-
-            # Split the output by lines
-            lines = output.splitlines()
-
-            # Iterate through each line
-            for line in lines:
-                # Check if the line contains 'Removable Disk' (common description for external drives)
-                if 'Removable Disk' in line:
-                    # Split the line by spaces and get the drive letter
-                    drive_info = line.split()
-                    drive_letter = drive_info[0]  # Drive letter is the first column
-                    external_drives.append(drive_letter)
-
-        return external_drives
 
 
 class VideoSafe:

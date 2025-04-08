@@ -34,9 +34,11 @@ except Exception as e:
 try:
     from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
     from imswitch.imcontrol.controller.controllers.experiment_controller.single_multiscale_zarr_data_source import SingleMultiscaleZarrWriter
-    IS_OMEZARR_AVAILABLE = True
+    IS_OMEZARR_AVAILABLE = False # TODO: True
 except Exception as e:
     IS_OMEZARR_AVAILABLE = False
+
+from imswitch.imcontrol.controller.controllers.experiment_controller.OmeTiffStitcher import OmeTiffStitcher
 
 from pydantic import BaseModel, Field
 from typing import List, Optional, Tuple, Dict
@@ -219,50 +221,6 @@ class ExperimentController(ImConWidgetController):
 
         return num_x_steps, num_y_steps
 
-    '''
-    def generate_snake_tiles(self, mExperiment):
-        """
-        Generates Snake Scan coordinates based on a list of central and neighbouring points coming from the GUI
-        """
-        tiles = []
-        for iCenter, centerPoint in enumerate(mExperiment.pointList):
-            # 1) Collect all relevant points (central, neighbours) in a list
-            allPoints = [(centerPoint.x, centerPoint.y)] + [
-                (n.x, n.y) for n in centerPoint.neighborPointList
-            ]
-            
-            # also add center point to the list
-            allPoints.append((centerPoint.x, centerPoint.y))
-            
-            # Sort by y, then by x (i.e. raster)
-            allPoints.sort(key=lambda coords: (coords[1], coords[0]))
-
-            # 2) Calculate the number of steps in x and y direction
-            num_x_steps, num_y_steps = self.get_num_xy_steps(centerPoint.neighborPointList)
-            allPointsSnake = [0]*num_x_steps*num_y_steps
-            iTile = 0
-            for iY in range(num_y_steps):
-                for iX in range(num_x_steps):
-                    if iY % 2 == 1 and num_x_steps!=1:
-                        # odd
-                        mIdex = iY*num_x_steps + num_x_steps - 1 - iX
-                    else: 
-                        #even
-                        mIdex = iTile 
-                    allPointsSnake[mIdex] = {
-                                            "iterator": iTile,
-                                            "centerIndex": iCenter,
-                                            "iX": iX,
-                                            "iY": iY,
-                                            "x": allPoints[iTile][0],
-                                            "y": allPoints[iTile][1],
-                                        }
-                    iTile += 1   
-            tiles.append(allPointsSnake)
-        def flatten(xss):
-            return [x for xs in xss for x in xs]            
-        return flatten(tiles)
-    '''
     def generate_snake_tiles(self, mExperiment):
         tiles = []
         for iCenter, centerPoint in enumerate(mExperiment.pointList):
@@ -333,7 +291,6 @@ class ExperimentController(ImConWidgetController):
         diffY = np.diff(np.unique([pt["y"] for pt in all_points])).min()
         mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
 
-
         # Prepare TIFF writer
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         drivePath = dirtools.UserFileDirs.Data
@@ -341,9 +298,13 @@ class ExperimentController(ImConWidgetController):
         if not os.path.exists(dirPath):
             os.makedirs(dirPath)
         mFileName = f"{timeStamp}_{exp_name}"
-        mFilePath = os.path.join(dirPath, mFileName + ".tif")
-        tiff_writer = tif.TiffWriter(mFilePath)
+        mFilePath = os.path.join(dirPath, mFileName + ".ome.tif")
+        #tiff_writer = tif.TiffWriter(mFilePath)
         
+        # Create a new OmeTiffStitcher instance for stitching tiles
+        tiff_writer = OmeTiffStitcher(mFilePath)
+        tiff_writer.start()
+
         # Prepare OME-Zarr writer (new)
         # fill ome model
         if IS_OMEZARR_AVAILABLE:
@@ -421,7 +382,7 @@ class ExperimentController(ImConWidgetController):
                         post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
                     ))
                     '''
-                    
+
                     workflowSteps.append(WorkflowStep(
                         name="Acquire frame",
                         step_id=str(step_id),
@@ -433,6 +394,10 @@ class ExperimentController(ImConWidgetController):
                         post_params={
                             "posX": mPoint["x"],
                             "posY": mPoint["y"],
+                            "posZ": 0, # TODO: Add Z position if needed
+                            "iX": mPoint["iX"],
+                            "iY": mPoint["iY"], 
+                            "pixel_size": mPixelSize,
                             "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
                             "channel": illuSource,
                             "time_index": t,       # or whatever loop index
@@ -510,7 +475,6 @@ class ExperimentController(ImConWidgetController):
             pre_params={"seconds": 0.1}
         ))
         
-
         def sendProgress(payload):
             self.sigExperimentWorkflowUpdate.emit(payload)
 
@@ -589,6 +553,38 @@ class ExperimentController(ImConWidgetController):
         if tiff_writer is None:
             self._logger.debug("No TIFF writer found in context!")
             return
+        
+        
+        # get latest image from the camera 
+        img = metadata["result"]
+
+        # get metadata
+        posX = kwargs.get("posX", 0)
+        posY = kwargs.get("posY", 0)
+        posZ = kwargs.get("posZ", 0)
+        channel_str = kwargs.get("channel", "Mono")
+        iX = kwargs.get("iX", 0)
+        iY = kwargs.get("iY", 0)
+        pixel_size = kwargs.get("pixel_size", 1.0)  # 1 micron per pixel
+
+        try:
+            tiff_writer.add_image(
+                image=img,
+                position_x=posX,
+                position_y=posY,
+                index_x=iX,
+                index_y=iY,
+                pixel_size=pixel_size
+            )
+            metadata["frame_saved"] = True
+        except Exception as e:
+            self._logger.error(f"Error saving TIFF: {e}")
+            metadata["frame_saved"] = False
+
+        '''
+        if tiff_writer is None:
+            self._logger.debug("No TIFF writer found in context!")
+            return
         img = metadata["result"]
         # append the image to the tiff file
         try:
@@ -597,6 +593,7 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error saving TIFF: {e}")
             metadata["frame_saved"] = False
+        '''
         
     def close_ome_zarr_store(self, omezarr_store):
         # If you need to do anything special (like flush) for the store, do it here.
@@ -621,6 +618,9 @@ class ExperimentController(ImConWidgetController):
             metadata: A dictionary containing the image data and other metadata.
             **kwargs: Additional keyword arguments, including tile position, channel, etc.
         """
+        if not IS_OMEZARR_AVAILABLE:
+            self._logger.error("OME-Zarr is not available.")
+            return
         omeZarrStore = context.get_object("omezarr_store")
         if omeZarrStore is None:
             raise ValueError("OME-Zarr store not found in context.")
@@ -642,7 +642,7 @@ class ExperimentController(ImConWidgetController):
 
         time.sleep(0.01)
 
-    def add_image_to_canvas(self, context: WorkflowContext, metadata: Dict[str, Any], emitCurrentProgress=True, **kwargs):
+    def add_image_to_canvas(self, context: WorkflowContext, metadata: Dict[str, Any], emitCurrentProgress=False, **kwargs):
         # Retrieve the canvas and add the image
         canvas = context.get_object("canvas")
         if canvas is None:

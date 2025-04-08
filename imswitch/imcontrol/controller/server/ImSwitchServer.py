@@ -16,9 +16,11 @@ import zipfile
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 import imswitch
 import uvicorn
@@ -31,7 +33,6 @@ from imswitch.imcontrol.model import configfiletools
 
 import socket
 from fastapi.middleware.cors import CORSMiddleware
-from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
 import threading
 from fastapi.openapi.docs import (
@@ -128,18 +129,21 @@ def list_items(base_path: str) -> List[Dict]:
     def scan_directory(path):
         with os.scandir(path) as it:
             for entry in it:
-                full_path = entry.path
-                rel_path = f"/{os.path.relpath(full_path, BASE_DIR).replace(os.path.sep, '/')}"
-                preview_url = f"/preview{rel_path}" if entry.is_file() else None
-                items.append({
-                    "name": entry.name,
-                    "isDirectory": entry.is_dir(),
-                    "path": rel_path,
-                    "size": entry.stat().st_size if entry.is_file() else None,
-                    "filePreviewPath": preview_url
-                })
-                if entry.is_dir():
-                    scan_directory(full_path)
+                try:
+                    full_path = entry.path
+                    rel_path = f"/{os.path.relpath(full_path, BASE_DIR).replace(os.path.sep, '/')}"
+                    preview_url = f"/preview{rel_path}" if entry.is_file() else None
+                    items.append({
+                        "name": entry.name,
+                        "isDirectory": entry.is_dir(),
+                        "path": rel_path,
+                        "size": entry.stat().st_size if entry.is_file() else None,
+                        "filePreviewPath": preview_url
+                    })
+                    if entry.is_dir():
+                        scan_directory(full_path)
+                except Exception as e:
+                    print(f"Error scanning {entry.path}: {e}")
 
     scan_directory(base_path)
     return items
@@ -267,6 +271,17 @@ def download_file(path: str):
                 zipf.write(full_path, arcname=arcname)
     return FileResponse(zip_path, filename=os.path.basename(zip_path))
 
+
+# Custom exception handler for validation errors
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": "Parsing of mExperiment failed. Please check your submission format.",
+            "errors": exc.errors()
+        },
+    )
 
 
 

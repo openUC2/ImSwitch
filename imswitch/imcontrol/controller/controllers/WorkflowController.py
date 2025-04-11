@@ -33,17 +33,13 @@ import io
 from fastapi import Header
 from pydantic import BaseModel
 from typing import List, Optional, Union, Tuple
-import zarr
-from ome_zarr.writer import write_image
-from ome_zarr.io import parse_url
-from ome_zarr.format import CurrentFormat
-from typing import Callable, List, Dict, Any, Optional
+
+from typing import List, Dict, Any, Optional
 import threading
 import json
-import traceback
 import numpy as np
 from pydantic import BaseModel
-from fastapi import FastAPI, Query
+from fastapi import Query
 from collections import deque
 from tempfile import TemporaryDirectory
 import os 

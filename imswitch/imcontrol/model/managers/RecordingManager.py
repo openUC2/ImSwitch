@@ -15,16 +15,18 @@ import cv2
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal, SignalInterface, Thread, Worker
 from imswitch.imcommon.model import initLogger
-from ome_zarr.writer import write_multiscales_metadata # TODO: This fails with newer numpy versions!
-from ome_zarr.format import format_from_version
 import abc
 import logging
 
 from imswitch.imcontrol.model.managers.DetectorsManager import DetectorsManager
 
 logger = logging.getLogger(__name__)
-
-
+try:
+    from ome_zarr.writer import write_multiscales_metadata # TODO: This fails with newer numpy versions!
+    from ome_zarr.format import format_from_version
+    IS_OME_ZARR = True
+except ImportError:
+    IS_OME_ZARR = False
 class AsTemporayFile(object):
     """ A temporary file that when exiting the context manager is renamed to its original name. """
     def __init__(self, filepath, tmp_extension='.tmp'):
@@ -58,6 +60,9 @@ class Storer(abc.ABC):
 class ZarrStorer(Storer):
     """ A storer that stores the images in a zarr file store """
     def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
+        if not IS_OME_ZARR:
+            logger.error("OME Zarr is not installed. Please install ome-zarr.")
+            return
         with AsTemporayFile(f'{self.filepath}.zarr') as path:
             datasets: List[dict] = []
             store = zarr.storage.DirectoryStore(path)
@@ -338,6 +343,9 @@ class RecordingManager(SignalInterface):
         elif saveFormat == SaveFormat.JPG:
             cv2.imwrite(filePath, image)
         elif saveFormat == SaveFormat.ZARR:
+            if not IS_OME_ZARR:
+                logger.error("OME Zarr is not installed. Please install ome-zarr.")
+                return
             path = self.getSaveFilePath(f'{savename}.{fileExtension}')
             store = zarr.storage.DirectoryStore(path)
             root = zarr.group(store=store)
@@ -440,6 +448,9 @@ class RecordingWorker(Worker):
                     f'{self.savename}_{detectorName}.{fileExtension}', False, False)
 
             elif self.saveFormat == SaveFormat.ZARR:
+                if not IS_OME_ZARR:
+                    logger.error("OME Zarr is not installed. Please install ome-zarr.")
+                    return
                 datasets[detectorName] = files[detectorName].create_dataset(datasetName, shape=(1, *reversed(shape)),
                                                                             dtype='i2', chunks=(1, 512, 512)
                                                                             )
@@ -791,6 +802,9 @@ class RecordingWorkerNoQt(Worker):
                     f'{self.savename}_{detectorName}.{fileExtension}', False, False)
 
             elif self.saveFormat == SaveFormat.ZARR:
+                if not IS_OME_ZARR:
+                    logger.error("OME Zarr is not installed. Please install ome-zarr.")
+                    return
                 datasets[detectorName] = files[detectorName].create_dataset(datasetName, shape=(1, *reversed(shape)),
                                                                             dtype='i2', chunks=(1, 512, 512)
                                                                             )

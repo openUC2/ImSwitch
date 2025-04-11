@@ -38,9 +38,6 @@ from fastapi.responses import StreamingResponse
 import numpy as np
 from io import BytesIO
 from PIL import Image
-from ome_zarr.writer import write_image
-from ome_zarr.io import parse_url
-from ome_zarr.format import CurrentFormat
 try:
     from iohub.ngff import open_ome_zarr
     IS_IOHUB = True

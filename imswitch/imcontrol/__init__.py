@@ -54,7 +54,8 @@ def getMainViewAndController(moduleCommChannel, *_args,
                 options = dataclasses.replace(options, setupFileName=setupFileName)
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
             except Exception as e: 
-                print("Error setting default setup file from commandline..:" + str(e))
+                print("Error setting default setup file from commandline..:")
+                print(e)
                 raise KeyError
                 # we will try to load it via the gui
         else:

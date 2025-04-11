@@ -49,11 +49,12 @@ def getMainViewAndController(moduleCommChannel, *_args,
         if imswitch.DEFAULT_SETUP_FILE is not None:
             try:
                 # we provide it via command line arguments
+                print("Trying to use the file: " + imswitch.DEFAULT_SETUP_FILE)
                 setupFileName = imswitch.DEFAULT_SETUP_FILE
                 options = dataclasses.replace(options, setupFileName=setupFileName)
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
             except Exception as e: 
-                print("Error setting default setup file from commandline..:" + e)
+                print("Error setting default setup file from commandline..:" + str(e))
                 raise KeyError
                 # we will try to load it via the gui
         else:
@@ -61,8 +62,14 @@ def getMainViewAndController(moduleCommChannel, *_args,
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
             except Exception as e:
                 # Have user pick setup anyway
-                options = pickSetup(options)
-                configfiletools.saveOptions(options)
+                logger.debug('Setup file not found, let user pick setup')
+                logger.debug('Error loading setup file: %s', e)
+                if IS_HEADLESS:
+                    # load from default _data
+                    setupFileName = imswitch.DEFAULT_SETUP_FILE
+                else:
+                    options = pickSetup(options)
+                    configfiletools.saveOptions(options)
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
     # this case is used for pytesting
     elif overrideSetupInfo is not None:

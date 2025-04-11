@@ -1,6 +1,7 @@
 import imswitch
 import dataclasses
 import sys
+import os
 from imswitch import IS_HEADLESS, DEFAULT_DATA_PATH
 
 __imswitch_module__ = True
@@ -45,19 +46,25 @@ def getMainViewAndController(moduleCommChannel, *_args,
     '''
     load the setup configuration including detectors, stages, etc.
     '''
-    if overrideSetupInfo is None:
+    if overrideSetupInfo is None: # TODO: This needs a rework!!
         if imswitch.DEFAULT_SETUP_FILE is not None:
             try:
-                # we provide it via command line arguments
+                # Attempt to use the file provided via command line arguments
                 print("Trying to use the file: " + imswitch.DEFAULT_SETUP_FILE)
                 setupFileName = imswitch.DEFAULT_SETUP_FILE
+
+                # Check if the file exists before proceeding
+                if not os.path.exists(setupFileName):
+                    raise FileNotFoundError(f"Setup file not found: {setupFileName}")
+
                 options = dataclasses.replace(options, setupFileName=setupFileName)
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
-            except Exception as e: 
-                print("Error setting default setup file from commandline..:")
-                print(e)
+            except FileNotFoundError as fnf_error:
+                print(f"FileNotFoundError: {fnf_error}")
+                raise
+            except Exception as e:
+                print(f"Error setting default setup file from commandline: {str(e)}")
                 raise KeyError
-                # we will try to load it via the gui
         else:
             try:
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)

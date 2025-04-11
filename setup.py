@@ -80,7 +80,6 @@ setup(
         "python-socketio[asyncio]==5.11.4",
         "ashlarUC2", 
         "jupyterlab==4.2.5",
-        "dateutil >= 2.8.1",
         "python-dateutil >= 2.8.1"        
         ],
 

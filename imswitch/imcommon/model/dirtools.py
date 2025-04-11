@@ -37,9 +37,23 @@ _baseUserFilesDir = os.path.join(getSystemUserDir(), 'ImSwitchConfig')
 
 
 
+def is_writable_directory(path: str) -> bool:
+    # Checks if 'path' is writable by attempting to create and remove a tiny file.
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        test_file = os.path.join(path, ".write_test")
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+        return True
+    except Exception:
+        return False
+
+
 def pick_first_external_mount(default_data_path: str):
     # This function picks the first subdirectory in 'default_data_path'
-    # that is not obviously a system volume.
+    # that is not obviously a system volume and is writable.
     if not default_data_path or not os.path.exists(default_data_path):
         return None
 
@@ -49,8 +63,8 @@ def pick_first_external_mount(default_data_path: str):
             continue
         # Exclude common system volumes
         if d not in ("Macintosh HD", "System Volume Information"):
-            # exclude hidden directories
-            if not d.startswith('.'):
+            # Exclude hidden directories
+            if not d.startswith('.') and is_writable_directory(full_path):
                 return full_path
     return None
 

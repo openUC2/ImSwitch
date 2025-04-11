@@ -45,7 +45,7 @@ from typing import List, Optional, Tuple, Dict
 import uuid
 
 # -----------------------------------------------------------
-# Reuse your existing sub-models:
+# Reuse the existing sub-models:
 # -----------------------------------------------------------
 class NeighborPoint(BaseModel):
     x: float
@@ -80,6 +80,7 @@ class ParameterValue(BaseModel):
     zStackStepSize: float = 1.
     exposureTime: float = None
     gain: float = None
+    resortPointListToSnakeCoordinates: bool = True
 
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
@@ -237,9 +238,7 @@ class ExperimentController(ImConWidgetController):
         tiles = []
         for iCenter, centerPoint in enumerate(mExperiment.pointList):
             # Collect central and neighbour points (without duplicating the center)
-            allPoints = [(centerPoint.x, centerPoint.y)] + [
-                (n.x, n.y) for n in centerPoint.neighborPointList
-            ]
+            allPoints = [(n.x, n.y) for n in centerPoint.neighborPointList]
             # Sort by y then by x (i.e., raster order)
             allPoints.sort(key=lambda coords: (coords[1], coords[0]))
 
@@ -308,7 +307,8 @@ class ExperimentController(ImConWidgetController):
             self.mDetector.startAcquisition()
 
         # Generate the list of points to scan based on snake scan
-        snake_tiles = self.generate_snake_tiles(mExperiment)
+        if p.resortPointListToSnakeCoordinates:
+            snake_tiles = self.generate_snake_tiles(mExperiment)
         # Flatten all point dictionaries from all tiles to compute scan range
         all_points = [pt for tile in snake_tiles for pt in tile]
 

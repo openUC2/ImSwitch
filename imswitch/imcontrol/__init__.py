@@ -50,7 +50,7 @@ def getMainViewAndController(moduleCommChannel, *_args,
         if imswitch.DEFAULT_SETUP_FILE is not None:
             try:
                 # Attempt to use the file provided via command line arguments
-                print("Trying to use the file: " + imswitch.DEFAULT_SETUP_FILE)
+                print(f"Trying to use the file: {imswitch.DEFAULT_SETUP_FILE}")
                 setupFileName = imswitch.DEFAULT_SETUP_FILE
 
                 # Check if the file exists before proceeding
@@ -58,12 +58,14 @@ def getMainViewAndController(moduleCommChannel, *_args,
                     raise FileNotFoundError(f"Setup file not found: {setupFileName}")
 
                 options = dataclasses.replace(options, setupFileName=setupFileName)
+                print(f"Loading setup info from: {setupFileName}")
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
             except FileNotFoundError as fnf_error:
                 print(f"FileNotFoundError: {fnf_error}")
                 raise
             except Exception as e:
                 print(f"Error setting default setup file from commandline: {str(e)}")
+                print(f"Options: {options}")
                 raise KeyError
         else:
             try:

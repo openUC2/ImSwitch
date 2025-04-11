@@ -12,7 +12,7 @@ then
     echo 'Starting SFTP Server'
     /usr/sbin/vsftpd /etc/vsftpd.conf
     echo 'Listing Config Dir'
-    ls /root/ImSwitchConfig/imcontrol_setups
+    ls /tmp/ImSwitchConfig/imcontrol_setups
     
     PATCH_DIR=/tmp/ImSwitch-changes
     PATCH_FILE=$PATCH_DIR/diff.patch 
@@ -30,12 +30,12 @@ then
     if [[ "$UPDATE_CONFIG" = "true" ]]
     then
         echo 'Pulling the ImSwitchConfig repository'
-        cd /root/ImSwitchConfig
+        cd /tmp/ImSwitchConfig
         git pull
     fi
     if [[ -z "$CONFIG_PATH" ]]
     then
-        CONFIG_FILE="${CONFIG_FILE:-/root/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json}"
+        CONFIG_FILE="${CONFIG_FILE:-/tmp/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json}"
     else
         CONFIG_FILE=None
     fi

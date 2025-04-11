@@ -61,7 +61,7 @@ setup(
         "dask[complete] >= 2024.11.2",
         "fastAPI >= 0.86.0",
         "uvicorn[standard] >= 0.19.0",
-        "matplotlib >= 3.6",
+        "matplotlib == 3.9.2",
         "opencv-python",
         "dataclasses-json >= 0.5",
         "imjoy_rpc",
@@ -79,7 +79,10 @@ setup(
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "ashlarUC2", 
-        "jupyterlab==4.2.5",        ],
+        "jupyterlab==4.2.5",
+        "dateutil >= 2.8.1",
+        "python-dateutil >= 2.8.1"        
+        ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
         'PyQt5': [
@@ -98,7 +101,7 @@ setup(
             "iohub==0.2.0a1", 
 
         ],
-        'arkitet':
+        'arkitekt':
             [
             "arkitekt==0.7.8",
             "arkitekt_next>=0.8.6"

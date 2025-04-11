@@ -21,7 +21,7 @@
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22  -e UPDATE_INSTALL_GIT=1  -e PIP_PACKAGES="arkitekt UC2-REST"  -e CONFIG_PATH=/Users/bene/Downloads  -e DATA_PATH=/Users/bene/Downloads  -v ~/Documents/imswitch_docker/imswitch_git:/tmp/ImSwitch-changes  -v ~/Documents/imswitch_docker/imswitch_pip:/persistent_pip_packages  -v /media/uc2/SD2/:/dataset  -v ~/Downloads:/config  --privileged imswitch_hik
 # sudo docker pull docker pull ghcr.io/openuc2/imswitch-noqt-x64:latest
 
-# sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -v ~:/config  -e CONFIG_PATH=/config -e CONFIG_FILE=example_uc2_vimba.json -e UPDATE_GIT=0 -e UPDATE_CONFIG=0 --privileged ghcr.io/openuc2/imswitch-noqt-x64:latest
+# sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -e CONFIG_FILE=example_uc2_vimba.json -e UPDATE_GIT=0 -e UPDATE_CONFIG=0 --privileged imswitch_hik_arm64
 
 
 
@@ -49,22 +49,14 @@ ARG TARGETPLATFORM
 ENV TZ=America/Los_Angeles
 
 # Install necessary dependencies and prepare the environment as usual
-RUN apt-get update && apt-get install -y \
-    wget \
-    unzip \
-    python3 \
-    python3-pip \
-    build-essential \
-    git \
-    mesa-utils \
-    libhdf5-dev \
-    nano \
-    usbutils \
-    sudo \
-    libglib2.0-0 \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
+RUN apt-get update -o Acquire::AllowInsecureRepositories=true \
+                   -o Acquire::AllowDowngradeToInsecureRepositories=true \
+                   -o Acquire::AllowUnsignedRepositories=true \
+                   && apt-get install -y --allow-unauthenticated \
+                      wget unzip python3 python3-pip build-essential git \
+                      mesa-utils libhdf5-dev nano usbutils sudo libglib2.0-0 \
+                   && apt-get clean \
+                   && rm -rf /var/lib/apt/lists/*
 
 # Install Miniforge based on architecture
 RUN if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
@@ -163,7 +155,7 @@ RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
 
 # Clone the config folder
-RUN git clone https://github.com/openUC2/ImSwitchConfig /root/ImSwitchConfig
+RUN git clone https://github.com/openUC2/ImSwitchConfig /tmp/ImSwitchConfig
 
 # we want psygnal to be installed without binaries - so first remove it 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
@@ -194,21 +186,19 @@ ENV GENICAM_GENTL64_PATH="${GENICAM_GENTL64_PATH}:/opt/Vimba_6_0/VimbaUSBTL/CTI/
 # install IOHub - as it will be installed via ImSwitch again
 #         "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install --no-cache-dir Cython"
-RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
-    cd /root/iohub && \
+RUN git clone https://github.com/czbiohub-sf/iohub /tmp/iohub && \
+    cd /tmp/iohub && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && \
-                  pip install --no-build-isolation /root/iohub"
-
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
-    pip install dataclasses_json==0.5.7 typing_extensions==4.5.0"
+                  pip install --no-build-isolation /tmp/iohub" && \
+    rm -rf /tmp/iohub
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
-RUN echo "Building on ${BUILD_DATE}"
+RUN echo Building on 1 
 
 # Clone the config folder
-RUN cd /root/ImSwitchConfig && \
+RUN cd /tmp/ImSwitchConfig && \
     git pull
 
 # now update potential breaking changes
@@ -223,7 +213,7 @@ RUN cd /tmp/UC2-REST && \
 
     
 # Expose FTP port and HTTP port
-EXPOSE  8001 8002 8003 8888 8889 22
+EXPOSE  8001 8002 8003 8888 8889
 
 ADD docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

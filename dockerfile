@@ -200,19 +200,19 @@ RUN git clone https://github.com/czbiohub-sf/iohub /root/iohub && \
                   pip install --no-build-isolation /root/iohub"
 
 # Install and configure OpenSSH
-RUN apt-get update && apt-get install -y openssh-server && apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+#RUN apt-get update && apt-get install -y openssh-server && apt-get clean && \
+#    rm -rf /var/lib/apt/lists/*
 
 # Create run directory for SSH
-RUN mkdir /var/run/sshd
+#RUN mkdir /var/run/sshd
 
 # Permit root login via SSH (not recommended for production by default)
-RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+#RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
 
 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
     pip install dataclasses_json==0.5.7 typing_extensions==4.5.0"
-    
+
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE

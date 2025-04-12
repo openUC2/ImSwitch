@@ -56,6 +56,7 @@ class ESP32StageManager(PositionerManager):
         self.maxSpeed["Z"] = positionerInfo.managerProperties.get('maxSpeedZ', 10000)
         self.maxSpeed["A"] = positionerInfo.managerProperties.get('maxSpeedA', 10000)
 
+        self.sampleLoadingPositionX, self.sampleLoadingPositionY, self.sampleLoadingPositionZ = 0,0,0
         # Setup homing coordinates and speed
         # X
         self.setHomeParametersAxis(axis="X", speed=positionerInfo.managerProperties.get('homeSpeedX', 15000), 
@@ -473,6 +474,14 @@ class ESP32StageManager(PositionerManager):
 
     def stopStageScanning(self):
         self._motor.stopStageScanning()
+        
+        
+    def moveToSampleMountingPosition(self, speed=10000, is_blocking=True):
+        value = (self.sampleLoadingPositionX, self.sampleLoadingPositionY, self.sampleLoadingPositionZ)
+        self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
+
+
+        
         
 # Copyright (C) 2020, 2021 The imswitch developers
 # This file is part of ImSwitch.

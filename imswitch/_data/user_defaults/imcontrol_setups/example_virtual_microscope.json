@@ -125,11 +125,11 @@
     "Experiment", 
     "Timelapse", 
     "UC2Config",
+    "imswitch_arkitekt_next",
     "Objective"
   ],
   "nonAvailableWidgets": [
     "Histogramm",  
-    "imswitch_arkitekt_next",
     "FocusLock",
     "FlowStop",
     "SIM",

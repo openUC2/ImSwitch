@@ -137,6 +137,10 @@ class PositionerManager(ABC):
     def enableMotors(self, enable: bool=None, autoenable:bool=None) -> None:
         """ Enable/disable motors. """
         pass
+    
+    def moveToSampleMountingPosition(self) -> None:
+        """ Move to sample mounting position. """
+        pass
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

@@ -211,6 +211,8 @@ RUN cd /tmp/UC2-REST && \
     git pull && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
 
+# install arkitekt 
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip" 
     
 # Expose FTP port and HTTP port
 EXPOSE  8001 8002 8003 8888 8889

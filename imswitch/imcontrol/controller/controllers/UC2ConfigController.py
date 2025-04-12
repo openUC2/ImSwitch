@@ -144,6 +144,10 @@ class UC2ConfigController(ImConWidgetController):
         self._master.UC2ConfigManager.closeSerial()
         if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Connection to ESP32 closed.")
 
+    @APIExport(runOnUIThread=True)
+    def moveToSampleMountingPosition(self):
+        self._logger.debug('Moving to sample loading position.')
+        self.stages.moveToSampleMountingPosition()
 
     @APIExport(runOnUIThread=True)
     def reconnect(self):

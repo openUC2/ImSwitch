@@ -10,11 +10,13 @@ def record(qtbot, detectorInfos, *args, **kwargs):
     detectorsManager = DetectorsManager(detectorInfos, updatePeriod=100)
     recordingManager = RecordingManager(detectorsManager)
 
-    filePerDetector, savedToDiskPerDetector = {}, {}
+    filePerDetector = {}
+    savedToDiskPerDetector = {}
 
     def memoryRecordingAvailable(_, file, __, savedToDisk, detectorName):
-        nonlocal filePerDetector, savedToDiskPerDetector
-        filePerDetector[detectorName], savedToDiskPerDetector[detectorName] = file, savedToDisk
+        # Update dictionaries directly
+        filePerDetector[detectorName] = file
+        savedToDiskPerDetector[detectorName] = savedToDisk
         return True
 
     recordingManager.startRecording(*args, **kwargs)

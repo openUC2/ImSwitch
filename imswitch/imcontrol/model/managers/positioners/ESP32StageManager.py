@@ -56,7 +56,16 @@ class ESP32StageManager(PositionerManager):
         self.maxSpeed["Z"] = positionerInfo.managerProperties.get('maxSpeedZ', 10000)
         self.maxSpeed["A"] = positionerInfo.managerProperties.get('maxSpeedA', 10000)
 
-        self.sampleLoadingPositionX, self.sampleLoadingPositionY, self.sampleLoadingPositionZ = 0,0,0
+        self.sampleLoadingPositions = {}
+        self.sampleLoadingPositions["X"] = positionerInfo.managerProperties.get('sampleLoadingPositionX', 0)
+        self.sampleLoadingPositions["Y"] = positionerInfo.managerProperties.get('sampleLoadingPositionY', 0)
+        self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
+        
+        self.stageOffsetPositions = {}
+        self.stageOffsetPositions["X"] = positionerInfo.managerProperties.get('stageOffsetPositionX', 0)
+        self.stageOffsetPositions["Y"] = positionerInfo.managerProperties.get('stageOffsetPositionY', 0)
+        self.stageOffsetPositions["Z"] = positionerInfo.managerProperties.get('stageOffsetPositionZ', 0)
+        self.stageOffsetPositions["A"] = positionerInfo.managerProperties.get('stageOffsetPositionA', 0)
         # Setup homing coordinates and speed
         # X
         self.setHomeParametersAxis(axis="X", speed=positionerInfo.managerProperties.get('homeSpeedX', 15000), 
@@ -134,10 +143,10 @@ class ESP32StageManager(PositionerManager):
         self._motor.setIsCoreXY(isCoreXY=self.isCoreXY)
 
         # Setup motors
-        self.setupMotor(self.minX, self.maxX, self.stepSizes["X"], self.backlashX, "X")
-        self.setupMotor(self.minY, self.maxY, self.stepSizes["Y"], self.backlashY, "Y")
-        self.setupMotor(self.minZ, self.maxZ, self.stepSizes["Z"], self.backlashZ, "Z")
-        self.setupMotor(self.minA, self.maxA, self.stepSizes["A"], self.backlashA, "A")
+        self.setupMotor(self.minX, self.maxX, self.stepSizes["X"], self.backlashX, self.stageOffsetPositions["X"], "X")
+        self.setupMotor(self.minY, self.maxY, self.stepSizes["Y"], self.backlashY, self.stageOffsetPositions["Y"], "Y")
+        self.setupMotor(self.minZ, self.maxZ, self.stepSizes["Z"], self.backlashZ, self.stageOffsetPositions["Z"], "Z")
+        self.setupMotor(self.minA, self.maxA, self.stepSizes["A"], self.backlashA, self.stageOffsetPositions["A"], "A")
 
         # Setup Motor drivers (TMC - if available)
         #    def set_tmc_parameters(self, axis=0, msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
@@ -217,8 +226,8 @@ class ESP32StageManager(PositionerManager):
         """
         self._motor.set_motor_enable(enable=enable, enableauto=enableauto)
 
-    def setupMotor(self, minPos, maxPos, stepSize, backlash, axis):
-        self._motor.setup_motor(axis=axis, minPos=minPos, maxPos=maxPos, stepSize=stepSize, backlash=backlash)
+    def setupMotor(self, minPos, maxPos, stepSize, backlash, offset, axis):
+        self._motor.setup_motor(axis=axis, minPos=minPos, maxPos=maxPos, stepSize=stepSize, backlash=backlash, offset=offset)
 
     def setupMotorDriver(self, axis="X", msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
         self._motor.set_tmc_parameters(axis=axis, msteps=msteps, rms_current=rms_current, stall_value=stall_value, sgthrs=sgthrs, semin=semin, semax=semax, blank_time=blank_time, toff=toff, timeout=timeout)
@@ -475,12 +484,23 @@ class ESP32StageManager(PositionerManager):
     def stopStageScanning(self):
         self._motor.stopStageScanning()
         
-        
     def moveToSampleMountingPosition(self, speed=10000, is_blocking=True):
-        value = (self.sampleLoadingPositionX, self.sampleLoadingPositionY, self.sampleLoadingPositionZ)
+        value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
 
-
+    def setStageOffsetAxis(self, knownPosition:float=None, currentPosition:float=None, knownOffset:float=None, axis="X"):
+        if currentPosition is None:
+            currentPosition = self.get_abs(axis=axis)
+        if knownOffset is None:
+            offset = currentPosition - knownPosition
+        else:   
+            offset = knownOffset
+        self._motor.set_offset(axis=axis, offset=offset)
+        try:
+            self.stageOffsetPositions[axis] = offset
+        except KeyError:
+            self.__logger.error(f"Axis {axis} not found in stageOffsetPositions.")
+        self.__logger.info(f"Set offset for {axis} axis to {offset} steps.")
         
         
 # Copyright (C) 2020, 2021 The imswitch developers

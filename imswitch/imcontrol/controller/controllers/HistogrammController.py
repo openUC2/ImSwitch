@@ -32,6 +32,8 @@ class HistogrammController(LiveUpdatedController):
         """ Update with new detector frame. """
         
         # bin image to reduce the number of pixels and off-load CPU usage
+        if image is None:
+            return
         binned_image = cv2.resize(image, (0, 0), fx=0.25, fy=0.25)
 
         # Now calculate the histogram for the binned image

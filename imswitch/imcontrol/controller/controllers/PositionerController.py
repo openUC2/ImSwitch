@@ -262,6 +262,18 @@ class PositionerController(ImConWidgetController):
         set step size. """
         self.stepDown(positionerName, axis)
 
+    @APIExport(runOnUIThread=True)
+    def setStageOffsetAxis(self, positionerName: Optional[str]=None, knownPosition:float=0, currentPosition:Optional[float]=None, knownOffset:Optional[float]=None,  axis:str="X"):
+        """ 
+        Sets the stage to a known offset aside from the home position. 
+        knownPosition and currentPosition have to be in physical coordinates (i.e. prior to applying the stepsize)
+        # TODO: Make this permanent (e.g. reflect change in config)
+        """
+        self._logger.debug(f'Setting stage offset for {axis} axis.')
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self._master.positionersManager[positionerName].setStageOffsetAxis(knownPosition=knownPosition, currentPosition=currentPosition, knownOffset=knownOffset, axis=axis)
+        
 
 _attrCategory = 'Positioner'
 _positionAttr = 'Position'

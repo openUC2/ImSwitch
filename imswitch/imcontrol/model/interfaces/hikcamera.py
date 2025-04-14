@@ -75,7 +75,7 @@ class CameraHIK:
         self._init_cam(cameraNo=self.cameraNo, callback_fct=None)
 
     def _init_cam(self, cameraNo=1, callback_fct=None):
-        self.is_connected = True
+
 
         deviceList = MV_CC_DEVICE_INFO_LIST()
         tlayerType = MV_USB_DEVICE
@@ -132,9 +132,26 @@ class CameraHIK:
         if ret != 0:
             raise Exception("Get width fail! ret[0x%x]" % ret)
         self.SensorWidth = stIntValue_width.nCurValue
-
+        self.is_connected = True
         print(f"Current number of pixels: Width = {self.SensorWidth}, Height = {self.SensorHeight}")
 
+    def reconnectCamera(self):
+        # Safely close any existing handle
+        if self.camera is not None:
+            try:
+                self.camera.MV_CC_CloseDevice()
+                self.camera.MV_CC_DestroyHandle()
+            except Exception as e:
+                self.__logger.error(f"Error while closing camera handle: {e}")
+            self.camera = None
+
+        # Re-initialize camera with original cameraNo
+        try:
+            self._init_cam(cameraNo=self.cameraNo, callback_fct=None)
+            self.__logger.debug("Camera reconnected successfully.")
+        except Exception as e:
+            self.__logger.error(f"Failed to reconnect camera: {e}")
+            
     def get_camera_parameters(self):
         param_dict = {}
 
@@ -372,6 +389,8 @@ class CameraHIK:
             property_value = self.camera.Gain.get()
         elif property_name == "exposure":
             property_value = self.camera.ExposureTime.get()
+        elif property_name == "frame_number":
+            property_value = self.getFrameNumber()
         elif property_name == "exposure_mode":
             property_value = self.camera.ExposureAuto.get()
         elif property_name == "blacklevel":
@@ -408,7 +427,10 @@ class CameraHIK:
             while True:
                 if self.g_bExit:
                     break
-
+                if not self.is_connected:
+                    # reconnect the camera 
+                    self.__logger.debug("Camera disconnected, trying to reconnect...")
+                    self.reconnectCamera()
                 ret = cam.MV_CC_GetImageBuffer(stOutFrame, 1000)
                 if (stOutFrame.pBufAddr is not None) and (ret == 0):
                     if self.isRGB:
@@ -444,7 +466,8 @@ class CameraHIK:
 
                         except Exception as e:
                             self.__logger.error(e)
-
+                            self.is_connected = False
+                            self.__logger.error("Get image fail! ret[0x%x]" % ret)
                     else:
                         cam.MV_CC_FreeImageBuffer(stOutFrame)
                         pData = (c_ubyte * (stOutFrame.stFrameInfo.nWidth * stOutFrame.stFrameInfo.nHeight))()
@@ -482,6 +505,10 @@ class CameraHIK:
             memset(byref(stDeviceList), 0, sizeof(stDeviceList))
 
             while True:
+                if not self.is_connected:
+                    # reconnect the camera 
+                    self.__logger.debug("Camera disconnected, trying to reconnect...")
+                    self.reconnectCamera()
                 if self.g_bExit:
                     break
                 if self.isRGB:
@@ -523,8 +550,11 @@ class CameraHIK:
                             self.frame_buffer.append(self.frame)
                             self.frameid_buffer.append(self.frameNumber)
 
-                    except:
-                        pass
+                    except Exception as e:
+                        self.__logger.error("Get image fail! ret[0x%x]" % ret)
+                        self.__logger.error(e)
+                        del data_buf
+                        self.is_connected = False
                 else:
                     data_buf = (c_ubyte * nPayloadSize)()
                     ret = cam.MV_CC_GetOneFrameTimeout(byref(data_buf), nPayloadSize, stDeviceList, 100)
@@ -538,7 +568,11 @@ class CameraHIK:
                         self.timestamp = time.time()
                         self.frame_buffer.append(self.frame)
                         self.frameid_buffer.append(self.frameNumber)
-
+                    else:
+                        self.is_connected = False
+                        self.__logger.error("Get image fail! ret[0x%x]" % ret)
+                        del data_buf
+                        
             if self.g_bExit:
                 return
 
@@ -555,4 +589,7 @@ class CameraHIK:
         flatfield = gaussian(flatfield, sigma=nGauss)
         flatfield = median(flatfield, selem=np.ones((nMedian, nMedian)))
         self.flatfieldImage = flatfield
+        
+    def getFrameNumber(self):
+        return self.frameNumber
 

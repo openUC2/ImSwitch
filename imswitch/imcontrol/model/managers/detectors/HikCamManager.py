@@ -71,6 +71,8 @@ class HikCamManager(DetectorManager):
                         editable=False),
             'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
                                     editable=True),
+            'frame_number': DetectorNumberParameter(group='Misc', value=1, valueUnits='frames',
+                                    editable=False),
             'exposure_mode': DetectorListParameter(group='Misc', value='manual', 
                             options=['manual', 'auto', 'single'], editable=True),
             'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),

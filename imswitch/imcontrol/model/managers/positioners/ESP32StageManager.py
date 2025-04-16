@@ -64,10 +64,10 @@ class ESP32StageManager(PositionerManager):
         self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
         
         self.stageOffsetPositions = {}
-        self.stageOffsetPositions["X"] = positionerInfo.stageOffsets['stageOffsetPositionX']
-        self.stageOffsetPositions["Y"] = positionerInfo.stageOffsets['stageOffsetPositionY']
-        self.stageOffsetPositions["Z"] = positionerInfo.stageOffsets['stageOffsetPositionZ']
-        self.stageOffsetPositions["A"] = positionerInfo.stageOffsets['stageOffsetPositionA']
+        self.stageOffsetPositions["X"] = positionerInfo.stageOffsets.get('stageOffsetPositionX',0)
+        self.stageOffsetPositions["Y"] = positionerInfo.stageOffsets.get('stageOffsetPositionY',0)
+        self.stageOffsetPositions["Z"] = positionerInfo.stageOffsets.get('stageOffsetPositionZ',0)
+        self.stageOffsetPositions["A"] = positionerInfo.stageOffsets.get('stageOffsetPositionA',0)
         # Setup homing coordinates and speed
         # X
         self.setHomeParametersAxis(axis="X", speed=positionerInfo.managerProperties.get('homeSpeedX', 15000), 

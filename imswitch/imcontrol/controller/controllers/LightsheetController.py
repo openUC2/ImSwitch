@@ -209,6 +209,8 @@ class LightsheetController(ImConWidgetController):
         
     def displayImage(self, lightsheetStack):
         # a bit weird, but we cannot update outside the main thread
+        if IS_HEADLESS:
+            return
         name = "Lightsheet Stack"
         # subsample stack 
         # if the stack is too large, we have to subsample it 
@@ -351,8 +353,8 @@ class LightsheetController(ImConWidgetController):
         self.lightsheetStack = np.array(allFrames).copy()
         saveImageThread = threading.Thread(target=displayAndSaveImageStack, args =(isSave,))
         saveImageThread.start()
-        self.sigImageReceived.emit(self.lightsheetStack)
         self.stopLightsheet()
+        if not IS_HEADLESS: self.sigImageReceived.emit(self.lightsheetStack)
         
     def getSaveFilePath(self, date, filename, extension):
         mFilename =  f"{date}_{filename}.{extension}"

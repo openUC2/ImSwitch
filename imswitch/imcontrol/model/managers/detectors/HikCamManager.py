@@ -77,6 +77,10 @@ class HikCamManager(DetectorManager):
                             options=['manual', 'auto', 'single'], editable=True),
             'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),
             'mode': DetectorBooleanParameter(group='Misc', value=name, editable=False), # auto or manual exposure settings            
+            'previewMinValue': DetectorNumberParameter(group='Misc', value=0, valueUnits='arb.u.',
+                                    editable=True),
+            'previewMaxValue': DetectorNumberParameter(group='Misc', value=255, valueUnits='arb.u.',
+                                    editable=True),
             'trigger_source': DetectorListParameter(group='Acquisition mode',
                             value='Continous',
                             options=['Continous',

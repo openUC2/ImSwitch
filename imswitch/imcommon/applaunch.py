@@ -59,13 +59,15 @@ def launchApp(app, mainView, moduleMainControllers):
     if IS_HEADLESS:
         """We won't have any GUI, so we don't need to prepare the app."""
         # Keep python running
+        tDiskCheck = time.time()
         while True: # TODO: have webserver signal somehow?
             try:
                 emit_queued()
                 time.sleep(1)
-                if dirtools.getDiskusage() > 0.9:
+                if time.time() - tDiskCheck > 60 and dirtools.getDiskusage() > 0.9:
                     # if the storage is full or the user presses Ctrl+C, we want to stop the experiment
                     moduleMainControllers.mapping["imcontrol"]._ImConMainController__commChannel.sigExperimentStop.emit()
+                    tDiskCheck = time.time()
                     
             except KeyboardInterrupt:
                 exitCode = 0

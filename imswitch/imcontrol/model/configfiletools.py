@@ -27,12 +27,18 @@ def saveSetupInfo(options, setupInfo):
 
 def loadOptions():
     global _options
+    global _optionsFilePath
 
     if _options is not None:
         return _options, False
 
     optionsDidNotExist = False
-    if not os.path.isfile(_optionsFilePath):
+    if DEFAULT_SETUP_FILE is not None:
+        _options = Options(
+            setupFileName=DEFAULT_SETUP_FILE
+        )
+        optionsDidNotExist = True
+    elif not os.path.isfile(_optionsFilePath):
         _options = Options(
             setupFileName=getSetupList()[0]
         )

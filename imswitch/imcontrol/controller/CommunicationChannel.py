@@ -89,6 +89,8 @@ class CommunicationChannel(SignalInterface):
     sigSendScanFreq = Signal(float)  # (scanPeriod)
 
     sigPixelSizeChange = Signal(float)  # (pixelSize)
+    
+    sigExperimentStop = Signal()
     #sigRequestScannersInScan = Signal()
 
     #sigSendScannersInScan = Signal(object)  # (scannerList)

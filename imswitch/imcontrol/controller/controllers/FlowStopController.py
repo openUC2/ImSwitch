@@ -344,7 +344,7 @@ class FlowStopController(LiveUpdatedController):
             if mFrame is None:
                 self._logger.warning("No frame received from the camera.")
                 return
-            tif.imsave(fileName, mFrame, append=False)
+            tif.imwrite(fileName, mFrame, append=False)
         elif fileFormat == "JPG":
             # save as JPEG 
             mFrame = self.detectorFlowCam.getLatestFrame()  

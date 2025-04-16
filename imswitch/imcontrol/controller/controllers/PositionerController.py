@@ -5,6 +5,7 @@ from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import initLogger
 from typing import Optional
+from imswitch.imcontrol.model import configfiletools
 
 
 class PositionerController(ImConWidgetController):
@@ -272,8 +273,52 @@ class PositionerController(ImConWidgetController):
         self._logger.debug(f'Setting stage offset for {axis} axis.')
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-        self._master.positionersManager[positionerName].setStageOffsetAxis(knownPosition=knownPosition, currentPosition=currentPosition, knownOffset=knownOffset, axis=axis)
+
+        if currentPosition is None:
+            currentPosition = self.getPos()[positionerName][axis]
+        if knownOffset is None:
+            offset = currentPosition - knownPosition
+        else:   
+            offset = knownOffset
+            
+        self._master.positionersManager[positionerName].setStageOffsetAxis(knownOffset=knownOffset, axis=axis)
         
+        self.saveStageOffset(positionerName=positionerName, offsetValue=offset, axis=axis)
+        
+    @APIExport(runOnUIThread=True)
+    def getStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
+        """ 
+        Returns the stage offset for the given axis. 
+        """
+        self._logger.debug(f'Getting stage offset for {axis} axis.')
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        return self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)
+
+    def saveStageOffset(self, positionerName=None, offsetValue=None, axis="X"):
+        """ Save the current stage offset to the config file.
+        If no name is given, the current stage is used.
+        """
+        try:
+            if not positionerName:
+                positionerName = self._positionerInfo.name
+                if not positionerName:
+                    return
+            
+            stageOffsets = {
+                "stageOffsetPositionX": self._master.positionersManager[positionerName].stageOffsetPositions["X"],
+                "stageOffsetPositionY": self._master.positionersManager[positionerName].stageOffsetPositions["Y"],
+                "stageOffsetPositionZ": self._master.positionersManager[positionerName].stageOffsetPositions["Z"],
+                "stageOffsetPositionA": self._master.positionersManager[positionerName].stageOffsetPositions["A"]
+            }
+
+            # Set in setup info
+            self._setupInfo.setStageOffset(positionerName, stageOffsets)
+            configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
+        except Exception as e:
+            self.__logger.error(f"Could not save stage offset: {e}")
+            return
+
 
 _attrCategory = 'Positioner'
 _positionAttr = 'Position'

@@ -63,7 +63,7 @@ for ix in range(2):
 		time.sleep(0.5)
 		# api.imcontrol.snapImageToPath(str(ix)+"_"+str(iy))
 		mFrame = api.imcontrol.snapImage(True, False)
-		tif.imsave(mPath+str(iiter)+"_("+str(int(mPos[0]))+", "+str(int(mPos[1]))+")"+".tif", mFrame)
+		tif.imwrite(mPath+str(iiter)+"_("+str(int(mPos[0]))+", "+str(int(mPos[1]))+")"+".tif", mFrame)
 		iiter +=1
 #
 #def doScanning():

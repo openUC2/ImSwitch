@@ -35,7 +35,7 @@ class FlatfieldManager(SignalInterface):
             self.__logger.error(f"Could not load default flatfield image from {self.defaultConfigPath}: {e}")
 
     def writeFlatfieldImage(self, data):
-        tif.imsave(os.path.join(self.defaultConfigPath, self.histoConfigFilename), data)
+        tif.imwrite(os.path.join(self.defaultConfigPath, self.histoConfigFilename), data)
 
     def update(self):
         return None #returnmask.image()

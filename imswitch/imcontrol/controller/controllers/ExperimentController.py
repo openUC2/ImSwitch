@@ -201,6 +201,9 @@ class ExperimentController(ImConWidgetController):
         except:
             self.mStage = None
             
+        # stop if some external signal (e.g. memory full is triggered)
+        self._commChannel.sigExperimentStop.connect(self.stopExperiment)
+            
         # TODO: Adjust parameters 
         # define changeable Experiment parameters as ExperimentWorkflowParams
         self.ExperimentParams = ExperimentWorkflowParams()
@@ -701,7 +704,7 @@ class ExperimentController(ImConWidgetController):
         final_canvas = context.get_object("canvas")
         if final_canvas is not None:
             self.sigExperimentImageUpdate.emit("canvas", final_canvas, True, 1, 0)  
-            tif.imsave("final_canvas.tif", final_canvas)  
+            tif.imwrite("final_canvas.tif", final_canvas)  
         else:
             print("No final canvas found!")
             

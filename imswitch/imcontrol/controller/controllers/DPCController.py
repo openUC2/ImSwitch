@@ -371,7 +371,7 @@ class DPCProcessor(object):
             if isRecording:
                 date = datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
                 mFilenameRecon = f"{date}_DPC_Reconstruction.tif"   
-                tif.imsave(mFilenameRecon, qdpc_result)         
+                tif.imwrite(mFilenameRecon, qdpc_result)         
             
             # compute gradient images
             dpc_result_1 = (self.stackToReconstruct[0]-self.stackToReconstruct[1])/(self.stackToReconstruct[0]+self.stackToReconstruct[1])

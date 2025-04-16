@@ -479,7 +479,7 @@ class HyphaController(LiveUpdatedController):
                 mStartTime = time.time()
                 while time.time()-mStartTime < self.duration and not self.stop:
                     mFrame = self.detector.getLatestFrame()
-                    tif.imsave(self.filepath, mFrame, append=True)
+                    tif.imwrite(self.filepath, mFrame, append=True)
                     time.sleep(1/self.framerate)
 
             def stop(self):
@@ -533,7 +533,7 @@ class HyphaController(LiveUpdatedController):
                 if not os.path.exists(dirPath):
                     os.makedirs(dirPath)
                 # save an image as a tif
-                tif.imsave(os.path.join(dirPath,mFilePath), mImage)
+                tif.imwrite(os.path.join(dirPath,mFilePath), mImage)
                 returnMessage["imagePath"] = os.path.join(dirPath,mFilePath)
                 self.__logger.debug(f"Image saved as {os.path.join(dirPath,mFilePath)}")
             except Exception as e:

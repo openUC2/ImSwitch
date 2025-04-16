@@ -47,7 +47,7 @@ for i in range(num_steps):
 
 # Save image stack
 stack_filename = os.path.join(save_dir, "imagepsf3.tif")  # Updated filename
-tif.imsave(stack_filename, mImageList)
+tif.imwrite(stack_filename, mImageList)
 print(f"Image stack saved: {stack_filename}")
 
 # Return to starting position (relative move, negative value of total distance)

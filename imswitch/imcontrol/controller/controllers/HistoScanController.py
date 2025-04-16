@@ -1264,7 +1264,7 @@ class HistoScanController(LiveUpdatedController):
                         print("Taking image")
                         mFrame = self.microscopeDetector.getLatestFrame()  
                         import tifffile as tif
-                        tif.imsave("test.tif", mFrame, append=True)
+                        tif.imwrite("test.tif", mFrame, append=True)
                         
                         lastStagePositionX = self.currentPosX
                         

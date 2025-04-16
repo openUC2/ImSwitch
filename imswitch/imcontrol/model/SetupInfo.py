@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Union
 from dataclasses_json import dataclass_json, Undefined, CatchAll
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class DeviceInfo:
     analogChannel: Optional[Union[str, int]]
     """ Channel for analog communication. ``null`` if the device is digital or
@@ -37,7 +37,7 @@ class DeviceInfo:
             return self.digitalLine
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class DetectorInfo(DeviceInfo):
     forAcquisition: bool = False
     """ Whether the detector is used for acquisition. """
@@ -46,7 +46,7 @@ class DetectorInfo(DeviceInfo):
     """ Whether the detector is used for focus lock. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LaserInfo(DeviceInfo):
     valueRangeMin: Optional[Union[int, float]]
     """ Minimum value of the laser. ``null`` if laser doesn't setting a value.
@@ -73,7 +73,7 @@ class LaserInfo(DeviceInfo):
     """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LEDInfo(DeviceInfo):
     valueRangeMin: Optional[Union[int, float]]
     """ Minimum value of the laser. ``null`` if laser doesn't setting a value.
@@ -88,12 +88,12 @@ class LEDInfo(DeviceInfo):
     """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LEDMatrixInfo(DeviceInfo):
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class PositionerInfo(DeviceInfo):
     axes: List[str]
     """ A list of axes (names) that the positioner controls. """
@@ -110,8 +110,10 @@ class PositionerInfo(DeviceInfo):
     resetOnClose: bool = True
     """ Whether the positioner should be reset to 0-position upon closing ImSwitch. """
 
-
-@dataclass(frozen=True)
+    stageOffsets: Dict[str, float] = field(default_factory=dict)
+    """ Stage offsets available to select (map preset name -> stage name -> """
+    
+@dataclass(frozen=False)
 class RS232Info:
     managerName: str
     """ RS232 manager class name. """
@@ -120,7 +122,7 @@ class RS232Info:
     """ Properties to be read by the RS232 manager. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class SLMInfo:
     monitorIdx: int
     """ Index of the monitor in the system list of monitors (indexing starts at
@@ -149,12 +151,12 @@ class SLMInfo:
     wavelength. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class UC2ConfigInfo:
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class SIMInfo:
     monitorIdx: int
     """ Index of the monitor in the system list of monitors (indexing starts at
@@ -208,7 +210,7 @@ class SIMInfo:
     tWaitSequence: float = 0.0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class DPCInfo:
     wavelength: int
     """ Wavelength of the laser line used with the SLM. """
@@ -226,7 +228,7 @@ class DPCInfo:
 
     rotations: List[int]
     
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class ObjectiveInfo:
     pixelsizes: List 
     NAs: List
@@ -239,61 +241,61 @@ class ObjectiveInfo:
     homeAcceleration: int = 20000
     calibrateOnStart: bool = True
     
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class MCTInfo:
     tWait: int
 
 class ROIScanInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LightsheetInfo:
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class WebRTCInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class HyphaInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class MockXXInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class JetsonNanoInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class HistoScanInfo:
     PreviewCamera: str = None
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class WorkflowInfo:
     pass
     
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class FlowStopInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LepmonInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class FlatfieldInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class PixelCalibrationInfo:
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class ISMInfo:
     wavelength: int
     """ Wavelength of the laser line used with the SLM. """
@@ -309,7 +311,7 @@ class ISMInfo:
     wavelength. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class FocusLockInfo:
     camera: str
     """ Detector name. """
@@ -341,7 +343,7 @@ class FocusLockInfo:
     piKi: float
     """ Default ki value of feedback loop. """
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class FOVLockInfo:
     camera: str
     """ Detector name. """
@@ -374,7 +376,7 @@ class FOVLockInfo:
     """ Default ki value of feedback loop. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class AutofocusInfo:
     camera: str
     """ Detector name. """
@@ -398,7 +400,7 @@ class AutofocusInfo:
     """ Height of frame crop. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class ScanInfo:
     scanWidgetType: str
     """ Type of scan widget to generate: PointScan/MoNaLISA/Base/etc."""
@@ -428,7 +430,7 @@ class ScanInfo:
     If integer, it will be translated to "Dev1/port0/line{frameClockLine}".
     """
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class EtSTEDInfo:
     detectorFast: str
     """ Name of the STED detector to use. """
@@ -440,7 +442,7 @@ class EtSTEDInfo:
     """ Name of the widefield laser to use. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class MicroscopeStandInfo:
     managerName: str
     """ Name of the manager to use. """
@@ -449,7 +451,7 @@ class MicroscopeStandInfo:
     """ Name of the rs232 device to use. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class NidaqInfo:
     timerCounterChannel: Optional[Union[str, int]] = None
     """ Output for Counter for timing purposes. If an integer is specified, it
@@ -465,12 +467,12 @@ class NidaqInfo:
         else:
             return self.timerCounterChannel
         
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class PulseStreamerInfo:
     ipAddress: Optional[str] = None
     """ IP address of Pulse Streamer hardware. """
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class PyroServerInfo:
     name: Optional[str] = 'ImSwitchServer'
     host: Optional[

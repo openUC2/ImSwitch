@@ -10,7 +10,7 @@ from imswitch.imcommon.model import dirtools
 import imswitch
 
 @dataclass_json
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class _Modules:
     enabled: List[str]
 

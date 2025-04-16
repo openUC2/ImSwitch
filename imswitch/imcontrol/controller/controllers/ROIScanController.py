@@ -189,7 +189,7 @@ class ROIScanController(ImConWidgetController):
             self.sigImageReceived.emit()
             # save the stack as ometiff including metadata including coordinates and time
             savepath = self.getSaveFilePath(currentTime, '', experimentName, ".tif")
-            tif.imsave(savepath, self.roiscanStack)#, metadata={"X":x, "Y":y, "Z":z, "t":datetime.now().strftime("%d-%m-%Y %H:%M:%S")})
+            tif.imwrite(savepath, self.roiscanStack)#, metadata={"X":x, "Y":y, "Z":z, "t":datetime.now().strftime("%d-%m-%Y %H:%M:%S")})
             self._logger.debug("Savepath: "+savepath)
             # if the experiment is stopped, stop the thread
             if iImage > nTimes:

@@ -2,6 +2,8 @@ from imswitch.imcommon.model import initLogger
 from .PositionerManager import PositionerManager
 import time
 import numpy as np
+import os
+import json 
 
 MAX_ACCEL = 500000
 PHYS_FACTOR = 1
@@ -62,10 +64,10 @@ class ESP32StageManager(PositionerManager):
         self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
         
         self.stageOffsetPositions = {}
-        self.stageOffsetPositions["X"] = positionerInfo.managerProperties.get('stageOffsetPositionX', 0)
-        self.stageOffsetPositions["Y"] = positionerInfo.managerProperties.get('stageOffsetPositionY', 0)
-        self.stageOffsetPositions["Z"] = positionerInfo.managerProperties.get('stageOffsetPositionZ', 0)
-        self.stageOffsetPositions["A"] = positionerInfo.managerProperties.get('stageOffsetPositionA', 0)
+        self.stageOffsetPositions["X"] = positionerInfo.stageOffsets['stageOffsetPositionX']
+        self.stageOffsetPositions["Y"] = positionerInfo.stageOffsets['stageOffsetPositionY']
+        self.stageOffsetPositions["Z"] = positionerInfo.stageOffsets['stageOffsetPositionZ']
+        self.stageOffsetPositions["A"] = positionerInfo.stageOffsets['stageOffsetPositionA']
         # Setup homing coordinates and speed
         # X
         self.setHomeParametersAxis(axis="X", speed=positionerInfo.managerProperties.get('homeSpeedX', 15000), 
@@ -488,20 +490,25 @@ class ESP32StageManager(PositionerManager):
         value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
 
-    def setStageOffsetAxis(self, knownPosition:float=None, currentPosition:float=None, knownOffset:float=None, axis="X"):
-        if currentPosition is None:
-            currentPosition = self.get_abs(axis=axis)
-        if knownOffset is None:
-            offset = currentPosition - knownPosition
-        else:   
-            offset = knownOffset
-        self._motor.set_offset(axis=axis, offset=offset)
+    def setStageOffsetAxis(self, knownOffset:float=None, axis="X"):
         try:
-            self.stageOffsetPositions[axis] = offset
+            self.stageOffsetPositions[axis] = knownOffset
         except KeyError:
             self.__logger.error(f"Axis {axis} not found in stageOffsetPositions.")
-        self.__logger.info(f"Set offset for {axis} axis to {offset} steps.")
+        self.__logger.info(f"Set offset for {axis} axis to {knownOffset} steps.")
+        self._motor.set_offset(axis=axis, offset=knownOffset)
         
+    def getStageOffsetAxis(self, axis:str="X"):
+        """ Get the current stage offset for a given axis.
+        If no axis is given, the current stage is used.
+        """
+        try:
+            return self.stageOffsetPositions[axis]
+        except KeyError:
+            self.__logger.error(f"Axis {axis} not found in stageOffsetPositions.")
+            return 0
+
+
         
 # Copyright (C) 2020, 2021 The imswitch developers
 # This file is part of ImSwitch.

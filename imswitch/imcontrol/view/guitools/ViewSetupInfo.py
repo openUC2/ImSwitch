@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Union
 from imswitch.imcontrol.model import SetupInfo
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class ROIInfo:
     x: int
     """ Starting X position of ROI, in pixels. """
@@ -19,12 +19,12 @@ class ROIInfo:
     """ Height of ROI, in pixels. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LaserPresetInfo:
     value: float
     """ Laser value. """
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LEDPresetInfo:
     value: float
     """ LED value. """
@@ -50,6 +50,10 @@ class ViewSetupInfo(SetupInfo):
     laserPresets: Dict[str, Dict[str, 'LaserPresetInfo']] = field(default_factory=dict)
     """ Laser presets available to select (map preset name -> laser name ->
     LaserPresetInfo). """
+    
+    stageOffsets: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    """ Stage offsets available to select (map preset name -> stage name ->
+    stage offset). """
 
     defaultLaserPresetForScan: Optional[str] = field(default_factory=lambda: None)
     """ Default laser preset for scanning. """
@@ -125,6 +129,10 @@ class ViewSetupInfo(SetupInfo):
         """ :meta private: """
         self.laserPresets[name] = laserPresetInfos
 
+    def setStageOffset(self, name, stageOffsets):
+        """ :meta private: """
+        self.positioners[name].stageOffsets=stageOffsets
+        
     def removeLaserPreset(self, name):
         """ :meta private: """
         try:

@@ -142,10 +142,13 @@ class PositionerManager(ABC):
         """ Move to sample mounting position. """
         pass
 
-    def setStageOffsetAxis(self, knownPosition:float=0, currentPosition:float=0, knownOffset:float=None, axis:str="X"):
+    def setStageOffsetAxis(self, knownOffset:float=None, axis="X"):
         """ Sets the offset of a known position to the current position of the stage."""
         
-
+    def getStageOffsetAxis(self, axis:str="X"):
+        """ Returns the offset of the stage for a given axis."""
+        pass
+    
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

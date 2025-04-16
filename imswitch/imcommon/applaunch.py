@@ -5,6 +5,7 @@ import traceback
 import time
 
 from .model import dirtools, pythontools, initLogger
+from imswitch.imcommon.framework import Signal, Thread     
 from imswitch import IS_HEADLESS
 if not IS_HEADLESS:
     from qtpy import QtCore, QtGui, QtWidgets
@@ -61,7 +62,11 @@ def launchApp(app, mainView, moduleMainControllers):
         while True: # TODO: have webserver signal somehow?
             try:
                 emit_queued()
-                time.sleep(.1)
+                time.sleep(1)
+                if dirtools.getDiskusage() > 0.9:
+                    # if the storage is full or the user presses Ctrl+C, we want to stop the experiment
+                    moduleMainControllers.mapping["imcontrol"]._ImConMainController__commChannel.sigExperimentStop.emit()
+                    
             except KeyboardInterrupt:
                 exitCode = 0
                 break

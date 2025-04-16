@@ -15,6 +15,8 @@ from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from skimage.registration import phase_cross_correlation
 from ..basecontrollers import ImConWidgetController
+from fastapi.responses import FileResponse
+
 
 class LightsheetController(ImConWidgetController):
     """Linked to LightsheetWidget."""
@@ -271,6 +273,8 @@ class LightsheetController(ImConWidgetController):
         '''Returns the path of the last saved lightsheet stack.'''
         if self.mFilePath is not None:
             return self.mFilePath
+        else:
+            return "No stack available yet"
         
     def lightsheetThread(self, minPosZ, maxPosZ, posX=None, posY=None, speed=10000, axis="A", illusource=None, illuvalue=None, isSave=True):
         '''Performs a lightsheet scan.'''
@@ -339,7 +343,7 @@ class LightsheetController(ImConWidgetController):
                 mFileName = "lightsheet_stack_x_{posX}_y_{posY}_z_{posZ}_pz_{pixelSizeZ}_pxy_{pixelSizeXY}"
                 self.mFilePath = self.getSaveFilePath(mDate, mFileName, mExtension)
                 self._logger.info(f"Saving lightsheet stack to {self.mFilePath}")
-                tif.imsave(self.mFilePath, self.lightsheetStack)
+                tif.imwrite(self.mFilePath, self.lightsheetStack)
 
         if len(allFrames) == 0:
             self._logger.error("No frames captured.")
@@ -360,6 +364,25 @@ class LightsheetController(ImConWidgetController):
 
         return newPath
 
+    @APIExport()
+    def getLatestLightsheetStackAsTif(self):
+        """
+        If there is a lightsheet stack available, return it as a TIFF file for download.
+        """
+        if self.mFilePath is not None and os.path.exists(self.mFilePath):
+            # Return the file as a response for download
+            return FileResponse(
+                path=self.mFilePath,
+                media_type="application/octet-stream",
+                filename=os.path.basename(self.mFilePath)
+            )
+        else:
+            # Return an error message if the file is not available
+            return {"error": "No lightsheet stack available"}
+        
+    @APIExport()
+    def getIsLightsheetRunning(self):
+        return self.isLightsheetRunning
         
     def stopLightsheet(self):
         self.isLightsheetRunning = False

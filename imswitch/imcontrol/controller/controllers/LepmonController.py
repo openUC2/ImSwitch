@@ -298,7 +298,7 @@ class LepmonController(LiveUpdatedController):
 
         if fileFormat.upper() == "TIF":
             import tifffile as tif
-            tif.imsave(fileName + ".tif", frame, append=False)
+            tif.imwrite(fileName + ".tif", frame, append=False)
         elif fileFormat.upper() == "JPG":
             cv2.imwrite(fileName + ".jpg", frame)
         elif fileFormat.upper() == "PNG":

@@ -71,7 +71,7 @@ class UC2ConfigController(ImConWidgetController):
             self.detector = self._master.detectorsManager[self.detector_names[0]]
             mImage = self.detector.getLatestFrame()
             # save image
-            #tif.imsave()
+            #tif.imwrite()
 
             # (detectorName, image, init, scale, isCurrentDetector)
             self._commChannel.sigUpdateImage.emit('Image', mImage, True, 1, False)

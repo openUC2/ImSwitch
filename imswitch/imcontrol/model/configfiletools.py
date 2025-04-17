@@ -18,7 +18,18 @@ def loadSetupInfo(options, setupInfoType):
         mPath = os.path.join(_setupFilesDir, options.setupFileName)
     print("Loading setup info from: " + mPath)
     with open(mPath) as setupFile:
-        return setupInfoType.from_json(setupFile.read(), infer_missing=True)
+        try:
+            mSetupDescription = setupInfoType.from_json(setupFile.read(), infer_missing=True)
+        except json.decoder.JSONDecodeError:
+            # Print the setupFileName to the console
+            print("Error: The setup file was corrupted and has been reset to default values.")
+            print("Setup file: " + mPath)
+            print("Please check the file for errors.")
+            print("Using default setup file: " + DEFAULT_SETUP_FILE)
+            print("Filecontent:")
+            print(setupFile.read())
+            raise json.decoder.JSONDecodeError
+        return mSetupDescription
 
 def saveSetupInfo(options, setupInfo):
     with open(os.path.join(_setupFilesDir, options.setupFileName), 'w') as setupFile:

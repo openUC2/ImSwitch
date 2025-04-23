@@ -343,7 +343,7 @@ class RecordingController(ImConWidgetController):
     def getDetectorNamesToCapture(self):
         """ Returns a list of which detectors the user has selected to be captured. """
         if not IS_HEADLESS: detectorMode = self._widget.getDetectorMode()
-        else: detectorMode = -1
+        else: detectorMode = -2
         if detectorMode == -1:  # Current detector at start
             return [self._master.detectorsManager.getCurrentDetectorName()]
         elif detectorMode == -2:  # All acquisition detectors
@@ -563,17 +563,53 @@ class RecordingController(ImConWidgetController):
         # Create a 2D NumPy array representing the image
         images = self.snapNumpy()
 
+        if detectorName == "ALL":
+            # Capture images for all detectors and put them into a large array
+            detectorNames = self.getDetectorNamesToCapture()
+            images = {detectorName: images[detectorName] for detectorName in detectorNames}
+
+            # Determine the maximum height and total width for the stitched image
+            max_height = max(img.shape[0] for img in images.values())
+            total_width = sum(img.shape[1] for img in images.values())
+
+            # Check if images are RGB or grayscale
+            is_rgb = len(next(iter(images.values())).shape) == 3
+
+            # Create an empty array for the stitched image
+            if is_rgb:
+                image = np.zeros((max_height, total_width, 3), dtype=next(iter(images.values())).dtype)
+            else:
+                image = np.zeros((max_height, total_width), dtype=next(iter(images.values())).dtype)
+
+            # Stitch images together
+            current_x = 0
+            for detectorName in detectorNames:
+                img = images[detectorName]
+                height, width = img.shape[:2]
+
+                if is_rgb and len(img.shape) == 2:
+                    # Convert grayscale to RGB if needed
+                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+
+                image[:height, current_x:current_x + width] = img
+                current_x += width
+
+            # Resize the image if needed to save bandwidth
+            if resizeFactor < 1:
+                image = self.resizeImage(image, resizeFactor)
         # get the image from the first detector if detectorName is not specified
-        if detectorName is None:
-            detectorName = self.getDetectorNamesToCapture()[0]
+        else:
+            if detectorName is None:
+                detectorName = self.getDetectorNamesToCapture()[0]
+            # get the image from the specified detector    
+            image = images[detectorName]
 
-        # get the image from the specified detector    
-        image = images[detectorName]
+            # eventually resize image to save bandwidth
+            if resizeFactor <1:
+                image = self.resizeImage(image, resizeFactor)
+            
+            
 
-        # eventually resize image to save bandwidth
-        if resizeFactor <1:
-            image = self.resizeImage(image, resizeFactor)
-        
         # using an in-memory image
         im = Image.fromarray(image)
         

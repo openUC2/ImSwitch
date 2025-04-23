@@ -150,8 +150,29 @@ class CameraOpenCV:
     def openPropertiesGUI(self):
         pass
 
+    def listAvailableUSBCameras(self):
+        '''list available cameras that can be used through openCVs VideoCapture'''
+        # list available cameras
+        from sys import platform
+        if platform == "linux" or platform == "linux2":
+            import glob
+            cameras = glob.glob('/dev/video*')
+            cameras = [int(c.split('/')[-1].replace('video', '')) for c in cameras]
+            self.__logger.debug("Available cameras: "+str(cameras))
+        else:
+            cameras = []
+            for i in range(10):
+                cap = cv2.VideoCapture(i)
+                if cap.isOpened():
+                    cameras.append(i)
+                    cap.release()
+                    
+        return cameras
+        # check if camera is open
+        
     def openCamera(self, cameraindex, width, height, isRGB):
         # open camera
+        if 0: self.listAvailableUSBCameras()
         from sys import platform
         if self.camera is not None:
             self.camera.release()

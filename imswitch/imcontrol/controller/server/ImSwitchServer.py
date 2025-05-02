@@ -311,10 +311,11 @@ class ServerThread(threading.Thread):
             print("Server is stopping...")
 class ImSwitchServer(Worker):
 
-    def __init__(self, api, setupInfo):
+    def __init__(self, api, uiapi, setupInfo):
         super().__init__()
 
         self._api = api
+        self._uiapi = uiapi
         self._name = setupInfo.pyroServerInfo.name
         self._host = setupInfo.pyroServerInfo.host
         self._port = setupInfo.pyroServerInfo.port
@@ -408,7 +409,21 @@ class ImSwitchServer(Worker):
                         return func(*args, **kwargs)
             return wrapper
 
+        def includeUIAPI(str, func):
+            # based on UIExport decorator, only get is supported
+            if hasattr(func, '_UIExport') and func._UIExport:
+                @app.get(str)
+                @wraps(func)
+                async def wrapper(*args, **kwargs):
+                    return func(*args, **kwargs)
+            else:
+                @app.get(str)
+                @wraps(func)
+                async def wrapper(*args, **kwargs):
+                    return func(*args, **kwargs)
+            return wrapper
 
+        # add APIExport decorated functions to the fastAPI
         for f in functions:
             func = api_dict[f]
             if hasattr(func, 'module'):
@@ -417,6 +432,16 @@ class ImSwitchServer(Worker):
                 module = func.__module__.split('.')[-1]
             self.func = includeAPI("/"+module+"/"+f, func)
 
+        # add UIExport decorated functions to the fastAPI under /externUI
+        uiapi_dict = self._uiapi._asdict()
+        functions = uiapi_dict.keys()
+        for f in functions:
+            func = uiapi_dict[f]
+            if hasattr(func, 'module'):
+                module = func.module
+            else:
+                module = func.__module__.split('.')[-1]
+            self.func = includeUIAPI("/externUI/"+module+"/"+f, func)
 
     # The reason why it's still called UC2ConfigController is because we don't want to change the API
     @app.get("/UC2ConfigController/returnAvailableSetups")

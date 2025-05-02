@@ -4,7 +4,7 @@ import h5py
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.controller import MainController, PickDatasetsController
 from imswitch.imcommon.model import (
-    ostools, initLogger, generateAPI, generateShortcuts, SharedAttributes
+    ostools, initLogger, generateAPI, generateUI, generateShortcuts, SharedAttributes
 )
 from imswitch.imcommon.framework import Thread
 from .server import ImSwitchServer
@@ -62,7 +62,7 @@ class ImConMainController(MainController):
                 continue
             
             if hasattr(controllers, controller_name):
-                # Controller ist vorhanden
+                # Controller is available in the imcontrol module
                 self.controllers[widgetKey] = self.__factory.createController(
                        getattr(controllers, controller_name), widget)
             else:
@@ -81,18 +81,29 @@ class ImConMainController(MainController):
         self.__api = generateAPI(
             apiObjs,
             missingAttributeErrorMsg=lambda attr: f'The imcontrol API does either not have any'
-                                                  f' method {attr}, or the widget that defines it'
-                                                  f' is not included in your currently active'
-                                                  f' hardware setup file.'
+                                                f' method {attr}, or the widget that defines it'
+                                                f' is not included in your currently active'
+                                                f' hardware setup file.'
         )
+        self.__apiui = None
+        if IS_HEADLESS:
+            uiObjs = mainView.widgets
+            self.__apiui = generateUI(
+                uiObjs,
+                missingAttributeErrorMsg=lambda attr: f'The imcontrol API does either not have any'
+                                                    f' method {attr}, or the widget that defines it'
+                                                    f' is not included in your currently active'
+                                                    f' hardware setup file.'
+            )
         # Generate Shorcuts
         if not IS_HEADLESS:
             self.__shortcuts = None
             shorcutObjs = list(self.__mainView.widgets.values())
             self.__shortcuts = generateShortcuts(shorcutObjs)
             self.__mainView.addShortcuts(self.__shortcuts)
+            
         self.__logger.debug("Start ImSwitch Server")
-        self._serverWorker = ImSwitchServer(self.__api, setupInfo)
+        self._serverWorker = ImSwitchServer(self.__api, self.__apiui, setupInfo)
         self._thread = threading.Thread(target=self._serverWorker.run)
         self._thread.start()
 

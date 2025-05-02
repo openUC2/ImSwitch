@@ -31,6 +31,18 @@ class WidgetFactory:
         self._createdWidgets.append(weakref.ref(widget))
         return widget
 
+    def createWidgetReact(self, widgetClass, *args, **extraKwargs):
+        kwargs = self._baseKwargs.copy()
+        kwargs.update(extraKwargs)
+
+        if issubclass(widgetClass, Widget):
+            widget = widgetClass(self._options, *args, **kwargs)
+        else:
+            widget = widgetClass(*args, **kwargs)
+
+        self._createdWidgets.append(weakref.ref(widget))
+        return widget
+    
     def setArgument(self, name, value):
         self._baseKwargs[name] = value
 
@@ -52,7 +64,7 @@ class Widget(QtWidgets.QWidget, metaclass=_QObjectABCMeta):
         self.setLayout(grid)
         grid.addWidget(errorLabel)
 
-
+class
 class NapariHybridWidget(Widget, naparitools.NapariBaseWidget, metaclass=_QObjectABCMeta):
     """ Superclass for widgets that can use the functionality of
     NapariBaseWidget. Derived classes should not implement __init__; instead,

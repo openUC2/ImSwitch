@@ -3,6 +3,9 @@ import os
 import sys
 import traceback
 import time
+import threading
+# somewhere after all your variables & functions exist
+from ipykernel.embed import embed_kernel   # pip install ipykernel
 
 from .model import dirtools, pythontools, initLogger
 from imswitch.imcommon.framework import Signal, Thread     
@@ -56,9 +59,12 @@ def prepareApp():
 def launchApp(app, mainView, moduleMainControllers):
     """ Launches the app. The program will exit when the app is exited. """
     logger = initLogger('launchApp')
+    #threading.Thread(target=embed_kernel, daemon=True).start()
+
     if IS_HEADLESS:
         """We won't have any GUI, so we don't need to prepare the app."""
         # Keep python running
+        embed_kernel()
         tDiskCheck = time.time()
         while True: # TODO: have webserver signal somehow?
             try:

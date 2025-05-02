@@ -2,7 +2,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtWidgets import  QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QLabel
 from .basewidgets import Widget
-
+from imswitch.imcommon.model import APIExport
 
 class UC2ConfigWidget(Widget):
     """ Widget containing UC2Config interface. """
@@ -85,6 +85,7 @@ class UC2ConfigWidget(Widget):
 
         self.setLayout(mainLayout)
 
+    @APIExport(runOnUIThread=True)
     def setBaudRateGui(self, baudrate):
         self.reconnectBaudrateEdit.setText(str(baudrate))
         

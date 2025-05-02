@@ -25,7 +25,7 @@ def loadSetupInfo(options, setupInfoType):
             print("Error: The setup file was corrupted and has been reset to default values.")
             print("Setup file: " + mPath)
             print("Please check the file for errors.")
-            print("Using default setup file: " + DEFAULT_SETUP_FILE)
+            print("Using default setup file: " + mPath)
             print("Filecontent:")
             print(setupFile.read())
             raise json.decoder.JSONDecodeError

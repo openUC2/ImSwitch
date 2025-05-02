@@ -125,8 +125,8 @@
     "Experiment", 
     "Timelapse", 
     "UC2Config",
-    "imswitch_arkitekt_next",
     "Objective"
+    "imswitch_arkitekt_next",
   ],
   "nonAvailableWidgets": [
     "Histogramm",  

@@ -2,6 +2,8 @@ import inspect
 import asyncio
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Mutex, Signal, SignalInterface
+from importlib.resources import files
+from fastapi.staticfiles import StaticFiles
 
 
 class APIExport:
@@ -20,6 +22,66 @@ class APIExport:
         func._APIRequestType = self._APIRequestType
         return func
 
+
+class UIExport:
+    """
+    Attach a small manifest to a controller class
+    and remember where its built widget‑bundle lives.
+    """
+    def __init__(self, *,
+                 path:str,                 # directory that contains remoteEntry.js
+                 name:str,
+                 icon:str,
+                 scope:str,
+                 exposed:str="Widget",     # default exposed module
+    ):
+        self._UIExport = True
+        self._UIPath   = path
+        self._UIName   = name
+        self._UIIcon   = icon
+        self._UIScope  = scope
+        self._UIExposed= exposed
+
+    def __call__(self, cls):
+        cls._UIExport = self._UIExport
+        cls._ui_meta  = {
+            "path"   : self._UIPath,
+            "name"   : self._UIName,
+            "icon"   : self._UIIcon,
+            "scope"  : self._UIScope,
+            "exposed": self._UIExposed,
+        }
+        return cls
+
+def generateUI(widgetClassList, *, missingAttributeErrorMsg=None):
+    """ Generates a UI from UIExport-decorated classes in the object. Must be
+    called from the main thread. """
+
+    from imswitch.imcommon.model import pythontools
+
+    exportedFuncs = {}
+    for widgetClass in widgetClassList.values():
+        widgetClassName = widgetClass[0]
+        widgetModule = widgetClass[1]
+        widgetClassObj = widgetClass[2]
+        if widgetClassObj is None:
+            continue
+        for subObjName in dir(widgetClassObj):
+            subObj = getattr(widgetClassObj, subObjName)
+            if not callable(subObj):
+                continue
+            if not hasattr(subObj, '_UIExport') or not subObj._UIExport:
+                continue        
+            if widgetClassName in exportedFuncs:
+                raise NameError(f'UI method name "{widgetClassName}" is already in use')
+            exportedFuncs[widgetClassName] = widgetClassObj
+        
+        if not hasattr(subObj, '_UIExport') or not subObj._UIExport:
+            continue
+        exportedFuncs[subObjName] = subObj
+
+    return pythontools.dictToROClass(exportedFuncs,
+                                     missingAttributeErrorMsg=missingAttributeErrorMsg)
 
 def generateAPI(objs, *, missingAttributeErrorMsg=None):
     """ Generates an API from APIExport-decorated methods in the objects in the

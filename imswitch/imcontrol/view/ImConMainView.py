@@ -1,20 +1,13 @@
-from imswitch import IS_HEADLESS
 from dataclasses import dataclass
 
 # FIXME: We should probably create another file that does not import these files
 from imswitch.imcommon.framework import Signal
-if not IS_HEADLESS:
-    from pyqtgraph.dockarea import Dock, DockArea
-    from qtpy import QtCore, QtWidgets
-    from qtpy.QtWidgets import QMainWindow
-    from imswitch.imcommon.view import PickDatasetsDialog
-    from .PickSetupDialog import PickSetupDialog
-else:
-    Dock = None
-    DockArea = None
-    QtCore = None
-    QtWidgets = None
-    QMainWindow = object
+
+from pyqtgraph.dockarea import Dock, DockArea
+from qtpy import QtCore, QtWidgets
+from qtpy.QtWidgets import QMainWindow
+from imswitch.imcommon.view import PickDatasetsDialog
+from .PickSetupDialog import PickSetupDialog
 from imswitch.imcommon.model import initLogger
 
 from . import widgets
@@ -28,7 +21,7 @@ class ImConMainView(QMainWindow):
 
     def __init__(self, options, viewSetupInfo, *args, **kwargs):
         self.__logger = initLogger(self)
-        self.__logger.debug('Initializing')
+        self.__logger.debug('Initializing ImConMainView')
 
         super().__init__(*args, **kwargs)
 
@@ -38,33 +31,33 @@ class ImConMainView(QMainWindow):
         self.shortcuts = {}
 
         self.viewSetupInfo = viewSetupInfo
-        if not IS_HEADLESS:
-            self.pickSetupDialog = PickSetupDialog(self)
-            self.pickDatasetsDialog = PickDatasetsDialog(self, allowMultiSelect=False)
 
-            # Menu Bar
-            menuBar = self.menuBar()
-            file = menuBar.addMenu('&File')
-            tools = menuBar.addMenu('&Tools')
-            self.shortcuts = menuBar.addMenu('&Shortcuts')
+        self.pickSetupDialog = PickSetupDialog(self)
+        self.pickDatasetsDialog = PickDatasetsDialog(self, allowMultiSelect=False)
 
-            self.loadParamsAction = QtWidgets.QAction('Load parameters from saved HDF5 file…', self)
-            self.loadParamsAction.setShortcut('Ctrl+P')
-            self.loadParamsAction.triggered.connect(self.sigLoadParamsFromHDF5)
-            file.addAction(self.loadParamsAction)
+        # Menu Bar
+        menuBar = self.menuBar()
+        file = menuBar.addMenu('&File')
+        tools = menuBar.addMenu('&Tools')
+        self.shortcuts = menuBar.addMenu('&Shortcuts')
 
-            self.pickSetupAction = QtWidgets.QAction('Pick hardware setup…', self)
-            self.pickSetupAction.triggered.connect(self.sigPickSetup)
-            tools.addAction(self.pickSetupAction)
+        self.loadParamsAction = QtWidgets.QAction('Load parameters from saved HDF5 file…', self)
+        self.loadParamsAction.setShortcut('Ctrl+P')
+        self.loadParamsAction.triggered.connect(self.sigLoadParamsFromHDF5)
+        file.addAction(self.loadParamsAction)
+
+        self.pickSetupAction = QtWidgets.QAction('Pick hardware setup…', self)
+        self.pickSetupAction.triggered.connect(self.sigPickSetup)
+        tools.addAction(self.pickSetupAction)
 
 
-            # Window
-            self.setWindowTitle('ImSwitch')
+        # Window
+        self.setWindowTitle('ImSwitch')
 
-            self.cwidget = QtWidgets.QWidget()
-            layout = QtWidgets.QHBoxLayout()
-            self.cwidget.setLayout(layout)
-            self.setCentralWidget(self.cwidget)
+        self.cwidget = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout()
+        self.cwidget.setLayout(layout)
+        self.setCentralWidget(self.cwidget)
 
         # Dock area
         rightDockInfos = {
@@ -140,7 +133,7 @@ class ImConMainView(QMainWindow):
         elif enabledDockKeys is True:
             enabledDockKeys = allDockKeys
 
-        if 'Image' in enabledDockKeys and not IS_HEADLESS:
+        if 'Image' in enabledDockKeys:
             self.docks['Image'] = Dock('Image Display', size=(1, 1))
             self.widgets['Image'] = self.factory.createWidget(widgets.ImageWidget)
             self.docks['Image'].addWidget(self.widgets['Image'])
@@ -164,9 +157,8 @@ class ImConMainView(QMainWindow):
             dockArea, 'left'
         )
 
-    # Add dock area to layout
-        if not IS_HEADLESS:
-            layout.addWidget(dockArea)
+        # Add dock area to layout
+        layout.addWidget(dockArea)
 
         '''
         # TODO: THIS HAS NO EFFECT! WHY?
@@ -194,12 +186,11 @@ class ImConMainView(QMainWindow):
             self.docks['Image'].setStretch(1, 1)
         '''
     def addShortcuts(self, shortcuts):
-        if not IS_HEADLESS:
-            for s in shortcuts.values():
-                action = QtWidgets.QAction(s["name"], self)
-                action.setShortcut(s["key"])
-                action.triggered.connect(s["callback"])
-                self.shortcuts.addAction(action)
+        for s in shortcuts.values():
+            action = QtWidgets.QAction(s["name"], self)
+            action.setShortcut(s["key"])
+            action.triggered.connect(s["callback"])
+            self.shortcuts.addAction(action)
 
     def showPickSetupDialogBlocking(self):
         result = self.pickSetupDialog.exec_()
@@ -274,30 +265,58 @@ class ImConMainViewNoQt(object):
         enabledDockKeys = self.viewSetupInfo.availableWidgets
         disabledKeys = ["Image"]
         widget_keys = {key: _DockInfo(name=key, yPosition=1) for key in enabledDockKeys if key not in disabledKeys}
-        self._addWidget(widget_keys)
-
-
+        self._addWidgetNoQt(widget_keys)
+        
     def closeEvent(self, event):
         self.sigClosing.emit()
         event.accept()
 
-    def _addWidget(self, dockInfoDict):
+    def _addWidgetNoQt(self, dockInfoDict):
+        # Preload all available plugins for widgets
+        availablePlugins = {
+            entry_point.name: entry_point
+            for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins')
+        }
 
         for widgetKey, dockInfo in dockInfoDict.items():
-            try:
-                self.widgets[widgetKey] = (widgetKey)
-            except Exception as e:
-                # try to get it from the plugins
-                foundPluginController = False
-                for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
-                    if entry_point.name == f'{widgetKey}_widget':
-                        packageWidget = entry_point.load()
-                        self.widgets[widgetKey] = packageWidget
-                        foundPluginController = True
-                        break
-                if not foundPluginController:
+            if widgetKey == "ImSwitchServer":
+                continue
+            # try if there is a react widget under ImSwitch.imswitch.imcontrol.view.widgets.*
+            # if not, try to load it from the plugins
+            
+            # Case 1: there is a react widget under ImSwitch.imswitch.imcontrol.view.widgets.*
+            module_name = f'imswitch.imcontrol.view.widgets.{widgetKey}ReactWidget'
+            module_spec = importlib.util.find_spec(module_name)
+            if module_spec is not None:
+                # The module exists, so we can import it
+                try:
+                    mWidgetModule = importlib.import_module(module_name)
+                    # load the class from the module
+                    mWidgetClass = getattr(mWidgetModule, f'{widgetKey}ReactWidget')
+                    self.widgets[widgetKey] = (widgetKey, mWidgetModule, mWidgetClass)
+                    continue
+                except ImportError as e:
                     self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
-
+                    continue
+            
+            # Case 2: Check if there is a plugin for the widget
+            plugin_name = f'{widgetKey}_widget'
+            if plugin_name in availablePlugins:
+                try:
+                    packageWidget = availablePlugins[plugin_name].load()
+                    # load the class from the module
+                    mWidgetClass = getattr(packageWidget, f'{widgetKey}ReactWidget')
+                    self.widgets[widgetKey] = (widgetKey, packageWidget, mWidgetClass)
+                    continue
+                except Exception as e:
+                    self.__logger.error(f"Could not load plugin widget {widgetKey}: {e}")
+                    continue
+            # Case 3: There is no react widget, so we create a default one
+            try:
+                self.widgets[widgetKey] = (widgetKey, None, None)
+            except Exception as e:
+                self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
+                continue
 
 @dataclass
 class _DockInfo:

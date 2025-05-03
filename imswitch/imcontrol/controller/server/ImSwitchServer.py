@@ -61,6 +61,9 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")  # serve 
 app.mount("/imswitch", StaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
 app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
 
+# manifests for the react app
+_ui_manifests = []
+
 
 if IS_SSL:
     app.add_middleware(HTTPSRedirectMiddleware)
@@ -411,6 +414,8 @@ class ImSwitchServer(Worker):
 
         def includeUIAPI(str, func):
             # based on UIExport decorator, only get is supported
+            
+            
             if hasattr(func, '_UIExport') and func._UIExport:
                 @app.get(str)
                 @wraps(func)
@@ -442,6 +447,14 @@ class ImSwitchServer(Worker):
             else:
                 module = func.__module__.split('.')[-1]
             self.func = includeUIAPI("/externUI/"+module+"/"+f, func)
+            meta = getattr(cls, "_ui_meta", None)
+            _ui_manifests.append({
+                "name": meta["name"],
+                "icon": meta["icon"],
+                "remote": f"{mount}/remoteEntry.js",
+                "scope": meta["scope"],
+                "exposed": meta["exposed"],
+            })
 
     # The reason why it's still called UC2ConfigController is because we don't want to change the API
     @app.get("/UC2ConfigController/returnAvailableSetups")

@@ -1,18 +1,21 @@
 from dataclasses import dataclass
-
+from imswitch import IS_HEADLESS
 # FIXME: We should probably create another file that does not import these files
 from imswitch.imcommon.framework import Signal
-
-from pyqtgraph.dockarea import Dock, DockArea
-from qtpy import QtCore, QtWidgets
-from qtpy.QtWidgets import QMainWindow
-from imswitch.imcommon.view import PickDatasetsDialog
-from .PickSetupDialog import PickSetupDialog
-from imswitch.imcommon.model import initLogger
-
 from . import widgets
 import pkg_resources
 import importlib
+
+if not IS_HEADLESS:
+    from pyqtgraph.dockarea import Dock, DockArea
+    from qtpy import QtCore, QtWidgets
+    from qtpy.QtWidgets import QMainWindow
+    from imswitch.imcommon.view import PickDatasetsDialog
+    from .PickSetupDialog import PickSetupDialog
+    from imswitch.imcommon.model import initLogger
+else:
+    QMainWindow = object
+    
 
 class ImConMainView(QMainWindow):
     sigLoadParamsFromHDF5 = Signal()

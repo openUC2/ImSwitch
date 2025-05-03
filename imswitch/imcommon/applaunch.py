@@ -64,7 +64,7 @@ def launchApp(app, mainView, moduleMainControllers):
     if IS_HEADLESS:
         """We won't have any GUI, so we don't need to prepare the app."""
         # Keep python running
-        embed_kernel()
+        # embed_kernel() # TODO: This should be non-blocking! 
         tDiskCheck = time.time()
         while True: # TODO: have webserver signal somehow?
             try:

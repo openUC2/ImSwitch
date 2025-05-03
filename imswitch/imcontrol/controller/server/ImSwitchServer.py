@@ -447,6 +447,8 @@ class ImSwitchServer(Worker):
             else:
                 module = func.__module__.split('.')[-1]
             self.func = includeUIAPI("/externUI/"+module+"/"+f, func)
+            continue
+            # TODO: This is not working yet
             meta = getattr(cls, "_ui_meta", None)
             _ui_manifests.append({
                 "name": meta["name"],

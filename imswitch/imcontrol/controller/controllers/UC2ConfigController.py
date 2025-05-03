@@ -3,12 +3,12 @@ import os
 import threading
 from imswitch import IS_HEADLESS
 import numpy as np
-from imswitch.imcommon.model import APIExport, initLogger, ostools
+import datetime
+from imswitch.imcommon.model import APIExport, initLogger, dirtools
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcontrol.model import configfiletools
-import dataclasses
-import imswitch
+import tifffile as tif
 from imswitch.imcontrol.model import Options
 from imswitch.imcontrol.view.guitools import ViewSetupInfo
 class UC2ConfigController(ImConWidgetController):
@@ -71,7 +71,22 @@ class UC2ConfigController(ImConWidgetController):
             self.detector = self._master.detectorsManager[self.detector_names[0]]
             mImage = self.detector.getLatestFrame()
             # save image
-            #tif.imwrite()
+            drivePath = dirtools.UserFileDirs.Data
+            timeStamp = datetime.datetime.now().strftime("%Y_%m_%d")
+            dirPath = os.path.join(drivePath, 'recordings', timeStamp)
+            fileName  = "Snapshot_"+datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
+            if not os.path.exists(dirPath):
+                os.makedirs(dirPath)
+            filePath = os.path.join(dirPath, fileName)
+            if mImage is not None:
+                if mImage.ndim == 2:
+                    tif.imwrite(filePath + ".tif", mImage)
+                elif mImage.ndim == 3:
+                    tif.imwrite(filePath + ".tif", mImage[0])
+                else:
+                    self.__logger.error("Image is not 2D or 3D")
+            else:
+                self.__logger.error("Image is None")
 
             # (detectorName, image, init, scale, isCurrentDetector)
             self._commChannel.sigUpdateImage.emit('Image', mImage, True, 1, False)
@@ -81,9 +96,9 @@ class UC2ConfigController(ImConWidgetController):
         try:
             self.__logger.debug("Registering callback for snapshot")
             # register default callback
-            self._master.UC2ConfigManager.ESP32.message.register_callback(0, snapImage) # FIXME: Too hacky?
             for i in range(1, self._master.UC2ConfigManager.ESP32.message.nCallbacks):
                 self._master.UC2ConfigManager.ESP32.message.register_callback(i, printCallback)
+            self._master.UC2ConfigManager.ESP32.message.register_callback(1, snapImage) # FIXME: Too hacky?
 
         except Exception as e:
             self.__logger.error(f"Could not register callback: {e}")

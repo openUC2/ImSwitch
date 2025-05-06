@@ -66,7 +66,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Union, Tuple
 
 class HistoStatus(BaseModel):
-    currentPosition: Optional[Tuple[float, float, int, int]] = None # X, Y, nX, nY
+    currentPosition: Optional[Tuple[float, float, int, int, int]] = None # X, Y, nX, nY
     ishistoscanRunning: bool = False
     stitchResultAvailable: bool = False
     mScanIndex: int = 0
@@ -1087,7 +1087,7 @@ class HistoScanController(LiveUpdatedController):
     def getHistoStatus(self) -> HistoStatus:
         # ensure currentPosition is a tuple of 4 elements
         if not isinstance(self.currentPosition, tuple) or len(self.currentPosition)!=4:
-            self.currentPosition = (self.currentPosition[0], self.currentPosition[1],0,0,0)
+            self.currentPosition = (self.currentPosition[0], self.currentPosition[1],0,0,0) # 
         statusDict = {
             "currentPosition": self.currentPosition,
             "ishistoscanRunning": bool(self.ishistoscanRunning),

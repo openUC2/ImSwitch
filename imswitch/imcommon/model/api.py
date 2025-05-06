@@ -32,15 +32,12 @@ class UIExport:
                  path:str,                 # directory that contains remoteEntry.js
                  name:str,
                  icon:str,
-                 scope:str,
-                 exposed:str="Widget",     # default exposed module
     ):
         self._UIExport = True
         self._UIPath   = path
         self._UIName   = name
         self._UIIcon   = icon
-        self._UIScope  = scope
-        self._UIExposed= exposed
+        
 
     def __call__(self, cls):
         cls._UIExport = self._UIExport
@@ -48,8 +45,6 @@ class UIExport:
             "path"   : self._UIPath,
             "name"   : self._UIName,
             "icon"   : self._UIIcon,
-            "scope"  : self._UIScope,
-            "exposed": self._UIExposed,
         }
         return cls
 
@@ -61,6 +56,9 @@ def generateUI(widgetClassList, *, missingAttributeErrorMsg=None):
 
     exportedFuncs = {}
     for widgetClass in widgetClassList.values():
+        # list comes from the UIExport decorator and contains
+        # the path to the widget, the name of the widget and
+        # the class itself
         widgetClassName = widgetClass[0]
         widgetModule = widgetClass[1]
         widgetClassObj = widgetClass[2]
@@ -72,14 +70,10 @@ def generateUI(widgetClassList, *, missingAttributeErrorMsg=None):
                 continue
             if not hasattr(subObj, '_UIExport') or not subObj._UIExport:
                 continue        
-            if widgetClassName in exportedFuncs:
+            if subObjName in exportedFuncs:
                 raise NameError(f'UI method name "{widgetClassName}" is already in use')
-            exportedFuncs[widgetClassName] = widgetClassObj
+            exportedFuncs[subObjName] = subObj
         
-        if not hasattr(subObj, '_UIExport') or not subObj._UIExport:
-            continue
-        exportedFuncs[subObjName] = subObj
-
     return pythontools.dictToROClass(exportedFuncs,
                                      missingAttributeErrorMsg=missingAttributeErrorMsg)
 

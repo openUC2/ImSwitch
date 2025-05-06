@@ -185,7 +185,7 @@ def get_items(path: str = ""):
 
 # ⬆️ Upload a File
 
-@app.post("/upload")
+@app.post("/FileManager/upload")
 def upload_file(file: UploadFile = File(...), target_path: Optional[str] = Form("")):
     """
     Upload a file to the specified target directory.
@@ -204,7 +204,7 @@ def upload_file(file: UploadFile = File(...), target_path: Optional[str] = Form(
     return {"message": f"File '{file.filename}' uploaded successfully", "path": str(file_location)}
 
 # 📋 Copy File(s) or Folder(s)
-@app.post("/copy")
+@app.post("/FileManager/copy")
 def copy_item(source: str = Form(...), destination: str = Form(...)):
     src = BASE_DIR / source
     dest = BASE_DIR / destination / src.name
@@ -220,7 +220,7 @@ def copy_item(source: str = Form(...), destination: str = Form(...)):
 
 
 # 📤 Move File(s) or Folder(s)
-@app.put("/move")
+@app.put("/FileManager/move")
 def move_item(source: str = Form(...), destination: str = Form(...)):
     src = BASE_DIR / source
     dest = BASE_DIR / destination / src.name
@@ -231,7 +231,7 @@ def move_item(source: str = Form(...), destination: str = Form(...)):
 
 
 # ✏️ Rename a File or Folder
-@app.patch("/rename")
+@app.patch("/FileManager/rename")
 def rename_item(source: str = Form(...), new_name: str = Form(...)):
     src = BASE_DIR / source
     new_path = src.parent / new_name
@@ -242,7 +242,7 @@ def rename_item(source: str = Form(...), new_name: str = Form(...)):
 
 
 # 🗑️ Delete File(s) or Folder(s)
-@app.delete("/")
+@app.delete("/FileManager")
 def delete_item(paths: List[str]):
     for path in paths:
         target = BASE_DIR / path
@@ -380,7 +380,18 @@ class ImSwitchServer(Worker):
         from imswitch import jupyternotebookurl # import it here to get the one after the notebook has been actually launched
         return {"url": jupyternotebookurl}
 
-    @app.get("/")
+    @app.get("/plugins")
+    def get_plugins():
+        """
+        Returns a list of available plugins
+        """
+        plugins = []
+        for f in _ui_manifests:
+            plugin = f
+            plugins.append(plugin)
+        return {"plugins": plugins}
+        
+
     def createAPI(self):
         api_dict = self._api._asdict()
         functions = api_dict.keys()
@@ -446,17 +457,23 @@ class ImSwitchServer(Worker):
                 module = func.module
             else:
                 module = func.__module__.split('.')[-1]
-            self.func = includeUIAPI("/externUI/"+module+"/"+f, func)
-            continue
-            # TODO: This is not working yet
-            meta = getattr(cls, "_ui_meta", None)
+            meta = getattr(func, "_ui_meta", None)
+            mount = f"/plugin/{meta['name']}"
+            # self.func = includeUIAPI(mount, func)
             _ui_manifests.append({
                 "name": meta["name"],
                 "icon": meta["icon"],
-                "remote": f"{mount}/remoteEntry.js",
-                "scope": meta["scope"],
-                "exposed": meta["exposed"],
+                "path": meta["path"],
+                "exposed": "Widget",
+                "scope": "lightsheet_plugin",
+                "url": os.path.join(mount,"index.html"), 
+                "remote": os.path.join(mount,"remoteEntry.js")
             })
+            app.mount(
+                mount,
+                StaticFiles(directory=os.path.join(meta["path"])),
+                name=meta["name"],
+            )
 
     # The reason why it's still called UC2ConfigController is because we don't want to change the API
     @app.get("/UC2ConfigController/returnAvailableSetups")

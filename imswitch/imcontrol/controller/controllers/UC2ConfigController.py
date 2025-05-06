@@ -78,6 +78,7 @@ class UC2ConfigController(ImConWidgetController):
             if not os.path.exists(dirPath):
                 os.makedirs(dirPath)
             filePath = os.path.join(dirPath, fileName)
+            self.__logger.debug(f"Saving image to {filePath}.tif")
             if mImage is not None:
                 if mImage.ndim == 2:
                     tif.imwrite(filePath + ".tif", mImage)

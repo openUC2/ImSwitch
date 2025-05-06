@@ -62,7 +62,16 @@ class ObjectiveController(LiveUpdatedController):
                     self.move = lambda slot, isBlocking: None
                     self.home = lambda direction, endstoppolarity, isBlocking: None
                     self.getstatus = lambda: {}
-                    self.setPositions = lambda x1, x2, isBlocking: None
+                    
+                def setPositions(self, x1, x2, z1, z2, isBlocking):
+                    if x1 is not None:
+                        self.x1 = x1
+                    if x2 is not None:
+                        self.x2 = x2
+                    if z1 is not None:
+                        self.z1 = z1                         
+                    if z2 is not None:
+                        self.z2 = z2
             self._objective = dummyObjective()
 
         if self.calibrateOnStart:

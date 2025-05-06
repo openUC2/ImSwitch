@@ -296,7 +296,7 @@ class ImConMainViewNoQt(object):
                     mWidgetModule = importlib.import_module(module_name)
                     # load the class from the module
                     mWidgetClass = getattr(mWidgetModule, f'{widgetKey}ReactWidget')
-                    self.widgets[widgetKey] = (widgetKey, mWidgetModule, mWidgetClass)
+                    self.widgets[widgetKey] = (widgetKey, mWidgetModule, mWidgetClass())
                     continue
                 except ImportError as e:
                     self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)

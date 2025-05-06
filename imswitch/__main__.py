@@ -125,8 +125,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         logger.info(f'Data folder: {imswitch.DEFAULT_DATA_PATH}')
         
         if imswitch.IS_HEADLESS:
-            os.environ["DISPLAY"] = ":0"
-            os.environ["QT_QPA_PLATFORM"] = "offscreen"
             app = None
         else:
             app = prepareApp()
@@ -150,8 +148,10 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         modulePkgs = [importlib.import_module(pythontools.joinModulePath('imswitch', moduleId))
                     for moduleId in enabledModuleIds]
 
+        # connect the different controllers through the communication channel
         moduleCommChannel = ModuleCommunicationChannel()
 
+        # only create the GUI if necessary 
         if not imswitch.IS_HEADLESS:
             from imswitch.imcommon.view import MultiModuleWindow, ModuleLoadErrorView
             multiModuleWindow = MultiModuleWindow('ImSwitch')
@@ -178,7 +178,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
             # The displayed module name will be the module's __title__, or alternatively its ID if
             # __title__ is not set
             moduleName = modulePkg.__title__ if hasattr(modulePkg, '__title__') else moduleId
-
+            # we load all the controllers, managers and widgets here: 
             try:
                 view, controller = modulePkg.getMainViewAndController(
                     moduleCommChannel=moduleCommChannel,

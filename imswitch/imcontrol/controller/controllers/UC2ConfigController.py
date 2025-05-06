@@ -4,13 +4,14 @@ import threading
 from imswitch import IS_HEADLESS
 import numpy as np
 import datetime
-from imswitch.imcommon.model import APIExport, initLogger, dirtools
+from imswitch.imcommon.model import APIExport, initLogger, dirtools, ostools
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcontrol.model import configfiletools
 import tifffile as tif
 from imswitch.imcontrol.model import Options
 from imswitch.imcontrol.view.guitools import ViewSetupInfo
+
 class UC2ConfigController(ImConWidgetController):
     """Linked to UC2ConfigWidget."""
     
@@ -165,6 +166,20 @@ class UC2ConfigController(ImConWidgetController):
         self._logger.debug('Moving to sample loading position.')
         self.stages.moveToSampleMountingPosition()
 
+    @APIExport(runOnUIThread=False)
+    def stopImSwitch(self):
+        self._commChannel.sigExperimentStop.emit()
+        return {"message": "ImSwitch is shutting down"}
+    
+    @APIExport(runOnUIThread=False)
+    def restartImSwitch(self):
+        ostools.restartSoftware()
+        return {"message": "ImSwitch is restarting"}
+        
+    @APIExport(runOnUIThread=False)
+    def getDiskUsage(self):
+        return dirtools.getDiskusage()
+    
     @APIExport(runOnUIThread=True)
     def reconnect(self):
         self._logger.debug('Reconnecting to ESP32 device.')

@@ -256,7 +256,7 @@ class CameraHIK:
             self.__logger.warning("Exposure mode not recognized")
 
     def set_camera_mode(self, isAutomatic):
-        self.set_exposure_mode("auto" if isAutomatic else "manual")
+        self.set_exposure_mode("auto" if isAutomatic.lower() else "manual")
 
     def set_gain(self, gain):
         self.gain = gain

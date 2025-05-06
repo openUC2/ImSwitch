@@ -39,6 +39,8 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
         config_folder = str(imswitch.DEFAULT_CONFIG_PATH)
         config_file = str(imswitch.DEFAULT_SETUP_FILE)
         is_ssl = str(imswitch.__ssl__)
+        scan_ext_drive_mount = bool(imswitch.SCAN_EXT_DATA_FOLDER)
+        ext_drive_mount = imswitch.EXT_DRIVE_MOUNT
         # Erstellen der Argumentliste
         args = [
             sys.executable,
@@ -54,8 +56,11 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
             args.append('--headless')
         if is_ssl == 'False':
             args.append('--no-ssl')
-
-        # Ausführen des Skripts mit den neuen Argumenten
+        if scan_ext_drive_mount:
+            args.append('--scan-ext-drive-mount')
+        if ext_drive_mount:
+            args.append('--ext-drive-mount')
+        # execute script with new arguments 
         os.execv(sys.executable, args)
     else:
         os.execv(sys.executable, ['"' + sys.executable + '"', '-m', module])

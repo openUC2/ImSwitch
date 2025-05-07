@@ -469,11 +469,14 @@ class ImSwitchServer(Worker):
                 "url": os.path.join(mount,"index.html"), 
                 "remote": os.path.join(mount,"remoteEntry.js")
             })
-            app.mount(
-                mount,
-                StaticFiles(directory=os.path.join(meta["path"])),
-                name=meta["name"],
-            )
+            # only if the mount exists:
+            self.__logger.debug(f"Mounting {mount} to {os.path.join(meta['path'])}")
+            if os.path.exists(os.path.join(meta["path"])):
+                app.mount(
+                    mount,
+                    StaticFiles(directory=os.path.join(meta["path"])),
+                    name=meta["name"],
+                )
 
     # The reason why it's still called UC2ConfigController is because we don't want to change the API
     @app.get("/UC2ConfigController/returnAvailableSetups")

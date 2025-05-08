@@ -47,11 +47,7 @@ class RecordingController(ImConWidgetController):
         self._commChannel.sigRequestScanFreq.connect(self.sendScanFreq)
         self._commChannel.sigStartLiveAcquistion.connect(self.setLiveStreamStart)
         self._commChannel.sigAcquisitionStopped.connect(self.setLiveStreamStop)
-        if 0: #IS_HEADLESS:IS_HEADLESS: 
-            self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged, check_nargs=False)
-            return
-        else:
-            self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
+        self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
         
         if IS_HEADLESS:
             self._widget = None

@@ -66,7 +66,7 @@ class ParameterValue(BaseModel):
     illumination: str
     brightfield: bool
     darkfield: bool
-    laserWaveLength: int
+    illuminationIntensity: int
     differentialPhaseContrast: bool
     timeLapsePeriod: float
     numberOfImages: int
@@ -280,16 +280,20 @@ class ExperimentController(ImConWidgetController):
         # Z-steps -related
         nZSteps = int((mExperiment.parameterValue.zStackMax-mExperiment.parameterValue.zStackMin)//mExperiment.parameterValue.zStackStepSize)+1
         isZStack = p.zStack
+        zStackMin = p.zStackMin
+        zStackMax = p.zStackMax
+        zStackStepSize = p.zStackStepSize
         
         # Illumination-related
+        illuSource = p.illumination
+        illuminationIntensity = p.illuminationIntensity
         isDarkfield = p.darkfield
-        illumination = p.illumination
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
         
         # camera-related
         gain = p.gain
-        exposureTime = p.exposureTime
+        exposure = p.exposureTime
         
         # Autofocus Related
         isAutoFocus = p.autoFocus
@@ -297,9 +301,6 @@ class ExperimentController(ImConWidgetController):
         autofocusMin = p.autoFocusMin
         autofocusStepSize = p.autoFocusStepSize
         
-        # Example usage of a single illumination source
-        illuSource = p.illumination
-        laserWaveLength = p.laserWaveLength
 
         # Check if another workflow is running
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
@@ -312,6 +313,12 @@ class ExperimentController(ImConWidgetController):
         # Generate the list of points to scan based on snake scan
         if p.resortPointListToSnakeCoordinates:
             snake_tiles = self.generate_snake_tiles(mExperiment)
+            
+        # Generate Z-positions 
+        if isZStack:
+            z_positions = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize)
+        else:
+            z_positions = [self.mStage.getPosition()["Z"]]  # Get current Z position
         # Flatten all point dictionaries from all tiles to compute scan range
         all_points = [pt for tile in snake_tiles for pt in tile]
 
@@ -384,69 +391,79 @@ class ExperimentController(ImConWidgetController):
                         main_func=self.move_stage_xy,
                         main_params={"posX": mPoint["x"], "posY": mPoint["y"], "relative": False},
                     ))
-                    step_id += 1
-                    # Turn on illumination (example with "illumination" parameter)
-                    workflowSteps.append(WorkflowStep(
-                        name="Turn on illumination",
-                        step_id=str(step_id),
-                        main_func=self.set_laser_power,
-                        main_params={"power": laserWaveLength, "channel": illuSource},
-                        post_funcs=[self.wait_time],
-                        post_params={"seconds": 0.05},
-                    ))
-                    step_id += 1
+                    
+                    # iterate over z-steps
+                    for iZ in z_positions:
+                    
+                        #move to Z position
+                        workflowSteps.append(WorkflowStep(
+                            name="Move to Z position",
+                            step_id=str(step_id),
+                            main_func=self.move_stage_z,
+                            main_params={"posZ": iZ, "relative": False},
+                            pre_funcs=[self.wait_time],
+                            pre_params={"seconds": 0.1},
+                        ))
+                            
+                        step_id += 1
+                        # Turn on illumination (example with "illumination" parameter)
+                        workflowSteps.append(WorkflowStep(
+                            name="Turn on illumination",
+                            step_id=str(step_id),
+                            main_func=self.set_laser_power,
+                            main_params={"power": illuminationIntensity, "channel": illuSource},
+                            post_funcs=[self.wait_time],
+                            post_params={"seconds": 0.05},
+                        ))
+                        step_id += 1
 
-                    # Acquire frame
-                    try:exposure = p.exposureTime
-                    except: exposure = 0.1
-                    try:gain = p.gain   
-                    except: gain = 1.0
-                    isPreview = False
-                    '''
-                    workflowSteps.append(WorkflowStep(
-                        name="Acquire frame",
-                        step_id=str(step_id),
-                        main_func=self.acquire_frame,
-                        main_params={"channel": "Mono"},
-                        post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
-                        pre_funcs=[self.set_exposure_time_gain],
-                        pre_params={"exposure_time": exposure, "gain": gain},
-                        # Hier übergeben wir posX, posY an das Metadata-Dict
-                        post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
-                    ))
-                    '''
+                        # Acquire frame
+                        isPreview = False
+                        '''
+                        workflowSteps.append(WorkflowStep(
+                            name="Acquire frame",
+                            step_id=str(step_id),
+                            main_func=self.acquire_frame,
+                            main_params={"channel": "Mono"},
+                            post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
+                            pre_funcs=[self.set_exposure_time_gain],
+                            pre_params={"exposure_time": exposure, "gain": gain},
+                            # Hier übergeben wir posX, posY an das Metadata-Dict
+                            post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
+                        ))
+                        '''
 
-                    workflowSteps.append(WorkflowStep(
-                        name="Acquire frame",
-                        step_id=str(step_id),
-                        main_func=self.acquire_frame,
-                        main_params={"channel": "Mono"},
-                        post_funcs=[self.save_frame_tiff, self.save_frame_ome_zarr, self.add_image_to_canvas],
-                        pre_funcs=[self.set_exposure_time_gain],
-                        pre_params={"exposure_time": exposure, "gain": gain},
-                        post_params={
-                            "posX": mPoint["x"],
-                            "posY": mPoint["y"],
-                            "posZ": 0, # TODO: Add Z position if needed
-                            "iX": mPoint["iX"],
-                            "iY": mPoint["iY"], 
-                            "pixel_size": mPixelSize,
-                            "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
-                            "channel": illuSource,
-                            "time_index": t,       # or whatever loop index
-                            "tile_index": mIndex   # or snake-tile index
-                        },
-                    ))
-                    step_id += 1
+                        workflowSteps.append(WorkflowStep(
+                            name="Acquire frame",
+                            step_id=str(step_id),
+                            main_func=self.acquire_frame,
+                            main_params={"channel": "Mono"},
+                            post_funcs=[self.save_frame_tiff, self.save_frame_ome_zarr, self.add_image_to_canvas],
+                            pre_funcs=[self.set_exposure_time_gain],
+                            pre_params={"exposure_time": exposure, "gain": gain},
+                            post_params={
+                                "posX": mPoint["x"],
+                                "posY": mPoint["y"],
+                                "posZ": 0, # TODO: Add Z position if needed
+                                "iX": mPoint["iX"],
+                                "iY": mPoint["iY"], 
+                                "pixel_size": mPixelSize,
+                                "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
+                                "channel": illuSource,
+                                "time_index": t,       # or whatever loop index
+                                "tile_index": mIndex   # or snake-tile index
+                            },
+                        ))
+                        step_id += 1
 
-                    # Turn off illumination
-                    workflowSteps.append(WorkflowStep(
-                        name="Turn off illumination",
-                        step_id=str(step_id),
-                        main_func=self.set_laser_power,
-                        main_params={"power": 0, "channel": illuSource},
-                    ))
-                    step_id += 1
+                        # Turn off illumination
+                        workflowSteps.append(WorkflowStep(
+                            name="Turn off illumination",
+                            step_id=str(step_id),
+                            main_func=self.set_laser_power,
+                            main_params={"power": 0, "channel": illuSource},
+                        ))
+                        step_id += 1
 
             # (Optional) Perform autofocus once per loop, if enabled
             if isAutoFocus:
@@ -454,7 +471,7 @@ class ExperimentController(ImConWidgetController):
                     name="Autofocus",
                     step_id=str(step_id),
                     main_func=self.autofocus,
-                    main_params={},
+                    main_params={"minZ": autofocusMin, "maxZ": autofocusMax, "stepSize": autofocusStepSize},
                 ))
                 step_id += 1
 
@@ -565,17 +582,20 @@ class ExperimentController(ImConWidgetController):
     
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
         if gain and gain >=0:
-            self._logger.error(f"Setting gain to {gain}")
+            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "gain"], gain)  # [category, detectorname, ROI1, ROI2] attribute, value
+            self._logger.debug(f"Setting gain to {gain}")
         if exposure_time and exposure_time >=0:
-            self._logger.error(f"Setting exposure time to {exposure_time}")
+            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "exposureTime"],exposure_time) # category, detectorname, attribute, value
+            self._logger.debug(f"Setting exposure time to {exposure_time}")
         
     def dummy_main_func(self):
         self._logger.debug("Dummy main function called")
         return True
  
-    def autofocus(self):
-        self._logger.error("Performing autofocus...NOT IMPLEMENTED")
-   
+    def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0):
+        self._logger.debug("Performing autofocus... with parameters minZ, maxZ, stepSize: %s, %s, %s", minZ, maxZ, stepSize)
+        # TODO: Connect this to the Autofocus Function
+        
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
         import time
         time.sleep(seconds)
@@ -761,11 +781,6 @@ class ExperimentController(ImConWidgetController):
         newPosition = self.mStage.getPosition()
         self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
         return newPosition["Z"]
-
-    def autofocus(self, context: WorkflowContext, metadata: Dict[str, Any]):
-        self._logger.debug("Performing autofocus...")
-        metadata["autofocus_done"] = True
-
 
             
     @APIExport()

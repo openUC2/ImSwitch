@@ -40,6 +40,15 @@ class SettingsController(ImConWidgetController):
         if not self._master.detectorsManager.hasDevices():
             return
 
+        self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
+        self.updateSharedAttrs()
+
+        # Connect CommunicationChannel signals
+        self._commChannel.sigDetectorSwitched.connect(self.detectorSwitched)
+        self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
+
+        self.roiAdded = False
+
         if IS_HEADLESS: return
         # Set up detectors
         for dName, dManager in self._master.detectorsManager:
@@ -51,7 +60,6 @@ class SettingsController(ImConWidgetController):
                 dManager.supportedBinnings, self._setupInfo.rois
             )
 
-        self.roiAdded = False
         self.initParameters()
 
         execOnAll = self._master.detectorsManager.execOnAll
@@ -64,12 +72,6 @@ class SettingsController(ImConWidgetController):
         execOnAll(lambda c: (self.updateFrameActionButtons(detector=c)),
                   condition=lambda c: c.forAcquisition)
 
-        self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
-        self.updateSharedAttrs()
-
-        # Connect CommunicationChannel signals
-        self._commChannel.sigDetectorSwitched.connect(self.detectorSwitched)
-        self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
 
         # Connect SettingsWidget signals
         self._widget.sigROIChanged.connect(self.ROIchanged)
@@ -401,10 +403,11 @@ class SettingsController(ImConWidgetController):
 
     def detectorSwitched(self, newDetectorName, _=None):
         """ Called when the user switches to another detector. """
-        self._widget.setDisplayedDetector(newDetectorName)
-        self._widget.setImageFrameVisible(self._master.detectorsManager[newDetectorName].croppable)
         newDetectorShape = self._master.detectorsManager[newDetectorName].shape
         self._commChannel.sigAdjustFrame.emit(newDetectorShape)
+        if IS_HEADLESS: return
+        self._widget.setDisplayedDetector(newDetectorName)
+        self._widget.setImageFrameVisible(self._master.detectorsManager[newDetectorName].croppable)
 
     def detectorSwitchClicked(self, detectorName):
         """ Changes the current detector to the selected detector. """
@@ -449,6 +452,8 @@ class SettingsController(ImConWidgetController):
             return
 
         detectorName = key[1]
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
         if len(key) == 3:
             if key[2] == _binningAttr:
                 self.setDetectorBinning(detectorName, value)

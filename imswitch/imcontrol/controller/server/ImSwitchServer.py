@@ -449,6 +449,7 @@ class ImSwitchServer(Worker):
             self.func = includeAPI("/"+module+"/"+f, func)
 
         # add UIExport decorated functions to the fastAPI under /externUI
+        if self._uiapi is None: return # we are on QT mode
         uiapi_dict = self._uiapi._asdict()
         functions = uiapi_dict.keys()
         for f in functions:

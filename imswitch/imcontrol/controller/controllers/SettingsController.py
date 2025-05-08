@@ -40,27 +40,28 @@ class SettingsController(ImConWidgetController):
         if not self._master.detectorsManager.hasDevices():
             return
 
-        self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
-        self.updateSharedAttrs()
 
         # Connect CommunicationChannel signals
         self._commChannel.sigDetectorSwitched.connect(self.detectorSwitched)
-        self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
 
         self.roiAdded = False
 
+        if not IS_HEADLESS: 
+            # Set up detectors
+            for dName, dManager in self._master.detectorsManager:
+                if not dManager.forAcquisition:
+                    continue
+                
+                self._widget.addDetector(
+                    dName, dManager.model, dManager.parameters, dManager.actions,
+                    dManager.supportedBinnings, self._setupInfo.rois
+                )
+            self.initParameters()
+        self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
+        self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
+        self.updateSharedAttrs()
         if IS_HEADLESS: return
-        # Set up detectors
-        for dName, dManager in self._master.detectorsManager:
-            if not dManager.forAcquisition:
-                continue
-            
-            self._widget.addDetector(
-                dName, dManager.model, dManager.parameters, dManager.actions,
-                dManager.supportedBinnings, self._setupInfo.rois
-            )
 
-        self.initParameters()
 
         execOnAll = self._master.detectorsManager.execOnAll
         execOnAll(lambda c: (self.updateParamsFromDetector(detector=c)),

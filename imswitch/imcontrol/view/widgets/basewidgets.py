@@ -64,7 +64,6 @@ class Widget(QtWidgets.QWidget, metaclass=_QObjectABCMeta):
         self.setLayout(grid)
         grid.addWidget(errorLabel)
 
-class
 class NapariHybridWidget(Widget, naparitools.NapariBaseWidget, metaclass=_QObjectABCMeta):
     """ Superclass for widgets that can use the functionality of
     NapariBaseWidget. Derived classes should not implement __init__; instead,

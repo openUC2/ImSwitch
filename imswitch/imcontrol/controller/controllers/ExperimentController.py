@@ -81,6 +81,7 @@ class ParameterValue(BaseModel):
     exposureTime: float = None
     gain: float = None
     resortPointListToSnakeCoordinates: bool = True
+    speed: float = 10000.0
 
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
@@ -254,6 +255,10 @@ class ExperimentController(ImConWidgetController):
                         mIdex = iY * num_x_steps + num_x_steps - 1 - iX
                     else:
                         mIdex = iTile
+                    if len(allPointsSnake) <= mIdex or len(allPoints) <= iTile: 
+                        # remove that index from allPointsSnake
+                        allPointsSnake[mIdex] = None
+                        continue
                     allPointsSnake[mIdex] = {
                         "iterator": iTile,
                         "centerIndex": iCenter,
@@ -294,7 +299,7 @@ class ExperimentController(ImConWidgetController):
         # camera-related
         gain = p.gain
         exposure = p.exposureTime
-        
+        self.SPEED_X, self.SPEED_Y, self.SPEED_Z = p.speed, p.speed, p.speed
         # Autofocus Related
         isAutoFocus = p.autoFocus
         autofocusMax = p.autoFocusMax
@@ -312,7 +317,11 @@ class ExperimentController(ImConWidgetController):
 
         # Generate the list of points to scan based on snake scan
         if p.resortPointListToSnakeCoordinates:
-            snake_tiles = self.generate_snake_tiles(mExperiment)
+            pass
+        snake_tiles = self.generate_snake_tiles(mExperiment)
+        # remove none values from all_points list 
+        snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
+
             
         # Generate Z-positions 
         if isZStack:
@@ -321,7 +330,6 @@ class ExperimentController(ImConWidgetController):
             z_positions = [self.mStage.getPosition()["Z"]]  # Get current Z position
         # Flatten all point dictionaries from all tiles to compute scan range
         all_points = [pt for tile in snake_tiles for pt in tile]
-
         minX = min(pt["x"] for pt in all_points)
         maxX = max(pt["x"] for pt in all_points)
         minY = min(pt["y"] for pt in all_points)

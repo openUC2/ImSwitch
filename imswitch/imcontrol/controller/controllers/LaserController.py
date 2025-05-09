@@ -268,7 +268,7 @@ class LaserController(ImConWidgetController):
             try:
                 return self._master.lasersManager[laserName].power
             except KeyError:
-                return None
+                return 0
         
     @APIExport(runOnUIThread=True)
     def setLaserActive(self, laserName: str, active: bool) -> None:

@@ -147,7 +147,7 @@ class WorkflowStep:
         context.store_step_result(self.step_id, metadata)
 
         # Emit event that step completed
-        context.emit_event("progress", {"status": "completed", "step_id": self.step_id, "name": self.name})
+        context.emit_event("progress", {"status": "completed", "step_id": self.step_id, "name": self.name, "context.total_step_number": context.context.total_step_number})
         return metadata["result"]
 
 class Workflow:
@@ -158,6 +158,7 @@ class Workflow:
     def run(self, context: Optional[WorkflowContext] = None):
         try:
             context = context or WorkflowContext()
+            context.total_step_number = len(self.steps)
             for i in range(context.current_step_index, len(self.steps)):
                 if context.should_stop:
                     break

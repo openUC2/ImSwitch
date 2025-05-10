@@ -7,7 +7,7 @@ import scipy.signal as signal
 import skimage.transform as transform
 import tifffile as tif
 from pydantic import BaseModel
-from typing import Any, List, Optional, Dict, Any
+from typing import Any, List, Optional, Dict, Any, Union
 import os 
 import uuid
 
@@ -15,12 +15,7 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
-from imswitch import IS_HEADLESS
-
 from pydantic import BaseModel
-from typing import Optional, Tuple, List
-
-import h5py
 import numpy as np
 
 try:
@@ -63,10 +58,10 @@ class Point(BaseModel):
     neighborPointList: List[NeighborPoint]
 
 class ParameterValue(BaseModel):
-    illumination: str
+    illumination: Union[List[str], str] = None # X, Y, nX, nY
+    illuminationIntensity: Union[List[int], int]
     brightfield: bool
     darkfield: bool
-    illuminationIntensity: int
     differentialPhaseContrast: bool
     timeLapsePeriod: float
     numberOfImages: int
@@ -92,24 +87,6 @@ class Experiment(BaseModel):
     # From your old "ExperimentModel":
     number_z_steps: int = Field(0, description="Number of Z slices")
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
-    x_pixels: int = Field(0, description="Image width in pixels")
-    y_pixels: int = Field(0, description="Image height in pixels")
-    microscope_name: str = Field("FRAME", description="Name of the microscope")
-    is_multiposition: bool = Field(False, description="Whether multiple positions are used")
-    channels: Dict[str, Dict[str, float]] = Field(
-        description="Channel definitions, typically keys like 'Ch0', 'Ch1' etc.",
-        default_factory=lambda: {
-        "Ch0": {"is_selected": True, "camera_exposure_time": 0}
-    })
-    multi_positions: Dict[str, Dict[str, float]] = Field(
-        description="Multi-position definitions if is_multiposition=True",
-        default_factory=lambda: {
-            '''
-            "pos1": {"x": 0, "y": 0, "z": 0},
-            "pos2": {"x": 10000, "y": 20000, "z": 5000},
-            '''
-        }
-    )
     
     # -----------------------------------------------------------
     # A helper to produce the "configuration" dict 
@@ -122,20 +99,11 @@ class Experiment(BaseModel):
         config = {
             "experiment": {
                 "MicroscopeState": {
-                    "microscope_name": self.microscope_name,
                     "number_z_steps": self.number_z_steps,
-                    "is_multiposition": self.is_multiposition,
                     "timepoints": self.timepoints,
-                    "channels": self.channels,
                 },
-                "CameraParameters": {
-                    self.microscope_name: {
-                        "x_pixels": self.x_pixels,
-                        "y_pixels": self.y_pixels,
-                    }
-                },
+                # TODO: Complete it again
             },
-            "multi_positions": self.multi_positions,
         }
         return config
     
@@ -158,6 +126,21 @@ class ExperimentWorkflowParams(BaseModel):
     isDPCpossible: bool = Field(False, description="Whether DPC is possible")
     isDarkfieldpossible: bool = Field(False, description="Whether darkfield is possible")
 
+    # timelapse parameters 
+    timeLapsePeriodMin: float = Field(0, description="Minimum time for a timelapse series")
+    timeLapsePeriodMax: float = Field(100000000, description="Maximum time for a timelapse series in seconds")
+    numberOfImagesMin: int = Field(0, description="Minimum time for a timelapse series")
+    numberOfImagesMax: int = Field(0, description="Minimum time for a timelapse series")
+    autofocusMinFocusPosition: float = Field(-10000, description="Minimum autofocus position")
+    autofocusMaxFocusPosition: float = Field(10000, description="Maximum autofocus position")
+    autofocusStepSizeMin: float = Field(1, description="Minimum autofocus position")
+    autofocusStepSizeMax: float = Field(1000, description="Maximum autofocus position")
+    zStackMinFocusPosition: float = Field(0, description="Minimum Z-stack position")
+    zStackMaxFocusPosition: float = Field(10000, description="Maximum Z-stack position")
+    zStackStepSizeMin: float = Field(1, description="Minimum Z-stack position")
+    zStackStepSizeMax: float = Field(1000, description="Maximum Z-stack position")
+    
+      
 
 class ExperimentController(ImConWidgetController):
     """Linked to ExperimentWidget."""
@@ -290,8 +273,10 @@ class ExperimentController(ImConWidgetController):
         zStackStepSize = p.zStackStepSize
         
         # Illumination-related
-        illuSource = p.illumination
-        illuminationIntensity = p.illuminationIntensity
+        illuSources = p.illumination
+        illuminationIntensites = p.illuminationIntensity
+        if type(illuminationIntensites) is not List: illuminationIntensites = [illuminationIntensites]
+        if type(illuSources) is not List: illuSources = [p.illumination]
         isDarkfield = p.darkfield
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
@@ -395,7 +380,7 @@ class ExperimentController(ImConWidgetController):
                     
                     workflowSteps.append(WorkflowStep(
                         name=name,
-                        step_id=str(step_id),
+                        step_id=step_id,
                         main_func=self.move_stage_xy,
                         main_params={"posX": mPoint["x"], "posY": mPoint["y"], "relative": False},
                     ))
@@ -406,7 +391,7 @@ class ExperimentController(ImConWidgetController):
                         #move to Z position
                         workflowSteps.append(WorkflowStep(
                             name="Move to Z position",
-                            step_id=str(step_id),
+                            step_id=step_id,
                             main_func=self.move_stage_z,
                             main_params={"posZ": iZ, "relative": False},
                             pre_funcs=[self.wait_time],
@@ -414,23 +399,26 @@ class ExperimentController(ImConWidgetController):
                         ))
                             
                         step_id += 1
-                        # Turn on illumination (example with "illumination" parameter)
-                        workflowSteps.append(WorkflowStep(
-                            name="Turn on illumination",
-                            step_id=str(step_id),
-                            main_func=self.set_laser_power,
-                            main_params={"power": illuminationIntensity, "channel": illuSource},
-                            post_funcs=[self.wait_time],
-                            post_params={"seconds": 0.05},
-                        ))
-                        step_id += 1
+                        for illuIndex, illuSource in enumerate(illuSources):
+                            illuminationIntensity = illuminationIntensites[illuIndex-1]
+                            
+                            # Turn on illumination (example with "illumination" parameter)
+                            workflowSteps.append(WorkflowStep(
+                                name="Turn on illumination",
+                                step_id=step_id,
+                                main_func=self.set_laser_power,
+                                main_params={"power": illuminationIntensity, "channel": illuSource},
+                                post_funcs=[self.wait_time],
+                                post_params={"seconds": 0.05},
+                            ))
+                            step_id += 1
 
                         # Acquire frame
                         isPreview = False
                         '''
                         workflowSteps.append(WorkflowStep(
                             name="Acquire frame",
-                            step_id=str(step_id),
+                            step_id=step_id,
                             main_func=self.acquire_frame,
                             main_params={"channel": "Mono"},
                             post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
@@ -443,7 +431,7 @@ class ExperimentController(ImConWidgetController):
 
                         workflowSteps.append(WorkflowStep(
                             name="Acquire frame",
-                            step_id=str(step_id),
+                            step_id=step_id,
                             main_func=self.acquire_frame,
                             main_params={"channel": "Mono"},
                             post_funcs=[self.save_frame_tiff, self.save_frame_ome_zarr, self.add_image_to_canvas],
@@ -467,7 +455,7 @@ class ExperimentController(ImConWidgetController):
                         # Turn off illumination
                         workflowSteps.append(WorkflowStep(
                             name="Turn off illumination",
-                            step_id=str(step_id),
+                            step_id=step_id,
                             main_func=self.set_laser_power,
                             main_params={"power": 0, "channel": illuSource},
                         ))
@@ -477,7 +465,7 @@ class ExperimentController(ImConWidgetController):
             if isAutoFocus:
                 workflowSteps.append(WorkflowStep(
                     name="Autofocus",
-                    step_id=str(step_id),
+                    step_id=step_id,
                     main_func=self.autofocus,
                     main_params={"minZ": autofocusMin, "maxZ": autofocusMax, "stepSize": autofocusStepSize},
                 ))
@@ -486,7 +474,7 @@ class ExperimentController(ImConWidgetController):
             # (Optional) Add a wait period between each loop
             workflowSteps.append(WorkflowStep(
                 name="Wait for next frame",
-                step_id=str(step_id),
+                step_id=step_id,
                 main_func=self.dummy_main_func,
                 main_params={},
                 pre_funcs=[self.wait_time],
@@ -497,7 +485,7 @@ class ExperimentController(ImConWidgetController):
         # Close TIFF writer at the end
         workflowSteps.append(WorkflowStep(
             name="Close TIFF writer",
-            step_id=str(step_id) + "_done",
+            step_id=step_id,
             main_func=self.close_tiff_writer,
             main_params={"tiff_writer": tiff_writer},
         ))
@@ -506,7 +494,7 @@ class ExperimentController(ImConWidgetController):
             # Close OME-Zarr store at the end (new)
             workflowSteps.append(WorkflowStep(
                 name="Close OME-Zarr store",
-                step_id=str(step_id) + "_close_omezarr",
+                step_id=step_id,
                 main_func=self.close_ome_zarr_store,
                 main_params={"omezarr_store": ome_store},
             ))
@@ -515,7 +503,7 @@ class ExperimentController(ImConWidgetController):
         # Emit final canvas
         workflowSteps.append(WorkflowStep(
             name="Emit Final Canvas",
-            step_id=str(step_id),
+            step_id=step_id,
             main_func=self.dummy_main_func,
             main_params={},
             pre_funcs=[self.emit_final_canvas],
@@ -526,7 +514,7 @@ class ExperimentController(ImConWidgetController):
         # Final step: mark done
         workflowSteps.append(WorkflowStep(
             name="Done",
-            step_id=str(step_id) + "_done2",
+            step_id=step_id,
             main_func=self.dummy_main_func,
             main_params={},
             pre_funcs=[self.wait_time],

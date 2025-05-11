@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from typing import Dict, List
+from typing import Dict, List, Optional, Union
 
 
 class PositionerManager(ABC):
@@ -8,7 +8,7 @@ class PositionerManager(ABC):
     positioner corresponds to a manager derived from this class. """
 
     @abstractmethod
-    def __init__(self, positionerInfo, name: str, initialPosition: Dict[str, float], initialSpeed: Dict[str, float]):
+    def __init__(self, positionerInfo, name: str, initialPosition: Dict[str, float], initialSpeed: Optional[Dict[str, float]]=None):
         """
         Args:
             positionerInfo: See setup file documentation.
@@ -22,8 +22,12 @@ class PositionerManager(ABC):
         self._position = initialPosition
         self.__axes = positionerInfo.axes
         # SPEED
+        if initialSpeed is None:
+            # assign default speeds 
+            initialSpeed = {axis: 0 for axis in positionerInfo.axes} # TODO: Hardcoded - should be updated according to JSon?
         self._speed = initialSpeed
-        self.setSpeed(positionerInfo.managerProperties.get("initialSpeed")) # force to display the correct values
+        try: self.setSpeed(positionerInfo.managerProperties.get("initialSpeed")) # force to display the correct values
+        except: pass
         
         # HOME
         initialHome={

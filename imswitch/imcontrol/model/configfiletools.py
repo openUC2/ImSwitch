@@ -32,8 +32,30 @@ def loadSetupInfo(options, setupInfoType):
         return mSetupDescription
 
 def saveSetupInfo(options, setupInfo):
-    with open(os.path.join(_setupFilesDir, options.setupFileName), 'w') as setupFile:
-        setupFile.write(setupInfo.to_json(indent=4))
+    # 1. Make a backup of the current setup file 
+    # 2. Save the new setup file
+    mFilename = os.path.join(_setupFilesDir, options.setupFileName)
+    if os.path.isfile(mFilename):
+        # make a backup of the current setup file
+        backupFileName = mFilename + ".bak"
+        if os.path.isfile(backupFileName):
+            os.remove(backupFileName)
+        os.rename(mFilename, backupFileName)
+    try:
+        with open(os.path.join(_setupFilesDir, options.setupFileName), 'w') as setupFile:
+            setupFile.write(setupInfo.to_json(indent=4))
+    except Exception as e:
+        print("Error: Could not save setup file.")
+        print("Please check the file for errors.")
+        print("Error message: " + str(e))
+        # revert to the backup file
+        if os.path.isfile(backupFileName):
+            os.remove(mFilename)
+            os.rename(backupFileName, mFilename)
+            os.remove(backupFileName)
+
+    
+    
 
 
 def loadOptions():

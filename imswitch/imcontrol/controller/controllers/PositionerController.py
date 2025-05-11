@@ -281,7 +281,7 @@ class PositionerController(ImConWidgetController):
         else:   
             offset = knownOffset
             
-        self._master.positionersManager[positionerName].setStageOffsetAxis(knownOffset=knownOffset, axis=axis)
+        self._master.positionersManager[positionerName].setStageOffsetAxis(knownOffset=offset, axis=axis)
         
         self.saveStageOffset(positionerName=positionerName, offsetValue=offset, axis=axis)
         

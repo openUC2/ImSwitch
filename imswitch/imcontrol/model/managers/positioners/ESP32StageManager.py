@@ -495,7 +495,7 @@ class ESP32StageManager(PositionerManager):
             self.stageOffsetPositions[axis] = knownOffset
         except KeyError:
             self.__logger.error(f"Axis {axis} not found in stageOffsetPositions.")
-        self.__logger.info(f"Set offset for {axis} axis to {knownOffset} steps.")
+        self.__logger.info(f"Set offset for {axis} axis to {knownOffset} mum.")
         self._motor.set_offset(axis=axis, offset=knownOffset)
         
     def getStageOffsetAxis(self, axis:str="X"):

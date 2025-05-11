@@ -10,6 +10,12 @@ class VirtualStageManager(PositionerManager):
         super().__init__(positionerInfo, name, initialPosition={axis: 0 for axis in positionerInfo.axes})
         self.__logger = initLogger(self, instanceName=name)
         self._commChannel = lowLevelManagers['commChannel']
+        
+        self.offset_x = 0
+        self.offset_y = 0
+        self.offset_z = 0
+        self.offset_a = 0
+        self.stageOffsetPositions = {"X": self.offset_x, "Y": self.offset_y, "Z": self.offset_z, "A": self.offset_a}
         try:
             self.VirtualMicroscope = lowLevelManagers["rs232sManager"]["VirtualMicroscope"]
         except:
@@ -22,17 +28,17 @@ class VirtualStageManager(PositionerManager):
 
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=1):
         if axis == "X":
-            self._positioner.move(x=value, is_absolute=is_absolute)
+            self._positioner.move(x=value+self.offset_x, is_absolute=is_absolute)
         if axis == "Y":
-            self._positioner.move(y=value, is_absolute=is_absolute)
+            self._positioner.move(y=value+self.offset_y, is_absolute=is_absolute)
         if axis == "Z":
-            self._positioner.move(z=value, is_absolute=is_absolute)
+            self._positioner.move(z=value+self.offset_z, is_absolute=is_absolute)
         if axis == "A":
-            self._positioner.move(a=value, is_absolute=is_absolute)
+            self._positioner.move(a=value+self.offset_a, is_absolute=is_absolute)
         if axis == "XYZ":
-            self._positioner.move(x=value[0], y=value[1], z=value[2], is_absolute=is_absolute)
+            self._positioner.move(x=value[0]+self.offset_x, y=value[1]+self.offset_y, z=value[2]+self.offset_z, is_absolute=is_absolute)
         if axis == "XY":
-            self._positioner.move(x=value[0], y=value[1], is_absolute=is_absolute)
+            self._positioner.move(x=value[0]+self.offset_x, y=value[1]+self.offset_y, is_absolute=is_absolute)
         for axes in ["A","X","Y","Z"]:
             self._position[axes] = self._positioner.position[axes]
             
@@ -127,6 +133,16 @@ class VirtualStageManager(PositionerManager):
             [self.setPosition(axis=axis, value=0) for axis in ["X","Y","Z"]]
 
 
+    def setStageOffset(self, axis, offset):
+        if axis == "X": self._positioner.set_stage_offset(x=offset)
+        if axis == "Y": self._positioner.set_stage_offset(y=offset)
+        if axis == "Z": self._positioner.set_stage_offset(z=offset)
+        if axis == "A": self._positioner.set_stage_offset(a=offset)
+        if axis == "XYZ": self._positioner.set_stage_offset(xyz=offset)
+        if axis == "XY": self._positioner.set_stage_offset(xy=offset)
+        #self._commChannel.sigUpdateMotorPosition.emit()
+        
+        
 # Copyright (C) 2020, 2021 The imswitch developers
 # This file is part of ImSwitch.
 #

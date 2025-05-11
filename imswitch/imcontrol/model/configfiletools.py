@@ -62,6 +62,7 @@ def loadOptions():
     global _options
     global _optionsFilePath
 
+    # Check if the options file exists
     if _options is not None:
         return _options, False
 

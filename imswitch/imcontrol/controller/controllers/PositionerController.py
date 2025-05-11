@@ -311,7 +311,7 @@ class PositionerController(ImConWidgetController):
                 "stageOffsetPositionZ": self._master.positionersManager[positionerName].stageOffsetPositions["Z"],
                 "stageOffsetPositionA": self._master.positionersManager[positionerName].stageOffsetPositions["A"]
             }
-
+            stageOffsets["stageOffsetPosition"+axis]=offsetValue
             # Set in setup info
             self._setupInfo.setStageOffset(positionerName, stageOffsets)
             configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)

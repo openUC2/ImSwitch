@@ -36,7 +36,7 @@ def getMainViewAndController(moduleCommChannel, *_args,
     '''
     if overrideOptions is None:
         options, optionsDidNotExist = configfiletools.loadOptions()
-        if optionsDidNotExist:
+        if not optionsDidNotExist:
             if not IS_HEADLESS: options = pickSetup(options)  # Setup to use not set, let user pick            
         configfiletools.saveOptions(options)
     else:

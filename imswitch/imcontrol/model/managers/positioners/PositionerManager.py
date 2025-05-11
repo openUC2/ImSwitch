@@ -8,7 +8,7 @@ class PositionerManager(ABC):
     positioner corresponds to a manager derived from this class. """
 
     @abstractmethod
-    def __init__(self, positionerInfo, name: str, initialPosition: Dict[str, float]):
+    def __init__(self, positionerInfo, name: str, initialPosition: Dict[str, float], initialSpeed: Dict[str, float]):
         """
         Args:
             positionerInfo: See setup file documentation.
@@ -22,18 +22,10 @@ class PositionerManager(ABC):
         self._position = initialPosition
         self.__axes = positionerInfo.axes
         # SPEED
-        if positionerInfo.managerProperties.get("initialSpeed") is not None:
-            self._speed = positionerInfo.managerProperties["initialSpeed"]
-        else:
-            self._speed = {axis: 0 for axis in self.__axes } # TODO: Hardcoded - hsould be updated according to JSon?
+        self._speed = initialSpeed
         self.setSpeed(positionerInfo.managerProperties.get("initialSpeed")) # force to display the correct values
         
         # HOME
-        if positionerInfo.managerProperties.get("initialIsHomed") is not None:
-            self._home = positionerInfo.managerProperties["initialIsHomed"]
-        else:
-            self._home = {axis: False for axis in self.__axes } 
-        # seetings for homign the axis
         initialHome={
             axis: False for axis in positionerInfo.axes # TODO: Hardcoded - hsould be updated according to JSon?
         }   

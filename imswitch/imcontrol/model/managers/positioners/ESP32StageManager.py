@@ -10,7 +10,7 @@ PHYS_FACTOR = 1
 gTIMEOUT = 100
 class ESP32StageManager(PositionerManager):
     def __init__(self, positionerInfo, name, **lowLevelManagers):
-        super().__init__(positionerInfo, name, initialPosition={axis: 0 for axis in positionerInfo.axes})
+        super().__init__(positionerInfo, name, initialPosition={axis: 0 for axis in positionerInfo.axes}, initialSpeed={axis: 0 for axis in positionerInfo.axes})
         self._rs232manager = lowLevelManagers['rs232sManager'][positionerInfo.managerProperties['rs232device']]
         self._commChannel = lowLevelManagers['commChannel']
         self.__logger = initLogger(self, instanceName=name)
@@ -57,6 +57,11 @@ class ESP32StageManager(PositionerManager):
         self.maxSpeed["Y"] = positionerInfo.managerProperties.get('maxSpeedY', 10000)
         self.maxSpeed["Z"] = positionerInfo.managerProperties.get('maxSpeedZ', 10000)
         self.maxSpeed["A"] = positionerInfo.managerProperties.get('maxSpeedA', 10000)
+        
+        self.setSpeed(positionerInfo.managerProperties.get('initialSpeedX', 10000), axis="X")
+        self.setSpeed(positionerInfo.managerProperties.get('initialSpeedY', 10000), axis="Y")
+        self.setSpeed(positionerInfo.managerProperties.get('initialSpeedZ', 10000), axis="Z")
+        self.setSpeed(positionerInfo.managerProperties.get('initialSpeedA', 10000), axis="A")
 
         self.sampleLoadingPositions = {}
         self.sampleLoadingPositions["X"] = positionerInfo.managerProperties.get('sampleLoadingPositionX', 0)

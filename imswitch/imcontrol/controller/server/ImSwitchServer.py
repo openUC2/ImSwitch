@@ -30,6 +30,8 @@ import socket
 from typing import List, Dict
 from imswitch import IS_HEADLESS, __ssl__, __httpport__
 from imswitch.imcontrol.model import configfiletools
+from fastapi.responses import RedirectResponse
+
 
 import socket
 from fastapi.middleware.cors import CORSMiddleware
@@ -286,6 +288,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         },
     )
 
+# Redirect root URL "/" to "/imswitch"
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    # Comments in English: Redirect to the React app
+    return RedirectResponse(url="/imswitch/index.html")
 
 
 class ServerThread(threading.Thread):

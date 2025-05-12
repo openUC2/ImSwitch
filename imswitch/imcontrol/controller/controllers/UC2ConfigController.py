@@ -177,8 +177,22 @@ class UC2ConfigController(ImConWidgetController):
         return {"message": "ImSwitch is restarting"}
         
     @APIExport(runOnUIThread=False)
+    def isImSwitchRunning(self):
+        return True
+    
+    @APIExport(runOnUIThread=False)
     def getDiskUsage(self):
         return dirtools.getDiskusage()
+    
+    @APIExport(runOnUIThread=False)
+    def getDataPath(self):
+        return dirtools.UserFileDirs.Data
+    
+    @APIExport(runOnUIThread=False)
+    def setDataPathFolder(self, path):
+        dirtools.UserFileDirs.Data = path
+        self._logger.debug(f"Data path set to {path}")
+        return {"message": f"Data path set to {path}"}
     
     @APIExport(runOnUIThread=True)
     def reconnect(self):

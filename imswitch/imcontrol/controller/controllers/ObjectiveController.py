@@ -61,8 +61,51 @@ class ObjectiveController(LiveUpdatedController):
                 def __init__(self):
                     self.move = lambda slot, isBlocking: None
                     self.home = lambda direction, endstoppolarity, isBlocking: None
-                    self.getstatus = lambda: {}
+                    self.x1 = 0
+                    self.x2 = 0
+                    self.slot = 0
+                    self.isHomed = 0
+                    self.z1 = 0
+                    self.z2 = 0
+                    self.pixelsizes = [2,4]
+                    self.NAs = [1.0, .5]
+                    self.magnifications = [10, 5]
+                    self.objectiveNames = ["TEST", "TEST2"]
                     
+                def home(self, direction, endstoppolarity, isBlocking):
+                    if direction is not None:
+                        self.homeDirection = direction
+                    if endstoppolarity is not None:
+                        self.homePolarity = endstoppolarity
+                    # Simulate homing process
+                    self.x1 = 0
+                    self.x2 = 0
+                    self.slot = 0
+                    self.isHomed = 1
+                    # Simulate a delay for homing
+                    import time
+                    time.sleep(1)
+                    
+                def move(self, slot, isBlocking):                
+                    self.slot = slot
+                    
+                def getstatus(self):
+                    return {
+                        "x1": self.x1,
+                        "x2": self.x2,
+                        "z1": self.z1,
+                        "z2": self.z2,
+                        "pos": 0,
+                        "isHomed": self.isHomed,
+                        "state": self.slot,
+                        "isRunning": 0, 
+                        "FOV": (100,100),
+                        "pixelsize": self.pixelsizes[self.slot - 1],
+                        "objectiveName": self.objectiveNames[self.slot - 1],
+                        "NA": self.NAs[self.slot - 1],
+                        "magnification": self.magnifications[self.slot - 1]
+                    }
+                        
                 def setPositions(self, x1, x2, z1, z2, isBlocking):
                     if x1 is not None:
                         self.x1 = x1
@@ -72,6 +115,7 @@ class ObjectiveController(LiveUpdatedController):
                         self.z1 = z1                         
                     if z2 is not None:
                         self.z2 = z2
+                        
             self._objective = dummyObjective()
 
         if self.calibrateOnStart:

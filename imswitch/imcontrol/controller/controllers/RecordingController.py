@@ -121,7 +121,7 @@ class RecordingController(ImConWidgetController):
         detectorNames = self.getDetectorNamesToCapture()
         if name is None:
             name = '_snap'
-        savename = os.path.join(folder, self.getFileName()) + name
+        savename = os.path.join(folder, self.getFileName() + "_" + name)
 
         attrs = {detectorName: self._commChannel.sharedAttrs.getHDF5Attributes()
                  for detectorName in detectorNames}

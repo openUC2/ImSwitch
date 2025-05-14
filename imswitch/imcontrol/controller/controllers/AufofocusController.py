@@ -163,10 +163,31 @@ class FrameProcessor:
         img = self.extract(img, self.nCropsize)
         if len(img.shape) > 2:
             img = np.mean(img, -1)
-        imagearraygf = ndi.gaussian_filter(img, self.nGauss)
-        is_success, buffer = cv2.imencode(".jpg", imagearraygf, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        focusquality = len(buffer) if is_success else 0
+        if 0:
+            imagearraygf = ndi.gaussian_filter(img, self.nGauss)
+            is_success, buffer = cv2.imencode(".jpg", imagearraygf, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            focusquality = len(buffer) if is_success else 0
+        else:
+            focusquality = self.calculate_focus_measure(img)
         self.allfocusvals.append(focusquality)
+
+    def calculate_focus_measure(self, image, method="LAPE"):
+        if len(image.shape) == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)  # optional
+        if method == "LAPE":
+            if image.dtype == np.uint16:
+                lap = cv2.Laplacian(image, cv2.CV_32F)
+            else:
+                lap = cv2.Laplacian(image, cv2.CV_16S)
+            focus_measure = np.mean(np.square(lap))
+        elif method == "GLVA":
+            focus_measure = np.std(image, axis=None)  # GLVA
+        else:
+            focus_measure = np.std(image, axis=None)  # GLVA
+        return focus_measure
+
+
+
 
     @staticmethod
     def extract(marray, crop_size):

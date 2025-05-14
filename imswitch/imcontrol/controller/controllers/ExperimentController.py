@@ -59,10 +59,10 @@ class Point(BaseModel):
 
 class ParameterValue(BaseModel):
     illumination: Union[List[str], str] = None # X, Y, nX, nY
-    illuminationIntensity: Union[List[int], int]
-    brightfield: bool
-    darkfield: bool
-    differentialPhaseContrast: bool
+    illuIntensities: Union[List[int], int]
+    brightfield: bool = 0,
+    darkfield: bool = 0, 
+    differentialPhaseContrast: bool = 0,
     timeLapsePeriod: float
     numberOfImages: int
     autoFocus: bool
@@ -72,9 +72,9 @@ class ParameterValue(BaseModel):
     zStack: bool
     zStackMin: float
     zStackMax: float
-    zStackStepSize: float = 1.
-    exposureTime: float = None
-    gain: float = None
+    zStackStepSize: Union[List[float], float] = 1.
+    exposureTimes: Union[List[float], float] = None
+    gains: float = None
     resortPointListToSnakeCoordinates: bool = True
     speed: float = 10000.0
 
@@ -110,7 +110,7 @@ class Experiment(BaseModel):
     
 class ExperimentWorkflowParams(BaseModel):
     """Parameters for the experiment workflow."""
-    # Comments in English
+
 
     # Illumination parameters
     illuSources: List[str] = Field(default_factory=list, description="List of illumination sources")
@@ -120,7 +120,7 @@ class ExperimentWorkflowParams(BaseModel):
 
     # Camera parameters
     exposureTimes: List[float] = Field(default_factory=list, description="Exposure times for each source")
-    gain: List[float] = Field(default_factory=list, description="Gain settings for each source")
+    gains: List[float] = Field(default_factory=list, description="gains settings for each source")
 
     # Feature toggles
     isDPCpossible: bool = Field(False, description="Whether DPC is possible")
@@ -196,7 +196,7 @@ class ExperimentController(ImConWidgetController):
         self.ExperimentParams.illuSourceMaxIntensities = [1023]*len(self.allIlluNames)
         self.ExperimentParams.illuIntensities = [0]*len(self.allIlluNames)
         self.ExperimentParams.exposureTimes = 1000000 # TODO: FIXME
-        self.ExperimentParams.gain = 23 # TODO: FIXME
+        self.ExperimentParams.gains = [23] # TODO: FIXME
         self.ExperimentParams.isDPCpossible = False
         self.ExperimentParams.isDarkfieldpossible = False
         
@@ -274,7 +274,7 @@ class ExperimentController(ImConWidgetController):
         
         # Illumination-related
         illuSources = p.illumination
-        illuminationIntensites = p.illuminationIntensity
+        illuminationIntensites = p.illuIntensities
         if type(illuminationIntensites) is not List: illuminationIntensites = [illuminationIntensites]
         if type(illuSources) is not List: illuSources = [p.illumination]
         isDarkfield = p.darkfield
@@ -282,8 +282,8 @@ class ExperimentController(ImConWidgetController):
         isDPC = p.differentialPhaseContrast
         
         # camera-related
-        gain = p.gain
-        exposure = p.exposureTime
+        gains = p.gains
+        exposures = p.exposureTimes
         self.SPEED_X, self.SPEED_Y, self.SPEED_Z = p.speed, p.speed, p.speed
         # Autofocus Related
         isAutoFocus = p.autoFocus
@@ -400,14 +400,14 @@ class ExperimentController(ImConWidgetController):
                             
                         step_id += 1
                         for illuIndex, illuSource in enumerate(illuSources):
-                            illuminationIntensity = illuminationIntensites[illuIndex-1]
+                            illuIntensities = illuminationIntensites[illuIndex-1]
                             
                             # Turn on illumination (example with "illumination" parameter)
                             workflowSteps.append(WorkflowStep(
                                 name="Turn on illumination",
                                 step_id=step_id,
                                 main_func=self.set_laser_power,
-                                main_params={"power": illuminationIntensity, "channel": illuSource},
+                                main_params={"power": illuIntensities, "channel": illuSource},
                                 post_funcs=[self.wait_time],
                                 post_params={"seconds": 0.05},
                             ))
@@ -436,7 +436,7 @@ class ExperimentController(ImConWidgetController):
                             main_params={"channel": "Mono"},
                             post_funcs=[self.save_frame_tiff, self.save_frame_ome_zarr, self.add_image_to_canvas],
                             pre_funcs=[self.set_exposure_time_gain],
-                            pre_params={"exposure_time": exposure, "gain": gain},
+                            pre_params={"exposure_time": exposures, "gain": gains},
                             post_params={
                                 "posX": mPoint["x"],
                                 "posY": mPoint["y"],

@@ -147,7 +147,7 @@ class WorkflowStep:
         context.store_step_result(self.step_id, metadata)
 
         # Emit event that step completed
-        context.emit_event("progress", {"status": "completed", "step_id": self.step_id, "name": self.name, "context.total_step_number": context.context.total_step_number})
+        context.emit_event("progress", {"status": "completed", "step_id": self.step_id, "name": self.name, "context.total_step_number": context.total_step_number})
         return metadata["result"]
 
 class Workflow:
@@ -167,6 +167,7 @@ class Workflow:
                 context.current_step_index = i + 1
             return context
         except Exception as e:
+            print("Error in step: "+step.name)
             print(e)
             context.emit_event("progress", {"status": "failed", "error": str(e), "traceback": traceback.format_exc()})
             # stop the workflow if an exception occurs

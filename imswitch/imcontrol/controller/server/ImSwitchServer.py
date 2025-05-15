@@ -398,6 +398,13 @@ class ImSwitchServer(Worker):
             plugins.append(plugin)
         return {"plugins": plugins}
         
+    @app.get("/hostname")
+    def get_hostname():
+        """
+        Returns the hostname of the server.
+        """
+        hostname = socket.gethostname()
+        return {"hostname": hostname}
 
     def createAPI(self):
         api_dict = self._api._asdict()

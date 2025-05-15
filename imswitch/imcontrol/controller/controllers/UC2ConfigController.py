@@ -221,6 +221,12 @@ class UC2ConfigController(ImConWidgetController):
         mThread.join()
         if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Bring the PS controller into pairing mode")
         
+    @APIExport(runOnUIThread=True)
+    def restartCANDevice(self, device_id=0):
+        self._logger.debug('Restarting CAN device.')
+        self._master.UC2ConfigManager.restartCANDevice(device_id)
+
+        
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

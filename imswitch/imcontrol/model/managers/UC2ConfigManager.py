@@ -68,6 +68,20 @@ class UC2ConfigManager(SignalInterface):
     def setDebug(self, debug):
         self.ESP32.serial.DEBUG = debug
 
+    def restartCANDevice(self, device_id):
+        """
+        Restart a CAN device by sending a reboot command to the ESP32.
+
+        0 - Master
+        10-19 - Motor
+        20-29 - Laser
+        30-39 - LED
+        Args:
+            device_id (_type_): _description_
+        """
+        self.ESP32.can.reboot_remote(can_address=device_id, isBlocking=False, timeout=1)
+        
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

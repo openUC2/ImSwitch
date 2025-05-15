@@ -74,7 +74,7 @@ class ParameterValue(BaseModel):
     zStackMax: float
     zStackStepSize: Union[List[float], float] = 1.
     exposureTimes: Union[List[float], float] = None
-    gains: float = None
+    gains: Union[List[float], float] = None
     resortPointListToSnakeCoordinates: bool = True
     speed: float = 10000.0
 
@@ -291,6 +291,12 @@ class ExperimentController(ImConWidgetController):
         autofocusMin = p.autoFocusMin
         autofocusStepSize = p.autoFocusStepSize
         
+        # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
+        if type(gains) is not List: gains = [gains]
+        if type(exposures) is not List: exposures = [exposures]
+        if len(gains) != len(illuSources): gains = [-1]*len(illuSources)
+        if len(exposures) != len(illuSources): exposures = [exposures[0]]*len(illuSources)
+        # TODO: We handle them with default => they won't be treated
 
         # Check if another workflow is running
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
@@ -400,14 +406,14 @@ class ExperimentController(ImConWidgetController):
                             
                         step_id += 1
                         for illuIndex, illuSource in enumerate(illuSources):
-                            illuIntensities = illuminationIntensites[illuIndex-1]
+                            illuIntensity = illuminationIntensites[illuIndex-1]
                             
                             # Turn on illumination (example with "illumination" parameter)
                             workflowSteps.append(WorkflowStep(
                                 name="Turn on illumination",
                                 step_id=step_id,
                                 main_func=self.set_laser_power,
-                                main_params={"power": illuIntensities, "channel": illuSource},
+                                main_params={"power": illuIntensity, "channel": illuSource},
                                 post_funcs=[self.wait_time],
                                 post_params={"seconds": 0.05},
                             ))
@@ -436,7 +442,7 @@ class ExperimentController(ImConWidgetController):
                             main_params={"channel": "Mono"},
                             post_funcs=[self.save_frame_tiff, self.save_frame_ome_zarr, self.add_image_to_canvas],
                             pre_funcs=[self.set_exposure_time_gain],
-                            pre_params={"exposure_time": exposures, "gain": gains},
+                            pre_params={"exposure_time": exposures[illuIndex], "gain": gains[illuIndex]},
                             post_params={
                                 "posX": mPoint["x"],
                                 "posY": mPoint["y"],
@@ -580,7 +586,7 @@ class ExperimentController(ImConWidgetController):
         if gain and gain >=0:
             self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "gain"], gain)  # [category, detectorname, ROI1, ROI2] attribute, value
             self._logger.debug(f"Setting gain to {gain}")
-        if exposure_time and exposure_time >=0:
+        if exposure_time and exposure_time >0:
             self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "exposureTime"],exposure_time) # category, detectorname, attribute, value
             self._logger.debug(f"Setting exposure time to {exposure_time}")
         

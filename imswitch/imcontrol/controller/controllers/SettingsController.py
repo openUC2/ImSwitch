@@ -486,6 +486,14 @@ class SettingsController(ImConWidgetController):
                 self.setSharedAttr(dName, parameterName, parameter.value, isDetectorParameter=True)
 
     @APIExport()
+    def setDetectorCompressionrate(self, compressionrate:int=80):
+        self._master.detectorsManager.updateGlobalDetectorParams({"compressionlevel":compressionrate})
+        
+    @APIExport()
+    def getDetectorGlobalParameters(self):
+        return self._master.detectorsManager.getGlobalDetectorParams()
+         
+    @APIExport()
     def getDetectorParameters(self) -> dict:
         """ Returns the current parameters of the current detector. """
         # collect exposure time

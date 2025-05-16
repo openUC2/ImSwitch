@@ -45,7 +45,7 @@ class SignalInstance(psygnal.SignalInstance):
     emit_interval = 0.0  # Emit at most every 100ms
     last_image_emit_time = 0
     image_emit_interval = .10  # Emit at most every 200ms
-
+    IMG_QUALITY = 80  # Set the desired quality level (0-100)
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
     ) -> None:
@@ -96,8 +96,11 @@ class SignalInstance(psygnal.SignalInstance):
                     except: 
                         output_frame = np.zeros((640,460))
                     # adjust the parameters of the jpeg compression
-                    quality = 80  # Set the desired quality level (0-100)
-                    encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+                    try:
+                        jpegQuality = args[5]["compressionlevel"]
+                    except:
+                        jpegQuality = self.IMG_QUALITY
+                    encode_params = [cv2.IMWRITE_JPEG_QUALITY, jpegQuality]
                     
                     # Compress image using JPEG format
                     flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)

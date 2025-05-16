@@ -16,6 +16,8 @@ class DetectorsManager(MultiManager, SignalInterface):
         str, np.ndarray, bool, list, bool
     )  # (detectorName, image, init, scale, isCurrentDetector)
     sigNewFrame = Signal()
+    
+    detectorParams = {}
 
     def __init__(self, detectorInfos, updatePeriod, **lowLevelManagers):
         MultiManager.__init__(self, detectorInfos, 'detectors', **lowLevelManagers)
@@ -27,14 +29,15 @@ class DetectorsManager(MultiManager, SignalInterface):
 
         self._currentDetectorName = None
         
-        
+        self.detectorParams["compressionlevel"]=80
+                
         for detectorName, detectorInfo in detectorInfos.items():
             if not self._subManagers[detectorName].forAcquisition:
                 continue
             # Connect signals
             self._subManagers[detectorName].sigImageUpdated.connect(
                 lambda image, init, scale, detectorName=detectorName: self.sigImageUpdated.emit(
-                    detectorName, image, init, scale, detectorName==self._currentDetectorName
+                    detectorName, image, init, scale, detectorName==self._currentDetectorName, self.detectorParams
                 )
             )
             # TODO: Use this instead?
@@ -61,6 +64,12 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._thread.started.connect(self._lvWorker.run)
         self._thread.finished.connect(self._lvWorker.stop)
 
+    def updateGlobalDetectorParams(self, params):
+        # we expect a dictionary with the parameters
+        self.detectorParams.update(params)
+        
+    def getGlobalDetectorParams(self) -> dict:
+        return self.detectorParams
     
     def __del__(self):
         self._lvWorker.stop()

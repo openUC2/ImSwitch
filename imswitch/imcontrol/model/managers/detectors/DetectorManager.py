@@ -151,7 +151,7 @@ class DetectorManager(SignalInterface):
                     return np.clip(scaled, 0, 255).astype(np.uint8)
                 if self._maxValueFramePreview != -1 and self._minValueFramePreview != -1:
                     self.__image = stretch_pixels(self.__image, self._minValueFramePreview, self._maxValueFramePreview)
-                self.sigImageUpdated.emit(self.__image, init, self.scale)
+                self.sigImageUpdated.emit(self.__image, init, self.scale) # TODO - inject compressionrate?
 
     def setMinValueFramePreview(self, value):
         """ Sets the minimum value for the frame preview to display via a jpeg image """

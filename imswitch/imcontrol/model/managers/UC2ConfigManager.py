@@ -79,7 +79,7 @@ class UC2ConfigManager(SignalInterface):
         Args:
             device_id (_type_): _description_
         """
-        self.ESP32.can.reboot_remote(can_address=device_id, isBlocking=False, timeout=1)
+        self.ESP32.can.reboot_remote(can_address=device_id, isBlocking=True, timeout=1)
         
 
 # Copyright (C) 2020-2024 ImSwitch developers

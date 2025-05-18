@@ -156,7 +156,9 @@ class ExperimentController(ImConWidgetController):
         # initialize variables
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
-
+        self.mFilePaths = []
+        
+        # set default values
         self.SPEED_Y = 10000
         self.SPEED_X = 10000
         self.SPEED_Z = 10000
@@ -254,6 +256,14 @@ class ExperimentController(ImConWidgetController):
             tiles.append(allPointsSnake)
         return tiles
 
+    @APIExport()
+    def getLastFilePathsList(self) -> List[str]:
+        """
+        Returns the last file paths list.
+        """
+        return self.mFilePaths
+        
+        
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
@@ -330,20 +340,6 @@ class ExperimentController(ImConWidgetController):
         diffY = np.diff(np.unique([pt["y"] for pt in all_points])).min()
         mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
 
-        # Prepare TIFF writer
-        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.Data
-        dirPath = os.path.join(drivePath, 'recordings', timeStamp)
-        if not os.path.exists(dirPath):
-            os.makedirs(dirPath)
-        mFileName = f"{timeStamp}_{exp_name}"
-        mFilePath = os.path.join(dirPath, mFileName + ".ome.tif")
-        #tiff_writer = tif.TiffWriter(mFilePath)
-        
-        # Create a new OmeTiffStitcher instance for stitching tiles
-        tiff_writer = OmeTiffStitcher(mFilePath)
-        tiff_writer.start()
-
         # Prepare OME-Zarr writer (new)
         # fill ome model
         if IS_OMEZARR_AVAILABLE:
@@ -376,8 +372,36 @@ class ExperimentController(ImConWidgetController):
         step_id = 0
 
         for t in range(nTimes):
+            
+            # Prepare TIFF writer
+            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            drivePath = dirtools.UserFileDirs.Data
+            dirPath = os.path.join(drivePath, 'recordings', timeStamp)
+            if not os.path.exists(dirPath):
+                os.makedirs(dirPath)
+            
+            mFilePaths = []
+            tiff_writers = []
+            for index, experiments_ in enumerate(mExperiment.pointList):
+                experimentName = experiments_.name
+                mFileName = f"{timeStamp}_{exp_name}"
+                mFilePath = os.path.join(dirPath, mFileName + str(index) + "_" + experimentName + "_" + ".ome.tif")
+                mFilePaths.append(mFilePath)
+                self._logger.debug(f"OME-TIFF path: {mFilePath}")
+                #tiff_writer = tif.TiffWriter(mFilePath)
+            
+                # Create a new OmeTiffStitcher instance for stitching tiles
+                tiff_writer = OmeTiffStitcher(mFilePath)
+                tiff_writers.append(tiff_writer)
+
+
             # Loop over each tile (each central point and its neighbors)
-            for tile in snake_tiles:
+            for position_center_index, tile in enumerate(snake_tiles):
+                
+                # start storer - store one center point per file # TODO: How about time series?
+                self.start_tiff_writer(tiff_writers=tiff_writers, tiff_index=position_center_index)
+            
+                # iterate over positions     
                 for mIndex, mPoint in enumerate(tile):
                     try:
                         name = f"Move to point {mPoint['iterator']}"
@@ -453,7 +477,8 @@ class ExperimentController(ImConWidgetController):
                                 "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
                                 "channel": illuSource,
                                 "time_index": t,       # or whatever loop index
-                                "tile_index": mIndex   # or snake-tile index
+                                "tile_index": mIndex,   # or snake-tile index
+                                "position_center_index": position_center_index,
                             },
                         ))
                         step_id += 1
@@ -467,17 +492,27 @@ class ExperimentController(ImConWidgetController):
                         ))
                         step_id += 1
 
-            # (Optional) Perform autofocus once per loop, if enabled
-            if isAutoFocus:
-                workflowSteps.append(WorkflowStep(
-                    name="Autofocus",
-                    step_id=step_id,
-                    main_func=self.autofocus,
-                    main_params={"minZ": autofocusMin, "maxZ": autofocusMax, "stepSize": autofocusStepSize},
-                ))
+                # (Optional) Perform autofocus once per loop, if enabled
+                if isAutoFocus:
+                    workflowSteps.append(WorkflowStep(
+                        name="Autofocus",
+                        step_id=step_id,
+                        main_func=self.autofocus,
+                        main_params={"minZ": autofocusMin, "maxZ": autofocusMax, "stepSize": autofocusStepSize},
+                    ))
+                    step_id += 1
+
                 step_id += 1
 
-            # (Optional) Add a wait period between each loop
+                # Close TIFF writer at the end
+                workflowSteps.append(WorkflowStep(
+                    name="Close TIFF writer",
+                    step_id=step_id,
+                    main_func=self.close_tiff_writer,
+                    main_params={"tiff_writers": tiff_writers, "tiff_index": position_center_index},
+                ))
+            
+            # Add a wait period between each loop
             workflowSteps.append(WorkflowStep(
                 name="Wait for next frame",
                 step_id=step_id,
@@ -486,15 +521,6 @@ class ExperimentController(ImConWidgetController):
                 pre_funcs=[self.wait_time],
                 pre_params={"seconds": 0.1}
             ))
-            step_id += 1
-
-        # Close TIFF writer at the end
-        workflowSteps.append(WorkflowStep(
-            name="Close TIFF writer",
-            step_id=step_id,
-            main_func=self.close_tiff_writer,
-            main_params={"tiff_writer": tiff_writer},
-        ))
 
         if IS_OMEZARR_AVAILABLE:
             # Close OME-Zarr store at the end (new)
@@ -538,7 +564,7 @@ class ExperimentController(ImConWidgetController):
         context.set_metadata("nTimes", nTimes)
         context.set_metadata("tPeriod", tPeriod)
 
-        context.set_object("tiff_writer", tiff_writer)
+        context.set_object("tiff_writers", tiff_writers)
         if IS_OMEZARR_AVAILABLE:
             context.set_object("omezarr_store", ome_store)
 
@@ -567,7 +593,8 @@ class ExperimentController(ImConWidgetController):
         # Start the workflow
         self.workflow_manager.start_workflow(wf, context)
 
-        return {"status": "running", "store_path": mFilePath}
+        self.mFilePaths = mFilePaths
+        return {"status": "running", "store_path": mFilePaths}
 
 
 
@@ -602,8 +629,8 @@ class ExperimentController(ImConWidgetController):
 
     def save_frame_tiff(self, context: WorkflowContext, metadata: Dict[str, Any], **kwargs):
         # Retrieve the TIFF writer and write the tile
-        tiff_writer = context.get_object("tiff_writer")
-        if tiff_writer is None:
+        tiff_writers = context.get_object("tiff_writers")
+        if tiff_writers is None:
             self._logger.debug("No TIFF writer found in context!")
             return
         
@@ -616,10 +643,13 @@ class ExperimentController(ImConWidgetController):
         posY = kwargs.get("posY", 0)
         posZ = kwargs.get("posZ", 0)
         channel_str = kwargs.get("channel", "Mono")
+        position_center_index = kwargs.get("position_center_index", 0)
+        time_stamp = kwargs.get("time_index", 0)
         iX = kwargs.get("iX", 0)
         iY = kwargs.get("iY", 0)
         pixel_size = kwargs.get("pixel_size", 1.0)  # 1 micron per pixel
-
+        # get tiff writer
+        tiff_writer = tiff_writers[position_center_index]
         try:
             tiff_writer.add_image(
                 image=img,
@@ -760,13 +790,20 @@ class ExperimentController(ImConWidgetController):
         self._logger.debug(f"Setting laser power to {power} for channel {channel}")
         return power
 
-    def close_tiff_writer(self, tiff_writer: tif.TiffWriter):
-        if tiff_writer is not None:
+    def close_tiff_writer(self, tiff_writers, tiff_index):
+        if tiff_writers is not None:
+            tiff_writer = tiff_writers[tiff_index]
             tiff_writer.close()
         else:
             raise ValueError("TIFF writer is not initialized.")
 
-        
+    def start_tiff_writer(self, tiff_writers, tiff_index):
+        if tiff_writers is not None:
+            tiff_writer = tiff_writers[tiff_index]
+            tiff_writer.start()
+        else:
+            raise ValueError("TIFF writer is not initialized.")
+    
     def move_stage_xy(self, posX: float, posY: float, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
         self._logger.debug(f"Moving stage to X={posX}, Y={posY}")

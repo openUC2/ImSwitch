@@ -147,7 +147,7 @@ class WorkflowStep:
         context.store_step_result(self.step_id, metadata)
 
         # Emit event that step completed
-        context.emit_event("progress", {"status": "completed", "step_id": self.step_id, "name": self.name, "context.total_step_number": context.total_step_number})
+        context.emit_event("progress", {"status": "completed", "step_id": context.current_step_index, "name": self.name, "total_step_number": context.total_step_number})
         return metadata["result"]
 
 class Workflow:

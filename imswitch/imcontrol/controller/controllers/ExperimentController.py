@@ -275,8 +275,8 @@ class ExperimentController(ImConWidgetController):
         # Illumination-related
         illuSources = p.illumination
         illuminationIntensites = p.illuIntensities
-        if type(illuminationIntensites) is not List: illuminationIntensites = [illuminationIntensites]
-        if type(illuSources) is not List: illuSources = [p.illumination]
+        if type(illuminationIntensites) is not List  and type(illuminationIntensites) is not list: illuminationIntensites = [p.illuIntensities]
+        if type(illuSources) is not List  and type(illuSources) is not list: illuSources = [p.illumination]
         isDarkfield = p.darkfield
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
@@ -292,11 +292,11 @@ class ExperimentController(ImConWidgetController):
         autofocusStepSize = p.autoFocusStepSize
         
         # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
-        if type(gains) is not List: gains = [gains]
-        if type(exposures) is not List: exposures = [exposures]
+        if type(gains) is not List and type(gains) is not list: gains = [gains]
+        if type(exposures) is not List and type(exposures) is not list: exposures = [exposures]
         if len(gains) != len(illuSources): gains = [-1]*len(illuSources)
         if len(exposures) != len(illuSources): exposures = [exposures[0]]*len(illuSources)
-        # TODO: We handle them with default => they won't be treated
+
 
         # Check if another workflow is running
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
@@ -308,7 +308,7 @@ class ExperimentController(ImConWidgetController):
 
         # Generate the list of points to scan based on snake scan
         if p.resortPointListToSnakeCoordinates:
-            pass
+            pass # TODO: we need an alternative case 
         snake_tiles = self.generate_snake_tiles(mExperiment)
         # remove none values from all_points list 
         snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
@@ -562,8 +562,6 @@ class ExperimentController(ImConWidgetController):
         context.set_object("canvas", canvas)
         context.on("progress", sendProgress)
         context.on("rgb_stack", sendProgress)
-        
-        context.on("progress", sendProgress)
         context.on("rgb_stack", sendProgress)
 
         # Start the workflow

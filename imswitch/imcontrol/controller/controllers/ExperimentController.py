@@ -331,13 +331,13 @@ class ExperimentController(ImConWidgetController):
         snake_tiles = self.generate_snake_tiles(mExperiment)
         # remove none values from all_points list 
         snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
-
             
         # Generate Z-positions 
+        currentZ = self.mStage.getPosition()["Z"]
         if isZStack:
-            z_positions = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize)
+            z_positions = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize) + currentZ
         else:
-            z_positions = [self.mStage.getPosition()["Z"]]  # Get current Z position
+            z_positions = [currentZ]  # Get current Z position
         # Flatten all point dictionaries from all tiles to compute scan range
         all_points = [pt for tile in snake_tiles for pt in tile]
         minX = min(pt["x"] for pt in all_points)
@@ -427,7 +427,7 @@ class ExperimentController(ImConWidgetController):
                     # iterate over z-steps
                     for indexZ, iZ in enumerate(z_positions):
                     
-                        #move to Z position
+                        #move to Z position - but only if we have more than one z position
                         if len(z_positions) > 1 or (len(z_positions) == 1 and mIndex == 0):
                             workflowSteps.append(WorkflowStep(
                                 name="Move to Z position",
@@ -442,16 +442,18 @@ class ExperimentController(ImConWidgetController):
                         for illuIndex, illuSource in enumerate(illuSources):
                             illuIntensity = illuminationIntensites[illuIndex-1]
                             if illuIntensity <= 0: continue
-                            # Turn on illumination (example with "illumination" parameter)
-                            workflowSteps.append(WorkflowStep(
-                                name="Turn on illumination",
-                                step_id=step_id,
-                                main_func=self.set_laser_power,
-                                main_params={"power": illuIntensity, "channel": illuSource},
-                                post_funcs=[self.wait_time],
-                                post_params={"seconds": 0.05},
-                            ))
-                            step_id += 1
+                            
+                            # Turn on illumination - if we have only one source, we can skip this step after the first stop of mIndex
+                            if len(illuminationIntensites) > 1 or  (len(illuSources) == 1 and mIndex == 0):
+                                workflowSteps.append(WorkflowStep(
+                                    name="Turn on illumination",
+                                    step_id=step_id,
+                                    main_func=self.set_laser_power,
+                                    main_params={"power": illuIntensity, "channel": illuSource},
+                                    post_funcs=[self.wait_time],
+                                    post_params={"seconds": 0.05},
+                                ))
+                                step_id += 1
 
                         # Acquire frame
                         isPreview = self.isPreview
@@ -545,15 +547,16 @@ class ExperimentController(ImConWidgetController):
             step_id += 1
         
         # Emit final canvas
-        workflowSteps.append(WorkflowStep(
-            name="Emit Final Canvas",
-            step_id=step_id,
-            main_func=self.dummy_main_func,
-            main_params={},
-            pre_funcs=[self.emit_final_canvas],
-            pre_params={}
-        ))
-        step_id += 1
+        if self.isPreview:
+            workflowSteps.append(WorkflowStep(
+                name="Emit Final Canvas",
+                step_id=step_id,
+                main_func=self.dummy_main_func,
+                main_params={},
+                pre_funcs=[self.emit_final_canvas],
+                pre_params={}
+            ))
+            step_id += 1
 
         # Final step: mark done
         workflowSteps.append(WorkflowStep(

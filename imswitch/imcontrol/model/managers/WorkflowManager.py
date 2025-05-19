@@ -5,7 +5,7 @@ from imswitch.imcommon.model import initLogger
 from typing import Callable, List, Dict, Any, Optional
 import threading
 import traceback
-
+import time 
 class WorkflowManager(object):
 
     def __init__(self, *args, **kwargs):
@@ -86,6 +86,7 @@ class WorkflowStep:
         self.post_params = post_params or {}
         # Allowing retries handling (if provided in main_params)
         self.max_retries = self.main_params.pop("max_retries", 0)
+        self.__logger = initLogger(self)
 
     def run(self, context: WorkflowContext):
         if context.should_stop:
@@ -104,20 +105,24 @@ class WorkflowStep:
 
         # Run pre-processing functions
         metadata["pre_result"] = []
-        for f in self.pre_funcs:
+        pre_start = time.time()
+        for f in self.pre_funcs:            
             # Merge context, metadata and pre_params
             merged_pre_params = {**self.pre_params, "context": context, "metadata": metadata}
             result = f(**merged_pre_params)
             metadata["pre_result"].append(result)
             if context.should_stop:
                 return None
+        metadata["pre_time"] = time.time() - pre_start
 
         # Run main function with error handling and retries
         retries = self.max_retries
         while True:
-            try:
+            main_start = time.time()
+            try:            
                 result = self.main_func(**self.main_params)
                 metadata["result"] = result
+                metadata["main_time"] = time.time() - main_start                
                 break
             except Exception as e:
                 print(e)
@@ -136,16 +141,27 @@ class WorkflowStep:
 
         # Run post-processing functions
         metadata["post_result"] = []
+        post_start = time.time()        
         for f in self.post_funcs:
             merged_post_params = {**self.post_params, "context": context, "metadata": metadata}
             result = f(**merged_post_params)
             metadata["post_result"].append(result)
             if context.should_stop:
                 return None
+        metadata["post_time"] = time.time() - post_start
+            
 
         # Store final metadata in the context
         context.store_step_result(self.step_id, metadata)
 
+        if 1:
+            # print the timings from pre/post functions
+            pre_time = metadata["pre_time"]
+            post_time = metadata["post_time"]
+            main_time = metadata["main_time"]
+            total_time = pre_time + post_time + main_time
+            self.__logger.debug(f"Step {self.name} ({self.step_id}) completed in {total_time:.2f}s (pre: {pre_time:.2f}s, main: {main_time:.2f}s, post: {post_time:.2f}s)")
+            
         # Emit event that step completed
         context.emit_event("progress", {"status": "completed", "step_id": context.current_step_index, "name": self.name, "total_step_number": context.total_step_number})
         return metadata["result"]

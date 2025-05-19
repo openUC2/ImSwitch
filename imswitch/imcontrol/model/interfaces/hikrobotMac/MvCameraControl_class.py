@@ -24,7 +24,11 @@ if platform == "linux" or platform == "linux2":
         except Exception as e:
             print(e)
 elif platform == "darwin":
-    MvCamCtrldll = ctypes.cdll.LoadLibrary("/usr/local/lib/libMvCameraControl.dylib")
+    try:
+        MvCamCtrldll = ctypes.cdll.LoadLibrary("/usr/local/lib/libMvCameraControl.dylib")
+    except Exception as e:
+        print(e)
+        MvCamCtrldll = None
 
 # 用于回调函数传入相机实例
 class _MV_PY_OBJECT_(Structure):

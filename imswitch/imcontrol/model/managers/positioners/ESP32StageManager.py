@@ -5,7 +5,7 @@ import numpy as np
 import os
 import json 
 
-MAX_ACCEL = 500000
+MAX_ACCEL = 1000000
 PHYS_FACTOR = 1
 gTIMEOUT = 100
 class ESP32StageManager(PositionerManager):

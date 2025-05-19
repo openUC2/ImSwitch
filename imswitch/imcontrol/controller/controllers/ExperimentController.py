@@ -76,7 +76,7 @@ class ParameterValue(BaseModel):
     exposureTimes: Union[List[float], float] = None
     gains: Union[List[float], float] = None
     resortPointListToSnakeCoordinates: bool = True
-    speed: float = 10000.0
+    speed: float = 20000.0
 
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
@@ -157,11 +157,12 @@ class ExperimentController(ImConWidgetController):
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
         self.mFilePaths = []
+        self.isPreview = False
         
         # set default values
-        self.SPEED_Y = 10000
-        self.SPEED_X = 10000
-        self.SPEED_Z = 10000
+        self.SPEED_Y_default = 10000
+        self.SPEED_X_default = 10000
+        self.SPEED_Z_default = 10000
         
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
@@ -294,7 +295,15 @@ class ExperimentController(ImConWidgetController):
         # camera-related
         gains = p.gains
         exposures = p.exposureTimes
-        self.SPEED_X, self.SPEED_Y, self.SPEED_Z = p.speed, p.speed, p.speed
+        if p.speed <= 0:
+            self.SPEED_X = self.SPEED_X_default
+            self.SPEED_Y = self.SPEED_Y_default
+            self.SPEED_Z = self.SPEED_Z_default
+        else: 
+            self.SPEED_X = p.speed
+            self.SPEED_Y = p.speed
+            self.SPEED_Z = p.speed
+        
         # Autofocus Related
         isAutoFocus = p.autoFocus
         autofocusMax = p.autoFocusMax
@@ -416,22 +425,23 @@ class ExperimentController(ImConWidgetController):
                     ))
                     
                     # iterate over z-steps
-                    for iZ in z_positions:
+                    for indexZ, iZ in enumerate(z_positions):
                     
                         #move to Z position
-                        workflowSteps.append(WorkflowStep(
-                            name="Move to Z position",
-                            step_id=step_id,
-                            main_func=self.move_stage_z,
-                            main_params={"posZ": iZ, "relative": False},
-                            pre_funcs=[self.wait_time],
-                            pre_params={"seconds": 0.1},
-                        ))
+                        if len(z_positions) > 1 or (len(z_positions) == 1 and mIndex == 0):
+                            workflowSteps.append(WorkflowStep(
+                                name="Move to Z position",
+                                step_id=step_id,
+                                main_func=self.move_stage_z,
+                                main_params={"posZ": iZ, "relative": False},
+                                pre_funcs=[self.wait_time],
+                                pre_params={"seconds": 0.1},
+                            ))
                             
                         step_id += 1
                         for illuIndex, illuSource in enumerate(illuSources):
                             illuIntensity = illuminationIntensites[illuIndex-1]
-                            
+                            if illuIntensity <= 0: continue
                             # Turn on illumination (example with "illumination" parameter)
                             workflowSteps.append(WorkflowStep(
                                 name="Turn on illumination",
@@ -444,7 +454,7 @@ class ExperimentController(ImConWidgetController):
                             step_id += 1
 
                         # Acquire frame
-                        isPreview = False
+                        isPreview = self.isPreview
                         '''
                         workflowSteps.append(WorkflowStep(
                             name="Acquire frame",
@@ -479,18 +489,20 @@ class ExperimentController(ImConWidgetController):
                                 "time_index": t,       # or whatever loop index
                                 "tile_index": mIndex,   # or snake-tile index
                                 "position_center_index": position_center_index,
+                                "isPreview": isPreview,
                             },
                         ))
                         step_id += 1
 
                         # Turn off illumination
-                        workflowSteps.append(WorkflowStep(
-                            name="Turn off illumination",
-                            step_id=step_id,
-                            main_func=self.set_laser_power,
-                            main_params={"power": 0, "channel": illuSource},
-                        ))
-                        step_id += 1
+                        if len(illuminationIntensites) > 1 or sum(np.array(illuminationIntensites)>0)>1:
+                            workflowSteps.append(WorkflowStep(
+                                name="Turn off illumination",
+                                step_id=step_id,
+                                main_func=self.set_laser_power,
+                                main_params={"power": 0, "channel": illuSource},
+                            ))
+                            step_id += 1
 
                 # (Optional) Perform autofocus once per loop, if enabled
                 if isAutoFocus:
@@ -519,7 +531,7 @@ class ExperimentController(ImConWidgetController):
                 main_func=self.dummy_main_func,
                 main_params={},
                 pre_funcs=[self.wait_time],
-                pre_params={"seconds": 0.1}
+                pre_params={"seconds": 0.01}
             ))
 
         if IS_OMEZARR_AVAILABLE:
@@ -702,7 +714,7 @@ class ExperimentController(ImConWidgetController):
             **kwargs: Additional keyword arguments, including tile position, channel, etc.
         """
         if not IS_OMEZARR_AVAILABLE:
-            self._logger.error("OME-Zarr is not available.")
+            # self._logger.error("OME-Zarr is not available.")
             return
         omeZarrStore = context.get_object("omezarr_store")
         if omeZarrStore is None:
@@ -727,6 +739,10 @@ class ExperimentController(ImConWidgetController):
 
     def add_image_to_canvas(self, context: WorkflowContext, metadata: Dict[str, Any], emitCurrentProgress=False, **kwargs):
         # Retrieve the canvas and add the image
+        isPreview = kwargs.get("isPreview", False)
+        if isPreview:
+            self._logger.debug("Preview mode is enabled. Skipping canvas update.")
+            return
         canvas = context.get_object("canvas")
         if canvas is None:
             self._logger.debug("No canvas found in context!")
@@ -804,13 +820,15 @@ class ExperimentController(ImConWidgetController):
         else:
             raise ValueError("TIFF writer is not initialized.")
     
-    def move_stage_xy(self, posX: float, posY: float, relative: bool = False):
+    def move_stage_xy(self, posX: float = None, posY: float = None, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
         self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
+        #if posY and posX is None:
+            
         self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True)
-        newPosition = self.mStage.getPosition()
-        self._commChannel.sigUpdateMotorPosition.emit([newPosition["X"], newPosition["Y"]])
-        return (newPosition["X"], newPosition["Y"])
+        #newPosition = self.mStage.getPosition()
+        self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
+        return (posX, posY)
 
     def move_stage_z(self, posZ: float, relative: bool = False):
         self._logger.debug(f"Moving stage to Z={posZ}")

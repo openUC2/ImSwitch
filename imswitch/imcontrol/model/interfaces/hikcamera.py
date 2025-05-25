@@ -75,27 +75,47 @@ class CameraHIK:
         self._init_cam(cameraNo=self.cameraNo, callback_fct=None)
 
     def _init_cam(self, cameraNo=1, callback_fct=None):
+        """
+        cameraNo – zero-based index across *all* discovered Hik cameras
+                (first all GigE, then all USB).
+        """
 
+        # 1) discover GigE *and* USB cameras
+        all_devices = []
+        for layer in (MV_GIGE_DEVICE, MV_USB_DEVICE):
+            dev_list = MV_CC_DEVICE_INFO_LIST()
+            if MvCamera.MV_CC_EnumDevices(layer, dev_list) == 0:
+                for i in range(dev_list.nDeviceNum):
+                    all_devices.append(cast(dev_list.pDeviceInfo[i],
+                                            POINTER(MV_CC_DEVICE_INFO)).contents)
 
-        deviceList = MV_CC_DEVICE_INFO_LIST()
-        tlayerType = MV_USB_DEVICE
-        ret = MvCamera.MV_CC_EnumDevices(tlayerType, deviceList)
-        if ret != 0:
-            raise Exception("Enum devices fail! ret[0x%x]" % ret)
+        if not all_devices:
+            raise Exception("No Hik cameras found on GigE or USB")
 
-        if deviceList.nDeviceNum == 0:
-            raise Exception("No camera HIK connected")
+        if cameraNo >= len(all_devices):
+            raise Exception(f"Camera index {cameraNo} out of range (found {len(all_devices)})")
 
+        # 2) create handle and open the selected device
+        self.stDeviceList = all_devices[int(cameraNo)]
         self.camera = MvCamera()
-        self.stDeviceList = cast(deviceList.pDeviceInfo[int(cameraNo)], POINTER(MV_CC_DEVICE_INFO)).contents
-
+        
         ret = self.camera.MV_CC_CreateHandle(self.stDeviceList)
         if ret != 0:
-            raise Exception("Create handle fail! ret[0x%x]" % ret)
+            raise Exception(f"Create handle fail! ret[0x{ret:x}]")
 
         ret = self.camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
         if ret != 0:
-            raise Exception("Open device fail! ret[0x%x]" % ret)
+            raise Exception(f"Open device fail! ret[0x{ret:x}]")
+
+        # 3) optimise network throughput for GigE
+        if self.stDeviceList.nTLayerType == MV_GIGE_DEVICE:
+            packet = self.camera.MV_CC_GetOptimalPacketSize()
+            if int(packet) > 0:
+                if self.camera.MV_CC_SetIntValue("GevSCPSPacketSize", packet) != 0:
+                    self.__logger.warning(f"Set Packet Size fail! ret[0x{ret:x}]")
+            else:
+                self.__logger.warning(f"Get Packet Size fail! ret[0x{packet:x}]")
+
 
         # get available parameters
         self.mParameters = self.get_camera_parameters()
@@ -411,11 +431,47 @@ class CameraHIK:
         return property_value
 
     def setTriggerSource(self, trigger_source):
-        pass
+        """
+        Continous          → free-run
+        Internal trigger   → software (SDK) trigger
+        External trigger   → hardware trigger on LINE0
+        """
+        was_streaming = self.is_streaming
+        if was_streaming:
+            self.suspend_live()                     # safe action (stop grabbing)
+
+        tlow = str(trigger_source).lower()
+        try:
+            if tlow in ("continuous", "continous"):
+                self.camera.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
+
+            elif tlow in ("internal trigger", "software", "software trigger"):
+                self.camera.MV_CC_SetEnumValue("TriggerMode",  MV_TRIGGER_MODE_ON)
+                self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER_SOURCE_SOFTWARE)
+
+            elif tlow in ("external trigger", "hardware", "line0"):
+                self.camera.MV_CC_SetEnumValue("TriggerMode",  MV_TRIGGER_MODE_ON)
+                self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER_SOURCE_LINE0)
+
+            else:
+                self.__logger.warning(f"Unknown trigger source: {trigger_source}")
+                return False
+
+            self.trigger_source = trigger_source      # remember selection
+            return True
+
+        finally:
+            if was_streaming:                         # resume if we had been running
+                self.start_live()
 
     def send_trigger(self):
-        pass
-
+        """Fire one software trigger pulse when trigger source is set to software."""
+        ret = self.camera.MV_CC_SetCommandValue("TriggerSoftware")
+        if ret != 0:
+            self.__logger.error(f"Software trigger failed! ret [0x{ret:x}]")
+            return False
+        return True
+    
     def openPropertiesGUI(self):
         pass
 

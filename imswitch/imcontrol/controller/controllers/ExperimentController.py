@@ -59,7 +59,7 @@ class Point(BaseModel):
 
 class ParameterValue(BaseModel):
     illumination: Union[List[str], str] = None # X, Y, nX, nY
-    illuIntensities: Union[List[int], int]
+    illuIntensities: Union[List[Optional[int]], Optional[int]] = None 
     brightfield: bool = 0,
     darkfield: bool = 0, 
     differentialPhaseContrast: bool = 0,
@@ -160,9 +160,10 @@ class ExperimentController(ImConWidgetController):
         self.isPreview = False
         
         # set default values
-        self.SPEED_Y_default = 10000
-        self.SPEED_X_default = 10000
-        self.SPEED_Z_default = 10000
+        self.SPEED_Y_default = 20000
+        self.SPEED_X_default = 20000
+        self.SPEED_Z_default = 20000
+        self.ACCELERATION = 500000
         
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
@@ -444,7 +445,7 @@ class ExperimentController(ImConWidgetController):
                             if illuIntensity <= 0: continue
                             
                             # Turn on illumination - if we have only one source, we can skip this step after the first stop of mIndex
-                            if len(illuminationIntensites) > 1 or  (len(illuSources) == 1 and mIndex == 0):
+                            if sum(np.array(illuminationIntensites)>0) > 1 or  ( mIndex == 0):
                                 workflowSteps.append(WorkflowStep(
                                     name="Turn on illumination",
                                     step_id=step_id,
@@ -497,7 +498,7 @@ class ExperimentController(ImConWidgetController):
                         step_id += 1
 
                         # Turn off illumination
-                        if len(illuminationIntensites) > 1 or sum(np.array(illuminationIntensites)>0)>1:
+                        if len(illuminationIntensites) > 1 and sum(np.array(illuminationIntensites)>0)>1: # TODO: Is htis the right approach?
                             workflowSteps.append(WorkflowStep(
                                 name="Turn off illumination",
                                 step_id=step_id,
@@ -568,6 +569,19 @@ class ExperimentController(ImConWidgetController):
             pre_params={"seconds": 0.1}
         ))
         
+        # turn off all illuminations
+        for illuIndex, illuSource in enumerate(illuSources):
+            illuIntensity = illuminationIntensites[illuIndex-1]
+            if illuIntensity <= 0: 
+                continue
+            # Turn off illumination
+            workflowSteps.append(WorkflowStep(
+                name="Turn off illumination",
+                step_id=step_id,
+                main_func=self.set_laser_power,
+                main_params={"power": 0, "channel": illuSource},
+            ))
+            
         def sendProgress(payload):
             self.sigExperimentWorkflowUpdate.emit(payload)
 
@@ -596,11 +610,12 @@ class ExperimentController(ImConWidgetController):
             return width_pixels, height_pixels
         canvas_width, canvas_height = compute_canvas_dimensions(minX, maxX, minY, maxY, diffX, diffY,  mPixelSize)
 
-        if self.mDetector._isRGB:
-            canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
-        else:
-            canvas = np.zeros((canvas_height, canvas_width), dtype=np.uint16) # numpy assigns y,x,z
-        context.set_object("canvas", canvas)
+        if self.isPreview:
+            if self.mDetector._isRGB:
+                canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
+            else:
+                canvas = np.zeros((canvas_height, canvas_width), dtype=np.uint16) # numpy assigns y,x,z
+            context.set_object("canvas", canvas)
         context.on("progress", sendProgress)
         context.on("rgb_stack", sendProgress)
         context.on("rgb_stack", sendProgress)
@@ -828,7 +843,7 @@ class ExperimentController(ImConWidgetController):
         self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
         #if posY and posX is None:
             
-        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True)
+        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
         self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
         return (posX, posY)

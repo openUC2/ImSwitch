@@ -219,6 +219,18 @@ class ObjectiveController(LiveUpdatedController):
             "objectiveName": "TEST",
             "NA": 1.0,
             "magnification": 1,
+            "availableObjectives": [1, 2],
+            "availableObjectivesNames": self.objectiveNames,
+            "availableObjectivesPositions": self.objectivePositions,
+            "homeDirection": self.homeDirection,
+            "homePolarity": self.homePolarity,
+            "homeSpeed": self.homeSpeed,
+            "homeAcceleration": self.homeAcceleration,
+            "availableObjectiveMagnifications": self.magnifications,
+            "availableObjectiveNAs": self.NAs,
+            "availableObjectivePixelSizes": self.pixelsizes,
+            "detectorWidth": self.detectorWidth,
+            "detectorHeight": self.detectorHeight
         }
 
         # get the status from the objective

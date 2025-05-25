@@ -101,7 +101,7 @@ class RecordingController(ImConWidgetController):
         if saveMode == SaveMode.RAM:
             self._widget.setsaveFormat(SaveFormat.TIFF.value)
 
-    def snap(self, name=None, mSaveFormat=None):
+    def snap(self, name=None, mSaveFormat=None) -> dict:
         """ Take a snap and save it to a file. """
         self.updateRecAttrs(isSnapping=True)
 
@@ -113,7 +113,8 @@ class RecordingController(ImConWidgetController):
                 mSaveFormat = SaveFormat(1) # TIFF
 
         timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-        folder = os.path.join(dirtools.UserFileDirs.Data, 'recordings', timeStamp)
+        relativeFolder = os.path.join('recordings', timeStamp)
+        folder = os.path.join(dirtools.UserFileDirs.Data, relativeFolder)
         if not os.path.exists(folder):
             os.makedirs(folder)
             time.sleep(0.01)
@@ -135,6 +136,7 @@ class RecordingController(ImConWidgetController):
                                            saveMode,
                                            mSaveFormat,
                                            attrs)
+        return {"fullPath": savename, "relativePath":relativeFolder}
 
     def snapNumpy(self):
         self.updateRecAttrs(isSnapping=True)
@@ -527,9 +529,9 @@ class RecordingController(ImConWidgetController):
             return HTTPException(detail="Variable not found", status_code=404)
 
     @APIExport(runOnUIThread=True)
-    def snapImageToPath(self, fileName: str = "."):
+    def snapImageToPath(self, fileName: str = ".") -> dict:
         """ Take a snap and save it to a .tiff file at the given fileName. """
-        self.snap(name = fileName, mSaveFormat=SaveFormat.TIFF)
+        return self.snap(name = fileName, mSaveFormat=SaveFormat.TIFF)
     
     @APIExport(runOnUIThread=False)
     def snapImage(self, output: bool = False, toList: bool = True) -> Union[None, list]:

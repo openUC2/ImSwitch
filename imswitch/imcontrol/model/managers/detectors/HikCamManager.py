@@ -135,7 +135,9 @@ class HikCamManager(DetectorManager):
 
 
     def setTriggerSource(self, source):
-        pass
+        # update camera safely and mirror value in GUI parameter list
+        self._performSafeCameraAction(lambda: self._camera.setTriggerSource(source))
+        self.parameters['trigger_source'].value = source
 
     def getChunk(self):
         try:

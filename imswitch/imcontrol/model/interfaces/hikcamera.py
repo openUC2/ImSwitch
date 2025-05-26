@@ -31,7 +31,21 @@ PixelType_Gvsp_YUV422_YUYV_Packed = 34603058
 PixelType_Gvsp_YUV422_Packed = 34603039
 PixelType_Gvsp_YUV411_Packed = 34340894
 
+
+# ----------------------------------------------------------------------------
+#  Callback signature
+# ----------------------------------------------------------------------------
+FRAME_CB = CFUNCTYPE(
+    None,
+    POINTER(MV_FRAME_OUT_INFO_EX),  # pFrameInfo
+    POINTER(c_ubyte),               # pUserBuf
+    c_uint32,                       # nDataSize
+    c_void_p                        # pUser (void*)
+)
+# ----------------------------------------------------------------------------
 class CameraHIK:
+    """Minimal wrapper that grabs frames via SDK callback (no polling)."""
+
     def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=-1, blacklevel=100, isRGB=False, binning=2):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
@@ -50,7 +64,7 @@ class CameraHIK:
         self.frame_rate = frame_rate
         self.cameraNo = cameraNo
 
-        self.NBuffer = 1
+        self.NBuffer = 5
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.flatfieldImage = None
@@ -69,53 +83,50 @@ class CameraHIK:
         self.frameNumber = -1
         self.g_bExit = False
 
-        self.isRGB = isRGB
+        self._open_camera(self.cameraNo)
+
         self.isFlatfielding = False
 
-        self._init_cam(cameraNo=self.cameraNo, callback_fct=None)
+        # user chooses colour mode; fall back to auto‑detect
+        self.isRGB = bool(isRGB) if isRGB is not None else self._detect_rgb()
+        if self.isRGB:
+            self.camera.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_YUV422_YUYV_Packed)
 
-    def _init_cam(self, cameraNo=1, callback_fct=None):
-        """
-        cameraNo – zero-based index across *all* discovered Hik cameras
-                (first all GigE, then all USB).
-        """
-
-        # 1) discover GigE *and* USB cameras
-        all_devices = []
-        for layer in (MV_GIGE_DEVICE, MV_USB_DEVICE):
-            dev_list = MV_CC_DEVICE_INFO_LIST()
-            if MvCamera.MV_CC_EnumDevices(layer, dev_list) == 0:
-                for i in range(dev_list.nDeviceNum):
-                    all_devices.append(cast(dev_list.pDeviceInfo[i],
-                                            POINTER(MV_CC_DEVICE_INFO)).contents)
-
-        if not all_devices:
-            raise Exception("No Hik cameras found on GigE or USB")
-
-        if cameraNo >= len(all_devices):
-            raise Exception(f"Camera index {cameraNo} out of range (found {len(all_devices)})")
-
-        # 2) create handle and open the selected device
-        self.stDeviceList = all_devices[int(cameraNo)]
-        self.camera = MvCamera()
-        
-        ret = self.camera.MV_CC_CreateHandle(self.stDeviceList)
+        # register callback -----------------------------------------------
+        self._c_callback = self._build_callback()    # keep reference!
+        ret = self.camera.MV_CC_RegisterImageCallBackEx(self._c_callback, None)
         if ret != 0:
-            raise Exception(f"Create handle fail! ret[0x{ret:x}]")
+            raise RuntimeError(f"RegisterImageCallBackEx failed 0x{ret:x}")
 
+
+    # ---------------------------------------------------------------------
+    # Camera discovery / opening
+    # ---------------------------------------------------------------------
+    def _open_camera(self, number: int):
+        # gather all devices (GigE then USB)
+        infos: list[MV_CC_DEVICE_INFO] = []
+        for layer in (MV_GIGE_DEVICE, MV_USB_DEVICE):
+            lst = MV_CC_DEVICE_INFO_LIST(); memset(byref(lst), 0, sizeof(lst))
+            if MvCamera.MV_CC_EnumDevices(layer, lst) == 0:
+                for i in range(lst.nDeviceNum):
+                    infos.append(cast(lst.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents)
+
+        if not infos or number >= len(infos):
+            raise RuntimeError("No suitable Hik camera found")
+
+        self.camera = MvCamera()
+        ret = self.camera.MV_CC_CreateHandle(infos[number])
+        if ret != 0:
+            raise RuntimeError(f"CreateHandle failed 0x{ret:x}")
         ret = self.camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
         if ret != 0:
-            raise Exception(f"Open device fail! ret[0x{ret:x}]")
+            raise RuntimeError(f"OpenDevice failed 0x{ret:x}")
 
-        # 3) optimise network throughput for GigE
-        if self.stDeviceList.nTLayerType == MV_GIGE_DEVICE:
-            packet = self.camera.MV_CC_GetOptimalPacketSize()
-            if int(packet) > 0:
-                if self.camera.MV_CC_SetIntValue("GevSCPSPacketSize", packet) != 0:
-                    self.__logger.warning(f"Set Packet Size fail! ret[0x{ret:x}]")
-            else:
-                self.__logger.warning(f"Get Packet Size fail! ret[0x{packet:x}]")
-
+        # optimise packet size for GigE
+        if infos[number].nTLayerType == MV_GIGE_DEVICE:
+            psize = self.camera.MV_CC_GetOptimalPacketSize()
+            if psize > 0:
+                self.camera.MV_CC_SetIntValue("GevSCPSPacketSize", psize)
 
         # get available parameters
         self.mParameters = self.get_camera_parameters()
@@ -171,7 +182,79 @@ class CameraHIK:
             self.__logger.debug("Camera reconnected successfully.")
         except Exception as e:
             self.__logger.error(f"Failed to reconnect camera: {e}")
-            
+    
+    # ---------------------------------------------------------------------
+    # RGB detection (very rough – checks model string for "UC")
+    # ---------------------------------------------------------------------
+    def _detect_rgb(self) -> bool:
+        name = MVCC_STRINGVALUE(); self.camera.MV_CC_GetStringValue("DeviceModelName", name)
+        return "UC" in name.chCurValue.decode()
+
+    # ---------------------------------------------------------------------
+    # C callback factory ---------------------------------------------------
+    # ---------------------------------------------------------------------
+    def _build_callback(self):
+        cam = self.camera    # local alias inside closure
+        is_rgb = self.isRGB
+        logger = self.__logger
+        mono8 = PixelType_Gvsp_Mono8
+        yuv422 = PixelType_Gvsp_YUV422_YUYV_Packed
+        rgb8   = PixelType_Gvsp_RGB8_Packed
+
+        @FRAME_CB
+        def _callback(pInfo, pBuf, nSize, _):
+            info = pInfo.contents
+            fid  = info.nFrameNum
+            w, h  = info.nWidth, info.nHeight
+            pix   = info.enPixelType
+
+            # raw → numpy (zero‑copy view)
+            buf = (c_ubyte * nSize).from_address(addressof(pBuf.contents))
+            arr = np.frombuffer(buf, dtype=np.uint8)
+
+            if pix == mono8 and not is_rgb:
+                frame = arr.reshape(h, w)
+            else:
+                # convert to RGB8 in SDK (thread‑safe)
+                n_rgb = w * h * 3
+                dst   = (c_ubyte * n_rgb)()
+                if platform == "win32":
+                    conv = MV_CC_PIXEL_CONVERT_PARAM_EX()
+                    memset(byref(conv), 0, sizeof(conv))
+                    conv.nWidth          = w
+                    conv.nHeight         = h
+                    conv.enSrcPixelType  = pix
+                    conv.enDstPixelType  = rgb8
+                    conv.pSrcData        = pBuf
+                    conv.nSrcDataLen     = nSize
+                    conv.pDstBuffer      = cast(dst, POINTER(c_ubyte))
+                    conv.nDstBufferSize  = n_rgb
+                    ret = cam.MV_CC_ConvertPixelTypeEx(conv)
+                else:
+                    conv = MV_CC_PIXEL_CONVERT_PARAM()
+                    memset(byref(conv), 0, sizeof(conv))
+                    conv.nWidth          = w
+                    conv.nHeight         = h
+                    conv.enSrcPixelType  = pix
+                    conv.enDstPixelType  = rgb8
+                    conv.pSrcData        = pBuf
+                    conv.nSrcDataLen     = nSize
+                    conv.pDstBuffer      = cast(dst, POINTER(c_ubyte))
+                    conv.nDstBufferSize  = n_rgb
+                    ret = cam.MV_CC_ConvertPixelType(conv)
+                if ret != 0:
+                    logger.error(f"Pixel convert failed 0x{ret:x}")
+                    return
+                frame = np.frombuffer(dst, dtype=np.uint8).reshape(h, w, 3)
+
+            # push into ring buffers
+            self.frame_buffer.append(frame)
+            self.frameid_buffer.append(fid)
+            self.frameNumber = fid
+            self.timestamp   = info.nDevTimeStamp
+
+        return _callback
+
     def get_camera_parameters(self):
         param_dict = {}
 
@@ -222,44 +305,31 @@ class CameraHIK:
 
 
     def start_live(self):
-        if not self.is_streaming:
-            self.g_bExit = False
-            ret = self.camera.MV_CC_StartGrabbing()
-            self.__logger.debug("start grabbing")
-            self.__logger.debug(ret)
-            try:
-                self.hThreadHandle = threading.Thread(target=self.work_thread, args=(self.camera, None, None))
-                self.hThreadHandle.start()
-            except Exception:
-                self.__logger.error("Could not start frame grabbing")
-
-            if ret != 0:
-                self.__logger.debug("start grabbing fail! ret[0x%x]" % ret)
-                return
-            self.is_streaming = True
+        if self.is_streaming:
+            return
+        self.flushBuffer()
+        ret = self.camera.MV_CC_StartGrabbing()
+        if ret != 0:
+            raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
+        self.is_streaming = True
 
     def stop_live(self):
-        if self.is_streaming:
-            self.g_bExit = True
-            self.hThreadHandle.join()
-            self.is_streaming = False
+        if not self.is_streaming:
+            return
+        self.camera.MV_CC_StopGrabbing()
+        self.is_streaming = False
 
     def suspend_live(self):
-        if self.is_streaming:
-            self.g_bExit = True
-            try:
-                self.hThreadHandle.join()
-                ret = self.camera.MV_CC_StopGrabbing()
-            except:
-                pass
-            self.is_streaming = False
+        self.stop_live()
 
     def prepare_live(self):
         pass
 
     def close(self):
-        ret = self.camera.MV_CC_CloseDevice()
-        ret = self.camera.MV_CC_DestroyHandle()
+        if self.is_streaming:
+            self.stop_live()
+        self.camera.MV_CC_CloseDevice()
+        self.camera.MV_CC_DestroyHandle()
 
     def set_exposure_time(self, exposure_time):
         self.exposure_time = exposure_time
@@ -315,29 +385,27 @@ class CameraHIK:
         except Exception as e:
             self.__logger.error(e)
 
-    def getLast(self, returnFrameNumber=False, timeout=1):
-        start_time = time.time()
-        while len(self.frame_buffer) == 0:
-            time.sleep(0.02)
-            if time.time() - start_time > timeout:
-                return None
-
-        frame = self.frame_buffer[-1]
-        frameNumber = self.frameid_buffer[-1]
+    def getLast(self, returnFrameNumber: bool = False, timeout: float = 1.0):
+        """Return the newest frame; wait *timeout* seconds if empty."""
+        t0 = time.time()
+        while not self.frame_buffer:
+            if time.time() - t0 > timeout:
+                return (None, None) if returnFrameNumber else None
+            time.sleep(0.01)
         if returnFrameNumber:
-            return np.array(frame), frameNumber
-        return np.array(frame)
+            return self.frame_buffer[-1], self.frameid_buffer[-1]
+        return self.frame_buffer[-1]
 
     def flushBuffer(self):
         self.frameid_buffer.clear()
         self.frame_buffer.clear()
 
     def getLastChunk(self):
-        chunk = np.array(self.frame_buffer)
-        frameids = np.array(self.frameid_buffer)
+        """Return *and clear* the entire ring‑buffer as a numpy stack."""
+        frames = list(self.frame_buffer)
+        ids    = list(self.frameid_buffer)
         self.flushBuffer()
-        self.__logger.debug("Buffer: "+str(chunk.shape)+" IDs: " + str(frameids))
-        return chunk
+        return np.array(frames), np.array(ids)
 
     def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
         # Not updated. Provided as example
@@ -650,3 +718,12 @@ class CameraHIK:
     def getFrameNumber(self):
         return self.frameNumber
 
+# ----------------------------------------------------------------------------
+# Convenience: context‑manager support
+# ----------------------------------------------------------------------------
+    def __enter__(self):
+        self.start_live()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()

@@ -36,6 +36,7 @@ from .RotationScanController import RotationScanController
 from .RotatorController import RotatorController
 from .UC2ConfigController import UC2ConfigController
 from .SIMController import SIMController
+from .TriggerAcquisitionController import TriggerAcquisitionController
 from .DPCController import DPCController
 from .MCTController import MCTController
 from .TimelapseController import TimelapseController

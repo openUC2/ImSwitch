@@ -4,7 +4,7 @@ from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import initLogger
-from typing import Optional
+from typing import Optional, Union
 from imswitch.imcontrol.model import configfiletools
 
 
@@ -319,8 +319,10 @@ class PositionerController(ImConWidgetController):
             self.__logger.error(f"Could not save stage offset: {e}")
             return
 
-    @APIExport(runOnUIThread=True)
-    def startStageScan(self, positionerName, xstart=0, xstep=1000, nx=20, ystart=0, ystep=1000, ny=10, settle=5, illumination=(0,0,0,0), led=0):
+    @APIExport(runOnUIThread=True, requestType="POST")
+    def startStageScan(self, positionerName=None, xstart:float=0, xstep:float=1000, nx:int=20, ystart:float=0, 
+                       ystep:float=1000, ny:int=10, tsettle:int=5, tExposure:int=50, illumination0: int=0, 
+                       illumination1: int=0, illumination2: int=0, illumination3: int=0, led:int=0):
         """ Starts a stage scan with the specified parameters.
         Parameters:
             xstart (int): Starting position in X direction.
@@ -333,13 +335,18 @@ class PositionerController(ImConWidgetController):
             illumination (tuple): Illumination settings for the scan.
             led (int): LED index to use for the scan.
         """
+        illumination = (illumination0, illumination1, illumination2, illumination3)
+        if isinstance(illumination, str):
+            # parse from CSV string to float list
+            illumination = [float(x) for x in illumination.split(',')]
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self.__logger.debug(f"Starting stage scan with parameters: xstart={xstart}, xstep={xstep}, nx={nx}, "
-                            f"ystart={ystart}, ystep={ystep}, ny={ny}, settle={settle}, illumination={illumination}, led={led}")
+                            f"ystart={ystart}, ystep={ystep}, ny={ny}, settle={tsettle}, illumination={illumination}, led={led}")
+        
         self._master.positionersManager[positionerName].start_stage_scanning(xstart=xstart, xstep=xstep, nx=nx,
                                                                               ystart=ystart, ystep=ystep, ny=ny,
-                                                                              settle=settle, illumination=illumination,
+                                                                              tsettle=tsettle, tExposure=tExposure, illumination=illumination,
                                                                               led=led)
     @APIExport(runOnUIThread=True)
     def stopStageScan(self, positionerName=None):

@@ -452,6 +452,7 @@ class CameraHIK:
             elif tlow in ("external trigger", "hardware", "line0"):
                 self.camera.MV_CC_SetEnumValue("TriggerMode",  MV_TRIGGER_MODE_ON)
                 self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER_SOURCE_LINE0)
+                #self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER)
 
             else:
                 self.__logger.warning(f"Unknown trigger source: {trigger_source}")

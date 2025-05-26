@@ -567,7 +567,8 @@ class SettingsController(ImConWidgetController):
             # Special case for certain parameters that will follow the "update all detectors" option
             execFunc = self._master.detectorsManager.execOnAll
         else:
-            def execFunc(f): self._master.detectorsManager.execOn(detectorName, f)
+            def execFunc(f): 
+                self._master.detectorsManager.execOn(detectorName, f)
 
         execFunc(
             lambda c: (c.setParameter(parameterName, value) and
@@ -591,6 +592,13 @@ class SettingsController(ImConWidgetController):
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'exposure', exposureTime)
+        
+    @APIExport(runOnUIThread=True)
+    def setDetectorTriggerType(self, detectorName: str=None, triggerType: str='Software') -> None:
+        """ Sets the trigger type for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        self.setDetectorParameter(detectorName, 'trigger_source', triggerType)
         
     @APIExport(runOnUIThread=True)
     def setDetectorPreviewMinMaxValue(self, detectorName: str=None, minValue: int=0, maxValue: int = 1024) -> None:

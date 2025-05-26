@@ -513,6 +513,35 @@ class ESP32StageManager(PositionerManager):
             self.__logger.error(f"Axis {axis} not found in stageOffsetPositions.")
             return 0
 
+    def start_stage_scanning(self, xstart=0, xstep=1, nx=100,
+                             ystart=0, ystep=1, ny=100, settle=0.1, illumination=None, led=None):
+        """
+        Start a stage scanning operation with the given parameters.
+        :param xstart: Starting position in X direction.
+        :param xstep: Step size in X direction.
+        :param nx: Number of steps in X direction.
+        :param ystart: Starting position in Y direction.
+        :param ystep: Step size in Y direction.
+        :param ny: Number of steps in Y direction.
+        :param settle: Settle time after each step.
+        :param illumination: Optional illumination settings.
+        :param led: Optional LED settings.
+        """
+        if illumination is None:
+            illumination = (0,0,0,0)  # Default to no illumination
+        if led is None:
+            led = 0
+        r = self._motor.start_stage_scanning(xstart=xstart, xstep=xstep, nx=nx,
+                                         ystart=ystart, ystep=ystep, ny=ny,
+                                         settle=settle, illumination=illumination, led=led)
+        return r
+    
+    def stop_stage_scanning(self):
+        """
+        Stop the current stage scanning operation.
+        """
+        self._motor.stop_stage_scanning()
+        self.__logger.info("Stage scanning stopped.")
 
         
 # Copyright (C) 2020, 2021 The imswitch developers

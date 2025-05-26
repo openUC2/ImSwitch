@@ -319,6 +319,35 @@ class PositionerController(ImConWidgetController):
             self.__logger.error(f"Could not save stage offset: {e}")
             return
 
+    @APIExport(runOnUIThread=True)
+    def startStageScan(self, positionerName, xstart=0, xstep=1000, nx=20, ystart=0, ystep=1000, ny=10, settle=5, illumination=(0,0,0,0), led=0):
+        """ Starts a stage scan with the specified parameters.
+        Parameters:
+            xstart (int): Starting position in X direction.
+            xstep (int): Step size in X direction.
+            nx (int): Number of steps in X direction.
+            ystart (int): Starting position in Y direction.
+            ystep (int): Step size in Y direction.
+            ny (int): Number of steps in Y direction.
+            settle (int): Settle time after each move in seconds.
+            illumination (tuple): Illumination settings for the scan.
+            led (int): LED index to use for the scan.
+        """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self.__logger.debug(f"Starting stage scan with parameters: xstart={xstart}, xstep={xstep}, nx={nx}, "
+                            f"ystart={ystart}, ystep={ystep}, ny={ny}, settle={settle}, illumination={illumination}, led={led}")
+        self._master.positionersManager[positionerName].start_stage_scanning(xstart=xstart, xstep=xstep, nx=nx,
+                                                                              ystart=ystart, ystep=ystep, ny=ny,
+                                                                              settle=settle, illumination=illumination,
+                                                                              led=led)
+    @APIExport(runOnUIThread=True)
+    def stopStageScan(self, positionerName=None):
+        """ Stops the current stage scan if one is running. """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self.__logger.debug(f"Stopping stage scan for positioner {positionerName}")
+        self._master.positionersManager[positionerName].stop_stage_scanning()
 
 _attrCategory = 'Positioner'
 _positionAttr = 'Position'

@@ -35,11 +35,10 @@ PixelType_Gvsp_YUV411_Packed = 34340894
 # ----------------------------------------------------------------------------
 #  Callback signature
 # ----------------------------------------------------------------------------
-FRAME_CB = CFUNCTYPE(
+CALLBACK_SIG = CFUNCTYPE(
     None,
-    POINTER(MV_FRAME_OUT_INFO_EX),  # pFrameInfo
     POINTER(c_ubyte),               # pUserBuf
-    c_uint32,                       # nDataSize
+    POINTER(MV_FRAME_OUT_INFO_EX),  # pFrameInfo
     c_void_p                        # pUser (void*)
 )
 # ----------------------------------------------------------------------------
@@ -88,15 +87,17 @@ class CameraHIK:
         self.isFlatfielding = False
 
         # user chooses colour mode; fall back to auto‑detect
+        isRGB = self.mParameters["isRGB"]
         self.isRGB = bool(isRGB) if isRGB is not None else self._detect_rgb()
+        # Use YUV format if isRGB is True (instead of Bayer)
         if self.isRGB:
             self.camera.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_YUV422_YUYV_Packed)
 
         # register callback -----------------------------------------------
-        self._c_callback = self._build_callback()    # keep reference!
-        ret = self.camera.MV_CC_RegisterImageCallBackEx(self._c_callback, None)
+        self._sdk_cb = self._wrap_cb(self._on_frame)   # keep ref
+        ret = self.camera.MV_CC_RegisterImageCallBackEx(self._sdk_cb, None)
         if ret != 0:
-            raise RuntimeError(f"RegisterImageCallBackEx failed 0x{ret:x}")
+            raise RuntimeError(f"Register cb failed 0x{ret:x}")
 
 
     # ---------------------------------------------------------------------
@@ -130,10 +131,10 @@ class CameraHIK:
 
         # get available parameters
         self.mParameters = self.get_camera_parameters()
-        self.isRGB = self.mParameters["isRGB"]
         
         # set parameters
         self.setBinning(binning=self.binning)
+        self.trigger_source = self.mParameters.get("trigger_source", "Continuous")
 
         stBool = c_bool(False)
         ret = self.camera.MV_CC_GetBoolValue("AcquisitionFrameRateEnable", stBool)
@@ -145,10 +146,9 @@ class CameraHIK:
             self.__logger.debug("Set trigger mode fail! ret[0x%x]" % ret)
             sys.exit()
 
-        # Use YUV format if isRGB is True (instead of Bayer)
-        if self.isRGB:
-            self.camera.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_YUV422_YUYV_Packed)
 
+
+        # setup sensor size
         stIntValue_height = MVCC_INTVALUE()
         memset(byref(stIntValue_height), 0, sizeof(MVCC_INTVALUE))
         stIntValue_width = MVCC_INTVALUE()
@@ -178,7 +178,7 @@ class CameraHIK:
 
         # Re-initialize camera with original cameraNo
         try:
-            self._init_cam(cameraNo=self.cameraNo, callback_fct=None)
+            self._open_camera(cameraNo=self.cameraNo)
             self.__logger.debug("Camera reconnected successfully.")
         except Exception as e:
             self.__logger.error(f"Failed to reconnect camera: {e}")
@@ -193,68 +193,72 @@ class CameraHIK:
     # ---------------------------------------------------------------------
     # C callback factory ---------------------------------------------------
     # ---------------------------------------------------------------------
-    def _build_callback(self):
-        cam = self.camera    # local alias inside closure
-        is_rgb = self.isRGB
-        logger = self.__logger
-        mono8 = PixelType_Gvsp_Mono8
-        yuv422 = PixelType_Gvsp_YUV422_YUYV_Packed
-        rgb8   = PixelType_Gvsp_RGB8_Packed
+    def _on_frame(self, frame: np.ndarray, fid: int, ts: int):
+        self.frame_buffer.append(frame)
+        self.frameid_buffer.append(fid)
+        self.frameNumber = fid
+        self.timestamp   = ts
+    
+    def _wrap_cb(self, user_cb):
 
-        @FRAME_CB
-        def _callback(pInfo, pBuf, nSize, _):
+        @CALLBACK_SIG
+        def _cb(pData, pInfo, _):
             info = pInfo.contents
-            fid  = info.nFrameNum
-            w, h  = info.nWidth, info.nHeight
-            pix   = info.enPixelType
+            w, h   = info.nWidth, info.nHeight
+            nSize  = info.nFrameLen
+            pix    = info.enPixelType
+            fid    = info.nFrameNum
+            ts     = self._hw_timestamp(info)        # ← fixed
 
-            # raw → numpy (zero‑copy view)
-            buf = (c_ubyte * nSize).from_address(addressof(pBuf.contents))
-            arr = np.frombuffer(buf, dtype=np.uint8)
+            # build NumPy view over the SDK buffer (zero-copy)
+            buf = np.frombuffer(
+                (c_ubyte * nSize).from_address(addressof(pData.contents)),
+                dtype=np.uint8
+            )
 
-            if pix == mono8 and not is_rgb:
-                frame = arr.reshape(h, w)
-            else:
-                # convert to RGB8 in SDK (thread‑safe)
-                n_rgb = w * h * 3
-                dst   = (c_ubyte * n_rgb)()
-                if platform == "win32":
-                    conv = MV_CC_PIXEL_CONVERT_PARAM_EX()
-                    memset(byref(conv), 0, sizeof(conv))
-                    conv.nWidth          = w
-                    conv.nHeight         = h
-                    conv.enSrcPixelType  = pix
-                    conv.enDstPixelType  = rgb8
-                    conv.pSrcData        = pBuf
-                    conv.nSrcDataLen     = nSize
-                    conv.pDstBuffer      = cast(dst, POINTER(c_ubyte))
-                    conv.nDstBufferSize  = n_rgb
-                    ret = cam.MV_CC_ConvertPixelTypeEx(conv)
-                else:
+            # reshape according to pixel type
+            if pix == PixelType_Gvsp_Mono8:              # mono 8-bit
+                frame = buf.reshape(h, w)
+            elif pix in (PixelType_Gvsp_RGB8_Packed,
+                        PixelType_Gvsp_BayerRG8,
+                        PixelType_Gvsp_BayerBG8,
+                        PixelType_Gvsp_BayerGB8,
+                        PixelType_Gvsp_BayerGR8):
+                # convert to RGB for non-packed types
+                if pix != PixelType_Gvsp_RGB8_Packed:
+                    nRGB = w * h * 3
+                    dst  = (c_ubyte * nRGB)()
                     conv = MV_CC_PIXEL_CONVERT_PARAM()
                     memset(byref(conv), 0, sizeof(conv))
-                    conv.nWidth          = w
-                    conv.nHeight         = h
-                    conv.enSrcPixelType  = pix
-                    conv.enDstPixelType  = rgb8
-                    conv.pSrcData        = pBuf
-                    conv.nSrcDataLen     = nSize
-                    conv.pDstBuffer      = cast(dst, POINTER(c_ubyte))
-                    conv.nDstBufferSize  = n_rgb
-                    ret = cam.MV_CC_ConvertPixelType(conv)
-                if ret != 0:
-                    logger.error(f"Pixel convert failed 0x{ret:x}")
-                    return
-                frame = np.frombuffer(dst, dtype=np.uint8).reshape(h, w, 3)
+                    conv.nWidth         = w
+                    conv.nHeight        = h
+                    conv.enSrcPixelType = pix
+                    conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
+                    conv.pSrcData       = pData
+                    conv.nSrcDataLen    = nSize
+                    conv.pDstBuffer     = dst
+                    conv.nDstBufferSize = nRGB
+                    ret = self.camera.MV_CC_ConvertPixelType(conv)
+                    if ret != 0:
+                        self.__logger.error(f"Pixel convert failed 0x{ret:x}")
+                        return
+                    buf   = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
+                frame = buf.reshape(h, w, 3)
+            else:
+                self.__logger.error(f"Unsupported pixel type 0x{pix:x}")
+                return
 
-            # push into ring buffers
+            # push into ring buffers for later use
             self.frame_buffer.append(frame)
             self.frameid_buffer.append(fid)
             self.frameNumber = fid
-            self.timestamp   = info.nDevTimeStamp
+            self.timestamp   = ts
 
-        return _callback
+            # pass to user callback
+            user_cb(frame, fid, ts)
 
+        return _cb
+        
     def get_camera_parameters(self):
         param_dict = {}
 
@@ -385,13 +389,38 @@ class CameraHIK:
         except Exception as e:
             self.__logger.error(e)
 
-    def getLast(self, returnFrameNumber: bool = False, timeout: float = 1.0):
-        """Return the newest frame; wait *timeout* seconds if empty."""
+    def getLast(self,
+                returnFrameNumber: bool = False,
+                timeout: float = 1.0,
+                auto_trigger: bool = True):
+        """
+        Return the newest frame in the ring-buffer.
+        If the buffer is empty *and* the camera is in **software-trigger**
+        mode, a trigger is fired automatically (once) so the caller does not
+        have to worry about it.
+
+        Parameters
+        ----------
+        returnFrameNumber : bool
+            If True return a tuple ``(frame, fid)``.
+        timeout : float
+            Seconds to wait for a frame before giving up.
+        auto_trigger : bool
+            Disable if you need manual control over the trigger pulse.
+        """
+        # one-shot trigger if necessary ---------------------------------------
+        if auto_trigger and getattr(self, "trigger_source", "").lower() in (
+            "internal trigger", "software", "software trigger"
+        ):
+            self.send_trigger()
+
+        # wait for a frame ----------------------------------------------------
         t0 = time.time()
         while not self.frame_buffer:
             if time.time() - t0 > timeout:
                 return (None, None) if returnFrameNumber else None
-            time.sleep(0.01)
+            time.sleep(0.005)
+
         if returnFrameNumber:
             return self.frame_buffer[-1], self.frameid_buffer[-1]
         return self.frame_buffer[-1]
@@ -718,6 +747,15 @@ class CameraHIK:
     def getFrameNumber(self):
         return self.frameNumber
 
+    # ── helper ---------------------------------------------------------------
+    def _hw_timestamp(self, info):
+        """Return 64-bit device time-stamp from MV_FRAME_OUT_INFO_EX."""
+        try:                     # new SDK (≥2019)
+            hi = info.nDevTimeStampHigh
+            lo = info.nDevTimeStampLow
+            return (hi << 32) | lo
+        except AttributeError:   # very old SDK
+            return getattr(info, "nHostTimeStamp", 0)
 # ----------------------------------------------------------------------------
 # Convenience: context‑manager support
 # ----------------------------------------------------------------------------

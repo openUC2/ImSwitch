@@ -10,6 +10,13 @@ from pydantic import BaseModel
 from typing import Any, List, Optional, Dict, Any, Union
 import os 
 import uuid
+import os
+import time
+import threading
+import collections
+import tifffile as tif
+from pathlib import Path
+
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
@@ -139,6 +146,7 @@ class ExperimentWorkflowParams(BaseModel):
     zStackMaxFocusPosition: float = Field(10000, description="Maximum Z-stack position")
     zStackStepSizeMin: float = Field(1, description="Minimum Z-stack position")
     zStackStepSizeMax: float = Field(1000, description="Maximum Z-stack position")
+    performanceMode: bool = Field(False, description="Whether to use performance mode for the experiment - this would be executing the scan on the Cpp hardware directly, not on the Python side.")
     
       
 
@@ -203,6 +211,21 @@ class ExperimentController(ImConWidgetController):
         self.ExperimentParams.gains = [23] # TODO: FIXME
         self.ExperimentParams.isDPCpossible = False
         self.ExperimentParams.isDarkfieldpossible = False
+        self.ExperimentParams.performanceMode = False
+        
+        '''
+        For Fast Scanning - Performance Mode -> Parameters will be sent to the hardware directly
+        requires hardware triggering
+        '''
+        # where to dump the TIFFs ----------------------------------------------
+        save_dir = dirtools.UserFileDirs.Data
+        self.save_dir  = Path(save_dir or Path.home() / "scan")
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+
+        # writer thread control -------------------------------------------------
+        self._writer_thread   = None
+        self._stop_writer_evt = threading.Event()
+
         
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
@@ -292,6 +315,9 @@ class ExperimentController(ImConWidgetController):
         isDarkfield = p.darkfield
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
+        
+        # check if we want to use performance mode
+        performanceMode = p.performanceMode
         
         # camera-related
         gains = p.gains
@@ -390,6 +416,29 @@ class ExperimentController(ImConWidgetController):
             if not os.path.exists(dirPath):
                 os.makedirs(dirPath)
             
+            # if performanceMode is True, we will execute on the Hardware directly
+            if performanceMode:
+                self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
+                # need to compute the pos/net dx and dy and center pos as well as number of images in X / Y 
+                xStart = minX; xStep = diffX
+                yStart = minY; yStep = diffY
+                nx, ny = self.get_num_xy_steps(mExperiment.pointList)
+                if len(illuminationIntensites) == 1: illumination0 = illuminationIntensites[0]
+                else: illumination0 = illuminationIntensites[0] if len(illuminationIntensites) > 0 else None
+                if len(illuminationIntensites) == 2: illumination1 = illuminationIntensites[1]
+                else: illumination1 = illuminationIntensites[1] if len(illuminationIntensites) > 1 else None
+                if len(illuminationIntensites) == 3: illumination2 = illuminationIntensites[2]
+                else: illumination2 = illuminationIntensites[2] if len(illuminationIntensites) > 2 else None
+                if len(illuminationIntensites) == 4: illumination3 = illuminationIntensites[3]
+                else: illumination3 = illuminationIntensites[3] if len(illuminationIntensites) > 3 else None
+                if len(illuminationIntensites) == 1: led = illuminationIntensites[0]
+                else: led = illuminationIntensites[0] if len(illuminationIntensites) > 0 else None
+                self.startFastStageScanAcquisition(xstart=xStart, xstep=xStep, nx=nx,
+                                                    ystart=yStart, ystep=yStep, ny=ny,      
+                                                    tsettle=10, tExposure=50,
+                                                    illumination0=illumination0, illumination1=illumination1,
+                                                    illumination2=illumination2, illumination3=illumination3, led=led)
+                break
             mFilePaths = []
             tiff_writers = []
             for index, experiments_ in enumerate(mExperiment.pointList):
@@ -889,5 +938,115 @@ class ExperimentController(ImConWidgetController):
         self.workflow_manager.stop_workflow()
         del self.workflow_manager
         self.workflow_manager = WorkflowsManager()
+        
+        
+        
+        
+    """Couples a 2‑D stage scan with external‑trigger camera acquisition.
+
+    • Puts the connected ``CameraHIK`` into *external* trigger mode
+      (one exposure per TTL rising edge on LINE0).
+    • Runs ``positioner.start_stage_scanning``.
+    • Pops every frame straight from the camera ring‑buffer and writes it to
+      disk as ``000123.tif`` (frame‑id used as filename).
+
+    Assumes the micro‑controller (or the positioner itself) raises a TTL pulse
+    **after** arriving at each grid co‑ordinate.
+    """
+
+
+    # -------------------------------------------------------------------------
+    # public API
+    # -------------------------------------------------------------------------
+    @APIExport(runOnUIThread=False)
+    def startFastStageScanAcquisition(self,
+                      xstart:float=0, xstep:float=500, nx:int=10,
+                      ystart:float=0, ystep:float=500, ny:int=10,
+                      tsettle:float=10, tExposure:float=50,
+                      illumination0:int=None, illumination1:int=None,
+                      illumination2:int=None, illumination3:int=None, led:float=None):
+        """Full workflow: arm camera ➔ launch writer ➔ execute scan."""
+        illumination = (illumination0, illumination1, illumination2, illumination3)
+        nIlluminations = sum(1 for i in illumination if i is not None)
+        nLED = 1 if led is not None else 0
+        nScan = min(nIlluminations + nLED, 1)
+        total_frames = nx * ny * nScan
+        self._logger.info(f"Stage‑scan: {nx}×{ny} ({total_frames} frames)")
+        self.stop()
+        # 1. prepare camera ----------------------------------------------------
+        self.mDetector.stopAcquisition()
+        #self.mDetector.NBuffer        = total_frames + 32   # head‑room
+        #self.mDetector.frame_buffer   = collections.deque(maxlen=self.mDetector.NBuffer)
+        #self.mDetector.frameid_buffer = collections.deque(maxlen=self.mDetector.NBuffer)
+        self.mDetector.setTriggerSource("External trigger")
+        self.mDetector.flushBuffers()
+        self.mDetector.startAcquisition()
+
+        # 2. start writer thread ----------------------------------------------
+        self._stop_writer_evt.clear()
+        self._writer_thread = threading.Thread(
+            target=self._writer_loop,
+            args=(total_frames,),
+            daemon=True,
+        )
+        self._writer_thread.start()
+
+        # 3. execute stage scan (blocks until finished) ------------------------
+        self.mStage.start_stage_scanning(
+            xstart=xstart, xstep=xstep, nx=nx,
+            ystart=ystart, ystep=ystep, ny=ny,
+            tsettle=tsettle, tExposure=tExposure,
+            illumination=illumination, led=led,
+        )
+
+        
+    # -------------------------------------------------------------------------
+    # internal helpers
+    # -------------------------------------------------------------------------
+    def _writer_loop(self, n_expected: int):
+        """
+        Bulk-writer that uses the (frames, ids) tuple returned by camera.getChunk().
+        The call is non-blocking; it returns empty arrays until new frames arrive.
+        """
+        saved = 0
+        while saved < n_expected and not self._stop_writer_evt.is_set():
+
+            frames, ids = self.mDetector.getChunk()        # ← empties camera buffer
+
+            if frames.size == 0:                        # nothing new yet
+                time.sleep(0.005)
+                continue
+
+            for frame, fid in zip(frames, ids):
+                tif.imwrite(self.save_dir / f"{fid:06d}.tif", frame)
+                saved += 1
+                self._logger.debug(f"saved {saved}/{n_expected}")
+
+        self._logger.info(f"Writer thread finished ({saved} images).")
+        # 4. wait for writer to finish then stop camera ------------------------
+
+        self._logger.info("Grid‑scan completed and all images saved.")
+
+        # 5. clean up and bring camera back to normal mode -----------------
+        self.mDetector.stopAcquisition()
+        self.mDetector.setTriggerSource("Continuous")
+        self.mDetector.flushBuffers()
+        self.mDetector.startAcquisition()
+        self._logger.info("Camera reset to continuous mode.")
+
+    def _stop(self):
+        """Abort the acquisition gracefully."""
+        self._stop_writer_evt.set()
+        if self._writer_thread is not None:
+            self._writer_thread.join(timeout=2)
+        self.mDetector.stopAcquisition()
+
+    @APIExport(runOnUIThread=False)
+    def stopFastStageScanAcquisition(self):
+        """Stop the stage scan acquisition and writer thread."""
+        self.mStage.stop_stage_scanning()
+        self._logger.info("Stopping stage scan acquisition...")
+        self._stop()
+        self._logger.info("Stage scan acquisition stopped.")
 
 # Copyright (C) 2025 Benedict Diederich

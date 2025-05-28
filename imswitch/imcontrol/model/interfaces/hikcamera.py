@@ -209,7 +209,7 @@ class CameraHIK:
         elif self.trigger_source == MV_TRIGGER_SOURCE_LINE0:
             return "External Trigger (LINE0)"
         else:
-            return "Continuous (Free Run)"^
+            return "Continuous (Free Run)"
     # ---------------------------------------------------------------------
     # C callback factory ---------------------------------------------------
     # ---------------------------------------------------------------------
@@ -579,17 +579,17 @@ class CameraHIK:
 
         tlow = str(trigger_source).lower()
         try:
-            if tlow in ("continuous", "continous"):
+            if tlow.find("cont")>=0:
                 self.camera.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
-
-            elif tlow in ("internal trigger", "software", "software trigger"):
+                self.__logger.debug("Trigger source set to continuous (free run)")
+            elif tlow.find("soft")>=0 or tlow in ("internal trigger", "software", "software trigger"):
                 self.camera.MV_CC_SetEnumValue("TriggerMode",  MV_TRIGGER_MODE_ON)
                 self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER_SOURCE_SOFTWARE)
-
-            elif tlow in ("external trigger", "hardware", "line0"):
+                self.__logger.debug("Trigger source set to software trigger")
+            elif tlow.find("ext")>=0 or tlow in ("external trigger", "hardware", "line0"):
                 self.camera.MV_CC_SetEnumValue("TriggerMode",  MV_TRIGGER_MODE_ON)
                 self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER_SOURCE_LINE0)
-                #self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER)
+                self.__logger.debug("Trigger source set to external trigger (LINE0)")
 
             else:
                 self.__logger.warning(f"Unknown trigger source: {trigger_source}")

@@ -289,24 +289,43 @@ class CameraHIK:
         ret = self.camera.MV_CC_GetIntValue("Height", stHeight)
         if ret == 0:
             param_dict["height"] = stHeight.nCurValue
+        
+        # get exposure time
+        mExposureValues = self.get_exposuretime()
+        if mExposureValues[0] is not None:
+            param_dict["exposure_current"] = mExposureValues[0]
+            param_dict["exposure_min"] = mExposureValues[1]
+            param_dict["exposure_max"] = mExposureValues[2]
 
+        # get gain
+        mGainValues = self.get_gain()
+        if mGainValues[0] is not None:
+            param_dict["gain_current"] = mGainValues[0]
+            param_dict["gain_min"] = mGainValues[1]
+            param_dict["gain_max"] = mGainValues[2]
+            
+        return param_dict
+
+    def get_gain(self):
         # Current / Min / Max Gain
         stGain = MVCC_FLOATVALUE()
         ret = self.camera.MV_CC_GetFloatValue("Gain", stGain)
         if ret == 0:
-            param_dict["gain_current"] = stGain.fCurValue
-            param_dict["gain_min"] = stGain.fMin
-            param_dict["gain_max"] = stGain.fMax
-
+            return (stGain.fCurValue, stGain.fMin, stGain.fMax)
+        else:
+            self.__logger.error(f"Get gain failed 0x{ret:x}")
+            return (None, None, None)
+        
+        
+    def get_exposuretime(self):
         # Current / Min / Max Exposure
         stExposure = MVCC_FLOATVALUE()
         ret = self.camera.MV_CC_GetFloatValue("ExposureTime", stExposure)
         if ret == 0:
-            param_dict["exposure_current"] = stExposure.fCurValue
-            param_dict["exposure_min"] = stExposure.fMin
-            param_dict["exposure_max"] = stExposure.fMax
-
-        return param_dict
+            return (stExposure.fCurValue, stExposure.fMin, stExposure.fMax)
+        else:
+            self.__logger.error(f"Get exposure time failed 0x{ret:x}")
+            return (None, None, None)
 
 
     def start_live(self):

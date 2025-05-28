@@ -177,6 +177,20 @@ class DetectorManager(SignalInterface):
         self.__parameters[name].value = value
         return self.parameters
 
+    def sendSoftwareTrigger(self) -> None:
+        """Trigger a software trigger on the detector, if supported.
+        This is a no-op for detectors that do not support software triggering.
+        """
+        pass 
+
+    def getCurrentTriggerType(self) -> str:
+        """availalbe trigger types from the camera"""
+        return "Software"
+    
+    def getTriggerTypes(self)  -> List[str]:
+        """ Returns a list of available trigger types for the detector. """
+        return ["Software", "External", "Continuous"]
+    
     def setRGB(self, isRGB: bool) -> None:
         """ Sets the sensortype of the camera """
         self._isRGB = isRGB

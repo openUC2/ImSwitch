@@ -199,7 +199,22 @@ class HikCamManager(DetectorManager):
 
     def openPropertiesDialog(self):
         self._camera.openPropertiesGUI()
+        
+    def sendSoftwareTrigger(self):
+        """Send a software trigger to the camera."""
+        if self._camera.send_trigger():
+            self.__logger.debug('Software trigger sent successfully.')
+        else:
+            self.__logger.warning('Failed to send software trigger.')
 
+    def getCurrentTriggerType(self):
+        """Get the current trigger type of the camera."""
+        return self._camera.getTriggerSource()
+    
+    def getTriggerTypes(self):
+        """Get the available trigger types for the camera."""
+        return self._camera.getTriggerTypes()
+    
     def _getHikObj(self, cameraId, isRGB = False, binning=1):
         try:
             from imswitch.imcontrol.model.interfaces.hikcamera import CameraHIK

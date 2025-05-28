@@ -84,6 +84,7 @@ class ParameterValue(BaseModel):
     gains: Union[List[float], float] = None
     resortPointListToSnakeCoordinates: bool = True
     speed: float = 20000.0
+    performanceMode: bool = False
 
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
@@ -422,7 +423,7 @@ class ExperimentController(ImConWidgetController):
                 # need to compute the pos/net dx and dy and center pos as well as number of images in X / Y 
                 xStart = minX; xStep = diffX
                 yStart = minY; yStep = diffY
-                nx, ny = self.get_num_xy_steps(mExperiment.pointList)
+                nx, ny = int((maxX-minX)//diffX), int((maxY-minY)//diffY)
                 if len(illuminationIntensites) == 1: illumination0 = illuminationIntensites[0]
                 else: illumination0 = illuminationIntensites[0] if len(illuminationIntensites) > 0 else None
                 if len(illuminationIntensites) == 2: illumination1 = illuminationIntensites[1]
@@ -433,12 +434,14 @@ class ExperimentController(ImConWidgetController):
                 else: illumination3 = illuminationIntensites[3] if len(illuminationIntensites) > 3 else None
                 if len(illuminationIntensites) == 1: led = illuminationIntensites[0]
                 else: led = illuminationIntensites[0] if len(illuminationIntensites) > 0 else None
+                # move to inital position first
+                self.move_stage_xy(posX=xStart, posY=yStart, relative=False)
                 self.startFastStageScanAcquisition(xstart=xStart, xstep=xStep, nx=nx,
                                                     ystart=yStart, ystep=yStep, ny=ny,      
                                                     tsettle=10, tExposure=50,
                                                     illumination0=illumination0, illumination1=illumination1,
                                                     illumination2=illumination2, illumination3=illumination3, led=led)
-                break
+                return
             mFilePaths = []
             tiff_writers = []
             for index, experiments_ in enumerate(mExperiment.pointList):
@@ -972,7 +975,7 @@ class ExperimentController(ImConWidgetController):
         nScan = min(nIlluminations + nLED, 1)
         total_frames = nx * ny * nScan
         self._logger.info(f"Stage‑scan: {nx}×{ny} ({total_frames} frames)")
-        self.stop()
+        self._stop() # ensure all prior runs are stopped
         # 1. prepare camera ----------------------------------------------------
         self.mDetector.stopAcquisition()
         #self.mDetector.NBuffer        = total_frames + 32   # head‑room

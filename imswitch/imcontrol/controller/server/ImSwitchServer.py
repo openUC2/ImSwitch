@@ -14,7 +14,6 @@ import shutil
 from fastapi.responses import FileResponse
 import zipfile
 import uvicorn
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -31,10 +30,7 @@ from typing import List, Dict
 from imswitch import IS_HEADLESS, __ssl__, __httpport__
 from imswitch.imcontrol.model import configfiletools
 from fastapi.responses import RedirectResponse
-
-
 import socket
-from fastapi.middleware.cors import CORSMiddleware
 import os
 import threading
 from fastapi.openapi.docs import (

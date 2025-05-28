@@ -123,7 +123,7 @@ class StageScanAcquisitionController(ImConWidgetController):
         self._stop_writer_evt.set()
         if self._writer_thread is not None:
             self._writer_thread.join(timeout=2)
-        self.camera.stop_live()
+        self.camera.stopAcquisition()
 
     @APIExport(runOnUIThread=False)
     def stopStageScanAcquisition(self):

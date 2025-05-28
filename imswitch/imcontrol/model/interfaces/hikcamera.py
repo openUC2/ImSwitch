@@ -4,7 +4,7 @@ import time
 import cv2
 from imswitch.imcommon.model import initLogger
 from skimage.filters import gaussian, median
-
+from typing import List, Optional, Union
 import sys
 import threading
 from ctypes import *
@@ -190,6 +190,26 @@ class CameraHIK:
         name = MVCC_STRINGVALUE(); self.camera.MV_CC_GetStringValue("DeviceModelName", name)
         return "UC" in name.chCurValue.decode()
 
+    def getTriggerTypes(self) -> List[str]:
+        """Return a list of available trigger types."""
+        if not self.is_connected:
+            return ["Camera not connected"]
+        return [
+            "Continuous (Free Run)",
+            "Software Trigger",
+            "External Trigger (LINE0)"
+        ]
+        
+    def getTriggerSource(self) -> str:
+        """Return the current trigger source as a string."""
+        if not self.is_connected:
+            return "Camera not connected"
+        if self.trigger_source == MV_TRIGGER_SOURCE_SOFTWARE:
+            return "Software Trigger"
+        elif self.trigger_source == MV_TRIGGER_SOURCE_LINE0:
+            return "External Trigger (LINE0)"
+        else:
+            return "Continuous (Free Run)"^
     # ---------------------------------------------------------------------
     # C callback factory ---------------------------------------------------
     # ---------------------------------------------------------------------

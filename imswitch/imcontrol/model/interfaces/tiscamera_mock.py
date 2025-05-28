@@ -89,6 +89,14 @@ class MockCameraTIS:
 
     suspend_live = stop_live  # alias for compatibility
 
+    def getTriggerSource(self):
+        """Match CameraHIK interface."""
+        return self.trigger_source.value
+    
+    def getTriggerTypes(self):
+        """Match CameraHIK interface."""
+        return [TriggerSource.CONTINUOUS.value, TriggerSource.SOFTWARE.value, TriggerSource.EXTERNAL.value] 
+    
     def flushBuffer(self):
         self.frame_buffer.clear()
         self.frameid_buffer.clear()
@@ -209,7 +217,7 @@ class MockCameraTIS:
             idx = np.random.choice(self.SensorHeight * self.SensorWidth, 200, replace=False)
             img.flat[idx] = np.random.randint(500, 4000, size=200)
 
-        if self._isRGB:
+        if self.isRGB:
             return np.stack([img, img, img], axis=-1)
         return img
 

@@ -484,6 +484,10 @@ class SettingsController(ImConWidgetController):
 
             for parameterName, parameter in dManager.parameters.items():
                 self.setSharedAttr(dName, parameterName, parameter.value, isDetectorParameter=True)
+    @APIExport()
+    def sendSoftwareTrigger(self):
+        """ Sends a software trigger to the current detector. """
+        self._master.detectorsManager.execOnCurrent(lambda c: c.sendSoftwareTrigger())
 
     @APIExport()
     def setDetectorCompressionrate(self, compressionrate:int=80):
@@ -600,6 +604,20 @@ class SettingsController(ImConWidgetController):
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'trigger_source', triggerType)
         
+    @APIExport(runOnUIThread=True)
+    def getDetectorTriggerTypes(self, detectorName: str=None) -> List[str]:
+        """ Returns the available trigger types for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        return self._master.detectorsManager[detectorName].getTriggerTypes()
+    
+    @APIExport(runOnUIThread=True)
+    def getDetectorCurrentTriggerType(self, detectorName: str=None) -> str:
+        """ Returns the current trigger type for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        return self._master.detectorsManager[detectorName].getCurrentTriggerType()
+    
     @APIExport(runOnUIThread=True)
     def setDetectorPreviewMinMaxValue(self, detectorName: str=None, minValue: int=0, maxValue: int = 1024) -> None:
         """ Sets the preview minimum value for the specified detector. """

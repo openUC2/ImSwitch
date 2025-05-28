@@ -198,6 +198,7 @@ class CameraHIK:
         self.frameid_buffer.append(fid)
         self.frameNumber = fid
         self.timestamp   = ts
+        #print("frame received:", fid, "timestamp:", ts)
     
     def _wrap_cb(self, user_cb):
 

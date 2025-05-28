@@ -44,12 +44,13 @@ class StageScanAcquisitionController(ImConWidgetController):
     # -------------------------------------------------------------------------
     @APIExport(runOnUIThread=False)
     def startStageScanAcquisition(self,
-                      xstart:float=0, xstep:float=1, nx:int=100,
-                      ystart:float=0, ystep:float=1, ny:int=100,
-                      tsettle:float=0.1, tExposure:float=50,
-                      illumination:float=None, led:float=None):
+                      xstart:float=0, xstep:float=500, nx:int=10,
+                      ystart:float=0, ystep:float=500, ny:int=10,
+                      tsettle:float=10, tExposure:float=50,
+                      illumination0:int=None, illumination1:int=None,
+                      illumination2:int=None, illumination3:int=None, led:float=None):
         """Full workflow: arm camera ➔ launch writer ➔ execute scan."""
-
+        illumination = (illumination0, illumination1, illumination2, illumination3)
         total_frames = nx * ny
         self._logger.info(f"Stage‑scan: {nx}×{ny} ({total_frames} frames)")
 

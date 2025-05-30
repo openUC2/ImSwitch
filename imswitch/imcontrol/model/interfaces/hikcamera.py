@@ -78,6 +78,7 @@ class CameraHIK:
         self.SensorWidth = 0
         self.frame = np.zeros((self.SensorHeight, self.SensorWidth))
 
+        self.lastFrameFromBuffer = None
         self.lastFrameId = -1
         self.frameNumber = -1
         self.g_bExit = False
@@ -459,6 +460,8 @@ class CameraHIK:
         while not self.frame_buffer:
             if time.time() - t0 > timeout:
                 return (None, None) if returnFrameNumber else None
+            if self.lastFrameFromBuffer is not None: # in case we are in trigger mode
+                return (self.lastFrameFromBuffer, self.lastFrameId) if returnFrameNumber else self.lastFrameFromBuffer
             time.sleep(0.005)
 
         if returnFrameNumber:
@@ -474,6 +477,8 @@ class CameraHIK:
         frames = list(self.frame_buffer)
         ids    = list(self.frameid_buffer)
         self.flushBuffer()
+        
+        self.lastFrameFromBuffer = frames[-1] if frames else None
         return np.array(frames), np.array(ids)
 
     def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):

@@ -136,12 +136,12 @@ class DataFileDirs(FileDirs):
     Libs = os.path.join(_baseDataFilesDir, 'libs')
     UserDefaults = os.path.join(_baseDataFilesDir, 'user_defaults')
 
-
+#TODO: THIS IS A MESS! We need to find a better way to handle the default data path
 class UserFileDirs(FileDirs):
     """ Catalog of directories that contain user configuration files. """
     Root = _baseUserFilesDir
     Config = os.path.join(_baseUserFilesDir, 'config')
-    Data = _baseUserFilesDir
+    Data = os.path.join(_baseUserFilesDir, 'data')  
     if DEFAULT_DATA_PATH is not None:
         Data = DEFAULT_DATA_PATH
     if SCAN_EXT_DATA_FOLDER and EXT_DRIVE_MOUNT is not None:

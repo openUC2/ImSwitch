@@ -260,6 +260,19 @@ class LaserController(ImConWidgetController):
         return self._master.lasersManager.getAllDeviceNames()
 
     @APIExport()
+    def getLaserValueRanges(self, laserName: str) -> List[Union[int, float, None]]:
+        """ Returns the value range of the specified laser as a tuple
+        (min, max). If the laser can only be turned on/off, returns None. """
+        try:
+            lManager = self._master.lasersManager[laserName]
+            if lManager.isBinary:
+                return None
+            else:
+                return (lManager.valueRangeMin, lManager.valueRangeMax)
+        except KeyError:
+            return None
+        
+    @APIExport()
     def getLaserValue(self, laserName: str) -> Union[int, float]:
         """ Returns the value of the specified laser, in the units that the
         laser uses. """

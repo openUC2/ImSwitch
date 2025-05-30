@@ -141,6 +141,8 @@ class DetectorManager(SignalInterface):
                 '''
                 eventually manipulate the image before sending it
                 we have 255 levels of gray, so we can use the min and max values to scale the image
+                
+                TODO: not ideal as we scale noise, but we need to do this for the preview
                 '''
                 def stretch_pixels(image_12bit, lower_clip, upper_clip):
                     # Clamping to the range [lower_clip, upper_clip]

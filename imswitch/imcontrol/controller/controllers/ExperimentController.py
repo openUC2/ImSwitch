@@ -220,8 +220,8 @@ class ExperimentController(ImConWidgetController):
         '''
         # where to dump the TIFFs ----------------------------------------------
         save_dir = dirtools.UserFileDirs.Data
-        self.save_dir  = Path(save_dir or Path.home() / "scan")
-        self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.save_dir  = os.path.join(save_dir, "ExperimentController")
+        os.mkdir(self.save_dir) if not os.path.exists(self.save_dir) else None
 
         # writer thread control -------------------------------------------------
         self._writer_thread   = None
@@ -423,7 +423,7 @@ class ExperimentController(ImConWidgetController):
                 # need to compute the pos/net dx and dy and center pos as well as number of images in X / Y 
                 xStart = minX; xStep = diffX
                 yStart = minY; yStep = diffY
-                nx, ny = int((maxX-minX)//diffX), int((maxY-minY)//diffY)
+                nx, ny = int((maxX-minX)//diffX)+1, int((maxY-minY)//diffY)+1
                 if len(illuminationIntensites) == 1: illumination0 = illuminationIntensites[0]
                 else: illumination0 = illuminationIntensites[0] if len(illuminationIntensites) > 0 else None
                 if len(illuminationIntensites) == 2: illumination1 = illuminationIntensites[1]
@@ -435,7 +435,7 @@ class ExperimentController(ImConWidgetController):
                 if len(illuminationIntensites) == 1: led = illuminationIntensites[0]
                 else: led = illuminationIntensites[0] if len(illuminationIntensites) > 0 else None
                 # move to inital position first
-                self.move_stage_xy(posX=xStart, posY=yStart, relative=False)
+                # xStart/ySTart => 0 means we start from that position 
                 self.startFastStageScanAcquisition(xstart=xStart, xstep=xStep, nx=nx,
                                                     ystart=yStart, ystep=yStep, ny=ny,      
                                                     tsettle=10, tExposure=50,
@@ -969,13 +969,15 @@ class ExperimentController(ImConWidgetController):
                       illumination0:int=None, illumination1:int=None,
                       illumination2:int=None, illumination3:int=None, led:float=None):
         """Full workflow: arm camera ➔ launch writer ➔ execute scan."""
+        self._stop() # ensure all prior runs are stopped
+        self.move_stage_xy(posX=xstart, posY=ystart, relative=False)
+
         illumination = (illumination0, illumination1, illumination2, illumination3)
         nIlluminations = sum(1 for i in illumination if i is not None)
         nLED = 1 if led is not None else 0
         nScan = min(nIlluminations + nLED, 1)
         total_frames = nx * ny * nScan
         self._logger.info(f"Stage‑scan: {nx}×{ny} ({total_frames} frames)")
-        self._stop() # ensure all prior runs are stopped
         # 1. prepare camera ----------------------------------------------------
         self.mDetector.stopAcquisition()
         #self.mDetector.NBuffer        = total_frames + 32   # head‑room
@@ -985,19 +987,70 @@ class ExperimentController(ImConWidgetController):
         self.mDetector.flushBuffers()
         self.mDetector.startAcquisition()
 
+        # compute the metadata for the stage scan (e.g. x/y coordinates and illumination channels)
+        # stage will start at xstart, ystart and move in steps of xstep, ystep in snake scan logic 
+        def addDataPoint(metadataList,x,y,illuminationChannel, illuminationValue, runningNumber):
+            """Helper function to add metadata to the list."""
+            metadataList.append({
+                "x": x,
+                "y": y,
+                "illuminationChannel": illuminationChannel,
+                "illuminationValue": illuminationValue,
+                "runningNumber": runningNumber
+            })
+            return metadataList
+        metadataList = []
+        runningNumber = 0
+        for iy in range(ny):
+            for ix in range(nx):
+                x = xstart + ix * xstep
+                y = ystart + iy * ystep
+                if iy % 2 == 1:
+                    x = xstart + (nx - 1 - ix) * xstep
+                
+                # determine which illumination channel to use
+                if (nIlluminations + nLED):
+                    # in that case the current illumination that is already turned on is kept and only one image is taken 
+                    illuminationChannel = "default"
+                    illuminationValue = -1
+                    runningNumber += 1
+                    metadataList = addDataPoint(metadataList,x,y,illuminationChannel, illuminationValue, runningNumber)
+                else:
+                    if illumination0 is not None or illumination0 > 0:
+                        illuminationChannel = "illumination0"
+                        illuminationValue = illumination0
+                        runningNumber += 1
+                        metadataList = addDataPoint(metadataList,x,y,illuminationChannel, illuminationValue, runningNumber)
+                    if illumination1 is not None or illumination1 > 0:
+                        illuminationChannel = "illumination1"
+                        illuminationValue = illumination1
+                        runningNumber += 1
+                        metadataList = addDataPoint(metadataList,x,y,illuminationChannel, illuminationValue, runningNumber)
+                    if illumination2 is not None or illumination2 > 0:
+                        illuminationChannel = "illumination2"
+                        illuminationValue = illumination2
+                        runningNumber += 1
+                        metadataList = addDataPoint(metadataList,x,y,illuminationChannel, illuminationValue, runningNumber)
+                    if illumination3 is not None or illumination3 > 0:
+                        illuminationChannel = "illumination3"
+                        illuminationValue = illumination3
+                        runningNumber += 1
+                        metadataList = addDataPoint(metadataList,x,y,illuminationChannel, illuminationValue, runningNumber)
+
+
         # 2. start writer thread ----------------------------------------------
         self._stop_writer_evt.clear()
         self._writer_thread = threading.Thread(
             target=self._writer_loop,
-            args=(total_frames,),
+            args=(total_frames,metadataList,),
             daemon=True,
         )
         self._writer_thread.start()
 
         # 3. execute stage scan (blocks until finished) ------------------------
         self.mStage.start_stage_scanning(
-            xstart=xstart, xstep=xstep, nx=nx,
-            ystart=ystart, ystep=ystep, ny=ny,
+            xstart=0, xstep=xstep, nx=nx,
+            ystart=0, ystep=ystep, ny=ny,
             tsettle=tsettle, tExposure=tExposure,
             illumination=illumination, led=led,
         )
@@ -1006,7 +1059,7 @@ class ExperimentController(ImConWidgetController):
     # -------------------------------------------------------------------------
     # internal helpers
     # -------------------------------------------------------------------------
-    def _writer_loop(self, n_expected: int):
+    def _writer_loop(self, n_expected: int, metadataList: list):
         """
         Bulk-writer that uses the (frames, ids) tuple returned by camera.getChunk().
         The call is non-blocking; it returns empty arrays until new frames arrive.
@@ -1021,9 +1074,11 @@ class ExperimentController(ImConWidgetController):
                 continue
 
             for frame, fid in zip(frames, ids):
-                tif.imwrite(self.save_dir / f"{fid:06d}.tif", frame)
+                currentMetadata = metadataList[fid] if fid < len(metadataList) else {}
+                fileName = os.path.join(self.save_dir,  f"FastScan_{currentMetadata['runningNumber']}_x_{currentMetadata['x']}_y_{currentMetadata['y']}_illu-{currentMetadata['illuminationChannel']}_{currentMetadata['illuminationValue']}{fid:06d}.tif")
+                tif.imwrite(fileName, frame)
                 saved += 1
-                self._logger.debug(f"saved {saved}/{n_expected}")
+                self._logger.debug(f"saved {saved}/{n_expected} under {fileName}")
 
         self._logger.info(f"Writer thread finished ({saved} images).")
         # 4. wait for writer to finish then stop camera ------------------------

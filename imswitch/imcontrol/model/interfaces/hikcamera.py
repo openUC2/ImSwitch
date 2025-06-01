@@ -222,7 +222,10 @@ class CameraHIK:
         #print("frame received:", fid, "timestamp:", ts)
     
     def _wrap_cb(self, user_cb):
-
+        '''
+        Wrap a user callback function to be used with the SDK.
+        The main task is to convert the SDK buffer into a NumPy array and
+        pass it to the user callback.'''
         @CALLBACK_SIG
         def _cb(pData, pInfo, _):
             info = pInfo.contents
@@ -271,10 +274,10 @@ class CameraHIK:
                 return
 
             # push into ring buffers for later use
-            self.frame_buffer.append(frame)
-            self.frameid_buffer.append(fid)
-            self.frameNumber = fid
-            self.timestamp   = ts
+            #self.frame_buffer.append(frame)
+            #self.frameid_buffer.append(fid)
+            #self.frameNumber = fid
+            #self.timestamp   = ts
 
             # pass to user callback
             user_cb(frame, fid, ts)

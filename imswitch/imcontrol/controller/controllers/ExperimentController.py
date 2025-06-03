@@ -3,17 +3,15 @@ import time
 from fastapi import HTTPException
 import numpy as np
 import tifffile as tif
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, List, Optional, Dict, Union
 import os
 import uuid
-import threading
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
-from imswitch.imcommon.model import dirtools, initLogger, APIExport
+from imswitch.imcommon.model import initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
-from pydantic import BaseModel, Field
 
 # Import the new component classes
 from .experiment_controller import (
@@ -34,14 +32,12 @@ try:
 except ImportError:
     IS_OMEZARR_AVAILABLE = False
 
-# -----------------------------------------------------------
-# Reuse the existing sub-models:
-# -----------------------------------------------------------
 class NeighborPoint(BaseModel):
     x: float
     y: float
     iX: int
     iY: int
+
 
 class Point(BaseModel):
     id: uuid.UUID
@@ -52,11 +48,12 @@ class Point(BaseModel):
     iY: int = 0
     neighborPointList: List[NeighborPoint]
 
+
 class ParameterValue(BaseModel):
-    illumination: Union[List[str], str] = None # X, Y, nX, nY
-    illuIntensities: Union[List[Optional[int]], Optional[int]] = None 
+    illumination: Union[List[str], str] = None  # X, Y, nX, nY
+    illuIntensities: Union[List[Optional[int]], Optional[int]] = None
     brightfield: bool = 0,
-    darkfield: bool = 0, 
+    darkfield: bool = 0,
     differentialPhaseContrast: bool = 0,
     timeLapsePeriod: float
     numberOfImages: int
@@ -74,6 +71,7 @@ class ParameterValue(BaseModel):
     speed: float = 20000.0
     performanceMode: bool = False
 
+
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
     name: str
@@ -83,10 +81,7 @@ class Experiment(BaseModel):
     # From your old "ExperimentModel":
     number_z_steps: int = Field(0, description="Number of Z slices")
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
-    
-    # -----------------------------------------------------------
-    # A helper to produce the "configuration" dict 
-    # -----------------------------------------------------------
+
     def to_configuration(self) -> dict:
         """
         Convert this Experiment into a dict structure that your Zarr writer or
@@ -102,11 +97,10 @@ class Experiment(BaseModel):
             },
         }
         return config
-    
-    
+
+
 class ExperimentWorkflowParams(BaseModel):
     """Parameters for the experiment workflow."""
-
 
     # Illumination parameters
     illuSources: List[str] = Field(default_factory=list, description="List of illumination sources")
@@ -122,7 +116,7 @@ class ExperimentWorkflowParams(BaseModel):
     isDPCpossible: bool = Field(False, description="Whether DPC is possible")
     isDarkfieldpossible: bool = Field(False, description="Whether darkfield is possible")
 
-    # timelapse parameters 
+    # timelapse parameters
     timeLapsePeriodMin: float = Field(0, description="Minimum time for a timelapse series")
     timeLapsePeriodMax: float = Field(100000000, description="Maximum time for a timelapse series in seconds")
     numberOfImagesMin: int = Field(0, description="Minimum time for a timelapse series")
@@ -136,8 +130,6 @@ class ExperimentWorkflowParams(BaseModel):
     zStackStepSizeMin: float = Field(1, description="Minimum Z-stack position")
     zStackStepSizeMax: float = Field(1000, description="Maximum Z-stack position")
     performanceMode: bool = Field(False, description="Whether to use performance mode for the experiment - this would be executing the scan on the Cpp hardware directly, not on the Python side.")
-    
-      
 
 class ExperimentController(ImConWidgetController):
     """Linked to ExperimentWidget."""

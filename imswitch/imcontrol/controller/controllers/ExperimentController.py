@@ -372,6 +372,14 @@ class ExperimentController(ImConWidgetController):
         minX, maxX, minY, maxY, diffX, diffY = self.computeScanRanges(snake_tiles)
         mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
 
+        # Prepare directory and filename for saving
+        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        drivePath = dirtools.UserFileDirs.Data
+        dirPath = os.path.join(drivePath, 'recordings', timeStamp)
+        if not os.path.exists(dirPath):
+            os.makedirs(dirPath)
+        mFileName = f"{timeStamp}_{exp_name}"
+
         # Prepare OME-Zarr writer (new)
         # fill ome model
         if IS_OMEZARR_AVAILABLE:
@@ -403,12 +411,7 @@ class ExperimentController(ImConWidgetController):
         step_id = 0
 
         for t in range(nTimes):
-            # Prepare TIFF writer
-            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            drivePath = dirtools.UserFileDirs.Data
-            dirPath = os.path.join(drivePath, 'recordings', timeStamp)
-            if not os.path.exists(dirPath):
-                os.makedirs(dirPath)
+            # Prepare TIFF writer - reuse timeStamp, dirPath from above
             # if performanceMode is True, we will execute on the Hardware directly
             if performanceMode:
                 self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
@@ -451,7 +454,6 @@ class ExperimentController(ImConWidgetController):
             tiff_writers = []
             for index, experiments_ in enumerate(mExperiment.pointList):
                 experimentName = experiments_.name
-                mFileName = f"{timeStamp}_{exp_name}"
                 mFilePath = os.path.join(dirPath, mFileName + str(index) + "_" + experimentName + "_" + ".ome.tif")
                 mFilePaths.append(mFilePath)
                 self._logger.debug(f"OME-TIFF path: {mFilePath}")

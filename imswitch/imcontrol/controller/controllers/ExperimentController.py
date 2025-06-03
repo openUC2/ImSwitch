@@ -2,49 +2,37 @@ from datetime import datetime
 import time
 from fastapi import HTTPException
 import numpy as np
-import scipy.ndimage as ndi
-import scipy.signal as signal
-import skimage.transform as transform
 import tifffile as tif
 from pydantic import BaseModel
-from typing import Any, List, Optional, Dict, Any, Union
-import os 
-import uuid
+from typing import Any, List, Optional, Dict, Union
 import os
-import time
+import uuid
 import threading
-import collections
-import tifffile as tif
-from pathlib import Path
-
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
-from pydantic import BaseModel
-import numpy as np
+from pydantic import BaseModel, Field
+
+# Import the new component classes
+from .experiment_controller import (
+    ProtocolManager, HardwareInterface, PerformanceModeExecutor, FileIOManager
+)
 
 try:
     from ashlarUC2 import utils
-    from ashlarUC2.scripts.ashlar import process_images
     IS_ASHLAR_AVAILABLE = True
-except Exception as e:
+except ImportError:
     IS_ASHLAR_AVAILABLE = False
-    
+
 # Attempt to use OME-Zarr
 try:
     from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
     from imswitch.imcontrol.controller.controllers.experiment_controller.single_multiscale_zarr_data_source import SingleMultiscaleZarrWriter
-    IS_OMEZARR_AVAILABLE = False # TODO: True
-except Exception as e:
+    IS_OMEZARR_AVAILABLE = False  # TODO: True
+except ImportError:
     IS_OMEZARR_AVAILABLE = False
-
-from imswitch.imcontrol.controller.controllers.experiment_controller.OmeTiffStitcher import OmeTiffStitcher
-
-from pydantic import BaseModel, Field
-from typing import List, Optional, Tuple, Dict
-import uuid
 
 # -----------------------------------------------------------
 # Reuse the existing sub-models:
@@ -162,73 +150,51 @@ class ExperimentController(ImConWidgetController):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
 
-        # initialize variables
+        # Initialize variables
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
         self.mFilePaths = []
         self.isPreview = False
-        
-        # set default values
+
+        # Initialize component managers
+        self.hardware = HardwareInterface(self._master, self._commChannel)
+        self.protocol_manager = ProtocolManager()
+        self.file_io_manager = FileIOManager()
+        self.performance_executor = PerformanceModeExecutor(
+            self.hardware, self.file_io_manager.base_save_dir
+        )
+
+        # Set default speeds (now handled by HardwareInterface)
         self.SPEED_Y_default = 20000
         self.SPEED_X_default = 20000
         self.SPEED_Z_default = 20000
         self.ACCELERATION = 500000
-        
-        # select detectors
-        allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
-        self.mDetector = self._master.detectorsManager[allDetectorNames[0]]
-        self.isRGB = self.mDetector._camera.isRGB
-        self.detectorPixelSize = self.mDetector.pixelSizeUm
-        
-        # select lasers
-        self.allIlluNames = self._master.lasersManager.getAllDeviceNames()+ self._master.LEDMatrixsManager.getAllDeviceNames()
-        self.availableIlliminations = []
-        for iDevice in self.allIlluNames:
-            try:
-                # laser maanger
-                self.availableIlliminations.append(self._master.lasersManager[iDevice])
-            except:
-                # lexmatrix manager
-                self.availableIlliminations.append(self._master.LEDMatrixsManager[iDevice])
-              
-        # select stage
-        self.allPositionerNames = self._master.positionersManager.getAllDeviceNames()[0]
-        try:
-            self.mStage = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
-        except:
-            self.mStage = None
-            
-        # stop if some external signal (e.g. memory full is triggered)
+
+        # Legacy properties for backwards compatibility
+        self.mDetector = self.hardware.mDetector
+        self.isRGB = self.hardware.is_rgb
+        self.detectorPixelSize = self.hardware.detector_pixel_size
+        self.allIlluNames = self.hardware.all_illumination_names
+        self.availableIlliminations = self.hardware.available_illuminations
+        self.mStage = self.hardware.mStage
+
+        # Stop if external signal (e.g. memory full) is triggered
         self._commChannel.sigExperimentStop.connect(self.stopExperiment)
-            
-        # TODO: Adjust parameters 
-        # define changeable Experiment parameters as ExperimentWorkflowParams
+
+        # Define changeable Experiment parameters
         self.ExperimentParams = ExperimentWorkflowParams()
         self.ExperimentParams.illuSources = self.allIlluNames
-        self.ExperimentParams.illuSourceMinIntensities = [0]*len(self.allIlluNames)
-        self.ExperimentParams.illuSourceMaxIntensities = [1023]*len(self.allIlluNames)
-        self.ExperimentParams.illuIntensities = [0]*len(self.allIlluNames)
-        self.ExperimentParams.exposureTimes = 1000000 # TODO: FIXME
-        self.ExperimentParams.gains = [23] # TODO: FIXME
+        self.ExperimentParams.illuSourceMinIntensities = [0] * len(self.allIlluNames)
+        self.ExperimentParams.illuSourceMaxIntensities = [1023] * len(self.allIlluNames)
+        self.ExperimentParams.illuIntensities = [0] * len(self.allIlluNames)
+        self.ExperimentParams.exposureTimes = 1000000  # TODO: FIXME
+        self.ExperimentParams.gains = [23]  # TODO: FIXME
         self.ExperimentParams.isDPCpossible = False
         self.ExperimentParams.isDarkfieldpossible = False
         self.ExperimentParams.performanceMode = False
-        
-        '''
-        For Fast Scanning - Performance Mode -> Parameters will be sent to the hardware directly
-        requires hardware triggering
-        '''
-        # where to dump the TIFFs ----------------------------------------------
-        save_dir = dirtools.UserFileDirs.Data
-        self.save_dir  = os.path.join(save_dir, "ExperimentController")
-        os.mkdir(self.save_dir) if not os.path.exists(self.save_dir) else None
 
-        # writer thread control -------------------------------------------------
-        self._writer_thread   = None
-        self._stop_writer_evt = threading.Event()
-        
-        # fast stage scanning parameters ----------------------------------------
-        self.fastStageScanIsRunning = False
+        # Legacy performance mode properties
+        self.fastStageScanIsRunning = self.performance_executor.is_scan_running()
 
         
     @APIExport(requestType="GET")
@@ -236,54 +202,16 @@ class ExperimentController(ImConWidgetController):
         return self.ExperimentParams
 
     def get_num_xy_steps(self, pointList):
-        # we don't consider the center point as this .. well in the center
-        if len(pointList) == 0:
-            return 1,1
-        all_iX = []
-        all_iY = []
-        for point in pointList:
-            all_iX.append(point.iX)
-            all_iY.append(point.iY)
-        min_iX, max_iX = min(all_iX), max(all_iX)
-        min_iY, max_iY = min(all_iY), max(all_iY)
-
-        num_x_steps = (max_iX - min_iX) + 1
-        num_y_steps = (max_iY - min_iY) + 1
-
-        return num_x_steps, num_y_steps
+        """Delegate to ProtocolManager."""
+        return self.protocol_manager.get_num_xy_steps(pointList)
 
     def generate_snake_tiles(self, mExperiment):
-        tiles = []
-        for iCenter, centerPoint in enumerate(mExperiment.pointList):
-            # Collect central and neighbour points (without duplicating the center)
-            allPoints = [(n.x, n.y) for n in centerPoint.neighborPointList]
-            # Sort by y then by x (i.e., raster order)
-            allPoints.sort(key=lambda coords: (coords[1], coords[0]))
+        """Delegate to ProtocolManager."""
+        return self.protocol_manager.generate_snake_tiles(mExperiment)
 
-            num_x_steps, num_y_steps = self.get_num_xy_steps(centerPoint.neighborPointList)
-            allPointsSnake = [0] * (num_x_steps * num_y_steps)
-            iTile = 0
-            for iY in range(num_y_steps):
-                for iX in range(num_x_steps):
-                    if iY % 2 == 1 and num_x_steps != 1:
-                        mIdex = iY * num_x_steps + num_x_steps - 1 - iX
-                    else:
-                        mIdex = iTile
-                    if len(allPointsSnake) <= mIdex or len(allPoints) <= iTile: 
-                        # remove that index from allPointsSnake
-                        allPointsSnake[mIdex] = None
-                        continue
-                    allPointsSnake[mIdex] = {
-                        "iterator": iTile,
-                        "centerIndex": iCenter,
-                        "iX": iX,
-                        "iY": iY,
-                        "x": allPoints[iTile][0],
-                        "y": allPoints[iTile][1],
-                    }
-                    iTile += 1
-            tiles.append(allPointsSnake)
-        return tiles
+    def computeScanRanges(self, snake_tiles):
+        """Delegate to ProtocolManager."""
+        return self.protocol_manager.compute_scan_ranges(snake_tiles)
 
     @APIExport()
     def getLastFilePathsList(self) -> List[str]:
@@ -296,177 +224,137 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
-        # Extract key parameters
+        # Extract and validate parameters using ProtocolManager
+        validated_params = self.protocol_manager.validate_experiment_parameters(mExperiment)
+        
         exp_name = mExperiment.name
-        p = mExperiment.parameterValue
         
-        # Timelapse-related
-        nTimes = p.numberOfImages
-        tPeriod = p.timeLapsePeriod
+        # Extract validated parameters
+        illumination_sources = validated_params['illumination_sources']
+        illumination_intensities = validated_params['illumination_intensities']
+        gains = validated_params['gains']
+        exposures = validated_params['exposures']
+        performance_mode = validated_params['performance_mode']
+        is_z_stack = validated_params['is_z_stack']
+        is_autofocus = validated_params['is_autofocus']
+        n_times = validated_params['n_times']
+        t_period = validated_params['t_period']
+        z_stack_min = validated_params['z_stack_min']
+        z_stack_max = validated_params['z_stack_max']
+        z_stack_step = validated_params['z_stack_step']
+        autofocus_min = validated_params['autofocus_min']
+        autofocus_max = validated_params['autofocus_max']
+        autofocus_step = validated_params['autofocus_step']
         
-        # Z-steps -related
-        nZSteps = int((mExperiment.parameterValue.zStackMax-mExperiment.parameterValue.zStackMin)//mExperiment.parameterValue.zStackStepSize)+1
-        isZStack = p.zStack
-        zStackMin = p.zStackMin
-        zStackMax = p.zStackMax
-        zStackStepSize = p.zStackStepSize
-        
-        # Illumination-related
-        illuSources = p.illumination
-        illuminationIntensites = p.illuIntensities
-        if type(illuminationIntensites) is not List  and type(illuminationIntensites) is not list: illuminationIntensites = [p.illuIntensities]
-        if type(illuSources) is not List  and type(illuSources) is not list: illuSources = [p.illumination]
-        isDarkfield = p.darkfield
-        isBrightfield = p.brightfield
-        isDPC = p.differentialPhaseContrast
-        
-        # check if we want to use performance mode
-        performanceMode = p.performanceMode
-        
-        # camera-related
-        gains = p.gains
-        exposures = p.exposureTimes
-        if p.speed <= 0:
+        # Set movement speeds
+        speed = validated_params['speed']
+        if speed:
+            self.SPEED_X = speed
+            self.SPEED_Y = speed
+            self.SPEED_Z = speed
+        else:
             self.SPEED_X = self.SPEED_X_default
             self.SPEED_Y = self.SPEED_Y_default
             self.SPEED_Z = self.SPEED_Z_default
-        else: 
-            self.SPEED_X = p.speed
-            self.SPEED_Y = p.speed
-            self.SPEED_Z = p.speed
-        
-        # Autofocus Related
-        isAutoFocus = p.autoFocus
-        autofocusMax = p.autoFocusMax
-        autofocusMin = p.autoFocusMin
-        autofocusStepSize = p.autoFocusStepSize
-        
-        # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
-        if type(gains) is not List and type(gains) is not list: gains = [gains]
-        if type(exposures) is not List and type(exposures) is not list: exposures = [exposures]
-        if len(gains) != len(illuSources): gains = [-1]*len(illuSources)
-        if len(exposures) != len(illuSources): exposures = [exposures[0]]*len(illuSources)
-
 
         # Check if another workflow is running
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
             raise HTTPException(status_code=400, detail="Another workflow is already running.")
 
         # Start the detector if not already running
-        if not self.mDetector._running:
-            self.mDetector.startAcquisition()
+        self.hardware.start_detector_acquisition()
 
         # Generate the list of points to scan based on snake scan
-        if p.resortPointListToSnakeCoordinates:
-            pass # TODO: we need an alternative case 
+        if mExperiment.parameterValue.resortPointListToSnakeCoordinates:
+            pass  # TODO: we need an alternative case
         snake_tiles = self.generate_snake_tiles(mExperiment)
-        # remove none values from all_points list 
+        # remove none values from all_points list
         snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
-            
-        # Generate Z-positions 
-        currentZ = self.mStage.getPosition()["Z"]
-        if isZStack:
-            z_positions = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize) + currentZ
+
+        # Generate Z-positions
+        current_position = self.hardware.get_current_position()
+        current_z = current_position["Z"]
+        if is_z_stack:
+            z_positions = np.arange(z_stack_min, z_stack_max + z_stack_step, z_stack_step) + current_z
         else:
-            z_positions = [currentZ]  # Get current Z position
+            z_positions = [current_z]  # Get current Z position
         minX, maxX, minY, maxY, diffX, diffY = self.computeScanRanges(snake_tiles)
         mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
 
-        # Prepare OME-Zarr writer (new)
-        # fill ome model
-        if IS_OMEZARR_AVAILABLE:
-            ome_store = None
-            zarr_path = os.path.join(dirPath, mFileName + ".ome.zarr")
-            self._logger.debug(f"OME-Zarr path: {zarr_path}")
-            if 0:
-                ome_store = MinimalZarrDataSource(file_name=zarr_path, mode="w")
-                # Configure it from your model
-                mExperiment.x_pixels, mExperiment.y_pixels=self.mDetector._shape[-2],self.mDetector._shape[-1]
-                mExperiment.number_z_steps = nZSteps
-                mExperiment.timepoints = nTimes
-                exp_config = mExperiment.to_configuration()
-                ome_store.set_metadata_from_configuration_experiment(exp_config)
-            else:
-                ome_store = SingleMultiscaleZarrWriter(zarr_path, "w")
-                # compute max coordinates for x/y
-                fovX = int(maxX - minX + diffX)
-                fovY = int(maxY - minY + diffY)
-                
-                ome_store.set_metadata(t=nTimes, c=1, z=nZSteps, bigY=fovY, bigX=fovX)
-                ome_store.open_store()
+        # Setup file I/O 
+        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dirPath = self.file_io_manager.create_experiment_directory(exp_name)
 
-            
+        # Prepare OME-Zarr writer setup variables
+        z_steps = validated_params['z_steps']
+        
+        # if performance_mode is True, we will execute on the Hardware directly
+        if performance_mode:
+            self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
+            for snake_tile in snake_tiles:
+                # wait if there is another fast stage scan running
+                self.performance_executor.wait_for_scan_completion()
+                
+                # need to compute the position ranges for this tile
+                xStart, xEnd, yStart, yEnd, xStep, yStep = self.computeScanRanges([snake_tile])
+                nx, ny = int((xEnd - xStart) // xStep) + 1, int((yEnd - yStart) // yStep) + 1
+                
+                # Extract illumination values
+                illumination0 = illumination_intensities[0] if len(illumination_intensities) > 0 else None
+                illumination1 = illumination_intensities[1] if len(illumination_intensities) > 1 else None
+                illumination2 = illumination_intensities[2] if len(illumination_intensities) > 2 else None
+                illumination3 = illumination_intensities[3] if len(illumination_intensities) > 3 else None
+                
+                # Find LED intensity
+                led_index = next((i for i, item in enumerate(illumination_sources) 
+                                if "led" in item.lower()), None)
+                led = min(illumination_intensities[led_index], 255) if led_index is not None else 0
+                
+                if nx > 100 or ny > 100:
+                    self._logger.error("Too many points in X/Y direction. Please reduce the number of points.")
+                    raise HTTPException(status_code=400, 
+                                      detail="Too many points in X/Y direction. Please reduce the number of points.")
+                
+                # Execute fast stage scan using performance executor
+                self.performance_executor.start_fast_stage_scan_acquisition(
+                    xstart=xStart, xstep=xStep, nx=nx,
+                    ystart=yStart, ystep=yStep, ny=ny,
+                    tsettle=90, tExposure=50,  # TODO: make these parameters adjustable
+                    illumination0=illumination0, illumination1=illumination1,
+                    illumination2=illumination2, illumination3=illumination3, 
+                    led=led
+                )
+            return {"status": "running", "store_path": []} 
+        # Setup for regular workflow mode (non-performance)
+        # Prepare OME-Zarr writer if available
+        ome_store = None
+        if IS_OMEZARR_AVAILABLE:
+            zarr_path = os.path.join(dirPath, f"{timeStamp}_{exp_name}.ome.zarr")
+            # compute max coordinates for x/y
+            fovX = int(maxX - minX + diffX)
+            fovY = int(maxY - minY + diffY)
+            ome_store = self.file_io_manager.setup_omezarr_store(
+                zarr_path, n_times, z_steps, fovX, fovY
+            )
         else:
-            self._logger.error("OME-ZARR not available or not installed.")
+            self._logger.warning("OME-ZARR not available or not installed.")
+
+        # Setup TIFF writers using FileIOManager
+        tiff_writers = self.file_io_manager.setup_tiff_writers(
+            mExperiment.pointList, dirPath, exp_name
+        )
 
         workflowSteps = []
         step_id = 0
 
-        for t in range(nTimes):
-            # Prepare TIFF writer
-            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            drivePath = dirtools.UserFileDirs.Data
-            dirPath = os.path.join(drivePath, 'recordings', timeStamp)
-            if not os.path.exists(dirPath):
-                os.makedirs(dirPath)
-            # if performanceMode is True, we will execute on the Hardware directly
-            if performanceMode:
-                self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
-                for snake_tile in snake_tiles:
-                    # we need to wait if there is another fast stage scan running
-                    while self.fastStageScanIsRunning:
-                        self._logger.debug("Waiting for fast stage scan to finish...")
-                        time.sleep(0.1) # TODO: Probably we want to do that in a thread since we need to return http response here?
-                    # need to compute the pos/net dx and dy and center pos as well as number of images in X / Y 
-                    xStart, xEnd, yStart, yEnd, xStep, yStep = self.computeScanRanges([snake_tile])
-                    nx, ny = int((xEnd-xStart)//xStep)+1, int((yEnd-yStart)//yStep)+1
-                    if len(illuminationIntensites) == 1: illumination0 = illuminationIntensites[0]
-                    else: illumination0 = illuminationIntensites[0] if len(illuminationIntensites) > 0 else None
-                    if len(illuminationIntensites) == 2: illumination1 = illuminationIntensites[1]
-                    else: illumination1 = illuminationIntensites[1] if len(illuminationIntensites) > 1 else None
-                    if len(illuminationIntensites) == 3: illumination2 = illuminationIntensites[2]
-                    else: illumination2 = illuminationIntensites[2] if len(illuminationIntensites) > 2 else None
-                    if len(illuminationIntensites) == 4: illumination3 = illuminationIntensites[3]
-                    else: illumination3 = illuminationIntensites[3] if len(illuminationIntensites) > 3 else None
-                    led_index = next((i for i, item in enumerate(mExperiment.parameterValue.illumination) if "led" in item.lower()), None)
-                    if led_index is not None:
-                        # If "LED" is found, get the intensity and limit it to 255
-                        led = min(mExperiment.parameterValue.illuIntensities[led_index], 255)
-                    else:
-                        # Default value if "LED" is not found
-                        led = 0
-                    if nx>100 or ny>100:
-                        self._logger.error("Too many points in X/Y direction. Please reduce the number of points.")
-                        raise HTTPException(status_code=400, detail="Too many points in X/Y direction. Please reduce the number of points.")
-                    # move to inital position first
-                    # xStart/ySTart => 0 means we start from that position 
-                    self.startFastStageScanAcquisition(xstart=xStart, xstep=xStep, nx=nx,
-                                                        ystart=yStart, ystep=yStep, ny=ny,      
-                                                        tsettle=90, tExposure=50, # TODO: make these parameters adjustable
-                                                        illumination0=illumination0, illumination1=illumination1,
-                                                        illumination2=illumination2, illumination3=illumination3, led=led)
-                    # we need to wait until the acquisition is done so that we can start the next one
-                return 
-            mFilePaths = []
-            tiff_writers = []
-            for index, experiments_ in enumerate(mExperiment.pointList):
-                experimentName = experiments_.name
-                mFileName = f"{timeStamp}_{exp_name}"
-                mFilePath = os.path.join(dirPath, mFileName + str(index) + "_" + experimentName + "_" + ".ome.tif")
-                mFilePaths.append(mFilePath)
-                self._logger.debug(f"OME-TIFF path: {mFilePath}")
-                #tiff_writer = tif.TiffWriter(mFilePath)
-            
-                # Create a new OmeTiffStitcher instance for stitching tiles
-                tiff_writer = OmeTiffStitcher(mFilePath)
-                tiff_writers.append(tiff_writer)
+        for t in range(n_times):
 
 
             # Loop over each tile (each central point and its neighbors)
             for position_center_index, tile in enumerate(snake_tiles):
                 
-                # start storer - store one center point per file # TODO: How about time series?
-                self.start_tiff_writer(tiff_writers=tiff_writers, tiff_index=position_center_index)
+                # start TIFF writer using FileIOManager
+                self.file_io_manager.start_tiff_writer(position_center_index)
             
                 # iterate over positions     
                 for mIndex, mPoint in enumerate(tile):
@@ -478,7 +366,7 @@ class ExperimentController(ImConWidgetController):
                     workflowSteps.append(WorkflowStep(
                         name=name,
                         step_id=step_id,
-                        main_func=self.move_stage_xy,
+                        main_func=self.hardware.move_stage_xy,
                         main_params={"posX": mPoint["x"], "posY": mPoint["y"], "relative": False},
                     ))
                     
@@ -490,23 +378,23 @@ class ExperimentController(ImConWidgetController):
                             workflowSteps.append(WorkflowStep(
                                 name="Move to Z position",
                                 step_id=step_id,
-                                main_func=self.move_stage_z,
+                                main_func=self.hardware.move_stage_z,
                                 main_params={"posZ": iZ, "relative": False},
                                 pre_funcs=[self.wait_time],
                                 pre_params={"seconds": 0.1},
                             ))
                             
                         step_id += 1
-                        for illuIndex, illuSource in enumerate(illuSources):
-                            illuIntensity = illuminationIntensites[illuIndex-1]
-                            if illuIntensity <= 0: continue
-                            
-                            # Turn on illumination - if we have only one source, we can skip this step after the first stop of mIndex
-                            if sum(np.array(illuminationIntensites)>0) > 1 or  ( mIndex == 0):
+                        for illuIndex, illuSource in enumerate(illumination_sources):
+                            illuIntensity = illumination_intensities[illuIndex]
+                            if illuIntensity <= 0: 
+                                continue
+                            # Turn on illumination - if we have only one source, we can skip this step after the first iteration
+                            if sum(np.array(illumination_intensities) > 0) > 1 or (mIndex == 0):
                                 workflowSteps.append(WorkflowStep(
                                     name="Turn on illumination",
                                     step_id=step_id,
-                                    main_func=self.set_laser_power,
+                                    main_func=self.hardware.set_laser_power,
                                     main_params={"power": illuIntensity, "channel": illuSource},
                                     post_funcs=[self.wait_time],
                                     post_params={"seconds": 0.05},
@@ -515,24 +403,11 @@ class ExperimentController(ImConWidgetController):
 
                         # Acquire frame
                         isPreview = self.isPreview
-                        '''
-                        workflowSteps.append(WorkflowStep(
-                            name="Acquire frame",
-                            step_id=step_id,
-                            main_func=self.acquire_frame,
-                            main_params={"channel": "Mono"},
-                            post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
-                            pre_funcs=[self.set_exposure_time_gain],
-                            pre_params={"exposure_time": exposure, "gain": gain},
-                            # Hier übergeben wir posX, posY an das Metadata-Dict
-                            post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
-                        ))
-                        '''
 
                         workflowSteps.append(WorkflowStep(
                             name="Acquire frame",
                             step_id=step_id,
-                            main_func=self.acquire_frame,
+                            main_func=self.hardware.acquire_frame,
                             main_params={"channel": "Mono"},
                             post_funcs=[self.save_frame_tiff, self.save_frame_ome_zarr, self.add_image_to_canvas],
                             pre_funcs=[self.set_exposure_time_gain],
@@ -540,14 +415,14 @@ class ExperimentController(ImConWidgetController):
                             post_params={
                                 "posX": mPoint["x"],
                                 "posY": mPoint["y"],
-                                "posZ": 0, # TODO: Add Z position if needed
+                                "posZ": 0,  # TODO: Add Z position if needed
                                 "iX": mPoint["iX"],
                                 "iY": mPoint["iY"], 
                                 "pixel_size": mPixelSize,
                                 "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
                                 "channel": illuSource,
-                                "time_index": t,       # or whatever loop index
-                                "tile_index": mIndex,   # or snake-tile index
+                                "time_index": t,
+                                "tile_index": mIndex,
                                 "position_center_index": position_center_index,
                                 "isPreview": isPreview,
                             },
@@ -555,22 +430,22 @@ class ExperimentController(ImConWidgetController):
                         step_id += 1
 
                         # Turn off illumination
-                        if len(illuminationIntensites) > 1 and sum(np.array(illuminationIntensites)>0)>1: # TODO: Is htis the right approach?
+                        if len(illumination_intensities) > 1 and sum(np.array(illumination_intensities) > 0) > 1:
                             workflowSteps.append(WorkflowStep(
                                 name="Turn off illumination",
                                 step_id=step_id,
-                                main_func=self.set_laser_power,
+                                main_func=self.hardware.set_laser_power,
                                 main_params={"power": 0, "channel": illuSource},
                             ))
                             step_id += 1
 
                 # (Optional) Perform autofocus once per loop, if enabled
-                if isAutoFocus:
+                if is_autofocus:
                     workflowSteps.append(WorkflowStep(
                         name="Autofocus",
                         step_id=step_id,
-                        main_func=self.autofocus,
-                        main_params={"minZ": autofocusMin, "maxZ": autofocusMax, "stepSize": autofocusStepSize},
+                        main_func=self.hardware.perform_autofocus,
+                        main_params={"min_z": autofocus_min, "max_z": autofocus_max, "step_size": autofocus_step},
                     ))
                     step_id += 1
 
@@ -580,8 +455,8 @@ class ExperimentController(ImConWidgetController):
                 workflowSteps.append(WorkflowStep(
                     name="Close TIFF writer",
                     step_id=step_id,
-                    main_func=self.close_tiff_writer,
-                    main_params={"tiff_writers": tiff_writers, "tiff_index": position_center_index},
+                    main_func=self.file_io_manager.close_tiff_writer,
+                    main_params={"writer_index": position_center_index},
                 ))
             
             # Add a wait period between each loop
@@ -594,13 +469,13 @@ class ExperimentController(ImConWidgetController):
                 pre_params={"seconds": 0.01}
             ))
 
-        if IS_OMEZARR_AVAILABLE:
-            # Close OME-Zarr store at the end (new)
+        if ome_store:
+            # Close OME-Zarr store at the end
             workflowSteps.append(WorkflowStep(
                 name="Close OME-Zarr store",
                 step_id=step_id,
-                main_func=self.close_ome_zarr_store,
-                main_params={"omezarr_store": ome_store},
+                main_func=self.file_io_manager.close_omezarr_store,
+                main_params={},
             ))
             step_id += 1
         
@@ -627,113 +502,72 @@ class ExperimentController(ImConWidgetController):
         ))
         
         # turn off all illuminations
-        for illuIndex, illuSource in enumerate(illuSources):
-            illuIntensity = illuminationIntensites[illuIndex-1]
-            if illuIntensity <= 0: 
-                continue
-            # Turn off illumination
-            workflowSteps.append(WorkflowStep(
-                name="Turn off illumination",
-                step_id=step_id,
-                main_func=self.set_laser_power,
-                main_params={"power": 0, "channel": illuSource},
-            ))
-            
+        self.hardware.turn_off_all_illumination(illumination_sources)
+
         def sendProgress(payload):
             self.sigExperimentWorkflowUpdate.emit(payload)
 
         # Create workflow and context
         wf = Workflow(workflowSteps, self.workflow_manager)
         context = WorkflowContext()
-        # Set metadata (optional – store whatever data you want)
+        # Set metadata
         context.set_metadata("experimentName", exp_name)
-        context.set_metadata("nTimes", nTimes)
-        context.set_metadata("tPeriod", tPeriod)
+        context.set_metadata("nTimes", n_times)
+        context.set_metadata("tPeriod", t_period)
 
         context.set_object("tiff_writers", tiff_writers)
-        if IS_OMEZARR_AVAILABLE:
+        if ome_store:
             context.set_object("omezarr_store", ome_store)
 
-        '''
-        image_width, image_height = image_dims[0], image_dims[1]        # physical size of the image in microns
-        size = np.array((max_coords[1]+image_height,max_coords[0]+image_width))/pixel_size # size of the final image that contains all tiles in microns
-        mshape = np.int32(np.ceil(size)*self.resolution_scale*pixel_size)          # size of the final image in pixels (i.e. canvas)
-        self.stitched_image = np.zeros(mshape.T, dtype=np.uint16)       # create a canvas for the stitched image
-        ''' 
-        
-        def compute_canvas_dimensions(minX, maxX, minY, maxY, diffX, diffY, pixelSize):
-            width_pixels = int(np.ceil((maxX - minX + diffX) / pixelSize))
-            height_pixels = int(np.ceil((maxY - minY + diffY) / pixelSize))
-            return width_pixels, height_pixels
-        canvas_width, canvas_height = compute_canvas_dimensions(minX, maxX, minY, maxY, diffX, diffY,  mPixelSize)
+        # Setup canvas for preview mode
+        canvas_width, canvas_height = self.file_io_manager.compute_canvas_dimensions(
+            minX, maxX, minY, maxY, diffX, diffY, mPixelSize
+        )
 
         if self.isPreview:
-            if self.mDetector._isRGB:
-                canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
-            else:
-                canvas = np.zeros((canvas_height, canvas_width), dtype=np.uint16) # numpy assigns y,x,z
+            canvas = self.file_io_manager.create_canvas(
+                canvas_width, canvas_height, self.hardware.is_rgb
+            )
             context.set_object("canvas", canvas)
+            
         context.on("progress", sendProgress)
-        context.on("rgb_stack", sendProgress)
         context.on("rgb_stack", sendProgress)
 
         # Start the workflow
         self.workflow_manager.start_workflow(wf, context)
 
-        self.mFilePaths = mFilePaths
-        return {"status": "running", "store_path": mFilePaths}
-
-    def computeScanRanges(self, snake_tiles):
-        # Flatten all point dictionaries from all tiles to compute scan range
-        all_points = [pt for tile in snake_tiles for pt in tile]
-        minX = min(pt["x"] for pt in all_points)
-        maxX = max(pt["x"] for pt in all_points)
-        minY = min(pt["y"] for pt in all_points)
-        maxY = max(pt["y"] for pt in all_points)
-        # compute step between two adjacent points in X/Y
-        diffX = np.diff(np.unique([pt["x"] for pt in all_points])).min()
-        diffY = np.diff(np.unique([pt["y"] for pt in all_points])).min()
-        return minX, maxX, minY, maxY, diffX, diffY
-
-
-
+        # Store file paths for retrieval
+        self.mFilePaths = self.file_io_manager.get_file_paths()
+        return {"status": "running", "store_path": self.mFilePaths}
 
     ########################################
-    # Hardware-related functions
+    # Legacy function wrappers for backwards compatibility
     ########################################
+    # Legacy wrapper functions for workflow compatibility
     def acquire_frame(self, channel: str):
-        self._logger.debug(f"Acquiring frame on channel {channel}")
-        mFrame = self.mDetector.getLatestFrame()
-        return mFrame
+        """Legacy wrapper - delegate to HardwareInterface."""
+        return self.hardware.acquire_frame(channel)
     
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
-        if gain and gain >=0:
-            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "gain"], gain)  # [category, detectorname, ROI1, ROI2] attribute, value
-            self._logger.debug(f"Setting gain to {gain}")
-        if exposure_time and exposure_time >0:
-            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "exposureTime"],exposure_time) # category, detectorname, attribute, value
-            self._logger.debug(f"Setting exposure time to {exposure_time}")
+        """Legacy wrapper - delegate to HardwareInterface."""
+        self.hardware.set_exposure_time_gain(exposure_time, gain)
         
     def dummy_main_func(self):
+        """Utility function for workflow steps."""
         self._logger.debug("Dummy main function called")
         return True
  
-    def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0):
-        self._logger.debug("Performing autofocus... with parameters minZ, maxZ, stepSize: %s, %s, %s", minZ, maxZ, stepSize)
-        # TODO: Connect this to the Autofocus Function
+    def autofocus(self, min_z: float = 0, max_z: float = 0, step_size: float = 0):
+        """Legacy wrapper - delegate to HardwareInterface."""
+        return self.hardware.perform_autofocus(min_z, max_z, step_size)
         
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
+        """Utility function for workflow steps."""
         import time
         time.sleep(seconds)
 
     def save_frame_tiff(self, context: WorkflowContext, metadata: Dict[str, Any], **kwargs):
-        # Retrieve the TIFF writer and write the tile
-        tiff_writers = context.get_object("tiff_writers")
-        if tiff_writers is None:
-            self._logger.debug("No TIFF writer found in context!")
-            return
-        
-        
+        """Save frame to TIFF using FileIOManager."""
         # get latest image from the camera 
         img = metadata["result"]
 
@@ -741,27 +575,16 @@ class ExperimentController(ImConWidgetController):
         posX = kwargs.get("posX", 0)
         posY = kwargs.get("posY", 0)
         posZ = kwargs.get("posZ", 0)
-        channel_str = kwargs.get("channel", "Mono")
         position_center_index = kwargs.get("position_center_index", 0)
-        time_stamp = kwargs.get("time_index", 0)
         iX = kwargs.get("iX", 0)
         iY = kwargs.get("iY", 0)
-        pixel_size = kwargs.get("pixel_size", 1.0)  # 1 micron per pixel
-        # get tiff writer
-        tiff_writer = tiff_writers[position_center_index]
-        try:
-            tiff_writer.add_image(
-                image=img,
-                position_x=posX,
-                position_y=posY,
-                index_x=iX,
-                index_y=iY,
-                pixel_size=pixel_size
-            )
-            metadata["frame_saved"] = True
-        except Exception as e:
-            self._logger.error(f"Error saving TIFF: {e}")
-            metadata["frame_saved"] = False
+        pixel_size = kwargs.get("pixel_size", 1.0)
+        
+        # Use FileIOManager to save
+        success = self.file_io_manager.save_frame_tiff(
+            img, position_center_index, posX, posY, posZ, iX, iY, pixel_size
+        )
+        metadata["frame_saved"] = success
 
         '''
         if tiff_writer is None:
@@ -976,153 +799,30 @@ class ExperimentController(ImConWidgetController):
     # -------------------------------------------------------------------------
     # public API
     # -------------------------------------------------------------------------
+    # Performance mode API delegation
     @APIExport(runOnUIThread=False)
     def startFastStageScanAcquisition(self,
-                      xstart:float=0, xstep:float=500, nx:int=10,
-                      ystart:float=0, ystep:float=500, ny:int=10,
-                      tsettle:float=90, tExposure:float=50,
-                      illumination0:int=None, illumination1:int=None,
-                      illumination2:int=None, illumination3:int=None, led:float=None):
-        """Full workflow: arm camera ➔ launch writer ➔ execute scan."""
-        self.fastStageScanIsRunning = True
-        self._stop() # ensure all prior runs are stopped
-        self.move_stage_xy(posX=xstart, posY=ystart, relative=False)
-
-        # 1. prepare camera ----------------------------------------------------
-        self.mDetector.stopAcquisition()
-        #self.mDetector.NBuffer        = total_frames + 32   # head‑room
-        #self.mDetector.frame_buffer   = collections.deque(maxlen=self.mDetector.NBuffer)
-        #self.mDetector.frameid_buffer = collections.deque(maxlen=self.mDetector.NBuffer)
-        self.mDetector.setTriggerSource("External trigger")
-        self.mDetector.flushBuffers()
-        self.mDetector.startAcquisition()
-
-        # compute the metadata for the stage scan (e.g. x/y coordinates and illumination channels)
-        # stage will start at xstart, ystart and move in steps of xstep, ystep in snake scan logic 
-        
-        illum_dict = {
-            "illumination0": illumination0,
-            "illumination1": illumination1,
-            "illumination2": illumination2,
-            "illumination3": illumination3, 
-            "led": led
-        }
-
-        # Count how many illumination entries are valid (not None)
-        nIlluminations = sum(val is not None and val > 0 for val in illum_dict.values())        
-        nScan = max(nIlluminations, 1)
-        total_frames = nx * ny * nScan
-        self._logger.info(f"Stage-scan: {nx}×{ny} ({total_frames} frames)")
-        def addDataPoint(metadataList, x, y, illuminationChannel, illuminationValue, runningNumber):
-            """Helper function to add metadata for each position."""
-            metadataList.append({
-                "x": x,
-                "y": y,
-                "illuminationChannel": illuminationChannel,
-                "illuminationValue": illuminationValue,
-                "runningNumber": runningNumber
-            })
-            return metadataList
-        metadataList = []
-        runningNumber = 0
-        for iy in range(ny):
-            for ix in range(nx):
-                x = xstart + ix * xstep
-                y = ystart + iy * ystep
-                # Snake pattern
-                if iy % 2 == 1:
-                    x = xstart + (nx - 1 - ix) * xstep
-
-                # If there's at least one valid illumination or LED set, take only one image as "default"
-                if nIlluminations == 0:
-                    runningNumber += 1
-                    addDataPoint(metadataList, x, y, "default", -1, runningNumber)
-                else:
-                    # Otherwise take an image for each illumination channel > 0
-                    for channel, value in illum_dict.items():
-                        if value is not None and value > 0:
-                            runningNumber += 1
-                            addDataPoint(metadataList, x, y, channel, value, runningNumber)
-        # 2. start writer thread ----------------------------------------------
-        self._stop_writer_evt.clear()
-        self._writer_thread = threading.Thread(
-            target=self._writer_loop,
-            args=(total_frames,metadataList,),
-            daemon=True,
+                      xstart: float = 0, xstep: float = 500, nx: int = 10,
+                      ystart: float = 0, ystep: float = 500, ny: int = 10,
+                      tsettle: float = 90, tExposure: float = 50,
+                      illumination0: int = None, illumination1: int = None,
+                      illumination2: int = None, illumination3: int = None, 
+                      led: float = None):
+        """Delegate to PerformanceModeExecutor."""
+        return self.performance_executor.start_fast_stage_scan_acquisition(
+            xstart, xstep, nx, ystart, ystep, ny, tsettle, tExposure,
+            illumination0, illumination1, illumination2, illumination3, led
         )
-        self._writer_thread.start()
-        illumination=(illumination0, illumination1, illumination2, illumination3) if nIlluminations > 0 else (0,0,0,0)
-        # 3. execute stage scan (blocks until finished) ------------------------
-        self.mStage.start_stage_scanning(
-            xstart=0, xstep=xstep, nx=nx,
-            ystart=0, ystep=ystep, ny=ny,
-            tsettle=tsettle, tExposure=tExposure,
-            illumination=illumination, led=led,
-        )
-
-        
-    # -------------------------------------------------------------------------
-    # internal helpers
-    # -------------------------------------------------------------------------
-    def _writer_loop(self, n_expected: int, metadataList: list, minPeriod: float = 0.2):
-        """
-        Bulk-writer that uses the (frames, ids) tuple returned by camera.getChunk().
-        The call is non-blocking; it returns empty arrays until new frames arrive.
-        """
-        saved = 0
-        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        mFilePath = os.path.join(self.save_dir, timeStamp + "_FastStageScan")
-        # create directory if it does not exist
-        if not os.path.exists(mFilePath):
-            os.makedirs(mFilePath)
-        self._logger.info(f"Writer thread started, saving to {mFilePath}...")
-        tLastCapture = time.time()  # for throttling
-        while saved < n_expected and not self._stop_writer_evt.is_set():
-
-            frames, ids = self.mDetector.getChunk()        # ← empties camera buffer
-
-            if frames.size == 0:                        # nothing new yet
-                time.sleep(0.005)
-                continue
-
-            for frame, fid in zip(frames, ids):
-                currentMetadata = metadataList[fid] if fid < len(metadataList) else {}
-                if currentMetadata == {}:
-                    self._logger.warning(f"Metadata for frame {fid} is empty. Skipping this frame.")
-                    break
-                fileName = os.path.join(mFilePath,  f"FastScan_{currentMetadata['runningNumber']}_x_{round(currentMetadata['x'], 1)}_y_{round(currentMetadata['y'], 1)}_illu-{currentMetadata['illuminationChannel']}_{currentMetadata['illuminationValue']}{fid:06d}.tif")
-                tif.imwrite(fileName, frame)
-                saved += 1
-                self._logger.debug(f"saved {saved}/{n_expected} under {fileName}")
-
-        self._logger.info(f"Writer thread finished ({saved} images).")
-        # 4. wait for writer to finish then stop camera ------------------------
-
-        self._logger.info("Grid‑scan completed and all images saved.")
-
-        # 5. clean up and bring camera back to normal mode -----------------
-        self.mDetector.stopAcquisition()
-        self.mDetector.setTriggerSource("Continuous")
-        self.mDetector.flushBuffers()
-        self.mDetector.startAcquisition()
-        self._logger.info("Camera reset to continuous mode.")
-        self.fastStageScanIsRunning = False
-
-
-    def _stop(self):
-        """Abort the acquisition gracefully."""
-        self._stop_writer_evt.set()
-        if self._writer_thread is not None:
-            self._writer_thread.join(timeout=2)
-        self.mDetector.stopAcquisition()
 
     @APIExport(runOnUIThread=False)
     def stopFastStageScanAcquisition(self):
-        """Stop the stage scan acquisition and writer thread."""
-        self.mStage.stop_stage_scanning()
-        self.fastStageScanIsRunning = False
-        self._logger.info("Stopping stage scan acquisition...")
-        self._stop()
-        self._logger.info("Stage scan acquisition stopped.")
+        """Delegate to PerformanceModeExecutor."""
+        return self.performance_executor.stop_fast_stage_scan_acquisition()
+
+    # Update legacy property for backwards compatibility
+    @property
+    def fastStageScanIsRunning(self):
+        """Legacy property - delegate to PerformanceModeExecutor."""
+        return self.performance_executor.is_scan_running()
 
 # Copyright (C) 2025 Benedict Diederich

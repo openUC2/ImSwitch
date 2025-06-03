@@ -25,17 +25,17 @@ class PyMicroscopeLaserManager(LaserManager):
         self.__logger.info(f"[{self.__port}] {self.__driver} initialized. ")
         super().__init__(laserInfo, name, isBinary=False, valueUnits='mW', valueDecimals=1)
         self.__maxPower = float(laserInfo.valueRangeMax)
-    
+
     def setEnabled(self, enabled: bool) -> None:
         (self.__laser.enable() if enabled else self.__laser.disable())
-    
+
     def setValue(self, value) -> None:
         # laser power is handled as percentage
         # so we divide for the max power to obtain
         # the actual percentage to which we set
         # the output power
         self.__laser.power = float(value) / self.__maxPower
-    
+
     def finalize(self) -> None:
         self.__logger.info(f"[{self.__port}] {self.__driver} closed.")
         self.__laser.shutdown()

@@ -78,7 +78,7 @@ class SIMDisplay(QtWidgets.QLabel):
         self.setPixmap(qpixmap)
         #self.__logger.debug("updateImage "+str(np.mean(imgArr)))
         #self.show() #if it is the problem of slow show up of the images
-        
+
     def setVisible(self, visible):
         super().setVisible(visible)
 

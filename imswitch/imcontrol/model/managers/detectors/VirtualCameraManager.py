@@ -16,10 +16,10 @@ class VirtualCameraManager(DetectorManager):
             self.VirtualMicroscope = _lowLevelManagers["rs232sManager"]["VirtualMicroscope"]
         except:
             return
-        
+
         # assign the camera from the Virtual Microscope
         self._camera = self.VirtualMicroscope._camera
-        
+
         # get the pixel size from the camera
         fullShape = (self._camera.SensorWidth,
                 self._camera.SensorHeight)
@@ -46,7 +46,7 @@ class VirtualCameraManager(DetectorManager):
             'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
                                     editable=True),
             'mode': DetectorBooleanParameter(group='Misc', value=True, editable=True),
-            'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),            
+            'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),
             'binning': DetectorNumberParameter(group="Misc", value=1, valueUnits="arb.u.", editable=True),
             'trigger_source': DetectorListParameter(group='Acquisition mode',
                             value='Continous',
@@ -101,7 +101,7 @@ class VirtualCameraManager(DetectorManager):
         else:
             frame = self._camera.getLast(returnFrameNumber=returnFrameNumber)
             return frame
-        
+
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
         If the parameter doesn't exist, i.e. the parameters field doesn't
@@ -136,11 +136,11 @@ class VirtualCameraManager(DetectorManager):
             return None
 
     def startAcquisition(self, liveView=False):
-        pass 
-    
+        pass
+
     def stopAcquisition(self):
         pass
-    
+
     def stopAcquisitionForROIChange(self):
         pass
     def finalize(self) -> None:
@@ -156,17 +156,17 @@ class VirtualCameraManager(DetectorManager):
         self.parameters['Camera pixel size'].value = pixelSizeUm
 
     def _performSafeCameraAction(self, function):
-        pass 
-    
+        pass
+
     def openPropertiesDialog(self):
         self._camera.openPropertiesGUI()
 
     def closeEvent(self):
         pass
-        
+
     def flushBuffers(self):
         pass
-    
+
     def crop(self, hpos, vpos, hsize, vsize):
         pass
 

@@ -20,14 +20,14 @@ class SIMWidget(NapariHybridWidget):
         #super().__init__(*args, **kwargs)
 
 
-        # Main GUI 
+        # Main GUI
         self.layout = QtWidgets.QHBoxLayout()
         self.setLayout(self.layout)
 
         # Side TabView
         self.tabView = QTabWidget()
         self.layout.addWidget(self.tabView, 0)
-        
+
 
         # Add tabs
         self.manual_control_tab = self.create_manual_control_tab()
@@ -35,21 +35,21 @@ class SIMWidget(NapariHybridWidget):
         self.reconstruction_parameters_tab = self.create_reconstruction_parameters_tab()
         self.timelapse_settings_tab = self.create_timelapse_settings_tab()
         self.zstack_settings_tab = self.create_zstack_settings_tab()
-        
-        
+
+
         self.tabView.addTab(self.manual_control_tab, "Manual Control")
         self.tabView.addTab(self.experiment_tab, "Experiment")
         self.tabView.addTab(self.reconstruction_parameters_tab, "Reconstruction Parameters")
         self.tabView.addTab(self.timelapse_settings_tab, "TimeLapse Settings")
         self.tabView.addTab(self.zstack_settings_tab, "Z-stack Settings")
-        
+
         self.layer = None
-        
-        
+
+
     def getImage(self):
         if self.layer is not None:
             return self.img.image
-        
+
     def setImage(self, im, name="SIM Reconstruction", pixelsize=None):
         if self.layer is None or name not in self.viewer.layers:
             self.layer = self.viewer.add_image(im, rgb=False, name=name, blending='additive')
@@ -93,14 +93,14 @@ class SIMWidget(NapariHybridWidget):
         self.SIMReconstructorList = QtWidgets.QComboBox()
         self.SIMReconstructorList.addItems(['napari', 'mcsim'])
         '''
-        
+
         # Checkboxes
         checkboxes = [
             "Enable Reconstruction", "Enable Record Reconstruction",
             "Enable Record RAW", "Enable Laser 488", "Enable Laser 635",
             "Enable TimeLapse", "Enable Z-stack", "Use GPU?",
             "Selected Path", "C:\\Users\\admin\\Desktop\\Timelapse\\",
-            
+
         ]
         self.checkbox_reconstruction = QCheckBox(checkboxes[0])
         self.checkbox_record_reconstruction = QCheckBox(checkboxes[1])
@@ -112,10 +112,10 @@ class SIMWidget(NapariHybridWidget):
         layout.addWidget(self.checkbox_record_reconstruction)
         layout.addWidget(self.checkbox_record_raw)
         layout.addWidget(self.path_label)
-        layout.addWidget(self.path_edit)        
+        layout.addWidget(self.path_edit)
         layout.addWidget(self.openFolderButton)
 
-        
+
         tab.setLayout(layout)
         return tab
 
@@ -130,7 +130,7 @@ class SIMWidget(NapariHybridWidget):
             ("Pixelsize", "6.5"), ("Alpha", "0.5"), ("Beta", "0.98"),
             ("w", "1"), ("eta", "0.6"), ("Magnification", "90")
         ]
-        
+
         # create widget per label
         self.wavelength1_label = QLabel(params[0][0])
         self.wavelength1_textedit = QLineEdit(params[0][1])
@@ -182,7 +182,7 @@ class SIMWidget(NapariHybridWidget):
         row_layout_10 = QHBoxLayout()
         row_layout_10.addWidget(self.magnification_label)
         row_layout_10.addWidget(self.magnification_textedit)
-        
+
         layout.addLayout(row_layout_1)
         layout.addLayout(row_layout_2)
         layout.addLayout(row_layout_3)
@@ -193,7 +193,7 @@ class SIMWidget(NapariHybridWidget):
         layout.addLayout(row_layout_8)
         layout.addLayout(row_layout_9)
         layout.addLayout(row_layout_10)
-        
+
 
         tab.setLayout(layout)
         return tab
@@ -206,7 +206,7 @@ class SIMWidget(NapariHybridWidget):
         settings = [
             ("Period", "0"), ("Number of frames", "10") , ("Drift correction", "0")
         ]
-        
+
         # create widget per label
         self.period_label = QLabel(settings[0][0])
         self.period_textedit = QLineEdit(settings[0][1])
@@ -214,7 +214,7 @@ class SIMWidget(NapariHybridWidget):
         self.frames_label = QLabel(settings[1][0])
         self.frames_textedit = QLineEdit(settings[1][1])
         self.correction_label = QLabel(settings[2][0])
-        self.correction_textedit = QLineEdit(settings[2][1])        
+        self.correction_textedit = QLineEdit(settings[2][1])
         row_layout_1 = QHBoxLayout()
         row_layout_1.addWidget(self.period_label)
         row_layout_1.addWidget(self.period_textedit)
@@ -228,9 +228,9 @@ class SIMWidget(NapariHybridWidget):
         layout.addLayout(row_layout_1)
         layout.addLayout(row_layout_2)
         layout.addLayout(row_layout_3)
-        
+
         layout.addSpacing(20)
-        
+
         self.start_timelapse_button = QPushButton("Start TimeLapse")
         self.stop_timelapse_button = QPushButton("Stop TimeLapse")
         button_layout = QHBoxLayout()
@@ -240,7 +240,7 @@ class SIMWidget(NapariHybridWidget):
 
         tab.setLayout(layout)
         return tab
-        
+
 
     def create_zstack_settings_tab(self):
         tab = QWidget()
@@ -272,9 +272,9 @@ class SIMWidget(NapariHybridWidget):
         layout.addLayout(row_layout_1)
         layout.addLayout(row_layout_2)
         layout.addLayout(row_layout_3)
-        
+
         layout.addSpacing(20)
-        
+
         self.start_zstack_button = QPushButton("Start Z-Stack")
         self.stop_zstack_button = QPushButton("Stop Z-Stack")
         button_layout = QHBoxLayout()
@@ -284,14 +284,14 @@ class SIMWidget(NapariHybridWidget):
 
         tab.setLayout(layout)
         return tab
-        
-        
+
+
     def getZStackParameters(self):
         return (np.float32(self.zmin_textedit.text()), np.float32(self.zmax_textedit.text()), np.float32(self.nsteps_textedit.text()))
-    
+
     def getTimelapseParameters(self):
         return (np.float32(self.period_textedit.text()), np.float32(self.frames_textedit.text()))
-    
+
     def getRecFolder(self):
         return self.path_edit.text()
 

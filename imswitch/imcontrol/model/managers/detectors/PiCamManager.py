@@ -47,7 +47,7 @@ class PiCamManager(DetectorManager):
                         editable=False),
             'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
                         editable=False),
-            }            
+            }
 
         # Prepare actions
         actions = {
@@ -91,8 +91,8 @@ class PiCamManager(DetectorManager):
         return value
 
     def setBinning(self, binning):
-        super().setBinning(binning) 
-        
+        super().setBinning(binning)
+
 
     def getChunk(self):
         return self._camera.getLastChunk()

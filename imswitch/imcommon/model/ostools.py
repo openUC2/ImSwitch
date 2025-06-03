@@ -22,9 +22,9 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
         # we read the args from __argparse__ and restart the software using the same arguments
         # we need to add the module name to the arguments
         from imswitch import __argparse__
-        
+
         '''
-        in docker: 
+        in docker:
         params+=" --http-port ${HTTP_PORT:-8001}"
         params+=" --socket-port ${SOCKET_PORT:-8002}"
         params+=" --config-folder ${CONFIG_PATH:-None}"
@@ -60,7 +60,7 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
             args.append('--scan-ext-drive-mount')
         if ext_drive_mount:
             args.append('--ext-drive-mount')
-        # execute script with new arguments 
+        # execute script with new arguments
         os.execv(sys.executable, args)
     else:
         os.execv(sys.executable, ['"' + sys.executable + '"', '-m', module])

@@ -24,7 +24,7 @@ MV_Image_Tif = 4                                 # < \~chinese Tif格式        
 MV_Image_Png = 3                                 # < \~chinese Png格式                           \~english Png image file
 MV_Image_Jpeg = 2                                # < \~chinese Jpeg格式                          \~english Jpeg image file
 MV_Image_Bmp = 1                                 # < \~chinese Bmp格式                           \~english Bmp image file
-MV_GAIN_MODE_CONTINUOUS = 2                      # < \~chinese 连续                              \~english Gain Mode Continuous 
+MV_GAIN_MODE_CONTINUOUS = 2                      # < \~chinese 连续                              \~english Gain Mode Continuous
 MV_GAIN_MODE_ONCE = 1                            # < \~chinese 单次                              \~english Gain Mode Once
 MV_GrabStrategy_UpcomingImage = 3                # < \~chinese 等待下一帧图像                     \~english Wait for the next image
 MV_GrabStrategy_LatestImages = 2                 # < \~chinese 获取列表中最新的图像               \~english Gets the latest image in the list
@@ -132,7 +132,7 @@ class _MV_GIGE_DEVICE_INFO_(Structure):
 _MV_GIGE_DEVICE_INFO_._fields_ = [
     ('nIpCfgOption', c_uint),                     # < \~chinese IP配置选项         \~english Ip config option
     ('nIpCfgCurrent', c_uint),                    # < \~chinese 当前IP地址配置     \~english IP configuration:bit31-static bit30-dhcp bit29-lla
-    ('nCurrentIp', c_uint),                       # < \~chinese 当前主机IP地址     \~english Current host Ip 
+    ('nCurrentIp', c_uint),                       # < \~chinese 当前主机IP地址     \~english Current host Ip
     ('nCurrentSubNetMask', c_uint),               # < \~chinese 当前子网掩码       \~english curtent subnet mask
     ('nDefultGateWay', c_uint),                   # < \~chinese 默认网关           \~english Default gate way
     ('chManufacturerName', c_ubyte * 32),         # < \~chinese 厂商名称           \~english Manufacturer Name
@@ -175,7 +175,7 @@ MV_USB3_DEVICE_INFO = _MV_USB3_DEVICE_INFO_
 class _MV_CamL_DEV_INFO_(Structure):
     pass
 _MV_CamL_DEV_INFO_._fields_ = [
-    ('chPortID', c_ubyte * INFO_MAX_BUFFER_SIZE),           # < \~chinese 端口号            \~english Port ID         
+    ('chPortID', c_ubyte * INFO_MAX_BUFFER_SIZE),           # < \~chinese 端口号            \~english Port ID
     ('chModelName', c_ubyte * INFO_MAX_BUFFER_SIZE),        # < \~chinese 设备型号          \~english Model name
     ('chFamilyName', c_ubyte * INFO_MAX_BUFFER_SIZE),       # < \~chinese 家族名字          \~english Family Name
     ('chDeviceVersion', c_ubyte * INFO_MAX_BUFFER_SIZE),    # < \~chinese 设备版本号        \~english Device Version
@@ -225,7 +225,7 @@ _MV_GENTL_IF_INFO_._fields_ = [
     ('chInterfaceID', c_ubyte * INFO_MAX_BUFFER_SIZE), # < \~chinese GenTL接口ID        \~english Interface ID of GenTL
     ('chTLType', c_ubyte * INFO_MAX_BUFFER_SIZE),      # < \~chinese 传输层类型          \~english Transport Layer type
     ('chDisplayName', c_ubyte * INFO_MAX_BUFFER_SIZE), # < \~chinese 设备显示名称         \~english Display name
-    ('nCtiIndex', c_uint),                             # < \~chinese GenTL的cti文件索引   \~english Cti file index of GenTL 
+    ('nCtiIndex', c_uint),                             # < \~chinese GenTL的cti文件索引   \~english Cti file index of GenTL
     ('nReserved', c_uint * 8),                         # < \~chinese 保留字节             \~english Reserved bytes
 ]
 MV_GENTL_IF_INFO = _MV_GENTL_IF_INFO_
@@ -303,26 +303,26 @@ _MV_FRAME_OUT_INFO_EX_._fields_ = [
     ('nFrameLen', c_uint),                                   # < \~chinese 帧的长度           \~english Frame length
     # < \~chinese 以下为chunk新增水印信息 \~english The followings are chunk add frame-specific information
     # < \~chinese 设备水印时标 \~english Device frame-specific time scale
-    ('nSecondCount', c_uint),                                
-    ('nCycleCount', c_uint),                                 
-    ('nCycleOffset', c_uint),                                
+    ('nSecondCount', c_uint),
+    ('nCycleCount', c_uint),
+    ('nCycleOffset', c_uint),
     ('fGain', c_float),                                      # < \~chinese 增益               \~english Gain
     ('fExposureTime', c_float),                              # < \~chinese 曝光时间           \~english Exposure Time
     ('nAverageBrightness', c_uint),                          # < \~chinese 平均亮度           \~english Average brightness
     # < \~chinese:白平衡相关 \~english White balance
-    ('nRed', c_uint),                                         
-    ('nGreen', c_uint),                                      
-    ('nBlue', c_uint),                                       
+    ('nRed', c_uint),
+    ('nGreen', c_uint),
+    ('nBlue', c_uint),
     ('nFrameCounter', c_uint),                               # < \~chinese 帧计数             \~english Frame counter
     ('nTriggerIndex', c_uint),                               # < \~chinese 触发计数           \~english Trigger index
     # < \~chinese  输入/输出 \~english Line Input/Output
-    ('nInput', c_uint),                                     
-    ('nOutput', c_uint),             
-    # < \~chinese ROI区域 \~english ROI Region                       
-    ('nOffsetX', c_ushort),                                  
-    ('nOffsetY', c_ushort),                                  
-    ('nChunkWidth', c_ushort),                              
-    ('nChunkHeight', c_ushort),                             
+    ('nInput', c_uint),
+    ('nOutput', c_uint),
+    # < \~chinese ROI区域 \~english ROI Region
+    ('nOffsetX', c_ushort),
+    ('nOffsetY', c_ushort),
+    ('nChunkWidth', c_ushort),
+    ('nChunkHeight', c_ushort),
     ('nLostPacket', c_uint),                                 # < \~chinese 本帧丢包数            \~english Lost Pacekt Number In This Frame
     ('nUnparsedChunkNum', c_uint),                           # < \~chinese 未解析的Chunkdata个数 \~english Unparsed chunk number
     ('UnparsedChunkList', N22_MV_FRAME_OUT_INFO_EX_3DOT_1E), # < \~chinese 数据库链表            \~english Unparsed chunk list
@@ -356,14 +356,14 @@ _MV_FRAME_OUT_._fields_ = [
 MV_FRAME_OUT = _MV_FRAME_OUT_
 
 # values for enumeration '_MV_GRAB_STRATEGY_'
-_MV_GRAB_STRATEGY_ = c_int # enum       
-MV_GRAB_STRATEGY = _MV_GRAB_STRATEGY_   
+_MV_GRAB_STRATEGY_ = c_int # enum
+MV_GRAB_STRATEGY = _MV_GRAB_STRATEGY_
 
 # 网络传输的相关信息    \~english Network transmission information
 class _MV_NETTRANS_INFO_(Structure):
     pass
 _MV_NETTRANS_INFO_._fields_ = [
-    ('nReceiveDataSize', int64_t),          # < \~chinese 已接收数据大小  [统计StartGrabbing和StopGrabbing之间的数据量]         \~english Received Data Size  [Calculate the Data Size between StartGrabbing and StopGrabbing]  
+    ('nReceiveDataSize', int64_t),          # < \~chinese 已接收数据大小  [统计StartGrabbing和StopGrabbing之间的数据量]         \~english Received Data Size  [Calculate the Data Size between StartGrabbing and StopGrabbing]
     ('nThrowFrameCount', c_int),            # < \~chinese 丢帧数量             \~english Throw frame number
     ('nNetRecvFrameCount', c_uint),         # < \~chinese 收到帧计数           \~english Receive Frame count
     ('nRequestResendPacketCount', int64_t), # < \~chinese 请求重发包数         \~english Request Resend Packet Count
@@ -432,7 +432,7 @@ _MV_SAVE_POINT_CLOUD_PARAM_._fields_ = [
     ('pSrcData', POINTER(c_ubyte)),                          # < \~chinese 输入数据缓存                                                          \~english Input data buffer
     ('nSrcDataLen', c_uint),                                 # < \~chinese 输入数据大小                                                           \~english Input data size
     ('pDstBuf', POINTER(c_ubyte)),                           # < \~chinese 输出像素数据缓存                                                        \~english Output pixel data buffer
-    ('nDstBufSize', c_uint),                                 # < \~chinese 提供的输出缓冲区大小(nLinePntNum * nLineNum * (16*3 + 4) + 2048)         \~english Output buffer size provided (nLinePntNum * nLineNum * (16*3 + 4) + 2048) 
+    ('nDstBufSize', c_uint),                                 # < \~chinese 提供的输出缓冲区大小(nLinePntNum * nLineNum * (16*3 + 4) + 2048)         \~english Output buffer size provided (nLinePntNum * nLineNum * (16*3 + 4) + 2048)
     ('nDstBufLen', c_uint),                                  # < \~chinese 输出像素数据缓存长度                                                     \~english Output pixel data buffer size
     ('enPointCloudFileType', MV_SAVE_POINT_CLOUD_FILE_TYPE), # < \~chinese 提供输出的点云文件类型                                                    \~english Output point data file type provided
     ('nReserved', c_uint * 8),                               # < \~chinese 保留字节                                                                 \~english Reserved bytes
@@ -497,7 +497,7 @@ _MV_SAVE_IMG_TO_FILE_PARAM_._fields_ = [
     ('pImagePath', c_char * 256),        # < \~chinese 输入文件路径         \~english Input file path
     # < \~chinese     ch:Bayer格式转为RGB24的插值方法 0-最近邻 1-双线性 2-Hamilton
     # < \~english   en:Interpolation method of convert Bayer to RGB24  0-nearest neighbour 1-bilinearity 2-Hamilton
-    ('iMethodValue', c_int),             
+    ('iMethodValue', c_int),
     ('nReserved', c_uint * 8),           # < \~chinese 保留字节           \~english Reserved bytes
 ]
 MV_SAVE_IMG_TO_FILE_PARAM = _MV_SAVE_IMG_TO_FILE_PARAM_

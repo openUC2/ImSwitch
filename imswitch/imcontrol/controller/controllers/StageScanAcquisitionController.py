@@ -23,4 +23,3 @@ class StageScanAcquisitionController(ImConWidgetController):
 
     def __init__(self, *args, save_dir: str | os.PathLike | None = None, **kwargs):
         super().__init__(*args, **kwargs)
-        

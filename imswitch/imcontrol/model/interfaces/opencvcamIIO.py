@@ -78,7 +78,7 @@ class CameraOpenCV:
 
     def set_analog_gain(self,analog_gain):
         if self.isAutoParameters:
-            return        
+            return
         self.analog_gain = analog_gain
         try:
             self.camera.set(cv2.CAP_PROP_EXPOSURE, self.analog_gain)

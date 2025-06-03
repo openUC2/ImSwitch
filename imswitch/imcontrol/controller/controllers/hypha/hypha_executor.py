@@ -19,7 +19,7 @@ class OutputRecorder:
 
     def write(self, type, content):
         self.outputs.append({"type": type, "content": content})
-    
+
     def show(self, type, content, attrs={}):
         self.outputs.append({"type": type, "content": content, "attrs": attrs})
 
@@ -116,22 +116,22 @@ def show_audio(output_recorder, store, samples, rate):
 def preprocess_code(source):
     """Parse the source code and separate it into main code and last expression."""
     parsed_ast = ast.parse(source)
-    
+
     last_node = parsed_ast.body[-1] if parsed_ast.body else None
-    
+
     if isinstance(last_node, ast.Expr):
         # Separate the AST into main body and last expression
         main_body_ast = ast.Module(body=parsed_ast.body[:-1], type_ignores=parsed_ast.type_ignores)
         last_expr_ast = last_node
-        
+
         # Convert main body AST back to source code for exec
         main_body_code = ast.unparse(main_body_ast)
-        
+
         return main_body_code, last_expr_ast
     else:
         # If the last node is not an expression, treat the entire code as the main body
         return source, None
-    
+
 
 async def execute_code(store, source, context):
     # HACK: Prevent 'wave' import from failing because audioop is not included with pyodide.
@@ -146,7 +146,7 @@ async def execute_code(store, source, context):
 
     out = JSOutWriter(output_recorder)
     err = JSErrWriter(output_recorder)
-   
+
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
             setup_matplotlib(output_recorder, store)

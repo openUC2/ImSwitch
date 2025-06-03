@@ -1,12 +1,12 @@
 from imswitch.imcommon.model import VFileItem, initLogger
 
 import pkg_resources
-        
+
 from imswitch.imcontrol.model import (
     DetectorsManager, LasersManager, MultiManager, PositionersManager,
     RecordingManager, RS232sManager, SLMManager, SIMManager, DPCManager, LEDMatrixsManager, MCTManager, ROIScanManager, MockXXManager, WebRTCManager, HyphaManager,
     ISMManager, UC2ConfigManager, AutofocusManager, HistoScanManager, PixelCalibrationManager, LightsheetManager, NidaqManager, FOVLockManager,
-    StandManager, RotatorsManager, JetsonNanoManager, LEDsManager, ScanManagerBase, ScanManagerPointScan, ScanManagerMoNaLISA, FlatfieldManager, 
+    StandManager, RotatorsManager, JetsonNanoManager, LEDsManager, ScanManagerBase, ScanManagerPointScan, ScanManagerMoNaLISA, FlatfieldManager,
     FlowStopManager, WorkflowManager, TimelapseManager, LepmonManager, ExperimentManager, ObjectiveManager
 )
 
@@ -70,7 +70,7 @@ class MasterController:
         if "Workflow" in self.__setupInfo.availableWidgets: self.workflowManager = WorkflowManager()
         # load all implugin-related managers and add them to the class
         # try to get it from the plugins
-        # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the 
+        # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the
         # MasterController Class
 
         for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
@@ -78,8 +78,8 @@ class MasterController:
             print (f"entry_point: {entry_point.name}")
             try:
                 if entry_point.name.find("manager")>=0:
-                    # check if there is an info class, too 
-                    try: 
+                    # check if there is an info class, too
+                    try:
                         InfoClassName = entry_point.name.split("_manager")[0] + "_info"
                         # load the info class from InfoClassName
                         InfoClass = pkg_resources.load_entry_point("imswitch", "imswitch.implugins", InfoClassName)
@@ -92,7 +92,7 @@ class MasterController:
                     setattr(self, entry_point.name, manager)  # Add the manager to the class
             except Exception as e:
                 self.__logger.error(e)
-            
+
         if self.__setupInfo.microscopeStand:
             self.standManager = StandManager(self.__setupInfo.microscopeStand,
                                              **lowLevelManagers)
@@ -126,8 +126,8 @@ class MasterController:
         self.recordingManager.sigRecordingFrameNumUpdated.connect(cc.sigUpdateRecFrameNum)
         self.recordingManager.sigRecordingTimeUpdated.connect(cc.sigUpdateRecTime)
         self.recordingManager.sigMemorySnapAvailable.connect(cc.sigMemorySnapAvailable)
-        self.recordingManager.sigMemoryRecordingAvailable.connect(self.memoryRecordingAvailable) 
-            
+        self.recordingManager.sigMemoryRecordingAvailable.connect(self.memoryRecordingAvailable)
+
         if "SLM" in self.__setupInfo.availableWidgets:
             self.slmManager.sigSLMMaskUpdated.connect(cc.sigSLMMaskUpdated)
             self.simManager.sigSIMMaskUpdated.connect(cc.sigSIMMaskUpdated)

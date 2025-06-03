@@ -6,10 +6,10 @@ import serial.tools.list_ports
 if not __name__ == "__main__":
     from imswitch.imcommon.model import initLogger
     from imswitch.imcontrol.model.managers.positioners.PositionerManager import PositionerManager
-else: 
+else:
     PositionerManager = object
 
-    
+
 
 BAUD_RATE = 115200
 
@@ -57,7 +57,7 @@ class GRBLController:
         Event().wait(.1)
         if cleaned_line not in ['$X', '$$']:
             idle_counter = 0
-            timenow = time.time()   
+            timenow = time.time()
             while True:
                 self.ser.reset_input_buffer()
                 self.write(('?' + '\n').encode())
@@ -124,7 +124,7 @@ class GRBLController:
 def find_grbl_port():
     ports = serial.tools.list_ports.comports()
     for port in ports:
-        if 'Arduino' in port.manufacturer or 'CH340' in port.manufacturer or 'USB' in port.description: 
+        if 'Arduino' in port.manufacturer or 'CH340' in port.manufacturer or 'USB' in port.description:
             print("Found GRBL controller at port: ", port.device)
             return port.device
     return None
@@ -139,10 +139,10 @@ class GRBLStageManager(PositionerManager):
             self.__logger.error(e)
             self.port = None
         self._commChannel = lowLevelManagers['commChannel']
-        
+
         for axis in positionerInfo.axes:
             self.speed[axis] = 10000
-            
+
         if port is None:
             self.port = find_grbl_port()
         else:
@@ -152,7 +152,7 @@ class GRBLStageManager(PositionerManager):
             self._position = self.getPosition()
         else:
             raise Exception("GRBL controller not found")
-        
+
     def setSpeed(self, value=0, axis="X"):
         self.speed[axis] = value
 

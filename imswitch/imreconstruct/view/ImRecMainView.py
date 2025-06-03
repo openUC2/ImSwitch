@@ -37,7 +37,7 @@ class ImRecMainView(QtWidgets.QMainWindow):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         self.setWindowTitle('Image Reconstruction')
 
         # self parameters

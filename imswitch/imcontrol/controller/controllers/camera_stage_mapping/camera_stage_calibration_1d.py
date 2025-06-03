@@ -4,11 +4,11 @@
 This module provides code that will move a microscope stage in
 1D, and calibrate its step size and backlash against the camera.
 The main calibration is done by :func:`.calibrate_backlash_1d`.
-To perform a 2D calibration, perform 1D calibrations in two 
+To perform a 2D calibration, perform 1D calibrations in two
 different (ideally orthogonal, though this is not a requirement)
 directions, and then use :func:`.image_to_stage_displacement_from_1d`
 to combine them.  This will yield a 2x2 transformation matrix in
-the same form as :func:`.calibrate_xy_grid`.  Use two 1D 
+the same form as :func:`.calibrate_xy_grid`.  Use two 1D
 calibrations in preference to the grid: it should be more robust
 and requires less knowledge of the system thanks to its built-in
 step size estimation.
@@ -35,7 +35,7 @@ def displacements(positions):
 
 def direction_from_points(points):
     """Figure out the axis of motion from an Nx2 array of points.
-    
+
     The return value is a normalised vector that points along the
     direction with the most motion.  This is the first *principal
     component* of the points.
@@ -75,9 +75,9 @@ def fit_backlash(moves):
     of steps to pixels.  The moves should be a :class:`.camera_stage_tracker.TrackerHistory`
     object.
 
-    We use a very basic fitting method: we do a brute-force search for 
+    We use a very basic fitting method: we do a brute-force search for
     the backlash value, and for each value of backlash we fit a line to
-    the relationship between stage position (after modelling backlash) 
+    the relationship between stage position (after modelling backlash)
     and image position.  We then pick the value of backlash that gets
     the lowest residuals.  Currently the backlash values tried will
     start at 0 and increase by 1 or by a factor of 1.33 each time.
@@ -137,8 +137,8 @@ def fit_backlash(moves):
         raise ValueError("The fit didn't look successful")
 
     return {
-        "backlash": backlash, 
-        "pixels_per_step": m, 
+        "backlash": backlash,
+        "pixels_per_step": m,
         "fractional_error": fractional_error,
         "stage_direction": stage_direction,
         "image_direction": image_direction,
@@ -155,7 +155,7 @@ def calibrate_backlash_1d(
         isStop: Optional[bool]=False
     ):
     """Figure out reasonable step sizes for calibration, and estimate the backlash.
-    
+
     Parameters
     ----------
     direction: 3-element ndarray
@@ -180,10 +180,10 @@ def calibrate_backlash_1d(
     # Move the stage until we can see a significant amount of motion
     i, m = move_until_motion_detected(
         tracker, move, direction, threshold=tracker.max_safe_displacement * 0.2)
-    
+
     logger.info("Moving the stage to the edge of the field of view...")
     i, m = move_until_motion_detected(
-        tracker, move, direction, 
+        tracker, move, direction,
         threshold=tracker.max_safe_displacement * 0.7,
         multipliers=m/2.0 * np.arange(10),
         detect_cumulative_motion=True)
@@ -195,7 +195,7 @@ def calibrate_backlash_1d(
     stage_step = stage_pos[-1, :] - stage_pos[-1 - i, :]
     image_step = image_pos[-1, :] - image_pos[-1 - i, :]
     steps_per_pixel = norm(stage_step)/norm(image_step)
-    
+
     # Calculate a step that moves roughly 0.2 times the max. displacement (i.e. 0.1 times the FoV)
     sensible_step = direction * tracker.max_safe_displacement * 0.1 * steps_per_pixel
     tracker.reset_history()
@@ -213,7 +213,7 @@ def calibrate_backlash_1d(
         #print(".", end="")
         stage_pos, image_pos = tracker.append_point()
         print("Stage pos FWD: %s, Image pos: %s" % (stage_pos - starting_stage_pos, image_pos))
-        if (i > 3 and tracker.moving_away_from_centre 
+        if (i > 3 and tracker.moving_away_from_centre
             and norm(image_pos) > 0.65 * tracker.max_safe_displacement):
             break # Stop once we have moved far enough
 
@@ -227,7 +227,7 @@ def calibrate_backlash_1d(
         #print(".", end="")
         stage_pos, image_pos = tracker.append_point()
         print("Stage pos BWD: %s, Image pos: %s" % (stage_pos - starting_stage_pos, image_pos))
-        if (i > 3 and tracker.moving_away_from_centre 
+        if (i > 3 and tracker.moving_away_from_centre
             and norm(image_pos) > 0.65 * tracker.max_safe_displacement):
             break # Stop once we have moved far enough
     linear_moves = tracker.history
@@ -270,7 +270,7 @@ def calibrate_backlash_1d(
 
 def plot_1d_backlash_calibration(results):
     """Plot the results of a calibration run
-    
+
     The input parameter should be the dictionary of calibration
     data that is output by ``calibrate_backlash_1d``.  There are
     a few type conversion functions in here (``to_tracker_history``
@@ -280,7 +280,7 @@ def plot_1d_backlash_calibration(results):
     """
     from matplotlib import pyplot as plt
     f, ax = plt.subplots(1,2)
-    
+
     for k in ["exponential", "linear", "backlash_corrected"]:
         moves = to_tracker_history(results[k+"_moves"])
         # to_tracker_history allows us to work with data that's been
@@ -299,7 +299,7 @@ def plot_1d_backlash_calibration(results):
         return stage_1d, image_1d
 
     ax[1].plot(*convert_moves(results["exponential_moves"]), 'o-')
-    
+
     stage_pos, image_pos = convert_moves(results["linear_moves"])
     model = apply_backlash(stage_pos, results["backlash"]).astype(float)
     model *= results["pixels_per_step"]

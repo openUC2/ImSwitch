@@ -19,7 +19,7 @@ class HoloWidget(NapariHybridWidget):
     def __post_init__(self):
 
         # Graphical elements
-        
+
         self.tabs = QTabWidget()
 
         self.tab_inlineholo = QtWidgets.QWidget()
@@ -28,20 +28,20 @@ class HoloWidget(NapariHybridWidget):
         self.tabs.addTab(self.tab_inlineholo, "Inline Holo")
         self.tabs.addTab(self.tab_offaxisholo, "Off-axis Holo")
         self.tabs.addTab(self.tab_generalsettings, "General Settings")
-        
+
         # add all tabs to the main window
         self.init_ui()
-        
+
         mainLayout = QtWidgets.QVBoxLayout(self)
         mainLayout.addWidget(self.tabs)
-        self.setLayout(mainLayout)      
-        
+        self.setLayout(mainLayout)
+
     def init_ui(self):
         self.init_inlineholo_tab()
         self.init_offaxisholo_tab()
         self.init_generalsettings_tab()
         self.setGeometry(300, 300, 300, 200)
-    
+
     def init_offaxisholo_tab(self):
         self.showCheckOffAxis = QtWidgets.QCheckBox('Show OffAxis Holo')
         self.showCheckOffAxis.setCheckable(True)
@@ -58,18 +58,18 @@ class HoloWidget(NapariHybridWidget):
         self.textEditCCCenterY = QtWidgets.QLineEdit('0')
         self.labelCCRadius = QtWidgets.QLabel('CC Radius: ')
         self.textEditCCRadius = QtWidgets.QLineEdit('100')
-        
+
         self.labelOffAxisFocus = QtWidgets.QLabel('OffAxis Focus')
         self.sliderOffAxisFocus = guitools.FloatSlider(QtCore.Qt.Horizontal, self, allowScrollChanges=False,
                                            decimals=valueDecimals)
         self.sliderOffAxisFocus.setFocusPolicy(QtCore.Qt.NoFocus)
-        valueRangeMin, valueRangeMax = valueRange        
+        valueRangeMin, valueRangeMax = valueRange
         self.sliderOffAxisFocus.setMinimum(valueRangeMin)
         self.sliderOffAxisFocus.setMaximum(valueRangeMax)
         self.sliderOffAxisFocus.setTickInterval(tickInterval)
         self.sliderOffAxisFocus.setSingleStep(singleStep)
         self.sliderOffAxisFocus.setValue(0)
-        
+
         self.btnSaveBackground = QtWidgets.QPushButton('Save Background')
         self.btnSnapHolo = QtWidgets.QPushButton('Snap Holo')
         self.textEditHoloFileName = QtWidgets.QLineEdit('holo')
@@ -84,7 +84,7 @@ class HoloWidget(NapariHybridWidget):
         grid.addWidget(self.textEditCCCenterY, 0, 3, 1, 1)
         grid.addWidget(self.labelCCRadius, 1, 0, 1, 1)
         grid.addWidget(self.textEditCCRadius, 1, 1, 1, 1)
-        
+
         grid.addWidget(self.showCheckOffAxis, 2, 0, 1, 1)
         grid.addWidget(self.labelOffAxisFocus, 3, 0, 1, 1)
         grid.addWidget(self.sliderOffAxisFocus, 3, 1, 1, 1)
@@ -94,16 +94,16 @@ class HoloWidget(NapariHybridWidget):
         grid.addWidget(self.textEditHoloFileName, 4, 2, 1, 1)
         grid.addWidget(self.labelHoloReconAlgorithm, 5, 0, 1, 1)
         grid.addWidget(self.pullDownHoloReconAlgorithm, 5, 1, 1, 1)
-        
+
         # Connect signals
         self.showCheckOffAxis.toggled.connect(self.sigShowOffAxisToggled)
         self.sliderOffAxisFocus.valueChanged.connect(
             lambda value: self.sigOffAxisSliderValueChanged.emit(value)
         )
-        
+
         # grid.setRowMinimumHeight(0, 300)
         self.tab_offaxisholo.setLayout(grid)
-    
+
     def init_inlineholo_tab(self):
         self.showCheckInLine = QtWidgets.QCheckBox('Show InLine Holo')
         self.showCheckInLine.setCheckable(True)
@@ -134,15 +134,15 @@ class HoloWidget(NapariHybridWidget):
         self.layer = None
         grid.addWidget(self.showCheckInLine, 1, 0, 1, 1)
         grid.addWidget(self.sliderInLineFocus, 2, 0, 1, 1)
-        
-        
+
+
         self.tab_inlineholo.setLayout(grid)
 
     def silenceLayer(self, name, enabled):
         """Change visibility of layer without emitting signal."""
         if name in self.viewer.layers:
             self.viewer.layers[name].visible = enabled
-                
+
     def init_generalsettings_tab(self):
         self.lineRate = QtWidgets.QLineEdit('2')
         self.labelRate = QtWidgets.QLabel('Update rate')
@@ -152,7 +152,7 @@ class HoloWidget(NapariHybridWidget):
         self.pixelSizeEdit = QtWidgets.QLineEdit('3.45')
         self.naLabel = QtWidgets.QLabel('NA')
         self.naEdit = QtWidgets.QLineEdit('0.3')
-        
+
         grid = QtWidgets.QGridLayout()
         grid.addWidget(self.wvlLabel, 0, 0, 1, 1)
         grid.addWidget(self.wvlEdit, 0, 1, 1, 1)
@@ -163,13 +163,13 @@ class HoloWidget(NapariHybridWidget):
         grid.addWidget(self.sliderInLineFocus, 3, 1, 1, 1)
         grid.addWidget(self.labelRate, 3, 2, 1, 1)
         grid.addWidget(self.lineRate, 3, 3, 1, 1)
-        
+
         self.lineRate.textChanged.connect(
             lambda: self.sigUpdateRateChanged.emit(self.getUpdateRate())
         )
         self.tab_generalsettings.setLayout(grid)
-        
-        
+
+
     def getWvl(self):
         return float(self.wvlEdit.text())
 
@@ -184,7 +184,7 @@ class HoloWidget(NapariHybridWidget):
 
     def getShowOffAxisHoloChecked(self):
         return self.showCheckOffAxis.isChecked()
-    
+
     def getUpdateRate(self):
         return float(self.lineRate.text())
 
@@ -203,7 +203,7 @@ class HoloWidget(NapariHybridWidget):
         if not "Center of Cross Correlation" in self.viewer.layers:
             return [0, 0]
         CCCenter = self.viewer.layers['Center of Cross Correlation'].data[0]
-        # set in gui 
+        # set in gui
         self.textEditCCCenterX.setText(str(int(CCCenter[0])))
         self.textEditCCCenterY.setText(str(int(CCCenter[1])))
         return CCCenter
@@ -212,7 +212,7 @@ class HoloWidget(NapariHybridWidget):
         if "Center of Cross Correlation" in self.viewer.layers:
             self.viewer.layers.remove('Center of Cross Correlation')
         self.viewer.add_points(size=10, face_color='red', name='Center of Cross Correlation')
-        
+
     def getCCRadius(self):
         return float(self.textEditCCRadius.text())
 # Copyright (C) 2020-2024 ImSwitch developers

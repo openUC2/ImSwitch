@@ -33,7 +33,7 @@ class ColorProcessorSDK(object):
         try:
             try:
                 mFWD = os.path.dirname(os.path.realpath(__file__))
-                self._sdk = cdll.LoadLibrary(mFWD+'\\dll\\thorlabs_tsi_color_processing.dll') 
+                self._sdk = cdll.LoadLibrary(mFWD+'\\dll\\thorlabs_tsi_color_processing.dll')
             except OSError:
                 self._sdk = cdll.LoadLibrary(r"thorlabs_tsi_color_processing.dll")
         except OSError as ose:

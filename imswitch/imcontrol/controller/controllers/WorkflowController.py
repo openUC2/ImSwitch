@@ -20,7 +20,7 @@ import ast
 import skimage.transform
 import skimage.util
 import skimage
-import datetime 
+import datetime
 import numpy as np
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
@@ -42,7 +42,7 @@ from pydantic import BaseModel
 from fastapi import Query
 from collections import deque
 from tempfile import TemporaryDirectory
-import os 
+import os
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import uuid
@@ -83,7 +83,7 @@ class ScanParameters(BaseModel):
     channel: str = "Mono"
     tile_shape: List[int] = [512, 512]
     dtype: str = "uint16"
-    
+
 
 class HistoStatus(BaseModel):
     currentPosition: Optional[Tuple[float, float, int, int]] = None  # X, Y, nX, nY
@@ -105,13 +105,13 @@ class HistoStatus(BaseModel):
     currentTimeInterval: Optional[float] = None
     currentNtimes: int = 1
     pixelSize: float = 1.0
-    
+
     # GUI-Specific Parameters
     illuminationSources: List[str] = ["Brightfield", "Darkfield", "Laser", "DPC"]
     selectedIllumination: Optional[str] = "Brightfield"
     laserWavelengths: List[float] = [405, 488, 532, 635, 785, 10]  # in nm
     selectedLaserWavelength: float = 488.0
-    
+
     # Time-lapse parameters
     timeLapsePeriod: float = 330.4  # s
     timeLapsePeriodMin: float = 1.0
@@ -119,14 +119,14 @@ class HistoStatus(BaseModel):
     numberOfImages: int = 652
     numberOfImagesMin: int = 1
     numberOfImagesMax: int = 1000
-    
+
     # Autofocus parameters
     autofocusMinFocusPosition: float = 0.0
     autofocusMaxFocusPosition: float = 0.0
     autofocusStepSize: float = 0.1
     autofocusStepSizeMin: float = 0.01
     autofocusStepSizeMax: float = 10.0
-    
+
     # Z-Stack parameters
     zStackMinFocusPosition: float = 0.0
     zStackMaxFocusPosition: float = 0.0
@@ -155,14 +155,14 @@ class WorkflowStepDefinition(BaseModel):
 class WorkflowDefinition(BaseModel):
     steps: List[WorkflowStepDefinition] = Field(default_factory=list)
     # optionally add other metadata fields if needed
-    
+
 class StartWorkflowRequest(BaseModel):
     workflow_id: str
 
 class StitchedImageResponse(BaseModel):
     imageList: List[List[float]]
     image: str
-  
+
 class WorkflowController(LiveUpdatedController):
     """Linked to WorkflowWidget."""
 
@@ -171,21 +171,21 @@ class WorkflowController(LiveUpdatedController):
     sigUpdateWorkflowState = Signal(str)
     sigStartHistoWorkflow = Signal(float, float, float, float, float, float, bool, list)
     sigStartMultiColorTimelapseWorkflow = Signal(int, int, list, list, list, list, bool)
-        
-    
+
+
     WORKFLOW_STORAGE: Dict[str, WorkflowDefinition] = {}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
-        
+
         # read offset between cam and microscope from config file in µm
         self.offsetCamMicroscopeX = -2500 #  self._master.WorkflowManager.offsetCamMicroscopeX
         self.offsetCamMicroscopeY = 2500 #  self._master.WorkflowManager.offsetCamMicroscopeY
         self.currentOverlap = 0.85
         self.currentNY = 2
         self.currentNX = 2
-        self.currentStepSizeX = None    
+        self.currentStepSizeX = None
         self.currentStepSizeY = None
         self.currentNtimes = 1
         self.currentIinitialPosX = 0
@@ -194,17 +194,17 @@ class WorkflowController(LiveUpdatedController):
         self.currentAshlarStitching = False
         self.currentAshlarFlipX = False
         self.currentAshlarFlipY = False
-        self.currentResizeFactor = 0.25 
+        self.currentResizeFactor = 0.25
         self.initialOverlap = 0.85
-                
+
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.mDetector = self._master.detectorsManager[allDetectorNames[0]] # FIXME: This is hardcoded, need to be changed through the GUI
-        
+
         # some locking mechanisms
         self.isWorkflowRunning = False
-        self.isWorkflowRunning = False 
-       
+        self.isWorkflowRunning = False
+
         # Lasers
         allLaserNames = self._master.lasersManager.getAllDeviceNames()
         if "LED" in allLaserNames:
@@ -214,7 +214,7 @@ class WorkflowController(LiveUpdatedController):
 
         # Stages
         self.mStage = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
-            
+
         # connect signals
         self.sigStartHistoWorkflow.connect(self.start_xyz_histo_workflow)
         self.workflow_manager = WorkflowsManager()
@@ -249,7 +249,7 @@ class WorkflowController(LiveUpdatedController):
     ########################################
     # Helper Functions
     ########################################
-    
+
     def compute_scan_positions(self, x_min, x_max, y_min, y_max, x_step, y_step):
         # Compute a grid of (x,y) positions
         xs = [x_min + i * x_step for i in range(int((x_max - x_min) / x_step) + 1)]
@@ -261,7 +261,7 @@ class WorkflowController(LiveUpdatedController):
         # Calculate the number of steps in x and y directions
         steps_x = int((posXmax - posXmin) / (img_width*overlap))
         steps_y = int((posYmax - posYmin) / (img_height*overlap))
-        
+
         coordinates = []
 
         # Loop over the positions in a snake pattern
@@ -272,20 +272,20 @@ class WorkflowController(LiveUpdatedController):
             else:  # Odd rows: right to left
                 for x in range(steps_x - 1, -1, -1):  # Starting from the last position, moving backwards
                     coordinates.append((posXmin + x * img_width *overlap, posYmin + y * img_height *overlap), x, y)
-        
+
         return coordinates
-    
+
     @APIExport()
     def computeOptimalScanStepSize2(self, overlap: float = 0.75):
         mFrameSize = (self.mDetector._camera.SensorHeight, self.mDetector._camera.SensorWidth)
         bestScanSizeX = mFrameSize[1]*self.mDetector.pixelSizeUm[-1]*overlap
-        bestScanSizeY = mFrameSize[0]*self.mDetector.pixelSizeUm[-1]*overlap     
+        bestScanSizeY = mFrameSize[0]*self.mDetector.pixelSizeUm[-1]*overlap
         return (bestScanSizeX, bestScanSizeY)
 
     ########################################
     # Workflow Functions
     ########################################
-    
+
     def move_stage_xy(self, posX: float, posY: float, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
         self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
@@ -323,7 +323,7 @@ class WorkflowController(LiveUpdatedController):
     def dummy_main_func(self):
         self._logger.debug("Dummy main function called")
         return True
-    
+
     def acquire_frame(self, channel: str):
         self._logger.debug(f"Acquiring frame on channel {channel}")
         mFrame = self.mDetector.getLatestFrame()
@@ -332,8 +332,8 @@ class WorkflowController(LiveUpdatedController):
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
         self._logger.debug(f"Setting exposure time to {exposure_time}")
         return exposure_time
-    
-    
+
+
     def process_data(self, context: WorkflowContext, metadata: Dict[str, Any]):
         self._logger.debug(f"Processing data for step {metadata['step_id']}...")
         metadata["processed"] = True
@@ -341,7 +341,7 @@ class WorkflowController(LiveUpdatedController):
     def save_frame(self, context: WorkflowContext, metadata: Dict[str, Any]):
         self._logger.debug(f"Saving frame for step {metadata['step_id']}...")
         metadata["frame_saved"] = True
-        
+
     def save_frame_tiff(self, context: WorkflowContext, metadata: Dict[str, Any]):
         # Retrieve the TIFF writer and write the tile
         tiff_writer = context.get_object("tiff_writer")
@@ -352,7 +352,7 @@ class WorkflowController(LiveUpdatedController):
         # append the image to the tiff file
         tiff_writer.save(img)
         metadata["frame_saved"] = True
-        
+
     def close_tiff_writer(self):
         if self.tiff_writer is not None:
             self.tiff_writer.close()
@@ -372,20 +372,20 @@ class WorkflowController(LiveUpdatedController):
         row = context.data.get("global", {}).get("last_row")
         if col is not None and row is not None:
             metadata["IndexX"] = col
-            metadata["IndexY"] = row    
+            metadata["IndexY"] = row
         self._logger.debug(f"Saving frame tile at row={row}, column={col}")
         try:zarr_writer["tiles"].write_tile(img, row, col)
         except:zarr_writer["tiles"].write_tile(img.T, row, col)
         metadata["frame_saved"] = True
-        
+
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
         import time
         time.sleep(seconds)
-        
+
     def addFrametoFile(self, frame:np.ndarray, context: WorkflowContext, metadata: Dict[str, Any]):
         self._logger.debug(f"Adding frame to file for step {metadata['step_id']}...")
         metadata["frame_added"] = True
-        
+
     def append_data(self, context: WorkflowContext, metadata: Dict[str, Any]):
         obj = context.get_object("data_buffer")
         if obj is not None:
@@ -398,19 +398,19 @@ class WorkflowController(LiveUpdatedController):
             context.remove_object("zarr_writer")
             metadata["zarr_closed"] = True
 
-    
+
     ########################################
     # Control Flow Functions
     ########################################
-     
+
     @APIExport()
     def stopWorkflow(self):
         self.isWorkflowRunning = False
-        
+
     @APIExport()
-    def startWorkflowTileBasedByParameters(self, numberTilesX:int=2, numberTilesY:int=2, stepSizeX:int=100, stepSizeY:int=100, 
-                                            nTimes:int=1, tPeriod:int=1, initPosX:Optional[Union[int, str]] = None, initPosY:Optional[Union[int, str]] = None, 
-                                            isStitchAshlar:bool=False, isStitchAshlarFlipX:bool=False, isStitchAshlarFlipY:bool=False, resizeFactor:float=0.25, 
+    def startWorkflowTileBasedByParameters(self, numberTilesX:int=2, numberTilesY:int=2, stepSizeX:int=100, stepSizeY:int=100,
+                                            nTimes:int=1, tPeriod:int=1, initPosX:Optional[Union[int, str]] = None, initPosY:Optional[Union[int, str]] = None,
+                                            isStitchAshlar:bool=False, isStitchAshlarFlipX:bool=False, isStitchAshlarFlipY:bool=False, resizeFactor:float=0.25,
                                             overlap:float=0.75):
         def computePositionList(numberTilesX, numberTilesY, stepSizeX, stepSizeY, initPosX, initPosY):
             positionList = []
@@ -426,10 +426,10 @@ class WorkflowController(LiveUpdatedController):
         if stepSizeX<=0 or stepSizeX is None:
             stepSizeX, _ = self.computeOptimalScanStepSize2()
         if stepSizeY<=0 or stepSizeY is None:
-            _, stepSizeY = self.computeOptimalScanStepSize2()          
+            _, stepSizeY = self.computeOptimalScanStepSize2()
         if initPosX is None or type(initPosX)==str :
             initPosX = self.mStage.getPosition()["X"]
-        if initPosY is None or type(initPosY)==str:    
+        if initPosY is None or type(initPosY)==str:
             initPosY = self.mStage.getPosition()["Y"]
 
     @APIExport()
@@ -459,7 +459,7 @@ class WorkflowController(LiveUpdatedController):
     @APIExport()
     def workflow_status(self):
         return self.workflow_manager.get_status()
-    
+
     @APIExport()
     def force_stop_workflow(self):
         self.workflow_manager.stop_workflow()
@@ -477,7 +477,7 @@ class WorkflowController(LiveUpdatedController):
     ########################################
     # Transmit Worflow Definition via API
     ########################################
-    
+
     @APIExport(requestType="POST")
     def create_workflow_definition_api(self, definition: WorkflowDefinition):
         workflow_id = str(uuid.uuid4())
@@ -513,15 +513,15 @@ class WorkflowController(LiveUpdatedController):
             )
             steps.append(step)
 
-        # (Edges might define ordering or concurrency—this is up to you 
-        #  how to interpret or linearize them. For a simple linear workflow, 
+        # (Edges might define ordering or concurrency—this is up to you
+        #  how to interpret or linearize them. For a simple linear workflow,
         #  you might just rely on the array order or define a topological sort.)
         def sendProgress(payload):
             self.sigUpdateWorkflowState.emit(payload)
-            
+
         wf = Workflow(steps, self.workflow_manager)
         context = WorkflowContext()
-        
+
         # Insert the tiff writer object into context so `save_frame` can use it
         tiff_writer = tifffile.TiffWriter("timelapse.tif")
         context.set_object("tiff_writer", tiff_writer)
@@ -529,7 +529,7 @@ class WorkflowController(LiveUpdatedController):
         # Run the workflow
         # context = wf.run_in_background(context)
         self.workflow_manager.start_workflow(wf, context)
-        
+
         return {"status": "started", "workflow_id": workflow_id}
 
 
@@ -548,13 +548,13 @@ class WorkflowController(LiveUpdatedController):
         autofocus_on: bool = Query(False),
         channel: str = Query("Mono")
     ):
-        
+
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
             raise HTTPException(status_code=400, detail="Another workflow is already running.")
-        
+
         # Start the detector if not already running
         if not self.mDetector._running: self.mDetector.startAcquisition()
-        
+
         # Compute the scan positions
         xs, ys = self.compute_scan_positions(x_min, x_max, y_min, y_max, x_step, y_step)
 
@@ -562,7 +562,7 @@ class WorkflowController(LiveUpdatedController):
         tmp_dir = TemporaryDirectory()
         store_path = os.path.join(tmp_dir.name, "tiled.zarr")
         self._logger.debug("Zarr store path: "+store_path)
-        
+
         # Let's assume single channel "Mono" for simplicity, but can adapt for more.
         dataset = open_ome_zarr(store_path, layout="tiled", mode="a", channel_names=[channel])
         # Calculate grid shape based on the number of xy positions
@@ -576,7 +576,7 @@ class WorkflowController(LiveUpdatedController):
         # if autofocus_on == True: run autofocus before every XY move
         # else no autofocus pre-func
         pre_for_xy = [self.autofocus] if autofocus_on else []
-        
+
         illuSources = ["LED", "Laser"]
 
         workflowSteps = []
@@ -599,7 +599,7 @@ class WorkflowController(LiveUpdatedController):
         z_pos = 0
         frames = [0]  # single frame index for simplicity
 
-        
+
         for y_i, y_pos in enumerate(ys):
             # we want to have snake scan pattern
             if y_i % 2 == 0:
@@ -653,7 +653,7 @@ class WorkflowController(LiveUpdatedController):
                             post_funcs=[self.process_data, self.save_frame_zarr],
                         ))
                         step_id += 1
-        
+
         # Close Zarr dataset at the end
         workflowSteps.append(WorkflowStep(
             name="Close Zarr dataset",
@@ -664,7 +664,7 @@ class WorkflowController(LiveUpdatedController):
 
         def sendProgress(payload):
             self.sigUpdateWorkflowState.emit(payload)
-            
+
         # Create a workflow and context
         wf = Workflow(steps=workflowSteps, workflow=self.workflow_manager)
         context = WorkflowContext()
@@ -678,10 +678,10 @@ class WorkflowController(LiveUpdatedController):
 
         #context = wf.run(context)
         # questions
-        # How can I pause a running thread? 
+        # How can I pause a running thread?
         # we would need a handle on the running thread to pause it
         # We should not run yet another workflow and wait for the first one to finish
-        
+
 
         # Return the store path to the client so they know where data is stored
         return {"status": "completed", "zarr_store_path": store_path}#, "results": context.data}
@@ -782,12 +782,12 @@ class WorkflowController(LiveUpdatedController):
                     # Acquire frame
                     # Possibly define a function that sets 'coord_index' and 'illum_index' in the metadata
                     # so you can compute tile positions in update_tile_indices
-                    
+
                     # have a seperate step to udpate indicees
                     def set_indices(context: WorkflowContext, metadata: Dict[str, Any]):
                         metadata["coord_index"] = c_i
                         metadata["illum_index"] = ill_i
-                    
+
                     workflowSteps.append(WorkflowStep(
                         name=f"Update indices",
                         main_func=self.dummy_main_func,

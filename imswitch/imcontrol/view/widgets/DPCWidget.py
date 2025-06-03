@@ -51,7 +51,7 @@ class DPCWidget(NapariHybridWidget):
                 'limits': (0, 1.6),
                 'step': 0.05,
                 'suffix': 'A.U.',
-                },            
+                },
             {
                 'name': 'n',
                 'type': 'float',
@@ -82,7 +82,7 @@ class DPCWidget(NapariHybridWidget):
         pmtreeDock = pg.dockarea.Dock('DPC Recon Parameters', size=(1, 1))
         pmtreeDock.addWidget(self.DPCParameterTree)
         self.paramtreeDockArea.addDock(pmtreeDock)
-        
+
 
         # Assign locations for gui elements
         self.grid = QtWidgets.QGridLayout()
@@ -90,23 +90,23 @@ class DPCWidget(NapariHybridWidget):
 
         self.grid.addWidget(self.startDPCAcquisition, 1, 0, 1, 1)
         self.grid.addWidget(self.isRecordingButton, 1, 1, 1, 1)
-        
-        # DPC parameters 
+
+        # DPC parameters
         self.grid.addWidget(self.paramtreeDockArea, 4, 0, 3, 2)
-        
+
         self.layer = None
         self.layers={}
 
     def getImage(self):
         if self.layer is not None:
             return self.img.image
-        
+
     def setImage(self, im, name="DPC"):
         if name not in self.viewer.layers:
             self.viewer.add_image(im, rgb=False, name=name, blending='additive')
         else:
             self.viewer.layers[name].data = im
-        
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

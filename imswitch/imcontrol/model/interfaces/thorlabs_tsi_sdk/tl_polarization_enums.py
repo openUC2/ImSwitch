@@ -32,21 +32,21 @@ class POLAR_PHASE(_CTypesEnum):
     """
     PolarPhase0 = 0
     """
-    0 degrees polarization phase 
-    
+    0 degrees polarization phase
+
     """
     PolarPhase45 = 1
     """
-    45 degrees polarization phase 
+    45 degrees polarization phase
 
     """
     PolarPhase90 = 2
     """
-    90 degrees polarization phase 
+    90 degrees polarization phase
 
     """
     PolarPhase135 = 3
     """
-    135 (-45) degrees polarization phase 
+    135 (-45) degrees polarization phase
 
     """

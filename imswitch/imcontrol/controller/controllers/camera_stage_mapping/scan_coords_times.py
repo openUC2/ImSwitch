@@ -5,7 +5,7 @@ Copyright Joe Knapper 2020, released under GNU GPL v3
 """
 
 
-import numpy as np 
+import numpy as np
 #import matplotlib.pyplot as plt
 
 def ordered_spiral(starting_x, starting_y, number_of_shells, x_move, y_move):

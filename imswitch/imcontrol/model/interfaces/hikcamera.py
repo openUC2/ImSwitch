@@ -132,7 +132,7 @@ class CameraHIK:
 
         # get available parameters
         self.mParameters = self.get_camera_parameters()
-        
+
         # set parameters
         self.setBinning(binning=self.binning)
         self.trigger_source = self.mParameters.get("trigger_source", "Continuous")
@@ -183,7 +183,7 @@ class CameraHIK:
             self.__logger.debug("Camera reconnected successfully.")
         except Exception as e:
             self.__logger.error(f"Failed to reconnect camera: {e}")
-    
+
     # ---------------------------------------------------------------------
     # RGB detection (very rough – checks model string for "UC")
     # ---------------------------------------------------------------------
@@ -200,7 +200,7 @@ class CameraHIK:
             "Software Trigger",
             "External Trigger (LINE0)"
         ]
-        
+
     def getTriggerSource(self) -> str:
         """Return the current trigger source as a string."""
         if not self.is_connected:
@@ -220,7 +220,7 @@ class CameraHIK:
         self.frameNumber = fid
         self.timestamp   = ts
         #print("frame received:", fid, "timestamp:", ts)
-    
+
     def _wrap_cb(self, user_cb):
         '''
         Wrap a user callback function to be used with the SDK.
@@ -283,7 +283,7 @@ class CameraHIK:
             user_cb(frame, fid, ts)
 
         return _cb
-        
+
     def get_camera_parameters(self):
         param_dict = {}
 
@@ -292,10 +292,10 @@ class CameraHIK:
         ret = self.camera.MV_CC_GetEnumValue("PixelFormat", stPixelFormat)
         if ret == 0:
             param_dict["pixel_format"] = stPixelFormat.nCurValue
-        
-        # camera Name 
+
+        # camera Name
         stName = MVCC_STRINGVALUE()
-        param_dict["isRGB"] = False            
+        param_dict["isRGB"] = False
         ret = self.camera.MV_CC_GetStringValue("DeviceModelName", stName)
         if ret == 0:
             param_dict["model_name"] = stName.chCurValue.decode("utf-8")
@@ -313,7 +313,7 @@ class CameraHIK:
         ret = self.camera.MV_CC_GetIntValue("Height", stHeight)
         if ret == 0:
             param_dict["height"] = stHeight.nCurValue
-        
+
         # get exposure time
         mExposureValues = self.get_exposuretime()
         if mExposureValues[0] is not None:
@@ -327,7 +327,7 @@ class CameraHIK:
             param_dict["gain_current"] = mGainValues[0]
             param_dict["gain_min"] = mGainValues[1]
             param_dict["gain_max"] = mGainValues[2]
-            
+
         return param_dict
 
     def get_gain(self):
@@ -339,8 +339,8 @@ class CameraHIK:
         else:
             self.__logger.error(f"Get gain failed 0x{ret:x}")
             return (None, None, None)
-        
-        
+
+
     def get_exposuretime(self):
         # Current / Min / Max Exposure
         stExposure = MVCC_FLOATVALUE()
@@ -480,7 +480,7 @@ class CameraHIK:
         frames = list(self.frame_buffer)
         ids    = list(self.frameid_buffer)
         self.flushBuffer()
-        
+
         self.lastFrameFromBuffer = frames[-1] if frames else None
         return np.array(frames), np.array(ids)
 
@@ -617,7 +617,7 @@ class CameraHIK:
             self.__logger.error(f"Software trigger failed! ret [0x{ret:x}]")
             return False
         return True
-    
+
     def openPropertiesGUI(self):
         pass
 
@@ -630,7 +630,7 @@ class CameraHIK:
                 if self.g_bExit:
                     break
                 if not self.is_connected:
-                    # reconnect the camera 
+                    # reconnect the camera
                     self.__logger.debug("Camera disconnected, trying to reconnect...")
                     self.reconnectCamera()
                 ret = cam.MV_CC_GetImageBuffer(stOutFrame, 1000)
@@ -708,7 +708,7 @@ class CameraHIK:
 
             while True:
                 if not self.is_connected:
-                    # reconnect the camera 
+                    # reconnect the camera
                     self.__logger.debug("Camera disconnected, trying to reconnect...")
                     self.reconnectCamera()
                 if self.g_bExit:
@@ -774,7 +774,7 @@ class CameraHIK:
                         self.is_connected = False
                         self.__logger.error("Get image fail! ret[0x%x]" % ret)
                         del data_buf
-                        
+
             if self.g_bExit:
                 return
 
@@ -791,7 +791,7 @@ class CameraHIK:
         flatfield = gaussian(flatfield, sigma=nGauss)
         flatfield = median(flatfield, selem=np.ones((nMedian, nMedian)))
         self.flatfieldImage = flatfield
-        
+
     def getFrameNumber(self):
         return self.frameNumber
 

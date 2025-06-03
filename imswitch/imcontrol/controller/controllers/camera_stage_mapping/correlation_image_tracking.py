@@ -6,9 +6,9 @@ image.  It can also be used to track 2D motion.  ``locate_feature_in_image``
 uses cross correlation followed by background-subracted centre of mass to
 find the location of a template with respect to an image.
 
-This code is faster than the FFT-based code if you have a good idea of 
-where the target is, and if the target is much smaller than the image, i.e. 
-if the search area is small.  If you are correlating whole images against 
+This code is faster than the FFT-based code if you have a good idea of
+where the target is, and if the target is much smaller than the image, i.e.
+if the search area is small.  If you are correlating whole images against
 each other, the FFT method is likely faster.
 
 (c) Richard Bowman 2020, released under GNU GPL v3
@@ -87,4 +87,3 @@ def locate_feature_in_image(image, feature, margin=0, restrict=False, relative_t
     if relative_to in ["centre", "center"]:
         return pos - (np.array(image.shape[:2]) - 1)/2.
     raise ValueError("An invalid value was specified for datum.")
-    

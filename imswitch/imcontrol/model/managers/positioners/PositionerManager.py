@@ -17,28 +17,28 @@ class PositionerManager(ABC):
             initialPosition: The initial position for each axis. This is a dict
               in the format ``{ axis: position }``.
         """
-        
+
         self._positionerInfo = positionerInfo
         self._position = initialPosition
         self.__axes = positionerInfo.axes
         # SPEED
         if initialSpeed is None:
-            # assign default speeds 
+            # assign default speeds
             initialSpeed = {axis: 0 for axis in positionerInfo.axes} # TODO: Hardcoded - should be updated according to JSon?
         self._speed = initialSpeed
         try: self.setSpeed(positionerInfo.managerProperties.get("initialSpeed")) # force to display the correct values
         except: pass
-        
+
         # HOME
         initialHome={
             axis: False for axis in positionerInfo.axes # TODO: Hardcoded - hsould be updated according to JSon?
-        }   
+        }
         self._home = initialHome # is homed?
 
         # settings for stopping the axis
         initialStop={
             axis: False for axis in positionerInfo.axes # TODO: Hardcoded - hsould be updated according to JSon?
-        }   
+        }
         self._stop = initialStop # is stopped?
 
         self.__name = name
@@ -105,8 +105,8 @@ class PositionerManager(ABC):
         position. Derived classes will update the position field manually. If
         the positioner controls multiple axes, the axis must be specified. """
         pass
-    
-    @abstractmethod 
+
+    @abstractmethod
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
         ''' Moves the positioner infinitely at a given speed'''
         pass
@@ -129,22 +129,22 @@ class PositionerManager(ABC):
     def finalize(self) -> None:
         """ Close/cleanup positioner. """
         pass
-    
+
     def enableMotors(self, enable: bool=None, autoenable:bool=None) -> None:
         """ Enable/disable motors. """
         pass
-    
+
     def moveToSampleMountingPosition(self) -> None:
         """ Move to sample mounting position. """
         pass
 
     def setStageOffsetAxis(self, knownOffset:float=None, axis="X"):
         """ Sets the offset of a known position to the current position of the stage."""
-        
+
     def getStageOffsetAxis(self, axis:str="X"):
         """ Returns the offset of the stage for a given axis."""
         pass
-    
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

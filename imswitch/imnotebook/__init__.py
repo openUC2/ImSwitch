@@ -10,20 +10,20 @@ from .view import LaunchNotebookServer
 
 def getMainViewAndController(moduleCommChannel, multiModuleWindowController, moduleMainControllers,
                              *_args, **_kwargs):
-    if IS_HEADLESS: 
+    if IS_HEADLESS:
         view = None
         notebookServer = LaunchNotebookServer()
         webaddr = notebookServer.startServer()
         print(webaddr)
     else:
         view = ImScrMainView()
-    
+
     try:
         controller = ImScrMainController(
             view,
             moduleCommChannel=moduleCommChannel,
             multiModuleWindowController=multiModuleWindowController,
-            moduleMainControllers=moduleMainControllers, 
+            moduleMainControllers=moduleMainControllers,
             webaddr=webaddr
         )
     except Exception as e:

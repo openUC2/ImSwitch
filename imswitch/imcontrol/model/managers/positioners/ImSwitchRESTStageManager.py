@@ -26,7 +26,7 @@ class ImSwitchRESTStageManager(PositionerManager):
         self._commChannel = lowLevelManagers['commChannel']
         self.__logger = initLogger(self, instanceName=name)
         super().__init__(positionerInfo, name, initialPosition={axis: 0 for axis in positionerInfo.axes})
-        
+
 
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=gTIMEOUT):
         '''
@@ -39,7 +39,7 @@ class ImSwitchRESTStageManager(PositionerManager):
             new_position = self._position[axis]  + value
             self._imswitch_client.positionersManager.movePositioner(self.positioner_name, axis, value, is_absolute=is_absolute, is_blocking=is_blocking)
         self._position[axis] = new_position
-        
+
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
         self._motor.move_forever(speed=speed, is_stop=is_stop)
 
@@ -57,12 +57,12 @@ class ImSwitchRESTStageManager(PositionerManager):
         pass #TODO: Not implemented yet
 
     def setPositionFromDevice(self, positionArray: np.array):
-        ''' mostly used for he position callback 
+        ''' mostly used for he position callback
         If new positions are coming from the device they will be updated in ImSwitch too'''
         for iAxis, axisName in enumerate(["A", "X", "Y", "Z"]):
             self.setPosition(positionArray[iAxis]*self.stepSizes[axisName], axisName)
         self._commChannel.sigUpdateMotorPosition.emit()
-        
+
     def closeEvent(self):
         pass
 
@@ -135,7 +135,7 @@ class ImSwitchRESTStageManager(PositionerManager):
         self.setPosition(axis="Y", value=0)
 
     def home_z(self,isBlocking=False):
-        if abs(self.homeStepsZ)>0:            
+        if abs(self.homeStepsZ)>0:
             self.move(value=self.homeStepsZ, speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsZ)*np.abs(self.homeEndposReleaseZ), speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
             self.setPosition(axis="Z", value=0)
@@ -146,7 +146,7 @@ class ImSwitchRESTStageManager(PositionerManager):
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
         self.setPosition(axis="Z", value=0)
-        
+
     def home_a(self,isBlocking=False):
         if abs(self.homeStepsA)>0:
             self.move(value=self.homeStepsA, speed=self.homeSpeedA, axis="A", is_absolute=False, is_blocking=True)

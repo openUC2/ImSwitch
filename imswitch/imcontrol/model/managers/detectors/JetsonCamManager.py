@@ -23,7 +23,7 @@ class JetsonCamManager(DetectorManager):
 
         model = self._camera.model
         self._running = False
-        
+
 
         for propertyName, propertyValue in detectorInfo.managerProperties['avcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
@@ -44,7 +44,7 @@ class JetsonCamManager(DetectorManager):
             'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
                         editable=False),
             'pixel_format': DetectorListParameter(group='Misc', value='Mono12', options=['Mono8','Mono12'], editable=True)
-            }            
+            }
 
         # Prepare actions
         actions = {
@@ -88,9 +88,9 @@ class JetsonCamManager(DetectorManager):
         return value
 
     def setBinning(self, binning):
-        super().setBinning(binning) 
-        
-    def getChunk(self):        
+        super().setBinning(binning)
+
+    def getChunk(self):
         return np.expand_dims(self._camera.getLastChunk(),0)
 
     def flushBuffers(self):
@@ -133,16 +133,16 @@ class JetsonCamManager(DetectorManager):
         # TODO: unsure if frameStart is needed? Try without.
         # This should be the only place where self.frameStart is changed
         # self._frameStart = (hpos, vpos)
-        # Only place self.shapes is changed 
+        # Only place self.shapes is changed
         #vsize = self._camera.getPropertyValue('image_width')
         #hsize = self._camera.getPropertyValue('image_height')
         self._shape = self._camera.shape
-    
+
     def _performSafeCameraAction(self, function):
         """ This method is used to change those camera properties that need
         the camera to be idle to be able to be adjusted.
         """
-        
+
         wasrunning = self._running
         self.stopAcquisitionForROIChange()
         function()

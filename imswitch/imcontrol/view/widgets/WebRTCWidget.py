@@ -11,12 +11,12 @@ class WebRTCWidget(NapariHybridWidget):
 
 
     def __post_init__(self):
-        pass        
-        
-    
-    
-    
-        
+        pass
+
+
+
+
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

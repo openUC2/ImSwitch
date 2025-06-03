@@ -123,7 +123,7 @@ def test_wellplate_experiment(imswitch_process):
         print("POST /ExperimentController/startWellplateExperiment =>", resp.status_code, resp.text)
     except Exception as e:
         pytest.fail(f"POST request failed: {e}")
-    
+
     # Optionally validate response
     assert resp.status_code == 200 or resp.status_code == 201, f"Unexpected status code: {resp.status_code}"
     assert "running" in resp.text, "Expected experiment to be running but got something else."

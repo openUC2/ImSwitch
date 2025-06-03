@@ -16,7 +16,7 @@ class DetectorsManager(MultiManager, SignalInterface):
         str, np.ndarray, bool, list, bool
     )  # (detectorName, image, init, scale, isCurrentDetector)
     sigNewFrame = Signal()
-    
+
     detectorParams = {}
 
     def __init__(self, detectorInfos, updatePeriod, **lowLevelManagers):
@@ -28,9 +28,9 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._activeAcqsMutex = Mutex()
 
         self._currentDetectorName = None
-        
+
         self.detectorParams["compressionlevel"]=80
-                
+
         for detectorName, detectorInfo in detectorInfos.items():
             if not self._subManagers[detectorName].forAcquisition:
                 continue
@@ -67,10 +67,10 @@ class DetectorsManager(MultiManager, SignalInterface):
     def updateGlobalDetectorParams(self, params):
         # we expect a dictionary with the parameters
         self.detectorParams.update(params)
-        
+
     def getGlobalDetectorParams(self) -> dict:
         return self.detectorParams
-    
+
     def __del__(self):
         self._lvWorker.stop()
         if hasattr(super(), '__del__'):
@@ -174,18 +174,18 @@ class DetectorsManager(MultiManager, SignalInterface):
         if disableAcq:
             self.execOnAll(lambda c: c.stopAcquisition(), condition=lambda c: c.forAcquisition)
             self.sigAcquisitionStopped.emit()
-    
+
     def getAcquistionHandles(self):
         """ Returns the list of active acquisition handles. """
         return self._activeAcqHandles + self._activeAcqLVHandles
-    
+
     def checkIfIsLiveView(self):
         """ Returns if there is live view ongoing """
         if self._activeAcqLVHandles and len(self._activeAcqLVHandles):
             return True
         else:
             return False
-    
+
     def setUpdatePeriod(self, updatePeriod):
         self._lvWorker.setUpdatePeriod(updatePeriod)
         self._thread.quit()

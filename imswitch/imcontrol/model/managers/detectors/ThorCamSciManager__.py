@@ -295,7 +295,7 @@ class ThorCamSciManager(DetectorManager):
             from imswitch.imcontrol.model.interfaces.thorcamscicamera import CameraThorCamSci
             self.__logger.debug(f'Trying to initialize Thorlabs Scientific camera {cameraId}')
             camera = CameraThorCamSci(cameraNo=cameraId, binning=binning)
-       
+
         except Exception as e:
             self.__logger.debug(e)
             self.__logger.warning(f'Failed to initialize ThorCamSci {cameraId}, loading TIS mocker')

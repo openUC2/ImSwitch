@@ -7,7 +7,7 @@ class ImScrMainController(MainController):
     """ Main controller of imscripting. """
 
     def __init__(self, mainView, moduleCommChannel, multiModuleWindowController,
-                 moduleMainControllers, 
+                 moduleMainControllers,
                  webaddr=None):
         self.__mainView = mainView
         self.__moduleCommChannel = moduleCommChannel

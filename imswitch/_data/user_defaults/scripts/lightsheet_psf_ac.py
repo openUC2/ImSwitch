@@ -33,14 +33,14 @@ num_steps = int(total_distance / step_size)  # Calculate number of steps
 for i in range(num_steps):
     # Relative move, step size 5
     api.imcontrol.movePositioner(positionerName, "X", step_size, False, True)
-    
+
     # Wait 50ms before proceeding
     time.sleep(1)
-    
+
     # Capture image
     image = api.imcontrol.snapImage(True, False)
     mImageList.append(image)
-    
+
     # Optional: Print current position
     current_position = start_X + (i + 1) * step_size
     print(f"Image captured at position X = {current_position}.")

@@ -20,7 +20,7 @@ class ImRecMainViewController(ImRecWidgetController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._commChannel.extension = self._widget.extension
-        
+
         if not IS_HEADLESS:
             self.dataFrameController = self._factory.createController(
                 DataFrameController, self._widget.dataFrame

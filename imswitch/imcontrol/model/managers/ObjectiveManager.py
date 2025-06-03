@@ -6,7 +6,7 @@ import os
 import numpy as np
 from PIL import Image
 from scipy import signal as sg
-import os 
+import os
 from imswitch.imcommon.model import dirtools
 
 import json
@@ -22,7 +22,7 @@ class ObjectiveManager(SignalInterface):
         self.__logger = initLogger(self)
 
         if ObjectiveInfo is None:
-            # define default 
+            # define default
             self.__ObjectiveInfo = {
                 "pixelsizes": [0.1, 0.2],
                 "NAs": [0.2, 0.1],
@@ -35,8 +35,8 @@ class ObjectiveManager(SignalInterface):
                 "homeAcceleration": 20000,
                 "calibrateOnStart": True
             }
-            
-            
+
+
         self.__ObjectiveInfo = ObjectiveInfo
         self.pixelsizes = self.__ObjectiveInfo.pixelsizes
         self.NAs = self.__ObjectiveInfo.NAs
@@ -48,11 +48,11 @@ class ObjectiveManager(SignalInterface):
         self.homeSpeed = self.__ObjectiveInfo.homeSpeed
         self.homeAcceleration = self.__ObjectiveInfo.homeAcceleration
         self.calibrateOnStart = self.__ObjectiveInfo.calibrateOnStart
-        
-    
+
+
 
     def update(self):
-        return None 
+        return None
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

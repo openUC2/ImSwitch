@@ -63,7 +63,7 @@ class PolarizationProcessorSDK(object):
         try:
             if platform.system() == 'Windows':
                 mFWD = os.path.dirname(os.path.realpath(__file__))
-                self._sdk = cdll.LoadLibrary(mFWD+'\\dll\\thorlabs_tsi_polarization_processor.dll')                     
+                self._sdk = cdll.LoadLibrary(mFWD+'\\dll\\thorlabs_tsi_polarization_processor.dll')
             elif platform.system() == 'Linux':
                 try:
                     self._sdk = cdll.LoadLibrary(r"./libthorlabs_tsi_polarization_processor.so")

@@ -19,7 +19,7 @@ class PositionerWidget(Widget):
         self.pars = {}
         self.grid = QtWidgets.QGridLayout()
         #self.setLayout(self.grid)
-    
+
         # Schritt 1: Container-Widget erstellen
         containerWidget = QtWidgets.QWidget()
 
@@ -100,8 +100,8 @@ class PositionerWidget(Widget):
             )
 
             self.numPositioners += 1
-            
-    
+
+
 
     def getAbsPosition(self, positionerName, axis):
         """ Returns the absolute position of the  specified positioner axis in

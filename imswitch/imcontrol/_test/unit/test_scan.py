@@ -54,8 +54,8 @@ def test_scan_signals():
 
 if __name__ == '__main__':
     test_scan_signals()
-    
-    
+
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

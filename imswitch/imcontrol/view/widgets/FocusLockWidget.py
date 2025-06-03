@@ -11,7 +11,7 @@ class FocusLockWidget(Widget):
     """ Widget containing focus lock interface. """
     sigSliderExpTValueChanged = QtCore.Signal(float)  # (value)
     sigSliderGainValueChanged = QtCore.Signal(float)  # (value)
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -69,7 +69,7 @@ class FocusLockWidget(Widget):
         valueRangeGain = (0,30)
         tickInterval = 5
         singleStep = 1
-        
+
         # exposure slider
         self.sliderExpT = guitools.FloatSlider(QtCore.Qt.Horizontal, self, allowScrollChanges=False,
                                            decimals=valueDecimals)

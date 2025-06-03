@@ -137,7 +137,7 @@ class LEDWidget(Widget):
         """ Sets the value of the specified LED, in the units that the LED
         uses. """
         self.ledModules[ledName].setValue(value)
-    
+
     def setModulationFrequency(self, ledName, value):
         """ Sets the modulation frequency of the specified LED. """
         self.ledModules[ledName].setModulationFrequency(value)
@@ -296,7 +296,7 @@ class LEDModule(QtWidgets.QWidget):
         """ Returns the value of the LED, in the units that the LED
         uses. """
         return float(self.setPointEdit.text())
-    
+
     def setActive(self, active):
         """ Sets whether the LED is powered on. """
         self.enableButton.setChecked(active)

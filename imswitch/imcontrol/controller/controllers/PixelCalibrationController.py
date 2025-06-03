@@ -184,7 +184,7 @@ class CSMExtension(object):
 
     def camera_stage_functions(self):
         """Return functions that allow us to interface with the microscope"""
-        
+
         def grabCroppedFrame(crop_size=512):
             marray = self._parent.detector.getLatestFrame()
             center_x, center_y = marray.shape[1] // 2, marray.shape[0] // 2
@@ -229,7 +229,7 @@ class CSMExtension(object):
         result = calibrate_backlash_1d(tracker, move, direction)
         result["move_history"] = move.history
         return result
-    
+
 
 
     def calibrate_xy(self):

@@ -1,5 +1,5 @@
 import json
-import os 
+import os
 
 def generate_wellplate_json(
     name,
@@ -30,11 +30,11 @@ def generate_wellplate_json(
             wells.append({
                 "wellID": f"{chr(65+j)}{i+1}",
                 "positionX": well_x,
-                "positionY": well_y, 
+                "positionY": well_y,
                 "positionXpx": well_x * pixel_image_x / phys_dim_x,
                 "positionYpx": well_y * pixel_image_y / phys_dim_y,
-                "idX": i, 
-                "idY": j, 
+                "idX": i,
+                "idY": j,
                 "idN": idN,
                 "positionXmin": well_x - well_radius,
                 "positionXmax": well_x + well_radius,
@@ -62,9 +62,9 @@ def generate_wellplate_json(
     return data
 
 imageFilePaths = [
-                  'images/samplelayouts/6wellplate_1509x1010.png', 
-                  'images/samplelayouts/12wellplate_1509x1010.png', 
-                  'images/samplelayouts/24wellplate_1509x1010.png', 
+                  'images/samplelayouts/6wellplate_1509x1010.png',
+                  'images/samplelayouts/12wellplate_1509x1010.png',
+                  'images/samplelayouts/24wellplate_1509x1010.png',
                   'images/samplelayouts/96wellplate_1509x1010.png']
 
 parameterPerImage = [
@@ -81,7 +81,7 @@ parameterPerImage = [
         "center_x": 63.85,
         "center_y": 42.75,
         "well_spacing_x": 31,
-        "well_spacing_y": 0, 
+        "well_spacing_y": 0,
         "well_radius": 10,
         "filePath": 'images/samplelayouts/4slidecarrier_1509x1010.png'
     },
@@ -98,7 +98,7 @@ parameterPerImage = [
         "center_x": 63.85,
         "center_y": 42.75,
         "well_spacing_x": 39,
-        "well_spacing_y": 39, 
+        "well_spacing_y": 39,
         "well_radius": 17.5,
         "filePath": 'images/samplelayouts/6wellplate_1509x1010.png'
     },
@@ -133,7 +133,7 @@ parameterPerImage = [
         "center_y": 42.75,
         "well_spacing_x": 18.9,
         "well_spacing_y": 18.9,
-        "well_radius": 6.5,  
+        "well_radius": 6.5,
         "filePath": 'images/samplelayouts/24wellplate_1509x1010.png'
     },
     {
@@ -156,7 +156,7 @@ parameterPerImage = [
 ]
 
 for iWellplate in parameterPerImage:
-    
+
     wellplate_json = generate_wellplate_json(
         name = iWellplate['name'],
         pixel_image_x = iWellplate['pixel_image_x'],
@@ -175,7 +175,7 @@ for iWellplate in parameterPerImage:
         well_radius = iWellplate['well_radius']
     )
     basePath = 'imswitch/_data/images/'
-    
+
     json_file_path = os.path.join(basePath, f"{iWellplate['name'].replace(' ', '_').lower()}.json")
 
     with open(json_file_path, "w") as file:

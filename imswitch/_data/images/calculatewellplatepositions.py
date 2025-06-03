@@ -1,12 +1,12 @@
-#%% compute the positions of wells in a wellplate 
+#%% compute the positions of wells in a wellplate
 
-import json 
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 #%%
-# read in the json file with the coordinates 
+# read in the json file with the coordinates
 pixelsize_eff = .31 # um from camera
 overlap = 0.75 # 25% overlap
 n_pix_x, n_pix_y = 4000,3000
@@ -29,7 +29,7 @@ for mFile in mFiles:
     n_tiles_x = int(2*radius/fov_physical_x) # number of pixels in the radius
     n_tiles_y = int(2*radius/fov_physical_y) # number of pixels in the radius
 
-    # % create xx/yy meshgrid 
+    # % create xx/yy meshgrid
     xx,yy = np.meshgrid(fov_physical_x*np.arange(-n_tiles_x//2,n_tiles_x//2)+1,fov_physical_y*np.arange(-n_tiles_y//2,n_tiles_y//2)+1)
     circle = ((xx)**2+(yy)**2) < radius**2
 
@@ -44,7 +44,7 @@ for mFile in mFiles:
 
     for well in data['ScanParameters']['wells']:
         center_x, center_y = well['positionX'], well['positionY']
-        
+
         if 0:
             plt.plot(well_scan_locations[0]+center_x,well_scan_locations[1]+center_y,'r.')
             plt.plot(center_x,center_y,'b.')
@@ -54,10 +54,10 @@ for mFile in mFiles:
                 plt.gca().add_patch(rect)
     plt.show()
 
-        
 
 
-        
+
+
 # %%
 
 # %%

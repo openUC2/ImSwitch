@@ -8,7 +8,7 @@ import threading
 from ipykernel.embed import embed_kernel   # pip install ipykernel
 
 from .model import dirtools, pythontools, initLogger
-from imswitch.imcommon.framework import Signal, Thread     
+from imswitch.imcommon.framework import Signal, Thread
 from imswitch import IS_HEADLESS
 if not IS_HEADLESS:
     from qtpy import QtCore, QtGui, QtWidgets
@@ -49,7 +49,7 @@ def prepareApp():
     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_DisableHighDpiScaling, True) # proper scaling on Mac?
     #QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
     # https://stackoverflow.com/questions/72131093/pyqt5-qwebengineview-doesnt-load-url
-    # The following element (sandbox) is to keep the app from crashing when using QWebEngineView    
+    # The following element (sandbox) is to keep the app from crashing when using QWebEngineView
     app = QtWidgets.QApplication(['', '--no-sandbox'])
     app.setWindowIcon(QtGui.QIcon(os.path.join(dirtools.DataFileDirs.Root, 'icon.png')))
     app.setStyleSheet(getBaseStyleSheet())
@@ -64,7 +64,7 @@ def launchApp(app, mainView, moduleMainControllers):
     if IS_HEADLESS:
         """We won't have any GUI, so we don't need to prepare the app."""
         # Keep python running
-        # embed_kernel() # TODO: This should be non-blocking! 
+        # embed_kernel() # TODO: This should be non-blocking!
         tDiskCheck = time.time()
         while True: # TODO: have webserver signal somehow?
             try:
@@ -74,11 +74,11 @@ def launchApp(app, mainView, moduleMainControllers):
                     # if the storage is full or the user presses Ctrl+C, we want to stop the experiment
                     moduleMainControllers.mapping["imcontrol"]._ImConMainController__commChannel.sigExperimentStop.emit()
                     tDiskCheck = time.time()
-                    
+
             except KeyboardInterrupt:
                 exitCode = 0
                 break
-        
+
     else:
         # Show app
         if mainView is not None:

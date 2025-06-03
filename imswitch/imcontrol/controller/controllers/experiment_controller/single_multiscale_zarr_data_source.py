@@ -59,7 +59,7 @@ class SingleMultiscaleZarrWriter:
 
     def open_store(self):
         """
-        Create the FSStore with dimension_separator='/', create group '0' 
+        Create the FSStore with dimension_separator='/', create group '0'
         with a single dataset '0' shaped (t, c, z, bigY, bigX).
 
         We'll define a minimal 'multiscales' attribute so napari recognizes
@@ -92,7 +92,7 @@ class SingleMultiscaleZarrWriter:
                 "datasets": [
                     {
                         "path": "0",
-                        # if you want a transform: 
+                        # if you want a transform:
                         # "coordinateTransformations": [{"type": "translation", "translation": [0,0,0,0,0]}]
                     }
                 ],
@@ -116,7 +116,7 @@ class SingleMultiscaleZarrWriter:
         'tile.shape' => (tileY, tileX).
         We do no checks if it fits in the bounding box, so make sure you computed them.
 
-        If you do a Z-stack or time-lapse, you can index them here with t,c,z 
+        If you do a Z-stack or time-lapse, you can index them here with t,c,z
         or just fix them to 0 if you want.
         """
         if self.dataset is None:

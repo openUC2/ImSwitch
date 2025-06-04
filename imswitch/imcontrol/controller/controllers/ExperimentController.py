@@ -15,8 +15,6 @@ import time
 import threading
 import collections
 import tifffile as tif
-from pathlib import Path
-from ome_zarr.writer import write_image
 import zarr, numcodecs
 from fastapi.responses import FileResponse
 
@@ -166,7 +164,7 @@ class ExperimentController(ImConWidgetController):
 
     sigExperimentWorkflowUpdate = Signal()
     sigExperimentImageUpdate = Signal(str, np.ndarray, bool, list, bool)  # (detectorName, image, init, scale, isCurrentDetector)
-
+    sigUpdateOMEZarrStore = Signal(dict)  
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -301,35 +299,11 @@ class ExperimentController(ImConWidgetController):
     @APIExport()
     def getLastScanAsOMEZARR(self): 
         """ Returns the last OME-Zarr folder as a zipped file for download. """ 
-        import tempfile
-        import shutil
-        if self.mOMEZarrFilePAth is not None and os.path.exists(self.mOMEZarrFilePAth): 
-            # If it’s a file, just return it 
-            if os.path.isfile(self.mOMEZarrFilePAth): 
-                return FileResponse(path=self.mOMEZarrFilePAth, 
-                                    media_type="application/octet-stream", 
-                                    filename=os.path.basename(self.mOMEZarrFilePAth))
-            elif os.path.isdir(self.mOMEZarrFilePAth):
-                # Create a temporary ZIP file
-                zip_base = os.path.basename(self.mOMEZarrFilePAth.rstrip("/"))
-                tmpdir = tempfile.mkdtemp()
-                zip_path = shutil.make_archive(
-                    base_name=os.path.join(tmpdir, zip_base),
-                    format="zip",
-                    root_dir=os.path.dirname(self.mOMEZarrFilePAth),
-                    base_dir=os.path.basename(self.mOMEZarrFilePAth),
-                )
-                # Return the zipped folder
-                return FileResponse(
-                    path=zip_path,
-                    media_type="application/zip",
-                    filename=f"{zip_base}.zip"
-                )
-            else:
-                raise HTTPException(status_code=404, detail="No OME-Zarr file/folder found.")    
-        else:
-            raise HTTPException(status_code=404, detail="No OME-Zarr file/folder found.")
-            
+        try:
+            return self.getOmeZarrUrl()
+        except Exception as e:
+            self._logger.error(f"Error while getting last scan as OME-Zarr: {e}")
+            raise HTTPException(status_code=500, detail="Error while getting last scan as OME-Zarr.")
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
@@ -1012,6 +986,16 @@ class ExperimentController(ImConWidgetController):
     **after** arriving at each grid co‑ordinate.
     """
 
+    def setOmeZarrUrl(self, url):
+        """Set the OME-Zarr URL for the experiment."""
+        self._omeZarrUrl = url
+        self._logger.info(f"OME-Zarr URL set to: {self._omeZarrUrl}")
+        
+    def getOmeZarrUrl(self):
+        """Get the OME-Zarr URL for the experiment."""
+        if self._omeZarrUrl is None:
+            raise ValueError("OME-Zarr URL is not set.")
+        return self._omeZarrUrl
 
     # -------------------------------------------------------------------------
     # public API
@@ -1093,6 +1077,7 @@ class ExperimentController(ImConWidgetController):
             self.mFilePath = os.path.join(self.save_dir,  f"{timeStamp}_FastStageScan")
             # create directory if it does not exist and file paths
             omezarr_store = OMEFileStorePaths(self.mFilePath)
+            self.setOmeZarrUrl(self.mFilePath.split(dirtools.UserFileDirs.Data)[-1]+".ome.zarr")
             self._writer_thread_ome = threading.Thread(
                 target=self._writer_loop_ome, args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0),
                 daemon=True)
@@ -1114,7 +1099,8 @@ class ExperimentController(ImConWidgetController):
             tsettle=tsettle, tExposure=tExposure,
             illumination=illumination, led=led,
         )
-        return self.mFilePath.split(dirtools.UserFileDirs.Data)[-1]+".ome.zarr"  # return relative path to the data directory
+        #TODO: Make path more uniform - e.g. basetype 
+        return self.getOmeZarrUrl()  # return relative path to the data directory
 
     # -------------------------------------------------------------------------
     # internal helpers
@@ -1190,6 +1176,7 @@ class ExperimentController(ImConWidgetController):
         nx: int,
         ny: int,
         min_period: float = 0.2,
+        is_tiff: bool = False,
     ):
         """
         Bulk-writer for fast stage scan.
@@ -1256,13 +1243,14 @@ class ExperimentController(ImConWidgetController):
                     self._logger.warning(f"missing metadata for frame-id {fid}")
                     continue
 
-                # 1) per-tile OME-TIFF -------------------------------------------------
-                tiff_name = (
-                    f"F{meta['runningNumber']:06d}_"
-                    f"x{meta['x']:.1f}_y{meta['y']:.1f}_"
-                    f"{meta['illuminationChannel']}_{meta['illuminationValue']}.ome.tif"
-                )
-                tif.imwrite(os.path.join(tiff_dir, tiff_name), frame, compression="zlib")
+                if is_tiff:
+                    # 1) per-tile OME-TIFF -------------------------------------------------
+                    tiff_name = (
+                        f"F{meta['runningNumber']:06d}_"
+                        f"x{meta['x']:.1f}_y{meta['y']:.1f}_"
+                        f"{meta['illuminationChannel']}_{meta['illuminationValue']}.ome.tif"
+                    )
+                    tif.imwrite(os.path.join(tiff_dir, tiff_name), frame, compression="zlib")
 
                 # 2) write into the Zarr canvas ---------------------------------------
                 ix = int(round((meta["x"] - x_start) / x_step))
@@ -1277,9 +1265,18 @@ class ExperimentController(ImConWidgetController):
                 if t_now - t_last < min_period:
                     time.sleep(min_period - (t_now - t_last))
                 t_last = t_now
+                
+                # emit signal to tell frontend about the new chunk
+                rel_chunk = f"0/{iy}.{ix}" # NGFF v0.4 layout
+                sigZarrDict = {
+                    "event": "zarr_chunk",
+                    "path": rel_chunk,
+                    "zarr": str(self.getOmeZarrUrl())  # e.g. /files/…/FastStageScan.ome.zarr
+                }
+                self.sigUpdateOMEZarrStore.emit(sigZarrDict)  # (rel_chunk, current_zarr_url, image_name)
 
-        self._logger.info(f"Writer thread finished ({saved}/{n_expected}) tiles")
-
+        self._logger.info(f"Writer thread finished ({saved}/{n_expected}) tiles under : {base_dir}")
+        # 3) close OME-Zarr store -----------------------------------------------
         # optional: build a 2× pyramid level (≈15 s on Pi 5 for 10 k tiles)
         try:
             from ome_zarr.writer import to_multiscales

@@ -42,7 +42,7 @@ def saveSetupInfo(options, setupInfo):
             os.remove(backupFileName)
         os.rename(mFilename, backupFileName)
     try:
-        with open(os.path.join(_setupFilesDir, options.setupFileName), 'w') as setupFile:
+        with open(os.path.join(mFilename), 'w') as setupFile:
             setupFile.write(setupInfo.to_json(indent=4))
     except Exception as e:
         print("Error: Could not save setup file.")

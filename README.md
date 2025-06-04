@@ -23,6 +23,23 @@ specific design of individual custom-built microscopes, all while using the same
 would like to involve the community in further developing ImSwitch in this direction, believing
 that it is possible to integrate current state-of-the-art solutions into one unified software.
 
+## UC2 Ecosystem Integration
+
+ImSwitch is a core component of the UC2 (You.See.Too) ecosystem, designed to work seamlessly with various UC2 hardware and software components:
+
+### Hardware Integration
+- **[UC2-ESP Firmware](https://github.com/youseetoo/uc2-esp32)**: Low-level firmware for ESP32-based controllers that manage UC2 hardware components like motors, LEDs, and lasers. ImSwitch communicates with these devices through serial protocols.
+- **[UC2-REST Interface](https://github.com/openUC2/UC2-REST/)**: A REST API middleware that provides standardized HTTP communication between ImSwitch and UC2 devices. This enables remote control and web-based interfaces.
+
+### Web Interface
+- **[ImSwitch React Frontend](https://github.com/openUC2/ImSwitch-ReactAPP)**: A modern web-based user interface built with React that provides remote access to ImSwitch functionality through web browsers. This allows for mobile control and remote microscopy operations.
+
+### Complete Operating System
+- **[ImSwitch-OS](https://github.com/openUC2/imswitch-os/tree/main)**: A complete Raspberry Pi-based operating system image with ImSwitch and all UC2 components pre-installed and configured. This provides a plug-and-play solution for UC2 microscopy systems.
+
+### Docker Support
+ImSwitch provides comprehensive Docker support for containerized deployments, enabling easy installation across different platforms and cloud environments. The Docker implementation supports both headless and GUI modes, making it suitable for both automated systems and interactive use.
+
 ## Installation
 
 ### Option A: Standalone bundles for Windows
@@ -160,11 +177,11 @@ For the ***Daheng Imaging Cameras*** please go to [this website](https://www.get
 
 For the ***Allied Vision Cameras*** please go to [this website](https://www.alliedvision.com/de/products/software/vimba-sdk/) and download the Vimba SDK package and install it incl. the drivers.
 
-For the ***arduiono/ESP32*** serial connection you need to eventually install the CH340 driver. Please find additional steps [here](https://learn.sparkfun.com/tutorials/how-to-install-ch340-drivers/all).
+For the ***Arduino/ESP32*** serial connection you need to eventually install the CH340 driver. Please find additional steps [here](https://learn.sparkfun.com/tutorials/how-to-install-ch340-drivers/all). These ESP32 devices run the [UC2-ESP firmware](https://github.com/youseetoo/uc2-esp32) for controlling UC2 hardware components.
 
 ## Optional: Add UC2 configurations
 
-Go [here](https://github.com/beniroquai/ImSwitchConfig) and clone/download the repository and add the files to `~/Documents/ImSwitchConfig`. You should find additional files in the same format there.
+Go [here](https://github.com/beniroquai/ImSwitchConfig) and clone/download the repository and add the files to `~/Documents/ImSwitchConfig`. You should find additional files in the same format there. These configuration files define the specific hardware setup for your UC2 microscope system and enable proper communication with UC2-ESP firmware and UC2-REST interfaces.
 
 ## On Jetson Nano
 

@@ -413,7 +413,10 @@ class ExperimentController(ImConWidgetController):
         # fill ome model
         if IS_OMEZARR_AVAILABLE:
             ome_store = None
-            zarr_path = os.path.join(dirPath, mFileName + ".ome.zarr")
+            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            drivePath = dirtools.UserFileDirs.Data
+            mFileName = os.path.join(drivePath, 'recordings', timeStamp)
+            zarr_path = os.path.join(drivePath, mFileName + ".ome.zarr")
             self._logger.debug(f"OME-Zarr path: {zarr_path}")
             if 0:
                 ome_store = MinimalZarrDataSource(file_name=zarr_path, mode="w")

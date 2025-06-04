@@ -38,7 +38,7 @@ ImSwitch is a core component of the UC2 (You.See.Too) ecosystem, designed to wor
 - **[ImSwitch-OS](https://github.com/openUC2/imswitch-os/tree/main)**: A complete Raspberry Pi-based operating system image with ImSwitch and all UC2 components pre-installed and configured. This provides a plug-and-play solution for UC2 microscopy systems.
 
 ### Docker Support
-ImSwitch provides comprehensive Docker support for containerized deployments, enabling easy installation across different platforms and cloud environments. The Docker implementation supports both headless and GUI modes, making it suitable for both automated systems and interactive use.
+ImSwitch provides comprehensive Docker support for containerized deployments, enabling easy installation across different platforms and cloud environments. The Docker implementation supports both headless and GUI modes, making it suitable for both automated systems and interactive use. See the [Docker documentation](docker/README.md) for detailed setup instructions and configuration options.
 
 ## Installation
 

@@ -38,12 +38,6 @@ from fastapi.responses import StreamingResponse
 import numpy as np
 from io import BytesIO
 from PIL import Image
-try:
-    from iohub.ngff import open_ome_zarr
-    IS_IOHUB = True
-except ImportError:
-    IS_IOHUB = False
-    isZARR=False
 isZARR=False
 
 try:
@@ -1585,55 +1579,23 @@ class ImageStitcher:
             self.queue.append((img, coords, metadata))
 
     def _process_queue(self):
-        if isZARR:
-           
-            tmp_dir = TemporaryDirectory()  
-            store_path = os.path.join(tmp_dir.name, "tiled.zarr")
-            print("Zarr store path", store_path)
-            
-            # define grid 
-            with open_ome_zarr(store_path, layout="tiled", mode="a", channel_names=["Mono"]) as dataset:
-                tiles = dataset.make_tiles(
-                    "tiled_raw", grid_shape=self.grid_shape, tile_shape=self.tile_shape, dtype=self.dtype
-                )
-                while self.isRunning:
-                    if not self.queue:
-                        time.sleep(.02) # unload CPU
-                        continue
-                    img, coords, metadata = self.queue.popleft()
-                    
-                    # flip image if needed
-                    if self.flipX:
-                        img = np.fliplr(img)
-                    if self.flipY:
-                        img = np.flipud(img)
-                    self._place_on_canvas(img, coords)
-
-                    # write image to disk
-                    # tif.write(data=img, metadata=metadata)                
-                    row = metadata['Plane']['IndexX']
-                    column = metadata['Plane']['IndexY']
-                    tiles.write_tile(img, row, column)
-
-        
-        else:
-            with tifffile.TiffWriter(self.file_path, bigtiff=True, append=True) as tif:
-                while self.isRunning:
-                    if not self.queue:
-                        time.sleep(.02) # unload CPU
-                        continue
-                    img, coords, metadata = self.queue.popleft()
-                    
-                    # flip image if needed
-                    if self.flipX:
-                        img = np.fliplr(img)
-                    if self.flipY:
-                        img = np.flipud(img)
-                    
-                    self._place_on_canvas(img, coords)
-                    # write image to disk
-                    #metadata e.g. {"Pixels": {"PhysicalSizeX": 0.2, "PhysicalSizeXUnit": "\\u00b5m", "PhysicalSizeY": 0.2, "PhysicalSizeYUnit": "\\u00b5m"}, "Plane": {"PositionX": -100, "PositionY": -100, "IndexX": 0, "IndexY": 0}}
-                    tif.write(data=img, metadata=metadata)
+        with tifffile.TiffWriter(self.file_path, bigtiff=True, append=True) as tif:
+            while self.isRunning:
+                if not self.queue:
+                    time.sleep(.02) # unload CPU
+                    continue
+                img, coords, metadata = self.queue.popleft()
+                
+                # flip image if needed
+                if self.flipX:
+                    img = np.fliplr(img)
+                if self.flipY:
+                    img = np.flipud(img)
+                
+                self._place_on_canvas(img, coords)
+                # write image to disk
+                #metadata e.g. {"Pixels": {"PhysicalSizeX": 0.2, "PhysicalSizeXUnit": "\\u00b5m", "PhysicalSizeY": 0.2, "PhysicalSizeYUnit": "\\u00b5m"}, "Plane": {"PositionX": -100, "PositionY": -100, "IndexX": 0, "IndexY": 0}}
+                tif.write(data=img, metadata=metadata)
                 
     def _place_on_canvas(self, img, coords):
         if self.isStitchAshlar and IS_ASHLAR_AVAILABLE:

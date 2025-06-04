@@ -47,11 +47,6 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import uuid
 
-try:
-    from iohub.ngff import open_ome_zarr
-    IS_IOHUB = True
-except ImportError:
-    IS_IOHUB = False
 
 
 isZARR=True
@@ -564,6 +559,8 @@ class WorkflowController(LiveUpdatedController):
         self._logger.debug("Zarr store path: "+store_path)
         
         # Let's assume single channel "Mono" for simplicity, but can adapt for more.
+        def open_ome_zarr(store_path, layout="tiled", mode="a", channel_names=None):
+            return None # TODO: Implement this function to open or create a Zarr dataset with the specified layout and channel names.
         dataset = open_ome_zarr(store_path, layout="tiled", mode="a", channel_names=[channel])
         # Calculate grid shape based on the number of xy positions
         grid_shape = (len(ys), len(xs))

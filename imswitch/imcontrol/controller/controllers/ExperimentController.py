@@ -16,7 +16,8 @@ import threading
 import collections
 import tifffile as tif
 from pathlib import Path
-
+from ome_zarr.writer import write_image
+import zarr, numcodecs
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
@@ -205,14 +206,17 @@ class ExperimentController(ImConWidgetController):
         # define changeable Experiment parameters as ExperimentWorkflowParams
         self.ExperimentParams = ExperimentWorkflowParams()
         self.ExperimentParams.illuSources = self.allIlluNames
-        self.ExperimentParams.illuSourceMinIntensities = [0]*len(self.allIlluNames)
-        self.ExperimentParams.illuSourceMaxIntensities = [1023]*len(self.allIlluNames)
+        self.ExperimentParams.illuSourceMinIntensities = []
+        self.ExperimentParams.illuSourceMaxIntensities = []
         self.ExperimentParams.illuIntensities = [0]*len(self.allIlluNames)
-        self.ExperimentParams.exposureTimes = 1000000 # TODO: FIXME
-        self.ExperimentParams.gains = [23] # TODO: FIXME
+        self.ExperimentParams.exposureTimes = [0]*len(self.allIlluNames) 
+        self.ExperimentParams.gains = [0]*len(self.allIlluNames) 
         self.ExperimentParams.isDPCpossible = False
         self.ExperimentParams.isDarkfieldpossible = False
         self.ExperimentParams.performanceMode = False
+        for laserN in self.availableIlliminations:
+            self.ExperimentParams.illuSourceMinIntensities.append(laserN.valueRangeMin)
+            self.ExperimentParams.illuSourceMaxIntensities.append(laserN.valueRangeMax)
         
         '''
         For Fast Scanning - Performance Mode -> Parameters will be sent to the hardware directly
@@ -849,14 +853,14 @@ class ExperimentController(ImConWidgetController):
             #Signal(str, np.ndarray, bool, list, bool)  # (detectorName, image, init, scale, isCurrentDetector)
             def mSendCanvas(canvas, init, scale):
                 mCanvas = np.copy(canvas)
-                self.sigExperimentImageUpdate.emit("canvas", mCanvas, init, scale, True)
+                self.sigExperimentImageUpdate.emit("canvas", mCanvas, init, [scale], True)
             import threading
             threading.Thread(target=mSendCanvas, args=(canvas, False, 1)).start()
 
     def emit_final_canvas(self, context: WorkflowContext, metadata: Dict[str, Any]):
         final_canvas = context.get_object("canvas")
         if final_canvas is not None:
-            self.sigExperimentImageUpdate.emit("canvas", final_canvas, True, 1, 0)  
+            self.sigExperimentImageUpdate.emit("canvas", final_canvas, True, [1], False)
             tif.imwrite("final_canvas.tif", final_canvas)  
         else:
             print("No final canvas found!")
@@ -1044,13 +1048,43 @@ class ExperimentController(ImConWidgetController):
                             runningNumber += 1
                             addDataPoint(metadataList, x, y, channel, value, runningNumber)
         # 2. start writer thread ----------------------------------------------
-        self._stop_writer_evt.clear()
-        self._writer_thread = threading.Thread(
-            target=self._writer_loop,
-            args=(total_frames,metadataList,),
-            daemon=True,
-        )
-        self._writer_thread.start()
+        saveOMEZarr = True 
+        if IS_OMEZARR_AVAILABLE and saveOMEZarr:
+            # ------------------------------------------------------------------+
+            # 2. open OME-Zarr canvas                                           |
+            # ──────────────────────────────────────────────────────────────────+
+            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            tile_h, tile_w = self.mDetector._shape[-2:]
+            zarr_path = (self.save_dir / f"{timeStamp}_FastStageScan.ome.zarr").as_posix()
+            store      = zarr.DirectoryStore(zarr_path)
+            root       = zarr.group(store, overwrite=True)
+            canvas     = root.create_dataset(
+                "0",
+                shape=(1, 1, 1, ny*tile_h, nx*tile_w),         # t, c, z, y, x
+                chunks=(1, 1, 1, tile_h,  tile_w),
+                dtype="uint16",
+                compressor=numcodecs.Blosc("zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE),
+            )
+            root.attrs["multiscales"] = [{"datasets":[{"path":"0"}],
+                                        "axes":[{"name":"t","type":"time"},
+                                                {"name":"c","type":"channel"},
+                                                {"name":"z","type":"space"},
+                                                {"name":"y","type":"space"},
+                                                {"name":"x","type":"space"}]}]
+            self._writer_thread = threading.Thread(
+                target=self._writer_loop_omezarr,
+                args=(total_frames, metadataList, canvas, tile_h, tile_w),
+                daemon=True,
+            )
+            self._writer_thread.start()
+        else:    
+            self._stop_writer_evt.clear()
+            self._writer_thread = threading.Thread(
+                target=self._writer_loop,
+                args=(total_frames,metadataList,),
+                daemon=True,
+            )
+            self._writer_thread.start()
         illumination=(illumination0, illumination1, illumination2, illumination3) if nIlluminations > 0 else (0,0,0,0)
         # 3. execute stage scan (blocks until finished) ------------------------
         self.mStage.start_stage_scanning(
@@ -1085,6 +1119,12 @@ class ExperimentController(ImConWidgetController):
                 time.sleep(0.005)
                 continue
 
+            # Create a new OmeTiffStitcher instance for stitching tiles
+            tiff_writer = OmeTiffStitcher(mFilePath)
+            tiff_writer.start()    
+
+
+            
             for frame, fid in zip(frames, ids):
                 currentMetadata = metadataList[fid] if fid < len(metadataList) else {}
                 if currentMetadata == {}:
@@ -1094,7 +1134,16 @@ class ExperimentController(ImConWidgetController):
                 tif.imwrite(fileName, frame)
                 saved += 1
                 self._logger.debug(f"saved {saved}/{n_expected} under {fileName}")
-
+                tiff_writer.add_image(
+                    image=frame,
+                    position_x=currentMetadata['x'],
+                    position_y=currentMetadata['y'],
+                    index_x=0,
+                    index_y=0, # TODO: Add index_x and index_y if needed
+                    pixel_size= self.detectorPixelSize[-1]  # assuming last element is the pixel size
+                )
+             
+        tiff_writer.close()  # close the tiff writer
         self._logger.info(f"Writer thread finished ({saved} images).")
         # 4. wait for writer to finish then stop camera ------------------------
 
@@ -1108,6 +1157,120 @@ class ExperimentController(ImConWidgetController):
         self._logger.info("Camera reset to continuous mode.")
         self.fastStageScanIsRunning = False
 
+    def _writer_loop_ome(
+        self,
+        n_expected: int,
+        metadata_list: list[dict],
+        *,
+        time_stamp: str,
+        x_start: float,
+        y_start: float,
+        x_step: float,
+        y_step: float,
+        nx: int,
+        ny: int,
+        min_period: float = 0.2,
+    ):
+        """
+        Bulk-writer for fast stage scan.
+
+        Stores every frame twice  
+        • individual OME-TIFF tile (debug/backup)  
+        • single chunked OME-Zarr mosaic (browser streaming)
+
+        Parameters
+        ----------
+        n_expected      total number of frames that will arrive
+        metadata_list   list with x, y, illuminationChannel, … for each frame-id
+        time_stamp      YYMMDD_HHMMSS string – folder prefix
+        x_start … ny    grid geometry (needed to locate each tile in the canvas)
+        """
+        # ------------------------------------------------------------------ paths
+        base_dir  = self.save_dir / f"{time_stamp}_FastStageScan"
+        tiff_dir  = base_dir / "tiles"
+        zarr_dir  = base_dir.with_suffix(".ome.zarr")      # ‹scan›_FastStageScan.ome.zarr
+        tiff_dir.mkdir(parents=True, exist_ok=True)
+
+        # ---------------------------------------------------------------- canvas
+        tile_h, tile_w = self.mDetector._shape[-2:]
+        store   = zarr.DirectoryStore(str(zarr_dir))
+        root    = zarr.group(store, overwrite=True)
+        canvas  = root.create_dataset(
+            "0",
+            shape=(1, 1, 1, ny * tile_h, nx * tile_w),      # t c z y x
+            chunks=(1, 1, 1, tile_h,     tile_w),
+            dtype="uint16",
+            compressor=numcodecs.Blosc("zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE),
+        )
+        root.attrs["multiscales"] = [{
+            "datasets": [{"path": "0"}],
+            "axes": [
+                {"name": "t", "type": "time"},
+                {"name": "c", "type": "channel"},
+                {"name": "z", "type": "space"},
+                {"name": "y", "type": "space"},
+                {"name": "x", "type": "space"},
+            ],
+        }]
+
+        # expose URL for the frontend
+        self.current_zarr_url = f"/files/{zarr_dir.name}"   # fastapi mounts save_dir as /files
+        self._logger.info(f"OME-Zarr stream: {self.current_zarr_url}")
+
+        # ------------------------------------------------------------- main loop
+        saved, t_last = 0, time.time()
+        self._logger.info(f"Writer thread started → {base_dir}")
+
+        while saved < n_expected and not self._stop_writer_evt.is_set():
+            frames, ids = self.mDetector.getChunk()  # empties camera buffer
+
+            if frames.size == 0:
+                time.sleep(0.005)
+                continue
+
+            for frame, fid in zip(frames, ids):
+                meta = metadata_list[fid] if fid < len(metadata_list) else None
+                if not meta:
+                    self._logger.warning(f"missing metadata for frame-id {fid}")
+                    continue
+
+                # 1) per-tile OME-TIFF -------------------------------------------------
+                tiff_name = (
+                    f"F{meta['runningNumber']:06d}_"
+                    f"x{meta['x']:.1f}_y{meta['y']:.1f}_"
+                    f"{meta['illuminationChannel']}_{meta['illuminationValue']}.ome.tif"
+                )
+                tif.imwrite(tiff_dir / tiff_name, frame, compression="zlib")
+
+                # 2) write into the Zarr canvas ---------------------------------------
+                ix = int(round((meta["x"] - x_start) / x_step))
+                iy = int(round((meta["y"] - y_start) / y_step))
+                y0, y1 = iy * tile_h, (iy + 1) * tile_h
+                x0, x1 = ix * tile_w, (ix + 1) * tile_w
+                canvas[0, 0, 0, y0:y1, x0:x1] = frame
+
+                saved += 1
+                # throttle disk writes if the scan outruns SD-card I/O
+                t_now = time.time()
+                if t_now - t_last < min_period:
+                    time.sleep(min_period - (t_now - t_last))
+                t_last = t_now
+
+        self._logger.info(f"Writer thread finished ({saved}/{n_expected}) tiles")
+
+        # optional: build a 2× pyramid level (≈15 s on Pi 5 for 10 k tiles)
+        try:
+            from ome_zarr.writer import to_multiscales
+            to_multiscales(store, scale_factors=[[2, 2, 2]])
+        except Exception as err:
+            self._logger.warning(f"pyramid generation failed: {err}")
+
+        # bring camera back to continuous mode
+        self.mDetector.stopAcquisition()
+        self.mDetector.setTriggerSource("Continuous")
+        self.mDetector.flushBuffers()
+        self.mDetector.startAcquisition()
+        self.fastStageScanIsRunning = False
 
     def _stop(self):
         """Abort the acquisition gracefully."""
@@ -1125,4 +1288,13 @@ class ExperimentController(ImConWidgetController):
         self._stop()
         self._logger.info("Stage scan acquisition stopped.")
 
+    @APIExport(runOnUIThread=False)
+    def startFastStageScanAcquisitionFilePath(self) -> str:
+        """Returns the file path of the last saved fast stage scan."""
+        if hasattr(self, 'fastStageScanFilePath') and self.fastStageScanFilePath is not None:
+            return self.fastStageScanFilePath
+        else:
+            return "No fast stage scan available yet"
+    
+    
 # Copyright (C) 2025 Benedict Diederich

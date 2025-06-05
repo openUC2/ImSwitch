@@ -37,7 +37,7 @@ class DetectorsManager(MultiManager, SignalInterface):
             # Connect signals
             self._subManagers[detectorName].sigImageUpdated.connect(
                 lambda image, init, scale, detectorName=detectorName: self.sigImageUpdated.emit(
-                    detectorName, image, init, scale, detectorName==self._currentDetectorName, self.detectorParams
+                    detectorName, image, init, scale, detectorName==self._currentDetectorName
                 )
             )
             # TODO: Use this instead?

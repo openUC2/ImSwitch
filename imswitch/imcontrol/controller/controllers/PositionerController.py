@@ -264,6 +264,17 @@ class PositionerController(ImConWidgetController):
         self.stepDown(positionerName, axis)
 
     @APIExport(runOnUIThread=True)
+    def resetStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
+        """ 
+        Resets the stage offset for the given axis to 0. 
+        """
+        self._logger.debug(f'Resetting stage offset for {axis} axis.')
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self._master.positionersManager[positionerName].setStageOffsetAxis(knownOffset=0, axis=axis)
+        self.saveStageOffset(positionerName=positionerName, offsetValue=0, axis=axis)
+
+    @APIExport(runOnUIThread=True)
     def setStageOffsetAxis(self, positionerName: Optional[str]=None, knownPosition:float=0, currentPosition:Optional[float]=None, knownOffset:Optional[float]=None,  axis:str="X"):
         """
         Sets the stage to a known offset aside from the home position.

@@ -183,14 +183,6 @@ RUN cd /opt/Vimba_6_0/VimbaPython/Source && \
 # Set environment variable for GenTL detection
 ENV GENICAM_GENTL64_PATH="${GENICAM_GENTL64_PATH}:/opt/Vimba_6_0/VimbaUSBTL/CTI/arm_64bit"
 
-# install IOHub - as it will be installed via ImSwitch again
-#         "iohub @ https://github.com/czbiohub-sf/iohub/archive/refs/heads/main.zip"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install --no-cache-dir Cython"
-RUN git clone https://github.com/czbiohub-sf/iohub /tmp/iohub && \
-    cd /tmp/iohub && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && \
-                  pip install --no-build-isolation /tmp/iohub" && \
-    rm -rf /tmp/iohub
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching

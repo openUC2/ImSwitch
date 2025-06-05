@@ -47,11 +47,6 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import uuid
 
-try:
-    from iohub.ngff import open_ome_zarr
-    IS_IOHUB = True
-except ImportError:
-    IS_IOHUB = False
 
 
 isZARR=True
@@ -564,6 +559,8 @@ class WorkflowController(LiveUpdatedController):
         self._logger.debug("Zarr store path: "+store_path)
 
         # Let's assume single channel "Mono" for simplicity, but can adapt for more.
+        def open_ome_zarr(store_path, layout="tiled", mode="a", channel_names=None):
+            return None # TODO: Implement this function to open or create a Zarr dataset with the specified layout and channel names.
         dataset = open_ome_zarr(store_path, layout="tiled", mode="a", channel_names=[channel])
         # Calculate grid shape based on the number of xy positions
         grid_shape = (len(ys), len(xs))
@@ -711,6 +708,16 @@ class WorkflowController(LiveUpdatedController):
         store_path = file_name + str(np.random.randint(0,100000))
         self._logger.debug("Zarr store path: " + store_path)
 
+        def open_ome_zarr(store_path, layout="tiled", mode="a", channel_names=None):
+            """
+            Open or create a Zarr dataset with the specified layout and channel names.
+            This is a placeholder function, you need to implement it based on your Zarr library.
+            """
+            # todo: this is a placeholder, you need to implement the actual opening/creation logic
+            import zarr
+            if not os.path.exists(store_path):
+                os.makedirs(store_path)
+            return zarr.open(store_path, mode=mode, shape=(0, 0), dtype="uint16", chunks=(1, 1), overwrite=True)
         dataset = open_ome_zarr(store_path, layout="tiled", mode="a", channel_names=["Mono"])
         # If the shape is unknown beforehand, you can guess or wait until images come in.
         # For demonstration, let's define a 512 x 512 tile shape:

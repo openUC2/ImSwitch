@@ -58,7 +58,8 @@ app = FastAPI(docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")  # serve static files such as the swagger UI
 app.mount("/imswitch", StaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
 app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
-
+# provide data path via static files
+app.mount("/data", StaticFiles(directory=dirtools.UserFileDirs.Data), name="data")  # serve user data files
 # manifests for the react app
 _ui_manifests = []
 

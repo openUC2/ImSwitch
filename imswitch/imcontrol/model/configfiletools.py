@@ -7,6 +7,15 @@ from .Options import Options
 from imswitch import DEFAULT_SETUP_FILE
 import dataclasses
 
+dirtools.initUserFilesIfNeeded()
+_setupFilesDir = os.path.join(dirtools.UserFileDirs.Root, 'imcontrol_setups')
+os.makedirs(_setupFilesDir, exist_ok=True)
+_optionsFilePath = os.path.join(dirtools.UserFileDirs.Config, 'imcontrol_options.json')
+_configsFilePath = os.path.join(dirtools.UserFileDirs.Config, 'imcontrol_options.json')
+
+_options = None
+_configs = None
+
 def getSetupList():
     return [Path(file).name for file in glob.glob(os.path.join(_setupFilesDir, '*.json'))]
 
@@ -42,7 +51,7 @@ def saveSetupInfo(options, setupInfo):
             os.remove(backupFileName)
         os.rename(mFilename, backupFileName)
     try:
-        with open(os.path.join(_setupFilesDir, options.setupFileName), 'w') as setupFile:
+        with open(os.path.join(mFilename), 'w') as setupFile:
             setupFile.write(setupInfo.to_json(indent=4))
     except Exception as e:
         print("Error: Could not save setup file.")
@@ -104,14 +113,7 @@ def saveConfigs(configs):
 
 
 
-dirtools.initUserFilesIfNeeded()
-_setupFilesDir = os.path.join(dirtools.UserFileDirs.Root, 'imcontrol_setups')
-os.makedirs(_setupFilesDir, exist_ok=True)
-_optionsFilePath = os.path.join(dirtools.UserFileDirs.Config, 'imcontrol_options.json')
-_configsFilePath = os.path.join(dirtools.UserFileDirs.Config, 'imcontrol_options.json')
 
-_options = None
-_configs = None
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

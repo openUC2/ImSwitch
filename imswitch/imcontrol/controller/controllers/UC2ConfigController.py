@@ -11,6 +11,66 @@ from imswitch.imcontrol.model import configfiletools
 import tifffile as tif
 from imswitch.imcontrol.model import Options
 from imswitch.imcontrol.view.guitools import ViewSetupInfo
+import json
+import os
+import tempfile
+import threading
+import requests
+import shutil
+from pathlib import Path
+from serial.tools import list_ports
+import serial
+
+try:
+    import esptool
+    HAS_ESPTOOL = True
+except ImportError:
+    HAS_ESPTOOL = False
+
+
+CAN_ADDRESS_MAP = {
+    "master": 1,
+    "a": 10,
+    "x": 11,
+    "y": 12,
+    "z": 13,
+    "laser": 20,
+    "led": 30,
+}
+
+GITHUB_API_LATEST_RELEASE = "https://api.github.com/repos/youseetoo/uc2-esp32/releases/latest"
+FIRMWARE_DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "uc2_esp32_fw"
+FIRMWARE_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _fetch_latest_firmware_assets():
+    """Return list of (name, download_url) tuples for the latest release."""
+    response = requests.get(GITHUB_API_LATEST_RELEASE, timeout=10)
+    response.raise_for_status()
+    data = response.json()
+    assets = data.get("assets", [])
+    return [(asset["name"], asset["browser_download_url"]) for asset in assets]
+
+
+def _download_firmware(filename: str, url: str) -> Path:
+    """Download *filename* from *url* to temporary folder and return Path."""
+    target = FIRMWARE_DOWNLOAD_DIR / filename
+    if target.exists():
+        return target
+    with requests.get(url, stream=True, timeout=30) as r:
+        r.raise_for_status()
+        with open(target, "wb") as f:
+            shutil.copyfileobj(r.raw, f)
+    return target
+
+
+def _run_esptool(args):
+    """Wrapper around esptool.main() that converts SystemExit to Exception."""
+    try:
+        esptool.main(args)
+    except SystemExit as exc:
+        if exc.code != 0:
+            raise RuntimeError(f"esptool failed with code {exc.code}, args: {args}")
 
 class UC2ConfigController(ImConWidgetController):
     """Linked to UC2ConfigWidget."""
@@ -227,7 +287,79 @@ class UC2ConfigController(ImConWidgetController):
         self._master.UC2ConfigManager.restartCANDevice(device_id)
 
 
-# Copyright (C) 2020-2024 ImSwitch developers
+        
+    ''' ESPTOOL related methods '''
+    @APIExport(runOnUIThread=False)
+    def list_firmware_and_ports(self):
+        if not HAS_ESPTOOL:
+            return {"error": "esptool not installed"}
+        try:
+            assets = _fetch_latest_firmware_assets()
+        except Exception as e:
+            return {"error": str(e)}
+        firmware_names = [name for name, _ in assets]
+        ports = [p.device for p in list_ports.comports()]
+        return {"firmware": firmware_names, "ports": ports}
+
+    @APIExport(runOnUIThread=False)
+    def flash_firmware(
+        self,
+        filename: str,
+        dev_type: str,
+        axis_or_id: str,
+        port: str,
+        erase_flash: bool = True,
+        baud_write: int = 460800,
+    ):
+        if not HAS_ESPTOOL:
+            return {"error": "esptool not installed"}
+        # locate asset
+        assets = dict(_fetch_latest_firmware_assets())
+        if filename not in assets:
+            return {"error": "unknown firmware filename"}
+        file_path = _download_firmware(filename, assets[filename])
+
+        # close existing serial if open
+        try:
+            self._master.UC2ConfigManager.closeSerial()
+        except Exception:
+            pass
+
+        # erase flash
+        esptool_args_base = [
+            "--chip",
+            "esp32",
+            "--port",
+            port,
+            "--baud",
+            str(baud_write),
+        ]
+        if erase_flash:
+            _run_esptool(esptool_args_base + ["erase_flash"])
+
+        # write flash (offset 0x0)
+        _run_esptool(esptool_args_base + ["write_flash", "0x0", str(file_path)])
+
+        # set CAN address after flashing
+        address_key = dev_type.lower()
+        if dev_type.lower() == "motor":
+            address_key = axis_or_id.lower()
+        address = CAN_ADDRESS_MAP.get(address_key)
+        if address is None:
+            return {"error": f"No CAN address mapping for {dev_type}/{axis_or_id}"}
+
+        ser = serial.Serial(port, 115200, timeout=2)
+        msg = json.dumps({"task": "/can_act", "address": int(address)}) + "\n"
+        ser.write(msg.encode())
+        ser.flush()
+        ser.close()
+
+        # reconnect ImSwitch serial if necessary (async)
+        threading.Thread(target=self.reconnectThread, daemon=True).start()
+        return {"status": "flashed", "file": filename, "address": address, "port": port}
+    
+
+# Copyright (C) Benedict Diederich
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

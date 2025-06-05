@@ -6,6 +6,7 @@ import subprocess
 import time
 import requests
 import pytest
+import tempfile
 from urllib3.exceptions import InsecureRequestWarning
 
 # Suppress warnings if self-signed SSL is used. Remove if not needed.
@@ -16,25 +17,36 @@ def imswitch_process():
     """
     Starts ImSwitch in headless mode with a specific config and stops it after tests.
     """
+    # Create a temporary directory for data storage
+    temp_data_dir = tempfile.mkdtemp()
+    
+    # Get the path to the example config file relative to the test location
+    test_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(test_dir, "../../..", "_data", "user_defaults", "imcontrol_setups", "example_virtual_microscope.json")
+    config_path = os.path.abspath(config_path)
+    
     # Adjust Python interpreter or environment if needed
     cmd = [
         "python3",  # or path to your Python
         "-m",
         "imswitch",  # or the entry point if ImSwitch is installed
         "main",
-        "--default_config=/Users/bene/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json",
+        f"--default_config={config_path}",
         "--is_headless=True",
         "--http_port=8001",
         "--socket_port=8002",
         "--scan_ext_data_folder=True",
-        "--data_folder=~/Downloads",
-        "--ext_drive_mount=/Volumes"
+        f"--data_folder={temp_data_dir}",
     ]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     time.sleep(2)  # Give some initial time to spin up
     yield proc
     proc.terminate()
     proc.wait(timeout=10)
+    
+    # Clean up temporary directory
+    import shutil
+    shutil.rmtree(temp_data_dir, ignore_errors=True)
 
 def wait_for_server(port=8001, timeout=30):
     """

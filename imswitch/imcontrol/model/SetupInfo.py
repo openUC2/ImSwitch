@@ -275,6 +275,10 @@ class HistoScanInfo:
     pass
 
 @dataclass(frozen=False)
+class StresstestInfo:
+    pass
+
+@dataclass(frozen=False)
 class WorkflowInfo:
     pass
     
@@ -548,6 +552,9 @@ class SetupInfo:
     jetsonnano: Optional[JetsonNanoInfo] = field(default_factory=lambda: None)
     """ Jetson Nano settings for jetson nano. Required to be defined to use jetson nano functionality. """
 
+    Stresstest: Optional[StresstestInfo] = field(default_factory=lambda: None)
+    """ Stresstest settings. Required to be defined to use Stresstest functionality. """
+    
     HistoScan: Optional[HistoScanInfo] = field(default_factory=lambda: None)
     """ HistoScan settings. Required to be defined to use HistoScan functionality. """
 

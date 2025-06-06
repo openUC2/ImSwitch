@@ -6,7 +6,8 @@ import random
 import math
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-
+from pydantic import BaseModel
+from typing import List
 try:
     from imswitch.imcommon.model import initLogger, APIExport, dirtools
     from imswitch.imcommon.framework import Signal, Timer
@@ -40,52 +41,48 @@ except ImportError:
     _HAS_NUMPY = False
 
 
-class StresstestParams:
-    """Parameters for stress testing"""
-    def __init__(self, minPosX=0.0, maxPosX=10000.0, minPosY=0.0, maxPosY=10000.0,
-                 numRandomPositions=10, numCycles=5, timeInterval=60.0,
-                 illuminationIntensity=50, exposureTime=0.1, saveImages=True, outputPath=""):
-        self.minPosX = minPosX  # minimum X position in micrometers
-        self.maxPosX = maxPosX  # maximum X position in micrometers
-        self.minPosY = minPosY  # minimum Y position in micrometers
-        self.maxPosY = maxPosY  # maximum Y position in micrometers
-        self.numRandomPositions = numRandomPositions  # number of random positions per cycle
-        self.numCycles = numCycles  # number of repetition cycles
-        self.timeInterval = timeInterval  # time interval between cycles in seconds
-        self.illuminationIntensity = illuminationIntensity  # illumination intensity (0-100)
-        self.exposureTime = exposureTime  # camera exposure time in seconds
-        self.saveImages = saveImages  # whether to save captured images
-        self.outputPath = outputPath  # output directory for results
-    
-    def dict(self):
-        """Convert to dictionary for JSON serialization"""
-        return {
-            'minPosX': self.minPosX,
-            'maxPosX': self.maxPosX,
-            'minPosY': self.minPosY,
-            'maxPosY': self.maxPosY,
-            'numRandomPositions': self.numRandomPositions,
-            'numCycles': self.numCycles,
-            'timeInterval': self.timeInterval,
-            'illuminationIntensity': self.illuminationIntensity,
-            'exposureTime': self.exposureTime,
-            'saveImages': self.saveImages,
-            'outputPath': self.outputPath
-        }
+class StresstestParams(BaseModel):
+    """
+    Pydantic model for stress test parameters.
+    """
+    minPosX: float = 0.0          # minimum X position in micrometers
+    maxPosX: float = 10000.0      # maximum X position in micrometers
+    minPosY: float = 0.0          # minimum Y position in micrometers
+    maxPosY: float = 10000.0      # maximum Y position in micrometers
+    numRandomPositions: int = 10  # number of random positions per cycle
+    numCycles: int = 5            # number of repetition cycles
+    timeInterval: float = 60.0    # time interval between cycles in seconds
+    illuminationIntensity: float = 50.0  # illumination intensity (0-100)
+    exposureTime: float = 0.1     # camera exposure time in seconds
+    saveImages: bool = True       # whether to save captured images
+    outputPath: str = ""          # output directory for results
 
+    class Config:
+        # Allows arbitrary Python types if necessary
+        arbitrary_types_allowed = True
 
-class StresstestResults:
-    """Results from stress testing"""
-    def __init__(self):
-        self.totalPositions = 0
-        self.completedPositions = 0
-        self.averagePositionError = 0.0
-        self.maxPositionError = 0.0
-        self.positionErrors = []
-        self.timestamps = []
-        self.targetPositions = []
-        self.actualPositions = []
-        self.isRunning = False
+    def dict(self, *args, **kwargs):
+        """
+        Override dict() to convert to dictionary for JSON serialization.
+        Calls the parent dict() and returns the result.
+        """
+        return super().dict(*args, **kwargs)
+
+class StresstestResults(BaseModel):
+    """Pydantic model for stress test results."""
+    totalPositions: int = 0
+    completedPositions: int = 0
+    averagePositionError: float = 0.0
+    maxPositionError: float = 0.0
+    positionErrors: List[float] = []
+    timestamps: List[str] = []
+    targetPositions: List[List[float]] = []
+    actualPositions: List[List[float]] = []
+    isRunning: bool = False
+
+    class Config:
+        # Allows arbitrary Python types if necessary
+        arbitrary_types_allowed = True
     
     def dict(self):
         """Convert to dictionary for JSON serialization"""

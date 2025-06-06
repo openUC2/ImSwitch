@@ -1089,7 +1089,7 @@ class ExperimentController(ImConWidgetController):
             self._stop_writer_evt.clear()
             self._writer_thread = threading.Thread(
                 target=self._writer_loop,
-                args=(total_frames,metadataList,),
+                args=(total_frames, metadataList, 0.2, False),  # Added minPeriod and use_ome_zarr parameters
                 daemon=True,
             )
             self._writer_thread.start()
@@ -1107,58 +1107,127 @@ class ExperimentController(ImConWidgetController):
     # -------------------------------------------------------------------------
     # internal helpers
     # -------------------------------------------------------------------------
-    def _writer_loop(self, n_expected: int, metadataList: list, minPeriod: float = 0.2):
+    def _writer_loop(self, n_expected: int, metadataList: list, minPeriod: float = 0.2, use_ome_zarr: bool = False):
         """
         Bulk-writer that uses the (frames, ids) tuple returned by camera.getChunk().
         The call is non-blocking; it returns empty arrays until new frames arrive.
+        Now supports optional OME-Zarr output using the unified writer.
         """
         saved = 0
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         mFilePath = os.path.join(self.save_dir, timeStamp + "_FastStageScan")
-        # create directory if it does not exist
-        if not os.path.exists(mFilePath):
-            os.makedirs(mFilePath)
+        
+        # Set up writers
+        tiff_writer = None
+        ome_writer = None
+        
+        if use_ome_zarr:
+            # Use unified OME writer for both TIFF and Zarr
+            file_paths = OMEFileStorePaths(mFilePath)
+            
+            # Determine grid parameters from metadata if available
+            if metadataList:
+                # Extract grid bounds from metadata
+                x_coords = [meta.get('x', 0) for meta in metadataList if meta]
+                y_coords = [meta.get('y', 0) for meta in metadataList if meta]
+                
+                if x_coords and y_coords:
+                    x_start, x_end = min(x_coords), max(x_coords)
+                    y_start, y_end = min(y_coords), max(y_coords)
+                    
+                    # Estimate step sizes (this is a best guess)
+                    unique_x = sorted(set(x_coords))
+                    unique_y = sorted(set(y_coords))
+                    x_step = unique_x[1] - unique_x[0] if len(unique_x) > 1 else 100.0
+                    y_step = unique_y[1] - unique_y[0] if len(unique_y) > 1 else 100.0
+                    nx, ny = len(unique_x), len(unique_y)
+                else:
+                    # Fallback defaults
+                    x_start, y_start, x_step, y_step = 0.0, 0.0, 100.0, 100.0
+                    nx = ny = int(np.sqrt(n_expected)) or 1
+            else:
+                # Fallback defaults
+                x_start, y_start, x_step, y_step = 0.0, 0.0, 100.0, 100.0
+                nx = ny = int(np.sqrt(n_expected)) or 1
+            
+            tile_shape = self.mDetector._shape[-2:]
+            grid_shape = (nx, ny)
+            grid_geometry = (x_start, y_start, x_step, y_step)
+            writer_config = OMEWriterConfig(
+                write_tiff=True,
+                write_zarr=True,
+                min_period=minPeriod
+            )
+            
+            ome_writer = OMEWriter(
+                file_paths=file_paths,
+                tile_shape=tile_shape,
+                grid_shape=grid_shape,
+                grid_geometry=grid_geometry,
+                config=writer_config,
+                logger=self._logger
+            )
+        else:
+            # Traditional TIFF-only mode
+            if not os.path.exists(mFilePath):
+                os.makedirs(mFilePath)
+            tiff_writer = OmeTiffStitcher(mFilePath)
+            tiff_writer.start()
+
         self._logger.info(f"Writer thread started, saving to {mFilePath}...")
         tLastCapture = time.time()  # for throttling
+        
         while saved < n_expected and not self._stop_writer_evt.is_set():
-
             frames, ids = self.mDetector.getChunk()        # ← empties camera buffer
 
             if frames.size == 0:                        # nothing new yet
                 time.sleep(0.005)
                 continue
-
-            # Create a new OmeTiffStitcher instance for stitching tiles
-            tiff_writer = OmeTiffStitcher(mFilePath)
-            tiff_writer.start()    
-
-
             
             for frame, fid in zip(frames, ids):
                 currentMetadata = metadataList[fid] if fid < len(metadataList) else {}
                 if currentMetadata == {}:
                     self._logger.warning(f"Metadata for frame {fid} is empty. Skipping this frame.")
                     break
-                fileName = os.path.join(mFilePath,  f"FastScan_{currentMetadata['runningNumber']}_x_{round(currentMetadata['x'], 1)}_y_{round(currentMetadata['y'], 1)}_illu-{currentMetadata['illuminationChannel']}_{currentMetadata['illuminationValue']}{fid:06d}.tif")
-                tif.imwrite(fileName, frame)
+                
+                if ome_writer:
+                    # Use unified OME writer
+                    ome_writer.write_frame(frame, currentMetadata)
+                else:
+                    # Traditional TIFF-only mode
+                    fileName = os.path.join(mFilePath,  f"FastScan_{currentMetadata['runningNumber']}_x_{round(currentMetadata['x'], 1)}_y_{round(currentMetadata['y'], 1)}_illu-{currentMetadata['illuminationChannel']}_{currentMetadata['illuminationValue']}{fid:06d}.tif")
+                    tif.imwrite(fileName, frame)
+                    
+                    if tiff_writer:
+                        tiff_writer.add_image(
+                            image=frame,
+                            position_x=currentMetadata['x'],
+                            position_y=currentMetadata['y'],
+                            index_x=0,
+                            index_y=0, # TODO: Add index_x and index_y if needed
+                            pixel_size= self.detectorPixelSize[-1]  # assuming last element is the pixel size
+                        )
+                
                 saved += 1
-                self._logger.debug(f"saved {saved}/{n_expected} under {fileName}")
-                tiff_writer.add_image(
-                    image=frame,
-                    position_x=currentMetadata['x'],
-                    position_y=currentMetadata['y'],
-                    index_x=0,
-                    index_y=0, # TODO: Add index_x and index_y if needed
-                    pixel_size= self.detectorPixelSize[-1]  # assuming last element is the pixel size
-                )
+                self._logger.debug(f"saved {saved}/{n_expected}")
+                
+                # Throttle if not using OME writer (which has its own throttling)
+                if not ome_writer:
+                    t_now = time.time()
+                    if t_now - tLastCapture < minPeriod:
+                        time.sleep(minPeriod - (t_now - tLastCapture))
+                    tLastCapture = t_now
              
-        tiff_writer.close()  # close the tiff writer
+        # Clean up writers
+        if tiff_writer:
+            tiff_writer.close()
+        if ome_writer:
+            ome_writer.finalize()
+            
         self._logger.info(f"Writer thread finished ({saved} images).")
-        # 4. wait for writer to finish then stop camera ------------------------
-
         self._logger.info("Grid‑scan completed and all images saved.")
 
-        # 5. clean up and bring camera back to normal mode -----------------
+        # Clean up and bring camera back to normal mode
         self.mDetector.stopAcquisition()
         self.mDetector.setTriggerSource("Continuous")
         self.mDetector.flushBuffers()

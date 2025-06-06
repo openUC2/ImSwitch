@@ -41,6 +41,7 @@ except Exception as e:
     IS_OMEZARR_AVAILABLE = False
 
 from imswitch.imcontrol.controller.controllers.experiment_controller.OmeTiffStitcher import OmeTiffStitcher
+from imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
 
 from pydantic import BaseModel, Field
 from typing import List, Optional, Tuple, Dict
@@ -1192,44 +1193,28 @@ class ExperimentController(ImConWidgetController):
         metadata_list   list with x, y, illuminationChannel, … for each frame-id
         x_start … ny    grid geometry (needed to locate each tile in the canvas)
         """
-        # ------------------------------------------------------------------ paths
-        tiff_dir = mFilePath.tiff_dir
-        zarr_dir = mFilePath.zarr_dir
-        base_dir = mFilePath.base_dir
-        # ---------------------------------------------------------------- canvas
-        tile_w, tile_h  = self.mDetector._shape[-2:]
-        store   = zarr.DirectoryStore(str(zarr_dir))
-        root    = zarr.group(store, overwrite=True)
-        canvas  = root.create_dataset(
-            "0",
-            shape=(1, 1, 1, ny * tile_h, nx * tile_w),      # t c z y x
-            chunks=(1, 1, 1, tile_h,     tile_w),
-            dtype="uint16",
-            compressor=numcodecs.Blosc("zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE),
-            dimension_separator="/"  
+        # Set up unified OME writer
+        tile_shape = self.mDetector._shape[-2:]  # (height, width)
+        grid_shape = (nx, ny)
+        grid_geometry = (x_start, y_start, x_step, y_step)
+        writer_config = OMEWriterConfig(
+            write_tiff=is_tiff,
+            write_zarr=True,
+            min_period=min_period
         )
-        root.attrs["multiscales"] = [{
-            "version": "0.4",
-                "datasets": [
-                {
-                    "path": "0",
-                    "coordinateTransformations": [
-                        {"type": "scale", "scale": [1, 1, 1, 1, 1]}
-                    ]
-                }
-            ],
-            "axes": [
-                {"name": "t", "type": "time"},
-                {"name": "c", "type": "channel"},
-                {"name": "z", "type": "space"},
-                {"name": "y", "type": "space"},
-                {"name": "x", "type": "space"},
-            ],
-        }]
+        
+        ome_writer = OMEWriter(
+            file_paths=mFilePath,
+            tile_shape=tile_shape,
+            grid_shape=grid_shape,
+            grid_geometry=grid_geometry,
+            config=writer_config,
+            logger=self._logger
+        )
 
         # ------------------------------------------------------------- main loop
-        saved, t_last = 0, time.time()
-        self._logger.info(f"Writer thread started → {base_dir}")
+        saved = 0
+        self._logger.info(f"Writer thread started → {mFilePath.base_dir}")
 
         while saved < n_expected and not self._stop_writer_evt.is_set():
             frames, ids = self.mDetector.getChunk()  # empties camera buffer
@@ -1244,46 +1229,23 @@ class ExperimentController(ImConWidgetController):
                     self._logger.warning(f"missing metadata for frame-id {fid}")
                     continue
 
-                if is_tiff:
-                    # 1) per-tile OME-TIFF -------------------------------------------------
-                    tiff_name = (
-                        f"F{meta['runningNumber']:06d}_"
-                        f"x{meta['x']:.1f}_y{meta['y']:.1f}_"
-                        f"{meta['illuminationChannel']}_{meta['illuminationValue']}.ome.tif"
-                    )
-                    tif.imwrite(os.path.join(tiff_dir, tiff_name), frame, compression="zlib")
-
-                # 2) write into the Zarr canvas ---------------------------------------
-                ix = int(round((meta["x"] - x_start) / x_step))
-                iy = int(round((meta["y"] - y_start) / y_step))
-                y0, y1 = iy * tile_h, (iy + 1) * tile_h
-                x0, x1 = ix * tile_w, (ix + 1) * tile_w
-                canvas[0, 0, 0, y0:y1, x0:x1] = frame
-
+                # Write frame using unified writer
+                chunk_info = ome_writer.write_frame(frame, meta)
                 saved += 1
-                # throttle disk writes if the scan outruns SD-card I/O
-                t_now = time.time()
-                if t_now - t_last < min_period:
-                    time.sleep(min_period - (t_now - t_last))
-                t_last = t_now
                 
                 # emit signal to tell frontend about the new chunk
-                rel_chunk = f"0/{iy}.{ix}" # NGFF v0.4 layout
-                sigZarrDict = {
-                    "event": "zarr_chunk",
-                    "path": rel_chunk,
-                    "zarr": str(self.getOmeZarrUrl())  # e.g. /files/…/FastStageScan.ome.zarr
-                }
-                self.sigUpdateOMEZarrStore.emit(sigZarrDict)  # (rel_chunk, current_zarr_url, image_name)
+                if chunk_info and "rel_chunk" in chunk_info:
+                    sigZarrDict = {
+                        "event": "zarr_chunk",
+                        "path": chunk_info["rel_chunk"],
+                        "zarr": str(self.getOmeZarrUrl())  # e.g. /files/…/FastStageScan.ome.zarr
+                    }
+                    self.sigUpdateOMEZarrStore.emit(sigZarrDict)
 
-        self._logger.info(f"Writer thread finished ({saved}/{n_expected}) tiles under : {base_dir}")
-        # 3) close OME-Zarr store -----------------------------------------------
-        # optional: build a 2× pyramid level (≈15 s on Pi 5 for 10 k tiles)
-        try:
-            from ome_zarr.writer import to_multiscales
-            to_multiscales(store, scale_factors=[[2, 2, 2]])
-        except Exception as err:
-            self._logger.warning(f"pyramid generation failed: {err}")
+        self._logger.info(f"Writer thread finished ({saved}/{n_expected}) tiles under : {mFilePath.base_dir}")
+        
+        # Finalize writing (build pyramids, etc.)
+        ome_writer.finalize()
 
         # bring camera back to continuous mode
         self.mDetector.stopAcquisition()

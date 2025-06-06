@@ -43,7 +43,8 @@ def wait_for_server(port=8001, timeout=30):
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            resp = requests.get(f"http://localhost:{port}/", verify=False, timeout=2)
+            # we listen to the HTTP port with a self-signed certificate
+            resp = requests.get(f"https://localhost:{port}/", verify=False, timeout=2, verify=False)
             if resp.status_code < 500:
                 return True
         except Exception:
@@ -57,7 +58,7 @@ def test_wellplate_experiment(imswitch_process):
 
     # Optionally verify GET route or some endpoint
     try:
-        r = requests.get("http://localhost:8001/ExperimentController/getCurrentExperimentParameters", verify=False)
+        r = requests.get("https://localhost:8001/ExperimentController/getCurrentExperimentParameters", verify=False)
         print("GET /ExperimentController/getCurrentExperimentParameters =>", r.status_code, r.content)
     except Exception as e:
         pytest.fail(f"GET request failed: {e}")
@@ -115,7 +116,7 @@ def test_wellplate_experiment(imswitch_process):
     # Send POST startWellplateExperiment
     try:
         resp = requests.post(
-            "http://localhost:8001/ExperimentController/startWellplateExperiment",
+            "https://localhost:8001/ExperimentController/startWellplateExperiment",
             json=experiment_payload,
             verify=False,
             timeout=10,

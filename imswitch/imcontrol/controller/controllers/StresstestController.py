@@ -123,6 +123,9 @@ class StresstestController(ImConWidgetController):
         self.params = StresstestParams()
         self.results = StresstestResults()
         
+        # Load default parameters from manager if available
+        self._loadDefaultParams()
+        
         # Hardware managers
         self.stages = None
         self.detector = None
@@ -194,13 +197,64 @@ class StresstestController(ImConWidgetController):
             else:
                 default_path = os.path.join(os.path.expanduser("~"), 'stresstest_results')
             os.makedirs(default_path, exist_ok=True)
-            self.params.outputPath = default_path
+            if not self.params.outputPath:  # Only set if not already set from manager
+                self.params.outputPath = default_path
         except Exception as e:
             if _HAS_IMSWITCH:
                 self._logger.error(f"Error setting default output path: {e}")
             else:
                 print(f"Error setting default output path: {e}")
-            self.params.outputPath = ""
+            if not self.params.outputPath:
+                self.params.outputPath = ""
+
+    def _loadDefaultParams(self):
+        """Load default parameters from StresstestManager if available"""
+        if not _HAS_IMSWITCH:
+            return
+            
+        try:
+            # Check if StresstestManager is available
+            if hasattr(self._master, 'StresstestManager'):
+                manager = self._master.StresstestManager
+                default_params = manager.getDefaultParams()
+                
+                # Update params with default values from manager
+                self.params.minPosX = default_params.get('minPosX', self.params.minPosX)
+                self.params.maxPosX = default_params.get('maxPosX', self.params.maxPosX)
+                self.params.minPosY = default_params.get('minPosY', self.params.minPosY)
+                self.params.maxPosY = default_params.get('maxPosY', self.params.maxPosY)
+                self.params.numRandomPositions = default_params.get('numRandomPositions', self.params.numRandomPositions)
+                self.params.numCycles = default_params.get('numCycles', self.params.numCycles)
+                self.params.timeInterval = default_params.get('timeInterval', self.params.timeInterval)
+                self.params.illuminationIntensity = default_params.get('illuminationIntensity', self.params.illuminationIntensity)
+                self.params.exposureTime = default_params.get('exposureTime', self.params.exposureTime)
+                self.params.saveImages = default_params.get('saveImages', self.params.saveImages)
+                self.params.outputPath = default_params.get('outputPath', self.params.outputPath)
+                
+                self._logger.info("Loaded default parameters from StresstestManager")
+            else:
+                self._logger.debug("StresstestManager not available, using built-in defaults")
+                
+        except Exception as e:
+            self._logger.warning(f"Could not load default parameters from manager: {e}")
+
+    def _saveParamsToManager(self):
+        """Save current parameters to StresstestManager if available"""
+        if not _HAS_IMSWITCH:
+            return
+            
+        try:
+            # Check if StresstestManager is available
+            if hasattr(self._master, 'StresstestManager'):
+                manager = self._master.StresstestManager
+                params_dict = self.params.dict()
+                manager.updateParams(params_dict)
+                self._logger.debug("Saved parameters to StresstestManager")
+            else:
+                self._logger.debug("StresstestManager not available, cannot save parameters")
+                
+        except Exception as e:
+            self._logger.warning(f"Could not save parameters to manager: {e}")
     
     @APIExport()
     def getStresstestParams(self) -> StresstestParams:
@@ -212,8 +266,12 @@ class StresstestController(ImConWidgetController):
         """Set stress test parameters"""
         try:
             self.params = params
+            
+            # Save parameters to manager if available
+            self._saveParamsToManager()
+            
             if _HAS_IMSWITCH:
-                self._logger.info(f"Updated stress test parameters: {params}")
+                self._logger.info(f"Updated stress test parameters")
             else:
                 print(f"Updated stress test parameters")
             return True

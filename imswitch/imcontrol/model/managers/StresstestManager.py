@@ -36,7 +36,11 @@ class StresstestManager(SignalInterface):
             "illuminationIntensity": 50,
             "exposureTime": 0.1,
             "saveImages": True,
-            "outputPath": ""
+            "outputPath": "",
+            "enableImageBasedError": False,
+            "numImagesPerPosition": 5,
+            "imageRegistrationMethod": "fft",
+            "pixelSizeUM": 0.1
         }
 
         # Load configuration or use defaults

@@ -40,6 +40,15 @@ try:
 except ImportError:
     _HAS_NUMPY = False
 
+# Import image registration utilities if available
+try:
+    from ..camera_stage_mapping.fft_image_tracking import displacement_between_images
+    from ..camera_stage_mapping.correlation_image_tracking import locate_feature_in_image
+    import cv2
+    _HAS_IMAGE_REGISTRATION = True
+except ImportError:
+    _HAS_IMAGE_REGISTRATION = False
+
 
 class StresstestParams(BaseModel):
     """
@@ -56,6 +65,12 @@ class StresstestParams(BaseModel):
     exposureTime: float = 0.1     # camera exposure time in seconds
     saveImages: bool = True       # whether to save captured images
     outputPath: str = ""          # output directory for results
+    
+    # Image-based error estimation parameters
+    enableImageBasedError: bool = False  # enable image registration-based error measurement
+    numImagesPerPosition: int = 5        # number of images to capture per position for registration
+    imageRegistrationMethod: str = "fft" # registration method: "fft" or "correlation"
+    pixelSizeUM: float = 0.1            # pixel size in micrometers for converting pixel shifts to distance
 
     class Config:
         # Allows arbitrary Python types if necessary
@@ -79,6 +94,13 @@ class StresstestResults(BaseModel):
     targetPositions: List[List[float]] = []
     actualPositions: List[List[float]] = []
     isRunning: bool = False
+    
+    # Image-based error measurement results
+    imageBasedErrors: List[float] = []      # average image registration errors per position 
+    imageShifts: List[List[float]] = []     # pixel shifts [x, y] for each position
+    imageRegistrationResults: List[Dict] = []  # detailed registration results per position
+    averageImageError: float = 0.0
+    maxImageError: float = 0.0
 
     class Config:
         # Allows arbitrary Python types if necessary
@@ -95,7 +117,12 @@ class StresstestResults(BaseModel):
             'timestamps': self.timestamps,
             'targetPositions': self.targetPositions,
             'actualPositions': self.actualPositions,
-            'isRunning': self.isRunning
+            'isRunning': self.isRunning,
+            'imageBasedErrors': self.imageBasedErrors,
+            'imageShifts': self.imageShifts,
+            'imageRegistrationResults': self.imageRegistrationResults,
+            'averageImageError': self.averageImageError,
+            'maxImageError': self.maxImageError
         }
 
 
@@ -227,6 +254,10 @@ class StresstestController(ImConWidgetController):
                 self.params.exposureTime = default_params.get('exposureTime', self.params.exposureTime)
                 self.params.saveImages = default_params.get('saveImages', self.params.saveImages)
                 self.params.outputPath = default_params.get('outputPath', self.params.outputPath)
+                self.params.enableImageBasedError = default_params.get('enableImageBasedError', self.params.enableImageBasedError)
+                self.params.numImagesPerPosition = default_params.get('numImagesPerPosition', self.params.numImagesPerPosition)
+                self.params.imageRegistrationMethod = default_params.get('imageRegistrationMethod', self.params.imageRegistrationMethod)
+                self.params.pixelSizeUM = default_params.get('pixelSizeUM', self.params.pixelSizeUM)
                 
                 self._logger.info("Loaded default parameters from StresstestManager")
             else:
@@ -464,21 +495,33 @@ class StresstestController(ImConWidgetController):
             # Calculate position error using basic math instead of numpy
             error = math.sqrt((target_pos[0] - actual_pos[0])**2 + (target_pos[1] - actual_pos[1])**2)
             
-            # Capture image
+            # Capture image(s) and perform image-based error estimation if enabled
             image = None
-            if _HAS_IMSWITCH and self.detector:
-                try:
-                    if not self.detector._running:
-                        self.detector.startAcquisition()
-                    image = self.detector.getLatestFrame()
-                except Exception as e:
-                    self._logger.warning(f"Could not capture image: {e}")
-            elif not _HAS_IMSWITCH:
-                # Create mock image data for testing
-                if _HAS_NUMPY:
-                    image = np.random.randint(0, 255, (100, 100), dtype=np.uint8)
-                else:
-                    image = [[random.randint(0, 255) for _ in range(100)] for _ in range(100)]
+            image_based_error = 0.0
+            image_shift = [0.0, 0.0]
+            registration_results = {}
+            
+            if self.params.enableImageBasedError:
+                image_based_results = self._performImageBasedErrorEstimation()
+                image_based_error = image_based_results['average_error']
+                image_shift = image_based_results['average_shift']
+                registration_results = image_based_results['detailed_results']
+                image = image_based_results.get('reference_image')
+            else:
+                # Capture single image
+                if _HAS_IMSWITCH and self.detector:
+                    try:
+                        if not self.detector._running:
+                            self.detector.startAcquisition()
+                        image = self.detector.getLatestFrame()
+                    except Exception as e:
+                        self._logger.warning(f"Could not capture image: {e}")
+                elif not _HAS_IMSWITCH:
+                    # Create mock image data for testing
+                    if _HAS_NUMPY:
+                        image = np.random.randint(0, 255, (100, 100), dtype=np.uint8)
+                    else:
+                        image = [[random.randint(0, 255) for _ in range(100)] for _ in range(100)]
             
             # Store results
             self.actual_positions.append(actual_pos)
@@ -489,9 +532,15 @@ class StresstestController(ImConWidgetController):
             self.results.timestamps.append(datetime.now().isoformat())
             self.results.completedPositions += 1
             
+            # Store image-based results if enabled
+            if self.params.enableImageBasedError:
+                self.results.imageBasedErrors.append(image_based_error)
+                self.results.imageShifts.append(image_shift)
+                self.results.imageRegistrationResults.append(registration_results)
+            
             # Save image if requested
             if self.params.saveImages and image is not None:
-                self._saveImage(image, target_pos, actual_pos, cycle, pos_idx)
+                self._saveImage(image, target_pos, actual_pos, cycle, pos_idx, image_based_error, image_shift)
                 
             # Emit position update signal
             position_data = {
@@ -499,14 +548,22 @@ class StresstestController(ImConWidgetController):
                 'actual': actual_pos,
                 'error': error,
                 'cycle': cycle,
-                'position_idx': pos_idx
+                'position_idx': pos_idx,
+                'image_based_error': image_based_error,
+                'image_shift': image_shift
             }
             self.sigPositionUpdate.emit(position_data)
             
             if _HAS_IMSWITCH:
-                self._logger.debug(f"Position error: {error:.2f} µm")
+                if self.params.enableImageBasedError:
+                    self._logger.debug(f"Position error: {error:.2f} µm, Image error: {image_based_error:.2f} µm")
+                else:
+                    self._logger.debug(f"Position error: {error:.2f} µm")
             else:
-                print(f"Position error: {error:.2f} µm")
+                if self.params.enableImageBasedError:
+                    print(f"Position error: {error:.2f} µm, Image error: {image_based_error:.2f} µm")
+                else:
+                    print(f"Position error: {error:.2f} µm")
             
         except Exception as e:
             if _HAS_IMSWITCH:
@@ -514,9 +571,177 @@ class StresstestController(ImConWidgetController):
             else:
                 print(f"Error processing position {target_pos}: {e}")
     
+    def _performImageBasedErrorEstimation(self):
+        """Perform image-based error estimation by capturing multiple images and computing registration shifts"""
+        try:
+            if not _HAS_IMAGE_REGISTRATION or not _HAS_NUMPY:
+                if _HAS_IMSWITCH:
+                    self._logger.warning("Image registration libraries not available, skipping image-based error estimation")
+                else:
+                    print("Image registration libraries not available, skipping image-based error estimation")
+                return {
+                    'average_error': 0.0,
+                    'average_shift': [0.0, 0.0],
+                    'detailed_results': {},
+                    'reference_image': None
+                }
+            
+            images = []
+            shifts = []
+            
+            # Capture multiple images
+            for img_idx in range(self.params.numImagesPerPosition):
+                if _HAS_IMSWITCH and self.detector:
+                    try:
+                        if not self.detector._running:
+                            self.detector.startAcquisition()
+                        # Wait a bit between captures to allow for any micro-movements
+                        if img_idx > 0:
+                            time.sleep(0.05)
+                        image = self.detector.getLatestFrame()
+                        if image is not None:
+                            images.append(image)
+                    except Exception as e:
+                        if _HAS_IMSWITCH:
+                            self._logger.warning(f"Could not capture image {img_idx}: {e}")
+                        else:
+                            print(f"Could not capture image {img_idx}: {e}")
+                elif not _HAS_IMSWITCH:
+                    # Create mock images with slight shifts for testing
+                    base_shift_x = random.uniform(-2, 2)
+                    base_shift_y = random.uniform(-2, 2)
+                    image = np.random.randint(0, 255, (100, 100), dtype=np.uint8)
+                    # Add some structure to make registration meaningful
+                    image[30:70, 30:70] = np.random.randint(100, 200, (40, 40), dtype=np.uint8)
+                    # Simulate small shifts for each image
+                    shift_x = base_shift_x + random.uniform(-0.5, 0.5)
+                    shift_y = base_shift_y + random.uniform(-0.5, 0.5)
+                    shifted_img = np.roll(image, int(shift_x), axis=0)
+                    shifted_img = np.roll(shifted_img, int(shift_y), axis=1)
+                    images.append(shifted_img)
+            
+            if len(images) < 2:
+                if _HAS_IMSWITCH:
+                    self._logger.warning("Not enough images captured for registration analysis")
+                else:
+                    print("Not enough images captured for registration analysis")
+                return {
+                    'average_error': 0.0,
+                    'average_shift': [0.0, 0.0],
+                    'detailed_results': {},
+                    'reference_image': images[0] if images else None
+                }
+            
+            # Use first image as reference
+            reference_image = images[0]
+            
+            # Calculate registration shifts for each subsequent image
+            detailed_results = {
+                'num_images': len(images),
+                'registration_method': self.params.imageRegistrationMethod,
+                'pixel_size_um': self.params.pixelSizeUM,
+                'individual_shifts': []
+            }
+            
+            for i, img in enumerate(images[1:], 1):
+                try:
+                    if self.params.imageRegistrationMethod == "fft":
+                        # Use FFT-based registration
+                        displacement = displacement_between_images(reference_image, img)
+                    else:
+                        # Use correlation-based registration (fallback)
+                        # For correlation method, we need to ensure proper format
+                        if len(reference_image.shape) == 3:
+                            ref_gray = cv2.cvtColor(reference_image, cv2.COLOR_RGB2GRAY)
+                            img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+                        else:
+                            ref_gray = reference_image
+                            img_gray = img
+                        
+                        # Extract a central region for template matching
+                        h, w = ref_gray.shape[:2]
+                        template_size = min(h//4, w//4, 50)  # Use a reasonable template size
+                        template = ref_gray[h//2-template_size//2:h//2+template_size//2,
+                                          w//2-template_size//2:w//2+template_size//2]
+                        
+                        # Find template position in the image
+                        position = locate_feature_in_image(img_gray, template, margin=10)
+                        expected_pos = np.array([h//2, w//2])
+                        displacement = position - expected_pos
+                    
+                    # Convert displacement to micrometers
+                    displacement_um = displacement * self.params.pixelSizeUM
+                    distance_um = np.sqrt(np.sum(displacement_um**2))
+                    
+                    shifts.append(displacement.tolist())
+                    detailed_results['individual_shifts'].append({
+                        'image_index': i,
+                        'displacement_pixels': displacement.tolist(),
+                        'displacement_um': displacement_um.tolist(), 
+                        'distance_um': float(distance_um)
+                    })
+                    
+                except Exception as e:
+                    if _HAS_IMSWITCH:
+                        self._logger.warning(f"Registration failed for image {i}: {e}")
+                    else:
+                        print(f"Registration failed for image {i}: {e}")
+                    # Use zero displacement for failed registrations
+                    shifts.append([0.0, 0.0])
+                    detailed_results['individual_shifts'].append({
+                        'image_index': i,
+                        'displacement_pixels': [0.0, 0.0],
+                        'displacement_um': [0.0, 0.0],
+                        'distance_um': 0.0,
+                        'error': str(e)
+                    })
+            
+            # Calculate average shift and error
+            if shifts:
+                avg_shift = np.mean(shifts, axis=0)
+                # Calculate average error in micrometers  
+                errors_um = [result['distance_um'] for result in detailed_results['individual_shifts'] if 'error' not in result]
+                avg_error = np.mean(errors_um) if errors_um else 0.0
+                
+                detailed_results['average_shift_pixels'] = avg_shift.tolist()
+                detailed_results['average_shift_um'] = (avg_shift * self.params.pixelSizeUM).tolist()
+                detailed_results['average_error_um'] = float(avg_error)
+                detailed_results['max_error_um'] = float(max(errors_um)) if errors_um else 0.0
+                detailed_results['std_error_um'] = float(np.std(errors_um)) if len(errors_um) > 1 else 0.0
+            else:
+                avg_shift = np.array([0.0, 0.0])
+                avg_error = 0.0
+                detailed_results['average_shift_pixels'] = [0.0, 0.0]
+                detailed_results['average_shift_um'] = [0.0, 0.0]
+                detailed_results['average_error_um'] = 0.0
+                detailed_results['max_error_um'] = 0.0
+                detailed_results['std_error_um'] = 0.0
+            
+            return {
+                'average_error': avg_error,
+                'average_shift': avg_shift.tolist(),
+                'detailed_results': detailed_results,
+                'reference_image': reference_image
+            }
+            
+        except Exception as e:
+            if _HAS_IMSWITCH:
+                self._logger.error(f"Error in image-based error estimation: {e}")
+            else:
+                print(f"Error in image-based error estimation: {e}")
+            return {
+                'average_error': 0.0,
+                'average_shift': [0.0, 0.0],
+                'detailed_results': {'error': str(e)},
+                'reference_image': None
+            }
+    
     def _saveImage(self, image, target_pos: List[float], actual_pos: List[float], 
-                   cycle: int, pos_idx: int):
+                   cycle: int, pos_idx: int, image_based_error: float = 0.0, image_shift: List[float] = None):
         """Save captured image with metadata"""
+        if image_shift is None:
+            image_shift = [0.0, 0.0]
+            
         try:
             # Try to import tifffile, fall back to basic file saving
             try:
@@ -544,7 +769,15 @@ class StresstestController(ImConWidgetController):
                 'position_index': pos_idx,
                 'timestamp': datetime.now().isoformat(),
                 'illumination_intensity': self.params.illuminationIntensity,
-                'exposure_time': self.params.exposureTime
+                'exposure_time': self.params.exposureTime,
+                'image_based_error_um': image_based_error,
+                'image_shift_pixels_x': image_shift[0],
+                'image_shift_pixels_y': image_shift[1],
+                'image_shift_um_x': image_shift[0] * self.params.pixelSizeUM,
+                'image_shift_um_y': image_shift[1] * self.params.pixelSizeUM,
+                'image_registration_enabled': self.params.enableImageBasedError,
+                'num_images_per_position': self.params.numImagesPerPosition,
+                'pixel_size_um': self.params.pixelSizeUM
             }
             
             # Save image with metadata
@@ -590,15 +823,26 @@ class StresstestController(ImConWidgetController):
                 self.results.averagePositionError = sum(self.position_errors) / len(self.position_errors)
                 self.results.maxPositionError = max(self.position_errors)
             
+            # Calculate image-based statistics if enabled
+            if self.params.enableImageBasedError and self.results.imageBasedErrors:
+                if _HAS_NUMPY:
+                    self.results.averageImageError = float(np.mean(self.results.imageBasedErrors))
+                    self.results.maxImageError = float(np.max(self.results.imageBasedErrors))
+                else:
+                    self.results.averageImageError = sum(self.results.imageBasedErrors) / len(self.results.imageBasedErrors)
+                    self.results.maxImageError = max(self.results.imageBasedErrors)
+            
             # Save results to JSON file
             self._saveResults()
             
+            log_msg = f"Stress test completed. Average position error: {self.results.averagePositionError:.2f} µm, Max position error: {self.results.maxPositionError:.2f} µm"
+            if self.params.enableImageBasedError and self.results.imageBasedErrors:
+                log_msg += f", Average image error: {self.results.averageImageError:.2f} µm, Max image error: {self.results.maxImageError:.2f} µm"
+            
             if _HAS_IMSWITCH:
-                self._logger.info(f"Stress test completed. Average error: {self.results.averagePositionError:.2f} µm, "
-                                f"Max error: {self.results.maxPositionError:.2f} µm")
+                self._logger.info(log_msg)
             else:
-                print(f"Stress test completed. Average error: {self.results.averagePositionError:.2f} µm, "
-                      f"Max error: {self.results.maxPositionError:.2f} µm")
+                print(log_msg)
         
         self.sigStresttestComplete.emit()
     
@@ -610,21 +854,42 @@ class StresstestController(ImConWidgetController):
             filepath = os.path.join(self.params.outputPath, filename)
             
             # Create comprehensive results dictionary
+            summary = {
+                'total_positions': len(self.position_errors),
+                'average_error_um': self.results.averagePositionError,
+                'max_error_um': self.results.maxPositionError,
+                'min_error_um': min(self.position_errors) if self.position_errors else 0,
+                'std_error_um': self._calculate_std(self.position_errors) if self.position_errors else 0,
+                'test_duration_minutes': (len(self.position_errors) * self.params.timeInterval) / 60.0
+            }
+            
+            # Add image-based statistics if available
+            if self.params.enableImageBasedError and self.results.imageBasedErrors:
+                summary.update({
+                    'image_based_enabled': True,
+                    'average_image_error_um': self.results.averageImageError,
+                    'max_image_error_um': self.results.maxImageError,
+                    'min_image_error_um': min(self.results.imageBasedErrors),
+                    'std_image_error_um': self._calculate_std(self.results.imageBasedErrors),
+                    'num_images_per_position': self.params.numImagesPerPosition,
+                    'registration_method': self.params.imageRegistrationMethod,
+                    'pixel_size_um': self.params.pixelSizeUM
+                })
+            else:
+                summary['image_based_enabled'] = False
+            
             results_dict = {
                 'parameters': self.params.dict(),
                 'results': self.results.dict(),
-                'summary': {
-                    'total_positions': len(self.position_errors),
-                    'average_error_um': self.results.averagePositionError,
-                    'max_error_um': self.results.maxPositionError,
-                    'min_error_um': min(self.position_errors) if self.position_errors else 0,
-                    'std_error_um': self._calculate_std(self.position_errors) if self.position_errors else 0,
-                    'test_duration_minutes': (len(self.position_errors) * self.params.timeInterval) / 60.0
-                }
+                'summary': summary
             }
             
             with open(filepath, 'w') as f:
                 json.dump(results_dict, f, indent=2)
+            
+            # Save detailed image registration results if available
+            if self.params.enableImageBasedError and self.results.imageRegistrationResults:
+                self._saveImageRegistrationResults()
                 
             if _HAS_IMSWITCH:
                 self._logger.info(f"Results saved to: {filename}")
@@ -636,6 +901,65 @@ class StresstestController(ImConWidgetController):
                 self._logger.error(f"Could not save results: {e}")
             else:
                 print(f"Could not save results: {e}")
+    
+    def _saveImageRegistrationResults(self):
+        """Save detailed image registration results to a separate JSON file"""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"stresstest_image_registration_{timestamp}.json"
+            filepath = os.path.join(self.params.outputPath, filename)
+            
+            # Create detailed image registration results
+            detailed_results = {
+                'test_info': {
+                    'timestamp': datetime.now().isoformat(),
+                    'total_positions': len(self.results.imageRegistrationResults),
+                    'num_images_per_position': self.params.numImagesPerPosition,
+                    'registration_method': self.params.imageRegistrationMethod,
+                    'pixel_size_um': self.params.pixelSizeUM
+                },
+                'position_results': []
+            }
+            
+            # Add results for each position
+            for i, (pos_results, target_pos, actual_pos, timestamp_str) in enumerate(zip(
+                self.results.imageRegistrationResults,
+                self.results.targetPositions,
+                self.results.actualPositions,
+                self.results.timestamps
+            )):
+                position_data = {
+                    'position_index': i,
+                    'target_position': target_pos,
+                    'actual_position': actual_pos,
+                    'timestamp': timestamp_str,
+                    'image_registration_results': pos_results
+                }
+                detailed_results['position_results'].append(position_data)
+            
+            # Calculate aggregate statistics
+            if self.results.imageBasedErrors:
+                detailed_results['aggregate_statistics'] = {
+                    'average_error_um': self.results.averageImageError,
+                    'max_error_um': self.results.maxImageError,
+                    'min_error_um': min(self.results.imageBasedErrors),
+                    'std_error_um': self._calculate_std(self.results.imageBasedErrors),
+                    'total_registrations': sum(len(result.get('individual_shifts', [])) for result in self.results.imageRegistrationResults)
+                }
+            
+            with open(filepath, 'w') as f:
+                json.dump(detailed_results, f, indent=2)
+                
+            if _HAS_IMSWITCH:
+                self._logger.info(f"Detailed image registration results saved to: {filename}")
+            else:
+                print(f"Detailed image registration results saved to: {filename}")
+                
+        except Exception as e:
+            if _HAS_IMSWITCH:
+                self._logger.error(f"Could not save image registration results: {e}")
+            else:
+                print(f"Could not save image registration results: {e}")
     
     def _calculate_std(self, values):
         """Calculate standard deviation without numpy"""

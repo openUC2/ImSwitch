@@ -13,7 +13,7 @@ class ThorCamSciManager(DetectorManager):
 
     def __init__(self, detectorInfo, name, **_lowLevelManagers):
         self.__logger = initLogger(self, instanceName=name)
-        
+
         # containing all the information from the json file
         self.detectorInfo = detectorInfo
 
@@ -25,14 +25,14 @@ class ThorCamSciManager(DetectorManager):
         except:
             # returning back to default pixelsize
             pixelSize = 1
-        
+
         # Get camera object (either mock or real)
         self._camera = self._getThorcamObj(cameraId, binning)
-        
+
         # set the shape (important for the recording manager)
-        fullShape = (self._camera.SensorWidth, 
+        fullShape = (self._camera.SensorWidth,
                      self._camera.SensorHeight)
-        
+
         # set the model
         model = self._camera.model
         self._running = False
@@ -54,7 +54,7 @@ class ThorCamSciManager(DetectorManager):
                         editable=False),
             'Camera pixel size': DetectorNumberParameter(group='Miscellaneous', value=pixelSize,
                                                 valueUnits='µm', editable=True)
-            }            
+            }
 
         # reading parameters from disk and write them to camrea
         for propertyName, propertyValue in detectorInfo.managerProperties['thorcamsci'].items():
@@ -93,11 +93,11 @@ class ThorCamSciManager(DetectorManager):
             elif triggerSource == 2 and triggerMode == 1:
                 self.setParameter('Trigger source', 'External "frame-trigger"')
 
-    
-    
+
+
     def getLatestFrame(self, is_save=False):
         """this function waits for the latest frame from the camera and returns it"""
-        frame = self._camera.getLast()        
+        frame = self._camera.getLast()
         return frame
 
 
@@ -145,7 +145,7 @@ class ThorCamSciManager(DetectorManager):
         else:
             raise ValueError(f'Invalid trigger source "{source}"')
 
-        
+
     def getChunk(self):
         """Get the latest chunk/buffer from the camera. Can be software-based queue or hardware-based buffer."""
         try:
@@ -162,7 +162,7 @@ class ThorCamSciManager(DetectorManager):
         if self._camera.model == "mock":
             self.__logger.debug('We could attempt to reconnect the camera')
             pass
-            
+
         if not self._running:
             self._camera.start_live()
             self._running = True
@@ -216,10 +216,10 @@ class ThorCamSciManager(DetectorManager):
             self.__logger.error(e)
             # TODO: unsure if frameStart is needed? Try without.
         # This should be the only place where self.frameStart is changed
-        
+
         # Only place self.shapes is changed
-        
-         
+
+
 
     def _performSafeCameraAction(self, function):
         """ This method is used to change those camera properties that need
@@ -250,7 +250,7 @@ class ThorCamSciManager(DetectorManager):
 
         self.__logger.info(f'Initialized camera, model: {camera.model}')
         return camera
-    
+
     def getFrameNumber(self):
         """Get the frame number of the camera"""
         return self._camera.getFrameNumber()

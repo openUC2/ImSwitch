@@ -1,15 +1,15 @@
 """
 Perform a 2D calibration of stage to camera coordinates.
 
-This module uses 2D motion to try to calibrate the relationship between 
+This module uses 2D motion to try to calibrate the relationship between
 a camera and a stage, by moving the stage in a grid and then fitting a
-2x2 transformation matrix that maps stage coordinates to camera 
-coordinates.  It works, but is not as robust as performing two 1D 
-calibrations and then combining them; see 
-:func:`.calibrate_backlash_1d` and 
+2x2 transformation matrix that maps stage coordinates to camera
+coordinates.  It works, but is not as robust as performing two 1D
+calibrations and then combining them; see
+:func:`.calibrate_backlash_1d` and
 :func:`.image_to_stage_displacement_from_1d`.
 
-The main calibration routine in this module is 
+The main calibration routine in this module is
 :func:`.calibrate_xy_grid`.
 
 
@@ -24,8 +24,8 @@ from functools import partial
 
 def backlash_corrected_move(get_position, move, backlash_amount, pos):
     """Make two moves, arriving at `pos` moving in the positive direction
-    
-    We first calculate the relative displacement and then look at the 
+
+    We first calculate the relative displacement and then look at the
     sign of each component.  For each axis where the displacement is
     negative, we deliberately overshoot the destination point, then
     make a second move that approaches the destination from the right
@@ -40,7 +40,7 @@ def backlash_corrected_move(get_position, move, backlash_amount, pos):
             (position is specified as an array)
 
         backlash_amount: number
-            A number, specifying the distance to move for 
+            A number, specifying the distance to move for
             backlash correction (should be greater than the backlash)
 
         pos: array-like
@@ -54,13 +54,13 @@ def backlash_corrected_move(get_position, move, backlash_amount, pos):
 
 def bake_backlash_corrected_move(get_position, move, backlash_amount):
     """Return a function that performs backlash-corrected moves
-    
+
     Given `get_position` and `move` functions, and a backlash-correction
     distance, return a function that takes only the destination position
     as argument, and performs a :func:`backlash_corrected_move`.
     """
     return partial(backlash_corrected_move, get_position, move, backlash_amount)
-    
+
 def calibrate_xy_grid(tracker, move, step = 100, n_steps=4, backlash_compensation=0):
     """Make a series of moves in X and Y to determine the XY components of the pixel-to-sample matrix.
 
@@ -73,7 +73,7 @@ def calibrate_xy_grid(tracker, move, step = 100, n_steps=4, backlash_compensatio
     tracker : Tracker
         An initialised :class:`.Tracker`, centred on the starting point.  This provides position readout from the stage and the camera.
     move : function
-        A function that accepts a 1D array and performs an absolute move to 
+        A function that accepts a 1D array and performs an absolute move to
         that position.  If backlash correction is needed, include it here.
     step : float, optional
         The amount to move the stage by.  This should move the sample by approximately 1/10th of the field of view.
@@ -105,7 +105,7 @@ def calibrate_xy_grid(tracker, move, step = 100, n_steps=4, backlash_compensatio
                 tracker.append_point()
     finally:
         move(starting_position)
-    # We then use least-squares to fit the XY part of the matrix relating 
+    # We then use least-squares to fit the XY part of the matrix relating
     # pixels to distance
     # stage_positions should be the stage positions, with a zero mean.
     # image_positions should be the same, but calculated from the images
@@ -125,10 +125,10 @@ def calibrate_xy_grid(tracker, move, step = 100, n_steps=4, backlash_compensatio
     if fractional_error > 0.05: # Check it was a reasonably good fit
         print("Warning: the error fitting measured displacements was %.1f%%" % (fractional_error*100))
     print(f"Calibrated the pixel-location matrix.\nResiduals were {fractional_error*100:.1f}% of the shift.")
-    
+
     return {
-        "image_to_stage_displacement": A, 
-        "moves": tracker.history, 
+        "image_to_stage_displacement": A,
+        "moves": tracker.history,
         "fractional_error": fractional_error
     }
 

@@ -27,7 +27,7 @@ elif sys.platform == 'win32':
                     dll = WinDLL('GxIAPI.dll', winmode=0)
                 else:
                     dll = WinDLL('GxIAPI.dll')
-                    
+
             except OSError:
                 print('Cannot find GxIAPI.dll.')
                 dll = -1
@@ -74,10 +74,10 @@ class GxOpenMode:
 class GxFrameMask:
     TYPE_MASK = 0xF0000000
     LEVEL_MASK = 0x0F000000
-    
+
     def __init__(self):
         pass
-    
+
 
 class GxFeatureType:
     INT = 0x10000000            # Integer type
@@ -538,7 +538,7 @@ if hasattr(dll, 'GXGetAllDeviceBaseInfo'):
 
         status = dll.GXGetAllDeviceBaseInfo(byref(devices_info), byref(buf_size_c))
         return status, devices_info
-        
+
 
 if hasattr(dll, 'GXGetDeviceIPInfo'):
     def gx_get_device_ip_info(index):
@@ -1628,7 +1628,7 @@ if hasattr(dll, 'GXQBuf'):
 
         status = dll.GXQBuf(handle_c, frame_data_p_p)
         return status
-        
+
 
 if hasattr(dll, 'GXDQAllBufs'):
     def gx_dequeue_all_bufs(handle, buff_num, time_out):

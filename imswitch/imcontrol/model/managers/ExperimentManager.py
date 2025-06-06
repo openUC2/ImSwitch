@@ -13,7 +13,7 @@ class ExperimentManager(SignalInterface):
 
 
     def update(self):
-        return None 
+        return None
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

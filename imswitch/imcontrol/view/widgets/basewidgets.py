@@ -42,7 +42,7 @@ class WidgetFactory:
 
         self._createdWidgets.append(weakref.ref(widget))
         return widget
-    
+
     def setArgument(self, name, value):
         self._baseKwargs[name] = value
 

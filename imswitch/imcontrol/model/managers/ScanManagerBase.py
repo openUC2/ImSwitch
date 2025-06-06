@@ -31,7 +31,7 @@ class SuperScanManager(ABC):
             self._TTLCycleDesigner = None
 
         self._expectedSyncParameters = []
-   
+
     def isValidChild(self):  # For future possible implementation
         return True
 

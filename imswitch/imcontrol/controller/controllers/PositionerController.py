@@ -37,11 +37,11 @@ class PositionerController(ImConWidgetController):
                     self.setSharedAttr(pName, axis, _stopAttr, pManager.stop[axis])
 
         # Connect CommunicationChannel signals
-        if 0: #IS_HEADLESS:IS_HEADLESS: 
+        if 0: #IS_HEADLESS:IS_HEADLESS:
             self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged, check_nargs=False)
         else:
             self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
-        
+
 
         # Connect PositionerWidget signals
         if not IS_HEADLESS:
@@ -147,7 +147,7 @@ class PositionerController(ImConWidgetController):
     def homeAxis(self, positionerName:str=None, axis:str="X", isBlocking:bool=False):
         self.__logger.debug(f"Homing axis {axis}")
         if positionerName is None:
-            positionerName = self._master.positionersManager.getAllDeviceNames()[0] 
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].doHome(axis, isBlocking=isBlocking)
         self.updatePosition(positionerName, axis)
         self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
@@ -156,7 +156,7 @@ class PositionerController(ImConWidgetController):
     def stopAxis(self, positionerName=None, axis="X"):
         self.__logger.debug(f"Stopping axis {axis}")
         if positionerName is None:
-            positionerName = self._master.positionersManager.getAllDeviceNames()[0] 
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].forceStop(axis)
 
     def attrChanged(self, key, value):
@@ -276,8 +276,8 @@ class PositionerController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def setStageOffsetAxis(self, positionerName: Optional[str]=None, knownPosition:float=0, currentPosition:Optional[float]=None, knownOffset:Optional[float]=None,  axis:str="X"):
-        """ 
-        Sets the stage to a known offset aside from the home position. 
+        """
+        Sets the stage to a known offset aside from the home position.
         knownPosition and currentPosition have to be in physical coordinates (i.e. prior to applying the stepsize)
         # TODO: Make this permanent (e.g. reflect change in config)
         """
@@ -289,17 +289,17 @@ class PositionerController(ImConWidgetController):
             currentPosition = self.getPos()[positionerName][axis]
         if knownOffset is None:
             offset = currentPosition - knownPosition
-        else:   
+        else:
             offset = knownOffset
-            
+
         self._master.positionersManager[positionerName].setStageOffsetAxis(knownOffset=offset, axis=axis)
-        
+
         self.saveStageOffset(positionerName=positionerName, offsetValue=offset, axis=axis)
-        
+
     @APIExport(runOnUIThread=True)
     def getStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
-        """ 
-        Returns the stage offset for the given axis. 
+        """
+        Returns the stage offset for the given axis.
         """
         self._logger.debug(f'Getting stage offset for {axis} axis.')
         if positionerName is None:
@@ -315,7 +315,7 @@ class PositionerController(ImConWidgetController):
                 positionerName = self._positionerInfo.name
                 if not positionerName:
                     return
-            
+
             stageOffsets = {
                 "stageOffsetPositionX": self._master.positionersManager[positionerName].stageOffsetPositions["X"],
                 "stageOffsetPositionY": self._master.positionersManager[positionerName].stageOffsetPositions["Y"],
@@ -331,8 +331,8 @@ class PositionerController(ImConWidgetController):
             return
 
     @APIExport(runOnUIThread=True, requestType="POST")
-    def startStageScan(self, positionerName=None, xstart:float=0, xstep:float=1000, nx:int=20, ystart:float=0, 
-                       ystep:float=1000, ny:int=10, tsettle:int=5, tExposure:int=50, illumination0: int=0, 
+    def startStageScan(self, positionerName=None, xstart:float=0, xstep:float=1000, nx:int=20, ystart:float=0,
+                       ystep:float=1000, ny:int=10, tsettle:int=5, tExposure:int=50, illumination0: int=0,
                        illumination1: int=0, illumination2: int=0, illumination3: int=0, led:int=0):
         """ Starts a stage scan with the specified parameters.
         Parameters:
@@ -354,7 +354,7 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self.__logger.debug(f"Starting stage scan with parameters: xstart={xstart}, xstep={xstep}, nx={nx}, "
                             f"ystart={ystart}, ystep={ystep}, ny={ny}, settle={tsettle}, illumination={illumination}, led={led}")
-        
+
         self._master.positionersManager[positionerName].start_stage_scanning(xstart=xstart, xstep=xstep, nx=nx,
                                                                               ystart=ystart, ystep=ystep, ny=ny,
                                                                               tsettle=tsettle, tExposure=tExposure, illumination=illumination,

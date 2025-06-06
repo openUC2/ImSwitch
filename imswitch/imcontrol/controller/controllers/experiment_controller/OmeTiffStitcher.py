@@ -74,7 +74,7 @@ class OmeTiffStitcher:
 
                 if image is not None:
                     # Each call writes a new series/plane in append mode.
-                    try:    
+                    try:
                         tif.write(data=image, metadata=metadata)
                     except Exception as e:
                         print(f"Error writing image: {e}")

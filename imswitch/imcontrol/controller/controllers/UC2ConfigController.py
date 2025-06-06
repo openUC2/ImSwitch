@@ -74,12 +74,12 @@ def _run_esptool(args):
 
 class UC2ConfigController(ImConWidgetController):
     """Linked to UC2ConfigWidget."""
-    
+
     sigUC2SerialReadMessage = Signal(str)
     sigUC2SerialWriteMessage = Signal(str)
     sigUC2SerialIsConnected = Signal(bool)
-    
-    
+
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
@@ -93,7 +93,7 @@ class UC2ConfigController(ImConWidgetController):
         #
         # register the callback to take a snapshot triggered by the ESP32
         self.registerCaptureCallback()
-        
+
         # register the callbacks for emitting serial-related signals
         if hasattr(self._master.UC2ConfigManager, "ESP32"):
             try:
@@ -121,8 +121,8 @@ class UC2ConfigController(ImConWidgetController):
 
     def processSerialWriteMessage(self, message):
         self.sigUC2SerialWriteMessage.emit(message)
-        
-    def processSerialReadMessage(self, message):    
+
+    def processSerialReadMessage(self, message):
         self.sigUC2SerialReadMessage.emit(message)
 
     def registerCaptureCallback(self):
@@ -211,7 +211,7 @@ class UC2ConfigController(ImConWidgetController):
 
     def reconnectThread(self, baudrate=None):
         self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
-        if not IS_HEADLESS: 
+        if not IS_HEADLESS:
             self._widget.reconnectDeviceLabel.setText("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
         else:
             self.__logger.debug("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
@@ -230,41 +230,41 @@ class UC2ConfigController(ImConWidgetController):
     def stopImSwitch(self):
         self._commChannel.sigExperimentStop.emit()
         return {"message": "ImSwitch is shutting down"}
-    
+
     @APIExport(runOnUIThread=False)
     def restartImSwitch(self):
         ostools.restartSoftware()
         return {"message": "ImSwitch is restarting"}
-        
+
     @APIExport(runOnUIThread=False)
     def isImSwitchRunning(self):
         return True
-    
+
     @APIExport(runOnUIThread=False)
     def getDiskUsage(self):
         return dirtools.getDiskusage()
-    
+
     @APIExport(runOnUIThread=False)
     def getDataPath(self):
         return dirtools.UserFileDirs.Data
-    
+
     @APIExport(runOnUIThread=False)
     def setDataPathFolder(self, path):
         dirtools.UserFileDirs.Data = path
         self._logger.debug(f"Data path set to {path}")
         return {"message": f"Data path set to {path}"}
-    
+
     @APIExport(runOnUIThread=True)
     def reconnect(self):
         self._logger.debug('Reconnecting to ESP32 device.')
         baudrate = None
-        if not IS_HEADLESS: 
+        if not IS_HEADLESS:
             self._widget.reconnectDeviceLabel.setText("Reconnecting to ESP32 device.")
             if self._widget.getBaudRateGui() in (115200, 500000):
                 baudrate = self._widget.getBaudRateGui()
         mThread = threading.Thread(target=self.reconnectThread, args=(baudrate,))
         mThread.start()
-    
+
     @APIExport(runOnUIThread=True)
     def writeSerial(self, payload):
         return self._master.UC2ConfigManager.ESP32.serial.writeSerial(payload)
@@ -280,11 +280,12 @@ class UC2ConfigController(ImConWidgetController):
         mThread.start()
         mThread.join()
         if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Bring the PS controller into pairing mode")
-        
+
     @APIExport(runOnUIThread=True)
     def restartCANDevice(self, device_id=0):
         self._logger.debug('Restarting CAN device.')
         self._master.UC2ConfigManager.restartCANDevice(device_id)
+
 
         
     ''' ESPTOOL related methods '''
@@ -357,7 +358,8 @@ class UC2ConfigController(ImConWidgetController):
         threading.Thread(target=self.reconnectThread, daemon=True).start()
         return {"status": "flashed", "file": filename, "address": address, "port": port}
     
-# Copyright (C) 2020-2024 ImSwitch developers
+
+# Copyright (C) Benedict Diederich
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

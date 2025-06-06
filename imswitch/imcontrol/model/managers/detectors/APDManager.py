@@ -159,7 +159,7 @@ class APDManager(DetectorManager):
             return data[np.newaxis,:,:]
         else:
             return np.empty(shape=(0,0,0))
-            
+
     def flushBuffers(self):
         pass
 
@@ -175,7 +175,7 @@ class APDManager(DetectorManager):
     def scale(self):
         return self.__pixel_sizes[::-1]
         #return list(reversed(self.__pixel_sizes))
-        
+
     @property
     def pixelSizeUm(self):
         return [1, self.__pixel_sizes[-2], self.__pixel_sizes[-1]]  # TODO: is this not in the wrong order, considering setPixelSize below?
@@ -189,22 +189,22 @@ class APDManager(DetectorManager):
         pass
 
     def remove_nans(self, im):
-        """ Remove slices which only contain np.nan values, called at end of acquisition. 
+        """ Remove slices which only contain np.nan values, called at end of acquisition.
         Source: https://stackoverflow.com/a/43724800 """
         acc = np.maximum.accumulate
         m = ~np.isnan(im)
         dims = im.ndim
 
         if dims==1:
-            return im[acc(m) & acc(m[::-1])[::-1]]    
+            return im[acc(m) & acc(m[::-1])[::-1]]
         else:
             r = np.tile(np.arange(dims),dims)
             per_axis_combs = np.delete(r,range(0,len(r),dims+1)).reshape(-1,dims-1)
             per_axis_combs_tuple = map(tuple,per_axis_combs)
 
             mask = []
-            for i in per_axis_combs_tuple:            
-                m0 = m.any(i)            
+            for i in per_axis_combs_tuple:
+                m0 = m.any(i)
                 mask.append(acc(m0) & acc(m0[::-1])[::-1])
             im_ret = im[np.ix_(*mask)]
             ax_rem = [i for i, val in enumerate(np.shape(im_ret)[1:]) if val == 1]
@@ -256,7 +256,7 @@ class ScanWorker(Worker):
         self._samples_d2_period = round(scanInfoDict['scan_samples_d2_period'] * self._frac_scan_det_rate)
         # det samples in total signal
         self._samples_total = round(scanInfoDict['scan_samples_total'] * self._frac_scan_det_rate)
-        # samples to throw due to: 
+        # samples to throw due to:
         self._throw_startzero = round(scanInfoDict['scan_throw_startzero'] * self._frac_scan_det_rate)  # starting zero-padding
         self._throw_initpos = round(scanInfoDict['scan_throw_initpos'] * self._frac_scan_det_rate)  # smooth inital positioning time
         self._throw_settling = round(scanInfoDict['scan_throw_settling'] * self._frac_scan_det_rate)  # settling time
@@ -269,7 +269,7 @@ class ScanWorker(Worker):
 
         self._phase_delay = int(scanInfoDict['phase_delay'])
         self._samples_throw_init = self._throw_startzero
-        
+
         # samples to throw due to smooth between d>2 step transitioning
         self._throw_init_d2_step = (self._throw_initpos + self._throw_settling + self._throw_startacc + self._phase_delay)
 
@@ -282,7 +282,7 @@ class ScanWorker(Worker):
         self._manager.setPixelSize(scanInfoDict['pixel_sizes'])  # 'pixel_sizes' order: low dim to high dim
 
     def throwdata(self, datalen):
-        """ Throw away data with length datalen, save the last value, 
+        """ Throw away data with length datalen, save the last value,
         and add length of data to total samples_read length.
         """
         if datalen > 0:
@@ -359,7 +359,7 @@ class ScanWorker(Worker):
                     if throwdatalen > 0:
                         self.throwdata(throwdatalen)
                 if dim > 3:
-                    self.throwdata(self._samples_padlens[dim-1])                  
+                    self.throwdata(self._samples_padlens[dim-1])
             else:
                 self.run_loop_d2()
             self._pos[dim-1] += 1

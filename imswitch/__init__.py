@@ -7,8 +7,8 @@ __jupyter_port__ = 8888
 jupyternotebookurl = ""
 __argparse__ = None
 
-''' 
-These are flags to ensure headless operation and side-loading of the config file 
+'''
+These are flags to ensure headless operation and side-loading of the config file
 '''
 IS_HEADLESS = False
 DEFAULT_SETUP_FILE = None

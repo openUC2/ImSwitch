@@ -151,7 +151,7 @@ class NidaqManager(SignalInterface):
                                           samps_per_chan=sampsInScan)
         if starttrig:
             aitask.triggers.start_trigger.cfg_dig_edge_start_trig(reference_trigger)
-        
+
         #self.__logger.debug(f'Created AI task: {name}')
         return aitask
 
@@ -280,7 +280,7 @@ class NidaqManager(SignalInterface):
                     DOdevices.append(device)
                     DOsignals.append(ttlDic[device])
                     DOlines.append(line)
-                
+
                 # check if line and frame clock should be outputted, if so add to DO lists
                 if self.__setupInfo.scan.lineClockLine:
                     DOdevices.append('LineClock')

@@ -6,7 +6,7 @@ import os
 import numpy as np
 from PIL import Image
 from scipy import signal as sg
-import os 
+import os
 from imswitch.imcommon.model import dirtools
 import tifffile as tif
 
@@ -20,7 +20,7 @@ class FlatfieldManager(SignalInterface):
     def __init__(self, FlatfieldInfo, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
-        
+
         self.FlatfieldImage = None
         self.histoConfigFilename = "FlatfieldImage.tif"
 
@@ -39,14 +39,14 @@ class FlatfieldManager(SignalInterface):
 
     def update(self):
         return None #returnmask.image()
-    
+
     def setFlatfieldImage(self, flatfieldImage):
         self.FlatfieldImage = flatfieldImage
         self.writeFlatfieldImage(self.FlatfieldImage)
-        
+
     def getFlatfieldImage(self):
         return self.FlatfieldImage
-    
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

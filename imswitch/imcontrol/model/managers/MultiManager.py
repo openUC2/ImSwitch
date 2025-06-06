@@ -39,7 +39,7 @@ class MultiManager(ABC):
                                 managedDeviceInfo, managedDeviceName, **lowLevelManagers)
                     except Exception as e:
                         self.__logger.error(e)
-                        
+
     def hasDevices(self):
         """ Returns whether this manager manages any devices. """
         return len(self._subManagers) > 0

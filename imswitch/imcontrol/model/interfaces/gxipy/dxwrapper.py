@@ -20,10 +20,10 @@ elif sys.platform == 'win32':
         except:
             dll = WinDLL('DxImageProc.dll', winmode=1) # https://stackoverflow.com/questions/59330863/cant-import-dll-module-in-python
 
-            
+
     except OSError:
         print('Cannot find DxImageProc.dll.')
-        
+
     '''
     try:
         dll = WinDLL('DxImageProc.dll')
@@ -42,7 +42,7 @@ class DxStatus:
     NOT_FIND_DEVICE = -104               # not find device
     STATUS_NOT_SUPPORTED = -105          # operation is not supported
     CPU_NOT_SUPPORT_ACCELERATE = -106    # CPU does not support acceleration
-  
+
     def __init__(self):
         pass
 
@@ -87,7 +87,7 @@ class DxActualBits:
 class MonoImgProcess(Structure):
     _fields_ = [
         ('defective_pixel_correct',     c_bool),        # Pixel correct switch
-        ('sharpness',                   c_bool),        # Sharpness switch　
+        ('sharpness',                   c_bool),        # Sharpness switch
         ('accelerate',                  c_bool),        # Accelerate switch
         ('sharp_factor',                c_float),       # Sharpen the intensity factor
         ('pro_lut',                     c_char_p),      # Lookup table

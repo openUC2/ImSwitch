@@ -13,7 +13,7 @@ GROUP_PREFIX = "Pos_"
 class MinimalZarrDataSource:
     """
     Writes frames to an OME-Zarr store:
-     - set_metadata_from_configuration_experiment(config) 
+     - set_metadata_from_configuration_experiment(config)
        picks out T, C, Z, X, Y, positions, etc.
      - new_position() for each position, creates arrays for multi-resolution
      - write() appends a new 2D frame into the right (t,c,z) slice
@@ -64,7 +64,7 @@ class MinimalZarrDataSource:
         # do we let z vary faster or c vary faster
         self.per_stack = ms.get("stack_cycling_mode", "per_stack") == "per_stack"
 
-        # Example: 2-level pyramid 
+        # Example: 2-level pyramid
         shape0 = (self.shape_z, self.shape_y, self.shape_x)
         shape1 = (self.shape_z, max(1, self.shape_y // 2), max(1, self.shape_x // 2))
         self.shapes = [shape0, shape1]
@@ -88,7 +88,7 @@ class MinimalZarrDataSource:
 
     def new_position(self, pos_index: int, **kw):
         """
-        For each multi-res level, create a (t,c,z,y,x) array, 
+        For each multi-res level, create a (t,c,z,y,x) array,
         then append an entry to 'multiscales'.
         """
         name = f"{GROUP_PREFIX}{pos_index}"

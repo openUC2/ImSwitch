@@ -13,9 +13,9 @@ class IC_GrabberDLL:
     """
     ctypes funcs to talk to tisgrabber.dll.
     """
-    
+
     GrabberHandlePtr = POINTER(structs.GrabberHandle)
-    
+
     # win32
     if sys.maxsize > 2**32:
         _ic_grabber_dll = windll.LoadLibrary(ctypes.util.find_library('tisgrabber_x64.dll'))
@@ -36,7 +36,7 @@ class IC_GrabberDLL:
     init_library = _ic_grabber_dll.IC_InitLibrary
     init_library.restype = c_int
     init_library.argtypes = (c_char_p,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Creates a new grabber handle and returns it. A new created grabber should be
     #    release with a call to IC_ReleaseGrabber if it is no longer needed.
@@ -49,7 +49,7 @@ class IC_GrabberDLL:
     ###create_grabber.restype = GrabberHandle
     create_grabber.restype = GrabberHandlePtr
     create_grabber.argtypes = None
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Release the grabber object. Must be called, if the calling application
     #    does no longer need the grabber.
@@ -60,20 +60,20 @@ class IC_GrabberDLL:
     release_grabber = _ic_grabber_dll.IC_ReleaseGrabber
     release_grabber.restype = None
     release_grabber.argtypes = (POINTER(GrabberHandlePtr),)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*    Must be called at the end of the application to release allocated memory.
     #    @sa IC_InitLibrary
     #*/
-    #void AC IC_CloseLibrary(); ///< Closes the library, cleans up memory. 
+    #void AC IC_CloseLibrary(); ///< Closes the library, cleans up memory.
     close_library = _ic_grabber_dll.IC_CloseLibrary
     close_library.restype = None
     close_library.argtypes = None
-        
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Open a video capture device. The hGrabber handle must have been created previously by
     #    a call to IC_CreateGrabber(). Once a hGrabber handle has been created it can be
-    #    recycled to open different video capture devices in sequence. 
+    #    recycled to open different video capture devices in sequence.
     #    @param hGrabber The handle to grabber object, that has been created by a call to IC_CreateGrabber
     #    @param szDeviceName Friendly name of the video capture device e.g. "DFK 21F04".
     #    @retval IC_SUCCESS on success.
@@ -106,10 +106,10 @@ class IC_GrabberDLL:
     #*/
     #int AC IC_OpenVideoCaptureDevice( HGRABBER hGrabber, char *szDeviceName ); ///< Opens a video capture device.
     open_device = _ic_grabber_dll.IC_OpenVideoCaptureDevice
-    open_device.restype = c_int                                
-    open_device.argtypes = (GrabberHandlePtr,            
-                            c_char_p)                        
-    
+    open_device.restype = c_int
+    open_device.argtypes = (GrabberHandlePtr,
+                            c_char_p)
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Close the current video capture device. The HGRABBER object will not be deleted.
     #    It can be used again for opening another video capture device.
@@ -119,7 +119,7 @@ class IC_GrabberDLL:
     close_device = _ic_grabber_dll.IC_CloseVideoCaptureDevice
     close_device.restype = None
     close_device.argtypes = (GrabberHandlePtr,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Retrieve the name of the current video capture device. If the device is
     #    invalid, NULL is returned.
@@ -131,24 +131,24 @@ class IC_GrabberDLL:
     get_device_name = _ic_grabber_dll.IC_GetDeviceName
     get_device_name.restype = c_char_p
     get_device_name.argtypes = (GrabberHandlePtr,)
-    
+
     #int AC IC_GetVideoFormatWidth( HGRABBER hGrabber); ///<Returns the width of the video format.
     get_video_format_width = _ic_grabber_dll.IC_GetVideoFormatWidth
     get_video_format_width.restype = c_int
     get_video_format_width.argtypes = (GrabberHandlePtr,)
-    
+
     #int AC IC_GetVideoFormatHeight( HGRABBER hGrabber);///<returns the height of the video format.
     get_video_format_height = _ic_grabber_dll.IC_GetVideoFormatHeight
     get_video_format_height.restype = c_int
     get_video_format_height.argtypes = (GrabberHandlePtr,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Set the sink type. A sink type must be set before images can be snapped.
-    #    The sink type basically describes the format of the buffer where the snapped 
-    #    images are stored. 
+    #    The sink type basically describes the format of the buffer where the snapped
+    #    images are stored.
     #
     #    Possible values for format are:
-    #    @li Y800    
+    #    @li Y800
     #    @li RGB24
     #    @li RGB32
     #    @li UYVY
@@ -157,7 +157,7 @@ class IC_GrabberDLL:
     #
     #    @param hGrabber The handle to the grabber object.
     #    @param format The desired color format. Possible values for format are:
-    #        @li Y800    
+    #        @li Y800
     #        @li RGB24
     #        @li RGB32
     #        @li UYVY
@@ -168,13 +168,13 @@ class IC_GrabberDLL:
     #
     #
     #*/
-    #int AC IC_SetFormat( HGRABBER hGrabber, COLORFORMAT format ); ///< Sets the color format of the sink. 
+    #int AC IC_SetFormat( HGRABBER hGrabber, COLORFORMAT format ); ///< Sets the color format of the sink.
     set_format = _ic_grabber_dll.IC_SetFormat
     set_format.restype = c_int
     set_format.argtypes = (GrabberHandlePtr,
                            #structs.ColorFormat)
                            c_int) # todo enum
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Retrieves the format of the sink type currently set (See IC_SetFormat()
     #    for possible formats). If no sink type is set
@@ -187,7 +187,7 @@ class IC_GrabberDLL:
     #get_format.restype = structs.ColorFormat
     get_format.restype = c_int # todo enum
     get_format.argtypes = (GrabberHandlePtr,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Set a video format for the current video capture device. The video format
     #    must be supported by the current video capture device.
@@ -227,10 +227,10 @@ class IC_GrabberDLL:
     set_video_format.restype = c_int
     set_video_format.argtypes = (GrabberHandlePtr,
                                  c_char_p)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Set a video norm for the current video capture device.
-    #    @note  The current video capture device must support video norms. 
+    #    @note  The current video capture device must support video norms.
     #    @param hGrabber The handle to the grabber object.
     #    @param szNorm A string that contains the desired video format.
     #    @retval IC_SUCCESS on success
@@ -242,10 +242,10 @@ class IC_GrabberDLL:
     set_video_norm.restype = c_int
     set_video_norm.argtypes = (GrabberHandlePtr,
                                c_char_p)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Set a input channel for the current video capture device. 
-    #    @note  The current video capture device must support input channels.. 
+    #/*! Set a input channel for the current video capture device.
+    #    @note  The current video capture device must support input channels..
     #    @param hGrabber The handle to the grabber object.
     #    @param szChannel A string that contains the desired video format.
     #    @retval IC_SUCCESS on success
@@ -255,7 +255,7 @@ class IC_GrabberDLL:
     #
     #
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Start the live video. 
+    #/*! Start the live video.
     #    @param hGrabber The handle to the grabber object.
     #    @param iShow The parameter indicates:   @li 1 : Show the video    @li 0 : Do not show the video, but deliver frames. (For callbacks etc.)
     #    @retval IC_SUCCESS on success
@@ -267,18 +267,18 @@ class IC_GrabberDLL:
     start_live.restype = c_int
     start_live.argtypes = (GrabberHandlePtr,
                            c_int)
-    
+
     #int AC IC_PrepareLive( HGRABBER hGrabber, int iShow); ///<Prepare the grabber for starting the live video.
     prepare_live = _ic_grabber_dll.IC_PrepareLive
     prepare_live.restype = c_int
     prepare_live.argtypes = (GrabberHandlePtr,
                              c_int)
-        
-    #int AC IC_SuspendLive(HGRABBER hGrabber); ///<Suspends an image stream and puts it into prepared state. 
+
+    #int AC IC_SuspendLive(HGRABBER hGrabber); ///<Suspends an image stream and puts it into prepared state.
     suspend_live = _ic_grabber_dll.IC_SuspendLive
     suspend_live.restype = c_int
     suspend_live.argtypes = (GrabberHandlePtr,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Stop the live video.
     #    @param hGrabber The handle to the grabber object.
@@ -288,19 +288,19 @@ class IC_GrabberDLL:
     stop_live = _ic_grabber_dll.IC_StopLive
     stop_live.restype = None
     stop_live.argtypes = (GrabberHandlePtr,)
-    
+
     #int AC IC_IsCameraPropertyAvailable( HGRABBER hGrabber, CAMERA_PROPERTY eProperty ); ///< Check whether a camera property is available.
     is_camera_property_available = _ic_grabber_dll.IC_IsCameraPropertyAvailable
     is_camera_property_available.restype = c_int
     is_camera_property_available.argtypes = (GrabberHandlePtr,
-                                             c_int)    
-    
+                                             c_int)
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Set a camera property like exposure, zoom.
-    #    
+    #
     #    @param hGrabber The handle to the grabber object.
     #    @param eProperty The property to be set. It can have following values:
-    #        @li PROP_CAM_PAN    
+    #        @li PROP_CAM_PAN
     #        @li PROP_CAM_TILT,
     #        @li PROP_CAM_ROLL,
     #        @li PROP_CAM_ZOOM,
@@ -321,7 +321,7 @@ class IC_GrabberDLL:
     set_camera_property.argtypes = (GrabberHandlePtr,
                                     c_int,
                                     c_long)
-    
+
     #int AC IC_CameraPropertyGetRange( HGRABBER hGrabber, CAMERA_PROPERTY eProperty, long *lMin, long *lMax); ///<Get the minimum and maximum value of a camera property
     camera_property_get_range = _ic_grabber_dll.IC_CameraPropertyGetRange
     camera_property_get_range.restype = c_int
@@ -329,19 +329,19 @@ class IC_GrabberDLL:
                                           c_int,
                                           POINTER(c_long),
                                           POINTER(c_long))
-                                          
+
     #int AC IC_GetCameraProperty( HGRABBER hGrabber, CAMERA_PROPERTY eProperty, long *lValue);  ///< Get a camera property's value.
     get_camera_property = _ic_grabber_dll.IC_GetCameraProperty
     get_camera_property.restype = c_int
     get_camera_property.argtypes = (GrabberHandlePtr,
                                     c_int,
                                     POINTER(c_long))
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Enable or disable automatic for a camera property. 
+    #/*! Enable or disable automatic for a camera property.
     #    @param hGrabber The handle to the grabber object.
     #    @param iProperty  The property to be set. It can have following values:
-    #    @li PROP_CAM_PAN    
+    #    @li PROP_CAM_PAN
     #    @li PROP_CAM_TILT,
     #    @li PROP_CAM_ROLL,
     #    @li PROP_CAM_ZOOM,
@@ -364,27 +364,27 @@ class IC_GrabberDLL:
     enable_auto_camera_property.argtypes = (GrabberHandlePtr,
                                            c_int,
                                            c_int)
-    
+
     #int AC IC_IsCameraPropertyAutoAvailable( HGRABBER hGrabber, CAMERA_PROPERTY iProperty ); ///<Check whether automation for a camera property is available.
     is_camera_property_auto_available = _ic_grabber_dll.IC_IsCameraPropertyAutoAvailable
     is_camera_property_auto_available.restype = c_int
     is_camera_property_auto_available.argtypes = (GrabberHandlePtr,
                                                   c_int)
-    
+
     #int AC IC_GetAutoCameraProperty( HGRABBER hGrabber, int iProperty, int *iOnOff ); ///<Retrieve whether automatic is enabled for the specifield camera property.
     get_auto_camera_property = _ic_grabber_dll.IC_GetAutoCameraProperty
     get_auto_camera_property.restype = c_int
     get_auto_camera_property.argtypes = (GrabberHandlePtr,
                                          c_int,
                                          POINTER(c_int))
-    
-    
+
+
     #int AC IC_IsVideoPropertyAvailable( HGRABBER hGrabber, VIDEO_PROPERTY eProperty ); ///<Check whether the specified video property is available.
     is_video_property_available = _ic_grabber_dll.IC_IsVideoPropertyAvailable
     is_video_property_available.restype = c_int
     is_video_property_available.argtypes = (GrabberHandlePtr,
                                             c_int)      # todo
-    
+
     #int AC IC_VideoPropertyGetRange( HGRABBER hGrabber, VIDEO_PROPERTY eProperty, long *lMin, long *lMax); ///<Retrieve the lower and upper limit of a video property.
     video_property_get_range = _ic_grabber_dll.IC_VideoPropertyGetRange
     video_property_get_range.restype = c_int
@@ -392,27 +392,27 @@ class IC_GrabberDLL:
                                          c_int,    # todo
                                          POINTER(c_long),
                                          POINTER(c_long))
-    
+
     #int AC IC_GetVideoProperty( HGRABBER hGrabber, VIDEO_PROPERTY eProperty, long *lValue ); ///< Retrieve the the current value of the specified video property.
     get_video_property = _ic_grabber_dll.IC_GetVideoProperty
     get_video_property.restype = c_int
     get_video_property.argtypes = (GrabberHandlePtr,
                                    c_int,   # todo
                                    POINTER(c_long))
-    
+
     #int AC IC_IsVideoPropertyAutoAvailable( HGRABBER hGrabber, VIDEO_PROPERTY eProperty ); ///<Check whether the specified video property supports automation.
     is_video_property_auto_available = _ic_grabber_dll.IC_IsVideoPropertyAutoAvailable
     is_video_property_auto_available.restype = c_int
     is_video_property_auto_available.argtypes = (GrabberHandlePtr,
-                                                 c_int)     # todo    
-    
+                                                 c_int)     # todo
+
     #int AC IC_GetAutoVideoProperty( HGRABBER hGrabber, int iProperty, int *iOnOff ); ///<Get the automation state of a video property.
     get_auto_video_property = _ic_grabber_dll.IC_GetAutoVideoProperty
     get_auto_video_property.restype = c_int
     get_auto_video_property.argtypes = (GrabberHandlePtr,
                                         c_int,   # todo enum
                                         POINTER(c_int))
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Set a video property like brightness, contrast.
     #
@@ -442,7 +442,7 @@ class IC_GrabberDLL:
     set_video_property.argtypes = (GrabberHandlePtr,
                                    c_int,
                                    c_long)   # todo enum
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Enable or disable automatic for a video propertery.
     #    @param hGrabber The handle to the grabber object.
@@ -473,10 +473,10 @@ class IC_GrabberDLL:
     enable_auto_video_property.argtypes = (GrabberHandlePtr,
                                            c_int,   # todo enum
                                            c_int)
-    
+
     #
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Retrieve the properties of the current video format and sink type 
+    #/*! Retrieve the properties of the current video format and sink type
     #    @param hGrabber The handle to the grabber object.
     #    @param *lWidth  This recieves the width of the image buffer.
     #    @param *lHeight  This recieves the height of the image buffer.
@@ -493,33 +493,33 @@ class IC_GrabberDLL:
                                       POINTER(c_long),
                                       POINTER(c_int),
                                       POINTER(c_int))   # todo colorformat
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Snaps an image. The video capture device must be set to live mode and a 
+    #/*! Snaps an image. The video capture device must be set to live mode and a
     #    sink type has to be set before this call. The format of the snapped images depend on
-    #    the selected sink type. 
+    #    the selected sink type.
     #
     #    @param hGrabber The handle to the grabber object.
     #    @param iTimeOutMillisek The Timeout time is passed in milli seconds. A value of -1 indicates, that
     #                            no time out is set.
     #
-    #    
+    #
     #    @retval IC_SUCCESS if an image has been snapped
     #    @retval IC_ERROR if something went wrong.
     #    @retval IC_NOT_IN_LIVEMODE if the live video has not been started.
     #
-    #    @sa IC_StartLive 
+    #    @sa IC_StartLive
     #    @sa IC_SetFormat
     #
     #*/
-    #int AC IC_SnapImage( HGRABBER hGrabber, int iTimeOutMillisek); ///<Snaps an image from the live stream. 
+    #int AC IC_SnapImage( HGRABBER hGrabber, int iTimeOutMillisek); ///<Snaps an image from the live stream.
     snap_image = _ic_grabber_dll.IC_SnapImage
     snap_image.restype = c_int
     snap_image.argtypes = (GrabberHandlePtr,
                            c_int)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Save the contents of the last snapped image by IC_SnapImage into a file. 
+    #/*! Save the contents of the last snapped image by IC_SnapImage into a file.
     #    @param hGrabber The handle to the grabber object.
     #    @param szFileName String containing the file name to be saved to.
     #    @param ft File type if the image, It have be
@@ -530,7 +530,7 @@ class IC_GrabberDLL:
     #    @retval IC_ERROR if something went wrong.
     #
     #    @remarks
-    #    The format of the saved images depend on the sink type. If the sink type 
+    #    The format of the saved images depend on the sink type. If the sink type
     #    is set to Y800, the saved image will be an 8 Bit grayscale image. In any
     #    other case the saved image will be a 24 Bit RGB image.
     #
@@ -545,7 +545,7 @@ class IC_GrabberDLL:
                            c_char_p,
                            c_int,    # 1 = jpeg
                            c_long)    # eg. 75 (75%)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Retrieve a byte pointer to the image data (pixel data) of the last snapped
     #    image (see SnapImage()). If the function fails, the return value is NULL
@@ -560,8 +560,8 @@ class IC_GrabberDLL:
     #unsigned char* AC IC_GetImagePtr( HGRABBER hGrabber ); ///< Retuns a pointer to the image data
     get_image_ptr = _ic_grabber_dll.IC_GetImagePtr
     get_image_ptr.restype = POINTER(c_void_p)
-    get_image_ptr.argtypes = (GrabberHandlePtr,)    
-    
+    get_image_ptr.argtypes = (GrabberHandlePtr,)
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Assign an Window handle to display the video in.
     #    @param hGrabber The handle to the grabber object.
@@ -591,18 +591,18 @@ class IC_GrabberDLL:
     #get_serial_number.argtypes = (GrabberHandlePtr,
     #                              c_char_p)
     # ^ doesn't seem to work... returns consistent but wrong number...
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Count all connected video capture devices. If the Parameter szDeviceList
     #    is NULL, only the number of devices is queried. The Parameter szDeviceList
     #    must be a two dimensional array of char. The iSize parameter specifies the
     #    length of the strings, that are used in the array.
-    #    
+    #
     #    @param szDeviceList A two dimensional char array that recieves the list. Or NULL if only the count of devices is to be returned.
     #    @param iSize Not used.
     #    @retval >= 0 Success, count of found devices
     #    @retval <0 An error occurred.
-    #    
+    #
     #    Simple sample to list the video capture devices:
     #    @code
     #    char szDeviceList[20][40];
@@ -620,7 +620,7 @@ class IC_GrabberDLL:
     list_devices.restype = c_int
     list_devices.argtypes = (POINTER((c_char * 20) * 40),    # hardcoded 40 devices, each with 20 characters
                              c_int)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Count all available video formats. If the Parameter szFormatList
     #    is NULL, only the number of formats is queried. The Parameter szFormatList
@@ -632,7 +632,7 @@ class IC_GrabberDLL:
     #
     #    @retval >= 0 Success, count of found video formats
     #    @retval <0 An error occurred.
-    #    
+    #
     #    Simple sample to list the video capture devices:
     #    @code
     #    char szFormatList[80][40];
@@ -654,31 +654,31 @@ class IC_GrabberDLL:
     list_video_formats.argtypes = (GrabberHandlePtr,
                                    POINTER((c_char * 40) * 80),
                                    c_int)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Get the number of the currently available devices. This function creates an
-    #    internal array of all connected video capture devices. With each call to this 
-    #    function, this array is rebuild. The name and the unique name can be retrieved 
+    #    internal array of all connected video capture devices. With each call to this
+    #    function, this array is rebuild. The name and the unique name can be retrieved
     #    from the internal array using the functions IC_GetDevice() and IC_GetUniqueNamefromList.
     #    They are usefull for retrieving device names for opening devices.
-    #    
+    #
     #    @retval >= 0 Success, count of found devices.
     #    @retval <0 An error occurred.
     #
     #    @sa IC_GetDevice
     #    @sa IC_GetUniqueNamefromList
     #*/
-    #int AC IC_GetDeviceCount(); ///<Get the number of the currently available devices. 
+    #int AC IC_GetDeviceCount(); ///<Get the number of the currently available devices.
     get_device_count = _ic_grabber_dll.IC_GetDeviceCount
     get_device_count.restype = c_int
-    
+
     #todo check that a static variable in class is fully live, ie a reference to it updates..
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Get a string representation of a device specified by iIndex. iIndex 
-    #    must be between 0 and IC_GetDeviceCount(). IC_GetDeviceCount() must 
+    #/*! Get a string representation of a device specified by iIndex. iIndex
+    #    must be between 0 and IC_GetDeviceCount(). IC_GetDeviceCount() must
     #    have been called before this function, otherwise it will always fail.
-    #    
+    #
     #    @param iIndex The number of the device whose name is to be returned. It must be
     #                  in the range from 0 to IC_GetDeviceCount(),
     #    @return Returns the string representation of the device on success, NULL
@@ -690,11 +690,11 @@ class IC_GrabberDLL:
     #char* AC IC_GetDevice( int iIndex ); ///< Get the name of a video capture device.
     get_device = _ic_grabber_dll.IC_GetDevice
     get_device.restype = c_char_p
-    get_device.argtypes = (c_int,)    
-    
+    get_device.argtypes = (c_int,)
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Get unique device name of a device specified by iIndex. The unique device name
-    #    consist from the device name and its serial number. It allows to differ between 
+    #    consist from the device name and its serial number. It allows to differ between
     #    more then one device of the same type connected to the computer. The unique device name
     #    is passed to the function IC_OpenDevByUniqueName
     #
@@ -711,7 +711,7 @@ class IC_GrabberDLL:
     get_unique_name_from_list = _ic_grabber_dll.IC_GetUniqueNamefromList
     get_unique_name_from_list.restype = c_char_p
     get_unique_name_from_list.argtypes = (c_int,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Get the number of the available input channels for the current device.
     #    A video    capture device must have been opened before this call.
@@ -727,12 +727,12 @@ class IC_GrabberDLL:
     get_input_channel_count = _ic_grabber_dll.IC_GetInputChannelCount
     get_input_channel_count.restype = c_int
     get_input_channel_count.argtypes = (GrabberHandlePtr,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Get a string representation of the input channel specified by iIndex. 
+    #/*! Get a string representation of the input channel specified by iIndex.
     #    iIndex must be between 0 and IC_GetInputChannelCount().
     #    IC_GetInputChannelCount() must have been called before this function,
-    #    otherwise it will always fail.        
+    #    otherwise it will always fail.
     #    @param hGrabber The handle to the grabber object.
     #    @param iIndex Number of the input channel to be used..
     #
@@ -745,29 +745,29 @@ class IC_GrabberDLL:
     get_input_channel.restype = c_char_p
     get_input_channel.argtypes = (GrabberHandlePtr,
                                   c_int)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Get the number of the available video formats for the current device. 
+    #/*! Get the number of the available video formats for the current device.
     #    A video capture device must have been opened before this call.
-    #    
+    #
     #    @param hGrabber The handle to the grabber object.
     #
     #    @retval >= 0 Success
     #    @retval < 0 An error occured.
-    #    
+    #
     #    @sa IC_GetVideoNorm
     #*/
     #int AC IC_GetVideoNormCount( HGRABBER hGrabber ); ///<Get the count of available video norms.
     get_video_norm_count = _ic_grabber_dll.IC_GetVideoNormCount
     get_video_norm_count.restype = c_int
     get_video_norm_count.argtypes = (GrabberHandlePtr,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Get a string representation of the video norm specified by iIndex. 
+    #/*! Get a string representation of the video norm specified by iIndex.
     #    iIndex must be between 0 and IC_GetVideoNormCount().
     #    IC_GetVideoNormCount() must have been called before this function,
-    #    otherwise it will always fail.        
-    #    
+    #    otherwise it will always fail.
+    #
     #    @param hGrabber The handle to the grabber object.
     #    @param iIndex Number of the video norm to be used.
     #
@@ -781,11 +781,11 @@ class IC_GrabberDLL:
     get_video_norm.restype = c_char_p
     get_video_norm.argtypes = (GrabberHandlePtr,
                                c_int)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Get the number of the available video formats for the current device. 
+    #/*! Get the number of the available video formats for the current device.
     #    A video capture device must have been opened before this call.
-    #    
+    #
     #    @param hGrabber The handle to the grabber object.
     #
     #    @retval >= 0 Success
@@ -797,13 +797,13 @@ class IC_GrabberDLL:
     get_video_format_count = _ic_grabber_dll.IC_GetVideoFormatCount
     get_video_format_count.restype = c_int
     get_video_format_count.argtypes = (GrabberHandlePtr,)
-    
-    
+
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Get a string representation of the video format specified by iIndex. 
+    #/*! Get a string representation of the video format specified by iIndex.
     #    iIndex must be between 0 and IC_GetVideoFormatCount().
     #    IC_GetVideoFormatCount() must have been called before this function,
-    #    otherwise it will always fail.    
+    #    otherwise it will always fail.
     #
     #    @param hGrabber The handle to the grabber object.
     #    @param iIndex Number of the video format to be used.
@@ -817,10 +817,10 @@ class IC_GrabberDLL:
     get_video_format.restype = c_char_p
     get_video_format.argtypes = (GrabberHandlePtr,
                                  c_int)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Save the state of a video capture device to a file. 
-    #    
+    #/*! Save the state of a video capture device to a file.
+    #
     #    @param hGrabber The handle to the grabber object.
     #    @param szFileName Name of the file where to save to.
     #
@@ -829,12 +829,12 @@ class IC_GrabberDLL:
     #
     #    @sa IC_LoadDeviceStateFromFile
     #*/
-    #int AC IC_SaveDeviceStateToFile(HGRABBER hGrabber, char* szFileName);///<Save the state of a video capture device to a file. 
+    #int AC IC_SaveDeviceStateToFile(HGRABBER hGrabber, char* szFileName);///<Save the state of a video capture device to a file.
     save_device_state_to_file = _ic_grabber_dll.IC_SaveDeviceStateToFile
     save_device_state_to_file.restype = c_int
     save_device_state_to_file.argtypes = (GrabberHandlePtr,
                                           c_char_p)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Load a device settings file. On success the device is opened automatically.
     #
@@ -854,20 +854,20 @@ class IC_GrabberDLL:
                                             c_char_p)
 
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Save the device settings to a file specified by szFilename. When used 
-    #    with IC Imaging Control 1.41 the device name, the input channel, the 
-    #    video norm and the video format are saved. When used with IC Imaging 
+    #/*! Save the device settings to a file specified by szFilename. When used
+    #    with IC Imaging Control 1.41 the device name, the input channel, the
+    #    video norm and the video format are saved. When used with IC Imaging
     #    Control 2.0, the VCDProperties are saved as well. Returns 1 on success,
     #    0 otherwise.
-    #    Notice that in IC Imaging Control 1.41 the device name includes the trailing 
+    #    Notice that in IC Imaging Control 1.41 the device name includes the trailing
     #    number if there is more than one device of the same type available. This can
     #    cause IC_OpenDeviceBySettings() to fail if one of those devices is unplugged.
-    #    When used with IC Imaging Control 2.0, this cannot happen because the device 
-    #    name is stored without the trailing number. Instead the first device that 
+    #    When used with IC Imaging Control 2.0, this cannot happen because the device
+    #    name is stored without the trailing number. Instead the first device that
     #    matches the type specified in the settings file is opened.
     #
     #    @deprecated Use IC_SaveDeviceStateToFile instead.
-    #    
+    #
     #*/
     #int AC IC_SaveDeviceSettings( HGRABBER hGrabber, char* szFilename );
     #
@@ -875,7 +875,7 @@ class IC_GrabberDLL:
     #//////////////////////////////////////////////////////////////////////////
     #/*! Open a device by a settings file specified by szFilename. If succedeed,
     #    1 is returned and a device specified in the settings file is opened and
-    #    initialized with the settings data. If failed, 0 is returned. 
+    #    initialized with the settings data. If failed, 0 is returned.
     #
     #    @deprecated Use IC_LoadDeviceStateFromFile instead.
     #*/
@@ -883,7 +883,7 @@ class IC_GrabberDLL:
     #
     #
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Load device settings from a file specified by szFilename. A device must 
+    #/*! Load device settings from a file specified by szFilename. A device must
     #    have been opened before this function is called. A check is performed whether
     #    the current device matches the device type stored in the settings file.
     #    If so, the settings are loaded and set.
@@ -896,7 +896,7 @@ class IC_GrabberDLL:
     #int AC IC_LoadDeviceSettings( HGRABBER hGrabber, char* szFilename );
     #
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Open a video capture by using its DisplayName. 
+    #/*! Open a video capture by using its DisplayName.
     #    @param hGrabber The handle to the grabber object.
     #    @param szDisplayname Displayname of the device. Can be retrieved by a call to IC_GetDisplayName().
     #
@@ -905,21 +905,21 @@ class IC_GrabberDLL:
     #
     #    @sa IC_GetDisplayName
     #*/
-    #int AC IC_OpenDevByDisplayName( HGRABBER hGrabber, char *szDisplayname); ///<Open a video capture by using its DisplayName. 
+    #int AC IC_OpenDevByDisplayName( HGRABBER hGrabber, char *szDisplayname); ///<Open a video capture by using its DisplayName.
     #
     #//////////////////////////////////////////////////////////////////////////
     #/*! Get a DisplayName from a currently open device. The display name of a
     #    device can be another on different computer for the same video capture
-    #    device. 
-    #    
+    #    device.
+    #
     #    @param hGrabber       Handle to a grabber object
     #    @param szDisplayName  Memory that will take the display name. If it is NULL, the
     #                          length of the display name will be returned.
     #    @param iLen           Size in Bytes of the memory allocated by szDisplayName.
     #
-    #    
+    #
     #    @retval IC_SUCCESS     On success. szDisplayName contains the display name of the device.
-    #    @retval IC_ERROR       iLen is less than the length of the retrieved display name. 
+    #    @retval IC_ERROR       iLen is less than the length of the retrieved display name.
     #    @retval IC_NO_HANDLE   hGrabber is not a valid handle. GetGrabber was not called.
     #    @retval IC_NO_DEVICE   No device opened. Open a device, before this function can be used.
     #    @retval >1             Length of the display name, if szDisplayName is NULL.
@@ -935,7 +935,7 @@ class IC_GrabberDLL:
                                  #c_char_p,
                                  POINTER(c_char),
                                  c_int)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Open a video capture by using its UniqueName. Use IC_GetUniqueName() to
     #    retrieve the unique name of a camera.
@@ -952,22 +952,22 @@ class IC_GrabberDLL:
     open_device_by_unique_name.restype = c_int
     open_device_by_unique_name.argtypes = (GrabberHandlePtr,
                                            c_char_p)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Get a UniqueName from a currently open device.
-    #    
+    #
     #    @param hGrabber      Handle to a grabber object
     #    @param szUniqueName  Memory that will take the Unique name. If it is NULL, the
     #                         length of the Unique name will be returned.
     #    @param iLen          Size in Bytes of the memory allocated by szUniqueName.
     #
-    #    
+    #
     #    @retval IC_SUCCESS    On success. szUniqueName contains the Unique name of the device.
-    #    @retval IC_ERROR      iLen is less than the length of the retrieved Unique name. 
+    #    @retval IC_ERROR      iLen is less than the length of the retrieved Unique name.
     #    @retval IC_NO_HANDLE  hGrabber is not a valid handle. GetGrabber was not called.
     #    @retval IC_NO_DEVICE  No device opened. Open a device, before this function can be used.
     #    @retval >1            Length of the Unique name, if szUniqueName is NULL.
-    #    
+    #
     #*/
     #int AC IC_GetUniqueName( HGRABBER hGrabber, char *szUniquename, int iLen); ///<Get a UniqueName from a currently open device.
     get_unique_name = _ic_grabber_dll.IC_GetUniqueName
@@ -975,7 +975,7 @@ class IC_GrabberDLL:
     get_unique_name.argtypes = (GrabberHandlePtr,
                                 c_char_p,
                                 c_int)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! This returns 1, if a valid device has been opened, otherwise it is 0.
     #
@@ -988,9 +988,9 @@ class IC_GrabberDLL:
     is_dev_valid = _ic_grabber_dll.IC_IsDevValid
     is_dev_valid.restype = c_int
     is_dev_valid.argtypes = (GrabberHandlePtr,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Show the VCDProperty dialog. 
+    #/*! Show the VCDProperty dialog.
     #
     #    @param hGrabber      Handle to a grabber object.
     #    @retval IC_SUCCESS on success
@@ -999,13 +999,13 @@ class IC_GrabberDLL:
     #    @note This function will only work with IC Imaging Control 2.0 or higher. When used
     #    with IC Imaging Control 1.41, it will always return 0.
     #*/
-    #int AC IC_ShowPropertyDialog( HGRABBER hGrabber ); ///<Show the VCDProperty dialog. 
+    #int AC IC_ShowPropertyDialog( HGRABBER hGrabber ); ///<Show the VCDProperty dialog.
     show_property_dialog = _ic_grabber_dll.IC_ShowPropertyDialog
     show_property_dialog.restype = c_int
     show_property_dialog.argtypes = (GrabberHandlePtr,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Show the device selection dialog. This dialogs enables to select the 
+    #/*! Show the device selection dialog. This dialogs enables to select the
     #    video capture device, the video norm, video format, input channel and
     #    frame rate.
     #
@@ -1026,9 +1026,9 @@ class IC_GrabberDLL:
     #HGRABBER AC IC_ShowDeviceSelectionDialog( HGRABBER hGrabber ); ///<Show the device selection dialog.
     #
     #//////////////////////////////////////////////////////////////////////////
-    #/*!    
-    #    Return whether the current video capture device supports an external 
-    #    trigger. 
+    #/*!
+    #    Return whether the current video capture device supports an external
+    #    trigger.
     #
     #    @param hGrabber      Handle to a grabber object.
     #    @retval 1 An external trigger is supported
@@ -1040,14 +1040,14 @@ class IC_GrabberDLL:
     is_trigger_available = _ic_grabber_dll.IC_IsTriggerAvailable
     is_trigger_available.restype = c_int
     is_trigger_available.argtypes = (GrabberHandlePtr,)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*!    Enable or disable the external trigger. 
+    #/*!    Enable or disable the external trigger.
     #    @param hGrabber      Handle to a grabber object.
     #    @param iEnable 1 = enable the trigger, 0 = disable the trigger
     #
-    #    @retval IC_SUCCESS    On success. 
-    #    @retval IC_ERROR      An error occurred. 
+    #    @retval IC_SUCCESS    On success.
+    #    @retval IC_ERROR      An error occurred.
     #
     #    @sa IC_IsTriggerAvailable
     #*/
@@ -1083,7 +1083,7 @@ class IC_GrabberDLL:
     #
     #    @param hGrabber      Handle to a grabber object.
     #
-    #    @return HDC The function returns not NULL, if the HDC could be retrieved. If the HDC 
+    #    @return HDC The function returns not NULL, if the HDC could be retrieved. If the HDC
     #            could not be retrieved or an error has occured, the function returns 0.
     #
     #    Sample code:
@@ -1117,9 +1117,9 @@ class IC_GrabberDLL:
     msg_box = _ic_grabber_dll.IC_MsgBox
     msg_box.argtypes = (c_char_p,
                         c_char_p)
-    
+
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Type declaration for the frame ready callback function. 
+    #/*! Type declaration for the frame ready callback function.
     #    @sa IC_SetFrameReadyCallback
     #    @sa IC_SetCallbacks
     #*/
@@ -1127,7 +1127,7 @@ class IC_GrabberDLL:
     #    (HGRABBER hGrabber, unsigned char* pData, unsigned long frameNumber, void* );
     #
     #//////////////////////////////////////////////////////////////////////////
-    #/*! Type declaration for the device lost callback function. 
+    #/*! Type declaration for the device lost callback function.
     #    @sa IC_SetCallbacks
     #*/
     #typedef void (*DEVICE_LOST_CALLBACK)(HGRABBER hGrabber, void* );
@@ -1151,7 +1151,7 @@ class IC_GrabberDLL:
     set_frame_ready_callback.argtypes = (GrabberHandlePtr,
                                          c_void_p,
                                          c_void_p)
-    
+
     #/*!    Set callback function
     #    @param hGrabber      Handle to a grabber object.
     #    @param cb Callback function of type FRAME_READY_CALLBACK, can be NULL, if no callback is needed
@@ -1172,23 +1172,23 @@ class IC_GrabberDLL:
     #
     #/////////////////////////////////////////////////////////////////////////
     #/*!    Set Continuous mode
-    # 
+    #
     #     In continuous mode, the callback is called for each frame,
     #     so that there is no need to use IC_SnapImage etc.
-    # 
+    #
     #    @param hGrabber      Handle to a grabber object.
     #    @param cont            0 : Snap continouos, 1 : do not automatically snap.
     #
     #    @remarks
     #     Not available in live mode.
-    # 
+    #
     # */
     #int AC IC_SetContinuousMode( HGRABBER hGrabber, int cont ); ///<Set Continuous mode.
     set_continuous_mode = _ic_grabber_dll.IC_SetContinuousMode
     set_continuous_mode.restype = c_int
     set_continuous_mode.argtypes = (GrabberHandlePtr,
                                     c_int)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! SignalDetected
     #
@@ -1236,13 +1236,13 @@ class IC_GrabberDLL:
     get_trigger_modes.argtypes = (GrabberHandlePtr,
                                   POINTER((c_char * 20) * 10),    # hardcoded 10 values, each with 20 characters)
                                   c_int)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*!  Set the trigger mode.
     #    Sets the mode that has been retrieved  by a call to IC_GetTriggerModes.
     #
     #    @param hGrabber    Handle to a grabber object.
-    #    @param szMode    String containing the name of the mode.    
+    #    @param szMode    String containing the name of the mode.
     #
     #    @retval IC_SUCCESS        Success.
     #    @retval IC_ERROR        An error occurred
@@ -1255,10 +1255,10 @@ class IC_GrabberDLL:
     set_trigger_mode.restype = c_int
     set_trigger_mode.argtypes = (GrabberHandlePtr,
                                  c_char_p)
-    
+
     #//////////////////////////////////////////////////////////////////////////
     #/*! Set the trigger polarity
-    #    
+    #
     #    Sample:
     #    @code
     #    IC_SetTriggerPolarity(hGrabber, 0);
@@ -1268,7 +1268,7 @@ class IC_GrabberDLL:
     #    IC_SetTriggerPolarity(hGrabber, 1);
     #    @endcode
     #    @param hGrabber    Handle to a grabber object.
-    #    @param iPolarity 
+    #    @param iPolarity
     #        @li 0 : Polarity on direction
     #        @li 1 : Polarity the other direction
     #
@@ -1282,41 +1282,41 @@ class IC_GrabberDLL:
     set_trigger_polarity.restype = c_int
     set_trigger_polarity.argtypes = (GrabberHandlePtr,
                                      c_int)
-    
+
     #int AC IC_GetExpRegValRange( HGRABBER hGrabber, long *lMin, long *lMax ); ///< Retrieve exposure register values lower and upper limits.
     get_exp_reg_val_range = _ic_grabber_dll.IC_GetExpRegValRange
     get_exp_reg_val_range.restype = c_int
     get_exp_reg_val_range.argtypes = (GrabberHandlePtr,
                                       POINTER(c_long),
                                       POINTER(c_long))
-        
+
     #int AC IC_GetExpRegVal( HGRABBER hGrabber, long *lValue ); ///< Retrieve the current register value of exposure.
     get_exp_reg_val = _ic_grabber_dll.IC_GetExpRegVal
     get_exp_reg_val.restype = c_int
     get_exp_reg_val.argtypes = (GrabberHandlePtr,
                                 POINTER(c_long))
-    
+
     #int AC IC_SetExpRegVal( HGRABBER hGrabber, long lValue ); ///<Set a register value for exposure.
     set_exp_reg_val = _ic_grabber_dll.IC_SetExpRegVal
     set_exp_reg_val.restype = c_int
     set_exp_reg_val.argtypes = (GrabberHandlePtr,
                                 c_long)
-    
-    
+
+
     #int AC IC_EnableExpRegValAuto( HGRABBER hGrabber, int iOnOff ); ///<Enable or disable automatic of exposure.
     enable_exp_reg_val_auto = _ic_grabber_dll.IC_EnableExpRegValAuto
     enable_exp_reg_val_auto.restype = c_int
     enable_exp_reg_val_auto.argtypes = (GrabberHandlePtr,
                                         c_int)
-    
+
     #int AC IC_GetExpRegValAuto( HGRABBER hGrabber, int *iOnOff );///<Check whether automatic exposure is enabled.
     get_exp_reg_val_auto = _ic_grabber_dll.IC_GetExpRegValAuto
     get_exp_reg_val_auto.restype = c_int
     get_exp_reg_val_auto.argtypes = (GrabberHandlePtr,
                                      POINTER(c_int))
 
-    
-    
+
+
     #
     #
     #//////////////////////////////////////////////////////////////////////////
@@ -1325,28 +1325,28 @@ class IC_GrabberDLL:
     #int AC IC_IsExpAbsValAvailable( HGRABBER hGrabber);
     is_exp_abs_val_available = _ic_grabber_dll.IC_IsExpAbsValAvailable
     is_exp_abs_val_available.restype = c_int
-    is_exp_abs_val_available.argtypes = (GrabberHandlePtr,)    
-    
+    is_exp_abs_val_available.argtypes = (GrabberHandlePtr,)
+
     #int AC IC_GetExpAbsValRange(HGRABBER hGrabber, float *fMin, float *fMax);
     get_exp_abs_val_range = _ic_grabber_dll.IC_GetExpAbsValRange
     get_exp_abs_val_range.restype = c_int
     get_exp_abs_val_range.argtypes = (GrabberHandlePtr,
                                       POINTER(c_float),
-                                      POINTER(c_float))    
-    
+                                      POINTER(c_float))
+
     #int AC IC_GetExpAbsVal(HGRABBER hGrabber, float *fValue);
     get_exp_abs_val = _ic_grabber_dll.IC_GetExpAbsVal
     get_exp_abs_val.restype = c_int
     get_exp_abs_val.argtypes = (GrabberHandlePtr,
                                 POINTER(c_float))
-    
+
     #int AC IC_SetExpAbsVal(HGRABBER hGrabber,  float fValue );
     set_exp_abs_val = _ic_grabber_dll.IC_SetExpAbsVal
     set_exp_abs_val.restype = c_int
     set_exp_abs_val.argtypes = (GrabberHandlePtr,
                                 c_float)
-    
-    
+
+
     #
     #
     #///////////////////////////////////////////////////////////////////
@@ -1357,7 +1357,7 @@ class IC_GrabberDLL:
     #    IC_GetColorEnhancement(hGrabber, &OnOFF);
     #    @endcode
     #    @param hGrabber    Handle to a grabber object.
-    #    @param OnOff 
+    #    @param OnOff
     #        @li 0 : Color enhancement is off
     #        @li 1 : Color enhancement is on
     #
@@ -1371,7 +1371,7 @@ class IC_GrabberDLL:
     get_color_enhancement.restype = c_int
     get_color_enhancement.argtypes = (GrabberHandlePtr,
                                       POINTER(c_int))
-    
+
     #///////////////////////////////////////////////////////////////////
     #/*! Sets the  value of Colorenhancement property
     #    Sample:
@@ -1380,7 +1380,7 @@ class IC_GrabberDLL:
     #    IC_GetColorEnhancement(hGrabber, OnOFF);
     #    @endcode
     #    @param hGrabber    Handle to a grabber object.
-    #    @param OnOff 
+    #    @param OnOff
     #        @li 0 : Color enhancement is off
     #        @li 1 : Color enhancement is on
     #
@@ -1394,7 +1394,7 @@ class IC_GrabberDLL:
     set_color_enhancement.restype = c_int
     set_color_enhancement.argtypes = (GrabberHandlePtr,
                                       c_int)
-    
+
     #///////////////////////////////////////////////////////////////////
     #/*! Sends a software trigger to the camera. The camera must support
     #    external trigger. The external trigger has to be enabled previously
@@ -1412,9 +1412,9 @@ class IC_GrabberDLL:
     software_trigger = _ic_grabber_dll.IC_SoftwareTrigger
     software_trigger.restype = c_int
     software_trigger.argtypes = (GrabberHandlePtr,)
-    
+
     #///////////////////////////////////////////////////////////////////
-    #/*! Sets a new frame rate. 
+    #/*! Sets a new frame rate.
     #    @param hGrabber    Handle to a grabber object.
     #    @param FrameRate The new frame rate.
     #    @retval IC_SUCCESS : Success
@@ -1428,7 +1428,7 @@ class IC_GrabberDLL:
     set_frame_rate.restype = c_int
     set_frame_rate.argtypes = (GrabberHandlePtr,
                                c_float)
-    
+
     #///////////////////////////////////////////////////////////////////
     #/*! Retrieves the current frame rate
     #
@@ -1439,7 +1439,7 @@ class IC_GrabberDLL:
     get_frame_rate = _ic_grabber_dll.IC_GetFrameRate
     get_frame_rate.restype = c_float
     get_frame_rate.argtypes = (GrabberHandlePtr,)
-    
+
     #int AC IC_SetWhiteBalanceAuto( HGRABBER hGrabber, int iOnOff);
     #
     #///////////////////////////////////////////////////////////////////
@@ -1520,7 +1520,7 @@ class IC_GrabberDLL:
     reset_properties = _ic_grabber_dll.IC_ResetProperties
     reset_properties.restype = c_int
     reset_properties.argtypes = (GrabberHandlePtr,)
-    
+
     #
     #
     #///////////////////////////////////////////////////////////////////
@@ -1535,9 +1535,9 @@ class IC_GrabberDLL:
     #
     #
     #///////////////////////////////////////////////////////////////////
-    #/*! This function queries the internal property set (KsPropertySet) of the driver. 
+    #/*! This function queries the internal property set (KsPropertySet) of the driver.
     #    It allows an application to access all properties of a video capture devices
-    #    using the enums and GUIDs from the header files fwcam1394propguid.h and 
+    #    using the enums and GUIDs from the header files fwcam1394propguid.h and
     #    fwcam1394props.h.
     #
     #    @param hGrabber    Handle to a grabber object.
@@ -1571,7 +1571,7 @@ class IC_GrabberDLL:
     #
     #
     #///////////////////////////////////////////////////////////////////
-    #/*! Enables or disables the default window size lock of the video window. 
+    #/*! Enables or disables the default window size lock of the video window.
     #
     #    @param hGrabber    Handle to a grabber object.
     #    @param Default    0 = disable, custome size can be set, 1 = enable, the standard size, which is video format, is used.
@@ -1586,13 +1586,13 @@ class IC_GrabberDLL:
     #int AC IC_SetDefaultWindowPosition(HGRABBER hGrabber, int Default);
     #
     #///////////////////////////////////////////////////////////////////
-    #/*! This function Sets the position and size of the video window. 
+    #/*! This function Sets the position and size of the video window.
     #
     #    @param hGrabber    Handle to a grabber object.
-    #    @param PosX  Specifies the x-coordinate of the upper left hand corner of the video window. It defaults to 0. 
-    #    @param PosY  Specifies the y-coordinate of the upper left hand corner of the video window. It defaults to 0. 
-    #    @param width  Specifies the width of the video window. 
-    #    @param height  Specifies the height of the video window. 
+    #    @param PosX  Specifies the x-coordinate of the upper left hand corner of the video window. It defaults to 0.
+    #    @param PosY  Specifies the y-coordinate of the upper left hand corner of the video window. It defaults to 0.
+    #    @param width  Specifies the width of the video window.
+    #    @param height  Specifies the height of the video window.
     #
     #     @retval IC_SUCCESS            Success
     #    @retval IC_ERROR            Setting of the values failed
@@ -1616,7 +1616,7 @@ class IC_GrabberDLL:
     #    @retval IC_NO_DEVICE        No video capture device opened
     #    @retval IC_PROPERTY_ELEMENT_NOT_AVAILABLE        A requested element of a given property item is not available
     #    @retval IC_PROPERTY_ELEMENT_WRONG_INTERFACE        requested element has not the interface, which is needed.
-    #    
+    #
     #    Simple call:
     #    @code
     #    if( IC_IsPropertyAvailable( hGrabber, "Brightness",NULL) == IC_SUCCESS )
@@ -1647,7 +1647,7 @@ class IC_GrabberDLL:
     is_property_available.argtypes = (GrabberHandlePtr,
                                       c_char_p,
                                       c_char_p)
-    
+
     #///////////////////////////////////////////////////////////////////
     #/*! This returns the range of a property.  For a list of properties and elements
     #    use the VCDPropertyInspector of IC Imaging Control.
@@ -1703,7 +1703,7 @@ class IC_GrabberDLL:
                                          c_char_p,
                                          POINTER(c_int),
                                          POINTER(c_int))
-    
+
     #///////////////////////////////////////////////////////////////////
     #/*! This returns the current value of a property. For a list of properties and elements
     #    use the VCDPropertyInspector of IC Imaging Control.
@@ -1727,7 +1727,7 @@ class IC_GrabberDLL:
                                    c_char_p,
                                    c_char_p,
                                    POINTER(c_int))
-    
+
     #///////////////////////////////////////////////////////////////////
     #/*! This sets a new value of a property.  For a list of properties and elements
     #    use the VCDPropertyInspector of IC Imaging Control.
@@ -1751,9 +1751,9 @@ class IC_GrabberDLL:
                                    c_char_p,
                                    c_char_p,
                                    c_int)
-    
+
     #///////////////////////////////////////////////////////////////////
-    #/*! This returns the range of an absolute value property. Usually it is used for exposure. 
+    #/*! This returns the range of an absolute value property. Usually it is used for exposure.
     #    a list of properties and elements use the VCDPropertyInspector of IC Imaging Control.
     #
     #    @param hGrabber    Handle to a grabber object.
@@ -1777,7 +1777,7 @@ class IC_GrabberDLL:
                                                   c_char_p,
                                                   POINTER(c_float),
                                                   POINTER(c_float))
-    
+
     #///////////////////////////////////////////////////////////////////
     #/*! This returns the current value of an absolute value property.
     #    Usually it is used for exposure. For a list of properties and elements
@@ -1802,9 +1802,9 @@ class IC_GrabberDLL:
                                             c_char_p,
                                             c_char_p,
                                             POINTER(c_float))
-    
+
     #///////////////////////////////////////////////////////////////////
-    #/*! This sets a new value of an absolute value property. Usually it is used for exposure. 
+    #/*! This sets a new value of an absolute value property. Usually it is used for exposure.
     #    a list of properties and elements
     #    use the VCDPropertyInspector of IC Imaging Control.
     #
@@ -1827,7 +1827,7 @@ class IC_GrabberDLL:
                                             c_char_p,
                                             c_char_p,
                                             c_float)
-    
+
     #///////////////////////////////////////////////////////////////////
     #/*! This returns the current value of a switch property. Switch properties
     #    are usually used for enabling and disabling of automatics.
@@ -1853,7 +1853,7 @@ class IC_GrabberDLL:
                                     c_char_p,
                                     c_char_p,
                                     POINTER(c_int))
-    
+
     #///////////////////////////////////////////////////////////////////
     #/*! This sets the  value of a switch property. Switch properties
     #    are usually used for enabling and disabling of automatics.
@@ -1879,7 +1879,7 @@ class IC_GrabberDLL:
                                     c_char_p,
                                     c_char_p,
                                     c_int)
-    
+
     #//////////////////////////////////////////////////////////////////
     #/*! This executes the on push on a property. These properties are used
     #    for white balance one push or for software trigger.
@@ -1888,7 +1888,7 @@ class IC_GrabberDLL:
     #
     #    @param hGrabber    Handle to a grabber object.
     #    @param Property  The name of the property, e.g. "Trigger"
-    #    @param Element  The type of the interface, e.g. "Software Trigger" 
+    #    @param Element  The type of the interface, e.g. "Software Trigger"
     #    @param On  Receives the value of the property
     #
     #     @retval IC_SUCCESS            Success
@@ -1902,11 +1902,11 @@ class IC_GrabberDLL:
     #
     #
     #//////////////////////////////////////////////////////////////////
-    #/*! 
+    #/*!
     #
     #    @param hGrabber    Handle to a grabber object.
     #    @param Property  The name of the property, e.g. "Strobe"
-    #    @param Element  The type of the interface, e.g. "Mode" 
+    #    @param Element  The type of the interface, e.g. "Mode"
     #    @param StringCount  Receives the count of strings, that is modes, availble
     #    @param Strings pointer to an array of char*, that will contain the mode strings. The array size should be StringCount * 20. Parameter can be null in order to query the number of strings
     #
@@ -1925,7 +1925,7 @@ class IC_GrabberDLL:
     #
     #    @param hGrabber    Handle to a grabber object.
     #    @param Property  The name of the property, e.g. "Strobe"
-    #    @param Element  The type of the interface, e.g. "Mode" 
+    #    @param Element  The type of the interface, e.g. "Mode"
     #    @param String     pointer to a char*. Size should be atleast 50. There is no check! This contains the result.
     #
     #     @retval IC_SUCCESS            Success
@@ -1942,7 +1942,7 @@ class IC_GrabberDLL:
     #
     #    @param hGrabber    Handle to a grabber object.
     #    @param Property  The name of the property, e.g. "Strobe"
-    #    @param Element  The type of the interface, e.g. "Mode" 
+    #    @param Element  The type of the interface, e.g. "Mode"
     #    @param String     pointer to a char*. Size should be atleast 50. There is no check! This contains the result.
     #
     #     @retval IC_SUCCESS            Success
@@ -1964,7 +1964,7 @@ class IC_GrabberDLL:
     get_available_frame_filter_count = _ic_grabber_dll.IC_GetAvailableFrameFilterCount
     get_available_frame_filter_count.restype = c_int
     get_available_frame_filter_count.argtypes = None
-    
+
     #//////////////////////////////////////////////////////////////////
     #/*! Query a list of framefilters
     #
@@ -1988,7 +1988,7 @@ class IC_GrabberDLL:
     get_available_frame_filters.restype = c_int
     get_available_frame_filters.argtypes = (POINTER(POINTER((c_char * 80) * 40)),
                                             c_int)
-    
+
     #//////////////////////////////////////////////////////////////////
     #/*! Create a frame filter
     #    @param szFilterName Name of the filter to create
@@ -2002,7 +2002,7 @@ class IC_GrabberDLL:
     create_frame_filter = _ic_grabber_dll.IC_CreateFrameFilter
     create_frame_filter.restype = c_int
     create_frame_filter.argtypes = (c_char_p, POINTER(structs.FrameFilterHandle))
-    
+
     #//////////////////////////////////////////////////////////////////
     #/*! Add the frame filter to the device
     #    @param hGrabber    Handle to a grabber object.
@@ -2016,7 +2016,7 @@ class IC_GrabberDLL:
     add_frame_filter_to_device.restype = c_int
     add_frame_filter_to_device.argtypes = (GrabberHandlePtr,
                                            POINTER(structs.FrameFilterHandle))
-    
+
     #//////////////////////////////////////////////////////////////////
     #/*! Deletes a previously created frame filter.
     #    @param FilterHandle    Handle to a frame filter object.
@@ -2024,7 +2024,7 @@ class IC_GrabberDLL:
     #void AC IC_DeleteFrameFilter( HFRAMEFILTER FilterHandle );
     #
     #///////////////////////////////////////////////////////////////
-    #/* Delete the memory allocated by the HFRAMEFILTER structure. Please remove the frame filter from the HGrabber, 
+    #/* Delete the memory allocated by the HFRAMEFILTER structure. Please remove the frame filter from the HGrabber,
     #   before deleting it.
     #
     #    @param FilterHandle    Handle to a frame filter object.
@@ -2051,7 +2051,7 @@ class IC_GrabberDLL:
     frame_filter_get_parameter.argtypes = (POINTER(structs.FrameFilterHandle),
                                            c_char_p,
                                            c_void_p)
-    
+
     #/*! Set an int parameter value of a frame filter
     #    @param FilterHandle    Handle to a frame filter object.
     #    @param ParameterName Name of the parameter whose value is to be set
@@ -2068,7 +2068,7 @@ class IC_GrabberDLL:
     frame_filter_set_parameter_int.argtypes = (POINTER(structs.FrameFilterHandle),
                                                c_char_p,
                                                c_int)
-    
+
     #/*! Set a float parameter value of a frame filter
     #    @param FilterHandle    Handle to a frame filter object.
     #    @param ParameterName Name of the parameter whose value is to be set
@@ -2116,9 +2116,9 @@ class IC_GrabberDLL:
     #typedef struct CODECHANDLE_t__ { int unused; } CODECHANDLE_t; ///<Internal structure of the grabber object handle.
     #
     #//////////////////////////////////////////////////////////////////////////
-    #/*! 
+    #/*!
     #*/
-    ##define    HCODEC CODECHANDLE_t* ///< Type of grabber object handle. Used for all functions. 
+    ##define    HCODEC CODECHANDLE_t* ///< Type of grabber object handle. Used for all functions.
     #
     #
     #////////////////////////////////////////////////////////////////////////////
@@ -2130,7 +2130,7 @@ class IC_GrabberDLL:
     #typedef int  _cdecl ENUMCODECCB( char* CodecName, void*);
     #
     #////////////////////////////////////////////////////////////////////////////
-    #/*! Enumerate all installed codecs. It calls the callback function passed by 
+    #/*! Enumerate all installed codecs. It calls the callback function passed by
     #    the cb parameter. It ends, if cb returns 0 or all codecs have been enumerated.
     #
     #    @param cb pallack function of type ENUMCODECCB
@@ -2214,7 +2214,7 @@ class IC_GrabberDLL:
     #/*! Pauses or continues AVI Capture. This allows, to start the stream and see the live video
     #    but images are not saved into the AVI file.
     #
-    #    
+    #
     #    @param hlGrabber Handle to a grabber with a valid device
     #    @param pause  1 = Pause, nothing saved, 0 = save images!
     #
@@ -2224,7 +2224,7 @@ class IC_GrabberDLL:
     #
     #int IC_enableAVICapturePause(HGRABBER hlGrabber, int Pause );
     #
-    
+
     def __init__(self):
         raise Exception("You probably don't want to instantiate this class!")
 

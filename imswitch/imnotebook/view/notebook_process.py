@@ -46,13 +46,13 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
             start = line.find("http://")
             # end = line.find("/", start+len("http://")) new notebook
             # needs a token which is at the end of the line
-            # replace hostname.local with localhost 
+            # replace hostname.local with localhost
             webaddr = line[start:]
             if ".local" in webaddr:
                 # replace hostname.local with localhost # TODO: Not good!
                 webaddr = "http://localhost"+webaddr.split(".local")[1]
-                break 
-                
+                break
+
         if time.time() - time0 > 10:
             print("Timeout waiting for server to start")
             return None

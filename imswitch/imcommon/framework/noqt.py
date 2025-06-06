@@ -10,10 +10,10 @@ import numpy as np
 from socketio import AsyncServer, ASGIApp
 import uvicorn
 import imswitch.imcommon.framework.base as abstract
-import cv2 
+import cv2
 import base64
 from imswitch import SOCKET_STREAM
-import time 
+import time
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
 import os
@@ -23,10 +23,10 @@ class Mutex(abstract.Mutex):
     """Wrapper around the `threading.Lock` class."""
     def __init__(self) -> None:
         self.__lock = threading.Lock()
-    
+
     def lock(self) -> None:
         self.__lock.acquire()
-    
+
     def unlock(self) -> None:
         self.__lock.release()
 
@@ -73,7 +73,7 @@ class SignalInstance(psygnal.SignalInstance):
 
         self._safe_broadcast_message(message)
         del message
-        
+
     def _handle_image_signal(self, args):
         """Compress and broadcast image signals."""
         detectorName = args[0]
@@ -87,13 +87,13 @@ class SignalInstance(psygnal.SignalInstance):
                         everyNthsPixel = np.min([output_frame.shape[0]//480, output_frame.shape[1]//640])
                     else:
                         everyNthsPixel = 1
-                                
-                    # convert 16 bit to 8 bit for visualization 
+
+                    # convert 16 bit to 8 bit for visualization
                     if output_frame.dtype == np.uint16:
                         output_frame = cv2.normalize(output_frame, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
                     try:
                         output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
-                    except: 
+                    except:
                         output_frame = np.zeros((640,460))
                     # adjust the parameters of the jpeg compression
                     try:
@@ -101,7 +101,7 @@ class SignalInstance(psygnal.SignalInstance):
                     except:
                         jpegQuality = self.IMG_QUALITY
                     encode_params = [cv2.IMWRITE_JPEG_QUALITY, jpegQuality]
-                    
+
                     # Compress image using JPEG format
                     flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
                     encoded_image = base64.b64encode(compressed).decode('utf-8')
@@ -111,14 +111,14 @@ class SignalInstance(psygnal.SignalInstance):
                         "name": self.name,
                         "detectorname": detectorName,
                         "pixelsize": int(pixelSize), # must not be int64
-                        "format": "jpeg", 
+                        "format": "jpeg",
                         "image": encoded_image,
                     }
                     self._safe_broadcast_message(message)
                     del message
         except Exception as e:
             print(f"Error processing image signal: {e}")
-                    
+
     def _generate_json_message(self, args):  # Consider using msgpspec for efficiency
         param_names = list(self.signature.parameters.keys())
         data = {"name": self.name, "args": {}}
@@ -137,7 +137,7 @@ class SignalInstance(psygnal.SignalInstance):
         return data
 
 
-        
+
     def _safe_broadcast_message(self, mMessage: dict) -> None:
         """Throttle the emit to avoid task buildup."""
         now = time.time()
@@ -149,7 +149,7 @@ class SignalInstance(psygnal.SignalInstance):
         try:
             sio.start_background_task(sio.emit, "signal", json.dumps(mMessage))
         except Exception as e:
-            #print(f"Error broadcasting message via Socket.IO (first attempt): {e}")            
+            #print(f"Error broadcasting message via Socket.IO (first attempt): {e}")
             try:
                 def thread_worker(message):
                     # Eigene Event Loop erstellen
@@ -162,8 +162,8 @@ class SignalInstance(psygnal.SignalInstance):
                     except Exception as e:
                         print(f"Error loading message: {e}")
                         return
-                        
-                
+
+
                 def send_message(message):
                     t = threading.Thread(target=thread_worker, args=(message,))
                     t.start()
@@ -189,21 +189,21 @@ class Signal(psygnal.Signal):
                 raise TypeError(f"Source and destination must have the same signature.")
             func = func.emit
         super().connect(func)
-    
+
     def disconnect(self, func: 'Union[Callable, abstract.Signal, None]' = None) -> None:
         if func is None:
             super().disconnect()
         super().disconnect(func)
-    
+
     def emit(self, *args) -> None:
         instance = self._signal_instance_class(*args)
         asyncio.create_task(instance.emit(*args))
-    
+
     @property
     @lru_cache
     def types(self) -> 'Tuple[type, ...]':
         return tuple([param.annotation for param in self._signature.parameters.values()])
-    
+
     @property
     def info(self) -> str:
         return self._info
@@ -320,7 +320,7 @@ def run_uvicorn():
             host="0.0.0.0",
             port=__socketport__,
             ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if __ssl__ else None,
-            ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if __ssl__ else None, 
+            ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if __ssl__ else None,
             timeout_keep_alive=2,
         )
         try:

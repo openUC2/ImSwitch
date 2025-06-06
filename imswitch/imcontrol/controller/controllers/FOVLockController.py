@@ -1,5 +1,5 @@
 import time
-import cv2 
+import cv2
 import numpy as np
 from time import perf_counter
 import scipy.ndimage as ndi
@@ -42,7 +42,7 @@ class FOVLockController(ImConWidgetController):
                           self._setupInfo.fovLock.frameCropy,
                           self._setupInfo.fovLock.frameCropw,
                           self._setupInfo.fovLock.frameCroph)
-        
+
         if self.cropFrame[0] is not None:
             self._master.detectorsManager[self.camera].crop(*self.cropFrame)
         self._widget.setKp(self._setupInfo.fovLock.piKp)
@@ -63,7 +63,7 @@ class FOVLockController(ImConWidgetController):
 
         self._widget.zStackBox.stateChanged.connect(self.zStackVarChange)
         self._widget.twoFociBox.stateChanged.connect(self.twoFociVarChange)
-        
+
         self._widget.sigSliderExpTValueChanged.connect(self.setExposureTime)
         self._widget.sigSliderGainValueChanged.connect(self.setGain)
 
@@ -129,7 +129,7 @@ class FOVLockController(ImConWidgetController):
 
     def setExposureTime(self, exposureTime):
         self.ESP32Camera.setExposureTime(exposureTime)
-        
+
     def fovCalibrationStart(self):
         self.__fovCalibThread.startThread()
 
@@ -152,13 +152,13 @@ class FOVLockController(ImConWidgetController):
         # get data
         img = self.__processDataThread.grabCameraFrame()
         self.setPointSignal = self.__processDataThread.update(self.twoFociVar)
-        
+
         # move
         if self.locked:
             '''
             compute the value to move the positioner
             '''
-            
+
             value_move = self.updatePI()
             if self.noStepVar and abs(value_move) > 0.002:
                 self._master.positionersManager[self.positioner].move(value_move, 0)
@@ -175,7 +175,7 @@ class FOVLockController(ImConWidgetController):
         else:
             self._widget.fovPlotCurveX.setData(self.timeData, self.setPointDataX)
             self._widget.fovPlotCurveY.setData(self.timeData, self.setPointDataY)
-    
+
     def aboutToLockUpdate(self):
         self.aboutToLockDataPoints = np.roll(self.aboutToLockDataPoints,1)
         self.aboutToLockDataPoints[0] = self.setPointSignal
@@ -205,7 +205,7 @@ class FOVLockController(ImConWidgetController):
         self.currentPosition = self._master.positionersManager[self.positioner].getposition()
         self.stepDistance = np.abs(self.currentPosition - self.lastPosition)
         distance = self.currentPosition - self.lockPosition
-        
+
         move = self.pi.update(self.setPointSignal)
         self.lastPosition = self.currentPosition
 
@@ -247,7 +247,7 @@ class ProcessDataThread(Thread):
         self.fovLockMetric = None
         self.latestimg = None
         self.lastimg = None
-        
+
     def setInitialFrame(self):
         detectorManager = self._controller._master.detectorsManager[self._controller.camera]
         self.latestimg = detectorManager.getLatestFrame()
@@ -257,12 +257,12 @@ class ProcessDataThread(Thread):
     def grabCameraFrame(self):
         detectorManager = self._controller._master.detectorsManager[self._controller.camera]
         self.latestimg = detectorManager.getLatestFrame()
-            
+
         # 1.5 swap axes of frame (depending on setup, make this a variable in the json)
         if self._controller._setupInfo.fovLock.swapImageAxes:
             self.latestimg = np.swapaxes(self.latestimg,0,1)
         return self.latestimg
-    
+
     def setFOVLockMetric(self, fovlockMetric):
         self.fovLockMetric = fovlockMetric
 
@@ -299,7 +299,7 @@ class ProcessDataThread(Thread):
         else:
             pixelShift = 0
 
-        return (pixelShiftX, pixelShiftY), pixelShift 
+        return (pixelShiftX, pixelShiftY), pixelShift
 
 
     def find_shift_feature_based(self, image1, image2):
@@ -339,7 +339,7 @@ class FOVCalibThread(object):
         self.initial_position = None
         self.latestimg = None
         self.avg_pixel_per_step = 1
-        
+
     def move_stage(self, steps, axis = "X", isAbsolute = False):
         self.positioner.move(value=steps, axis=axis, is_absolute=isAbsolute, is_blocking=True)
 
@@ -349,15 +349,15 @@ class FOVCalibThread(object):
 
     def calculate_pixel_shift(self, img1, img2):
         self._controller._logger.info('Calculating pixel shift')
-        (pixelShiftX, pixelShiftY), pixelShift = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))    
+        (pixelShiftX, pixelShiftY), pixelShift = cv2.phaseCorrelate(np.float32(img1), np.float32(img2))
         self._controller._logger.info('Done')
         return pixelShiftX, pixelShiftY
-    
+
     def startThread(self):
         import threading
         self.mThread = threading.Thread(target=self.runCalibration)
         self.mThread.start()
-    
+
     def runCalibration(self):
         self._controller._logger.info('Starting FOV calibration')
         self.signalData = []
@@ -366,7 +366,7 @@ class FOVCalibThread(object):
         self.toVal = float(self._controller._widget.calibToEdit.text())
         self.scan_list = np.round(np.linspace(self.fromVal, self.toVal, 20), 2)
         initial_position = self.positioner.getPosition()['X']
-        
+
         pixel_displacements = []
         self._controller._logger.info(self.scan_list)
         steps = 0
@@ -433,7 +433,7 @@ class PI:
             self.started = True
         self.lastError = self.error
         return self.out*self.avg_pixel_per_stepgithu
-    
+
 
     def restart(self):
         self.started = False
@@ -469,7 +469,7 @@ class PI:
     @ki.setter
     def ki(self, value):
         self._ki = value
-        
+
 
 
 

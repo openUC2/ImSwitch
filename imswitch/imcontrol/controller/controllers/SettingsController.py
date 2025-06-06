@@ -46,12 +46,12 @@ class SettingsController(ImConWidgetController):
 
         self.roiAdded = False
 
-        if not IS_HEADLESS: 
+        if not IS_HEADLESS:
             # Set up detectors
             for dName, dManager in self._master.detectorsManager:
                 if not dManager.forAcquisition:
                     continue
-                
+
                 self._widget.addDetector(
                     dName, dManager.model, dManager.parameters, dManager.actions,
                     dManager.supportedBinnings, self._setupInfo.rois
@@ -320,7 +320,7 @@ class SettingsController(ImConWidgetController):
             else:
                 c.setBinning(int(self.allParams[c.name].binning.value()))
 
-        self.getDetectorManagerFrameExecFunc()(set_binning)        
+        self.getDetectorManagerFrameExecFunc()(set_binning)
         self.updateSharedAttrs()
 
     def updateParamsFromDetector(self, *, detector):
@@ -492,11 +492,11 @@ class SettingsController(ImConWidgetController):
     @APIExport()
     def setDetectorCompressionrate(self, compressionrate:int=80):
         self._master.detectorsManager.updateGlobalDetectorParams({"compressionlevel":compressionrate})
-        
+
     @APIExport()
     def getDetectorGlobalParameters(self):
         return self._master.detectorsManager.getGlobalDetectorParams()
-         
+
     @APIExport()
     def getDetectorParameters(self) -> dict:
         """ Returns the current parameters of the current detector. """
@@ -506,7 +506,7 @@ class SettingsController(ImConWidgetController):
         # collect gain
         try: mGain = self._master.detectorsManager.getCurrentDetector().parameters['gain'].value
         except: mGain = 0
-        # collect pixelSize 
+        # collect pixelSize
         try: mPixelSize = self._master.detectorsManager.getCurrentDetector().pixelSizeUm[-1]
         except: mPixelSize = 1
         # collect binning
@@ -515,7 +515,7 @@ class SettingsController(ImConWidgetController):
         # get Black Level
         try: mBlacklevel = self._master.detectorsManager.getCurrentDetector().parameters['blacklevel'].value
         except: mBlacklevel = 0
-        # get rgb 
+        # get rgb
         try: mRGB = self._master.detectorsManager.getCurrentDetector()._isRGB
         except: mRGB = 0
         # collect mode (auto/manual)
@@ -531,7 +531,7 @@ class SettingsController(ImConWidgetController):
             'mode': camMode
         }
         return mParameterDict
-    
+
     @APIExport()
     def getDetectorNames(self) -> List[str]:
         """ Returns the device names of all detectors. These device names can
@@ -565,13 +565,13 @@ class SettingsController(ImConWidgetController):
     def setDetectorParameter(self, detectorName: str, parameterName: str, value: Any) -> None:
         """ Sets the specified detector-specific parameter to the specified
         value. """
-        
+
         if (parameterName in ['Trigger source'] and
                 self.getCurrentParams().allDetectorsFrame.value()):
             # Special case for certain parameters that will follow the "update all detectors" option
             execFunc = self._master.detectorsManager.execOnAll
         else:
-            def execFunc(f): 
+            def execFunc(f):
                 self._master.detectorsManager.execOn(detectorName, f)
 
         execFunc(
@@ -589,35 +589,35 @@ class SettingsController(ImConWidgetController):
             self.setDetectorParameter(detectorName, 'mode', 'Auto' if isAuto else 'Manual')
         except Exception as e:
             pass
-        
+
     @APIExport(runOnUIThread=True)
     def setDetectorExposureTime(self, detectorName: str=None, exposureTime: float=1) -> None:
         """ Sets the exposure time for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'exposure', exposureTime)
-        
+
     @APIExport(runOnUIThread=True)
     def setDetectorTriggerType(self, detectorName: str=None, triggerType: str='Software') -> None:
         """ Sets the trigger type for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'trigger_source', triggerType)
-        
+
     @APIExport(runOnUIThread=True)
     def getDetectorTriggerTypes(self, detectorName: str=None) -> List[str]:
         """ Returns the available trigger types for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         return self._master.detectorsManager[detectorName].getTriggerTypes()
-    
+
     @APIExport(runOnUIThread=True)
     def getDetectorCurrentTriggerType(self, detectorName: str=None) -> str:
         """ Returns the current trigger type for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         return self._master.detectorsManager[detectorName].getCurrentTriggerType()
-    
+
     @APIExport(runOnUIThread=True)
     def setDetectorPreviewMinMaxValue(self, detectorName: str=None, minValue: int=0, maxValue: int = 1024) -> None:
         """ Sets the preview minimum value for the specified detector. """
@@ -625,7 +625,7 @@ class SettingsController(ImConWidgetController):
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'previewMinValue', minValue)
         self.setDetectorParameter(detectorName, 'previewMaxValue', maxValue)
-        
+
 
     @APIExport(runOnUIThread=True)
     def setDetectorGain(self, detectorName: str=None, gain: float=0) -> None:
@@ -640,14 +640,14 @@ class SettingsController(ImConWidgetController):
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'previewMinValue', minValue)
-        
+
     @APIExport(runOnUIThread=True)
     def setDetectorPreviewMaxValue(self, detectorName: str=None, maxValue: int=4095) -> None:
         """ Sets the preview maximum value for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'previewMaxValue', maxValue)
-        
+
 _attrCategory = 'Detector'
 _modelAttr = 'Model'
 _pixelSizeAttr = 'Pixel size'

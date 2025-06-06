@@ -35,7 +35,7 @@ class LEDMatrixWidget(Widget):
         for ix in range(nLedsX):
             for iy in range(nLedsY):
                 buttons[str(nLedsX*iy+ix)]=(iy,ix)
-        
+
         # Create leds (buttons) and add them to the grid layout
         for corrds, pos in buttons.items():
             self.leds[corrds] = guitools.BetterPushButton(corrds)

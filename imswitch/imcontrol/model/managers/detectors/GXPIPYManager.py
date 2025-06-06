@@ -37,18 +37,18 @@ class GXPIPYManager(DetectorManager):
             # returning back to default pixelsize
             pixelSize = 1
 
-        try: 
+        try:
             self.flipX = detectorInfo.managerProperties['gxipycam']['flipX']
         except:
             self.flipX = False
 
-        try: 
+        try:
             self.flipY = detectorInfo.managerProperties['gxipycam']['flipY']
         except:
             self.flipY = False
 
 
-        try: 
+        try:
             isRGB = detectorInfo.managerProperties['isRGB']
         except:
             isRGB = False
@@ -80,7 +80,7 @@ class GXPIPYManager(DetectorManager):
                         editable=False),
             'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
                                     editable=True),
-            'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),            
+            'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),
             'binning': DetectorNumberParameter(group="Misc", value=1, valueUnits="arb.u.", editable=True),
             'flipX': DetectorBooleanParameter(group="Misc", value=self.flipX, editable=True),
             'flipY': DetectorBooleanParameter(group="Misc", value=self.flipY, editable=True),
@@ -92,7 +92,7 @@ class GXPIPYManager(DetectorManager):
                             editable=True),
             'Camera pixel size': DetectorNumberParameter(group='Miscellaneous', value=pixelSize,
                                                 valueUnits='µm', editable=True)
-                                    
+
             }
 
         # reading parameters from disk and write them to camrea
@@ -344,9 +344,9 @@ class GXPIPYManager(DetectorManager):
 
     def closeEvent(self):
         self._camera.close()
-        
+
     def recordFlatfieldImage(self):
-        ''' 
+        '''
         record n images and average them before subtracting from the latest frame
         '''
         self._camera.recordFlatfieldImage()

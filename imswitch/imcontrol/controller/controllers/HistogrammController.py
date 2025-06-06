@@ -20,17 +20,17 @@ class HistogrammController(LiveUpdatedController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         self.updateRate = 10
         self.it = 0
-        
+
         # Connect CommunicationChannel signals
         self._commChannel.sigUpdateImage.connect(self.update)
 
 
     def update(self, detectorName, image, init, isCurrentDetector):
         """ Update with new detector frame. """
-        
+
         # bin image to reduce the number of pixels and off-load CPU usage
         if image is None:
             return
@@ -45,7 +45,7 @@ class HistogrammController(LiveUpdatedController):
         # display the curve
         if not IS_HEADLESS:
             self._widget.setHistogrammData(units,hist)
-    
+
     @APIExport(runOnUIThread=False)
     def histogrammActive(self):
         '''just a dummy endpoint to check if the histogramm is active'''

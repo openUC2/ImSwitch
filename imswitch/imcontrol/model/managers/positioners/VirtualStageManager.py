@@ -10,7 +10,7 @@ class VirtualStageManager(PositionerManager):
         super().__init__(positionerInfo, name, initialPosition={axis: 0 for axis in positionerInfo.axes})
         self.__logger = initLogger(self, instanceName=name)
         self._commChannel = lowLevelManagers['commChannel']
-        
+
         self.offset_x = 0
         self.offset_y = 0
         self.offset_z = 0
@@ -41,7 +41,7 @@ class VirtualStageManager(PositionerManager):
             self._positioner.move(x=value[0]+self.offset_x, y=value[1]+self.offset_y, is_absolute=is_absolute)
         for axes in ["A","X","Y","Z"]:
             self._position[axes] = self._positioner.position[axes]
-            
+
         self.getPosition() # update position in GUI
 
     def setPositionOnDevice(self, axis, value):
@@ -59,17 +59,17 @@ class VirtualStageManager(PositionerManager):
             self._positioner.move(x=value[0], y=value[1], is_absolute=True)
         for axes in ["A","X","Y","Z"]:
             self._position[axes] = self._positioner.position[axes]
-        #self._commChannel.sigUpdateMotorPosition.emit() 
+        #self._commChannel.sigUpdateMotorPosition.emit()
 
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
         pass
 
     def setSpeed(self, speed, axis=None):
         pass
-    
+
     def setPosition(self, value, axis):
         pass
-    
+
     def getPosition(self):
         # load position from device
         # t,x,y,z
@@ -97,9 +97,9 @@ class VirtualStageManager(PositionerManager):
 
     def stop_x(self):
         pass
-        
+
     def stop_y(self):
-        pass 
+        pass
 
     def stop_z(self):
         pass
@@ -114,12 +114,12 @@ class VirtualStageManager(PositionerManager):
         if axis == "X": self.home_x(isBlocking)
         if axis == "Y": self.home_y(isBlocking)
         if axis == "Z": self.home_z(isBlocking)
-        
+
 
     def home_x(self, isBlocking):
         self.move(value=0, axis="X", is_absolute=True)
         self.setPosition(axis="X", value=0)
-        
+
     def home_y(self,isBlocking):
         self.move(value=0, axis="Y", is_absolute=True)
         self.setPosition(axis="Y", value=0)
@@ -141,8 +141,8 @@ class VirtualStageManager(PositionerManager):
         if axis == "XYZ": self._positioner.set_stage_offset(xyz=offset)
         if axis == "XY": self._positioner.set_stage_offset(xy=offset)
         #self._commChannel.sigUpdateMotorPosition.emit()
-        
-        
+
+
 # Copyright (C) 2020, 2021 The imswitch developers
 # This file is part of ImSwitch.
 #

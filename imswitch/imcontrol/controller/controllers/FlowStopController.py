@@ -4,7 +4,7 @@ import tifffile as tif
 import os
 import platform
 import subprocess
-import cv2 
+import cv2
 from threading import Thread, Event
 try:
     import NanoImagingPack as nip
@@ -26,11 +26,11 @@ class FlowStopController(LiveUpdatedController):
     sigImageReceived = Signal()
     sigImagesTaken = Signal(int)
     sigIsRunning = Signal(bool)
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self, tryInheritParent=False)
-        
+
         # load from config file in User/Documents/ImSwitchConfig
         self.wasRunning = self._master.FlowStopManager.defaultConfig["wasRunning"]
         self.defaultFlowRate = self._master.FlowStopManager.defaultConfig["flowRate"]
@@ -49,9 +49,9 @@ class FlowStopController(LiveUpdatedController):
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detectorFlowCam = self._master.detectorsManager[allDetectorNames[0]]
-        
+
         self.is_measure = False
-        
+
         # select light source and activate
         allIlluNames = self._master.lasersManager.getAllDeviceNames()
         self.ledSource = self._master.lasersManager[allIlluNames[0]]
@@ -63,7 +63,7 @@ class FlowStopController(LiveUpdatedController):
 
         # start live and adjust camera settings to auto exposure
         self.changeAutoExposureTime('auto')
-        
+
         # Connect FlowStopWidget signals
         if not IS_HEADLESS:
             # Connect CommunicationChannel signals
@@ -80,8 +80,8 @@ class FlowStopController(LiveUpdatedController):
             self._widget.buttonStop.clicked.connect(self.stopFlowStopExperimentByButton)
             self._widget.pumpMovePosButton.clicked.connect(self.movePumpPos)
             self._widget.pumpMoveNegButton.clicked.connect(self.movePumpNeg)
-            
-        # start thread if it was funning 
+
+        # start thread if it was funning
         if self.wasRunning:
             timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
             experimentName = self.defaultExperimentName
@@ -95,10 +95,10 @@ class FlowStopController(LiveUpdatedController):
             filePath = self.defaultSavePath
             fileFormat = self.defaultFileFormat
             isRecordVideo = self.defaultIsRecordVideo
-            self.startFlowStopExperiment(timeStamp, experimentName, experimentDescription, 
-                                         uniqueId, numImages, volumePerImage, timeToStabilize, delayToStart, 
+            self.startFlowStopExperiment(timeStamp, experimentName, experimentDescription,
+                                         uniqueId, numImages, volumePerImage, timeToStabilize, delayToStart,
                                          frameRate, filePath, fileFormat, isRecordVideo)
-            
+
     def startFlowStopExperimentByButton(self):
         """ Start FlowStop experiment. """
         self.is_measure=True
@@ -132,10 +132,10 @@ class FlowStopController(LiveUpdatedController):
                                      experimentDescription = experimentDescription, uniqueId = uniqueId,
                                      numImages = numImages, volumePerImage = volumePerImage,
                                      timeToStabilize = timeToStabilize, delayToStart = 0, frameRate = 1,
-                                     filePath = self.defaultSavePath, fileFormat = fileFormat, 
-                                     isRecordVideo = isRecordVideo, 
+                                     filePath = self.defaultSavePath, fileFormat = fileFormat,
+                                     isRecordVideo = isRecordVideo,
                                      pumpSpeed = pumpSpeed)
-        
+
 
     @APIExport()
     def getStatus(self) -> list:
@@ -147,12 +147,12 @@ class FlowStopController(LiveUpdatedController):
             self.mExperimentParameters = self._widget.getAutomaticImagingParameters()
         else:
             self.mExperimentParameters["timeStamp"] = datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
-        return self.mExperimentParameters 
-    
+        return self.mExperimentParameters
+
     @APIExport()
     def isRunning(self) -> bool:
         return self.is_measure
-    
+
     @APIExport(runOnUIThread=True)
     def startFlowStopExperimentFastAPI(self, timeStamp: str, experimentName: str, experimentDescription: str,
                                         uniqueId: str, numImages: int, volumePerImage: float, timeToStabilize: float,
@@ -161,7 +161,7 @@ class FlowStopController(LiveUpdatedController):
                                         pumpSpeed: float = 10000):
         try:uniqueId = int(uniqueId)
         except:uniqueId = np.random.randint(0, 2**16)
-        
+
         # Store the parameters
         self.mExperimentParameters = {
             'timeStamp': timeStamp,
@@ -184,22 +184,22 @@ class FlowStopController(LiveUpdatedController):
                                         delayToStart, frameRate, filePath, fileFormat, isRecordVideo,
                                         pumpSpeed)
         return self.mExperimentParameters
-    
-    def startFlowStopExperiment(self, timeStamp: str, experimentName: str, experimentDescription: str, 
-                                uniqueId: str, numImages: int, volumePerImage: float, timeToStabilize: float, 
-                                delayToStart: float=1, frameRate: float=1, filePath: str="./", 
-                                fileFormat: str= "JPG", isRecordVideo: bool = True, 
+
+    def startFlowStopExperiment(self, timeStamp: str, experimentName: str, experimentDescription: str,
+                                uniqueId: str, numImages: int, volumePerImage: float, timeToStabilize: float,
+                                delayToStart: float=1, frameRate: float=1, filePath: str="./",
+                                fileFormat: str= "JPG", isRecordVideo: bool = True,
                                 pumpSpeed: float = 10000):
         try:uniqueId = int(uniqueId)
         except:uniqueId = np.random.randint(0, 2**16)
         """ Start FlowStop experiment. """
-        self.thread = Thread(target=self.flowExperimentThread, 
-                             name="FlowStopExperiment", 
-                             args=(timeStamp, experimentName, experimentDescription, 
+        self.thread = Thread(target=self.flowExperimentThread,
+                             name="FlowStopExperiment",
+                             args=(timeStamp, experimentName, experimentDescription,
                                    uniqueId, numImages, volumePerImage, timeToStabilize,
-                                   delayToStart, frameRate, filePath, fileFormat, isRecordVideo, 
+                                   delayToStart, frameRate, filePath, fileFormat, isRecordVideo,
                                    pumpSpeed))
-        
+
         self.thread.start()
 
     def stopFlowStopExperimentByButton(self):
@@ -217,19 +217,19 @@ class FlowStopController(LiveUpdatedController):
     @APIExport(runOnUIThread=True)
     def movePump(self, value: float = 0.0, speed: float = 10000.0):
         self.positioner.move(value=value, speed=speed, axis=self.pumpAxis, is_absolute=False, is_blocking=False)
-    
+
     @APIExport(runOnUIThread=True)
     def moveFocus(self, value: float = 0.0, speed: float = 10000.0):
         self.positioner.move(value=value, speed=speed, axis=self.focusAxis, is_absolute=False, is_blocking=False)
-        
+
     @APIExport(runOnUIThread=True)
     def stopFocus(self):
         self.positioner.stopAll()
-        
+
     @APIExport(runOnUIThread=True)
     def getCurrentFrameNumber(self):
         return self.imagesTaken
-    
+
     @APIExport(runOnUIThread=True)
     def setIlluIntensity(self, value: float = 0.0):
         self.ledSource.setValue(value)
@@ -244,12 +244,12 @@ class FlowStopController(LiveUpdatedController):
             self._widget.buttonStop.setStyleSheet("background-color: grey")
             self._widget.buttonStart.setStyleSheet("background-color: green")
 
-    def flowExperimentThread(self, timeStamp: str, experimentName: str, 
-                             experimentDescription: str, uniqueId: str, 
-                             numImages: int, volumePerImage: float, 
-                             timeToStabilize: float, delayToStart: float=0, 
-                             frameRate: float=1, filePath:str="./", 
-                             fileFormat="TIF", isRecordVideo: bool = True, 
+    def flowExperimentThread(self, timeStamp: str, experimentName: str,
+                             experimentDescription: str, uniqueId: str,
+                             numImages: int, volumePerImage: float,
+                             timeToStabilize: float, delayToStart: float=0,
+                             frameRate: float=1, filePath:str="./",
+                             fileFormat="TIF", isRecordVideo: bool = True,
                              pumpSpeed: float = 10000):
         ''' FlowStop experiment thread.
         The device captures images periodically by moving the pump at n-steps / ml, waits for a certain time
@@ -271,8 +271,8 @@ class FlowStopController(LiveUpdatedController):
         self._logger.debug(dirPath)
         if not os.path.exists(dirPath):
             os.makedirs(dirPath)
-            
-        # create the video writer object 
+
+        # create the video writer object
         videoFrameRate = 5
         videoBitrate = 4000000
         if self.isRecordVideo:
@@ -301,9 +301,9 @@ class FlowStopController(LiveUpdatedController):
                     'timeToStabilize': timeToStabilize,
                 }
                 self.setSharedAttr('FlowStop', _metaDataAttr, metaData)
-                
 
-                # save image                    
+
+                # save image
                 mFileName = f'{timeStamp}_{experimentName}_{uniqueId}_{self.imagesTaken}'
                 mFilePath = os.path.join(dirPath, mFileName)
                 self.snapImageFlowCam(mFilePath, metaData, fileFormat=fileFormat)
@@ -339,15 +339,15 @@ class FlowStopController(LiveUpdatedController):
             fileName  = datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
 
         if fileFormat == "TIF":
-            # save as tif 
-            mFrame = self.detectorFlowCam.getLatestFrame()  
+            # save as tif
+            mFrame = self.detectorFlowCam.getLatestFrame()
             if mFrame is None:
                 self._logger.warning("No frame received from the camera.")
                 return
             tif.imwrite(fileName, mFrame, append=False)
         elif fileFormat == "JPG":
-            # save as JPEG 
-            mFrame = self.detectorFlowCam.getLatestFrame()  
+            # save as JPEG
+            mFrame = self.detectorFlowCam.getLatestFrame()
             if mFrame is None:
                 self._logger.warning("No frame received from the camera.")
                 return
@@ -383,7 +383,7 @@ class FlowStopController(LiveUpdatedController):
     def changeExposureTime(self, value):
         """ Change exposure time. """
         self.detector.setParameter(name="exposure", value=value)
-    
+
     @APIExport(runOnUIThread=True)
     def changeAutoExposureTime(self, value):
         """ Change auto exposure time. """
@@ -410,14 +410,14 @@ class FlowStopController(LiveUpdatedController):
         """ Displays the image in the view. """
         self._widget.setImage(im)
 
-    
+
 
 
 class VideoSafe:
     def __init__(self, frame_provider, output_folder, frame_rate=5, bitrate=4000000):
         """
         Initializes the VideoSafe class.
-        
+
         Parameters:
         frame_provider (function): Function that returns a numpy array frame when called.
         output_folder (str): Directory to save the video files.
@@ -440,7 +440,7 @@ class VideoSafe:
     def _get_video_writer(self):
         """
         Initializes a new video writer object.
-        
+
         Returns:
         cv2.VideoWriter: The video writer object.
         """
@@ -456,7 +456,7 @@ class VideoSafe:
         #    video_writer.set(cv2.CAP_PROP_BITRATE, self.bitrate)
 
         return video_writer
-    
+
     def _write_video(self):
         """
         Continuously writes frames to the video file until stopped.
@@ -466,7 +466,7 @@ class VideoSafe:
             frame = self.frame_provider()
             #https://stackoverflow.com/questions/30509573/writing-an-mp4-video-using-python-opencv
             frame = cv2.cvtColor(cv2.convertScaleAbs(frame), cv2.COLOR_GRAY2BGR)
-            self.video_writer.write(frame)  
+            self.video_writer.write(frame)
             self.frame_count += 1
             if self.frame_count >= self.max_frames:
                 self.video_writer.release()

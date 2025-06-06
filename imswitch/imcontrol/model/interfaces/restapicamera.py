@@ -10,10 +10,10 @@ class RestPiCamera():
     def __init__(self, host, port=80, is_debug=False):
         self. base_uri = f"{host}:{port}"
         self.host = host
-        self.port = port 
+        self.port = port
         self.SensorWidth = -1
         self.SensorHeight = - 1
-        self.is_connected = self.isConnected()  
+        self.is_connected = self.isConnected()
 
         self.SensorWidth, self.SensorHeight = self.get_resolution_preview()
 
@@ -32,10 +32,10 @@ class RestPiCamera():
             s.shutdown(2)
             is_up = True
         except:
-            pass 
+            pass
         return is_up
 
-        
+
     def get_json(self, path, payload=None):
         """Perform an HTTP GET request and return the JSON response"""
         if self.is_connected:
@@ -45,7 +45,7 @@ class RestPiCamera():
                 r = requests.get(path, payload)
             else:
                 r = requests.get(path)
-                
+
             r.raise_for_status()
             return r.json()
         else:
@@ -69,24 +69,24 @@ class RestPiCamera():
             "iso": iso
         }
         return_message = self.post_json(path, payload)
-        
+
     def get_iso(self):
         # do homing of the robot
         path = '/picamera/iso'
         return_message = self.get_json(path)
-       
+
     def set_exposuretime(self, exposuretime):
         path = '/picamera/exposuretime'
         payload = {
             "exposuretime": exposuretime
         }
         return_message = self.post_json(path, payload)
-        
+
     def get_exposuretime(self):
         # do homing of the robot
         path = '/picamera/exposuretime'
         return_message = self.get_json(path)
-        
+
     def get_snap(self):
         path = '/picamera/singleframe'
         r = requests.get(self.base_uri + path)
@@ -100,7 +100,7 @@ class RestPiCamera():
         return_message = self.get_json(path)
         Nx, Ny = return_message["Nx"], return_message["Ny"]
         return Nx, Ny
-        
+
     def get_preview(self):
         path = '/picamera/singleframe'
         r = requests.get(self.base_uri + path)

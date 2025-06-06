@@ -3,7 +3,7 @@ from .PositionerManager import PositionerManager
 import time
 import numpy as np
 import os
-import json 
+import json
 
 MAX_ACCEL = 1000000
 PHYS_FACTOR = 1
@@ -50,14 +50,14 @@ class ESP32StageManager(PositionerManager):
         self.backlashY = positionerInfo.managerProperties.get('backlashY', 0)
         self.backlashZ = positionerInfo.managerProperties.get('backlashZ', 0)
         self.backlashA = positionerInfo.managerProperties.get('backlashA', 0)
-        
+
         # maximum speed per Axis
         self.maxSpeed = {}
         self.maxSpeed["X"] = positionerInfo.managerProperties.get('maxSpeedX', 10000)
         self.maxSpeed["Y"] = positionerInfo.managerProperties.get('maxSpeedY', 10000)
         self.maxSpeed["Z"] = positionerInfo.managerProperties.get('maxSpeedZ', 10000)
         self.maxSpeed["A"] = positionerInfo.managerProperties.get('maxSpeedA', 10000)
-        
+
         self.setSpeed(positionerInfo.managerProperties.get('initialSpeedX', 10000), axis="X")
         self.setSpeed(positionerInfo.managerProperties.get('initialSpeedY', 10000), axis="Y")
         self.setSpeed(positionerInfo.managerProperties.get('initialSpeedZ', 10000), axis="Z")
@@ -67,7 +67,7 @@ class ESP32StageManager(PositionerManager):
         self.sampleLoadingPositions["X"] = positionerInfo.managerProperties.get('sampleLoadingPositionX', 0)
         self.sampleLoadingPositions["Y"] = positionerInfo.managerProperties.get('sampleLoadingPositionY', 0)
         self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
-        
+
         self.stageOffsetPositions = {}
         self.stageOffsetPositions["X"] = positionerInfo.stageOffsets.get('stageOffsetPositionX',0)
         self.stageOffsetPositions["Y"] = positionerInfo.stageOffsets.get('stageOffsetPositionY',0)
@@ -75,10 +75,10 @@ class ESP32StageManager(PositionerManager):
         self.stageOffsetPositions["A"] = positionerInfo.stageOffsets.get('stageOffsetPositionA',0)
         # Setup homing coordinates and speed
         # X
-        self.setHomeParametersAxis(axis="X", speed=positionerInfo.managerProperties.get('homeSpeedX', 15000), 
-                                   direction=positionerInfo.managerProperties.get('homeDirectionX', -1), 
-                                   endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityX', 1), 
-                                   endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseX', 1), 
+        self.setHomeParametersAxis(axis="X", speed=positionerInfo.managerProperties.get('homeSpeedX', 15000),
+                                   direction=positionerInfo.managerProperties.get('homeDirectionX', -1),
+                                   endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityX', 1),
+                                   endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseX', 1),
                                    timeout=positionerInfo.managerProperties.get('homeTimeoutX', 20000))
         # Y
         self.setHomeParametersAxis(axis="Y", speed=positionerInfo.managerProperties.get('homeSpeedY', 15000),
@@ -86,37 +86,37 @@ class ESP32StageManager(PositionerManager):
                                       endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityY', 1),
                                       endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseY', 1),
                                       timeout=positionerInfo.managerProperties.get('homeTimeoutY', 20000))
-        
+
         # Z
         self.setHomeParametersAxis(axis="Z", speed=positionerInfo.managerProperties.get('homeSpeedZ', 15000),
                                         direction=positionerInfo.managerProperties.get('homeDirectionZ', -1),
                                         endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityZ', 1),
                                         endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseZ', 1),
                                         timeout=positionerInfo.managerProperties.get('homeTimeoutZ', 20000))
-        
+
         # A
         self.setHomeParametersAxis(axis="A", speed=positionerInfo.managerProperties.get('homeSpeedA', 15000),
                                         direction=positionerInfo.managerProperties.get('homeDirectionA', -1),
                                         endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityA', 1),
                                         endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseA', 1),
                                         timeout=positionerInfo.managerProperties.get('homeTimeoutA', 20000))
-                                    
+
         # perform homing on startup?
         self.homeOnStartX = positionerInfo.managerProperties.get('homeOnStartX', 0)
         self.homeOnStartY = positionerInfo.managerProperties.get('homeOnStartY', 0)
         self.homeOnStartZ = positionerInfo.managerProperties.get('homeOnStartZ', 0)
         self.homeOnStartA = positionerInfo.managerProperties.get('homeOnStartA', 0)
-        
+
         # homing is actually enabled?
         self.homeXenabled = positionerInfo.managerProperties.get('homeXenabled', False)
         self.homeYenabled = positionerInfo.managerProperties.get('homeYenabled', False)
         self.homeZenabled = positionerInfo.managerProperties.get('homeZenabled', False)
         self.homeAenabled = positionerInfo.managerProperties.get('homeAenabled', False)
-        
+
         # homing steps without endstop
         self.homeStepsX = positionerInfo.managerProperties.get('homeStepsX', 0)
         self.homeStepsY = positionerInfo.managerProperties.get('homeStepsY', 0)
-        self.homeStepsZ = positionerInfo.managerProperties.get('homeStepsZ', 0) 
+        self.homeStepsZ = positionerInfo.managerProperties.get('homeStepsZ', 0)
         self.homeStepsA = positionerInfo.managerProperties.get('homeStepsA', 0)
 
         # Limiting is actually enabled - can we go smaller than 0?
@@ -161,17 +161,17 @@ class ESP32StageManager(PositionerManager):
             if positionerInfo.managerProperties.get('mstepsX', 16) is not None:
                 self.setupMotorDriver(axis="X", msteps=positionerInfo.managerProperties.get('mstepsX', 16), rms_current=positionerInfo.managerProperties.get('rms_currentX', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsX', 10), semin=positionerInfo.managerProperties.get('seminX', 5), semax=positionerInfo.managerProperties.get('semaxX', 2), blank_time=positionerInfo.managerProperties.get('blank_timeX', 24), toff=positionerInfo.managerProperties.get('toffX', 3), timeout=1)
             if positionerInfo.managerProperties.get('mstepsY', 16) is not None:
-                self.setupMotorDriver(axis="Y", msteps=positionerInfo.managerProperties.get('mstepsY', 16), rms_current=positionerInfo.managerProperties.get('rms_currentY', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsY', 10), semin=positionerInfo.managerProperties.get('seminY', 5), semax=positionerInfo.managerProperties.get('semaxY', 2), blank_time=positionerInfo.managerProperties.get('blank_timeY', 24), toff=positionerInfo.managerProperties.get('toffY', 3), timeout=1)  
+                self.setupMotorDriver(axis="Y", msteps=positionerInfo.managerProperties.get('mstepsY', 16), rms_current=positionerInfo.managerProperties.get('rms_currentY', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsY', 10), semin=positionerInfo.managerProperties.get('seminY', 5), semax=positionerInfo.managerProperties.get('semaxY', 2), blank_time=positionerInfo.managerProperties.get('blank_timeY', 24), toff=positionerInfo.managerProperties.get('toffY', 3), timeout=1)
             if positionerInfo.managerProperties.get('mstepsZ', 16) is not None:
                 self.setupMotorDriver(axis="Z", msteps=positionerInfo.managerProperties.get('mstepsZ', 16), rms_current=positionerInfo.managerProperties.get('rms_currentZ', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsZ', 10), semin=positionerInfo.managerProperties.get('seminZ', 5), semax=positionerInfo.managerProperties.get('semaxZ', 2), blank_time=positionerInfo.managerProperties.get('blank_timeZ', 24), toff=positionerInfo.managerProperties.get('toffZ', 3), timeout=1)
             if positionerInfo.managerProperties.get('mstepsA', 16) is not None:
                 self.setupMotorDriver(axis="A", msteps=positionerInfo.managerProperties.get('mstepsA', 16), rms_current=positionerInfo.managerProperties.get('rms_currentA', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsA', 10), semin=positionerInfo.managerProperties.get('seminA', 5), semax=positionerInfo.managerProperties.get('semaxA', 2), blank_time=positionerInfo.managerProperties.get('blank_timeA', 24), toff=positionerInfo.managerProperties.get('toffA', 3), timeout=1)
-        
+
         # Dummy move to get the motor to the right position
         for iAxis in positionerInfo.axes:
             self.move(value=-1, speed=1000, axis=iAxis, is_absolute=False, is_blocking=True, isEnable=True, timeout=0.2)
             self.move(value=1, speed=1000, axis=iAxis, is_absolute=False, is_blocking=True, isEnable=True, timeout=0.2)
-        
+
         # optional: hom on startup:
         if self.homeOnStartX: self.home_x()
         time.sleep(0.5)
@@ -190,7 +190,7 @@ class ESP32StageManager(PositionerManager):
 
         # try to register the callback
         try:
-            # if event "0" is triggered, the callback function to update the stage positions 
+            # if event "0" is triggered, the callback function to update the stage positions
             # will be called
             self._motor.register_callback(0,callbackfct=self.setPositionFromDevice)
         except Exception as e:
@@ -221,7 +221,7 @@ class ESP32StageManager(PositionerManager):
             self.homeEndstoppolarityA = endstoppolarity
             self.homeEndposReleaseA = endposrelease
             self.homeTimeoutA = timeout
-            
+
 
     def setAxisOrder(self, order=[0,1,2,3]):
         self._motor.setMotorAxisOrder(order=order)
@@ -238,7 +238,7 @@ class ESP32StageManager(PositionerManager):
 
     def setupMotorDriver(self, axis="X", msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
         self._motor.set_tmc_parameters(axis=axis, msteps=msteps, rms_current=rms_current, stall_value=stall_value, sgthrs=sgthrs, semin=semin, semax=semax, blank_time=blank_time, toff=toff, timeout=timeout)
-        
+
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=gTIMEOUT, is_reduced=True):
         '''
         Move the motor to a new position
@@ -326,7 +326,7 @@ class ESP32StageManager(PositionerManager):
     def setupPIDcontroller(self, PIDactive=1, Kp=100, Ki=10, Kd=1, target=500, PID_updaterate=200):
         return self._motor.set_pidcontroller(PIDactive=PIDactive, Kp=Kp, Ki=Ki, Kd=Kd, target=target,
                                              PID_updaterate=PID_updaterate)
- 
+
     def moveForeverByAxis(self, speed=0, axis="X", is_stop=False):
         speed=(0, 0, 0, 0)
         if axis == "X":
@@ -338,7 +338,7 @@ class ESP32StageManager(PositionerManager):
         elif axis == "A":
             speed[0]=speed
         self.moveForever(speed=speed, is_stop=is_stop)
-     
+
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
         self._motor.move_forever(speed=speed, is_stop=is_stop)
 
@@ -364,14 +364,14 @@ class ESP32StageManager(PositionerManager):
         self._motor.set_position(axis, value)
 
     def setPositionFromDevice(self, positionArray: np.array):
-        ''' mostly used for he position callback 
+        ''' mostly used for he position callback
         If new positions are coming from the device they will be updated in ImSwitch too'''
         posDict = {"ESP32Stage": {}}
-        for iAxis, axisName in enumerate(["A", "X", "Y", "Z"]): 
+        for iAxis, axisName in enumerate(["A", "X", "Y", "Z"]):
             self.setPosition(positionArray[iAxis] , axisName)
-            posDict["ESP32Stage"][axisName] = positionArray[iAxis] 
+            posDict["ESP32Stage"][axisName] = positionArray[iAxis]
         self._commChannel.sigUpdateMotorPosition.emit(posDict)
-        
+
     def closeEvent(self):
         pass
 
@@ -384,7 +384,7 @@ class ESP32StageManager(PositionerManager):
         except Exception as e:
             self.__logger.error(e)
             return self._position
-        
+
 
     def forceStop(self, axis):
         if axis=="X":
@@ -453,7 +453,7 @@ class ESP32StageManager(PositionerManager):
         self.setPosition(axis="Y", value=0)
 
     def home_z(self,isBlocking=False):
-        if abs(self.homeStepsZ)>0:            
+        if abs(self.homeStepsZ)>0:
             self.move(value=self.homeStepsZ, speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsZ)*np.abs(self.homeEndposReleaseZ), speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
             self.setPosition(axis="Z", value=0)
@@ -464,7 +464,7 @@ class ESP32StageManager(PositionerManager):
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
         self.setPosition(axis="Z", value=0)
-        
+
     def home_a(self,isBlocking=False):
         if abs(self.homeStepsA)>0:
             self.move(value=self.homeStepsA, speed=self.homeSpeedA, axis="A", is_absolute=False, is_blocking=True)
@@ -484,13 +484,13 @@ class ESP32StageManager(PositionerManager):
             [self.setPosition(axis=axis, value=0) for axis in ["X","Y","Z"]]
 
     def startStageScanning(self, nStepsLine=100, dStepsLine=1, nTriggerLine=1, nStepsPixel=100, dStepsPixel=1, nTriggerPixel=1, delayTimeStep=10, nFrames=5, isBlocking=False):
-        self._motor.startStageScanning(nStepsLine=nStepsLine, dStepsLine=dStepsLine, nTriggerLine=nTriggerLine, 
-                                       nStepsPixel=nStepsPixel, dStepsPixel=dStepsPixel, nTriggerPixel=nTriggerPixel, 
+        self._motor.startStageScanning(nStepsLine=nStepsLine, dStepsLine=dStepsLine, nTriggerLine=nTriggerLine,
+                                       nStepsPixel=nStepsPixel, dStepsPixel=dStepsPixel, nTriggerPixel=nTriggerPixel,
                                        delayTimeStep=delayTimeStep, nFrames=nFrames, isBlocking=isBlocking)
 
     def stopStageScanning(self):
         self._motor.stopStageScanning()
-        
+
     def moveToSampleMountingPosition(self, speed=10000, is_blocking=True):
         value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
@@ -502,7 +502,7 @@ class ESP32StageManager(PositionerManager):
             self.__logger.error(f"Axis {axis} not found in stageOffsetPositions.")
         self.__logger.info(f"Set offset for {axis} axis to {knownOffset} mum.")
         self._motor.set_offset(axis=axis, offset=knownOffset)
-        
+
     def getStageOffsetAxis(self, axis:str="X"):
         """ Get the current stage offset for a given axis.
         If no axis is given, the current stage is used.
@@ -535,7 +535,7 @@ class ESP32StageManager(PositionerManager):
                                          ystart=ystart, ystep=ystep, ny=ny,
                                          tsettle=tsettle, tExposure=tExposure, illumination=illumination, led=led)
         return r
-    
+
     def stop_stage_scanning(self):
         """
         Stop the current stage scanning operation.
@@ -543,7 +543,7 @@ class ESP32StageManager(PositionerManager):
         self._motor.stop_stage_scanning()
         self.__logger.info("Stage scanning stopped.")
 
-        
+
 # Copyright (C) 2020, 2021 The imswitch developers
 # This file is part of ImSwitch.
 #

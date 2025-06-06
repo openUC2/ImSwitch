@@ -85,34 +85,34 @@ class LEDMatrixController(ImConWidgetController):
     def setEnabled(self, enabled:bool) -> None:
         """ Sets the value of the LEDMatrix. """
         self.setAllLED(state=enabled, intensity=None)
-    
+
     @APIExport()
     def setValue(self, value:int) -> None:
         """ Sets the value of the LEDMatrix. """
         self.setIntensity(intensity=value)
         self.setAllLED(state=(1,1,1), intensity=value)
-        
+
     @APIExport()
     def setRing(self, ringRadius: int, intensity: int) -> None:
         """ Sets the value of the LEDMatrix. """
         #self.setIntensity(intensity=intensity)
         self.ledMatrix.setRing(radius=ringRadius, intensity=intensity)
         if not IS_HEADLESS: self._widget.leds[str(ringRadius)].setChecked(True)
-        
+
     @APIExport()
     def setCircle(self, circleRadius: int, intensity: int) -> None:
         """ Sets the value of the LEDMatrix. """
         #self.setIntensity(intensity=intensity)
         self.ledMatrix.setCircle(radius=circleRadius, intensity=intensity)
         if not IS_HEADLESS: self._widget.leds[str(circleRadius)].setChecked(True)
-        
+
     @APIExport()
     def setHalves(self, intensity: int, direction: str) -> None:
         """ Sets the value of the LEDMatrix. """
         #self.setIntensity(intensity=intensity)
         self.ledMatrix.setHalves(intensity=intensity, region=direction)
         if not IS_HEADLESS: self._widget.leds[str(intensity)].setChecked(True)
-        
+
     @APIExport()
     def setStatus(self, status:str="idle") -> None:
         """ Sets the value of the LEDMatrix. """

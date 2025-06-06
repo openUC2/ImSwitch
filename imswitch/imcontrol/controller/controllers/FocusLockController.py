@@ -1,5 +1,5 @@
 import time
-import cv2 
+import cv2
 import numpy as np
 from time import perf_counter
 import scipy.ndimage as ndi
@@ -42,7 +42,7 @@ class FocusLockController(ImConWidgetController):
                           self._setupInfo.focusLock.frameCropy,
                           self._setupInfo.focusLock.frameCropw,
                           self._setupInfo.focusLock.frameCroph)
-        
+
         if self.cropFrame[0] is not None:
             self._master.detectorsManager[self.camera].crop(*self.cropFrame)
         self._widget.setKp(self._setupInfo.focusLock.piKp)
@@ -63,7 +63,7 @@ class FocusLockController(ImConWidgetController):
 
         self._widget.zStackBox.stateChanged.connect(self.zStackVarChange)
         self._widget.twoFociBox.stateChanged.connect(self.twoFociVarChange)
-        
+
         self._widget.sigSliderExpTValueChanged.connect(self.setExposureTime)
         self._widget.sigSliderGainValueChanged.connect(self.setGain)
 
@@ -128,7 +128,7 @@ class FocusLockController(ImConWidgetController):
 
     def setExposureTime(self, exposureTime):
         self.ESP32Camera.setExposureTime(exposureTime)
-        
+
     def focusCalibrationStart(self):
         self.__focusCalibThread.start()
 
@@ -166,7 +166,7 @@ class FocusLockController(ImConWidgetController):
                                                 self.setPointData[1:self.currPoint])
         else:
             self._widget.focusPlotCurve.setData(self.timeData, self.setPointData)
-    
+
     def aboutToLockUpdate(self):
         self.aboutToLockDataPoints = np.roll(self.aboutToLockDataPoints,1)
         self.aboutToLockDataPoints[0] = self.setPointSignal
@@ -229,17 +229,17 @@ class ProcessDataThread(Thread):
         self._controller = controller
         super().__init__(*args, **kwargs)
         self.focusLockMetric = None
-        
+
 
     def grabCameraFrame(self):
         detectorManager = self._controller._master.detectorsManager[self._controller.camera]
         self.latestimg = detectorManager.getLatestFrame()
-            
+
         # 1.5 swap axes of frame (depending on setup, make this a variable in the json)
         if self._controller._setupInfo.focusLock.swapImageAxes:
             self.latestimg = np.swapaxes(self.latestimg,0,1)
         return self.latestimg
-    
+
     def setFocusLockMetric(self, focuslockMetric):
         self.focusLockMetric = focuslockMetric
 
@@ -247,11 +247,11 @@ class ProcessDataThread(Thread):
 
         if self._controller._master.detectorsManager[self._controller.camera].model == "ESP32SerialCamera":
             imagearraygf = ndi.filters.gaussian_filter(self.latestimg, 5)
-            # mBackground = np.mean(mStack, (0)) #np.ones(mStack.shape[1:])# 
+            # mBackground = np.mean(mStack, (0)) #np.ones(mStack.shape[1:])#
             mBackground = ndi.filters.gaussian_filter(self.latestimg,15)
             mFrame = imagearraygf/mBackground # mStack/mBackground
             massCenterGlobal=np.max(np.mean(mFrame**2, 1))/np.max(np.mean(mFrame**2, 0))
-            
+
         else:
             if self.focusLockMetric == "JPG":
 
@@ -418,7 +418,7 @@ class PI:
     @ki.setter
     def ki(self, value):
         self._ki = value
-        
+
 
 
 

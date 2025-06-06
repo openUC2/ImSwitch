@@ -20,7 +20,7 @@ class BaslerManager(DetectorManager):
         self.__logger = initLogger(self, instanceName=name)
 
         self._camera = self._getBaslerObj(detectorInfo.managerProperties['cameraListIndex'])
-        try:        
+        try:
             pixelSize = detectorInfo.managerProperties['cameraEffPixelsize'] # mum
         except Exception as e:
             self.__logger.error("No value is given for the effective pixelsize in the config json!")
@@ -34,14 +34,14 @@ class BaslerManager(DetectorManager):
             self._camera.setPropertyValue(propertyName, propertyValue)
 
         try: # FIXME: get that form the real camera
-            isRGB = detectorInfo.managerProperties['basler']['isRGB']  
+            isRGB = detectorInfo.managerProperties['basler']['isRGB']
         except:
             isRGB = False
 
-        fullShape = (self._camera.SensorHeight, 
+        fullShape = (self._camera.SensorHeight,
                      self._camera.SensorWidth)
 
-        # TODO: Not implemented yet 
+        # TODO: Not implemented yet
         self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
 
         # Prepare parameters
@@ -55,12 +55,12 @@ class BaslerManager(DetectorManager):
             'image_width': DetectorNumberParameter(group='Misc', value=fullShape[0], valueUnits='arb.u.',
                         editable=False),
             'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
-                        editable=False), 
+                        editable=False),
             'isRGB': DetectorNumberParameter(group='Misc', value=isRGB, valueUnits='arb.u.',
                         editable=False),
             'Camera pixel size': DetectorNumberParameter(group='Misc', value=pixelSize,
                                     valueUnits='µm', editable=True)
-            }            
+            }
 
         # Prepare actions
         actions = {
@@ -107,8 +107,8 @@ class BaslerManager(DetectorManager):
         return value
 
     def setBinning(self, binning):
-        super().setBinning(binning) 
-        
+        super().setBinning(binning)
+
 
     def getChunk(self):
         try:

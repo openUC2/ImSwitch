@@ -46,7 +46,7 @@ try:
 except ImportError:
     print("Arkitekt not found")
 
- 
+
 PORT = __httpport__
 IS_SSL = __ssl__
 
@@ -378,7 +378,7 @@ class ImSwitchServer(Worker):
             swagger_js_url="/static/swagger-ui-bundle.js",
             swagger_css_url="/static/swagger-ui.css",
         )
-        
+
     @app.get("/jupyternotebookurl")
     def get_jupyter_notebook_url():
         from imswitch import jupyternotebookurl # import it here to get the one after the notebook has been actually launched
@@ -394,7 +394,7 @@ class ImSwitchServer(Worker):
             plugin = f
             plugins.append(plugin)
         return {"plugins": plugins}
-        
+
     @app.get("/hostname")
     def get_hostname():
         """
@@ -419,7 +419,7 @@ class ImSwitchServer(Worker):
                     @wraps(func)
                     async def wrapper(*args, **kwargs):
                         import importlib #importlib.reload(my_module)
-                        return await func(*args, **kwargs) # sometimes we need to return a future 
+                        return await func(*args, **kwargs) # sometimes we need to return a future
             else:
                 if hasattr(func, '_APIRequestType') and func._APIRequestType == "POST":
                     @app.post(str)
@@ -436,8 +436,8 @@ class ImSwitchServer(Worker):
 
         def includeUIAPI(str, func):
             # based on UIExport decorator, only get is supported
-            
-            
+
+
             if hasattr(func, '_UIExport') and func._UIExport:
                 @app.get(str)
                 @wraps(func)
@@ -478,7 +478,7 @@ class ImSwitchServer(Worker):
                 "path": meta["path"],
                 "exposed": "Widget",
                 "scope": "lightsheet_plugin",
-                "url": os.path.join(mount,"index.html"), 
+                "url": os.path.join(mount,"index.html"),
                 "remote": os.path.join(mount,"remoteEntry.js")
             })
             # only if the mount exists:
@@ -499,15 +499,15 @@ class ImSwitchServer(Worker):
         _, _ = configfiletools.loadOptions()
         setup_list = configfiletools.getSetupList()
         return {"available_setups": setup_list}
-    
+
     @app.get("/UC2ConfigController/getCurrentSetupFilename")
     def getCurrentSetupFilename():
         """
         Returns the current setup filename.
-        """  
+        """
         options, _ = imswitch.DEFAULT_SETUP_FILE # configfiletools.loadOptions()
         return {"current_setup": options.setupFileName}
-    
+
     @app.get("/UC2ConfigController/setSetupFileName")
     def setSetupFileName(setupFileName: str, restartSoftware: bool=False) -> str:
         '''Sets the setup file name in the options file.'''
@@ -521,7 +521,7 @@ class ImSwitchServer(Worker):
         configfiletools.saveOptions(options)
         if restartSoftware: ostools.restartSoftware()
         return f"Setup file {setupFileName} set successfully."
-        
+
     @app.get("/UC2ConfigController/readSetupFile")
     def readSetupFile(setupFileName: str=None) -> dict:
         '''Reads the setup file. If setupFileName is None, reads the current setup file.'''
@@ -535,8 +535,8 @@ class ImSwitchServer(Worker):
         mOptions = Options(setupFileName=setupFileName)
         setup_dict = configfiletools.loadSetupInfo(mOptions, ViewSetupInfo)
         return setup_dict
-    
-    @app.post("/UC2ConfigController/writeNewSetupFile")    
+
+    @app.post("/UC2ConfigController/writeNewSetupFile")
     def writeNewSetupFile(setupFileName: str, setupDict: dict, setAsCurrentConfig: bool = True, restart: bool = False, overwrite: bool = False) -> str:
         '''Writes a new setup file. and set as new setup file if needed on next boot.'''
         if setupFileName is None:

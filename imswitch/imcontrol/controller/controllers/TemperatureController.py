@@ -39,7 +39,7 @@ class TemperatureController(ImConWidgetController):
 
         # get hold on the Temperature Controller
         self.temperatureController = self._master.rs232sManager["ESP32"]._esp32.temperature
-        
+
         # Connect TemperatureWidget signals
         if not IS_HEADLESS:
             self._widget.sigPIDToggled.connect(self.setPID)
@@ -47,12 +47,12 @@ class TemperatureController(ImConWidgetController):
             self._widget.sigShowTemperatureToggled.connect(self.switchTemperatureMonitor)
             self.setPID(self._widget.getPIDChecked())
 
-            
-        # create logging directory 
+
+        # create logging directory
         self.temperatureDir = os.path.join(dirtools.UserFileDirs.Root, 'temperatureController')
         if not os.path.exists(self.temperatureDir):
             os.makedirs(self.temperatureDir)
-        
+
 
     def switchTemperatureMonitor(self, active):
         """ Switch the temperature monitoring on or off. """
@@ -79,15 +79,15 @@ class TemperatureController(ImConWidgetController):
 
         # retrieve PID values
         self.Kp, self.Ki, self.Kd = self._widget.getPIDValues()
-        
+
         # get temperature value from GUI
         self.controlTarget = self._widget.getTemperatureValue()
-        
+
         # we actually set the target value with this slider
         self._widget.updateTargetTemperatureValue(self.controlTarget)
         self.set_temperature(active=self.PIDenabled,
                                 Kp=self.Kp, Ki=self.Ki, Kd=self.Kd, target=self.controlTarget)
-        
+
     def valueRotationSpeedChanged(self, value):
         """ Change magnitude. """
         self.speedRotation = int(value)
@@ -106,13 +106,13 @@ class TemperatureController(ImConWidgetController):
         self.PIDenabled = enabled
         # retrieve PID values
         self.Kp, self.Ki, self.Kd = self._widget.getPIDValues()
-        
+
         # get temperature value from GUI
         self.controlTarget = float(self._widget.getTemperatureValue())
 
         self.set_temperature(active=self.PIDenabled,
                                 Kp=self.Kp, Ki=self.Ki, Kd=self.Kd, target=self.controlTarget)
-        
+
     @APIExport(runOnUIThread=False)
     def set_temperature(self, active, Kp=None, Ki=None, Kd=None, target=None, sensorOffset = 3):
         """ Set the temperature. """
@@ -125,7 +125,7 @@ class TemperatureController(ImConWidgetController):
         if target is not None:
             self.controlTarget = target
 
-        
+
 
         self.temperatureController.set_temperature(active=active
             , Kp=self.Kp, Ki=self.Ki, Kd=self.Kd, target=self.controlTarget+sensorOffset)
@@ -150,13 +150,13 @@ class TemperatureController(ImConWidgetController):
 
         while self.is_measure:
             self.temperatureValue  = self.temperatureController.get_temperature()
-            if self.temperatureValue and self.temperatureValue > -200: # if not, we have faulty values 
-                    
+            if self.temperatureValue and self.temperatureValue > -200: # if not, we have faulty values
+
                 self._widget.updateTemperature(self.temperatureValue)
-                
+
                 # logging temperature to file
                 mFileName = os.path.join(self.temperatureDir, 'temperature.csv')
-                
+
                 # Create directory if it does not exist
                 os.makedirs(os.path.dirname(mFileName), exist_ok=True)
                 try:
@@ -169,7 +169,7 @@ class TemperatureController(ImConWidgetController):
                         writer.writerow([dt_string, self.temperatureValue])
                 except:
                     pass
-            
+
                 # update plot
                 self.updateSetPointData()
                 if self.currPoint < self.nBuffer:

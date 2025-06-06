@@ -18,7 +18,7 @@ setupInfoBasic = ViewSetupInfo.from_json("""
           "managerName": "VirtualStageManager",
           "managerProperties": {
             "rs232device": "VirtualMicroscope",
-            "isEnable": true, 
+            "isEnable": true,
             "enableauto": false,
             "isDualaxis": 0,
             "stepsizeX": 1,
@@ -37,7 +37,7 @@ setupInfoBasic = ViewSetupInfo.from_json("""
           "axes": [
             "X",
             "Y",
-            "Z", 
+            "Z",
             "A"
           ],
           "forScanning": true,
@@ -97,8 +97,8 @@ setupInfoBasic = ViewSetupInfo.from_json("""
   "fovLock": {
     "camera": "WidefieldCamera",
     "positioner": "VirtualStage",
-    "updateFreq": 1, 
-    "piKp":1, 
+    "updateFreq": 1,
+    "piKp":1,
     "piKi":1
     },
     "sim": {
@@ -130,21 +130,21 @@ setupInfoBasic = ViewSetupInfo.from_json("""
     "MCT",
     "ROIScan",
     "HistoScan",
-    "Hypha" 
+    "Hypha"
   ],
   "nonAvailableWidgets":[
     "FocusLock",
-    "SIM", 
+    "SIM",
     "DPC",
     "FOVLock",
-    "Temperature", 
+    "Temperature",
     "HistoScan",
-    "PixelCalibration", 
-    "Lightsheet", 
-    "WebRTC", 
-    "Flatfield", 
+    "PixelCalibration",
+    "Lightsheet",
+    "WebRTC",
+    "Flatfield",
     "STORMRecon",
-    "DPC",    
+    "DPC",
     "ImSwitchServer",
     "PixelCalibration",
     "FocusLock"]
@@ -209,7 +209,7 @@ setupInfoWithoutWidgets = ViewSetupInfo.from_json("""
       "wavelength": 488,
       "valueRangeMin": 0,
       "valueRangeMax": 1023
-    }    
+    }
   },
   "detectors": {
     "WidefieldCamera": {
@@ -248,11 +248,11 @@ setupInfoWithoutWidgets = ViewSetupInfo.from_json("""
     "piKi": 1
   },
   "objective": {
-    "pixelsizes": [0.2, 0.1], 
+    "pixelsizes": [0.2, 0.1],
     "NAs": [0.5, 0.8],
     "magnifications": [10, 20],
     "objectiveNames": ["10x", "20x"],
-    "objectivePositions": [0, 1], 
+    "objectivePositions": [0, 1],
     "homeDirection": -1,
     "homePolarity": 1,
     "homeSpeed": 20000,
@@ -271,18 +271,18 @@ setupInfoWithoutWidgets = ViewSetupInfo.from_json("""
     "MCT",
     "ROIScan",
     "HistoScan",
-    "Hypha", 
+    "Hypha",
     "ImSwitchServer",
     "Lightsheet",
     "Workflow",
-    "Lepmon", 
-    "Experiment", 
-    "Timelapse", 
+    "Lepmon",
+    "Experiment",
+    "Timelapse",
     "UC2Config",
     "Objective"
   ],
   "nonAvailableWidgets": [
-    "Histogramm",  
+    "Histogramm",
     "imswitch_arkitekt_next",
     "FocusLock",
     "FlowStop",

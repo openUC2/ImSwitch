@@ -21,8 +21,8 @@ class RecordingController(ImConWidgetController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
-        
-        
+
+
         # Define a dictionary to store variables accessible to the function
         self.shared_variables: dict[str, any] = {}
 
@@ -32,7 +32,7 @@ class RecordingController(ImConWidgetController):
         self.endedRecording = False
         self.lapseCurrent = -1
         self.lapseTotal = 0
-        
+
         self.streamstarted = False
 
         # Connect CommunicationChannel signals
@@ -48,14 +48,14 @@ class RecordingController(ImConWidgetController):
         self._commChannel.sigStartLiveAcquistion.connect(self.setLiveStreamStart)
         self._commChannel.sigAcquisitionStopped.connect(self.setLiveStreamStop)
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
-        
+
         if IS_HEADLESS:
             self._widget = None
-            return  
-        
-        
+            return
+
+
         self.untilStop()
-        
+
         # ADD GUI elements just in case
         self._widget.setDetectorList(
             self._master.detectorsManager.execOnAll(lambda c: c.model,
@@ -130,7 +130,7 @@ class RecordingController(ImConWidgetController):
         if not IS_HEADLESS:
             saveMode = SaveMode(self._widget.getSnapSaveMode())
         else:
-            saveMode = SaveMode(1) # TODO: Assuming we want to save the image 
+            saveMode = SaveMode(1) # TODO: Assuming we want to save the image
         self._master.recordingManager.snap(detectorNames,
                                            savename,
                                            saveMode,
@@ -267,7 +267,7 @@ class RecordingController(ImConWidgetController):
         else:
             self.recording = False
             self.lapseCurrent = -1
-            if not IS_HEADLESS: 
+            if not IS_HEADLESS:
                 self._widget.updateRecFrameNum(0)
                 self._widget.updateRecTime(0)
                 self._widget.updateRecLapseNum(0)
@@ -356,7 +356,7 @@ class RecordingController(ImConWidgetController):
 
     def getFileName(self):
         """ Gets the filename of the data to save. """
-        if IS_HEADLESS: 
+        if IS_HEADLESS:
             filename =  time.strftime('%Hh%Mm%Ss')+"_ImSwitch_ImageFile"
         else:
             filename = self._widget.getCustomFilename()
@@ -412,10 +412,10 @@ class RecordingController(ImConWidgetController):
 
     def getTimelapseFreq(self):
         return self._widget.getTimelapseFreq()
-    
+
     def setLiveStreamStart(self):
         self.streamRunning = True
-        
+
     def setLiveStreamStop(self):
         self.streamRunning = False
 
@@ -423,7 +423,7 @@ class RecordingController(ImConWidgetController):
         self.streamRunning = False
         self.streamstarted = False
         self.streamQueue = None
-        
+
     def startStream(self):
         '''
         return a generator that converts frames into jpeg's reads to stream
@@ -432,14 +432,14 @@ class RecordingController(ImConWidgetController):
         detectorNum1Name = detectorManager.getAllDeviceNames()[0]
         detectorNum1 = detectorManager[detectorNum1Name]
         detectorNum1.startAcquisition()
-        
+
         # adaptive resize: Keep them below 640x480
         output_frame = detectorNum1.getLatestFrame()
         if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
             everyNthsPixel = np.min([output_frame.shape[0]//480, output_frame.shape[1]//640])
         else:
             everyNthsPixel = 1
-        
+
         try:
             while self.streamRunning:
                 output_frame = detectorNum1.getLatestFrame()
@@ -447,7 +447,7 @@ class RecordingController(ImConWidgetController):
                     continue
                 try:
                     output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
-                except: 
+                except:
                     output_frame = np.zeros((640,460))
                 # adjust the parameters of the jpeg compression
                 quality = 90  # Set the desired quality level (0-100)
@@ -459,7 +459,7 @@ class RecordingController(ImConWidgetController):
                 time.sleep(0.1) # 10 fps
         except:
             self.streamRunning = False
-            
+
 
     def streamer(self):
         from multiprocessing import Queue
@@ -484,7 +484,7 @@ class RecordingController(ImConWidgetController):
         return a generator that converts frames into jpeg's reads to stream
         '''
         if startStream:
-            # start the live video feed 
+            # start the live video feed
             self._commChannel.sigStartLiveAcquistion.emit(True)
             headers = {
                 "Cache-Control": "no-cache",
@@ -518,8 +518,8 @@ class RecordingController(ImConWidgetController):
             self._logger.error(e)
             return HTTPException(detail=str(e), status_code=400)
     '''
-    
-    
+
+
     @APIExport(runOnUIThread=False)
     #@app.get("/get-variable/{variable_name}")
     def getVariable(self, variable_name: str):
@@ -532,11 +532,11 @@ class RecordingController(ImConWidgetController):
     def snapImageToPath(self, fileName: str = ".") -> dict:
         """ Take a snap and save it to a .tiff file at the given fileName. """
         return self.snap(name = fileName, mSaveFormat=SaveFormat.TIFF)
-    
+
     @APIExport(runOnUIThread=False)
     def snapImage(self, output: bool = False, toList: bool = True) -> Union[None, list]:
-        """ 
-        Take a snap and save it to a .tiff file at the set file path. 
+        """
+        Take a snap and save it to a .tiff file at the set file path.
         output: if True, return the numpy array of the image as a list if toList is True, or as a numpy array if toList is False
         toList: if True, return the numpy array of the image as a list, otherwise return it as a numpy array
         """
@@ -599,25 +599,25 @@ class RecordingController(ImConWidgetController):
         else:
             if detectorName is None:
                 detectorName = self.getDetectorNamesToCapture()[0]
-            # get the image from the specified detector    
+            # get the image from the specified detector
             image = images[detectorName]
 
             # eventually resize image to save bandwidth
             if resizeFactor <1:
                 image = self.resizeImage(image, resizeFactor)
-            
-            
+
+
 
         # using an in-memory image
         im = Image.fromarray(image)
-        
+
         # save image to an in-memory bytes buffer
         # save image to an in-memory bytes buffer
         with io.BytesIO() as buf:
             im = im.convert('L')  # convert image to 'L' mode
             im.save(buf, format='PNG')
             im_bytes = buf.getvalue()
-            
+
         headers = {'Content-Disposition': 'inline; filename="test.png"'}
         return Response(im_bytes, headers=headers, media_type='image/png')
 
@@ -654,19 +654,19 @@ class RecordingController(ImConWidgetController):
             self.recording = True
             self.endedRecording = False
 
-            
+
 
     @APIExport(runOnUIThread=True)
     def stopRecording(self) -> None:
         """ Stops recording. """
         if not IS_HEADLESS:
             self._widget.setRecButtonChecked(True)
-        else:    
+        else:
             self.recording = False
             self.endedRecording = True
             if self.recMode == RecMode.ScanLapse and self.lapseCurrent != -1:
                 self._commChannel.sigAbortScan.emit()
-            self._master.recordingManager.endRecording()            
+            self._master.recordingManager.endRecording()
 
     @APIExport(runOnUIThread=True)
     def setRecModeSpecFrames(self, numFrames: int) -> None:

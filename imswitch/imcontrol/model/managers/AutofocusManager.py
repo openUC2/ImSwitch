@@ -12,7 +12,7 @@ from imswitch.imcommon.model import initLogger
 
 
 class AutofocusManager(SignalInterface):
-    
+
     def __init__(self, autofocusInfo, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)

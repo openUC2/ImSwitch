@@ -6,20 +6,20 @@ class IC_Exception(Exception):
     """
     An exception for the IC imaging control software. It contains a message
     property which is a string indicating what went wrong.
-    
+
     error code -3 has multiple possible interpretations, sometimes from the same function!
-    
+
     :param errorCode: Error code to be used to look up error message.
     """
 
     @property
     def message(self):
         return self._error_codes[self.error_code]
-            
+
     @property
     def error_code(self):
         return self._error_code
-        
+
     _error_codes = {
         # IC errors
         1: 'IC SUCCESS',
@@ -40,7 +40,7 @@ class IC_Exception(Exception):
         -105: 'VIDEO FORMAT RETURNED NULL TYPE',
         -106: 'DEVICE NAME NOT FOUND'
     }
-    
+
     def __init__(self, error_code):
         # if error code does not match expected codes then assign invalid code
         if error_code in self._error_codes:

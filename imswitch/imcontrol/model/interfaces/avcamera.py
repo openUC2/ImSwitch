@@ -113,7 +113,7 @@ class CameraAV:
         if not self._running:
             self._running = True
         if not self._streaming:
-            # TODO: THis is not working 
+            # TODO: THis is not working
             #self._camera.start_streaming(
             #    handler=self._frame_handler,
             #    buffer_count=10

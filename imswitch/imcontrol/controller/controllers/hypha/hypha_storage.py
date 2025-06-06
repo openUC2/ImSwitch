@@ -85,7 +85,7 @@ class HyphaDataStore:
                 'Content-Length': str(len(obj['value'])),
                 'Content-Disposition': f'inline; filename="{obj["name"].split("/")[-1]}"'
             }
-            
+
             return {
                 'status': 200,
                 'headers': headers,

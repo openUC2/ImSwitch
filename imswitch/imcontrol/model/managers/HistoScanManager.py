@@ -6,7 +6,7 @@ import os
 import numpy as np
 from PIL import Image
 from scipy import signal as sg
-import os 
+import os
 from imswitch.imcommon.model import dirtools
 
 import json
@@ -39,12 +39,12 @@ class HistoScanManager(SignalInterface):
             self.offsetX = 0
             self.offsetY = 0
 
-    
+
     def startHistoScan(self, HistoScanInfo):
         self.__logger.debug(f"Starting HistoScan with {HistoScanInfo}")
         self.update()
-        
-    
+
+
     def writeConfig(self, data):
         with open(os.path.join(self.defaultConfigPath, self.histoConfigFilename), "w") as outfile:
             json.dump(data, outfile, indent=4)

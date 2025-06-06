@@ -13,7 +13,7 @@ class TemperatureWidget(NapariHybridWidget):
     sigPIDToggled = QtCore.Signal(bool)  # (enabled)
     sigsliderTemperatureValueChanged = QtCore.Signal(float)  # (value)
     sigShowTemperatureToggled = QtCore.Signal(bool)  # (enabled)
-    
+
     def __post_init__(self):
 
         # PID Checkbox
@@ -69,18 +69,18 @@ class TemperatureWidget(NapariHybridWidget):
         # Connect signals
         self.PIDCheck.toggled.connect(self.sigPIDToggled)
         self.measureCheck.toggled.connect(self.sigShowTemperatureToggled)
-        
+
         # on change of the target temperature value, emit the value
         self.valueTemperatureTarget.editingFinished.connect(
             lambda: self.sigsliderTemperatureValueChanged.emit(float(self.valueTemperatureTarget.text()))
         )
-        
+
     def getPIDValues(self):
         return float(self.valP.text()), float(self.valI.text()), float(self.valD.text())
-    
+
     def updateTemperature(self, temperature):
         self.valueTemperature.setText(str(temperature))
-        
+
     def updateTargetTemperatureValue(self, temperature):
         self.valueTemperatureTarget.setText(str(temperature))
 

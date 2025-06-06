@@ -17,11 +17,11 @@ import os
 
 class WorkflowWidget(NapariHybridWidget):
     """ Widget containing Workflow interface. """
-    
+
     def __post_init__(self):
         #super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
-    
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

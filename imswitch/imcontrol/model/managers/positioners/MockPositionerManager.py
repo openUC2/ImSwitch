@@ -14,7 +14,7 @@ class MockPositionerManager(PositionerManager):
         # if len(positionerInfo.axes) != 1:
         #     raise RuntimeError(f'{self.__class__.__name__} only supports one axis,'
         #                        f' {len(positionerInfo.axes)} provided.')
-                               
+
         super().__init__(positionerInfo, name, initialPosition={
             axis: 0 for axis in positionerInfo.axes
         }, initialSpeed={axis: 0 for axis in positionerInfo.axes})

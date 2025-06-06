@@ -5,14 +5,14 @@ from imswitch.imcommon.model import initLogger
 from typing import Callable, List, Dict, Any, Optional
 import threading
 import traceback
-import time 
+import time
 class WorkflowManager(object):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
-    
+
     def update(self):
         return None
 
@@ -26,16 +26,16 @@ class WorkflowContext:
         self.current_step_index = 0
         self.event_listeners: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
         self.objects: Dict[str, Any] = {}  # Storage for arbitrary objects
-    
+
     def set_metadata(self, key: str, value: Any):
         self.data[key] = value
-    
+
     def set_object(self, key: str, obj: Any):
         self.objects[key] = obj
-    
+
     def get_object(self, key: str) -> Any:
         return self.objects.get(key)
-    
+
     def remove_object(self, key: str):
         if key in self.objects:
             del self.objects[key]
@@ -106,7 +106,7 @@ class WorkflowStep:
         # Run pre-processing functions
         metadata["pre_result"] = []
         pre_start = time.time()
-        for f in self.pre_funcs:            
+        for f in self.pre_funcs:
             # Merge context, metadata and pre_params
             merged_pre_params = {**self.pre_params, "context": context, "metadata": metadata}
             result = f(**merged_pre_params)
@@ -119,10 +119,10 @@ class WorkflowStep:
         retries = self.max_retries
         while True:
             main_start = time.time()
-            try:            
+            try:
                 result = self.main_func(**self.main_params)
                 metadata["result"] = result
-                metadata["main_time"] = time.time() - main_start                
+                metadata["main_time"] = time.time() - main_start
                 break
             except Exception as e:
                 print(e)
@@ -141,7 +141,7 @@ class WorkflowStep:
 
         # Run post-processing functions
         metadata["post_result"] = []
-        post_start = time.time()        
+        post_start = time.time()
         for f in self.post_funcs:
             merged_post_params = {**self.post_params, "context": context, "metadata": metadata}
             result = f(**merged_post_params)
@@ -149,7 +149,7 @@ class WorkflowStep:
             if context.should_stop:
                 return None
         metadata["post_time"] = time.time() - post_start
-            
+
 
         # Store final metadata in the context
         context.store_step_result(self.step_id, metadata)
@@ -161,7 +161,7 @@ class WorkflowStep:
             main_time = metadata["main_time"]
             total_time = pre_time + post_time + main_time
             self.__logger.debug(f"Step {self.name} ({self.step_id}) completed in {total_time:.2f}s (pre: {pre_time:.2f}s, main: {main_time:.2f}s, post: {post_time:.2f}s)")
-            
+
         # Emit event that step completed
         context.emit_event("progress", {"status": "completed", "step_id": context.current_step_index, "name": self.name, "total_step_number": context.total_step_number})
         return metadata["result"]
@@ -200,7 +200,7 @@ class Workflow:
         t = threading.Thread(target=background_run)
         t.start()
         return context, t
-    
+
 
 
 ########################################

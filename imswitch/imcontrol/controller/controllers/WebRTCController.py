@@ -5,7 +5,7 @@ try:
     isNIP = True
 except:
     isNIP = False
-    
+
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from imswitch.imcontrol.view import guitools
 from imswitch.imcommon.model import initLogger
@@ -80,7 +80,7 @@ class WebRTCController(LiveUpdatedController):
         t = threading.Thread(target=run_server, args=(aiohttp_server(),))
         t.start()
         self.sigImageReceived.connect(self.displayImage)
-        
+
 
     async def on_shutdown(self, app):
         # close peer connections
@@ -145,7 +145,7 @@ class WebRTCController(LiveUpdatedController):
         video.setDetector(detector)
         video_sender = pc.addTrack(video)
         self.force_codec(pc, video_sender, "video/H264")
-        
+
         await pc.setRemoteDescription(offer)
 
         answer = await pc.createAnswer()
@@ -177,7 +177,7 @@ class VideoTransformTrack(MediaStreamTrack):
     def __init__(self):
         super().__init__()  # don't forget this!
         self.count = 0
-    
+
     def setDetector(self, detector):
         self.detector = detector
 

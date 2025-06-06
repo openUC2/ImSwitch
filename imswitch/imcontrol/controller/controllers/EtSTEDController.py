@@ -41,23 +41,23 @@ def micros():
     freq = ctypes.c_int64()
 
     #get ticks on the internal ~2MHz QPC clock
-    ctypes.windll.Kernel32.QueryPerformanceCounter(ctypes.byref(tics)) 
+    ctypes.windll.Kernel32.QueryPerformanceCounter(ctypes.byref(tics))
     #get the actual freq. of the internal ~2MHz QPC clock
-    ctypes.windll.Kernel32.QueryPerformanceFrequency(ctypes.byref(freq))  
-    
+    ctypes.windll.Kernel32.QueryPerformanceFrequency(ctypes.byref(freq))
+
     t_us = tics.value*1e6/freq.value
     return t_us
-    
+
 def millis():
     "return a timestamp in milliseconds (ms)"
     tics = ctypes.c_int64()
     freq = ctypes.c_int64()
 
     #get ticks on the internal ~2MHz QPC clock
-    ctypes.windll.Kernel32.QueryPerformanceCounter(ctypes.byref(tics)) 
-    #get the actual freq. of the internal ~2MHz QPC clock 
-    ctypes.windll.Kernel32.QueryPerformanceFrequency(ctypes.byref(freq)) 
-    
+    ctypes.windll.Kernel32.QueryPerformanceCounter(ctypes.byref(tics))
+    #get the actual freq. of the internal ~2MHz QPC clock
+    ctypes.windll.Kernel32.QueryPerformanceFrequency(ctypes.byref(freq))
+
     t_ms = tics.value*1e3/freq.value
     return t_ms
 
@@ -67,7 +67,7 @@ class EtSTEDController(ImConWidgetController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         if self._setupInfo.etSTED is None:
             return
 
@@ -143,7 +143,7 @@ class EtSTEDController(ImConWidgetController):
             self.__param_vals = self.readParams()
             # Reset parameter for extra information that pipelines can input and output
             self.__exinfo = None
-            
+
             # Check if visualization mode, in case launch help widget
             experimentModeIdx = self._widget.experimentModesPar.currentIndex()
             self.experimentMode = self._widget.experimentModes[experimentModeIdx]
@@ -250,7 +250,7 @@ class EtSTEDController(ImConWidgetController):
             # connect communication channel signals
             self._commChannel.sigUpdateImage.connect(self.runPipeline)
             self._master.lasersManager.execOn(self.laserFast, lambda l: l.setEnabled(True))
-            
+
             #self._widget.setEventScatterVisible(True)
             self._widget.initiateButton.setText('Stop')
             self.__running = True
@@ -468,7 +468,7 @@ class EtSTEDController(ImConWidgetController):
                             for i in range(np.size(coords_detected,0)):
                                 self.setDetLogLine("det_coord_x_", coords_scan[0], i)
                                 self.setDetLogLine("det_coord_y_", coords_scan[1], i)
-                        
+
                         #self.__logger.debug(coords_scan)
                         #self.__logger.debug(coords_center_scan)
                         self.initiateSlowScan(position=coords_center_scan)
@@ -542,7 +542,7 @@ class EtSTEDController(ImConWidgetController):
         self.setDetLogLine("scan_period", scanFreq)
 
     def addFastAxisShift(self, center):
-        """ Add a scanning-method and microscope-specific shift to the fast axis scanning. 
+        """ Add a scanning-method and microscope-specific shift to the fast axis scanning.
         Based on second-degree curved surface fit to 2D-sampling of dwell time and pixel size induced shifts. """
         dwell_time = float(self._analogParameterDict['sequence_time'])
         px_size = float(self._analogParameterDict['axis_step_size'][0])
@@ -595,7 +595,7 @@ class EtSTEDController(ImConWidgetController):
 class EtSTEDCoordTransformHelper():
     """ Coordinate transform help widget controller. """
     def __init__(self, etSTEDController, coordTransformWidget, saveFolder, *args, **kwargs):
-        
+
         self.__logger = initLogger(self)
         self.__logger.debug('Initializing')
 
@@ -692,8 +692,8 @@ class EtSTEDCoordTransformHelper():
         """ Opens current folder in File Explorer and returns chosen filename. """
         if IS_TKINTER:
             filename = askopenfilename()
-        else: 
-            filename = "" 
+        else:
+            filename = ""
         return filename
 
     def updateCalibImage(self, img_data, modality):
@@ -729,7 +729,7 @@ class EtSTEDCoordTransformHelper():
             res.append(x_i1 - y[i,0])
             res.append(x_i2 - y[i,1])
         return res
-    
+
     def poly_thirdorder_transform(self, a, x):
         """ Use for plotting the least-squares fit results. """
         c1 = x[0]

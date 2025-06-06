@@ -7,4 +7,4 @@ if not IS_HEADLESS:
     from .PickUC2BoardConfigDialog import PickUC2BoardConfigDialog
     from .SLMDisplay import SLMDisplay
     from .SIMDisplay import SIMDisplay
-    
+

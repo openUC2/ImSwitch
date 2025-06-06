@@ -158,7 +158,7 @@ class Picamera2:
         self.SensorHeight = img.shape[0]
         self.SensorWidth = img.shape[1]
         self.shape = (self.SensorWidth,self.SensorHeight)
-        
+
         # starting thread
         self.frameGrabberThread = Thread(target = self.setFrameBuffer, args=(isRGB,))
         self.frameGrabberThread.start()

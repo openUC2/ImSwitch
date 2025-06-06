@@ -2,7 +2,7 @@ from imswitch.imcommon.model import initLogger
 from .LaserManager import LaserManager
 
 class SQUIDLedManager(LaserManager):
-    """ LaserManager for controlling LEDs and LAsers connected to an 
+    """ LaserManager for controlling LEDs and LAsers connected to an
     ESP32 exposing a REST API
     Each LaserManager instance controls one LED.
 
@@ -12,7 +12,7 @@ class SQUIDLedManager(LaserManager):
       through which the communication should take place
     - ``channel_index`` -- laser channel (A to H)
     """
-    
+
     ILLUMINATION_SOURCE_LED_ARRAY_FULL = 0;
     ILLUMINATION_SOURCE_LED_ARRAY_LEFT_HALF = 1
     ILLUMINATION_SOURCE_LED_ARRAY_RIGHT_HALF = 2
@@ -37,20 +37,20 @@ class SQUIDLedManager(LaserManager):
         self.B=0
 
         self.enabled = False
-        
+
         super().__init__(laserInfo, name, isBinary=self.__isBinary, valueUnits='mW', valueDecimals=0)
-        
-        
+
+
 
     def setEnabled(self, enabled):
         """Turn on (N) or off (F) laser emission"""
-        
+
         self.enabled = enabled
         self._rs232manager._squid.set_illumination_led_matrix(illumination_source=self.illumination_source,
                                                               r=self.R*self.enabled,
                                                               g=self.G*self.enabled,
                                                               b=self.B*self.enabled)
-       
+
 
     def setValue(self, power):
         """Handles output power.
@@ -60,7 +60,7 @@ class SQUIDLedManager(LaserManager):
         self.R=power
         self.G=power
         self.B=power
-    
+
         if self.enabled:
             self._rs232manager._squid.set_illumination_led_matrix(illumination_source=self.illumination_source,
                                                             r=self.R,

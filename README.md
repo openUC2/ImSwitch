@@ -424,7 +424,7 @@ git clone https://github.com/openUC2/UC2-REST
 cd UC2-REST
 pip install -e .
 cd ..
-git clone git clone https://github.com/openUC2/imswitch
+git clone https://github.com/openUC2/imswitch
 cd imswitch
 # nano setup.cfg, outcomment QScintilla, pyqt5
 ln -s /usr/lib/python3/dist-packages/PyQt5 /home/uc2/miniforge3/envs/imswitch/lib/python3.9/site-packages/
@@ -612,7 +612,7 @@ reduce `nFramebuffer from 200 to 10!!!!
 
 ## Configure the System
 
-We created a set of UC2-specific `json`-configuration files. ***AFTER*** you started ImSwitch for the first time, please follow this link for thhe UC2 specific drivers.
+We created a set of UC2-specific `json`-configuration files. ***AFTER*** you started ImSwitch for the first time, please follow this link for the UC2 specific drivers.
 
 Please go to the Review [here]()
 

@@ -51,7 +51,7 @@ class LepmonController(LiveUpdatedController):
     sigIsRunning = Signal(bool)       # e.g. "isRunning" WS message
     sigFocusSharpness = Signal(float) # e.g. "focusSharpness" WS message
     temperatureUpdate = Signal(dict)  # e.g. "temperatureUpdate" WS message
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self, tryInheritParent=False)
@@ -59,10 +59,10 @@ class LepmonController(LiveUpdatedController):
         # Mock reading config
         self._master.LepmonManager.defaultConfig = DEFAULT_CONFIG
         self.mExperimentParameters = self._master.LepmonManager.defaultConfig
-        
+
         self.is_measure = False
         self.imagesTaken = 0
-        
+
         # Detector (camera)
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detectorlepmonCam = self._master.detectorsManager[allDetectorNames[0]]
@@ -73,24 +73,24 @@ class LepmonController(LiveUpdatedController):
         # If was running, start automatically
         if self.mExperimentParameters["wasRunning"]:
             self._logger.debug("Resuming experiment because 'wasRunning' was True.")
-            
+
         # start thread that pulls sensor data
         self.sensorThread = Thread(target=self._pullSensorData, args=(10,))
         self.sensorThread.start()
-        
+
         # initialize temperature and humidity
         self.innerTemp = np.round(np.random.uniform(20, 25), 2)
         self.outerTemp = np.round(np.random.uniform(15, 20), 2)
         self.humidity = np.round(np.random.uniform(40, 50), 2)
-        
-        
+
+
     # ---------------------- GET-Like Endpoints ---------------------- #
 
     @APIExport(requestType="POST")
-    def setSensorData(self, sensorData: dict) -> dict: 
+    def setSensorData(self, sensorData: dict) -> dict:
         """
         A GET-like endpoint that sets the inner and outer temperature and humidity.
-        {"innerTemp": 25.0, "outerTemp": 20.0, "humidity": 45.0}   
+        {"innerTemp": 25.0, "outerTemp": 20.0, "humidity": 45.0}
         """
         try:
             innerTemp = sensorData["innerTemp"]
@@ -105,7 +105,7 @@ class LepmonController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Could not update sensor data: {e}")
             return {"success": False, "message": "Could not update sensor data:"}
-        
+
 
     @APIExport()
     def getStatus(self) -> dict:
@@ -143,8 +143,8 @@ class LepmonController(LiveUpdatedController):
                         deviceLng: float = None,
                         exposureTime: float = 100.0,
                         gain: float = 0.0,
-                        timelapsePeriod: int = 60, 
-                        time: str = None, 
+                        timelapsePeriod: int = 60,
+                        time: str = None,
                         date: str = None) -> dict:
         """
         Called by the frontend to start an experiment.
@@ -152,26 +152,26 @@ class LepmonController(LiveUpdatedController):
         Then we call self.startLepmonExperiment(...) in a thread.
         """
         self._logger.debug(f"startExperiment from deviceTime={deviceTime}, lat={deviceLat}, lng={deviceLng}")
-        
+
         # We can set camera exposure/gain
         self.changeAutoExposureTime("manual")
         self.changeExposureTime(exposureTime)
         self.changeGain(gain)
-        
+
         # Also set timelapse period
         self.mExperimentParameters["timelapsePeriod"] = timelapsePeriod
         self.mExperimentParameters["time"] = time
         self.mExperimentParameters["date"] = date
-       
-        
+
+
         self.mExperimentParameters["timeStamp"] = (time + "_" + date)
         self.mExperimentParameters["storagePath"] = "/mnt/usb_drive"
         self.mExperimentParameters["numImages"] = -1
         self.mExperimentParameters["fileFormat"] = "TIF"
         self.mExperimentParameters["frameRate"] = timelapsePeriod
-        self.mExperimentParameters["experimentName"] = "LepMonTest" 
+        self.mExperimentParameters["experimentName"] = "LepMonTest"
         self.mExperimentParameters["uniqueId"] = np.random.randint(0, 1000),
-        
+
         # Start thread
         self.mExperimentThread = Thread(target=self.lepmonExperimentThread, args=(
             self.mExperimentParameters["timeStamp"],
@@ -183,8 +183,8 @@ class LepmonController(LiveUpdatedController):
             self.mExperimentParameters["fileFormat"],
         ), daemon=True)
         self.mExperimentThread.start()
-    
-    
+
+
         # Actually start the experiment logic
         self.is_measure = True
         self.imagesTaken = 0
@@ -338,7 +338,7 @@ class LepmonController(LiveUpdatedController):
         if hasattr(super(), '__del__'):
             super().__del__()
     # ---------------------- Helper functions -------------------------- #
-    
+
     def _pullSensorData(self, interval):
         self._pullSensorDataActive = True
         while self._pullSensorDataActive:
@@ -348,10 +348,10 @@ class LepmonController(LiveUpdatedController):
             # self.sigSensorData.emit(sensor_data)
             time.sleep(interval)
             # simulate inner/outer temperature and humidity
-            # join them in dictionary 
+            # join them in dictionary
             sensor_data = {"innerTemp": self.innerTemp, "outerTemp": self.outerTemp, "humidity": self.humidity}
             self.temperatureUpdate.emit(sensor_data)
-            
+
     def _computeFreeSpace(self) -> str:
         # Simplistic approach or call your existing function
         usage = dirtools.getDiskusage()  # returns fraction used, e.g. 0.8 => 80%

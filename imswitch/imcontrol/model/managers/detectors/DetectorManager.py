@@ -2,7 +2,7 @@ import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-import cv2 
+import cv2
 import numpy as np
 
 from imswitch.imcommon.framework import Signal, SignalInterface
@@ -76,7 +76,7 @@ class DetectorManager(SignalInterface):
                  supportedBinnings: List[int], model: str, *,
                  parameters: Optional[Dict[str, DetectorParameter]] = None,
                  actions: Optional[Dict[str, DetectorAction]] = None,
-                 croppable: bool = True, 
+                 croppable: bool = True,
                  isRGB: bool = False) -> None:
         """
         Args:
@@ -108,10 +108,10 @@ class DetectorManager(SignalInterface):
 
         self.__flatfieldImage = None
         self.__isFlatfielding = False
-        
+
         self._minValueFramePreview = -1
         self._maxValueFramePreview = -1
-        
+
         self.__fullShape = fullShape
         self.__supportedBinnings = supportedBinnings
         self.__image = np.array([])
@@ -121,8 +121,8 @@ class DetectorManager(SignalInterface):
         #if not detectorInfo.forAcquisition and not detectorInfo.forFocusLock:
         #    raise ValueError('At least one of forAcquisition and forFocusLock must be set in'
         #                     ' DetectorInfo.')
-    
-        # set RGB if information is available 
+
+        # set RGB if information is available
         try:
             isRGB = self._detectorInfo.managerProperties["isRGB"] #parameters['isRGB'].value
         except:
@@ -141,7 +141,7 @@ class DetectorManager(SignalInterface):
                 '''
                 eventually manipulate the image before sending it
                 we have 255 levels of gray, so we can use the min and max values to scale the image
-                
+
                 TODO: not ideal as we scale noise, but we need to do this for the preview
                 '''
                 def stretch_pixels(image_12bit, lower_clip, upper_clip):
@@ -158,11 +158,11 @@ class DetectorManager(SignalInterface):
     def setMinValueFramePreview(self, value):
         """ Sets the minimum value for the frame preview to display via a jpeg image """
         self._minValueFramePreview = value
-        
+
     def setMaxValueFramePreview(self, value):
         """ Sets the maximum value for the frame preview to display via a jpeg image """
         self._maxValueFramePreview = value
-        
+
     def setParameter(self, name: str, value: Any) -> Dict[str, DetectorParameter]:
         """ Sets a parameter value and returns the updated list of parameters.
         If the parameter doesn't exist, i.e. the parameters field doesn't
@@ -183,16 +183,16 @@ class DetectorManager(SignalInterface):
         """Trigger a software trigger on the detector, if supported.
         This is a no-op for detectors that do not support software triggering.
         """
-        pass 
+        pass
 
     def getCurrentTriggerType(self) -> str:
         """availalbe trigger types from the camera"""
         return "Software"
-    
+
     def getTriggerTypes(self)  -> List[str]:
         """ Returns a list of available trigger types for the detector. """
         return ["Software", "External", "Continuous"]
-    
+
     def setRGB(self, isRGB: bool) -> None:
         """ Sets the sensortype of the camera """
         self._isRGB = isRGB
@@ -206,8 +206,8 @@ class DetectorManager(SignalInterface):
         self._binning = binning
 
     def setFlatfieldImage(self, flatieldImage, setFlatfielding):
-        pass 
-    
+        pass
+
     @property
     def name(self) -> str:
         """ Unique detector name, defined in the detector's setup info. """
@@ -335,7 +335,7 @@ class DetectorManager(SignalInterface):
     def recordFlatfieldImage(self, image: np.ndarray) -> np.ndarray:
         """ Performs flatfield correction on the specified image. """
         return image
-    
+
     def getIsRGB(self):
         return self.isRGB
 

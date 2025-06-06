@@ -23,7 +23,7 @@ class HistogrammWidget(NapariHybridWidget):
         self.histogrammPlot.showGrid(x=True, y=True)
         # update this (self.histogrammPlotCurve.setData(X,Y)) with update(focusSignal) function
         self.histogrammPlotCurve = self.histogrammPlot.plot(pen='y')
-        
+
         # Add elements to GridLayout
         grid = QtWidgets.QGridLayout()
         self.setLayout(grid)

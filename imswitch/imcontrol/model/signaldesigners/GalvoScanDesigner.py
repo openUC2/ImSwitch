@@ -88,7 +88,7 @@ class GalvoScanDesigner(ScanDesigner):
                    for positionerProps in positionersProps]
 
         # get conversion factors for scanning axes
-        convFactors = [positionerProps['conversionFactor'] 
+        convFactors = [positionerProps['conversionFactor']
                        if 'conversionFactor' in positionerProps else 1
                        for positionerProps in positionersProps]
 

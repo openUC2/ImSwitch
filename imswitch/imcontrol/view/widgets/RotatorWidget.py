@@ -66,7 +66,7 @@ class RotatorWidget(Widget):
         self.pars['SetSpeedButton'+name].clicked.connect(lambda: self.sigSetSpeedClicked.emit(name))
         self.pars['StartMoveButton'+name].clicked.connect(lambda: self.sigStartContMovClicked.emit(name))
         self.pars['StopMoveButton'+name].clicked.connect(lambda: self.sigStopContMovClicked.emit(name))
-        
+
         if self.numPositioners == 0:
             # Add space item to make the grid look nicer
             self.grid.addItem(
@@ -88,7 +88,7 @@ class RotatorWidget(Widget):
     def getAbsPos(self, name):
         """ Returns the absolute position of the rotation mount, in degrees. """
         return float(self.pars['AbsPosEdit'+name].text())
-    
+
     def getSpeed(self, name):
         """ Returns the user-input speed, in mrpm. """
         return int(self.pars['SpeedEdit'+name].text())

@@ -11,7 +11,7 @@ import zarr
 class MockDetectorsManager():
     shape: tuple
     pixelSizeUm: float
-    
+
 
 @pytest.fixture()
 def fake_manager():

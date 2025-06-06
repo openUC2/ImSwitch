@@ -29,7 +29,7 @@ class ObjectiveStatusModel(BaseModel):
 
 class ObjectiveController(LiveUpdatedController):
     sigObjectiveChanged = Signal(dict) # pixelsize, NA, magnification, objectiveName, FOVx, FOVy
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self, tryInheritParent=False)
@@ -49,7 +49,7 @@ class ObjectiveController(LiveUpdatedController):
         self.homeSpeed = self._master.objectiveManager.homeSpeed
         self.homeAcceleration = self._master.objectiveManager.homeAcceleration
         self.calibrateOnStart = self._master.objectiveManager.calibrateOnStart
-        
+
         self.detectorWidth, self.detectorHeight = self.detector._camera.SensorWidth, self.detector._camera.SensorHeight
         self.currentObjective = None  # Will be set after calibration
 
@@ -71,7 +71,7 @@ class ObjectiveController(LiveUpdatedController):
                     self.NAs = [1.0, .5]
                     self.magnifications = [10, 5]
                     self.objectiveNames = ["TEST", "TEST2"]
-                    
+
                 def home(self, direction, endstoppolarity, isBlocking):
                     if direction is not None:
                         self.homeDirection = direction
@@ -85,10 +85,10 @@ class ObjectiveController(LiveUpdatedController):
                     # Simulate a delay for homing
                     import time
                     time.sleep(1)
-                    
-                def move(self, slot, isBlocking):                
+
+                def move(self, slot, isBlocking):
                     self.slot = slot
-                    
+
                 def getstatus(self):
                     return {
                         "x1": self.x1,
@@ -98,24 +98,24 @@ class ObjectiveController(LiveUpdatedController):
                         "pos": 0,
                         "isHomed": self.isHomed,
                         "state": self.slot,
-                        "isRunning": 0, 
+                        "isRunning": 0,
                         "FOV": (100,100),
                         "pixelsize": self.pixelsizes[self.slot - 1],
                         "objectiveName": self.objectiveNames[self.slot - 1],
                         "NA": self.NAs[self.slot - 1],
                         "magnification": self.magnifications[self.slot - 1]
                     }
-                        
+
                 def setPositions(self, x1, x2, z1, z2, isBlocking):
                     if x1 is not None:
                         self.x1 = x1
                     if x2 is not None:
                         self.x2 = x2
                     if z1 is not None:
-                        self.z1 = z1                         
+                        self.z1 = z1
                     if z2 is not None:
                         self.z2 = z2
-                        
+
             self._objective = dummyObjective()
 
         if self.calibrateOnStart:
@@ -175,7 +175,7 @@ class ObjectiveController(LiveUpdatedController):
 
         # Setzen der Pixelgröße in der Detector-Objekt
         self.detector.setPixelSizeUm(mStatus["pixelsize"])
-            
+
         #objective_params["objective"]["FOV"] = self.pixelsizes[0] * (self.detectorWidth, self.detectorHeight)
         #objective_params["objective"]["pixelsize"] = self.detector.pixelSizeUm[-1]
 
@@ -189,7 +189,7 @@ class ObjectiveController(LiveUpdatedController):
 
     def onCalibrateClicked(self):
         self.calibrateObjective()
-        
+
     @APIExport(runOnUIThread=True)
     def setPositions(self, x1:float=None, x2:float=None, z1:float=None, z2:float=None, isBlocking:bool=False):
         '''
@@ -202,7 +202,7 @@ class ObjectiveController(LiveUpdatedController):
     def getstatus(self):
         """
         Get the current status of the objective.
-        
+
         """
         # default status
         status = {
@@ -213,7 +213,7 @@ class ObjectiveController(LiveUpdatedController):
             "pos": 0,
             "isHomed": 0,
             "state": 0,
-            "isRunning": 0, 
+            "isRunning": 0,
             "FOV": (100,100),
             "pixelsize": 1,
             "objectiveName": "TEST",
@@ -250,7 +250,7 @@ class ObjectiveController(LiveUpdatedController):
         status["NA"] = current_NA
         status["magnification"] = current_magnification
         status["objectiveName"] = current_objective_name
-        
+
         # return the data as a dictionary
         return status
 

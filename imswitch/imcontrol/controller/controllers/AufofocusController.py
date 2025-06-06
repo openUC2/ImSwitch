@@ -34,7 +34,7 @@ class AutofocusController(ImConWidgetController):
         self.stages = self._master.positionersManager[self.stageName]
 
         self._commChannel.sigAutoFocus.connect(self.autoFocus)
-        if not IS_HEADLESS: 
+        if not IS_HEADLESS:
             self._widget.focusButton.clicked.connect(self.focusButton)
 
     def __del__(self):
@@ -57,7 +57,7 @@ class AutofocusController(ImConWidgetController):
     def autoFocus(self, rangez:int=100, resolutionz:int=10, defocusz:int=0):
         self.isAutofusRunning = True
         self._AutofocusThead = threading.Thread(
-            target=self.doAutofocusBackground, 
+            target=self.doAutofocusBackground,
             args=(rangez, resolutionz, defocusz),
             daemon=True
         )

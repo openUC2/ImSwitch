@@ -16,11 +16,11 @@ class ROIScanWidget(NapariHybridWidget):
     sigROIScanStop = QtCore.Signal(bool)  # (enabled)
     sigROIScanStart = QtCore.Signal(bool)  # (enabled)
     sigROIScanSelectScanCoordinates = QtCore.Signal(bool)
-    
+
     sigShowToggled = QtCore.Signal(bool)  # (enabled)
     sigPIDToggled = QtCore.Signal(bool)  # (enabled)
     sigUpdateRateChanged = QtCore.Signal(float)  # (rate)
-    
+
     sigSliderLaser2ValueChanged = QtCore.Signal(float)  # (value)
     sigSliderLaser1ValueChanged = QtCore.Signal(float)  # (value)
     sigSliderLEDValueChanged = QtCore.Signal(float)  # (value)
@@ -41,7 +41,7 @@ class ROIScanWidget(NapariHybridWidget):
         arrowButtonLayout.addWidget(self.downButton)
         arrowButtonLayout.addWidget(self.leftButton)
         arrowButtonLayout.addWidget(self.rightButton)
-        
+
         focusLayout = QHBoxLayout()
         self.plusButton = QPushButton("+")
         self.minusButton = QPushButton("-")
@@ -51,7 +51,7 @@ class ROIScanWidget(NapariHybridWidget):
         self.labelX = QLabel("X: 0")
         self.labelY = QLabel("Y: 0")
         self.labelZ = QLabel("Z: 0")
-        
+
         self.saveButton = QPushButton("Save XYZ")
         self.coordinatesList = QListWidget()
         self.deleteButton = QPushButton("Delete")
@@ -72,16 +72,16 @@ class ROIScanWidget(NapariHybridWidget):
 
         self.timeIntervalField = QLineEdit()
         self.timeIntervalField.setPlaceholderText("Time Interval (s)")
-        
+
         self.numberOfScansField = QLineEdit()
         self.numberOfScansField.setPlaceholderText("Number of Scans")
 
         self.startButton = QPushButton("Start")
         self.stopButton = QPushButton("Stop")
-        
+
         self.experimentNameField = QLineEdit()
         self.experimentNameField.setPlaceholderText("Experiment Name")
-        
+
         self.infoText = QLabel("Info: ")
 
         secondSectionLayout.addWidget(self.timeIntervalField)
@@ -97,19 +97,19 @@ class ROIScanWidget(NapariHybridWidget):
         self.setLayout(mainLayout)
 
         self.layer = None
-            
+
     def setImage(self, im, colormap="gray", name="", pixelsize=(1,1,1), translation=(0,0,0)):
         if len(im.shape) == 2:
             translation = (translation[0], translation[1])
         if self.layer is None or name not in self.viewer.layers:
-            self.layer = self.viewer.add_image(im, rgb=False, colormap=colormap, 
+            self.layer = self.viewer.add_image(im, rgb=False, colormap=colormap,
                                                scale=pixelsize,translate=translation,
                                                name=name, blending='additive')
         self.layer.data = im
-        
-        
-    
-        
+
+
+
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

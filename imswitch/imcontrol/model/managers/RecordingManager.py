@@ -202,7 +202,7 @@ class RecordingManager(SignalInterface):
         self._memRecordings = {}  # { filePath: bytesIO }
         self.__detectorsManager = detectorsManager
         self.__record = False
-        
+
         if 1: #not IS_HEADLESS: # TODO: Merge the two RecordingWorkers
             self._thread = Thread()
             self.__recordingWorker = RecordingWorker(self)
@@ -712,7 +712,7 @@ class RecordingWorkerNoQt(Worker):
 
     def moveToThread(self, thread) -> None:
         return super().moveToThread(thread)
-            
+
     def _record(self):
         self.__logger.info('Recording started in mode: ' + str(self.recMode))
         if self.saveFormat == SaveFormat.HDF5 or self.saveFormat == SaveFormat.ZARR:

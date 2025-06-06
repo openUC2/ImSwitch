@@ -16,7 +16,7 @@ class ObjectiveWidget(NapariHybridWidget):
         # Create widgets
         self.btnObj1 = QPushButton("Objective 1", self)
         self.btnObj2 = QPushButton("Objective 2", self)
-        
+
         self.lblPosObj1 = QLabel("Pos Objective 1", self)
         self.txtPosObj1 = QTextEdit(self)
         self.lblPosObj2 = QLabel("Pos Objective 2", self)
@@ -28,7 +28,7 @@ class ObjectiveWidget(NapariHybridWidget):
         self.btnSetPosObj1 = QPushButton("Set Position Objective 1", self)
 
         self.lblCurrentObjective = QLabel("Current Objective:", self)
-        
+
         # Grid layout
         layout = QGridLayout()
         layout.addWidget(self.btnObj1, 0, 0)
@@ -37,7 +37,7 @@ class ObjectiveWidget(NapariHybridWidget):
         layout.addWidget(self.txtPosObj1, 1, 1)
         layout.addWidget(self.lblPosObj2, 2, 0)
         layout.addWidget(self.txtPosObj2, 2, 1)
-        layout.addWidget(self.btnCalibrate, 3, 0) 
+        layout.addWidget(self.btnCalibrate, 3, 0)
         layout.addWidget(self.btnSetPosObj1, 3, 1)
         layout.addWidget(self.btnMovePlus, 4, 0)
         layout.addWidget(self.btnMoveMinus, 4, 1    )
@@ -45,10 +45,10 @@ class ObjectiveWidget(NapariHybridWidget):
 
         # Set the layout to the main window
         self.setLayout(layout)
-        
+
     def setCurrentObjectiveInfo(self, currentObjective):
         self.lblCurrentObjective.setText("Current Objective: " + str(currentObjective))
-        
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

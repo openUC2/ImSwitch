@@ -56,7 +56,7 @@ class EmbeddedNapari(napari.Viewer):
                     self.window.file_menu.removeAction(menuChild)
             except Exception:
                 pass
-        
+
         self.scale_bar.visible = True
 
     def add_image(self, *args, protected=False, **kwargs):

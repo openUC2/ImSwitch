@@ -20,8 +20,8 @@ class JetsonNanoManager(SignalInterface):
 
         if jetsonnanoInfo is None:
             return
-       
-        
+
+
         self.update()
 
 
@@ -29,10 +29,10 @@ class JetsonNanoManager(SignalInterface):
     def update(self):
         #self.allPatternsPaths
         #self.maskDouble = self.__masks[0].concat(self.__masks[1])
-        #self.maskCombined = self.maskDouble 
+        #self.maskCombined = self.maskDouble
         #self.sigJetsonNanoMaskUpdated.emit(self.maskCombined)
 
-        #returnmask = self.maskDouble 
+        #returnmask = self.maskDouble
         return None #returnmask.image()
 
 # Copyright (C) 2020-2024 ImSwitch developers

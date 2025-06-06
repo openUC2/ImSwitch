@@ -1,7 +1,7 @@
 # metadata.py
 class MinimalMetadata:
     """
-    Minimal stand-in for your custom metadata logic. 
+    Minimal stand-in for your custom metadata logic.
     - per_stack => whether Z changes faster or C changes faster in your scanning.
     - multiscales_dict(...) => builds the top-level dictionary that OME-Zarr demands.
     """

@@ -7,7 +7,7 @@ import logging
 import time
 import numpy as np
 from collections import namedtuple
-import os 
+import os
 import json
 MoveHistory = namedtuple("MoveHistory", ["times", "stage_positions"])
 
@@ -65,26 +65,26 @@ class OFMStageScanClass(object):
         # everything is measured in normalized pixel coordinates
         # so if we want to move the stage by one pixel we need to know the effective pixel size
         # and the stage step size
-        
+
         self._effPixelsize = effPixelsize
-        self._stageStepSize = stageStepSize # given in microns 
+        self._stageStepSize = stageStepSize # given in microns
         self._micronToPixel = self._effPixelsize/self._stageStepSize
         self._stageOrder = STAGE_ORDER
         self._calibration_file_path = calibration_file_path
-        
-        # get hold on detector and stage 
+
+        # get hold on detector and stage
         self.microscopeDetector = mDetector
         self.microscopeStage = mStage
 
     def stop(self):
         self.isStop = True
-        
+
     def getIsStop(self):
         return self.isStop
-    
+
     def camera_stage_functions(self):
         """Return functions that allow us to interface with the microscope"""
-        
+
         def grabCroppedFrame(crop_size=512):
             if self._is_client:
                 marray = self._client.recordingManager.snapNumpyToFastAPI()
@@ -112,17 +112,17 @@ class OFMStageScanClass(object):
             return (SIGN_AXES[STAGE_ORDER[0]]*posDict["X"]/self._micronToPixel, SIGN_AXES[STAGE_ORDER[1]]*posDict["Y"]/self._micronToPixel, SIGN_AXES[STAGE_ORDER[2]]*posDict["Z"]/self._micronToPixel)
 
         def movePosition(posList):
-            
+
             if self._is_client:
                 positioner_names = self._client.positionersManager.getAllDeviceNames()
                 positioner_name = positioner_names[0]
                 self._client.positionersManager.movePositioner(positioner_name, dist=SIGN_AXES[STAGE_ORDER[0]]*posList[0]*self._micronToPixel, axis=self._stageOrder[0], is_absolute=True, is_blocking=True)
                 time.sleep(.1)
                 self._client.positionersManager.movePositioner(positioner_name, dist=SIGN_AXES[STAGE_ORDER[1]]*posList[1]*self._micronToPixel, axis=self._stageOrder[1], is_absolute=True, is_blocking=True)
-            else:                
+            else:
                 self.microscopeStage.move(value=SIGN_AXES[STAGE_ORDER[0]]*posList[0]*self._micronToPixel, axis=self._stageOrder[0], is_absolute=True, is_blocking=True)
                 self.microscopeStage.move(value=SIGN_AXES[STAGE_ORDER[1]]*posList[1]*self._micronToPixel, axis=self._stageOrder[1], is_absolute=True, is_blocking=True)
-            
+
             if len(posList)>2:
                 if self._is_client:
                     self._client.positionersManager.movePositioner(positioner_name, dist=SIGN_AXES[STAGE_ORDER[2]]*posList[2]*self._micronToPixel, axis=self._stageOrder[2], is_absolute=True, is_blocking=True)
@@ -152,12 +152,12 @@ class OFMStageScanClass(object):
         result = calibrate_backlash_1d(tracker, move, direction, self.getIsStop)#, return_backlash_data=return_backlash_data, nMultipliers=nMultipliers)
         result["move_history"] = move.history
         return result
-    
+
 
 
     def calibrate_xy(self, return_backlash_data=False):
         """Move the microscope's stage in X and Y, to calibrate its relationship to the camera"""
-        try: 
+        try:
             self._logger.info("Calibrating X axis:")
             cal_x = self.calibrate_1d(np.array([1, 0, 0]), return_backlash_data=return_backlash_data)
             cal_x["stage_axis"] = self._stageOrder[0]
@@ -169,10 +169,10 @@ class OFMStageScanClass(object):
             cal_x = None
             cal_y = None
             if cal_x is None or cal_y is None:
-                raise ValueError("Calibration failed. Try reordering the stage axes. Or move to a different position and try again.")        
+                raise ValueError("Calibration failed. Try reordering the stage axes. Or move to a different position and try again.")
         # Combine X and Y calibrations to make a 2D calibration
         cal_xy = image_to_stage_displacement_from_1d([cal_x, cal_y])
-        
+
         data = {
             "camera_stage_mapping_calibration": cal_xy,
             "linear_calibration_"+cal_x["stage_axis"]: cal_x,
@@ -190,8 +190,8 @@ class OFMStageScanClass(object):
         # Convert NumPy arrays to lists and save the JSON file with the custom encoder
         with open(CSM_DATAFILE_PATH, 'w') as json_file:
             json.dump(data, json_file, indent=4, sort_keys=True, cls=NumpyEncoder)
-            
-        
+
+
         return data
 
     @property

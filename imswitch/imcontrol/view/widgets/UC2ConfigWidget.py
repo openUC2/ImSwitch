@@ -27,7 +27,7 @@ class UC2ConfigWidget(Widget):
 
         self.stopCommunicationButton = QPushButton("Interrupt communication", self)
         reconnectLayout.addWidget(self.stopCommunicationButton)
-        
+
         self.btpairingButton = QPushButton("Connect to PS Controller", self)
 
         # Layout for motor positions
@@ -40,7 +40,7 @@ class UC2ConfigWidget(Widget):
         self.motorXLabel = QLabel("Motor X:", self)
         self.motorXEdit = QLineEdit(self)
         self.motorXEdit.setText("0")
-        
+
         self.motorYLabel = QLabel("Motor Y:", self)
         self.motorYEdit = QLineEdit(self)
         self.motorYEdit.setText("0")
@@ -58,7 +58,7 @@ class UC2ConfigWidget(Widget):
         motorsLayout.addWidget(self.motorZLabel)
         motorsLayout.addWidget(self.motorZEdit)
 
-        # Button to set motor positions per Axis 
+        # Button to set motor positions per Axis
         # Layout for motor positions
         motorsBtnLayout = QHBoxLayout()
 
@@ -70,7 +70,7 @@ class UC2ConfigWidget(Widget):
         motorsBtnLayout.addWidget(self.setPositionYBtn)
         motorsBtnLayout.addWidget(self.setPositionZBtn)
         motorsBtnLayout.addWidget(self.setPositionABtn)
-        
+
         # Button for motor auto enable
         self.autoEnableBtn = QPushButton("Set Auto Enable", self)
         self.unsetAutoEnableBtn = QPushButton("Unset Auto Enable", self)
@@ -88,12 +88,12 @@ class UC2ConfigWidget(Widget):
     @APIExport(runOnUIThread=True)
     def setBaudRateGui(self, baudrate):
         self.reconnectBaudrateEdit.setText(str(baudrate))
-        
+
     def getBaudRateGui(self):
         try:return int(self.reconnectBaudrateEdit.text())
         except:return None
 
-            
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

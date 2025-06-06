@@ -11,7 +11,7 @@ class ViewController(ImConWidgetController):
         self._acqHandle = None
         self._commChannel.sigStartLiveAcquistion.connect(self.startLiveView)
         self._commChannel.sigStopLiveAcquisition.connect(self.stopLiveView)
-        
+
         if IS_HEADLESS: return
         self._widget.setViewToolsEnabled(False)
 
@@ -19,13 +19,13 @@ class ViewController(ImConWidgetController):
         self._widget.sigGridToggled.connect(self.gridToggle)
         self._widget.sigCrosshairToggled.connect(self.crosshairToggle)
         self._widget.sigLiveviewToggled.connect(self.liveview)
-        
+
     def startLiveView(self):
         self.liveview(enabled=True)
-    
+
     def stopLiveView(self):
         self.liveview(enabled=False)
-     
+
     def liveview(self, enabled):
         """ Start liveview and activate detector acquisition. """
         if enabled and self._acqHandle is None:
@@ -36,7 +36,7 @@ class ViewController(ImConWidgetController):
         if not IS_HEADLESS:
             self._widget.setViewToolsEnabled(enabled)
             self._widget.setLiveViewActive(enabled)
-        
+
     def gridToggle(self, enabled):
         """ Connect with grid toggle from Image Widget through communication channel. """
         self._commChannel.sigGridToggled.emit(enabled)
@@ -58,7 +58,7 @@ class ViewController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def setLiveViewActive(self, active: bool) -> None:
         """ Sets whether the LiveView is active and updating. """
-        if IS_HEADLESS: 
+        if IS_HEADLESS:
             self.liveview(active)
         else:
             self._widget.setLiveViewActive(active)
@@ -70,7 +70,7 @@ class ViewController(ImConWidgetController):
             return self._widget.getLiveViewActive()
         else:
             return self._acqHandle is not None
-    
+
     @APIExport(runOnUIThread=True)
     def setLiveViewGridVisible(self, visible: bool) -> None:
         """ Sets whether the LiveView grid is visible. """

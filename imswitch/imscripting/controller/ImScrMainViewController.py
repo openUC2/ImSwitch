@@ -5,7 +5,7 @@ try:
     isQsciAvailable = True
 except:
     isQsciAvailable = False
-    
+
 from .FilesController import FilesController
 from .OutputController import OutputController
 from .basecontrollers import ImScrWidgetController
@@ -18,10 +18,10 @@ class ImScrMainViewController(ImScrWidgetController):
         super().__init__(*args, **kwargs)
         if not isQsciAvailable or IS_HEADLESS:
             return
-        
+
         self.filesController = self._factory.createController(FilesController,
                                                               self._widget.files)
-        
+
         self.editorController = self._factory.createController(EditorController,
                                                                self._widget.editor)
         self.consoleController = self._factory.createController(ConsoleController,

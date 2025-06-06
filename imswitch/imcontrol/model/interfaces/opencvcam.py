@@ -78,7 +78,7 @@ class CameraOpenCV:
 
     def set_analog_gain(self,analog_gain):
         if self.isAutoParameters:
-            return        
+            return
         self.analog_gain = analog_gain
         try:
             self.camera.set(cv2.CAP_PROP_EXPOSURE, self.analog_gain)
@@ -166,10 +166,10 @@ class CameraOpenCV:
                 if cap.isOpened():
                     cameras.append(i)
                     cap.release()
-                    
+
         return cameras
         # check if camera is open
-        
+
     def openCamera(self, cameraindex, width, height, isRGB):
         # open camera
         if 0: self.listAvailableUSBCameras()
@@ -195,7 +195,7 @@ class CameraOpenCV:
         self.SensorWidth = img.shape[1]
         self.shape = (self.SensorWidth,self.SensorHeight)
         self.camera_is_open = True
-        
+
 
         # starting thread
         self.frameGrabberThread = Thread(target = self.setFrameBuffer, args=(isRGB,))

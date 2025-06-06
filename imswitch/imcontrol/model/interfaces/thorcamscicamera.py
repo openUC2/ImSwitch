@@ -37,8 +37,8 @@ class CameraThorCamSci:
         # many to be purged
         self.model = "CameraThorCamSci"
         self.shape = (0, 0)
-        
-        # set some flags        
+
+        # set some flags
         self.is_connected = False
         self.is_streaming = False
 
@@ -48,7 +48,7 @@ class CameraThorCamSci:
         self.gain = gain
         self.preview_width = 600
         self.preview_height = 600
-        self.frame_rate = frame_rate 
+        self.frame_rate = frame_rate
         self.cameraNo = cameraNo
 
         # reserve some space for the software-based framebuffer
@@ -57,11 +57,11 @@ class CameraThorCamSci:
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.lastFrameId = -1
         self.lastFrame = None
-    
+
         #%% starting the camera thread
         self.camera = None
 
-        # binning 
+        # binning
         self.binning = binning
 
         try:
@@ -73,12 +73,12 @@ class CameraThorCamSci:
     def _init_cam(self, cameraNo=1):
         # start camera
         self.is_connected = True
-        
+
         # open the first device
         self.sdk = TLCameraSDK()
         cameras = self.sdk.discover_available_cameras()
         self.camera = self.sdk.open_camera(cameras[cameraNo])
-        
+
         self.camera.frames_per_trigger_zero_for_unlimited = 0
         self.camera.image_poll_timeout_ms = 2000  # 2 second timeout
         self.camera.arm(2)
@@ -101,54 +101,54 @@ class CameraThorCamSci:
                 self.camera.bit_depth
             )
 
-        # get framesize 
+        # get framesize
         self.SensorHeight = self.camera.sensor_height_pixels
         self.SensorWidth = self.camera.sensor_width_pixels
         # begin acquisition
         self.camera.issue_software_trigger()
-        
+
         # set exposure
         self.camera.exposure_time_us=int(self.exposure_time*1000)
 
         # set gain
         self.camera.gain=int(self.gain)
-        
+
         # set blacklevel
         self.camera.blacklevel=int(self.blacklevel)
 
         # start frame grabber thread
         self.frameGrabberThread = threading.Thread(target=self.frameGrabber, daemon=True)
         self.frameGrabberThread.start()
-        
+
     def start_live(self):
-        self.__logger.debug("Starting Live Thorcam")  
+        self.__logger.debug("Starting Live Thorcam")
         if not self.is_streaming:
             # start data acquisition
             self.frameGrabberThread = threading.Thread(target=self.frameGrabber, daemon=True)
             self.frameGrabberThread.start()
 
     def stop_live(self):
-        self.__logger.debug("Stpüüomg Live Thorcam")  
+        self.__logger.debug("Stpüüomg Live Thorcam")
         if self.is_streaming:
             # start data acquisition
             self.is_streaming = False
             self.frameGrabberThread.join()
 
     def suspend_live(self):
-        self.__logger.debug("Suspending Live Thorcam")  
+        self.__logger.debug("Suspending Live Thorcam")
         if self.is_streaming:
             self.is_streaming = False
             self.frameGrabberThread.join()
 
 
     def prepare_live(self):
-        self.__logger.debug("Preparing Live Thorcam")  
+        self.__logger.debug("Preparing Live Thorcam")
         return
 
     def close(self):
         self.__logger.debug("Closing Thorcam")
         self.camera.disarm()
-        
+
     def set_exposure_time(self,exposure_time):
         self.exposure_time = exposure_time
         self.camera.exposure_time_us=int(exposure_time*1000)
@@ -159,14 +159,14 @@ class CameraThorCamSci:
 
     def set_frame_rate(self, frame_rate):
         pass
-        
+
     def set_blacklevel(self,blacklevel):
         self.blacklevel = blacklevel
         self.camera.black_level=blacklevel
-        
+
     def set_pixel_format(self,format):
         pass
-    
+
     def setBinning(self, binning=1):
         # Unfortunately this does not work
         # self.camera.BinningHorizontal.set(binning)
@@ -178,19 +178,19 @@ class CameraThorCamSci:
     def getLast(self, is_resize=True):
         # get frame and save
         return self.lastFrame
-        
+
 
     def flushBuffer(self):
         self.frameid_buffer.clear()
         self.frame_buffer.clear()
-        
+
     def getLastChunk(self):
         chunk = np.array(self.frame_buffer)
         frameids = np.array(self.frameid_buffer)
         #self.flushBuffer()
         self.__logger.debug("Buffer: "+str(chunk.shape)+" IDs: " + str(frameids))
         return chunk
-    
+
     def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
         pass
 
@@ -209,7 +209,7 @@ class CameraThorCamSci:
         elif property_name == "trigger_source":
             self.setTriggerSource(property_value)
         elif property_name == "image_width":
-            property_value = 0        
+            property_value = 0
         elif property_name == "image_height":
             property_value = 0
         else:
@@ -224,15 +224,15 @@ class CameraThorCamSci:
         elif property_name == "exposure":
             property_value = self.camera.ExposureTime.get()
         elif property_name == "blacklevel":
-            property_value = self.camera.BlackLevel.get()            
+            property_value = self.camera.BlackLevel.get()
         elif property_name == "image_width":
-            property_value = self.camera.Width.get()//self.binning         
+            property_value = self.camera.Width.get()//self.binning
         elif property_name == "image_height":
             property_value = self.camera.Height.get()//self.binning
         elif property_name == "roi_size":
-            property_value = self.roi_size 
+            property_value = self.roi_size
         elif property_name == "frame_Rate":
-            property_value = self.frame_rate 
+            property_value = self.frame_rate
         elif property_name == "trigger_source":
             property_value = self.trigger_source
         else:
@@ -242,16 +242,16 @@ class CameraThorCamSci:
 
     def setTriggerSource(self, trigger_source):
         return
-            
+
     def getFrameNumber(self):
-        return self.frameNumber 
+        return self.frameNumber
 
     def send_trigger(self):
         return
 
     def openPropertiesGUI(self):
         return
-    
+
     def frameGrabber(self):
         self.is_streaming=True
         while self.is_streaming:
@@ -278,4 +278,4 @@ class CameraThorCamSci:
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.    
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.

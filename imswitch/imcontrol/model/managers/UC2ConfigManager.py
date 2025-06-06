@@ -55,13 +55,13 @@ class UC2ConfigManager(SignalInterface):
 
     def interruptSerialCommunication(self):
         self.ESP32.serial.interruptCurrentSerialCommunication()
-        
+
     def initSerial(self, baudrate=None):
         try:
             self.ESP32.serial.reconnect(baudrate=baudrate)
         except:
             self.ESP32.serial.reconnect() # fall back to old version of UC2-REST
-            
+
     def pairBT(self):
         self.ESP32.state.pairBT()
 
@@ -80,7 +80,7 @@ class UC2ConfigManager(SignalInterface):
             device_id (_type_): _description_
         """
         self.ESP32.can.reboot_remote(can_address=device_id, isBlocking=True, timeout=1)
-        
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

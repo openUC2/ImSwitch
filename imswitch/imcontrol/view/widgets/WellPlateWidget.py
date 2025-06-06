@@ -14,7 +14,7 @@ class WellPlateWidget(Widget):
         self.pars = {}
         self.grid = QtWidgets.QGridLayout()
         self.setLayout(self.grid)
-        
+
         self.__logger = initLogger(self, instanceName="WellPlateWidget")
 
 
@@ -57,14 +57,14 @@ class WellPlateWidget(Widget):
             wellLayout.addWidget(self.Wells[corrds], pos[0], pos[1])
         # Add button layout to base well layout
         self.setLayout(wellLayout)
-  
+
         '''
         for i in range(len(axes)):
             axis = axes[i]
             parNameSuffix = self._getParNameSuffix(positionerName, axis)
             label = f'{positionerName} -- {axis}' if positionerName != axis else positionerName
 
-            
+
             self.pars['Label' + parNameSuffix] = QtWidgets.QLabel(f'<strong>{label}</strong>')
             self.pars['Label' + parNameSuffix].setTextFormat(QtCore.Qt.RichText)
             self.pars['Position' + parNameSuffix] = QtWidgets.QLabel(f'<strong>{0:.2f} µm</strong>')
@@ -111,7 +111,7 @@ class WellPlateWidget(Widget):
 
     def _getParNameSuffix(self, positionerName, axis):
         return f'{positionerName}--{axis}'
-  
+
 
     # Copyright (C) 2020-2024 ImSwitch developers
     # This file is part of ImSwitch.

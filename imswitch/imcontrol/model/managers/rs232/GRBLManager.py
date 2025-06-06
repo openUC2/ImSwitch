@@ -32,9 +32,9 @@ class GRBLManager:
         try:
             self.is_home = rs232Info.managerProperties['is_home']
         except:
-            self.is_home = False 
-             
-        
+            self.is_home = False
+
+
         self._board = grbldriver.GrblDriver(self._port)
 
         # init the stage

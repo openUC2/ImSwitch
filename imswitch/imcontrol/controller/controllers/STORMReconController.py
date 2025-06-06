@@ -14,12 +14,12 @@ from imswitch.imcommon.model import APIExport
 import numpy as np
 try:
     import microEye
-    isMicroEye = True         
+    isMicroEye = True
     from microEye.Filters import BandpassFilter
     from microEye.fitting.fit import CV_BlobDetector
     from microEye.fitting.results import FittingMethod
     from microEye.fitting.fit import localize_frame
-  
+
 except:
     isMicroEye = False
 
@@ -31,7 +31,7 @@ class STORMReconController(LiveUpdatedController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         self.updateRate = 0
         self.it = 0
         self.showPos = False
@@ -42,7 +42,7 @@ class STORMReconController(LiveUpdatedController):
         # Prepare image computation worker
         self.imageComputationWorker = self.STORMReconImageComputationWorker()
         self.imageComputationWorker.sigSTORMReconImageComputed.connect(self.displayImage)
-            
+
         # get the detector
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
@@ -64,7 +64,7 @@ class STORMReconController(LiveUpdatedController):
 
             self.changeRate(self.updateRate)
             self.setShowSTORMRecon(False)
-            
+
             # setup reconstructor
             self.peakDetector = CV_BlobDetector()
             self.preFilter = BandpassFilter()
@@ -85,7 +85,7 @@ class STORMReconController(LiveUpdatedController):
 
     def setShowSTORMRecon(self, enabled):
         """ Show or hide STORMRecon. """
-        
+
         # read parameters from GUI for reconstruction the data on the fly
         # Filters + Blob detector params
         filter = self._widget.image_filter.currentData().filter
@@ -94,7 +94,7 @@ class STORMReconController(LiveUpdatedController):
         threshold = self._widget.th_min_slider.value()
         fit_roi_size = self._widget.fit_roi_size.value()
         fitting_method = self._widget.fitting_cbox.currentData()
-        
+
         # write parameters to worker
         self.imageComputationWorker.setFilter(filter)
         self.imageComputationWorker.setTempEnabled(tempEnabled)
@@ -102,16 +102,16 @@ class STORMReconController(LiveUpdatedController):
         self.imageComputationWorker.setThreshold(threshold)
         self.imageComputationWorker.setFitRoiSize(fit_roi_size)
         self.imageComputationWorker.setFittingMethod(fitting_method)
-        
+
         self.active = enabled
-        
+
         # if it will be deactivated, trigger an image-save operation
         if not self.active:
             self.imageComputationWorker.saveImage()
         else:
             # this will activate/deactivate the live reconstruction
             self.imageComputationWorker.setActive(enabled)
-            
+
 
     def update(self, detectorName, im, init, isCurrentDetector):
         """ Update with new detector frame. """
@@ -133,37 +133,37 @@ class STORMReconController(LiveUpdatedController):
         """ Change update rate. """
         self.updateRate = updateRate
         self.it = 0
-        
+
     @APIExport()
     def triggerSTORMReconstruction(self, frame=None):
         """ Trigger reconstruction. """
         if frame is None:
             frame = self.detector.getLatestFrame()
         self.imageComputationWorker.reconSTORMFrame(frame=frame)
-                
+
 
     class STORMReconImageComputationWorker(Worker):
         sigSTORMReconImageComputed = Signal(np.ndarray)
 
         def __init__(self):
             super().__init__()
-            
+
             self.threshold = 0.2 # default threshold
             self.fit_roi_size = 13 # default roi size
-            
+
             self._logger = initLogger(self, tryInheritParent=False)
             self._numQueuedImages = 0
             self._numQueuedImagesMutex = Mutex()
-            
+
             # store the sum of all reconstructed frames
             self.sumReconstruction = None
             self.allParameters = []
-            
+
             self.active = False
 
 
         def reconSTORMFrame(self, frame, preFilter=None, peakDetector=None,
-                            rel_threshold=0.4, PSFparam=np.array([1.5]), 
+                            rel_threshold=0.4, PSFparam=np.array([1.5]),
                             roiSize=13, method=None):
             # tune parameters
             if method is None: # avoid error when microeye is not installed..
@@ -172,14 +172,14 @@ class STORMReconController(LiveUpdatedController):
                 preFilter = self.preFilter
             if peakDetector is None:
                 peakDetector = self.peakDetector
-                
+
             # parameters are read only once the SMLM reconstruction is initiated
             # cannot be altered during recroding
             index = 1
             filtered = frame.copy() # nip.gaussf(frame, 1.5)
             varim = None
 
-            # localize  frame 
+            # localize  frame
             # params = > x,y,background, max(0, intensity), magnitudeX / magnitudeY
             frames, params, crlbs, loglike = localize_frame(
                         index,
@@ -206,22 +206,22 @@ class STORMReconController(LiveUpdatedController):
 
         def setThreshold(self, threshold):
             self.threshold = threshold
-            
+
         def setFitRoiSize(self, roiSize):
             self.fit_roi_size = roiSize
-            
+
         def computeSTORMReconImage(self):
             """ Compute STORMRecon of an image. """
             try:
                 if self._numQueuedImages > 1 or not self.active:
                     return  # Skip this frame in order to catch up
-                STORMReconrecon, params = self.reconSTORMFrame(frame=self._image, 
-                                                               preFilter=self.preFilter, 
-                                                               peakDetector=self.peakDetector, 
-                                                               rel_threshold=self.threshold, 
+                STORMReconrecon, params = self.reconSTORMFrame(frame=self._image,
+                                                               preFilter=self.preFilter,
+                                                               peakDetector=self.peakDetector,
+                                                               rel_threshold=self.threshold,
                                                                roiSize=self.fit_roi_size)
                 self.allParameters.append(params)
-                
+
                 if self.sumReconstruction is None:
                     self.sumReconstruction = STORMReconrecon
                 else:
@@ -243,34 +243,34 @@ class STORMReconController(LiveUpdatedController):
             self.fittingMethod = method
         def setFilter(self, filter):
             self.preFilter = filter
-        
+
         def setTempEnabled(self, tempEnabled):
             self.tempEnabled = tempEnabled
-            
+
         def setDetector(self, detector):
             self.peakDetector = detector
-            
+
         def saveImage(self, filename="STORMRecon", fileExtension="tif"):
             if self.sumReconstruction is None:
                 return
-            
+
             # wait to finish all queued images
             while self._numQueuedImages > 0:
                 time.sleep(0.1)
-                
-            Ntime = datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")            
-            filePath = self.getSaveFilePath(date=Ntime, 
-                                filename=filename, 
+
+            Ntime = datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
+            filePath = self.getSaveFilePath(date=Ntime,
+                                filename=filename,
                                 extension=fileExtension)
-            
+
             # self.switchOffIllumination()
             self._logger.debug(filePath)
             tif.imwrite(filePath, self.sumReconstruction, append=False)
-            
+
             # Reset sumReconstruction
             self.sumReconstruction *= 0
             self.allParameters = []
-            
+
         def getSaveFilePath(self, date, filename, extension):
             mFilename =  f"{date}_{filename}.{extension}"
             dirPath  = os.path.join(dirtools.UserFileDirs.Root, 'recordings', date)
@@ -281,7 +281,7 @@ class STORMReconController(LiveUpdatedController):
                 os.makedirs(dirPath)
 
             return newPath
-        
+
         def setActive(self, enabled):
             self.active = enabled
 

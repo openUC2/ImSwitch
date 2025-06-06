@@ -26,7 +26,7 @@ class SquareButton(QPushButton):
 class LightsheetWidget(NapariHybridWidget):
     """ Widget containing lightsheet interface. """
     sigSliderIlluValueChanged = Signal(float)  # (value)
-    
+
     def __post_init__(self):
         #super().__init__(*args, **kwargs)
         self.grid = QtWidgets.QGridLayout()
@@ -53,7 +53,7 @@ class LightsheetWidget(NapariHybridWidget):
         self.illuminationSlider.valueChanged.connect(
             lambda value: self.sigSliderIlluValueChanged.emit(value)
         )
-        
+
         self.controlsLayout.addWidget(self.illuminationSlider, 3, 1, 1, 1)
 
         # Pull-down menu for the stage axis
@@ -80,9 +80,9 @@ class LightsheetWidget(NapariHybridWidget):
         self.controlsLayout.addWidget(self.stopButton, 7, 1, 1, 1)
         self.controlsLayout.addWidget(self.speedLabel, 8, 0, 1, 1)
         self.controlsLayout.addWidget(self.speedTextedit, 8, 1, 1, 1)
-        
+
         self.layer = None
-        
+
         # add mesospim tab
         self.mesoSPIMScrollArea = QtWidgets.QScrollArea()
         self.mesoSPIMScrollArea.setWidgetResizable(True)  # Erlaubt das Widget innerhalb der ScrollArea, seine Größe zu ändern
@@ -94,22 +94,22 @@ class LightsheetWidget(NapariHybridWidget):
         self.mesoSPIMWidget = self.createMesoSPIMTab()
         self.mesoSPIMTab.setLayout(self.mesoSPIMWidget)
         self.mesoSPIMScrollArea.setWidget(self.mesoSPIMTab)
-        
-        
+
+
         # Create the second tab for the 3D viewer
         self.viewerTab = QtWidgets.QWidget()
         self.viewerLayout = QtWidgets.QVBoxLayout(self.viewerTab)
         self.tabWidget.addTab(self.controlsTab, "Controls")
         self.tabWidget.addTab(self.viewerTab, "3D Viewer")
-        self.tabWidget.addTab(self.mesoSPIMScrollArea, "MesoSPIM")        
-        
+        self.tabWidget.addTab(self.mesoSPIMScrollArea, "MesoSPIM")
+
         #self.tabWidget.addTab(self.mesoSPIMTab, "MesoSPIM")
 
         # Initialize GLViewWidget and add it to the viewer layout
         self.glWidget = gl.GLViewWidget()
         nPixelDimViewer = 5000
-        #self.glWidget.setRange(xRange=(-nPixelDimViewer, nPixelDimViewer), 
-        #                       yRange=(-nPixelDimViewer, nPixelDimViewer), 
+        #self.glWidget.setRange(xRange=(-nPixelDimViewer, nPixelDimViewer),
+        #                       yRange=(-nPixelDimViewer, nPixelDimViewer),
         #                       zRange=(-nPixelDimViewer, nPixelDimViewer))
         mPos = QtGui.QVector3D(0.0, 0.0, 0.0)
         self.glWidget.setCameraPosition(pos=mPos, distance=nPixelDimViewer*2, elevation=30, azimuth=45)
@@ -126,24 +126,24 @@ class LightsheetWidget(NapariHybridWidget):
         self.glWidget.addItem(xLabel)
         self.glWidget.addItem(yLabel)
         self.glWidget.addItem(zLabel)
-        
+
         # add a label to the viewer layout and describe what we see
         self.viewerLayout.addWidget(QtWidgets.QLabel("Sample position in XYZ space"))
         self.viewerLayout.addWidget(self.glWidget)
-        
+
 
         # Now, add your 3D viewer setup code here, working with self.glWidget
         w = gl.GLGridItem()
         self.glWidget.addItem(w)
 
-        # draw position of stage    
+        # draw position of stage
         self.ScatterPlotItems = {}
         self.updatePosition((0,0,0))
 
     def createMesoSPIMTab(self):
         # Group box for XYZ controls
         # Create group boxes
-        main_layout = QVBoxLayout(self) 
+        main_layout = QVBoxLayout(self)
         xyz_groupbox = self.createGroupbox('Sample Translation XY', 14)
         focus_groupbox = self.createGroupbox('Focus \& Sample Z', 14)
         rotation_groupbox = self.createGroupbox('Rotation', 14)
@@ -162,7 +162,7 @@ class LightsheetWidget(NapariHybridWidget):
         self.buttonXY_zero = SquareButton('ZERO\nXY')
         self.spinXY_increment = self.createSpinBox(1000, ' µm')
         scan_overlap_layout, self.scan_overlap = self.createLabeledSpinbox('overlap', 10, ' %')
-        
+
         xyz_layout.addWidget(self.buttonXY_up, 0, 1)  # Y plus button
         xyz_layout.addWidget(self.buttonXY_right, 1, 2)  # X plus button
         xyz_layout.addWidget(self.buttonXY_left, 1, 0)  # X minus button
@@ -172,8 +172,8 @@ class LightsheetWidget(NapariHybridWidget):
         xyz_layout.addWidget(self.spinXY_increment, 3, 1)  # Increment spin box
         xyz_layout.addWidget(QLabel('Overlap'), 4, 0)  # Overlap label
         xyz_layout.addWidget(self.scan_overlap, 4, 1)  # Overlap spin box
-        
-        
+
+
         # Adding widgets to Focus group box
         self.buttonFocus_up = SquareButton('^')
         self.buttonFocus_down = SquareButton('v')
@@ -182,7 +182,7 @@ class LightsheetWidget(NapariHybridWidget):
         self.buttonFocus_zero = SquareButton('ZERO\nF')
         self.spinFocus_increment = self.createSpinBox(1000, ' µm')
         self.spinSpeedFocus = self.createSpinBox(1000, ' µm/s')
-        
+
         focus_layout.addWidget(self.buttonFocus_up, 0, 1)  # Focus plus button
         focus_layout.addWidget(self.buttonFocus_zero, 1, 1)  # Focus zero button
         focus_layout.addWidget(self.buttonFocus_down, 2, 1)  # Focus minus button
@@ -210,32 +210,32 @@ class LightsheetWidget(NapariHybridWidget):
         scan_x_max_layout, self.scan_x_max = self.createLabeledSpinbox('max X', 1000, ' µm')
         scan_y_max_layout, self.scan_y_max = self.createLabeledSpinbox('max Y', 1000, ' µm')
         scan_z_max_layout, self.scan_z_max = self.createLabeledSpinbox('max Z', 1000, ' µm')
-        
+
         self.button_scan_x_min_snap = SquareButton('cX')
         self.button_scan_x_max_snap = SquareButton('cX')
         self.button_scan_y_min_snap = SquareButton('cY')
         self.button_scan_y_max_snap = SquareButton('cY')
         self.button_scan_z_min_snap = SquareButton('cZ')
         self.button_scan_z_max_snap = SquareButton('cZ')
-        
+
         self.button_scan_xyz_start = self.createTextButton('Start Scan', 16)
         self.button_scan_xyz_stop = self.createTextButton('Stop Scan', 16)
-        
+
         scan_groupbox_layout = self.createGridLayout(scan_groupbox)
         scan_groupbox_layout.addLayout(scan_x_min_layout, 0, 0)
         scan_groupbox_layout.addWidget(self.button_scan_x_min_snap, 0, 1)
         scan_groupbox_layout.addLayout(scan_x_max_layout, 0, 2)
         scan_groupbox_layout.addWidget(self.button_scan_x_max_snap, 0, 3)
-        
+
         scan_groupbox_layout.addLayout(scan_y_min_layout, 1, 0)
         scan_groupbox_layout.addWidget(self.button_scan_y_min_snap, 1, 1)
         scan_groupbox_layout.addLayout(scan_y_max_layout, 1, 2)
         scan_groupbox_layout.addWidget(self.button_scan_y_max_snap, 1, 3)
-        
+
         scan_groupbox_layout.addLayout(scan_z_min_layout, 2, 0)
         scan_groupbox_layout.addWidget(self.button_scan_z_min_snap, 2, 1)
         scan_groupbox_layout.addLayout(scan_z_max_layout, 2, 2)
-        scan_groupbox_layout.addWidget(self.button_scan_z_max_snap, 2, 3)        
+        scan_groupbox_layout.addWidget(self.button_scan_z_max_snap, 2, 3)
         scan_groupbox_layout.addWidget(self.button_scan_xyz_start, 3, 0)
         scan_groupbox_layout.addWidget(self.button_scan_xyz_stop, 3, 2)
 
@@ -247,19 +247,19 @@ class LightsheetWidget(NapariHybridWidget):
         hbox_layout.addWidget(scan_groupbox)
         main_layout.addLayout(hbox_layout)
         return main_layout
-        
+
     def get_step_size_xy_zf(self):
         '''
         Returns the step size for the XYZ and focus controls.
         '''
         return self.spinXY_increment.value(), self.spinFocus_increment.value()
-        
+
     def get_speed_focusthrough(self):
         '''
         Returns the speed for focus-through.
         '''
         return self.spinSpeedFocus.value()
-    
+
     def get_scan_parameters(self):
         '''
         Returns the scan parameters.
@@ -277,25 +277,25 @@ class LightsheetWidget(NapariHybridWidget):
         mScanParams['illu_source'] = self.illuminationSourceComboBox.currentText()
         mScanParams['illu_value'] = self.illuminationSlider.value()
         return mScanParams
-    
+
     def set_scan_x_min(self, value):
         self.scan_x_min.setValue(value)
-    
+
     def set_scan_x_max(self, value):
         self.scan_x_max.setValue(value)
-    
+
     def set_scan_y_min(self, value):
         self.scan_y_min.setValue(value)
-    
+
     def set_scan_y_max(self, value):
         self.scan_y_max.setValue(value)
-    
+
     def set_scan_z_min(self, value):
         self.scan_z_min.setValue(value)
-    
+
     def set_scan_z_max(self, value):
         self.scan_z_max.setValue(value)
-    
+
     def createGroupbox(self, title, pointsize):
         groupbox = QGroupBox(title)
         groupbox.setFont(QFont('Arial', pointsize))
@@ -323,7 +323,7 @@ class LightsheetWidget(NapariHybridWidget):
         layout.addWidget(QLabel(label))
         layout.addWidget(spinbox)
         return layout, spinbox
-        
+
     def createSpinBox(self, value, suffix):
         spinbox = QSpinBox()
         spinbox.setMinimum(-10000)
@@ -339,43 +339,43 @@ class LightsheetWidget(NapariHybridWidget):
             self.glWidget.addItem(self.scatterPlotItem)
         else:  # If it already exists, just update the data
             self.scatterPlotItem.setData(pos=mPoint)
-            
+
     def setAvailableIlluSources(self, sources):
         self.illuminationSourceComboBox.clear()
         self.illuminationSourceComboBox.addItems(sources)
-    
+
     def setAvailableStageAxes(self, axes):
         self.stageAxisComboBox.clear()
         self.stageAxisComboBox.addItems(axes)
-        
+
     def getSpeed(self):
         return np.float32(self.speedTextedit.text())
-    
+
     def getIlluminationSource(self):
         return self.illuminationSourceComboBox.currentText()
-    
+
     def getStageAxis(self):
         return self.stageAxisComboBox.currentText()
-    
+
     def getMinPosition(self):
         return np.float32(self.minPositionLineEdit.text())
-    
+
     def getMaxPosition(self):
         return np.float32(self.maxPositionLineEdit.text())
-        
+
     def setImage(self, im, colormap="gray", name="", pixelsize=(1,1,1), translation=(0,0,0)):
         if len(im.shape) == 2:
             translation = (translation[0], translation[1])
         if self.layer is None or name not in self.viewer.layers:
-            self.layer = self.viewer.add_image(im, rgb=False, colormap=colormap, 
+            self.layer = self.viewer.add_image(im, rgb=False, colormap=colormap,
                                                scale=pixelsize,translate=translation,
                                                name=name, blending='additive')
         self.layer.data = im
         #self.layer.contrast_limits_range = (range_min, range_max)
         self.layer.contrast_limits = (np.min(im), np.max(im))
-        
-        
-        
+
+
+
 
 '''
 # GLViewWidget setup

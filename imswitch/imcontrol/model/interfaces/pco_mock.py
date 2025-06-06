@@ -7,7 +7,7 @@ try:
     isNIP = True
 except:
     isNIP = False
-    
+
 class MockCameraPCO:
     def __init__(self):
         self.properties = {
@@ -29,9 +29,9 @@ class MockCameraPCO:
         self.SensorWidth = 500
         self.frameId = 0
         self.shape = (self.SensorHeight,self.SensorWidth)
-        
+
         self.IIllu = np.ones((self.SensorHeight, self.SensorWidth))
-        
+
         self.ISample = self.generateSample()
 
     def start_live(self):
@@ -61,7 +61,7 @@ class MockCameraPCO:
             Isample = nip.extract(Isample, (self.SensorHeight, self.SensorWidth))+np.abs(np.random.randn(self.SensorHeight, self.SensorWidth))*3
 
         return Isample
-        
+
     def grabFrame(self, **kwargs):
         # simulate simple imaging system
         img = self.ISample*self.IIllu
@@ -73,10 +73,10 @@ class MockCameraPCO:
 
     def getLast(self, is_resize=False):
         return self.grabFrame()
-    
+
     def getLastChunk(self):
         return np.expand_dims(self.grabFrame(),0)
-    
+
     def setPropertyValue(self, property_name, property_value):
         return property_value
 
@@ -85,30 +85,30 @@ class MockCameraPCO:
             return self.properties[property_name]
         except Exception as e:
             return 0
-    
+
     def getLastFrameId(self):
         self.frameId += 1
         return self.frameId
 
     def openPropertiesGUI(self):
         pass
-    
+
     def close(self):
         pass
 
     def close(self):
         pass
-    
+
     def flushBuffer(self):
-        pass 
+        pass
 
-    
+
 
     ## SIM-simulation related
-    
+
     def setIlluPattern(self, illuPattern):
         self.IIllu=illuPattern
-        
+
     def setIlluPatternByID(self, iRot=0, iPhi=0, Nrot=3, Nphi=3):
         Nx,Ny=self.SensorHeight, self.SensorWidth
         #for iPhi in range(3):
@@ -117,7 +117,7 @@ class MockCameraPCO:
 
         self.setIlluPattern(IGrating)
         return IGrating
-                   
+
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

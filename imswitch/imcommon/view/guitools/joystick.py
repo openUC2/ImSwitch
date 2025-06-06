@@ -15,7 +15,7 @@ class Joystick(QWidget):
         super().__init__()
 
         self.window_title = 'Joystick'
-        self.window_min_size = window_min_size 
+        self.window_min_size = window_min_size
         self.wnd_fit_size = 400
         self.window_size = [self.wnd_fit_size, self.wnd_fit_size]
 
@@ -30,9 +30,9 @@ class Joystick(QWidget):
 
         self.stat_label_margin = 10
         self.stat_label = QLabel(self)
-        
+
         self.callbackFct = callbackFct
-        
+
         self.init_ui()
 
     def init_ui(self):
@@ -127,7 +127,7 @@ class Joystick(QWidget):
             radius = (self.circle_diameter - self.stick_diameter) / 2
             stick_pos_buf[0] = radius * math.cos(theta)
             stick_pos_buf[1] = radius * math.sin(theta)
-        
+
         # Emit signal #TODO: Not sure if this is the right way to do it
         if self.callbackFct is not None:
             self.callbackFct(stick_pos_buf[0], stick_pos_buf[1])
@@ -159,7 +159,7 @@ class Joystick(QWidget):
     def get_strength(self):
         max_distance = (self.circle_diameter - self.stick_diameter) / 2
         distance = math.sqrt(self.stick_pos[0] * self.stick_pos[0] + self.stick_pos[1] * self.stick_pos[1])
-        
+
         return distance / max_distance
 
     def get_angle(self, in_deg=False):

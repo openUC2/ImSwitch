@@ -68,7 +68,7 @@ class ESP32LEDLaserManager(LaserManager):
         """
         self.power = power
         if self.enabled:
-            
+
             if self.channel_index == "LED":
                 # ensure that in case it's not initialized yet, we display an all-on pattern
                 if self._led.ledpattern[0,0]==-1:
@@ -89,7 +89,7 @@ class ESP32LEDLaserManager(LaserManager):
 
     def setGalvo(self,channel=1, frequency=1, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1):
         self._rs232manager._esp32.galvo.set_dac(
-            channel=channel, frequency=frequency, offset=offset, amplitude=amplitude, clk_div=clk_div, 
+            channel=channel, frequency=frequency, offset=offset, amplitude=amplitude, clk_div=clk_div,
             phase=phase, invert=invert, timeout=timeout)
 
 # Copyright (C) 2020-2024 ImSwitch developers

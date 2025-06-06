@@ -24,8 +24,8 @@ class ImScrMainView(QtWidgets.QMainWindow):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setWindowTitle('Scripting')
-        
-        if not editorViewAvailable: 
+
+        if not editorViewAvailable:
             return
 
         # Actions in menubar

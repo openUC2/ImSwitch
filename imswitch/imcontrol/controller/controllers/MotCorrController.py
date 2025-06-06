@@ -5,12 +5,12 @@ class MotCorrController(ImConWidgetController):
     """ Linked to MotCorrWidget."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         self._manager = self._master.standManager
 
         self._widget.motcorrControl.slider.valueChanged[int].connect(self.changeSlider)
         self._widget.motcorrControl.setPointEdit.returnPressed.connect(self.changeEdit)
-        
+
     def changeSlider(self, _):
         """ Called when the slider is moved, sets the motorized correction collar position to value."""
         self._manager.motCorrPos(self._widget.motcorrControl.slider.value())

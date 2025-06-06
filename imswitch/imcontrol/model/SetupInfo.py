@@ -112,7 +112,7 @@ class PositionerInfo(DeviceInfo):
 
     stageOffsets: Dict[str, float] = field(default_factory=dict)
     """ Stage offsets available to select (map preset name -> stage name -> """
-    
+
 @dataclass(frozen=False)
 class RS232Info:
     managerName: str
@@ -196,7 +196,7 @@ class SIMInfo:
     nPhases: int = 3
 
     simMagnefication: float = 1.0
-    
+
     isFastAPISIM: bool = False
 
     simPixelsize: float = 1.0
@@ -206,7 +206,7 @@ class SIMInfo:
     simETA: float = 1.0
 
     simN: float = 1.0
-    
+
     tWaitSequence: float = 0.0
 
 
@@ -227,10 +227,10 @@ class DPCInfo:
     n: float
 
     rotations: List[int]
-    
+
 @dataclass(frozen=False)
 class ObjectiveInfo:
-    pixelsizes: List 
+    pixelsizes: List
     NAs: List
     magnifications: List
     objectiveNames: List
@@ -240,7 +240,7 @@ class ObjectiveInfo:
     homeSpeed: int = 20000
     homeAcceleration: int = 20000
     calibrateOnStart: bool = True
-    
+
 @dataclass(frozen=False)
 class MCTInfo:
     tWait: int
@@ -277,7 +277,7 @@ class HistoScanInfo:
 @dataclass(frozen=False)
 class WorkflowInfo:
     pass
-    
+
 @dataclass(frozen=False)
 class FlowStopInfo:
     pass
@@ -466,7 +466,7 @@ class NidaqInfo:
             return f'Dev1/ctr{self.timerCounterChannel}'  # for backwards compatibility
         else:
             return self.timerCounterChannel
-        
+
 @dataclass(frozen=False)
 class PulseStreamerInfo:
     ipAddress: Optional[str] = None
@@ -523,16 +523,16 @@ class SetupInfo:
 
     objective: Optional[ObjectiveInfo] = field(default_factory=lambda: None)
     """ Objective settings. Required to be defined to use Objective functionality. """
-    
+
     mct: Optional[MCTInfo] = field(default_factory=lambda: None)
     """ MCT settings. Required to be defined to use MCT functionality. """
 
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """
-        
+
     roiscan: Optional[ROIScanInfo] = field(default_factory=lambda: None)
     """ ROIScan settings. Required to be defined to use ROIScan functionality. """
-    
+
     lightsheet: Optional[LightsheetInfo] = field(default_factory=lambda: None)
     """ MCT settings. Required to be defined to use Lightsheet functionality. """
 
@@ -553,16 +553,16 @@ class SetupInfo:
 
     Workflow: Optional[WorkflowInfo] = field(default_factory=lambda: None)
     """ Workflow settings. Required to be defined to use Workflow functionality. """
-    
+
     FlowStop:  Optional[FlowStopInfo] = field(default_factory=lambda: None)
     """ FlowStop settings. Required to be defined to use FlowStop functionality. """
 
     Lepmon: Optional[LepmonInfo] = field(default_factory=lambda: None)
     """ Lepmon settings. Required to be defined to use Lepmon functionality. """
-    
+
     Flatfield: Optional[FlatfieldInfo] = field(default_factory=lambda: None)
     """ Flatfield settings. Required to be defined to use Flatfield functionality. """
-    
+
     PixelCalibration: Optional[PixelCalibrationInfo] = field(default_factory=lambda: None)
     """ PixelCalibration settings. Required to be defined to use PixelCalibration functionality. """
 
@@ -578,7 +578,7 @@ class SetupInfo:
 
     fovLock: Optional[FOVLockInfo] = field(default_factory=lambda: None)
     """ Focus lock settings. Required to be defined to use fov lock
-    functionality. """    
+    functionality. """
 
     autofocus: Optional[AutofocusInfo] = field(default_factory=lambda: None)
     """ Autofocus settings. Required to be defined to use autofocus
@@ -610,7 +610,7 @@ class SetupInfo:
     def add_attribute(self, attr_name, attr_value):
         # load all implugin-related setup infos and add them to the class
         # try to get it from the plugins
-        # If there is a imswitch_sim_info, we want to add this as self.imswitch_sim_info to the 
+        # If there is a imswitch_sim_info, we want to add this as self.imswitch_sim_info to the
         # SetupInfo Class
 
         import pkg_resources
@@ -619,7 +619,7 @@ class SetupInfo:
                 ManagerClass = entry_point.load()
                 ManagerDataClass = make_dataclass(entry_point.name.split("_info")[0], [(entry_point.name, ManagerClass)])
                 setattr(self, entry_point.name.split("_info")[0], field(default_factory=ManagerDataClass))
-        
+
     def getDevice(self, deviceName):
         """ Returns the DeviceInfo for a specific device.
 

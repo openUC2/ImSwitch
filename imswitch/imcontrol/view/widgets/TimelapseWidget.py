@@ -8,11 +8,11 @@ from .basewidgets import NapariHybridWidget
 
 class TimelapseWidget(NapariHybridWidget):
     """ Widget containing mct interface. """
-    
+
     def __post_init__(self):
         # initialize all GUI elements
         mainWidget = QtWidgets.QWidget()
-            
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

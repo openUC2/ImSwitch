@@ -92,11 +92,11 @@ class MockCameraTIS:
     def getTriggerSource(self):
         """Match CameraHIK interface."""
         return self.trigger_source.value
-    
+
     def getTriggerTypes(self):
         """Match CameraHIK interface."""
-        return [TriggerSource.CONTINUOUS.value, TriggerSource.SOFTWARE.value, TriggerSource.EXTERNAL.value] 
-    
+        return [TriggerSource.CONTINUOUS.value, TriggerSource.SOFTWARE.value, TriggerSource.EXTERNAL.value]
+
     def flushBuffer(self):
         self.frame_buffer.clear()
         self.frameid_buffer.clear()

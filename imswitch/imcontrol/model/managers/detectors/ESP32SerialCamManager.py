@@ -5,7 +5,7 @@ from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter
 
 class ESP32SerialCamManager(DetectorManager):
-    """ DetectorManager that deals with the ESP32 Serial Cam 
+    """ DetectorManager that deals with the ESP32 Serial Cam
     """
 
     def __init__(self, detectorInfo, name, **_lowLevelManagers):
@@ -18,8 +18,8 @@ class ESP32SerialCamManager(DetectorManager):
         fullShape = (320,240)
         try:
             self.port = detectorInfo.managerProperties['port']
-        except: 
-            self.port = None 
+        except:
+            self.port = None
 
         # Prepare actions
         actions = {}
@@ -30,7 +30,7 @@ class ESP32SerialCamManager(DetectorManager):
                                                 editable=True),
             'gain': DetectorNumberParameter(group='Misc', value=1, valueUnits='arb.u.',
                                             editable=True)
-            }          
+            }
         # initialize camera
 
         self._camera = self._getESP32CamObj(self.port)
@@ -43,7 +43,7 @@ class ESP32SerialCamManager(DetectorManager):
 
 
     def getLatestFrame(self, is_save=False):
-        return self._camera.getLast() 
+        return self._camera.getLast()
 
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
@@ -70,8 +70,8 @@ class ESP32SerialCamManager(DetectorManager):
 
         value = self._camera.getPropertyValue(name)
         return value
-    
-        
+
+
     def getChunk(self):
         return np.expand_dims(self._camera.getLastChunk(),0)
 
@@ -82,7 +82,7 @@ class ESP32SerialCamManager(DetectorManager):
         if self._camera.model == "mock":
             self.__logger.debug('We could attempt to reconnect the camera')
             pass
-            
+
         if not self._running:
             self._camera.start_live()
             self._running = True

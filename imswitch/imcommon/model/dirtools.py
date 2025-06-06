@@ -27,12 +27,12 @@ def getSystemUserDir():
                 return buf.value
             except ImportError:
                 pass
-            #TOOD: How can we ensure that configuration files are updated automatically.. 
+            #TOOD: How can we ensure that configuration files are updated automatically..
         return os.path.expanduser('~')  # Non-Windows system, return home directory
 
 
 _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)), '_data')
-_baseUserFilesDir = os.path.join(getSystemUserDir(), 'ImSwitchConfig') 
+_baseUserFilesDir = os.path.join(getSystemUserDir(), 'ImSwitchConfig')
 
 
 
@@ -81,7 +81,7 @@ def getDiskusage():
     total, used, free = disk_usage(current_drive)
 
     # Calculate percentage used
-    percent_used = (used / total) 
+    percent_used = (used / total)
 
     # Check if it exceeds the threshold
     return percent_used
@@ -141,21 +141,21 @@ class UserFileDirs(FileDirs):
     """ Catalog of directories that contain user configuration files. """
     Root = _baseUserFilesDir
     Config = os.path.join(_baseUserFilesDir, 'config')
-    Data = os.path.join(_baseUserFilesDir, 'data')  
+    Data = os.path.join(_baseUserFilesDir, 'data')
     if DEFAULT_DATA_PATH is not None:
         Data = DEFAULT_DATA_PATH
     if SCAN_EXT_DATA_FOLDER and EXT_DRIVE_MOUNT is not None:
         # TODO: This is a testing workaround
         '''
         Basic idea: We provide ImSwitch (most likely runing inside docker) with the path to the external mounts for external drives (e.g. /media or /Volumes)
-        ImSwitch now has to pick the external drive and check if it is mounted and use this as a data storage 
+        ImSwitch now has to pick the external drive and check if it is mounted and use this as a data storage
         '''
         # If SCAN_EXT_DATA_FOLDER or user sets default_data_path, pick the subfolder
         chosen_mount = pick_first_external_mount(EXT_DRIVE_MOUNT)
         if chosen_mount:
             Data = chosen_mount
-        
-    
+
+
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

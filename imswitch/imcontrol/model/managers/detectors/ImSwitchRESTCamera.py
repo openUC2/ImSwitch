@@ -4,7 +4,7 @@ from platform import system
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import (
     DetectorManager,
-    DetectorNumberParameter, 
+    DetectorNumberParameter,
     DetectorListParameter
 )
 
@@ -21,14 +21,14 @@ class ImSwitchRESTCamera(DetectorManager):
         self.detectorInfo = detectorInfo
         self.parent = parent
         # Set default values for parameters like pixel size and exposure
-        parameters = {}        
+        parameters = {}
         parameters['Camera pixel size'] = DetectorNumberParameter(
             group='Misc',
             value=10,
             valueUnits='um',
             editable=True
         )
-        
+
         super().__init__(detectorInfo, name, fullShape=(640, 480), supportedBinnings=[1],
                     model="MJPEG Stream", parameters=parameters, croppable=True)
 
@@ -36,7 +36,7 @@ class ImSwitchRESTCamera(DetectorManager):
         self._rs232manager = lowLevelManagers['rs232sManager'][detectorInfo.managerProperties['rs232device']]
         self._imswitch_client = self._rs232manager._imswitch_client
 
-        # pull funcitons 
+        # pull funcitons
         self.startVideoStream = self._imswitch_client.recordingManager.startVideoStream
         self.stopVideoStream = self._imswitch_client.recordingManager.stopVideoStream
         self.getFrame = self._imswitch_client.recordingManager.getVideoFrame
@@ -49,7 +49,7 @@ class ImSwitchRESTCamera(DetectorManager):
         try:
             umxpx = self.parameters['Camera pixel size'].value
         except:
-            umxpx = 1   
+            umxpx = 1
         return [1, umxpx, umxpx]
 
     def getLatestFrame(self, is_save=False):
@@ -60,7 +60,7 @@ class ImSwitchRESTCamera(DetectorManager):
         if frame is not None:
             return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return None
-    
+
     def setParameter(self, name, value):
         '''
         Set parameters like exposure (this method is updated for MJPEG stream case).
@@ -74,7 +74,7 @@ class ImSwitchRESTCamera(DetectorManager):
                 # This depends on whether the MJPEG stream supports exposure adjustment
                 pass
         super().setParameter(name, value)
-        
+
     def getChunk(self):
         try:
             return self.getLatestFrame()

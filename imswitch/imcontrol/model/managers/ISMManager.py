@@ -22,7 +22,7 @@ class ISMManager(SignalInterface):
             return
 
         self.__ISMInfo = ISMInfo
-        
+
         self.update()
 
 
@@ -30,10 +30,10 @@ class ISMManager(SignalInterface):
     def update(self):
         #self.allPatternsPaths
         #self.maskDouble = self.__masks[0].concat(self.__masks[1])
-        #self.maskCombined = self.maskDouble 
+        #self.maskCombined = self.maskDouble
         #self.sigISMMaskUpdated.emit(self.maskCombined)
 
-        #returnmask = self.maskDouble 
+        #returnmask = self.maskDouble
         return None #returnmask.image()
 
 # Copyright (C) 2020-2024 ImSwitch developers

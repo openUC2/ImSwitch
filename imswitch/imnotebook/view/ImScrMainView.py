@@ -27,18 +27,18 @@ DEBUG = True
 
 class ImScrMainView(QtWidgets.QMainWindow):
     """ Main self.view of ImNotebook. """
-    
+
     sigClosing = QtCore.Signal()
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setWindowTitle('Notebook')
-        
+
         # Actions in menubar
         if IS_HEADLESS:
-            return 
-        
-        # test and launch notebook server        
+            return
+
+        # test and launch notebook server
         self.notebookServer = LaunchNotebookServer()
         webaddr = self.notebookServer.startServer()
 

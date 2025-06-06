@@ -41,7 +41,7 @@ class ImConMainController(MainController):
             # Connect view signals
             self.__mainView.sigLoadParamsFromHDF5.connect(self.loadParamsFromHDF5)
             self.__mainView.sigPickSetup.connect(self.pickSetup)
-            self.__mainView.sigClosing.connect(self.closeEvent)   
+            self.__mainView.sigClosing.connect(self.closeEvent)
             self.pickSetupController = self.__factory.createController(
                 PickSetupController, self.__mainView.pickSetupDialog
             )
@@ -53,14 +53,14 @@ class ImConMainController(MainController):
 
         for widgetKey, widget in self.__mainView.widgets.items():
             self.__logger.debug(f'Creating controller for widget {widgetKey}')
-            
+
             # Check if the controller is available
             controller_name = f'{widgetKey}Controller'
             if widgetKey == 'Scan':
                 controller_name = f'{widgetKey}Controller{self.__setupInfo.scan.scanWidgetType}'
             if widgetKey == 'ImSwitchServer':
                 continue
-            
+
             if hasattr(controllers, controller_name):
                 # Controller is available in the imcontrol module
                 self.controllers[widgetKey] = self.__factory.createController(
@@ -74,7 +74,7 @@ class ImConMainController(MainController):
                         mPlugin, widget)
                 except Exception as e:
                     self.__logger.debug(e)
-                    
+
         # Generate API
         self.__api = None
         apiObjs = list(self.controllers.values()) + [self.__commChannel]
@@ -101,7 +101,7 @@ class ImConMainController(MainController):
             shorcutObjs = list(self.__mainView.widgets.values())
             self.__shortcuts = generateShortcuts(shorcutObjs)
             self.__mainView.addShortcuts(self.__shortcuts)
-            
+
         self.__logger.debug("Start ImSwitch Server")
         self._serverWorker = ImSwitchServer(self.__api, self.__apiui, setupInfo)
         self._thread = threading.Thread(target=self._serverWorker.run)
@@ -117,7 +117,7 @@ class ImConMainController(MainController):
                 return packageController
         self.__logger.error(f'No controller found for widget {widgetKey}')
         return None
-        
+
     @property
     def api(self):
         return self.__api

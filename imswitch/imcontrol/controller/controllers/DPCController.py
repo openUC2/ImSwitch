@@ -1,4 +1,4 @@
-    
+
 import json
 import os
 
@@ -34,7 +34,7 @@ class DPCController(ImConWidgetController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
-        self.nSyncCameraSLM = 1  # 5 frames will be captured before a frame is retrieved from buffer for prcoessing 
+        self.nSyncCameraSLM = 1  # 5 frames will be captured before a frame is retrieved from buffer for prcoessing
         self.iSyncCameraSLM = 0 # counter for syncCameraSLM
 
         # switch to detect if a recording is in progress
@@ -53,31 +53,31 @@ class DPCController(ImConWidgetController):
         if False:
             # TODO: We need to generalize this interface in a better way
             #self.brightfieldPattern = {"0": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]}
-            self.allDPCPatterns = {self.allDPCPatternNames[0]: [0,1,2,7,8,9,10,11,12,21,22,23,24], 
-                                    self.allDPCPatternNames[1]: [3,4,5,6,13,14,15,16,17,18,19,20,21,22], 
-                                    self.allDPCPatternNames[2]: [0,5,6,7,8,18,19,20,21,22,23,24], 
+            self.allDPCPatterns = {self.allDPCPatternNames[0]: [0,1,2,7,8,9,10,11,12,21,22,23,24],
+                                    self.allDPCPatternNames[1]: [3,4,5,6,13,14,15,16,17,18,19,20,21,22],
+                                    self.allDPCPatternNames[2]: [0,5,6,7,8,18,19,20,21,22,23,24],
                                     self.allDPCPatternNames[3]: [1,2,3,4,9,10,11,12,14,15,16]}
             self.nLEDs = 25
-        else:        
-            '''self.allDPCPatterns = {self.allDPCPatternNames[0]: [8,9,10,11,13,14], 
-                        self.allDPCPatternNames[1]: [1,2,4,5,6,7], 
-                        self.allDPCPatternNames[2]: [2,4,5,11,10,13], 
+        else:
+            '''self.allDPCPatterns = {self.allDPCPatternNames[0]: [8,9,10,11,13,14],
+                        self.allDPCPatternNames[1]: [1,2,4,5,6,7],
+                        self.allDPCPatternNames[2]: [2,4,5,11,10,13],
                         self.allDPCPatternNames[3]: [1,6,7,8,9,14]}
             self.nLEDs = 16'''
-            self.allDPCPatterns = {self.allDPCPatternNames[0]: [41,42,43,44,45,46,47,50,51,52,53,54,59,60,61], 
-                        self.allDPCPatternNames[1]: [25,26,27,28,29,30,31,18,19,20,21,22,11,12,13], 
-                        self.allDPCPatternNames[2]: [13,21,22,29,30,31,37,38,39,45,46,47,53,54,61], 
+            self.allDPCPatterns = {self.allDPCPatternNames[0]: [41,42,43,44,45,46,47,50,51,52,53,54,59,60,61],
+                        self.allDPCPatternNames[1]: [25,26,27,28,29,30,31,18,19,20,21,22,11,12,13],
+                        self.allDPCPatternNames[2]: [13,21,22,29,30,31,37,38,39,45,46,47,53,54,61],
                         self.allDPCPatternNames[3]: [11,18,19,25,26,27,33,34,35,41,42,43,50,51,59]}
             self.nLEDs = 64
-        
+
         # dpc parameters
-        self.rotation  = self._master.dpcManager.rotations 
+        self.rotation  = self._master.dpcManager.rotations
         self.wavelength = self._master.dpcManager.wavelength
         self.pixelsize = self._master.dpcManager.pixelsize
         self.NA = self._master.dpcManager.NA
         self.NAi =  self._master.dpcManager.NAi
         self.n =  self._master.dpcManager.n
-        
+
         self.tWait = .2 # time to wait between turning on LED Matrix and frame acquisition
 
         # select LEDArray
@@ -86,7 +86,7 @@ class DPCController(ImConWidgetController):
             if not IS_HEADLESS: self._widget.replaceWithError('No LEDMatrix found in your setup file.')
             return
         self.ledMatrix = self._master.LEDMatrixsManager[allLEDMatrixNames[0]]
-        
+
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
@@ -98,7 +98,7 @@ class DPCController(ImConWidgetController):
             {
                 'name': 'pixelsize',
                 'type': 'int',
-                'value': self.pixelsize, 
+                'value': self.pixelsize,
                 'limits': (0,50),
                 'step': .01,
                 'suffix': 'µm',
@@ -106,7 +106,7 @@ class DPCController(ImConWidgetController):
             {
                 'name': 'wavelength',
                 'type': 'float',
-                'value': self.wavelength, 
+                'value': self.wavelength,
                 'limits': (0,2),
                 'step': .01,
                 'suffix': 'µm',
@@ -114,7 +114,7 @@ class DPCController(ImConWidgetController):
             {
                 'name': 'NA',
                 'type': 'float',
-                'value': self.NA, 
+                'value': self.NA,
                 'limits': (0, 1.6),
                 'step': 0.05,
                 'suffix': 'A.U.',
@@ -126,7 +126,7 @@ class DPCController(ImConWidgetController):
                 'limits': (0, 1.6),
                 'step': 0.05,
                 'suffix': 'A.U.',
-                },            
+                },
             {
                 'name': 'n',
                 'type': 'float',
@@ -136,25 +136,25 @@ class DPCController(ImConWidgetController):
                 'suffix': 'A.U.',
                 },
             {
-                'name': 'shape', 
+                'name': 'shape',
                 'value': self.frameShape,
             }
            ]}]
         #TODO: Set parameters
-            
-    
+
+
         #assign parameters from disk
-        
+
         self.DPCProcessor = DPCProcessor(self, self.frameShape, self.generalparams)
-        
+
         # connect the reconstructed image to the displayer
         self.sigDPCProcessorImageComputed.connect(self.displayImage)
-        
+
         if not IS_HEADLESS:
             #self._widget.applyChangesButton.clicked.connect(self.applyParams)
             self._widget.startDPCAcquisition.clicked.connect(self.startDPC)
             self._widget.isRecordingButton.clicked.connect(self.toggleRecording)
-        
+
     def __del__(self):
         pass
 
@@ -178,12 +178,12 @@ class DPCController(ImConWidgetController):
                 self.dpcThread.start()
                 self._widget.startDPCAcquisition.setText("Stop")
             else:
-                # stop live processing 
+                # stop live processing
                 self.active = False
                 self._master.detectorsManager.startAcquisition(liveView=True)
                 self.dpcThread.join()
                 self._widget.startDPCAcquisition.setText("Start")
-            
+
     def toggleRecording(self):
         if IS_HEADLESS:
             return
@@ -192,20 +192,20 @@ class DPCController(ImConWidgetController):
             self._widget.isRecordingButton.setText("Stop Recording")
         else:
             self._widget.isRecordingButton.setText("Start Recording")
-    
 
-            
+
+
     def performDPCExperimentThread(self, dpc_info_dict):
-        """ 
-        Iterate over all DPC patterns, display them and acquire images 
-        """     
+        """
+        Iterate over all DPC patterns, display them and acquire images
+        """
         self.patternID = 0
         self.isReconstructing = False
         while self.active:
-            
+
             if not self.active:
                 break
-            # initialize the processor 
+            # initialize the processor
             processor = self.DPCProcessor
             processor.setParameters(dpc_info_dict)
 
@@ -222,9 +222,9 @@ class DPCController(ImConWidgetController):
                 self._logger.debug("Showing pattern: "+iPatternName)
                 ledPattern = []
                 ledIntensity = (0,255,0)
-                
-                # no sparse update :( 
-                for iLED in range(self.nLEDs): 
+
+                # no sparse update :(
+                for iLED in range(self.nLEDs):
                     if iLED in ledIDs:
                         ledPattern.append(ledIntensity)
                     else:
@@ -233,8 +233,8 @@ class DPCController(ImConWidgetController):
                 print(ledPattern)
                 # wait a moment
                 time.sleep(self.tWait)
-                
-                # 2 grab a frame 
+
+                # 2 grab a frame
                 frame = self.detector.getLatestFrame()
                 processor.addFrameToStack(frame)
                 '''
@@ -251,9 +251,9 @@ class DPCController(ImConWidgetController):
                 self._logger.debug("Showing pattern: "+iPatternName)
                 ledPattern = []
                 ledIntensity = (0,255,0)
-                
-                # no sparse update :( 
-                for iLED in range(self.nLEDs): 
+
+                # no sparse update :(
+                for iLED in range(self.nLEDs):
                     if iLED in ledIDs:
                         ledPattern.append(ledIntensity)
                     else:
@@ -261,11 +261,11 @@ class DPCController(ImConWidgetController):
                 self.ledMatrix.mLEDmatrix.send_LEDMatrix_array(np.array(ledPattern), getReturn = True)
                 # wait a moment
                 time.sleep(self.tWait)
-                
-                # 2 grab a frame 
+
+                # 2 grab a frame
                 frame = self.detector.getLatestFrame()
                 processor.addFrameToStack(frame)
-            
+
 
             # We will collect N*M images and process them with the DPC processor
             # process the frames and display
@@ -273,10 +273,10 @@ class DPCController(ImConWidgetController):
                 self.isReconstructing=True
                 # reconstruct and save the stack in background to not block the main thread
                 processor.reconstruct(self.isRecording)
-                
+
                 # reset the per-colour stack to add new frames in the next imaging series
                 processor.clearStack()
-        
+
 
     def getInfoDict(self, generalParams=None):
         state_general = None
@@ -287,7 +287,7 @@ class DPCController(ImConWidgetController):
             state_general = {generalparamname: float(
                 generalParams.param("general").param(generalparamname).value()) for generalparamname
                              in generalparamnames}
-            
+
         return state_general
 
 '''#####################################
@@ -311,15 +311,15 @@ class DPCProcessor(object):
         self.NAi = .3
         self.n= 1
         self.wavelength = .53
-        self.rotation = [0, 180, 90, 270]    
-        
+        self.rotation = [0, 180, 90, 270]
+
         self.dpc_solver_obj = DPCSolver(shape=self.shape, wavelength=self.wavelength, na=self.NA, NAi=self.NAi, pixelsize=self.pixelsize, rotation=self.rotation)
         #parameters for Tikhonov regurlarization [absorption, phase] ((need to tune this based on SNR)
         self.dpc_solver_obj.setTikhonovRegularization(reg_u = 1e-1, reg_p = 5e-3)
-        
+
         # stack to store the individual DPC images
         self.stack = []
-        
+
     def setParameters(self, dpc_info_dict):
         # uses parameters from GUI
         self.pixelsize = dpc_info_dict["pixelsize"]
@@ -327,9 +327,9 @@ class DPCProcessor(object):
         self.NAi = dpc_info_dict["NAi"]
         self.n= dpc_info_dict["n"]
         self.wavelength = dpc_info_dict["wavelength"]
-        self.rotation = [0, 180, 90, 270] 
+        self.rotation = [0, 180, 90, 270]
         self.dpc_num = 4
-        
+
     def addFrameToStack(self, frame):
         '''
         append stacks to to-be-processed stack
@@ -345,13 +345,13 @@ class DPCProcessor(object):
         return the imagestack
         '''
         return np.array(self.stack)
-        
+
     def clearStack(self):
         '''
-        reset the stack 
+        reset the stack
         '''
         self.stack=[]
-        
+
     def reconstruct(self, isRecording=False):
         '''
         reconstruction
@@ -370,9 +370,9 @@ class DPCProcessor(object):
             # save images eventually
             if isRecording:
                 date = datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-                mFilenameRecon = f"{date}_DPC_Reconstruction.tif"   
-                tif.imwrite(mFilenameRecon, qdpc_result)         
-            
+                mFilenameRecon = f"{date}_DPC_Reconstruction.tif"
+                tif.imwrite(mFilenameRecon, qdpc_result)
+
             # compute gradient images
             dpc_result_1 = (self.stackToReconstruct[0]-self.stackToReconstruct[1])/(self.stackToReconstruct[0]+self.stackToReconstruct[1])
             dpc_result_2 = (self.stackToReconstruct[2]-self.stackToReconstruct[3])/(self.stackToReconstruct[2]+self.stackToReconstruct[3])
@@ -404,7 +404,7 @@ class DPCSolver:
         self.shape = shape
         if self.shape[0] == 0:
             self.shape = (512, 512)
-            
+
         self.wavelength = wavelength
         self.na         = na
         self.NAi      = NAi
@@ -416,18 +416,18 @@ class DPCSolver:
         self.pupil      = self.pupilGen(self.fxlin, self.fylin, self.wavelength, self.na)
         self.sourceGen()
         self.WOTFGen()
-        
+
     def setTikhonovRegularization(self, reg_u = 1e-6, reg_p = 1e-6):
         self.reg_u      = reg_u
         self.reg_p      = reg_p
-        
+
     def normalization(self):
         for img in self.dpc_imgs:
             img          /= uniform_filter(img, size=img.shape[0]//2)
             meanIntensity = img.mean()
             img          /= meanIntensity        # normalize intensity with DC term
             img          -= 1.0                  # subtract the DC term
-        
+
     def sourceGen(self):
         self.source = []
         pupil = self.pupilGen(self.fxlin, self.fylin, self.wavelength, self.na, NAi=self.NAi)
@@ -444,7 +444,7 @@ class DPCSolver:
                 self.source[-1] *= pupil
                 self.source[-1] += pupil
         self.source = np.asarray(self.source)
-        
+
     def WOTFGen(self):
         self.Hu = []
         self.Hp = []
@@ -470,10 +470,10 @@ class DPCSolver:
             absorption = IF((AHA[3]*AHy[0]-AHA[1]*AHy[1])/determinant).real
             phase      = IF((AHA[0]*AHy[1]-AHA[2]*AHy[0])/determinant).real
             dpc_result.append(absorption+1.0j*phase)
-            
+
         return np.asarray(dpc_result)
-    
-    
+
+
     def pupilGen(self, fxlin, fylin, wavelength, na, NAi=0.0):
         pupil = np.array(fxlin[naxis, :]**2+fylin[:, naxis]**2 <= (na/wavelength)**2)
         if NAi != 0.0:
@@ -485,7 +485,7 @@ class DPCSolver:
         return (xlin-size//2)*dx
 
 
-    
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

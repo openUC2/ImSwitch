@@ -20,7 +20,7 @@ def getSetupList():
     return [Path(file).name for file in glob.glob(os.path.join(_setupFilesDir, '*.json'))]
 
 def loadSetupInfo(options, setupInfoType):
-    # if options.setupFileName contains absolute path, don't concatenate 
+    # if options.setupFileName contains absolute path, don't concatenate
     if os.path.isabs(options.setupFileName):
         mPath = options.setupFileName
     else:
@@ -41,7 +41,7 @@ def loadSetupInfo(options, setupInfoType):
         return mSetupDescription
 
 def saveSetupInfo(options, setupInfo):
-    # 1. Make a backup of the current setup file 
+    # 1. Make a backup of the current setup file
     # 2. Save the new setup file
     mFilename = os.path.join(_setupFilesDir, options.setupFileName)
     if os.path.isfile(mFilename):
@@ -63,8 +63,8 @@ def saveSetupInfo(options, setupInfo):
             os.rename(backupFileName, mFilename)
             os.remove(backupFileName)
 
-    
-    
+
+
 
 
 def loadOptions():

@@ -18,7 +18,7 @@ class CameraWebcam:
         # many to be purged
         self.model = "Webcam"
         self.shape = (0, 0)
-        
+
         self.is_connected = False
         self.is_streaming = False
 
@@ -29,12 +29,12 @@ class CameraWebcam:
             self._init_cam(cameraNo = cameraNo)
         else:
             raise Exception("No camera connected")
-        
+
     def _init_cam(self, cameraNo=1):
         # start camera
         self.is_connected = True
 
-        
+
         # Initialize the webcam
         try:
             self.camera = cv2.VideoCapture(cameraNo)
@@ -44,26 +44,26 @@ class CameraWebcam:
 
         # get the shape of the frame
         shape = self.camera.read()[1].shape
-    
-        # get framesize 
+
+        # get framesize
         self.SensorHeight = shape[1]
         self.SensorWidth = shape[0]
-        
+
     def start_live(self):
         pass
-        
+
     def stop_live(self):
         pass
-    
+
     def suspend_live(self):
         pass
-        
+
     def prepare_live(self):
         pass
 
     def close(self):
         self.camera.release()
-        
+
     def set_exposure_time(self,exposure_time):
         self.exposure_time = exposure_time
         return
@@ -75,14 +75,14 @@ class CameraWebcam:
         self.camera.Gain.set(self.gain)
 
     def set_frame_rate(self, frame_rate):
-        pass 
-    
+        pass
+
     def set_blacklevel(self,blacklevel):
         pass
 
     def set_pixel_format(self,format):
-        pass 
-        
+        pass
+
     def setBinning(self, binning=1):
         # Unfortunately this does not work
         # self.camera.BinningHorizontal.set(binning)
@@ -96,16 +96,16 @@ class CameraWebcam:
         return self.frame
 
     def flushBuffer(self):
-        return 
-    
+        return
+
     def getLastChunk(self):
         # get frames from camera'S buffer => e.g. for Hdf5 saving
         frame = self.camera.read()
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         chunk = np.expand_dims(frame, 0)
-        
+
         return chunk
-    
+
     def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
         return hpos,vpos,hsize,vsize
 
@@ -136,9 +136,9 @@ class CameraWebcam:
         elif property_name == "exposure":
             property_value = 0# self.camera.ExposureTime.get()
         elif property_name == "blacklevel":
-            property_value = self.camera.BlackLevel.get()            
+            property_value = self.camera.BlackLevel.get()
         elif property_name == 0:# "image_width":
-            property_value = self.camera.Width.get()//self.binning         
+            property_value = self.camera.Width.get()//self.binning
         elif property_name == "image_height":
             property_value = 0 #self.camera.Height.get()//self.binning
         else:
@@ -148,12 +148,12 @@ class CameraWebcam:
 
     def setTriggerSource(self, trigger_source):
         pass
-            
-    
+
+
     def openPropertiesGUI(self):
         pass
-    
-    
+
+
 
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.
@@ -169,4 +169,4 @@ class CameraWebcam:
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.    
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.

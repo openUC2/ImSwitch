@@ -20,7 +20,7 @@ class PixelCalibrationManager(SignalInterface):
 
         if PixelCalibrationInfo is None:
             return
-        
+
         self.update()
 
     def update(self):

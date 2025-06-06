@@ -37,7 +37,7 @@ class UIExport:
         self._UIPath   = path
         self._UIName   = name
         self._UIIcon   = icon
-        
+
 
     def __call__(self, cls):
         cls._UIExport = self._UIExport
@@ -69,11 +69,11 @@ def generateUI(widgetClassList, *, missingAttributeErrorMsg=None):
             if not callable(subObj):
                 continue
             if not hasattr(subObj, '_UIExport') or not subObj._UIExport:
-                continue        
+                continue
             if subObjName in exportedFuncs:
                 raise NameError(f'UI method name "{widgetClassName}" is already in use')
             exportedFuncs[subObjName] = subObj
-        
+
     return pythontools.dictToROClass(exportedFuncs,
                                      missingAttributeErrorMsg=missingAttributeErrorMsg)
 
@@ -142,7 +142,7 @@ class _UIThreadExecWrapper(SignalInterface):
 
     async def _execAsync(self):
         await self._apiFunc(*self._args, **self._kwargs)
-        
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

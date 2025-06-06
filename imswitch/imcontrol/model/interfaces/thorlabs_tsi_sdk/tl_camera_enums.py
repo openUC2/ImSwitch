@@ -19,18 +19,18 @@ class OPERATION_MODE(_CTypesEnum):
     SOFTWARE_TRIGGERED = 0
     """
     Use software operation mode to generate one or more frames per trigger or to run continuous video mode.
-    
+
     """
     HARDWARE_TRIGGERED = 1
     """
     Use hardware triggering to generate one or more frames per trigger by issuing hardware signals.
-    
+
     """
     BULB = 2
     """
-    Use bulb-mode triggering to generate one or more frames per trigger by issuing hardware signals. Please refer to 
+    Use bulb-mode triggering to generate one or more frames per trigger by issuing hardware signals. Please refer to
     the camera manual for signaling details.
-    
+
     """
     RESERVED1 = 3  # Reserved for internal use.
     RESERVED2 = 4  # Reserved for internal use.
@@ -44,17 +44,17 @@ class SENSOR_TYPE(_CTypesEnum):
     MONOCHROME = 0
     """
     Each pixel of the sensor indicates an intensity.
-    
+
     """
     BAYER = 1
     """
-    The sensor has a bayer-patterned filter overlaying it, allowing the camera SDK to distinguish red, green, and blue 
+    The sensor has a bayer-patterned filter overlaying it, allowing the camera SDK to distinguish red, green, and blue
     values.
-    
+
     """
     MONOCHROME_POLARIZED = 2
     """
-     The sensor has a polarization filter overlaying it allowing the camera to capture polarization information from 
+     The sensor has a polarization filter overlaying it allowing the camera to capture polarization information from
      the incoming light.
 
     """
@@ -69,7 +69,7 @@ class TRIGGER_POLARITY(_CTypesEnum):
     ACTIVE_HIGH = 0
     """
     Acquire an image on the RISING edge of the trigger pulse.
-    
+
     """
     ACTIVE_LOW = 1
     """
@@ -91,22 +91,22 @@ class EEP_STATUS(_CTypesEnum):
     DISABLED = 0
     """
     EEP mode is disabled.
-    
+
     """
     ENABLED_ACTIVE = 1
     """
     EEP mode is enabled and currently active.
-    
+
     """
     ENABLED_INACTIVE = 2
     """
     EEP mode is enabled, but due to an unsupported exposure value, currently inactive.
-    
+
     """
     ENABLED_BULB = 3
     """
     EEP mode is enabled in bulb mode.
-    
+
     """
 
 
@@ -120,12 +120,12 @@ class DATA_RATE(_CTypesEnum):
     FPS_30 = 2
     """
     Sets the device to deliver images at 30 frames per second.
-    
+
     """
     FPS_50 = 3
     """
     Sets the device to deliver images at 50 frames per second.
-    
+
     """
 
 
@@ -138,17 +138,17 @@ class USB_PORT_TYPE(_CTypesEnum):
     USB1_0 = 0
     """
     The device is connected to a USB 1.0/1.1 port (1.5 Mbits/sec or 12 Mbits/sec).
-    
+
     """
     USB2_0 = 1
     """
     The device is connected to a USB 2.0 port (480 Mbits/sec).
-    
+
     """
     USB3_0 = 2
     """
     The device is connected to a USB 3.0 port (5000 Mbits/sec).
-    
+
     """
 
 
@@ -162,17 +162,17 @@ class TAPS(_CTypesEnum):
     SINGLE_TAP = 0
     """
     Charges are read out through a single analog-to-digital converter.
-    
+
     """
     DUAL_TAP = 1
     """
     Charges are read out through two analog-to-digital converters.
-    
+
     """
     QUAD_TAP = 2
     """
     Charges are read out through four analog-to-digital converters.
-    
+
     """
 
 
@@ -185,15 +185,15 @@ class COMMUNICATION_INTERFACE(_CTypesEnum):
     GIG_E = 0
     """
     The camera uses the GigE Vision (GigE) interface standard.
-    
+
     """
     LINK = 1
     """
     The camera uses the CameraLink serial-communication-protocol standard.
-    
+
     """
     USB = 2
     """
     The camera uses a USB interface.
-    
+
     """

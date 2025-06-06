@@ -4,7 +4,7 @@ def informationDisplay(widget, title):
     """Inform User about something"""
     QtWidgets.QMessageBox.information(widget, 'Ok', title)
 
-    
+
 def askYesNoQuestion(widget, title, question):
     """ Asks the user a yes/no question and returns whether "yes" was clicked. """
     result = QtWidgets.QMessageBox.question(widget, title, question,

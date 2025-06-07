@@ -13,15 +13,22 @@ import tifffile as tif
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
+try:
+    from .OmeTiffStitcher import OmeTiffStitcher
+except ImportError:
+    from OmeTiffStitcher import OmeTiffStitcher
+
 
 @dataclass
 class OMEWriterConfig:
     """Configuration for OME writer behavior."""
     write_tiff: bool = False
     write_zarr: bool = True
+    write_stitched_tiff: bool = False  # New option for stitched TIFF
     min_period: float = 0.2
     compression: str = "zlib"
     zarr_compressor = None
+    pixel_size: float = 1.0  # pixel size in microns
     
     def __post_init__(self):
         if self.zarr_compressor is None:
@@ -60,12 +67,18 @@ class OMEWriter:
         self.root = None
         self.canvas = None
         
+        # Stitched TIFF writer
+        self.tiff_stitcher = None
+        
         # Timing
         self.t_last = time.time()
         
         # Initialize storage if needed
         if config.write_zarr:
             self._setup_zarr_store()
+        
+        if config.write_stitched_tiff:
+            self._setup_tiff_stitcher()
     
     def _setup_zarr_store(self):
         """Set up the OME-Zarr store and canvas."""
@@ -100,6 +113,14 @@ class OMEWriter:
             ],
         }]
     
+    def _setup_tiff_stitcher(self):
+        """Set up the TIFF stitcher for creating stitched OME-TIFF files."""
+        stitched_tiff_path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
+        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True)
+        self.tiff_stitcher.start()
+        if self.logger:
+            self.logger.debug(f"TIFF stitcher initialized: {stitched_tiff_path}")
+    
     def write_frame(self, frame, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Write a single frame to both TIFF and/or Zarr formats.
@@ -121,6 +142,10 @@ class OMEWriter:
         if self.config.write_zarr and self.canvas is not None:
             chunk_info = self._write_zarr_tile(frame, metadata)
             result.update(chunk_info)
+        
+        # Write to stitched TIFF if requested
+        if self.config.write_stitched_tiff and self.tiff_stitcher is not None:
+            self._write_stitched_tiff_tile(frame, metadata)
         
         # Throttle writes if needed
         self._throttle_writes()
@@ -158,6 +183,21 @@ class OMEWriter:
             "canvas_bounds": (x0, x1, y0, y1)
         }
     
+    def _write_stitched_tiff_tile(self, frame, metadata: Dict[str, Any]):
+        """Write tile to stitched TIFF using OmeTiffStitcher."""
+        # Calculate grid index from position
+        ix = int(round((metadata["x"] - self.x_start) / self.x_step))
+        iy = int(round((metadata["y"] - self.y_start) / self.y_step))
+        
+        self.tiff_stitcher.add_image(
+            image=frame,
+            position_x=metadata["x"],
+            position_y=metadata["y"],
+            index_x=ix,
+            index_y=iy,
+            pixel_size=self.config.pixel_size
+        )
+    
     def _throttle_writes(self):
         """Throttle disk writes if needed."""
         t_now = time.time()
@@ -176,6 +216,12 @@ class OMEWriter:
             except Exception as err:
                 if self.logger:
                     self.logger.warning(f"Pyramid generation failed: {err}")
+        
+        # Close stitched TIFF writer
+        if self.config.write_stitched_tiff and self.tiff_stitcher is not None:
+            self.tiff_stitcher.close()
+            if self.logger:
+                self.logger.info("Stitched TIFF file completed")
         
         if self.logger:
             self.logger.info(f"OME writer finalized for {self.file_paths.base_dir}")

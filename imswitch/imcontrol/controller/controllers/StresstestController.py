@@ -118,9 +118,9 @@ class StresstestParams(BaseModel):
     maxPosX: float = 10000.0      # maximum X position in micrometers
     minPosY: float = 0.0          # minimum Y position in micrometers
     maxPosY: float = 10000.0      # maximum Y position in micrometers
-    numRandomPositions: int = 10  # number of random positions per cycle
-    numCycles: int = 5            # number of repetition cycles
-    timeInterval: float = 60.0    # time interval between cycles in seconds
+    numRandomPositions: int = 5  # number of random positions per cycle
+    numCycles: int = 3            # number of repetition cycles
+    timeInterval: float = 10.0    # time interval between cycles in seconds
     illuminationIntensity: float = 50.0  # illumination intensity (0-100)
     exposureTime: float = 0.1     # camera exposure time in seconds
     saveImages: bool = True       # whether to save captured images

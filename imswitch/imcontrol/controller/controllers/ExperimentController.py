@@ -449,13 +449,14 @@ class ExperimentController(ImConWidgetController):
                 We will move the stage to each point, set the illumination, acquire the frame and save it 
                 using the unified OME writer (TIFF stitching + OME-Zarr).
                 '''
-                # Set up unified OME writer for normal mode
-                file_paths = self.setup_ome_writer_for_normal_mode(snake_tiles, exp_name, write_stitched_tiff=True)
 
 
                 # Loop over each tile (each central point and its neighbors)
                 for position_center_index, tile in enumerate(snake_tiles):
 
+                    # Set up unified OME writer for normal mode
+                    # TODO: We need to store the writers in a list or dict to access them later via the worfkflow manager e.g. we need to store the instances of OMEWriter, otherwise they will get overwritten withevery sub position patch
+                    file_paths = self.setup_ome_writer_for_normal_mode(tile, exp_name+"_"+str(position_center_index), write_stitched_tiff=True)
                     # iterate over positions
                     for mIndex, mPoint in enumerate(tile):
                         try:
@@ -1213,11 +1214,10 @@ class ExperimentController(ImConWidgetController):
         """
         # Calculate grid parameters from snake tiles
         all_points = []
-        for tile in snake_tiles:
-            for point in tile:
-                if point is not None:
-                    all_points.append([point["x"], point["y"]])
-        
+        for point in snake_tiles:
+            if point is not None:
+                all_points.append([point["x"], point["y"]])
+    
         if not all_points:
             raise ValueError("No valid points found in snake_tiles")
         
@@ -1241,7 +1241,7 @@ class ExperimentController(ImConWidgetController):
         file_paths = OMEFileStorePaths(mFilePath)
         
         # Set up OME writer in normal mode (non-performance mode)
-        tile_shape = self.mDetector._shape[-2:]  # (height, width)
+        tile_shape = (self.mDetector._shape[-1],self.mDetector._shape[-2])  # (height, width)
         grid_shape = (nx, ny)
         grid_geometry = (x_start, y_start, x_step, y_step)
         writer_config = OMEWriterConfig(
@@ -1254,7 +1254,7 @@ class ExperimentController(ImConWidgetController):
         
         self._current_ome_writer = OMEWriter(
             file_paths=file_paths,
-            tile_shape=tile_shape,
+            tile_shape=tile_shape, # (height, width)
             grid_shape=grid_shape,
             grid_geometry=grid_geometry,
             config=writer_config,

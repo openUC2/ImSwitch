@@ -58,7 +58,7 @@ class OMEWriter:
         self.file_paths = file_paths
         self.tile_h, self.tile_w = tile_shape
         self.nx, self.ny = grid_shape
-        self.x_start, self.y_start, self.x_step, self.y_step = grid_geometry
+        self.x_start, self.y_start, self.x_step, self.y_step = grid_geometry # TODO: this should be set per each grid 
         self.config = config
         self.logger = logger
         
@@ -209,7 +209,7 @@ class OMEWriter:
         """Finalize the writing process and optionally build pyramids."""
         if self.config.write_zarr and self.store is not None:
             try:
-                from ome_zarr.writer import to_multiscales
+                from ome_zarr.writer import to_multiscales # TODO: THis doesn'T exist!
                 to_multiscales(self.store, scale_factors=[[2, 2, 2]])
                 if self.logger:
                     self.logger.info("OME-Zarr pyramid generated successfully")

@@ -40,14 +40,74 @@ try:
 except ImportError:
     _HAS_NUMPY = False
 
-# Import image registration utilities if available
+# Import off-the-shelf image registration libraries if available
 try:
-    from ..camera_stage_mapping.fft_image_tracking import displacement_between_images
-    from ..camera_stage_mapping.correlation_image_tracking import locate_feature_in_image
     import cv2
+    from skimage import registration
+    from skimage.feature import match_template
+    import numpy as np
     _HAS_IMAGE_REGISTRATION = True
 except ImportError:
     _HAS_IMAGE_REGISTRATION = False
+
+
+def displacement_between_images_skimage(image1, image2):
+    """
+    Calculate displacement between two images using scikit-image phase cross-correlation.
+    
+    Args:
+        image1: Reference image (numpy array)
+        image2: Image to compare (numpy array)
+    
+    Returns:
+        numpy array: [y_shift, x_shift] displacement in pixels
+    """
+    if not _HAS_IMAGE_REGISTRATION:
+        raise ImportError("Required libraries (scikit-image, opencv) not available for image registration")
+    
+    # Convert to grayscale if needed
+    if len(image1.shape) == 3:
+        image1 = cv2.cvtColor(image1, cv2.COLOR_RGB2GRAY)
+    if len(image2.shape) == 3:
+        image2 = cv2.cvtColor(image2, cv2.COLOR_RGB2GRAY)
+    
+    # Use scikit-image phase cross-correlation
+    shift, error, diffphase = registration.phase_cross_correlation(image1, image2)
+    
+    return shift
+
+
+def locate_feature_in_image_opencv(image, template):
+    """
+    Locate a template in an image using OpenCV template matching.
+    
+    Args:
+        image: Large image to search in (numpy array)
+        template: Template to find (numpy array)
+    
+    Returns:
+        numpy array: [y, x] position of template center in image
+    """
+    if not _HAS_IMAGE_REGISTRATION:
+        raise ImportError("Required libraries (opencv) not available for template matching")
+    
+    # Convert to grayscale if needed
+    if len(image.shape) == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    if len(template.shape) == 3:
+        template = cv2.cvtColor(template, cv2.COLOR_RGB2GRAY)
+    
+    # Perform template matching
+    result = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+    
+    # Find the location of the best match
+    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+    
+    # Calculate center position of the matched template
+    template_center = np.array([max_loc[1] + template.shape[0] // 2, 
+                               max_loc[0] + template.shape[1] // 2])
+    
+    return template_center
 
 
 class StresstestParams(BaseModel):
@@ -576,9 +636,9 @@ class StresstestController(ImConWidgetController):
         try:
             if not _HAS_IMAGE_REGISTRATION or not _HAS_NUMPY:
                 if _HAS_IMSWITCH:
-                    self._logger.warning("Image registration libraries not available, skipping image-based error estimation")
+                    self._logger.warning("Image registration libraries (scikit-image, opencv) not available, skipping image-based error estimation")
                 else:
-                    print("Image registration libraries not available, skipping image-based error estimation")
+                    print("Image registration libraries (scikit-image, opencv) not available, skipping image-based error estimation")
                 return {
                     'average_error': 0.0,
                     'average_shift': [0.0, 0.0],
@@ -646,26 +706,18 @@ class StresstestController(ImConWidgetController):
             for i, img in enumerate(images[1:], 1):
                 try:
                     if self.params.imageRegistrationMethod == "fft":
-                        # Use FFT-based registration
-                        displacement = displacement_between_images(reference_image, img)
+                        # Use scikit-image FFT-based registration
+                        displacement = displacement_between_images_skimage(reference_image, img)
                     else:
-                        # Use correlation-based registration (fallback)
-                        # For correlation method, we need to ensure proper format
-                        if len(reference_image.shape) == 3:
-                            ref_gray = cv2.cvtColor(reference_image, cv2.COLOR_RGB2GRAY)
-                            img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-                        else:
-                            ref_gray = reference_image
-                            img_gray = img
-                        
+                        # Use OpenCV template matching (correlation-based)
                         # Extract a central region for template matching
-                        h, w = ref_gray.shape[:2]
+                        h, w = reference_image.shape[:2]
                         template_size = min(h//4, w//4, 50)  # Use a reasonable template size
-                        template = ref_gray[h//2-template_size//2:h//2+template_size//2,
-                                          w//2-template_size//2:w//2+template_size//2]
+                        template = reference_image[h//2-template_size//2:h//2+template_size//2,
+                                                 w//2-template_size//2:w//2+template_size//2]
                         
                         # Find template position in the image
-                        position = locate_feature_in_image(img_gray, template, margin=10)
+                        position = locate_feature_in_image_opencv(img, template)
                         expected_pos = np.array([h//2, w//2])
                         displacement = position - expected_pos
                     

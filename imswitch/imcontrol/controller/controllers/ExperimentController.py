@@ -454,9 +454,23 @@ class ExperimentController(ImConWidgetController):
                 # Loop over each tile (each central point and its neighbors)
                 for position_center_index, tile in enumerate(snake_tiles):
 
-                    # Set up unified OME writer for normal mode
-                    # TODO: We need to store the writers in a list or dict to access them later via the worfkflow manager e.g. we need to store the instances of OMEWriter, otherwise they will get overwritten withevery sub position patch
-                    file_paths = self.setup_ome_writer_for_normal_mode(tile, exp_name+"_"+str(position_center_index), write_stitched_tiff=True)
+                    # Set up unified OME writer for normal mode - store in context to prevent overwriting
+                    tile_key = f"tile_{position_center_index}"
+                    
+                    # Add workflow step to set up OME writer for this tile
+                    workflowSteps.append(WorkflowStep(
+                        name=f"Setup OME writer for tile {position_center_index}",
+                        step_id=step_id,
+                        main_func=self.setup_ome_writer_for_workflow,
+                        main_params={
+                            "snake_tiles": tile,
+                            "exp_name": exp_name+"_"+str(position_center_index),
+                            "tile_key": tile_key,
+                            "write_stitched_tiff": True
+                        },
+                    ))
+                    step_id += 1
+                    
                     # iterate over positions
                     for mIndex, mPoint in enumerate(tile):
                         try:
@@ -538,6 +552,7 @@ class ExperimentController(ImConWidgetController):
                                     "time_index": t,       # or whatever loop index
                                     "tile_index": mIndex,   # or snake-tile index
                                     "position_center_index": position_center_index,
+                                    "tile_key": tile_key,  # Add tile key for OME writer lookup
                                     "isPreview": isPreview,
                                     "runningNumber": step_id,  # Add running number for compatibility
                                     "illuminationChannel": illuSource,
@@ -566,6 +581,15 @@ class ExperimentController(ImConWidgetController):
                         ))
                         step_id += 1
 
+                    step_id += 1
+
+                    # Finalize OME writer for this tile
+                    workflowSteps.append(WorkflowStep(
+                        name=f"Finalize OME writer for tile {position_center_index}",
+                        step_id=step_id,
+                        main_func=self.finalize_tile_ome_writer,
+                        main_params={"tile_key": tile_key},
+                    ))
                     step_id += 1
 
                 # Add a wait period between each loop
@@ -722,6 +746,13 @@ class ExperimentController(ImConWidgetController):
             self._logger.debug("No image found in metadata!")
             return
         
+        # Get tile key to identify the correct OME writer
+        tile_key = kwargs.get("tile_key")
+        if tile_key is None:
+            self._logger.error("No tile_key provided for OME writer lookup")
+            metadata["frame_saved"] = False
+            return
+        
         # Prepare metadata for OME writer
         ome_metadata = {
             "x": kwargs.get("posX", 0),
@@ -735,8 +766,8 @@ class ExperimentController(ImConWidgetController):
         }
         
         try:
-            # Write frame using unified OME writer
-            chunk_info = self.write_frame_to_ome_writer(img, ome_metadata)
+            # Write frame using the specific OME writer from context
+            chunk_info = self.write_frame_to_ome_writer_from_context(context, tile_key, img, ome_metadata)
             
             # Emit signal for frontend updates if Zarr chunk was written
             if chunk_info and "rel_chunk" in chunk_info:
@@ -1177,6 +1208,28 @@ class ExperimentController(ImConWidgetController):
         self.mDetector.startAcquisition()
         self.fastStageScanIsRunning = False
 
+    def write_frame_to_ome_writer_from_context(self, context: WorkflowContext, tile_key: str, frame, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Write a frame to the specific OME writer stored in context (for normal mode scanning).
+        
+        Args:
+            context: WorkflowContext containing the OME writers
+            tile_key: Key to identify the specific OME writer
+            frame: Image data as numpy array
+            metadata: Dictionary containing position and other metadata
+            
+        Returns:
+            Dictionary with information about the written chunk (for Zarr)
+        """
+        ome_writer_key = f"ome_writer_{tile_key}"
+        ome_writer = context.get_object(ome_writer_key)
+        
+        if ome_writer is not None:
+            return ome_writer.write_frame(frame, metadata)
+        else:
+            self._logger.warning(f"No OME writer available for tile key: {tile_key}")
+            return None
+
     def write_frame_to_ome_writer(self, frame, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Write a frame to the current OME writer (for normal mode scanning).
@@ -1194,13 +1247,71 @@ class ExperimentController(ImConWidgetController):
             self._logger.warning("No OME writer available for frame writing")
             return None
     
-    def finalize_current_ome_writer(self):
-        """Finalize the current OME writer and clean up."""
+    def finalize_tile_ome_writer(self, context: WorkflowContext, metadata: Dict[str, Any], tile_key: str):
+        """Finalize the OME writer for a specific tile."""
+        ome_writer_key = f"ome_writer_{tile_key}"
+        ome_writer = context.get_object(ome_writer_key)
+        
+        if ome_writer is not None:
+            try:
+                self._logger.info(f"Finalizing OME writer for tile: {tile_key}")
+                ome_writer.finalize()
+                context.remove_object(ome_writer_key)
+            except Exception as e:
+                self._logger.error(f"Error finalizing OME writer for tile {tile_key}: {e}")
+        else:
+            self._logger.warning(f"No OME writer found for tile key: {tile_key}")
+
+    def finalize_current_ome_writer(self, context: WorkflowContext = None, metadata: Dict[str, Any] = None):
+        """Finalize all OME writers and clean up."""
+        # Finalize OME writers from context (normal mode)
+        if context is not None:
+            # Find all OME writer objects in context
+            ome_writers_to_finalize = []
+            for key in list(context.objects.keys()):
+                if key.startswith("ome_writer_"):
+                    ome_writer = context.get_object(key)
+                    if ome_writer is not None:
+                        ome_writers_to_finalize.append((key, ome_writer))
+            
+            # Finalize each OME writer
+            for key, ome_writer in ome_writers_to_finalize:
+                try:
+                    self._logger.info(f"Finalizing OME writer: {key}")
+                    ome_writer.finalize()
+                    context.remove_object(key)
+                except Exception as e:
+                    self._logger.error(f"Error finalizing OME writer {key}: {e}")
+        
+        # Also finalize the instance variable if it exists (performance mode)
         if self._current_ome_writer is not None:
-            self._current_ome_writer.finalize()
-            self._current_ome_writer = None
+            try:
+                self._current_ome_writer.finalize()
+                self._current_ome_writer = None
+            except Exception as e:
+                self._logger.error(f"Error finalizing current OME writer: {e}")
     
-    def setup_ome_writer_for_normal_mode(self, snake_tiles, exp_name: str, write_stitched_tiff: bool = True) -> OMEFileStorePaths:
+    def setup_ome_writer_for_workflow(self, context: WorkflowContext, metadata: Dict[str, Any], snake_tiles, exp_name: str, tile_key: str, write_stitched_tiff: bool = True):
+        """
+        Set up OME writer for normal mode scanning and store it in workflow context.
+        
+        Args:
+            context: WorkflowContext to store the OME writer
+            metadata: Workflow metadata
+            snake_tiles: List of tile coordinates for determining grid geometry
+            exp_name: Experiment name for file naming
+            tile_key: Unique key for this tile's OME writer
+            write_stitched_tiff: Whether to enable stitched TIFF output
+        """
+        file_paths = self.setup_ome_writer_for_normal_mode(snake_tiles, exp_name, write_stitched_tiff, tile_key)
+        
+        # Get the OME writer that was created and store it in context
+        if hasattr(self, '_current_ome_writer') and self._current_ome_writer is not None:
+            context.set_object(f"ome_writer_{tile_key}", self._current_ome_writer)
+            self._current_ome_writer = None  # Clear the instance variable
+            self._logger.info(f"OME writer stored in context with key: ome_writer_{tile_key}")
+
+    def setup_ome_writer_for_normal_mode(self, snake_tiles, exp_name: str, write_stitched_tiff: bool = True, tile_key: str = None) -> OMEFileStorePaths:
         """
         Set up OME writer for normal mode scanning.
         

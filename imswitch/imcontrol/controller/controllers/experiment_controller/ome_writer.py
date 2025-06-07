@@ -21,7 +21,7 @@ class OMEWriterConfig:
     write_zarr: bool = True
     min_period: float = 0.2
     compression: str = "zlib"
-    zarr_compressor: Optional[numcodecs.Codec] = None
+    zarr_compressor = None
     
     def __post_init__(self):
         if self.zarr_compressor is None:

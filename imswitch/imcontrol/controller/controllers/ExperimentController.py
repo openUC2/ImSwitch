@@ -36,7 +36,7 @@ except Exception as e:
 try:
     from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
     from imswitch.imcontrol.controller.controllers.experiment_controller.single_multiscale_zarr_data_source import SingleMultiscaleZarrWriter
-    IS_OMEZARR_AVAILABLE = False # TODO: True
+    IS_OMEZARR_AVAILABLE = True # TODO: True
 except Exception as e:
     IS_OMEZARR_AVAILABLE = False
 
@@ -425,9 +425,17 @@ class ExperimentController(ImConWidgetController):
         step_id = 0
 
         for t in range(nTimes):
-            # Prepare TIFF writer - reuse timeStamp, dirPath from above
-            # if performanceMode is True, we will execute on the Hardware directly
-            if performanceMode:
+            '''
+            THIS IS THE PERFORMANCE MODE:
+             The microcontroller will move the stage in a grid and triggers the camera, 
+             ImSwitch listens to the camera and stores the images in a OME-Zarr format.
+             The microcontroller will also handle the illumination and the Z-positioning.
+             The microcontroller will not handle the autofocus if enabled.
+             
+             Prepare TIFF writer - reuse timeStamp, dirPath from above
+             if performanceMode is True, we will execute on the Hardware directly
+            '''
+            if performanceMode and hasattr(self.mStage, "startFastStageScanAcquisition") and hasattr(self.mDetector, "setTriggerSource"):
                 self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
                 for snake_tile in snake_tiles:
                     # we need to wait if there is another fast stage scan running
@@ -464,196 +472,203 @@ class ExperimentController(ImConWidgetController):
                                                         illumination2=illumination2, illumination3=illumination3, led=led)
                     # we need to wait until the acquisition is done so that we can start the next one
                 return
-            mFilePaths = []
-            tiff_writers = []
-            for index, experiments_ in enumerate(mExperiment.pointList):
-                experimentName = experiments_.name
-                mFilePath = os.path.join(dirPath, mFileName + str(index) + "_" + experimentName + "_" + ".ome.tif")
-                mFilePaths.append(mFilePath)
-                self._logger.debug(f"OME-TIFF path: {mFilePath}")
-                #tiff_writer = tif.TiffWriter(mFilePath)
+            else:
+                
+                ''' THIS IS THE NORMAL MODE:
+                We will move the stage to each point, set the illumination, acquire the frame and save it to OME-TIFF and OME-Zarr.
+                The OME-TIFF will be stitched later on.
+                The OME-Zarr will be written directly.
+                '''
+                mFilePaths = []
+                tiff_writers = []
+                for index, experiments_ in enumerate(mExperiment.pointList):
+                    experimentName = experiments_.name
+                    mFilePath = os.path.join(dirPath, mFileName + str(index) + "_" + experimentName + "_" + ".ome.tif")
+                    mFilePaths.append(mFilePath)
+                    self._logger.debug(f"OME-TIFF path: {mFilePath}")
+                    #tiff_writer = tif.TiffWriter(mFilePath)
 
-                # Create a new OmeTiffStitcher instance for stitching tiles
-                tiff_writer = OmeTiffStitcher(mFilePath)
-                tiff_writers.append(tiff_writer)
+                    # Create a new OmeTiffStitcher instance for stitching tiles
+                    tiff_writer = OmeTiffStitcher(mFilePath)
+                    tiff_writers.append(tiff_writer)
 
 
-            # Loop over each tile (each central point and its neighbors)
-            for position_center_index, tile in enumerate(snake_tiles):
+                # Loop over each tile (each central point and its neighbors)
+                for position_center_index, tile in enumerate(snake_tiles):
 
-                # start storer - store one center point per file # TODO: How about time series?
-                self.start_tiff_writer(tiff_writers=tiff_writers, tiff_index=position_center_index)
+                    # start storer - store one center point per file # TODO: How about time series?
+                    self.start_tiff_writer(tiff_writers=tiff_writers, tiff_index=position_center_index)
 
-                # iterate over positions
-                for mIndex, mPoint in enumerate(tile):
-                    try:
-                        name = f"Move to point {mPoint['iterator']}"
-                    except Exception:
-                        name = f"Move to point {mPoint['x']}, {mPoint['y']}"
+                    # iterate over positions
+                    for mIndex, mPoint in enumerate(tile):
+                        try:
+                            name = f"Move to point {mPoint['iterator']}"
+                        except Exception:
+                            name = f"Move to point {mPoint['x']}, {mPoint['y']}"
 
-                    workflowSteps.append(WorkflowStep(
-                        name=name,
-                        step_id=step_id,
-                        main_func=self.move_stage_xy,
-                        main_params={"posX": mPoint["x"], "posY": mPoint["y"], "relative": False},
-                    ))
+                        workflowSteps.append(WorkflowStep(
+                            name=name,
+                            step_id=step_id,
+                            main_func=self.move_stage_xy,
+                            main_params={"posX": mPoint["x"], "posY": mPoint["y"], "relative": False},
+                        ))
 
-                    # iterate over z-steps
-                    for indexZ, iZ in enumerate(z_positions):
+                        # iterate over z-steps
+                        for indexZ, iZ in enumerate(z_positions):
 
-                        #move to Z position - but only if we have more than one z position
-                        if len(z_positions) > 1 or (len(z_positions) == 1 and mIndex == 0):
-                            workflowSteps.append(WorkflowStep(
-                                name="Move to Z position",
-                                step_id=step_id,
-                                main_func=self.move_stage_z,
-                                main_params={"posZ": iZ, "relative": False},
-                                pre_funcs=[self.wait_time],
-                                pre_params={"seconds": 0.1},
-                            ))
-
-                        step_id += 1
-                        for illuIndex, illuSource in enumerate(illuSources):
-                            illuIntensity = illuminationIntensites[illuIndex-1]
-                            if illuIntensity <= 0: continue
-
-                            # Turn on illumination - if we have only one source, we can skip this step after the first stop of mIndex
-                            if sum(np.array(illuminationIntensites)>0) > 1 or  ( mIndex == 0):
+                            #move to Z position - but only if we have more than one z position
+                            if len(z_positions) > 1 or (len(z_positions) == 1 and mIndex == 0):
                                 workflowSteps.append(WorkflowStep(
-                                    name="Turn on illumination",
+                                    name="Move to Z position",
                                     step_id=step_id,
-                                    main_func=self.set_laser_power,
-                                    main_params={"power": illuIntensity, "channel": illuSource},
-                                    post_funcs=[self.wait_time],
-                                    post_params={"seconds": 0.05},
+                                    main_func=self.move_stage_z,
+                                    main_params={"posZ": iZ, "relative": False},
+                                    pre_funcs=[self.wait_time],
+                                    pre_params={"seconds": 0.1},
                                 ))
-                                step_id += 1
 
-                        # Acquire frame
-                        isPreview = self.isPreview
-                        '''
-                        workflowSteps.append(WorkflowStep(
-                            name="Acquire frame",
-                            step_id=step_id,
-                            main_func=self.acquire_frame,
-                            main_params={"channel": "Mono"},
-                            post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
-                            pre_funcs=[self.set_exposure_time_gain],
-                            pre_params={"exposure_time": exposure, "gain": gain},
-                            # Hier übergeben wir posX, posY an das Metadata-Dict
-                            post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
-                        ))
-                        '''
+                            step_id += 1
+                            for illuIndex, illuSource in enumerate(illuSources):
+                                illuIntensity = illuminationIntensites[illuIndex-1]
+                                if illuIntensity <= 0: continue
 
-                        workflowSteps.append(WorkflowStep(
-                            name="Acquire frame",
-                            step_id=step_id,
-                            main_func=self.acquire_frame,
-                            main_params={"channel": "Mono"},
-                            post_funcs=[self.save_frame_tiff, self.save_frame_ome_zarr, self.add_image_to_canvas],
-                            pre_funcs=[self.set_exposure_time_gain],
-                            pre_params={"exposure_time": exposures[illuIndex], "gain": gains[illuIndex]},
-                            post_params={
-                                "posX": mPoint["x"],
-                                "posY": mPoint["y"],
-                                "posZ": 0, # TODO: Add Z position if needed
-                                "iX": mPoint["iX"],
-                                "iY": mPoint["iY"],
-                                "pixel_size": mPixelSize,
-                                "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
-                                "channel": illuSource,
-                                "time_index": t,       # or whatever loop index
-                                "tile_index": mIndex,   # or snake-tile index
-                                "position_center_index": position_center_index,
-                                "isPreview": isPreview,
-                            },
-                        ))
-                        step_id += 1
+                                # Turn on illumination - if we have only one source, we can skip this step after the first stop of mIndex
+                                if sum(np.array(illuminationIntensites)>0) > 1 or  ( mIndex == 0):
+                                    workflowSteps.append(WorkflowStep(
+                                        name="Turn on illumination",
+                                        step_id=step_id,
+                                        main_func=self.set_laser_power,
+                                        main_params={"power": illuIntensity, "channel": illuSource},
+                                        post_funcs=[self.wait_time],
+                                        post_params={"seconds": 0.05},
+                                    ))
+                                    step_id += 1
 
-                        # Turn off illumination
-                        if len(illuminationIntensites) > 1 and sum(np.array(illuminationIntensites)>0)>1: # TODO: Is htis the right approach?
+                            # Acquire frame
+                            isPreview = self.isPreview
+                            '''
                             workflowSteps.append(WorkflowStep(
-                                name="Turn off illumination",
+                                name="Acquire frame",
                                 step_id=step_id,
-                                main_func=self.set_laser_power,
-                                main_params={"power": 0, "channel": illuSource},
+                                main_func=self.acquire_frame,
+                                main_params={"channel": "Mono"},
+                                post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
+                                pre_funcs=[self.set_exposure_time_gain],
+                                pre_params={"exposure_time": exposure, "gain": gain},
+                                # Hier übergeben wir posX, posY an das Metadata-Dict
+                                post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
+                            ))
+                            '''
+
+                            workflowSteps.append(WorkflowStep(
+                                name="Acquire frame",
+                                step_id=step_id,
+                                main_func=self.acquire_frame,
+                                main_params={"channel": "Mono"},
+                                post_funcs=[self.save_frame_tiff, self.save_frame_ome_zarr, self.add_image_to_canvas],
+                                pre_funcs=[self.set_exposure_time_gain],
+                                pre_params={"exposure_time": exposures[illuIndex], "gain": gains[illuIndex]},
+                                post_params={
+                                    "posX": mPoint["x"],
+                                    "posY": mPoint["y"],
+                                    "posZ": 0, # TODO: Add Z position if needed
+                                    "iX": mPoint["iX"],
+                                    "iY": mPoint["iY"],
+                                    "pixel_size": mPixelSize,
+                                    "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
+                                    "channel": illuSource,
+                                    "time_index": t,       # or whatever loop index
+                                    "tile_index": mIndex,   # or snake-tile index
+                                    "position_center_index": position_center_index,
+                                    "isPreview": isPreview,
+                                },
                             ))
                             step_id += 1
 
-                # (Optional) Perform autofocus once per loop, if enabled
-                if isAutoFocus:
-                    workflowSteps.append(WorkflowStep(
-                        name="Autofocus",
-                        step_id=step_id,
-                        main_func=self.autofocus,
-                        main_params={"minZ": autofocusMin, "maxZ": autofocusMax, "stepSize": autofocusStepSize},
-                    ))
+                            # Turn off illumination
+                            if len(illuminationIntensites) > 1 and sum(np.array(illuminationIntensites)>0)>1: # TODO: Is htis the right approach?
+                                workflowSteps.append(WorkflowStep(
+                                    name="Turn off illumination",
+                                    step_id=step_id,
+                                    main_func=self.set_laser_power,
+                                    main_params={"power": 0, "channel": illuSource},
+                                ))
+                                step_id += 1
+
+                    # (Optional) Perform autofocus once per loop, if enabled
+                    if isAutoFocus:
+                        workflowSteps.append(WorkflowStep(
+                            name="Autofocus",
+                            step_id=step_id,
+                            main_func=self.autofocus,
+                            main_params={"minZ": autofocusMin, "maxZ": autofocusMax, "stepSize": autofocusStepSize},
+                        ))
+                        step_id += 1
+
                     step_id += 1
 
-                step_id += 1
+                    # Close TIFF writer at the end
+                    workflowSteps.append(WorkflowStep(
+                        name="Close TIFF writer",
+                        step_id=step_id,
+                        main_func=self.close_tiff_writer,
+                        main_params={"tiff_writers": tiff_writers, "tiff_index": position_center_index},
+                    ))
 
-                # Close TIFF writer at the end
+                # Add a wait period between each loop
                 workflowSteps.append(WorkflowStep(
-                    name="Close TIFF writer",
+                    name="Wait for next frame",
                     step_id=step_id,
-                    main_func=self.close_tiff_writer,
-                    main_params={"tiff_writers": tiff_writers, "tiff_index": position_center_index},
+                    main_func=self.dummy_main_func,
+                    main_params={},
+                    pre_funcs=[self.wait_time],
+                    pre_params={"seconds": 0.01}
                 ))
 
-            # Add a wait period between each loop
+            if IS_OMEZARR_AVAILABLE:
+                # Close OME-Zarr store at the end (new)
+                workflowSteps.append(WorkflowStep(
+                    name="Close OME-Zarr store",
+                    step_id=step_id,
+                    main_func=self.close_ome_zarr_store,
+                    main_params={"omezarr_store": ome_store},
+                ))
+                step_id += 1
+
+            # Emit final canvas
+            if self.isPreview:
+                workflowSteps.append(WorkflowStep(
+                    name="Emit Final Canvas",
+                    step_id=step_id,
+                    main_func=self.dummy_main_func,
+                    main_params={},
+                    pre_funcs=[self.emit_final_canvas],
+                    pre_params={}
+                ))
+                step_id += 1
+
+            # Final step: mark done
             workflowSteps.append(WorkflowStep(
-                name="Wait for next frame",
+                name="Done",
                 step_id=step_id,
                 main_func=self.dummy_main_func,
                 main_params={},
                 pre_funcs=[self.wait_time],
-                pre_params={"seconds": 0.01}
+                pre_params={"seconds": 0.1}
             ))
 
-        if IS_OMEZARR_AVAILABLE:
-            # Close OME-Zarr store at the end (new)
-            workflowSteps.append(WorkflowStep(
-                name="Close OME-Zarr store",
-                step_id=step_id,
-                main_func=self.close_ome_zarr_store,
-                main_params={"omezarr_store": ome_store},
-            ))
-            step_id += 1
-
-        # Emit final canvas
-        if self.isPreview:
-            workflowSteps.append(WorkflowStep(
-                name="Emit Final Canvas",
-                step_id=step_id,
-                main_func=self.dummy_main_func,
-                main_params={},
-                pre_funcs=[self.emit_final_canvas],
-                pre_params={}
-            ))
-            step_id += 1
-
-        # Final step: mark done
-        workflowSteps.append(WorkflowStep(
-            name="Done",
-            step_id=step_id,
-            main_func=self.dummy_main_func,
-            main_params={},
-            pre_funcs=[self.wait_time],
-            pre_params={"seconds": 0.1}
-        ))
-
-        # turn off all illuminations
-        for illuIndex, illuSource in enumerate(illuSources):
-            illuIntensity = illuminationIntensites[illuIndex-1]
-            if illuIntensity <= 0:
-                continue
-            # Turn off illumination
-            workflowSteps.append(WorkflowStep(
-                name="Turn off illumination",
-                step_id=step_id,
-                main_func=self.set_laser_power,
-                main_params={"power": 0, "channel": illuSource},
-            ))
+            # turn off all illuminations
+            for illuIndex, illuSource in enumerate(illuSources):
+                illuIntensity = illuminationIntensites[illuIndex-1]
+                if illuIntensity <= 0:
+                    continue
+                # Turn off illumination
+                workflowSteps.append(WorkflowStep(
+                    name="Turn off illumination",
+                    step_id=step_id,
+                    main_func=self.set_laser_power,
+                    main_params={"power": 0, "channel": illuSource},
+                ))
 
         def sendProgress(payload):
             self.sigExperimentWorkflowUpdate.emit(payload)
@@ -836,6 +851,8 @@ class ExperimentController(ImConWidgetController):
         if 0:
             omeZarrStore.write(img, x=posX, y=posY, z=posZ)
         else:
+            # TODO: This is not working as the posY and posX are in microns, but the OME-Zarr store expects pixel coordinates.
+            # Convert to pixel coordinates
             omeZarrStore.write_tile(img, t=0, c=0, z=0, y_start=posY, x_start=posX)
 
         time.sleep(0.01)

@@ -56,7 +56,6 @@ setup(
         "scikit-image==0.19.3",
         "Send2Trash >= 1.8",
         "tifffile >= 2020.11.26",
-        "ome_zarr >= 0.9.0",
         "dask[complete] >= 2024.8.0",
         "fastAPI >= 0.86.0",
         "uvicorn[standard] >= 0.19.0",

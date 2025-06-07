@@ -5,8 +5,15 @@ from .basecontrollers import ImRecWidgetController
 from imswitch.imcommon.model.logging import initLogger
 import zarr
 import numpy as np
-from ome_zarr.io import parse_url
-from ome_zarr.writer import write_image
+try:
+    # Use vanilla Zarr implementation instead of ome-zarr
+    from imswitch.imcontrol.controller.controllers.experiment_controller.vanilla_zarr_ome import (
+        parse_url, write_image
+    )
+except ImportError:
+    # Fallback to ome-zarr if vanilla implementation is not available
+    from ome_zarr.io import parse_url
+    from ome_zarr.writer import write_image
 from time import perf_counter
 import tifffile as tiff
 import h5py

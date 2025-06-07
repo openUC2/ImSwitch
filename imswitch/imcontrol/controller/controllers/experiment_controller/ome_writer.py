@@ -82,15 +82,15 @@ class OMEWriter:
     
     def _setup_zarr_store(self):
         """Set up the OME-Zarr store and canvas."""
-        self.store = zarr.DirectoryStore(str(self.file_paths.zarr_dir))
-        self.root = zarr.group(self.store, overwrite=True)
-        self.canvas = self.root.create_dataset(
+        # Use path string for Zarr v3 compatibility
+        self.store = str(self.file_paths.zarr_dir)
+        self.root = zarr.group(store=self.store, overwrite=True)
+        self.canvas = self.root.create_array(
             "0",
             shape=(1, 1, 1, self.ny * self.tile_h, self.nx * self.tile_w),  # t c z y x
             chunks=(1, 1, 1, self.tile_h, self.tile_w),
             dtype="uint16",
-            compressor=self.config.zarr_compressor,
-            dimension_separator="/"
+            compressor=self.config.zarr_compressor
         )
         
         # Set OME-Zarr metadata
@@ -205,14 +205,76 @@ class OMEWriter:
             time.sleep(self.config.min_period - (t_now - self.t_last))
         self.t_last = t_now
     
+    def _build_vanilla_zarr_pyramids(self):
+        """Build multiscale pyramids using vanilla Zarr without ome-zarr dependency."""
+        if self.canvas is None:
+            return
+            
+        # Read the full resolution data from level 0
+        full_data = self.canvas[0, 0, 0, :, :]  # Extract y,x from t,c,z,y,x
+        
+        # Create pyramid levels with 2x downsampling
+        max_levels = 4  # Create up to 4 pyramid levels
+        current_shape = full_data.shape
+        
+        for level in range(1, max_levels):
+            # Calculate new shape for this level (2x downsampling)
+            new_shape = (current_shape[0] // 2, current_shape[1] // 2)
+            
+            # Stop if the image becomes too small
+            if new_shape[0] < 64 or new_shape[1] < 64:
+                break
+                
+            # Create downsampled data using simple subsampling
+            downsampled = full_data[::2**level, ::2**level]
+            
+            # Create new dataset for this pyramid level
+            level_canvas = self.root.create_array(
+                str(level),
+                shape=(1, 1, 1, downsampled.shape[0], downsampled.shape[1]),  # t c z y x
+                chunks=(1, 1, 1, min(self.tile_h, downsampled.shape[0]), min(self.tile_w, downsampled.shape[1])),
+                dtype="uint16",
+                compressor=self.config.zarr_compressor
+            )
+            
+            # Write the downsampled data
+            level_canvas[0, 0, 0, :, :] = downsampled
+            
+            if self.logger:
+                self.logger.debug(f"Created pyramid level {level} with shape {downsampled.shape}")
+        
+        # Update the multiscales metadata to include all pyramid levels
+        datasets = []
+        for level_name in sorted(self.root.keys(), key=int):
+            level_int = int(level_name)
+            scale_factor = 2 ** level_int
+            datasets.append({
+                "path": level_name,
+                "coordinateTransformations": [
+                    {"type": "scale", "scale": [1, 1, 1, scale_factor, scale_factor]}
+                ]
+            })
+        
+        # Update multiscales metadata with all levels
+        self.root.attrs["multiscales"] = [{
+            "version": "0.4",
+            "datasets": datasets,
+            "axes": [
+                {"name": "t", "type": "time"},
+                {"name": "c", "type": "channel"},
+                {"name": "z", "type": "space"},
+                {"name": "y", "type": "space"},
+                {"name": "x", "type": "space"},
+            ],
+        }]
+    
     def finalize(self):
         """Finalize the writing process and optionally build pyramids."""
         if self.config.write_zarr and self.store is not None:
             try:
-                from ome_zarr.writer import to_multiscales # TODO: THis doesn'T exist!
-                to_multiscales(self.store, scale_factors=[[2, 2, 2]])
+                self._build_vanilla_zarr_pyramids()
                 if self.logger:
-                    self.logger.info("OME-Zarr pyramid generated successfully")
+                    self.logger.info("Vanilla Zarr pyramid generated successfully")
             except Exception as err:
                 if self.logger:
                     self.logger.warning(f"Pyramid generation failed: {err}")

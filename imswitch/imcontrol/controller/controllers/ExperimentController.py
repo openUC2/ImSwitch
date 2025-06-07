@@ -174,7 +174,6 @@ class ExperimentController(ImConWidgetController):
         # initialize variables
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
-        self.mFilePaths = []
         self.isPreview = False
 
         # set default values
@@ -633,9 +632,8 @@ class ExperimentController(ImConWidgetController):
         context.set_metadata("nTimes", nTimes)
         context.set_metadata("tPeriod", tPeriod)
 
-        context.set_object("tiff_writers", tiff_writers)
-        if IS_OMEZARR_AVAILABLE:
-            context.set_object("omezarr_store", ome_store)
+
+
 
         '''
         image_width, image_height = image_dims[0], image_dims[1]        # physical size of the image in microns
@@ -663,8 +661,7 @@ class ExperimentController(ImConWidgetController):
         # Start the workflow
         self.workflow_manager.start_workflow(wf, context)
 
-        self.mFilePaths = mFilePaths
-        return {"status": "running", "store_path": mFilePaths}
+        return {"status": "running"}
 
     def computeScanRanges(self, snake_tiles):
         # Flatten all point dictionaries from all tiles to compute scan range

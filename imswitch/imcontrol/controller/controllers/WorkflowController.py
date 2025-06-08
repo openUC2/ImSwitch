@@ -474,7 +474,7 @@ class WorkflowController(LiveUpdatedController):
     ########################################
 
     @APIExport(requestType="POST")
-    def create_workflow_definition_api(self, definition: WorkflowDefinition):
+    def uploadWorkflow(self, definition: WorkflowDefinition):
         workflow_id = str(uuid.uuid4())
         self.WORKFLOW_STORAGE[workflow_id] = definition
         return {"workflow_id": workflow_id, "status": "stored"}

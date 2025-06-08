@@ -241,10 +241,44 @@ class ExperimentController(ImConWidgetController):
         # fast stage scanning parameters ----------------------------------------
         self.fastStageScanIsRunning = False
 
+        # OME writer configuration -----------------------------------------------
+        self._ome_write_tiff = False
+        self._ome_write_zarr = True
+        self._ome_write_stitched_tiff = True
+        self._ome_n_time_points = 1
+        self._ome_n_z_planes = 1
+        self._ome_n_channels = 1
+
 
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
         return self.ExperimentParams
+
+    @APIExport(requestType="GET")
+    def getOMEWriterConfig(self):
+        """Get current OME writer configuration."""
+        return {
+            "write_tiff": getattr(self, '_ome_write_tiff', False),
+            "write_zarr": getattr(self, '_ome_write_zarr', True),
+            "write_stitched_tiff": getattr(self, '_ome_write_stitched_tiff', True),
+            "n_time_points": getattr(self, '_ome_n_time_points', 1),
+            "n_z_planes": getattr(self, '_ome_n_z_planes', 1),
+            "n_channels": getattr(self, '_ome_n_channels', 1),
+        }
+
+    @APIExport(requestType="POST")
+    def setOMEWriterConfig(self, config: dict):
+        """Set OME writer configuration via REST API."""
+        # Store configuration as instance attributes
+        self._ome_write_tiff = config.get("write_tiff", False)
+        self._ome_write_zarr = config.get("write_zarr", True)
+        self._ome_write_stitched_tiff = config.get("write_stitched_tiff", True)
+        self._ome_n_time_points = config.get("n_time_points", 1)
+        self._ome_n_z_planes = config.get("n_z_planes", 1)
+        self._ome_n_channels = config.get("n_channels", 1)
+        
+        self._logger.info(f"OME writer configuration updated: {config}")
+        return {"status": "success", "config": config}
 
     def get_num_xy_steps(self, pointList):
         # we don't consider the center point as this .. well in the center
@@ -483,11 +517,14 @@ class ExperimentController(ImConWidgetController):
                         grid_geometry = (0, 0, 100, 100)
                     
                     writer_config = OMEWriterConfig(
-                        write_tiff=False,  # Individual tiles not needed for normal mode
-                        write_zarr=True,
-                        write_stitched_tiff=True,
+                        write_tiff=self._ome_write_tiff,
+                        write_zarr=self._ome_write_zarr,
+                        write_stitched_tiff=self._ome_write_stitched_tiff,
                         min_period=0.1,  # Faster for normal mode
-                        pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0
+                        pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0,
+                        n_time_points=self._ome_n_time_points,
+                        n_z_planes=self._ome_n_z_planes,
+                        n_channels=self._ome_n_channels
                     )
                     
                     ome_writer = OMEWriter(
@@ -760,6 +797,8 @@ class ExperimentController(ImConWidgetController):
             "illuminationValue": kwargs.get("illuminationValue", 0),
             "tile_index": kwargs.get("tile_index", 0),
             "time_index": kwargs.get("time_index", 0),
+            "z_index": kwargs.get("z_index", 0),
+            "channel_index": kwargs.get("channel_index", 0),
         }
         
         try:
@@ -1144,10 +1183,13 @@ class ExperimentController(ImConWidgetController):
         grid_geometry = (x_start, y_start, x_step, y_step)
         writer_config = OMEWriterConfig(
             write_tiff=is_tiff,
-            write_zarr=True,
-            write_stitched_tiff=write_stitched_tiff,
+            write_zarr=self._ome_write_zarr,
+            write_stitched_tiff=self._ome_write_stitched_tiff,
             min_period=min_period,
-            pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0
+            pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0,
+            n_time_points=self._ome_n_time_points,
+            n_z_planes=self._ome_n_z_planes,
+            n_channels=self._ome_n_channels
         )
         
         ome_writer = OMEWriter(

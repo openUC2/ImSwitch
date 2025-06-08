@@ -30,6 +30,10 @@ class OMEWriterConfig:
     zarr_compressor = None
     pixel_size: float = 1.0  # pixel size in microns
     dimension_seperator: str = "/"
+    # Multi-dimensional support
+    n_time_points: int = 1  # Number of time points
+    n_z_planes: int = 1     # Number of z planes
+    n_channels: int = 1     # Number of channels
     
     def __post_init__(self):
         if self.zarr_compressor is None:
@@ -88,7 +92,13 @@ class OMEWriter:
         self.root = zarr.group(store=self.store, overwrite=True)
         self.canvas = self.root.create_dataset(
             "0",
-            shape=(1, 1, 1, self.ny * self.tile_h, self.nx * self.tile_w),  # t c z y x
+            shape=(
+                self.config.n_time_points, 
+                self.config.n_channels, 
+                self.config.n_z_planes, 
+                self.ny * self.tile_h, 
+                self.nx * self.tile_w
+            ),  # t c z y x
             chunks=(1, 1, 1, self.tile_h, self.tile_w),
             dtype="uint16",
             compressor=self.config.zarr_compressor
@@ -155,8 +165,14 @@ class OMEWriter:
     
     def _write_tiff_tile(self, frame, metadata: Dict[str, Any]):
         """Write individual TIFF tile."""
+        # Include time and z information in filename
+        t_idx = metadata.get("time_index", 0)
+        z_idx = metadata.get("z_index", 0)
+        c_idx = metadata.get("channel_index", 0)
+        
         tiff_name = (
             f"F{metadata['runningNumber']:06d}_"
+            f"t{t_idx:03d}_c{c_idx:03d}_z{z_idx:03d}_"
             f"x{metadata['x']:.1f}_y{metadata['y']:.1f}_"
             f"{metadata['illuminationChannel']}_{metadata['illuminationValue']}.ome.tif"
         )
@@ -169,19 +185,32 @@ class OMEWriter:
         ix = int(round((metadata["x"] - self.x_start) / self.x_step))
         iy = int(round((metadata["y"] - self.y_start) / self.y_step))
         
+        # Get time, channel, and z indices from metadata
+        t_idx = metadata.get("time_index", 0)
+        c_idx = metadata.get("channel_index", 0) 
+        z_idx = metadata.get("z_index", 0)
+        
+        # Validate indices are within bounds
+        t_idx = min(t_idx, self.config.n_time_points - 1)
+        c_idx = min(c_idx, self.config.n_channels - 1)
+        z_idx = min(z_idx, self.config.n_z_planes - 1)
+        
         # Calculate canvas coordinates
         y0, y1 = iy * self.tile_h, (iy + 1) * self.tile_h
         x0, x1 = ix * self.tile_w, (ix + 1) * self.tile_w
         
-        # Write to canvas
-        self.canvas[0, 0, 0, y0:y1, x0:x1] = frame
+        # Write to canvas with proper indexing
+        self.canvas[t_idx, c_idx, z_idx, y0:y1, x0:x1] = frame
         
         # Return chunk information for frontend updates
         rel_chunk = f"0/{iy}.{ix}"  # NGFF v0.4 layout
         return {
             "rel_chunk": rel_chunk,
             "grid_pos": (ix, iy),
-            "canvas_bounds": (x0, x1, y0, y1)
+            "canvas_bounds": (x0, x1, y0, y1),
+            "t_idx": t_idx,
+            "c_idx": c_idx,
+            "z_idx": z_idx
         }
     
     def _write_stitched_tiff_tile(self, frame, metadata: Dict[str, Any]):

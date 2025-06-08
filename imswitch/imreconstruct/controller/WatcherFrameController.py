@@ -5,6 +5,8 @@ from .basecontrollers import ImRecWidgetController
 from imswitch.imcommon.model.logging import initLogger
 import zarr
 import numpy as np
+
+# Fallback to ome-zarr if vanilla implementation is not available
 from ome_zarr.io import parse_url
 from ome_zarr.writer import write_image
 from time import perf_counter

@@ -58,7 +58,7 @@ for ix in range(2):
 	for iy in range(2):
 		mPos = (ix*xDim*mOverlap+58000,
 		 iy*yDim*mOverlap+23000)
-		
+
 		api.imcontrol.movePositioner(positionerName, "XY", mPos, True, True)
 		time.sleep(0.5)
 		# api.imcontrol.snapImageToPath(str(ix)+"_"+str(iy))
@@ -97,7 +97,7 @@ for ix in range(2):
     #iPos = 0
     #for position in positions:
     #    posX, posY, posZ = position
-        
+
     #    api.imcontrol.movePositioner(positionerName, "X", posX, True, True)
     #    api.imcontrol.movePositioner(positionerName, "Y", posY, True, True)
     #    api.imcontrol.movePositioner(positionerName, "Z", posZ, True, True)

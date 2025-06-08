@@ -7,11 +7,20 @@ from .Options import Options
 from imswitch import DEFAULT_SETUP_FILE
 import dataclasses
 
+dirtools.initUserFilesIfNeeded()
+_setupFilesDir = os.path.join(dirtools.UserFileDirs.Root, 'imcontrol_setups')
+os.makedirs(_setupFilesDir, exist_ok=True)
+_optionsFilePath = os.path.join(dirtools.UserFileDirs.Config, 'imcontrol_options.json')
+_configsFilePath = os.path.join(dirtools.UserFileDirs.Config, 'imcontrol_options.json')
+
+_options = None
+_configs = None
+
 def getSetupList():
     return [Path(file).name for file in glob.glob(os.path.join(_setupFilesDir, '*.json'))]
 
 def loadSetupInfo(options, setupInfoType):
-    # if options.setupFileName contains absolute path, don't concatenate 
+    # if options.setupFileName contains absolute path, don't concatenate
     if os.path.isabs(options.setupFileName):
         mPath = options.setupFileName
     else:
@@ -20,7 +29,7 @@ def loadSetupInfo(options, setupInfoType):
     with open(mPath) as setupFile:
         try:
             mSetupDescription = setupInfoType.from_json(setupFile.read(), infer_missing=True)
-        except json.decoder.JSONDecodeError:
+        except json.decoder.JSONDecodeError as e:
             # Print the setupFileName to the console
             print("Error: The setup file was corrupted and has been reset to default values.")
             print("Setup file: " + mPath)
@@ -28,11 +37,17 @@ def loadSetupInfo(options, setupInfoType):
             print("Using default setup file: " + mPath)
             print("Filecontent:")
             print(setupFile.read())
-            raise json.decoder.JSONDecodeError
+            print("Error message: " + str(e))
+            raise e
+        except Exception as e:
+            print("Error: Could not load setup file.")
+            print("Please check the file for errors.")
+            print("Error message: " + str(e))
+            raise e
         return mSetupDescription
 
 def saveSetupInfo(options, setupInfo):
-    # 1. Make a backup of the current setup file 
+    # 1. Make a backup of the current setup file
     # 2. Save the new setup file
     mFilename = os.path.join(_setupFilesDir, options.setupFileName)
     if os.path.isfile(mFilename):
@@ -54,13 +69,12 @@ def saveSetupInfo(options, setupInfo):
             os.rename(backupFileName, mFilename)
             os.remove(backupFileName)
 
-    
-    
+
+
 
 
 def loadOptions():
     global _options
-    global _optionsFilePath
 
     # Check if the options file exists
     if _options is not None:
@@ -105,14 +119,7 @@ def saveConfigs(configs):
 
 
 
-dirtools.initUserFilesIfNeeded()
-_setupFilesDir = os.path.join(dirtools.UserFileDirs.Root, 'imcontrol_setups')
-os.makedirs(_setupFilesDir, exist_ok=True)
-_optionsFilePath = os.path.join(dirtools.UserFileDirs.Config, 'imcontrol_options.json')
-_configsFilePath = os.path.join(dirtools.UserFileDirs.Config, 'imcontrol_options.json')
 
-_options = None
-_configs = None
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

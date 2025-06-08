@@ -3,7 +3,7 @@ import gxipy as gx
 from PIL import Image
 
 
-import napari 
+import napari
 
 def main():
     # create a device manager
@@ -23,7 +23,7 @@ def main():
         print("This sample does not support color camera.")
         cam.close_device()
         return
-    
+
     binning = 4
     cam.BinningHorizontal.set(binning)
     cam.BinningVertical.set(binning)

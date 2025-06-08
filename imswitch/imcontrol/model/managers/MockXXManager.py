@@ -20,7 +20,7 @@ class MockXXManager(SignalInterface):
 
         if MockXXInfo is None:
             return
-       
+
 
     def update(self):
         return None #returnmask.image()

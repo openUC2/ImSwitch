@@ -10,7 +10,7 @@ from scipy import signal as sg
 from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import initLogger
 from imswitch.imcommon.model import dirtools
-import json 
+import json
 
 class FlowStopManager(SignalInterface):
 
@@ -21,10 +21,10 @@ class FlowStopManager(SignalInterface):
         self.flowStopConfigFilename = "config.json"
         self.allParameterKeys = ["wasRunning", "flowRate", "dnumberOfFrames",
                                  "experimentName","frameRate","savePath",
-                                 "fileFormat", "axisFocus", 
-                                 "axisFlow", "delayTimeAfterRestart", "isRecordVideo", "numImages", "uniqueId", 
+                                 "fileFormat", "axisFocus",
+                                 "axisFlow", "delayTimeAfterRestart", "isRecordVideo", "numImages", "uniqueId",
                                  "volumePerImage", "timeToStabilize", "pumpSpeed"]
-        
+
         # get default configs
         self.defaultConfigPath = os.path.join(dirtools.UserFileDirs.Root, "flowStopController")
         if not os.path.exists(self.defaultConfigPath):
@@ -32,15 +32,15 @@ class FlowStopManager(SignalInterface):
 
         try:
             with open(os.path.join(self.defaultConfigPath, self.flowStopConfigFilename)) as jf:
-                # check if all keys are present 
+                # check if all keys are present
                 self.defaultConfig = json.load(jf)
-                # check if all keys are present 
+                # check if all keys are present
                 missing_keys = [key for key in self.allParameterKeys if key not in self.defaultConfig]
                 if missing_keys:
                     raise KeyError
                 else:
                     pass
-                    
+
         except Exception as e:
             self.__logger.error(f"s {self.defaultConfigPath}: {e}")
             self.defaultConfig = {}
@@ -56,18 +56,18 @@ class FlowStopManager(SignalInterface):
             self.defaultConfig["delayTimeAfterRestart"]=1
             self.defaultConfig["isRecordVideo"]=True
             self.defaultConfig["numImages"]=10
-            self.defaultConfig["uniqueId"] = np.random.randint(0, 1000000), 
+            self.defaultConfig["uniqueId"] = np.random.randint(0, 1000000),
             self.defaultConfig["volumePerImage"] = 1000
             self.defaultConfig["timeToStabilize"] = 1
             self.defaultConfig["pumpSpeed"] = 100
             self.writeConfig(self.defaultConfig)
-                
+
     def updateConfig(self, parameterName, value):
         with open(os.path.join(self.defaultConfigPath, self.flowStopConfigFilename), "w") as outfile:
             mDict = json.load(outfile)
             mDict[parameterName] = value
             json.dump(mDict, outfile, indent=4)
-            
+
     def writeConfig(self, data):
         with open(os.path.join(self.defaultConfigPath, self.flowStopConfigFilename), "w") as outfile:
             json.dump(data, outfile, indent=4)

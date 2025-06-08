@@ -12,7 +12,7 @@ import numpy as np
 import tifffile as tiff
 import cv2
 
-from imswitch import IS_HEADLESS
+
 from imswitch.imcommon.framework import Signal, SignalInterface, Thread, Worker
 from imswitch.imcommon.model import initLogger
 import abc
@@ -21,6 +21,7 @@ import logging
 from imswitch.imcontrol.model.managers.DetectorsManager import DetectorsManager
 
 logger = logging.getLogger(__name__)
+# Fallback to ome-zarr if vanilla implementation is not available
 try:
     from ome_zarr.writer import write_multiscales_metadata # TODO: This fails with newer numpy versions!
     from ome_zarr.format import format_from_version
@@ -202,7 +203,7 @@ class RecordingManager(SignalInterface):
         self._memRecordings = {}  # { filePath: bytesIO }
         self.__detectorsManager = detectorsManager
         self.__record = False
-        
+
         if 1: #not IS_HEADLESS: # TODO: Merge the two RecordingWorkers
             self._thread = Thread()
             self.__recordingWorker = RecordingWorker(self)
@@ -712,7 +713,7 @@ class RecordingWorkerNoQt(Worker):
 
     def moveToThread(self, thread) -> None:
         return super().moveToThread(thread)
-            
+
     def _record(self):
         self.__logger.info('Recording started in mode: ' + str(self.recMode))
         if self.saveFormat == SaveFormat.HDF5 or self.saveFormat == SaveFormat.ZARR:

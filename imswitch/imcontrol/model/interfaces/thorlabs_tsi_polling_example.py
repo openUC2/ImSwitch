@@ -102,7 +102,7 @@ with TLCameraSDK() as sdk:
 
             with tifffile.TiffWriter(OUTPUT_DIRECTORY + os.sep + FILENAME, append=True) as tiff:
                 """
-                    Setting append=True here means that calling tiff.save will add the image as a page to a multipage TIFF. 
+                    Setting append=True here means that calling tiff.save will add the image as a page to a multipage TIFF.
                 """
                 tiff.save(data=image_data  # np.ushort image data array from the camera
                           )
@@ -113,8 +113,8 @@ with TLCameraSDK() as sdk:
                     View the tifffile source or online to see what is supported.
                 """
                 """
-                    The extratags parameter allows the user to specify additional tags. Programs will typically ignore 
-                    any tags from 32768 onward, which is where the bit depth and exposure have been placed. The 
+                    The extratags parameter allows the user to specify additional tags. Programs will typically ignore
+                    any tags from 32768 onward, which is where the bit depth and exposure have been placed. The
                     syntax for extra tags is (tag_code, data_type_of_value, number_of_values, value, write_once).
                     View the tifffile source for more information.
                 """
@@ -132,8 +132,8 @@ with TLCameraSDK() as sdk:
                 print("Unable to dispose mono to color sdk: " + str(exception))
 
 """
-Reading tiffs - to test that the tags from before worked, we're going to read back the tags on the first page. 
-Note that custom TIFF tags are not going to be picked up by normal TIFF viewers, but can be read programmatically 
+Reading tiffs - to test that the tags from before worked, we're going to read back the tags on the first page.
+Note that custom TIFF tags are not going to be picked up by normal TIFF viewers, but can be read programmatically
 if the tag code is known.
 """
 # open file

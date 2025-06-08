@@ -27,10 +27,10 @@ class CameraPCO:
         # many to be purged
         self.model = "CameraPCO"
         self.shape = (0, 0)
-        
+
         self.is_connected = False
 
-        # unload CPU? 
+        # unload CPU?
         self.downsamplepreview = 1
 
         # camera parameters
@@ -39,7 +39,7 @@ class CameraPCO:
         self.preview_height = 600
         self.defaultBufferSize = 9
         # dict for different trigger mode
-        self.trigger_type = ['software trigger', 
+        self.trigger_type = ['software trigger',
                              'auto sequence',
                              'external exposure start & software trigger',
                              'external exposure control'
@@ -54,12 +54,12 @@ class CameraPCO:
         except Exception as e:
             self.__logger.error(e)
             raise("Camera not found")
-            
-            
+
+
     def _init_cam(self):
         # start camera
         self.is_connected = True
-        
+
         # open the first device
         self.camera = pco.Camera()
         #☺pco.Camera(debuglevel='verbose', timestamp='on')
@@ -80,16 +80,16 @@ class CameraPCO:
                 continue
             break
 
-        # get framesize 
+        # get framesize
         self.SensorHeight = frame.shape[0] #self.camera._Camera__roi['x1']//self.binning
         self.SensorWidth = frame.shape[0] #self.camera._Camera__roi['y1']//self.binning
-        
+
 
     def start_live(self, waitForFirstImage=True, nFrameBuffer=None):
         if not self.camera.is_recording:
             if nFrameBuffer is None:
                 nFrameBuffer = self.defaultBufferSize
-            # start data acquisition    
+            # start data acquisition
             try:
                 self.camera.record(number_of_images=nFrameBuffer,mode='ring buffer')
             except Exception as e:
@@ -97,7 +97,7 @@ class CameraPCO:
                 self.camera.stop()
                 self.camera.record(number_of_images=nFrameBuffer,mode='ring buffer')
             if  0 and waitForFirstImage: # TODO: this is not working
-                try: 
+                try:
                     self.camera.wait_for_first_image(timeout=1)
                 except Exception as e:
                     self.__logger.error(e)
@@ -105,16 +105,16 @@ class CameraPCO:
     def stop_live(self):
         if self.camera.is_recording:
             self.camera.stop()
-            
+
     def suspend_live(self):
         pass
-        
+
     def prepare_live(self):
         pass
 
     def close(self):
         self.camera.close()
-        
+
     def set_exposure_time(self,exposure_time):
         self.exposure_time = exposure_time
         try:
@@ -136,7 +136,7 @@ class CameraPCO:
             # in that case we want to return the last frame of the buffer ?
             if self.frames is not None and len(self.frames)>0:
                 return self.frames[-1]
-            else: 
+            else:
                 return None
         else:
             self.frame_raw_metadata = self.camera.image(image_index=-1)
@@ -144,14 +144,14 @@ class CameraPCO:
             self.frame = self.frame_raw_metadata[0]
             self.frameID = self.frame_raw_metadata[1]["recorder image number"]
             return self.frame
-        
-    
+
+
     def getLastFrameId(self):
         return self.frameID
 
     def flushBuffer(self):
         pass
-        
+
     def getLastChunk(self, timeout=2):
         # save on disk
         self.frames = None
@@ -159,7 +159,7 @@ class CameraPCO:
             # Create a thread to run the call_images function
             def retreiveChunkInBackground():
                 # TODO: if we are in triggered mode this can be a blocking function :(
-                self.frames, metadatas = self.camera.images() 
+                self.frames, metadatas = self.camera.images()
                 self.frame = self.camera.images()[0] # FIXME: Sneaky but should at least update the viewer if it's called from the main loop
                 self.frameID = metadatas[0]["recorder image number"]
             thread = threading.Thread(target=retreiveChunkInBackground)
@@ -173,7 +173,7 @@ class CameraPCO:
             else:
                 print("The images function call completed successfully.")
         return self.frames
-    
+
     def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
         return hpos,vpos,hsize,vsize
 
@@ -197,14 +197,14 @@ class CameraPCO:
         #if property_name == "exposure":
             #property_value = self.camera.exposure_time * 1e3
         if property_name == "image_width":
-            property_value = self.camera.Width.get()//self.binning         
+            property_value = self.camera.Width.get()//self.binning
         elif property_name == "image_height":
             property_value = self.camera.Height.get()//self.binning
         elif property_name == "roi_size":
-            property_value = self.roi_size 
+            property_value = self.roi_size
         elif property_name == "framerate":
             property_value = format(1 / self.camera.exposure_time, '.1f')
-             #property_value = self.camera.sdk.get_frame_rate() 
+             #property_value = self.camera.sdk.get_frame_rate()
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
             return False
@@ -222,18 +222,18 @@ class CameraPCO:
             self.camera.configuration = {'trigger': self.trigger_type[1]}
         elif source == 'External start':
             self.camera.configuration = {'trigger': self.trigger_type[2]}
-            if wasRunning: 
+            if wasRunning:
                 self.start_live(waitForFirstImage=False)
             return
         elif source == 'External control':
             self.camera.configuration = {'trigger': self.trigger_type[3]}
-            if wasRunning: 
+            if wasRunning:
                 self.start_live(waitForFirstImage=False)
-            return            
+            return
         else:
             raise ValueError(f'Invalid trigger source "{source}"')
         self.start_live()
-        
+
     def setFrameBuffer(self, nFrameBuffer=10, waitForFirstImage=False):
         wasRunning = self.camera.is_recording
         if wasRunning:
@@ -241,9 +241,9 @@ class CameraPCO:
         if nFrameBuffer == -1:
             nFrameBuffer = self.defaultBufferSize
         self.start_live(waitForFirstImage=waitForFirstImage, nFrameBuffer=nFrameBuffer)
-            
 
-    
+
+
 
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.
@@ -259,4 +259,4 @@ class CameraPCO:
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.    
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.

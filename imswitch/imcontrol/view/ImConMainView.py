@@ -15,7 +15,7 @@ if not IS_HEADLESS:
     from .PickSetupDialog import PickSetupDialog
 else:
     QMainWindow = object
-    
+
 
 class ImConMainView(QMainWindow):
     sigLoadParamsFromHDF5 = Signal()
@@ -269,7 +269,7 @@ class ImConMainViewNoQt(object):
         disabledKeys = ["Image"]
         widget_keys = {key: _DockInfo(name=key, yPosition=1) for key in enabledDockKeys if key not in disabledKeys}
         self._addWidgetNoQt(widget_keys)
-        
+
     def closeEvent(self, event):
         self.sigClosing.emit()
         event.accept()
@@ -286,7 +286,7 @@ class ImConMainViewNoQt(object):
                 continue
             # try if there is a react widget under ImSwitch.imswitch.imcontrol.view.widgets.*
             # if not, try to load it from the plugins
-            
+
             # Case 1: there is a react widget under ImSwitch.imswitch.imcontrol.view.widgets.*
             module_name = f'imswitch.imcontrol.view.widgets.{widgetKey}ReactWidget'
             module_spec = importlib.util.find_spec(module_name)
@@ -301,7 +301,7 @@ class ImConMainViewNoQt(object):
                 except ImportError as e:
                     self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
                     continue
-            
+
             # Case 2: Check if there is a plugin for the widget
             plugin_name = f'{widgetKey}_widget'
             if plugin_name in availablePlugins:

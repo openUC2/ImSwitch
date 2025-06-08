@@ -8,7 +8,7 @@ import skimage.transform as transform
 import tifffile as tif
 from pydantic import BaseModel
 from typing import Any, List, Optional, Dict, Any, Union
-import os 
+import os
 import uuid
 import os
 import time
@@ -31,16 +31,17 @@ try:
     IS_ASHLAR_AVAILABLE = True
 except Exception as e:
     IS_ASHLAR_AVAILABLE = False
-    
+
 # Attempt to use OME-Zarr
 try:
     from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
     from imswitch.imcontrol.controller.controllers.experiment_controller.single_multiscale_zarr_data_source import SingleMultiscaleZarrWriter
-    IS_OMEZARR_AVAILABLE = False # TODO: True
+    IS_OMEZARR_AVAILABLE = True # TODO: True
 except Exception as e:
     IS_OMEZARR_AVAILABLE = False
 
 from imswitch.imcontrol.controller.controllers.experiment_controller.OmeTiffStitcher import OmeTiffStitcher
+from imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
 
 from pydantic import BaseModel, Field
 from typing import List, Optional, Tuple, Dict
@@ -74,9 +75,9 @@ class Point(BaseModel):
 
 class ParameterValue(BaseModel):
     illumination: Union[List[str], str] = None # X, Y, nX, nY
-    illuIntensities: Union[List[Optional[int]], Optional[int]] = None 
+    illuIntensities: Union[List[Optional[int]], Optional[int]] = None
     brightfield: bool = 0,
-    darkfield: bool = 0, 
+    darkfield: bool = 0,
     differentialPhaseContrast: bool = 0,
     timeLapsePeriod: float
     numberOfImages: int
@@ -103,9 +104,9 @@ class Experiment(BaseModel):
     # From your old "ExperimentModel":
     number_z_steps: int = Field(0, description="Number of Z slices")
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
-    
+
     # -----------------------------------------------------------
-    # A helper to produce the "configuration" dict 
+    # A helper to produce the "configuration" dict
     # -----------------------------------------------------------
     def to_configuration(self) -> dict:
         """
@@ -122,8 +123,8 @@ class Experiment(BaseModel):
             },
         }
         return config
-    
-    
+
+
 class ExperimentWorkflowParams(BaseModel):
     """Parameters for the experiment workflow."""
 
@@ -142,7 +143,7 @@ class ExperimentWorkflowParams(BaseModel):
     isDPCpossible: bool = Field(False, description="Whether DPC is possible")
     isDarkfieldpossible: bool = Field(False, description="Whether darkfield is possible")
 
-    # timelapse parameters 
+    # timelapse parameters
     timeLapsePeriodMin: float = Field(0, description="Minimum time for a timelapse series")
     timeLapsePeriodMax: float = Field(100000000, description="Maximum time for a timelapse series in seconds")
     numberOfImagesMin: int = Field(0, description="Minimum time for a timelapse series")
@@ -156,8 +157,8 @@ class ExperimentWorkflowParams(BaseModel):
     zStackStepSizeMin: float = Field(1, description="Minimum Z-stack position")
     zStackStepSizeMax: float = Field(1000, description="Maximum Z-stack position")
     performanceMode: bool = Field(False, description="Whether to use performance mode for the experiment - this would be executing the scan on the Cpp hardware directly, not on the Python side.")
-    
-      
+
+
 
 class ExperimentController(ImConWidgetController):
     """Linked to ExperimentWidget."""
@@ -173,21 +174,19 @@ class ExperimentController(ImConWidgetController):
         # initialize variables
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
-        self.mFilePaths = []
-        self.isPreview = False
-        
+
         # set default values
         self.SPEED_Y_default = 20000
         self.SPEED_X_default = 20000
         self.SPEED_Z_default = 20000
         self.ACCELERATION = 500000
-        
+
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.mDetector = self._master.detectorsManager[allDetectorNames[0]]
         self.isRGB = self.mDetector._camera.isRGB
         self.detectorPixelSize = self.mDetector.pixelSizeUm
-        
+
         # select lasers
         self.allIlluNames = self._master.lasersManager.getAllDeviceNames()+ self._master.LEDMatrixsManager.getAllDeviceNames()
         self.availableIlliminations = []
@@ -198,18 +197,18 @@ class ExperimentController(ImConWidgetController):
             except:
                 # lexmatrix manager
                 self.availableIlliminations.append(self._master.LEDMatrixsManager[iDevice])
-              
+
         # select stage
         self.allPositionerNames = self._master.positionersManager.getAllDeviceNames()[0]
         try:
             self.mStage = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
         except:
             self.mStage = None
-            
+
         # stop if some external signal (e.g. memory full is triggered)
         self._commChannel.sigExperimentStop.connect(self.stopExperiment)
-            
-        # TODO: Adjust parameters 
+
+        # TODO: Adjust parameters
         # define changeable Experiment parameters as ExperimentWorkflowParams
         self.ExperimentParams = ExperimentWorkflowParams()
         self.ExperimentParams.illuSources = self.allIlluNames
@@ -224,7 +223,6 @@ class ExperimentController(ImConWidgetController):
         for laserN in self.availableIlliminations:
             self.ExperimentParams.illuSourceMinIntensities.append(laserN.valueRangeMin)
             self.ExperimentParams.illuSourceMaxIntensities.append(laserN.valueRangeMax)
-        
         '''
         For Fast Scanning - Performance Mode -> Parameters will be sent to the hardware directly
         requires hardware triggering
@@ -236,15 +234,51 @@ class ExperimentController(ImConWidgetController):
 
         # writer thread control -------------------------------------------------
         self._writer_thread   = None
+        self._writer_thread_ome = None
+        self._current_ome_writer = None  # For normal mode OME writing
         self._stop_writer_evt = threading.Event()
-        
+
         # fast stage scanning parameters ----------------------------------------
         self.fastStageScanIsRunning = False
 
-        
+        # OME writer configuration -----------------------------------------------
+        self._ome_write_tiff = False
+        self._ome_write_zarr = True
+        self._ome_write_stitched_tiff = True
+        self._ome_n_time_points = 1
+        self._ome_n_z_planes = 1
+        self._ome_n_channels = 1
+
+
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
         return self.ExperimentParams
+
+    @APIExport(requestType="GET")
+    def getOMEWriterConfig(self):
+        """Get current OME writer configuration."""
+        return {
+            "write_tiff": getattr(self, '_ome_write_tiff', False),
+            "write_zarr": getattr(self, '_ome_write_zarr', True),
+            "write_stitched_tiff": getattr(self, '_ome_write_stitched_tiff', True),
+            "n_time_points": getattr(self, '_ome_n_time_points', 1),
+            "n_z_planes": getattr(self, '_ome_n_z_planes', 1),
+            "n_channels": getattr(self, '_ome_n_channels', 1),
+        }
+
+    @APIExport(requestType="POST")
+    def setOMEWriterConfig(self, config: dict):
+        """Set OME writer configuration via REST API."""
+        # Store configuration as instance attributes
+        self._ome_write_tiff = config.get("write_tiff", False)
+        self._ome_write_zarr = config.get("write_zarr", True)
+        self._ome_write_stitched_tiff = config.get("write_stitched_tiff", True)
+        self._ome_n_time_points = config.get("n_time_points", 1)
+        self._ome_n_z_planes = config.get("n_z_planes", 1)
+        self._ome_n_channels = config.get("n_channels", 1)
+        
+        self._logger.info(f"OME writer configuration updated: {config}")
+        return {"status": "success", "config": config}
 
     def get_num_xy_steps(self, pointList):
         # we don't consider the center point as this .. well in the center
@@ -280,7 +314,7 @@ class ExperimentController(ImConWidgetController):
                         mIdex = iY * num_x_steps + num_x_steps - 1 - iX
                     else:
                         mIdex = iTile
-                    if len(allPointsSnake) <= mIdex or len(allPoints) <= iTile: 
+                    if len(allPointsSnake) <= mIdex or len(allPoints) <= iTile:
                         # remove that index from allPointsSnake
                         allPointsSnake[mIdex] = None
                         continue
@@ -310,18 +344,18 @@ class ExperimentController(ImConWidgetController):
         # Extract key parameters
         exp_name = mExperiment.name
         p = mExperiment.parameterValue
-        
+
         # Timelapse-related
         nTimes = p.numberOfImages
         tPeriod = p.timeLapsePeriod
-        
+
         # Z-steps -related
         nZSteps = int((mExperiment.parameterValue.zStackMax-mExperiment.parameterValue.zStackMin)//mExperiment.parameterValue.zStackStepSize)+1
         isZStack = p.zStack
         zStackMin = p.zStackMin
         zStackMax = p.zStackMax
         zStackStepSize = p.zStackStepSize
-        
+
         # Illumination-related
         illuSources = p.illumination
         illuminationIntensites = p.illuIntensities
@@ -330,10 +364,10 @@ class ExperimentController(ImConWidgetController):
         isDarkfield = p.darkfield
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
-        
+
         # check if we want to use performance mode
         performanceMode = p.performanceMode
-        
+
         # camera-related
         gains = p.gains
         exposures = p.exposureTimes
@@ -341,17 +375,17 @@ class ExperimentController(ImConWidgetController):
             self.SPEED_X = self.SPEED_X_default
             self.SPEED_Y = self.SPEED_Y_default
             self.SPEED_Z = self.SPEED_Z_default
-        else: 
+        else:
             self.SPEED_X = p.speed
             self.SPEED_Y = p.speed
             self.SPEED_Z = p.speed
-        
+
         # Autofocus Related
         isAutoFocus = p.autoFocus
         autofocusMax = p.autoFocusMax
         autofocusMin = p.autoFocusMin
         autofocusStepSize = p.autoFocusStepSize
-        
+
         # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
         if type(gains) is not List and type(gains) is not list: gains = [gains]
         if type(exposures) is not List and type(exposures) is not list: exposures = [exposures]
@@ -369,12 +403,12 @@ class ExperimentController(ImConWidgetController):
 
         # Generate the list of points to scan based on snake scan
         if p.resortPointListToSnakeCoordinates:
-            pass # TODO: we need an alternative case 
+            pass # TODO: we need an alternative case
         snake_tiles = self.generate_snake_tiles(mExperiment)
-        # remove none values from all_points list 
+        # remove none values from all_points list
         snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
-            
-        # Generate Z-positions 
+
+        # Generate Z-positions
         currentZ = self.mStage.getPosition()["Z"]
         if isZStack:
             z_positions = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize) + currentZ
@@ -383,52 +417,37 @@ class ExperimentController(ImConWidgetController):
         minX, maxX, minY, maxY, diffX, diffY = self.computeScanRanges(snake_tiles)
         mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
 
-        # Prepare OME-Zarr writer (new)
-        # fill ome model
-        if IS_OMEZARR_AVAILABLE:
-            ome_store = None
-            zarr_path = os.path.join(dirPath, mFileName + ".ome.zarr")
-            self._logger.debug(f"OME-Zarr path: {zarr_path}")
-            if 0:
-                ome_store = MinimalZarrDataSource(file_name=zarr_path, mode="w")
-                # Configure it from your model
-                mExperiment.x_pixels, mExperiment.y_pixels=self.mDetector._shape[-2],self.mDetector._shape[-1]
-                mExperiment.number_z_steps = nZSteps
-                mExperiment.timepoints = nTimes
-                exp_config = mExperiment.to_configuration()
-                ome_store.set_metadata_from_configuration_experiment(exp_config)
-            else:
-                ome_store = SingleMultiscaleZarrWriter(zarr_path, "w")
-                # compute max coordinates for x/y
-                fovX = int(maxX - minX + diffX)
-                fovY = int(maxY - minY + diffY)
-                
-                ome_store.set_metadata(t=nTimes, c=1, z=nZSteps, bigY=fovY, bigX=fovX)
-                ome_store.open_store()
-
-            
-        else:
-            self._logger.error("OME-ZARR not available or not installed.")
+        # Prepare directory and filename for saving
+        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        drivePath = dirtools.UserFileDirs.Data
+        dirPath = os.path.join(drivePath, 'ExperimentController', timeStamp)
+        if not os.path.exists(dirPath):
+            os.makedirs(dirPath)
+        mFileName = f"{timeStamp}_{exp_name}"
 
         workflowSteps = []
         step_id = 0
+        file_writers = []  # Initialize outside the loop for context storage
 
         for t in range(nTimes):
-            # Prepare TIFF writer
-            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            drivePath = dirtools.UserFileDirs.Data
-            dirPath = os.path.join(drivePath, 'recordings', timeStamp)
-            if not os.path.exists(dirPath):
-                os.makedirs(dirPath)
-            # if performanceMode is True, we will execute on the Hardware directly
-            if performanceMode:
+            '''
+            THIS IS THE PERFORMANCE MODE:
+             The microcontroller will move the stage in a grid and triggers the camera, 
+             ImSwitch listens to the camera and stores the images in a OME-Zarr format.
+             The microcontroller will also handle the illumination and the Z-positioning.
+             The microcontroller will not handle the autofocus if enabled.
+             
+             Prepare TIFF writer - reuse timeStamp, dirPath from above
+             if performanceMode is True, we will execute on the Hardware directly
+            '''
+            if performanceMode and hasattr(self.mStage, "startFastStageScanAcquisition") and hasattr(self.mDetector, "setTriggerSource"):
                 self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
                 for snake_tile in snake_tiles:
                     # we need to wait if there is another fast stage scan running
                     while self.fastStageScanIsRunning:
                         self._logger.debug("Waiting for fast stage scan to finish...")
                         time.sleep(0.1) # TODO: Probably we want to do that in a thread since we need to return http response here?
-                    # need to compute the pos/net dx and dy and center pos as well as number of images in X / Y 
+                    # need to compute the pos/net dx and dy and center pos as well as number of images in X / Y
                     xStart, xEnd, yStart, yEnd, xStep, yStep = self.computeScanRanges([snake_tile])
                     nx, ny = int((xEnd-xStart)//xStep)+1, int((yEnd-yStart)//yStep)+1
                     if len(illuminationIntensites) == 1: illumination0 = illuminationIntensites[0]
@@ -450,206 +469,226 @@ class ExperimentController(ImConWidgetController):
                         self._logger.error("Too many points in X/Y direction. Please reduce the number of points.")
                         raise HTTPException(status_code=400, detail="Too many points in X/Y direction. Please reduce the number of points.")
                     # move to inital position first
-                    # xStart/ySTart => 0 means we start from that position 
+                    # xStart/ySTart => 0 means we start from that position
                     self.startFastStageScanAcquisition(xstart=xStart, xstep=xStep, nx=nx,
-                                                        ystart=yStart, ystep=yStep, ny=ny,      
+                                                        ystart=yStart, ystep=yStep, ny=ny,
                                                         tsettle=90, tExposure=50, # TODO: make these parameters adjustable
                                                         illumination0=illumination0, illumination1=illumination1,
                                                         illumination2=illumination2, illumination3=illumination3, led=led)
                     # we need to wait until the acquisition is done so that we can start the next one
-                return 
-            mFilePaths = []
-            tiff_writers = []
-            for index, experiments_ in enumerate(mExperiment.pointList):
-                experimentName = experiments_.name
-                mFileName = f"{timeStamp}_{exp_name}"
-                mFilePath = os.path.join(dirPath, mFileName + str(index) + "_" + experimentName + "_" + ".ome.tif")
-                mFilePaths.append(mFilePath)
-                self._logger.debug(f"OME-TIFF path: {mFilePath}")
-                #tiff_writer = tif.TiffWriter(mFilePath)
-            
-                # Create a new OmeTiffStitcher instance for stitching tiles
-                tiff_writer = OmeTiffStitcher(mFilePath)
-                tiff_writers.append(tiff_writer)
-
-
-            # Loop over each tile (each central point and its neighbors)
-            for position_center_index, tile in enumerate(snake_tiles):
+                return
+            else:
                 
-                # start storer - store one center point per file # TODO: How about time series?
-                self.start_tiff_writer(tiff_writers=tiff_writers, tiff_index=position_center_index)
-            
-                # iterate over positions     
-                for mIndex, mPoint in enumerate(tile):
-                    try:
-                        name = f"Move to point {mPoint['iterator']}"
-                    except Exception:
-                        name = f"Move to point {mPoint['x']}, {mPoint['y']}"
+                ''' THIS IS THE NORMAL MODE:
+                We will move the stage to each point, set the illumination, acquire the frame and save it 
+                using the unified OME writer (TIFF stitching + OME-Zarr).
+                '''
+
+                # Set up all OME writers at once (similar to original file_writers approach)
+                for position_center_index, tiles in enumerate(snake_tiles):
+                    experimentName = f"{t}_{exp_name}_{position_center_index}"
+                    mFilePath = os.path.join(dirPath, mFileName + str(position_center_index) + "_" + experimentName + "_" + ".ome.tif")
+                    self._logger.debug(f"OME-TIFF path: {mFilePath}")
                     
-                    workflowSteps.append(WorkflowStep(
-                        name=name,
-                        step_id=step_id,
-                        main_func=self.move_stage_xy,
-                        main_params={"posX": mPoint["x"], "posY": mPoint["y"], "relative": False},
-                    ))
+                    # Create a new OMEWriter instance for this tile
+                    file_paths = OMEFileStorePaths(mFilePath.replace(".ome.tif", ""))
+                    tile_shape = (self.mDetector._shape[-1], self.mDetector._shape[-2])  # (height, width)
                     
-                    # iterate over z-steps
-                    for indexZ, iZ in enumerate(z_positions):
+                    # Calculate grid parameters from tile
+                    all_points = []
+                    for point in tiles:
+                        if point is not None:
+                            all_points.append([point["x"], point["y"]])
                     
-                        #move to Z position - but only if we have more than one z position
-                        if len(z_positions) > 1 or (len(z_positions) == 1 and mIndex == 0):
-                            workflowSteps.append(WorkflowStep(
-                                name="Move to Z position",
-                                step_id=step_id,
-                                main_func=self.move_stage_z,
-                                main_params={"posZ": iZ, "relative": False},
-                                pre_funcs=[self.wait_time],
-                                pre_params={"seconds": 0.1},
-                            ))
-                            
-                        step_id += 1
-                        for illuIndex, illuSource in enumerate(illuSources):
-                            illuIntensity = illuminationIntensites[illuIndex-1]
-                            if illuIntensity <= 0: continue
-                            
-                            # Turn on illumination - if we have only one source, we can skip this step after the first stop of mIndex
-                            if sum(np.array(illuminationIntensites)>0) > 1 or  ( mIndex == 0):
+                    if all_points:
+                        x_coords = [p[0] for p in all_points]
+                        y_coords = [p[1] for p in all_points]
+                        x_start, x_end = min(x_coords), max(x_coords)
+                        y_start, y_end = min(y_coords), max(y_coords)
+                        unique_x = sorted(set(x_coords))
+                        unique_y = sorted(set(y_coords))
+                        x_step = unique_x[1] - unique_x[0] if len(unique_x) > 1 else 100.0
+                        y_step = unique_y[1] - unique_y[0] if len(unique_y) > 1 else 100.0
+                        nx, ny = len(unique_x), len(unique_y)
+                        grid_shape = (nx, ny)
+                        grid_geometry = (x_start, y_start, x_step, y_step)
+                    else:
+                        grid_shape = (1, 1)
+                        grid_geometry = (0, 0, 100, 100)
+                    
+                    writer_config = OMEWriterConfig(
+                        write_tiff=self._ome_write_tiff,
+                        write_zarr=self._ome_write_zarr,
+                        write_stitched_tiff=self._ome_write_stitched_tiff,
+                        min_period=0.1,  # Faster for normal mode
+                        pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0,
+                        n_time_points=self._ome_n_time_points,
+                        n_z_planes=self._ome_n_z_planes,
+                        n_channels=self._ome_n_channels
+                    )
+                    
+                    ome_writer = OMEWriter(
+                        file_paths=file_paths,
+                        tile_shape=tile_shape,
+                        grid_shape=grid_shape,
+                        grid_geometry=grid_geometry,
+                        config=writer_config,
+                        logger=self._logger
+                    )
+                    file_writers.append(ome_writer)
+
+                # Loop over each tile (each central point and its neighbors)
+                for position_center_index, tiles in enumerate(snake_tiles):
+                    
+                    # iterate over positions
+                    for mIndex, mPoint in enumerate(tiles):
+                        try:
+                            name = f"Move to point {mPoint['iterator']}"
+                        except Exception:
+                            name = f"Move to point {mPoint['x']}, {mPoint['y']}"
+
+                        workflowSteps.append(WorkflowStep(
+                            name=name,
+                            step_id=step_id,
+                            main_func=self.move_stage_xy,
+                            main_params={"posX": mPoint["x"], "posY": mPoint["y"], "relative": False},
+                        ))
+
+                        # iterate over z-steps
+                        for indexZ, iZ in enumerate(z_positions):
+
+                            #move to Z position - but only if we have more than one z position
+                            if len(z_positions) > 1 or (len(z_positions) == 1 and mIndex == 0):
                                 workflowSteps.append(WorkflowStep(
-                                    name="Turn on illumination",
+                                    name="Move to Z position",
                                     step_id=step_id,
-                                    main_func=self.set_laser_power,
-                                    main_params={"power": illuIntensity, "channel": illuSource},
-                                    post_funcs=[self.wait_time],
-                                    post_params={"seconds": 0.05},
+                                    main_func=self.move_stage_z,
+                                    main_params={"posZ": iZ, "relative": False},
+                                    pre_funcs=[self.wait_time],
+                                    pre_params={"seconds": 0.1},
                                 ))
-                                step_id += 1
 
-                        # Acquire frame
-                        isPreview = self.isPreview
-                        '''
-                        workflowSteps.append(WorkflowStep(
-                            name="Acquire frame",
-                            step_id=step_id,
-                            main_func=self.acquire_frame,
-                            main_params={"channel": "Mono"},
-                            post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
-                            pre_funcs=[self.set_exposure_time_gain],
-                            pre_params={"exposure_time": exposure, "gain": gain},
-                            # Hier übergeben wir posX, posY an das Metadata-Dict
-                            post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
-                        ))
-                        '''
+                            step_id += 1
+                            for illuIndex, illuSource in enumerate(illuSources):
+                                illuIntensity = illuminationIntensites[illuIndex-1]
+                                if illuIntensity <= 0: continue
 
-                        workflowSteps.append(WorkflowStep(
-                            name="Acquire frame",
-                            step_id=step_id,
-                            main_func=self.acquire_frame,
-                            main_params={"channel": "Mono"},
-                            post_funcs=[self.save_frame_tiff, self.save_frame_ome_zarr, self.add_image_to_canvas],
-                            pre_funcs=[self.set_exposure_time_gain],
-                            pre_params={"exposure_time": exposures[illuIndex], "gain": gains[illuIndex]},
-                            post_params={
-                                "posX": mPoint["x"],
-                                "posY": mPoint["y"],
-                                "posZ": 0, # TODO: Add Z position if needed
-                                "iX": mPoint["iX"],
-                                "iY": mPoint["iY"], 
-                                "pixel_size": mPixelSize,
-                                "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
-                                "channel": illuSource,
-                                "time_index": t,       # or whatever loop index
-                                "tile_index": mIndex,   # or snake-tile index
-                                "position_center_index": position_center_index,
-                                "isPreview": isPreview,
-                            },
-                        ))
-                        step_id += 1
+                                # Turn on illumination - if we have only one source, we can skip this step after the first stop of mIndex
+                                if sum(np.array(illuminationIntensites)>0) > 1 or  ( mIndex == 0):
+                                    workflowSteps.append(WorkflowStep(
+                                        name="Turn on illumination",
+                                        step_id=step_id,
+                                        main_func=self.set_laser_power,
+                                        main_params={"power": illuIntensity, "channel": illuSource},
+                                        post_funcs=[self.wait_time],
+                                        post_params={"seconds": 0.05},
+                                    ))
+                                    step_id += 1
 
-                        # Turn off illumination
-                        if len(illuminationIntensites) > 1 and sum(np.array(illuminationIntensites)>0)>1: # TODO: Is htis the right approach?
+                            # Acquire frame
                             workflowSteps.append(WorkflowStep(
-                                name="Turn off illumination",
+                                name="Acquire frame",
                                 step_id=step_id,
-                                main_func=self.set_laser_power,
-                                main_params={"power": 0, "channel": illuSource},
+                                main_func=self.acquire_frame,
+                                main_params={"channel": "Mono"},
+                                post_funcs=[self.save_frame_ome], #, self.add_image_to_canvas],
+                                pre_funcs=[self.set_exposure_time_gain],
+                                pre_params={"exposure_time": exposures[illuIndex], "gain": gains[illuIndex]},
+                                post_params={
+                                    "posX": mPoint["x"],
+                                    "posY": mPoint["y"],
+                                    "posZ": 0, # TODO: Add Z position if needed
+                                    "iX": mPoint["iX"],
+                                    "iY": mPoint["iY"],
+                                    "pixel_size": mPixelSize,
+                                    "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
+                                    "channel": illuSource,
+                                    "time_index": t,       # or whatever loop index
+                                    "tile_index": mIndex,   # or snake-tile index
+                                    "position_center_index": position_center_index,
+                                    "runningNumber": step_id,  # Add running number for compatibility
+                                    "illuminationChannel": illuSource,
+                                    "illuminationValue": illuminationIntensites[illuIndex],
+                                },
                             ))
                             step_id += 1
 
-                # (Optional) Perform autofocus once per loop, if enabled
-                if isAutoFocus:
+                            # Turn off illumination
+                            if len(illuminationIntensites) > 1 and sum(np.array(illuminationIntensites)>0)>1: # TODO: Is htis the right approach?
+                                workflowSteps.append(WorkflowStep(
+                                    name="Turn off illumination",
+                                    step_id=step_id,
+                                    main_func=self.set_laser_power,
+                                    main_params={"power": 0, "channel": illuSource},
+                                ))
+                                step_id += 1
+
+                    # (Optional) Perform autofocus once per loop, if enabled
+                    if isAutoFocus:
+                        workflowSteps.append(WorkflowStep(
+                            name="Autofocus",
+                            step_id=step_id,
+                            main_func=self.autofocus,
+                            main_params={"minZ": autofocusMin, "maxZ": autofocusMax, "stepSize": autofocusStepSize},
+                        ))
+                        step_id += 1
+
+                    step_id += 1
+
+                    # Finalize OME writer for this tile
                     workflowSteps.append(WorkflowStep(
-                        name="Autofocus",
+                        name=f"Finalize OME writer for tile {position_center_index}",
                         step_id=step_id,
-                        main_func=self.autofocus,
-                        main_params={"minZ": autofocusMin, "maxZ": autofocusMax, "stepSize": autofocusStepSize},
+                        main_func=self.dummy_main_func,  # Placeholder for any pre-finalization logic
+                        main_params={},
+                        post_funcs=[self.finalize_tile_ome_writer],
+                        post_params={"tile_index": position_center_index},
                     ))
                     step_id += 1
 
-                step_id += 1
-
-                # Close TIFF writer at the end
+                # Add a wait period between each loop
                 workflowSteps.append(WorkflowStep(
-                    name="Close TIFF writer",
+                    name="Wait for next frame",
                     step_id=step_id,
-                    main_func=self.close_tiff_writer,
-                    main_params={"tiff_writers": tiff_writers, "tiff_index": position_center_index},
+                    main_func=self.dummy_main_func,
+                    main_params={},
+                    pre_funcs=[self.wait_time],
+                    pre_params={"seconds": 0.01}
                 ))
-            
-            # Add a wait period between each loop
+
+            # Finalize OME writer at the end
             workflowSteps.append(WorkflowStep(
-                name="Wait for next frame",
+                name="Finalize OME writer",
+                step_id=step_id,
+                main_func=self.finalize_current_ome_writer,
+                main_params={},
+            ))
+            step_id += 1
+
+
+            # Final step: mark done
+            workflowSteps.append(WorkflowStep(
+                name="Done",
                 step_id=step_id,
                 main_func=self.dummy_main_func,
                 main_params={},
                 pre_funcs=[self.wait_time],
-                pre_params={"seconds": 0.01}
+                pre_params={"seconds": 0.1}
             ))
 
-        if IS_OMEZARR_AVAILABLE:
-            # Close OME-Zarr store at the end (new)
-            workflowSteps.append(WorkflowStep(
-                name="Close OME-Zarr store",
-                step_id=step_id,
-                main_func=self.close_ome_zarr_store,
-                main_params={"omezarr_store": ome_store},
-            ))
-            step_id += 1
-        
-        # Emit final canvas
-        if self.isPreview:
-            workflowSteps.append(WorkflowStep(
-                name="Emit Final Canvas",
-                step_id=step_id,
-                main_func=self.dummy_main_func,
-                main_params={},
-                pre_funcs=[self.emit_final_canvas],
-                pre_params={}
-            ))
-            step_id += 1
+            # turn off all illuminations
+            for illuIndex, illuSource in enumerate(illuSources):
+                illuIntensity = illuminationIntensites[illuIndex-1]
+                if illuIntensity <= 0:
+                    continue
+                # Turn off illumination
+                workflowSteps.append(WorkflowStep(
+                    name="Turn off illumination",
+                    step_id=step_id,
+                    main_func=self.set_laser_power,
+                    main_params={"power": 0, "channel": illuSource},
+                ))
 
-        # Final step: mark done
-        workflowSteps.append(WorkflowStep(
-            name="Done",
-            step_id=step_id,
-            main_func=self.dummy_main_func,
-            main_params={},
-            pre_funcs=[self.wait_time],
-            pre_params={"seconds": 0.1}
-        ))
-        
-        # turn off all illuminations
-        for illuIndex, illuSource in enumerate(illuSources):
-            illuIntensity = illuminationIntensites[illuIndex-1]
-            if illuIntensity <= 0: 
-                continue
-            # Turn off illumination
-            workflowSteps.append(WorkflowStep(
-                name="Turn off illumination",
-                step_id=step_id,
-                main_func=self.set_laser_power,
-                main_params={"power": 0, "channel": illuSource},
-            ))
-            
         def sendProgress(payload):
             self.sigExperimentWorkflowUpdate.emit(payload)
 
@@ -661,29 +700,19 @@ class ExperimentController(ImConWidgetController):
         context.set_metadata("nTimes", nTimes)
         context.set_metadata("tPeriod", tPeriod)
 
-        context.set_object("tiff_writers", tiff_writers)
-        if IS_OMEZARR_AVAILABLE:
-            context.set_object("omezarr_store", ome_store)
+        # Store file_writers in context if they were created (non-performance mode)
+        if len(file_writers) > 0:
+            context.set_object("file_writers", file_writers)
+
+
+
 
         '''
         image_width, image_height = image_dims[0], image_dims[1]        # physical size of the image in microns
         size = np.array((max_coords[1]+image_height,max_coords[0]+image_width))/pixel_size # size of the final image that contains all tiles in microns
         mshape = np.int32(np.ceil(size)*self.resolution_scale*pixel_size)          # size of the final image in pixels (i.e. canvas)
         self.stitched_image = np.zeros(mshape.T, dtype=np.uint16)       # create a canvas for the stitched image
-        ''' 
-        
-        def compute_canvas_dimensions(minX, maxX, minY, maxY, diffX, diffY, pixelSize):
-            width_pixels = int(np.ceil((maxX - minX + diffX) / pixelSize))
-            height_pixels = int(np.ceil((maxY - minY + diffY) / pixelSize))
-            return width_pixels, height_pixels
-        canvas_width, canvas_height = compute_canvas_dimensions(minX, maxX, minY, maxY, diffX, diffY,  mPixelSize)
-
-        if self.isPreview:
-            if self.mDetector._isRGB:
-                canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
-            else:
-                canvas = np.zeros((canvas_height, canvas_width), dtype=np.uint16) # numpy assigns y,x,z
-            context.set_object("canvas", canvas)
+        '''
         context.on("progress", sendProgress)
         context.on("rgb_stack", sendProgress)
         context.on("rgb_stack", sendProgress)
@@ -691,8 +720,7 @@ class ExperimentController(ImConWidgetController):
         # Start the workflow
         self.workflow_manager.start_workflow(wf, context)
 
-        self.mFilePaths = mFilePaths
-        return {"status": "running", "store_path": mFilePaths}
+        return {"status": "running"}
 
     def computeScanRanges(self, snake_tiles):
         # Flatten all point dictionaries from all tiles to compute scan range
@@ -716,7 +744,7 @@ class ExperimentController(ImConWidgetController):
         self._logger.debug(f"Acquiring frame on channel {channel}")
         mFrame = self.mDetector.getLatestFrame()
         return mFrame
-    
+
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
         if gain and gain >=0:
             self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "gain"], gain)  # [category, detectorname, ROI1, ROI2] attribute, value
@@ -724,54 +752,79 @@ class ExperimentController(ImConWidgetController):
         if exposure_time and exposure_time >0:
             self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "exposureTime"],exposure_time) # category, detectorname, attribute, value
             self._logger.debug(f"Setting exposure time to {exposure_time}")
-        
+
     def dummy_main_func(self):
         self._logger.debug("Dummy main function called")
         return True
- 
+
     def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0):
         self._logger.debug("Performing autofocus... with parameters minZ, maxZ, stepSize: %s, %s, %s", minZ, maxZ, stepSize)
         # TODO: Connect this to the Autofocus Function
-        
+
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
         import time
         time.sleep(seconds)
 
-    def save_frame_tiff(self, context: WorkflowContext, metadata: Dict[str, Any], **kwargs):
-        # Retrieve the TIFF writer and write the tile
-        tiff_writers = context.get_object("tiff_writers")
-        if tiff_writers is None:
-            self._logger.debug("No TIFF writer found in context!")
+    def save_frame_ome(self, context: WorkflowContext, metadata: Dict[str, Any], **kwargs):
+        """
+        Saves a single frame using the unified OME writer (both stitched TIFF and OME-Zarr).
+        
+        Args:
+            context: WorkflowContext containing relevant data.
+            metadata: A dictionary containing the image data and other metadata.
+            **kwargs: Additional keyword arguments, including tile position, channel, etc.
+        """
+        # Get the latest image from the camera
+        img = metadata.get("result")
+        if img is None:
+            self._logger.debug("No image found in metadata!")
             return
         
+        # Get tile index to identify the correct OME writer
+        position_center_index = kwargs.get("position_center_index")
+        if position_center_index is None:
+            self._logger.error("No position_center_index provided for OME writer lookup")
+            metadata["frame_saved"] = False
+            return
         
-        # get latest image from the camera 
-        img = metadata["result"]
-
-        # get metadata
-        posX = kwargs.get("posX", 0)
-        posY = kwargs.get("posY", 0)
-        posZ = kwargs.get("posZ", 0)
-        channel_str = kwargs.get("channel", "Mono")
-        position_center_index = kwargs.get("position_center_index", 0)
-        time_stamp = kwargs.get("time_index", 0)
-        iX = kwargs.get("iX", 0)
-        iY = kwargs.get("iY", 0)
-        pixel_size = kwargs.get("pixel_size", 1.0)  # 1 micron per pixel
-        # get tiff writer
-        tiff_writer = tiff_writers[position_center_index]
+        # Prepare metadata for OME writer
+        ome_metadata = {
+            "x": kwargs.get("posX", 0),
+            "y": kwargs.get("posY", 0),
+            "z": kwargs.get("posZ", 0),
+            "runningNumber": kwargs.get("runningNumber", 0),
+            "illuminationChannel": kwargs.get("illuminationChannel", "unknown"),
+            "illuminationValue": kwargs.get("illuminationValue", 0),
+            "tile_index": kwargs.get("tile_index", 0),
+            "time_index": kwargs.get("time_index", 0),
+            "z_index": kwargs.get("z_index", 0),
+            "channel_index": kwargs.get("channel_index", 0),
+        }
+        
         try:
-            tiff_writer.add_image(
-                image=img,
-                position_x=posX,
-                position_y=posY,
-                index_x=iX,
-                index_y=iY,
-                pixel_size=pixel_size
-            )
+            # Get file_writers list from context
+            file_writers = context.get_object("file_writers")
+            if file_writers is None or position_center_index >= len(file_writers):
+                self._logger.error(f"No OME writer found for tile index {position_center_index}")
+                metadata["frame_saved"] = False
+                return
+            
+            # Write frame using the specific OME writer from the list
+            ome_writer = file_writers[position_center_index]
+            chunk_info = ome_writer.write_frame(img, ome_metadata)
+            self.setOmeZarrUrl(ome_writer.store.split(dirtools.UserFileDirs.Data)[-1])  # Update OME-Zarr URL in context
+            # Emit signal for frontend updates if Zarr chunk was written
+            if chunk_info and "rel_chunk" in chunk_info:
+                sigZarrDict = {
+                    "event": "zarr_chunk",
+                    "path": chunk_info["rel_chunk"],
+                    "zarr": str(self.getOmeZarrUrl())
+                }
+                self.sigUpdateOMEZarrStore.emit(sigZarrDict)
+            
             metadata["frame_saved"] = True
         except Exception as e:
-            self._logger.error(f"Error saving TIFF: {e}")
+            self._logger.error(f"Error saving OME frame: {e}")
             metadata["frame_saved"] = False
 
         '''
@@ -787,7 +840,7 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Error saving TIFF: {e}")
             metadata["frame_saved"] = False
         '''
-        
+
     def close_ome_zarr_store(self, omezarr_store):
         # If you need to do anything special (like flush) for the store, do it here.
         # Otherwise, Zarr’s FS-store or disk-store typically closes on its own.
@@ -801,7 +854,7 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error closing OME-Zarr store: {e}")
             raise e
-    
+
     def save_frame_ome_zarr(self, context: Dict[str, Any], metadata: Dict[str, Any], **kwargs):
         """
         Saves a single frame (tile) to an OME-Zarr store, handling coordinate transformation mismatch.
@@ -826,11 +879,13 @@ class ExperimentController(ImConWidgetController):
         posY = kwargs.get("posY", 0)
         posZ = kwargs.get("posZ", 0)
         channel_str = kwargs.get("channel", "Mono")
-        
+
         # 3) Write the frame with stage coords:
         if 0:
             omeZarrStore.write(img, x=posX, y=posY, z=posZ)
         else:
+            # TODO: This is not working as the posY and posX are in microns, but the OME-Zarr store expects pixel coordinates.
+            # Convert to pixel coordinates
             omeZarrStore.write_tile(img, t=0, c=0, z=0, y_start=posY, x_start=posX)
 
         time.sleep(0.01)
@@ -844,7 +899,7 @@ class ExperimentController(ImConWidgetController):
         canvas = context.get_object("canvas")
         if canvas is None:
             self._logger.debug("No canvas found in context!")
-            return        
+            return
         img = metadata["result"] # After acquire_frame runs, its return (the frame) goes into metadata["result"]. Then each post-func—save_frame_tiff, add_image_to_canvas, etc.—can read it from metadata["result"].
         if img is None:
             self._logger.debug("No image found in metadata!")
@@ -867,11 +922,11 @@ class ExperimentController(ImConWidgetController):
     def emit_final_canvas(self, context: WorkflowContext, metadata: Dict[str, Any]):
         final_canvas = context.get_object("canvas")
         if final_canvas is not None:
-            self.sigExperimentImageUpdate.emit("canvas", final_canvas, True, 1, 0)  
-            tif.imwrite("final_canvas.tif", final_canvas)  
+            self.sigExperimentImageUpdate.emit("canvas", final_canvas, True, 1, 0)
+            tif.imwrite("final_canvas.tif", final_canvas)
         else:
             print("No final canvas found!")
-            
+
     def append_frame_to_stack(self, context: WorkflowContext, metadata: Dict[str, Any]):
         # Retrieve the stack writer and append the frame
         # if we have one stack "full", we need to reset the stack
@@ -883,7 +938,7 @@ class ExperimentController(ImConWidgetController):
         stack_writer.append(img)
         context.set_object("stack_writer", stack_writer)
         metadata["frame_saved"] = True
-        
+
     def emit_rgb_stack(self, context: WorkflowContext, metadata: Dict[str, Any]):
         stack_writer = context.get_object("stack_writer")
         if stack_writer is None:
@@ -893,7 +948,7 @@ class ExperimentController(ImConWidgetController):
         context.emit_event("rgb_stack", {"rgb_stack": rgb_stack})
         stack_writer = []
         context.set_object("stack_writer", stack_writer)
-        
+
     def set_laser_power(self, power: float, channel: str):
         if channel not in self.allIlluNames:
             self._logger.error(f"Channel {channel} not found in available lasers: {self.allIlluNames}")
@@ -904,25 +959,12 @@ class ExperimentController(ImConWidgetController):
         self._logger.debug(f"Setting laser power to {power} for channel {channel}")
         return power
 
-    def close_tiff_writer(self, tiff_writers, tiff_index):
-        if tiff_writers is not None:
-            tiff_writer = tiff_writers[tiff_index]
-            tiff_writer.close()
-        else:
-            raise ValueError("TIFF writer is not initialized.")
 
-    def start_tiff_writer(self, tiff_writers, tiff_index):
-        if tiff_writers is not None:
-            tiff_writer = tiff_writers[tiff_index]
-            tiff_writer.start()
-        else:
-            raise ValueError("TIFF writer is not initialized.")
-    
+
     def move_stage_xy(self, posX: float = None, posY: float = None, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
         self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
         #if posY and posX is None:
-            
         self.mStage.move(value=(posX, posY), speed=(self.SPEED_X_default, self.SPEED_Y_default), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
         self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
@@ -935,7 +977,7 @@ class ExperimentController(ImConWidgetController):
         self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
         return newPosition["Z"]
 
-            
+
     @APIExport()
     def pauseWorkflow(self):
         status = self.workflow_manager.get_status()["status"]
@@ -963,14 +1005,14 @@ class ExperimentController(ImConWidgetController):
     @APIExport()
     def getExperimentStatus(self):
         return self.workflow_manager.get_status()
-    
+
     @APIExport()
     def forceStopExperiment(self):
         self.workflow_manager.stop_workflow()
         del self.workflow_manager
         self.workflow_manager = WorkflowsManager()
-        
-        
+
+
     """Couples a 2‑D stage scan with external‑trigger camera acquisition.
 
     • Puts the connected ``CameraHIK`` into *external* trigger mode
@@ -1019,18 +1061,18 @@ class ExperimentController(ImConWidgetController):
         self.mDetector.startAcquisition()
 
         # compute the metadata for the stage scan (e.g. x/y coordinates and illumination channels)
-        # stage will start at xstart, ystart and move in steps of xstep, ystep in snake scan logic 
-        
+        # stage will start at xstart, ystart and move in steps of xstep, ystep in snake scan logic
+
         illum_dict = {
             "illumination0": illumination0,
             "illumination1": illumination1,
             "illumination2": illumination2,
-            "illumination3": illumination3, 
+            "illumination3": illumination3,
             "led": led
         }
 
         # Count how many illumination entries are valid (not None)
-        nIlluminations = sum(val is not None and val > 0 for val in illum_dict.values())        
+        nIlluminations = sum(val is not None and val > 0 for val in illum_dict.values())
         nScan = max(nIlluminations, 1)
         total_frames = nx * ny * nScan
         self._logger.info(f"Stage-scan: {nx}×{ny} ({total_frames} frames)")
@@ -1081,13 +1123,14 @@ class ExperimentController(ImConWidgetController):
             self._stop_writer_evt.clear()            
             self._writer_thread_ome.start()
         else:    
+            # Non-performance mode: also use _writer_loop_ome but configure for TIFF stitching
             self._stop_writer_evt.clear()
-            self._writer_thread = threading.Thread(
-                target=self._writer_loop,
-                args=(total_frames,metadataList,),
-                daemon=True,
+            self._writer_thread_ome = threading.Thread(
+                target=self._writer_loop_ome, 
+                args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0.2, True, True, False),  # is_tiff=True, write_stitched_tiff=True, is_performance_mode=False
+                daemon=True
             )
-            self._writer_thread.start()
+            self._writer_thread_ome.start()
         illumination=(illumination0, illumination1, illumination2, illumination3) if nIlluminations > 0 else (0,0,0,0)
         # 3. execute stage scan (blocks until finished) ------------------------
         self.mStage.start_stage_scanning(
@@ -1102,65 +1145,6 @@ class ExperimentController(ImConWidgetController):
     # -------------------------------------------------------------------------
     # internal helpers
     # -------------------------------------------------------------------------
-    def _writer_loop(self, n_expected: int, metadataList: list, minPeriod: float = 0.2):
-        """
-        Bulk-writer that uses the (frames, ids) tuple returned by camera.getChunk().
-        The call is non-blocking; it returns empty arrays until new frames arrive.
-        """
-        saved = 0
-        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        mFilePath = os.path.join(self.save_dir, timeStamp + "_FastStageScan")
-        # create directory if it does not exist
-        if not os.path.exists(mFilePath):
-            os.makedirs(mFilePath)
-        self._logger.info(f"Writer thread started, saving to {mFilePath}...")
-        tLastCapture = time.time()  # for throttling
-        while saved < n_expected and not self._stop_writer_evt.is_set():
-
-            frames, ids = self.mDetector.getChunk()        # ← empties camera buffer
-
-            if frames.size == 0:                        # nothing new yet
-                time.sleep(0.005)
-                continue
-
-            # Create a new OmeTiffStitcher instance for stitching tiles
-            tiff_writer = OmeTiffStitcher(mFilePath)
-            tiff_writer.start()    
-
-
-            
-            for frame, fid in zip(frames, ids):
-                currentMetadata = metadataList[fid] if fid < len(metadataList) else {}
-                if currentMetadata == {}:
-                    self._logger.warning(f"Metadata for frame {fid} is empty. Skipping this frame.")
-                    break
-                fileName = os.path.join(mFilePath,  f"FastScan_{currentMetadata['runningNumber']}_x_{round(currentMetadata['x'], 1)}_y_{round(currentMetadata['y'], 1)}_illu-{currentMetadata['illuminationChannel']}_{currentMetadata['illuminationValue']}{fid:06d}.tif")
-                tif.imwrite(fileName, frame)
-                saved += 1
-                self._logger.debug(f"saved {saved}/{n_expected} under {fileName}")
-                tiff_writer.add_image(
-                    image=frame,
-                    position_x=currentMetadata['x'],
-                    position_y=currentMetadata['y'],
-                    index_x=0,
-                    index_y=0, # TODO: Add index_x and index_y if needed
-                    pixel_size= self.detectorPixelSize[-1]  # assuming last element is the pixel size
-                )
-             
-        tiff_writer.close()  # close the tiff writer
-        self._logger.info(f"Writer thread finished ({saved} images).")
-        # 4. wait for writer to finish then stop camera ------------------------
-
-        self._logger.info("Grid‑scan completed and all images saved.")
-
-        # 5. clean up and bring camera back to normal mode -----------------
-        self.mDetector.stopAcquisition()
-        self.mDetector.setTriggerSource("Continuous")
-        self.mDetector.flushBuffers()
-        self.mDetector.startAcquisition()
-        self._logger.info("Camera reset to continuous mode.")
-        self.fastStageScanIsRunning = False
-
     def _writer_loop_ome(
         self,
         mFilePath: OMEFileStorePaths,
@@ -1174,125 +1158,165 @@ class ExperimentController(ImConWidgetController):
         ny: int,
         min_period: float = 0.2,
         is_tiff: bool = False,
+        write_stitched_tiff: bool = True,  # Enable stitched TIFF by default
+        is_performance_mode: bool = True,  # New parameter to distinguish modes
     ):
         """
-        Bulk-writer for fast stage scan.
+        Bulk-writer for both fast stage scan (performance mode) and normal stage scan.
 
-        Stores every frame twice  
-        • individual OME-TIFF tile (debug/backup)  
-        • single chunked OME-Zarr mosaic (browser streaming)
+        Stores every frame in multiple formats:
+        • individual OME-TIFF tile (debug/backup) - optional
+        • single chunked OME-Zarr mosaic (browser streaming) 
+        • stitched OME-TIFF file (Fiji compatible) - optional
 
         Parameters
         ----------
         n_expected      total number of frames that will arrive
         metadata_list   list with x, y, illuminationChannel, … for each frame-id
         x_start … ny    grid geometry (needed to locate each tile in the canvas)
+        is_performance_mode  whether using hardware triggering or workflow-based acquisition
         """
-        # ------------------------------------------------------------------ paths
-        tiff_dir = mFilePath.tiff_dir
-        zarr_dir = mFilePath.zarr_dir
-        base_dir = mFilePath.base_dir
-        # ---------------------------------------------------------------- canvas
-        tile_w, tile_h  = self.mDetector._shape[-2:]
-        store   = zarr.DirectoryStore(str(zarr_dir))
-        root    = zarr.group(store, overwrite=True)
-        canvas  = root.create_dataset(
-            "0",
-            shape=(1, 1, 1, ny * tile_h, nx * tile_w),      # t c z y x
-            chunks=(1, 1, 1, tile_h,     tile_w),
-            dtype="uint16",
-            compressor=numcodecs.Blosc("zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE),
-            dimension_separator="/"  
+        # Set up unified OME writer
+        tile_shape = self.mDetector._shape[-2:]  # (height, width)
+        grid_shape = (nx, ny)
+        grid_geometry = (x_start, y_start, x_step, y_step)
+        writer_config = OMEWriterConfig(
+            write_tiff=is_tiff,
+            write_zarr=self._ome_write_zarr,
+            write_stitched_tiff=self._ome_write_stitched_tiff,
+            min_period=min_period,
+            pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0,
+            n_time_points=self._ome_n_time_points,
+            n_z_planes=self._ome_n_z_planes,
+            n_channels=self._ome_n_channels
         )
-        root.attrs["multiscales"] = [{
-            "version": "0.4",
-                "datasets": [
-                {
-                    "path": "0",
-                    "coordinateTransformations": [
-                        {"type": "scale", "scale": [1, 1, 1, 1, 1]}
-                    ]
-                }
-            ],
-            "axes": [
-                {"name": "t", "type": "time"},
-                {"name": "c", "type": "channel"},
-                {"name": "z", "type": "space"},
-                {"name": "y", "type": "space"},
-                {"name": "x", "type": "space"},
-            ],
-        }]
+        
+        ome_writer = OMEWriter(
+            file_paths=mFilePath,
+            tile_shape=tile_shape,
+            grid_shape=grid_shape,
+            grid_geometry=grid_geometry,
+            config=writer_config,
+            logger=self._logger
+        )
 
         # ------------------------------------------------------------- main loop
-        saved, t_last = 0, time.time()
-        self._logger.info(f"Writer thread started → {base_dir}")
+        saved = 0
+        self._logger.info(f"Writer thread started → {mFilePath.base_dir}")
 
-        while saved < n_expected and not self._stop_writer_evt.is_set():
-            frames, ids = self.mDetector.getChunk()  # empties camera buffer
+        if is_performance_mode:
+            # Performance mode: get frames from camera buffer
+            while saved < n_expected and not self._stop_writer_evt.is_set():
+                frames, ids = self.mDetector.getChunk()  # empties camera buffer
 
-            if frames.size == 0:
-                time.sleep(0.005)
-                continue
-
-            for frame, fid in zip(frames, ids):
-                meta = metadata_list[fid] if fid < len(metadata_list) else None
-                if not meta:
-                    self._logger.warning(f"missing metadata for frame-id {fid}")
+                if frames.size == 0:
+                    time.sleep(0.005)
                     continue
 
-                if is_tiff:
-                    # 1) per-tile OME-TIFF -------------------------------------------------
-                    tiff_name = (
-                        f"F{meta['runningNumber']:06d}_"
-                        f"x{meta['x']:.1f}_y{meta['y']:.1f}_"
-                        f"{meta['illuminationChannel']}_{meta['illuminationValue']}.ome.tif"
-                    )
-                    tif.imwrite(os.path.join(tiff_dir, tiff_name), frame, compression="zlib")
+                for frame, fid in zip(frames, ids):
+                    meta = metadata_list[fid] if fid < len(metadata_list) else None
+                    if not meta:
+                        self._logger.warning(f"missing metadata for frame-id {fid}")
+                        continue
 
-                # 2) write into the Zarr canvas ---------------------------------------
-                ix = int(round((meta["x"] - x_start) / x_step))
-                iy = int(round((meta["y"] - y_start) / y_step))
-                y0, y1 = iy * tile_h, (iy + 1) * tile_h
-                x0, x1 = ix * tile_w, (ix + 1) * tile_w
-                canvas[0, 0, 0, y0:y1, x0:x1] = frame
+                    # Write frame using unified writer
+                    chunk_info = ome_writer.write_frame(frame, meta)
+                    saved += 1
+                    
+                    # emit signal to tell frontend about the new chunk
+                    if chunk_info and "rel_chunk" in chunk_info:
+                        sigZarrDict = {
+                            "event": "zarr_chunk",
+                            "path": chunk_info["rel_chunk"],
+                            "zarr": str(self.getOmeZarrUrl())  # e.g. /files/…/FastStageScan.ome.zarr
+                        }
+                        self.sigUpdateOMEZarrStore.emit(sigZarrDict)
+        else:
+            # Normal mode: frames are provided via external queue or workflow
+            # This is a placeholder - actual implementation depends on how frames are provided
+            self._logger.info("Normal mode writer started - waiting for frames via workflow")
+            # In normal mode, frames will be written via separate calls to write_frame
 
-                saved += 1
-                # throttle disk writes if the scan outruns SD-card I/O
-                t_now = time.time()
-                if t_now - t_last < min_period:
-                    time.sleep(min_period - (t_now - t_last))
-                t_last = t_now
-                
-                # emit signal to tell frontend about the new chunk
-                rel_chunk = f"0/{iy}.{ix}" # NGFF v0.4 layout
-                sigZarrDict = {
-                    "event": "zarr_chunk",
-                    "path": rel_chunk,
-                    "zarr": str(self.getOmeZarrUrl())  # e.g. /files/…/FastStageScan.ome.zarr
-                }
-                self.sigUpdateOMEZarrStore.emit(sigZarrDict)  # (rel_chunk, current_zarr_url, image_name)
+        self._logger.info(f"Writer thread finished ({saved}/{n_expected}) tiles under : {mFilePath.base_dir}")
+        
+        # Finalize writing (build pyramids, etc.)
+        ome_writer.finalize()
 
-        self._logger.info(f"Writer thread finished ({saved}/{n_expected}) tiles under : {base_dir}")
-        # 3) close OME-Zarr store -----------------------------------------------
-        # optional: build a 2× pyramid level (≈15 s on Pi 5 for 10 k tiles)
-        try:
-            from ome_zarr.writer import to_multiscales
-            to_multiscales(store, scale_factors=[[2, 2, 2]])
-        except Exception as err:
-            self._logger.warning(f"pyramid generation failed: {err}")
+        # Store writer reference for normal mode
+        if not is_performance_mode:
+            self._current_ome_writer = ome_writer
+            return  # Don't reset camera in normal mode
 
-        # bring camera back to continuous mode
+        # bring camera back to continuous mode (performance mode only)
         self.mDetector.stopAcquisition()
         self.mDetector.setTriggerSource("Continuous")
         self.mDetector.flushBuffers()
         self.mDetector.startAcquisition()
         self.fastStageScanIsRunning = False
 
+    def write_frame_to_ome_writer(self, frame, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Write a frame to the current OME writer (for normal mode scanning).
+        
+        Args:
+            frame: Image data as numpy array
+            metadata: Dictionary containing position and other metadata
+            
+        Returns:
+            Dictionary with information about the written chunk (for Zarr)
+        """
+        if self._current_ome_writer is not None:
+            return self._current_ome_writer.write_frame(frame, metadata)
+        else:
+            self._logger.warning("No OME writer available for frame writing")
+            return None
+    
+    def finalize_tile_ome_writer(self, context: WorkflowContext, metadata: Dict[str, Any], tile_index: int):
+        """Finalize the OME writer for a specific tile."""
+        file_writers = context.get_object("file_writers")
+        
+        if file_writers is not None and tile_index < len(file_writers):
+            ome_writer = file_writers[tile_index]
+            try:
+                self._logger.info(f"Finalizing OME writer for tile: {tile_index}")
+                ome_writer.finalize()
+                self._logger.info(f"OME writer finalized for tile {tile_index}")
+            except Exception as e:
+                self._logger.error(f"Error finalizing OME writer for tile {tile_index}: {e}")
+        else:
+            self._logger.warning(f"No OME writer found for tile index: {tile_index}")
+
+    def finalize_current_ome_writer(self, context: WorkflowContext = None, metadata: Dict[str, Any] = None):
+        """Finalize all OME writers and clean up."""
+        # Finalize OME writers from context (normal mode)
+        if context is not None:
+            # Get file_writers list and finalize all
+            file_writers = context.get_object("file_writers")
+            if file_writers is not None:
+                for i, ome_writer in enumerate(file_writers):
+                    try:
+                        self._logger.info(f"Finalizing OME writer for tile {i}")
+                        ome_writer.finalize()
+                    except Exception as e:
+                        self._logger.error(f"Error finalizing OME writer for tile {i}: {e}")
+                # Clear the list from context
+                context.remove_object("file_writers")
+        
+        # Also finalize the instance variable if it exists (performance mode)
+        if self._current_ome_writer is not None:
+            try:
+                self._current_ome_writer.finalize()
+                self._current_ome_writer = None
+            except Exception as e:
+                self._logger.error(f"Error finalizing current OME writer: {e}")
+    
     def _stop(self):
         """Abort the acquisition gracefully."""
         self._stop_writer_evt.set()
         if self._writer_thread is not None:
             self._writer_thread.join(timeout=2)
+        if self._writer_thread_ome is not None:
+            self._writer_thread_ome.join(timeout=2)
         self.mDetector.stopAcquisition()
 
     @APIExport(runOnUIThread=False)

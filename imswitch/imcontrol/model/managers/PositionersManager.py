@@ -9,7 +9,7 @@ class PositionersManager(MultiManager):
         lowLevelManagers['commChannel'] = commChannel
         super().__init__(positionerInfos, 'positioners', **lowLevelManagers)
 
-        
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

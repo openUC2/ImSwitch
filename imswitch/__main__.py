@@ -9,7 +9,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
          data_folder: str=None, scan_ext_data_folder:bool=None, ext_drive_mount:str=None):
     '''
     is_headless: bool => start with or without qt
-    default_config: str => path to the config file 
+    default_config: str => path to the config file
     http_port: int => port number (default: 8001)
     socket_port: int => port number (default: 8002)
     ssl: bool => use ssl (default: True)
@@ -17,9 +17,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
     data_folder: str => path to the data folder (default: None, pointing to Documents/ImSwitchConfig)
     scan_ext_data_folder: bool => if True, we will scan the ext_drive_mount for usb drives and use this for data storage
     ext_drive_mount: str => path to the external drive mount point (default: None, optionally pointing to e.g. /Volumes or /media)
-    
-    
-    
+
+
+
     To start imswitch in headless using the arguments, you can call the main file with the following arguments:
         python main.py --headless or
         python -m imswitch --headless 1 --config-file example_virtual_microscope.json --config-folder /Users/bene/Downloads --scan-ext-drive-mount true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes
@@ -40,37 +40,37 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
             parser.add_argument('--http-port', dest='http_port', type=int, default=8001,
                                 help='specify http port')
 
-            # specify socket port 
+            # specify socket port
             parser.add_argument('--socket-port', dest='socket_port', type=int, default=8002,
                                 help='specify socket port')
             # specify ssl
             parser.add_argument('--no-ssl', dest='ssl', default=True, action='store_false',
                                 help='specify ssl')
-            
+
             # specify the config folder (e.g. if running from a different location / container)
             parser.add_argument('--config-folder', dest='config_folder', type=str, default=None,
                                 help='specify config folder')
-            
-            parser.add_argument('--ext-data-folder', dest='data_folder', type=str, default=None, 
+
+            parser.add_argument('--ext-data-folder', dest='data_folder', type=str, default=None,
                                 help='point to a folder to store the data. This is the default location for the data folder. If not specified, the default location will be used.')
 
             parser.add_argument('--scan-ext-drive-mount', dest='scan_ext_data_folder', default=False, action='store_true',
                                 help='scan the external mount (linux only) if we have a USB drive to save to')
-            
+
             parser.add_argument('--ext-drive-mount', dest='ext_drive_mount', type=str, default=None,
                                 help='specify the external drive mount point (e.g. /Volumes or /media)')
-            
-            
-            
+
+
+
             args = parser.parse_args()
-            
-            imswitch.IS_HEADLESS = args.headless            # if True, no QT will be loaded   
+
+            imswitch.IS_HEADLESS = args.headless            # if True, no QT will be loaded
             imswitch.__httpport__ = args.http_port          # e.g. 8001
             imswitch.__ssl__ = args.ssl                     # if True, ssl will be used (e.g. https)
             imswitch.__socketport__ = args.socket_port      # e.g. 8002
-            
+
             if type(args.config_file)==str and args.config_file.find("json")>=0:  # e.g. example_virtual_microscope.json
-                imswitch.DEFAULT_SETUP_FILE = args.config_file  
+                imswitch.DEFAULT_SETUP_FILE = args.config_file
             if args.config_folder and os.path.isdir(args.config_folder):
                 imswitch.DEFAULT_CONFIG_PATH = args.config_folder # e.g. /Users/USER/ in case an alternative path is used
             if args.data_folder and os.path.isdir(args.data_folder):
@@ -79,7 +79,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 imswitch.SCAN_EXT_DATA_FOLDER = args.scan_ext_data_folder
             if args.ext_drive_mount:
                 imswitch.EXT_DRIVE_MOUNT = args.ext_drive_mount
-            
+
         except Exception as e:
             print(e)
             pass
@@ -123,7 +123,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         logger.info(f'Config file: {imswitch.DEFAULT_SETUP_FILE}')
         logger.info(f'Config folder: {imswitch.DEFAULT_CONFIG_PATH}')
         logger.info(f'Data folder: {imswitch.DEFAULT_DATA_PATH}')
-        
+
         if imswitch.IS_HEADLESS:
             app = None
         else:
@@ -151,7 +151,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         # connect the different controllers through the communication channel
         moduleCommChannel = ModuleCommunicationChannel()
 
-        # only create the GUI if necessary 
+        # only create the GUI if necessary
         if not imswitch.IS_HEADLESS:
             from imswitch.imcommon.view import MultiModuleWindow, ModuleLoadErrorView
             multiModuleWindow = MultiModuleWindow('ImSwitch')
@@ -178,7 +178,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
             # The displayed module name will be the module's __title__, or alternatively its ID if
             # __title__ is not set
             moduleName = modulePkg.__title__ if hasattr(modulePkg, '__title__') else moduleId
-            # we load all the controllers, managers and widgets here: 
+            # we load all the controllers, managers and widgets here:
             try:
                 view, controller = modulePkg.getMainViewAndController(
                     moduleCommChannel=moduleCommChannel,
@@ -186,7 +186,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                     moduleMainControllers=moduleMainControllers
                 )
                 logger.info(f'initialize module {moduleId}')
-                
+
             except Exception as e:
                 logger.error(f'Failed to initialize module {moduleId}')
                 logger.error(e)
@@ -197,11 +197,11 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                     multiModuleWindow.addModule(moduleId, moduleName, ModuleLoadErrorView(e))
             else:
                 # Add module to window
-                if not imswitch.IS_HEADLESS: 
+                if not imswitch.IS_HEADLESS:
                     multiModuleWindow.addModule(moduleId, moduleName, view)
                 moduleMainControllers[moduleId] = controller
-                
-                # in case of the imnotebook, spread the notebook url 
+
+                # in case of the imnotebook, spread the notebook url
                 if moduleId == 'imnotebook':
                     imswitch.jupyternotebookurl = controller.webaddr
 

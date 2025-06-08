@@ -10,8 +10,8 @@ try:
     from microEye.checklist_dialog import ChecklistDialog, Checklist
     isMicroEye = True
 except:
-    isMicroEye = False 
-    
+    isMicroEye = False
+
 from imswitch.imcommon.view.guitools import pyqtgraphtools
 from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
@@ -28,23 +28,23 @@ class STORMReconWidget(NapariHybridWidget):
 
         # Napari image layer for results
         self.layer = None
-        
-        # Main GUI 
+
+        # Main GUI
         self.layout = QtWidgets.QHBoxLayout()
         self.setLayout(self.layout)
 
         # Side TabView
         self.tabView = QTabWidget()
         self.layout.addWidget(self.tabView, 0)
-        
+
         if not isMicroEye:
             self.image_control_layout = QFormLayout()
             self.image_control_layout.addRow(
                 QLabel('MicroEye not installed. Please install MicroEye to use this feature.'),
                 None)
             #xself.tabView.addTab(self.controls_group, 'Prefit Options')
-            return 
-            
+            return
+
 
         # Localization / Render tab layout
         self.loc_group = QWidget()
@@ -55,7 +55,7 @@ class STORMReconWidget(NapariHybridWidget):
         self.data_filters = QWidget()
         self.data_filters_layout = QVBoxLayout()
         self.data_filters.setLayout(self.data_filters_layout)
-        
+
         # Tiff Options tab layout
         self.controls_group = QWidget()
         self.controls_layout = QVBoxLayout()
@@ -84,7 +84,7 @@ class STORMReconWidget(NapariHybridWidget):
 
         self.controls_layout.addLayout(
             self.image_control_layout)
-        
+
         self.blobDetectionWidget = BlobDetectionWidget()
         #self.blobDetectionWidget.update.connect(
         #    lambda: self.update_display())
@@ -158,12 +158,12 @@ class STORMReconWidget(NapariHybridWidget):
         #self.detection.stateChanged.connect(self.slider_changed)
 
         self.controls_layout.addStretch()
-        
-        
-        
-        
+
+
+
+
         '''
-        FITTING 
+        FITTING
         '''
 
         # Localization / Render layout
@@ -254,7 +254,7 @@ class STORMReconWidget(NapariHybridWidget):
         self.refresh_btn = QPushButton(
             'Refresh SuperRes Image',
             clicked=lambda: self.renderLoc())
-        
+
         self.frc_res_btn = QPushButton(
             'FRC Resolution',
             clicked=lambda: self.FRC_estimate())
@@ -312,8 +312,8 @@ class STORMReconWidget(NapariHybridWidget):
             QLabel('S-res pixel-size [nm]:'),
             self.super_px_size
         )
-        
-        # activate live localization 
+
+        # activate live localization
         self.loc_ref_lay = QHBoxLayout()
         self.loc_ref_lay.addWidget(self.loc_btn)
         self.loc_ref_lay.addWidget(self.refresh_btn)
@@ -346,7 +346,7 @@ class STORMReconWidget(NapariHybridWidget):
         if self.layer is None or self.layer.name not in self.viewer.layers:
             self.layer = self.viewer.add_image(im, rgb=False, name="STORMRecon", blending='additive')
         self.layer.data = im
-        
+
     def localize(self):
         if self.loc_btn.text() == "Localize":
             self.sigShowToggled.emit(True)
@@ -354,4 +354,3 @@ class STORMReconWidget(NapariHybridWidget):
         else:
             self.sigShowToggled.emit(False)
             self.loc_btn.setText("Localize")
-        

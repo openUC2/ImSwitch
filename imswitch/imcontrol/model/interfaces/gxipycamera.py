@@ -48,9 +48,9 @@ class CameraGXIPY:
         self.lastFrameId = -1
         self.frameNumber = -1
         self.frame = None
-        
+
         # For RGB
-        self.contrast_lut = None        
+        self.contrast_lut = None
         self.gamma_lut = None
         self.color_correction_param = 0
 
@@ -98,13 +98,13 @@ class CameraGXIPY:
 
         # set camera to mono12 mode
         availablePixelFormats = self.camera.PixelFormat.get_range()
-        if self.camera.PixelColorFilter.is_implemented() is True: 
+        if self.camera.PixelColorFilter.is_implemented() is True:
             self.isRGB = True
-        else: 
+        else:
             self.isRGB = False # TODO: Need to have an effect of the super class
-        try: 
+        try:
             self.set_pixel_format(list(availablePixelFormats)[-1]) # last one is at highest bitrate
-        except Exception as e: 
+        except Exception as e:
             self.__logger.error(e)
 
         # get framesize
@@ -167,7 +167,7 @@ class CameraGXIPY:
         self.isFlatfielding = is_flatfielding
         # record the flatfield image if needed
         if self.isFlatfielding:
-            self.recordFlatfieldImage() 
+            self.recordFlatfieldImage()
 
     def set_exposure_time(self,exposure_time):
         self.exposure_time = exposure_time
@@ -189,7 +189,7 @@ class CameraGXIPY:
     def set_blacklevel(self,blacklevel):
         self.blacklevel = blacklevel
         self.camera.BlackLevel.set(self.blacklevel)
-    
+
     def set_pixel_format(self,format):
         format = format.upper()
         if self.camera.PixelFormat.is_implemented() and self.camera.PixelFormat.is_writable():
@@ -409,7 +409,7 @@ class CameraGXIPY:
             self.__logger.error("Got an incomplete frame")
             return
 
-        
+
         # if RGB
         if self.isRGB:
             rgb_image = frame.convert("RGB")
@@ -454,7 +454,7 @@ class CameraGXIPY:
         flatfield = gaussian(flatfield, sigma=nGauss)
         flatfield = median(flatfield, selem=np.ones((nMedian, nMedian)))
         self.flatfieldImage = flatfield
-        
+
     def setFlatfieldImage(self, flatfieldImage, isFlatfieldEnabeled=True):
         self.flatfieldImage = flatfieldImage
         self.isFlatfielding = isFlatfieldEnabeled

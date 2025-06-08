@@ -102,11 +102,11 @@ class ESP32LEDMatrixManager(LEDMatrixManager):
         Draw filled circle of radius.
         """
         self.mLEDmatrix.send_LEDMatrix_circles(radius=radius, intensity=intensity)
-        
+
     def setStatus(self, status:str="idle") -> None:
         """ Sets the value of the LEDMatrix. """
         self.mLEDmatrix.send_LEDMatrix_status(status=status)
-        
+
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

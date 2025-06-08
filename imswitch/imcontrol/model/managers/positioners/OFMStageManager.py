@@ -17,7 +17,7 @@ class OFMStageManager(PositionerManager):
         ]
         self.__logger = initLogger(self, instanceName=name)
 
-        
+
     def moveThread(self, displacement,is_absolute=False,is_blocking=True):
         if is_blocking:
             if is_absolute:
@@ -29,8 +29,8 @@ class OFMStageManager(PositionerManager):
                 Thread(target=self._rs232manager._OFM.move, args=(displacement,)).start()
             else:
                 Thread(target=self._rs232manager._OFM.move_rel, args=(displacement,)).start()
-                
-        
+
+
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=False):
         if axis == 'X':
             displacement = {"x":value, "y":0, "z":0}
@@ -53,7 +53,7 @@ class OFMStageManager(PositionerManager):
         else:
             self.__logger.error('Wrong axis, has to be "X" "Y" or "Z".')
             return
-    
+
     def closeEvent(self):
         pass
 

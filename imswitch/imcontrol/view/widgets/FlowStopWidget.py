@@ -17,7 +17,7 @@ class FlowStopWidget(NapariHybridWidget):
     sigSliderRotationSpeedValueChanged = QtCore.Signal(float)  # (value)
     sigExposureTimeChanged = QtCore.Signal(float)  # (value)
     sigGainChanged = QtCore.Signal(float)  # (value)
-    
+
     def __post_init__(self):
         #super().__init__()
 
@@ -43,7 +43,7 @@ class FlowStopWidget(NapariHybridWidget):
         # Main layout
         mainLayout = QtWidgets.QVBoxLayout(self)
         mainLayout.addWidget(self.tabs)
-        
+
         self.setLayout(mainLayout)
         self.layer = None
 
@@ -56,17 +56,17 @@ class FlowStopWidget(NapariHybridWidget):
         self.sliderPumpSpeed.valueChanged.connect(
             lambda value: self.sigSliderPumpSpeedValueChanged.emit(value)
         )
-        
+
         self.textEditExposureTime.textChanged.connect(
             lambda value: self.sigExposureTimeChanged.emit(float(value))
         )
-        
+
         self.textEditGain.textChanged.connect(
             lambda value: self.sigGainChanged.emit(float(value))
         )
-        
+
         self.snapButton.clicked.connect(self.sigSnapClicked)
-        
+
     def createManualAcquisitionTab(self):
         # TAB 1 - Manual Acquisition Settings
         self.labelFocus = QtWidgets.QLabel('Focus')
@@ -76,26 +76,26 @@ class FlowStopWidget(NapariHybridWidget):
         self.textEditExposureTime = QtWidgets.QLineEdit("0.1")
         self.labelGain = QtWidgets.QLabel('Gain')
         self.textEditGain = QtWidgets.QLineEdit("0")
-        
+
         self.labelMovePump = QtWidgets.QLabel('Move Pump:')
         self.labelMovePumpValue = QtWidgets.QLabel('Flowrate Pump 0 [stp\s]')
         self.textEditMovePump = QtWidgets.QLineEdit("0")
         self.pumpMovePosButton = QtWidgets.QPushButton('Move Pump +')
         self.pumpMoveNegButton = QtWidgets.QPushButton('Move Pump -')
         self.pumpMoveStopButton = QtWidgets.QPushButton('Stop Pump')
-            
+
         # Slider to set the focus value
         valueRangeFocus = (0,100)
         tickIntervalFocus = 5
         singleStepFocus = 1
         self.sliderFocus = self.createSlider('Focus', 0, valueRangeFocus, tickIntervalFocus, singleStepFocus)
-        
+
         # Slider to set the focus value
         valueRangePump = (300,700)
         tickIntervalPump = 1
         singleStepPump = 1
         self.sliderPumpSpeed = self.createSlider('Pump Speed', 0, valueRangePump, tickIntervalPump, singleStepPump)
-            
+
         # Add widgets for Manual Acquisition Settings
         self.tabManualLayout.addWidget(self.labelFocus, 0, 0)
         self.tabManualLayout.addWidget(self.sliderFocus, 0, 1)
@@ -133,15 +133,15 @@ class FlowStopWidget(NapariHybridWidget):
         self.textEditTimeToStabilize = QtWidgets.QLineEdit('0.5')
         self.labelPumpSpeed = QtWidgets.QLabel('Pump Speed')
         self.textEditPumpSpeed = QtWidgets.QLineEdit('1000')
-        
+
         self.labelExperimentalSettings = QtWidgets.QLabel('Experimental Settings:')
         self.switchPumpDirection = QtWidgets.QPushButton('Switch Pump Direction')
         self.buttonStart = QtWidgets.QPushButton('Start')
         self.buttonStop = QtWidgets.QPushButton('Stop')
-        
+
         self.labelStatus = QtWidgets.QLabel('Status:')
         self.labelStatusValue = QtWidgets.QLabel('Stopped')
-        
+
         # Add widgets for Automatic Settings
         self.tabAutoLayout.addWidget(self.labelMetaData, 0, 0)
         self.tabAutoLayout.addWidget(self.labelExperimentName, 1, 0)
@@ -169,7 +169,7 @@ class FlowStopWidget(NapariHybridWidget):
 
     def setStatus(self, status):
         self.labelStatusValue.setText(status)
-        
+
     def createSlider(self, label, value, valueRange, tickInterval, singleStep):
         slider = guitools.FloatSlider(QtCore.Qt.Horizontal, self, allowScrollChanges=False,
                                         decimals=1)
@@ -195,7 +195,7 @@ class FlowStopWidget(NapariHybridWidget):
             'timeToStabilize': self.textEditTimeToStabilize.text(),
             'pumpSpeed': self.textEditPumpSpeed.text(),
         }
-        
+
     def getImage(self):
         if self.layer is not None:
             return self.img.image

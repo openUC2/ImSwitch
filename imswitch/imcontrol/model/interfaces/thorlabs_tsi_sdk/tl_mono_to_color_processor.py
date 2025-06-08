@@ -70,7 +70,7 @@ class MonoToColorProcessorSDK(object):
         try:
             if platform.system() == 'Windows':
                 mFWD = os.path.dirname(os.path.realpath(__file__))
-                self._sdk = cdll.LoadLibrary(mFWD+'\\dll\\thorlabs_tsi_mono_to_color_processing.dll')                 
+                self._sdk = cdll.LoadLibrary(mFWD+'\\dll\\thorlabs_tsi_mono_to_color_processing.dll')
             elif platform.system() == 'Linux':
                 try:
                     self._sdk = cdll.LoadLibrary(r"./libthorlabs_tsi_mono_to_color_processing.so")

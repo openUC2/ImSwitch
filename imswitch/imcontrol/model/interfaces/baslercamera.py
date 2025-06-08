@@ -15,7 +15,7 @@ class CameraBasler:
         # many to be purged
         self.model = "CameraBasler"
         self.shape = (0, 0)
-        
+
         self.is_connected = False
         self.is_streaming = False
 
@@ -31,7 +31,7 @@ class CameraBasler:
         self.camera = None
         self._init_cam()
         self.last_frame = np.zeros((self.preview_height,self.preview_width))
-        
+
 
     def _init_cam(self):
         # Create an instant camera object with the camera device found first.
@@ -40,19 +40,19 @@ class CameraBasler:
 
         # start camera
         self.is_connected = True
-        
+
         # set exposure
         self.set_exposure_time(self.exposure_time)
 
         # set gain
         self.set_gain(self.gain)
-        
+
         # set blacklevel
         self.set_blacklevel(self.blacklevel)
 
         # set the acq buffer count
         self.camera.MaxNumBuffer = 5
-        
+
         # set camera to mono12 mode
         try:
             self.camera.PixelFormat.SetValue('Mono12')
@@ -61,7 +61,7 @@ class CameraBasler:
             self.camera.PixelFormat.SetValue('RGB8')
             pass
 
-        # get framesize 
+        # get framesize
         self.SensorHeight = self.camera.HeightMax.GetValue()
         self.SensorWidth = self.camera.WidthMax.GetValue()
 
@@ -79,7 +79,7 @@ class CameraBasler:
             try:
                 #self.__logger.debug("BASLER: Grabbing frame")
                 grabResult = self.camera.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
-            
+
                 # Image grabbed successfully?
                 if grabResult.GrabSucceeded():
                     # Access the image data.
@@ -99,7 +99,7 @@ class CameraBasler:
             # start data acquisition
             self.frame_grabber_thread = threading.Thread(target=self.frame_grabber, args=())
             self.frame_grabber_thread.start()
-            
+
             self.is_streaming = True
 
     def stop_live(self):
@@ -107,7 +107,7 @@ class CameraBasler:
             # start data acquisition
             self.camera.StopGrabbing()
             self.frame_grabber_thread.join()
-            del self.frame_grabber_thread 
+            del self.frame_grabber_thread
             self.is_streaming = False
 
     def suspend_live(self):
@@ -116,27 +116,27 @@ class CameraBasler:
             try:
                 self.camera.StopGrabbing()
                 self.frame_grabber_thread.join()
-                del self.frame_grabber_thread 
+                del self.frame_grabber_thread
             except:
-                # camera was disconnected? 
+                # camera was disconnected?
                 self.camera.Close()
                 self._init_cam()
 
             self.is_streaming = False
-        
+
     def prepare_live(self):
         pass
 
     def close(self):
         self.camera.Close()
-        
+
     def set_exposure_time(self,exposure_time):
         self.exposure_time = exposure_time
         try:
             self.camera.ExposureTime.SetValue(self.exposure_time*1000)
         except Exception as e:
             self.__logger.error(e)
-        
+
     def set_gain(self,gain):
         self.gain = gain
         try:
@@ -175,19 +175,19 @@ class CameraBasler:
         # get frame and save
         try:
             self.last_frame_preview = self.last_frame
-            
+
             minHeight = int(self.SensorHeight//2-self.roi_size//2)
             maxHeight = int(self.SensorHeight//2+self.roi_size//2)
             minWidth = int(self.SensorWidth//2-self.roi_size//2)
             maxWidth = int(self.SensorWidth//2+self.roi_size//2)
             self.last_frame_preview = self.last_frame_preview[minHeight:maxHeight,minWidth:maxWidth]
-            
+
             if is_resize:
                 self.last_frame_preview = cv2.resize(self.last_frame_preview , dsize=None, fx=.25, fy=.25, interpolation= cv2.INTER_LINEAR)
 #                self.last_frame_preview = cv2.resize(self.last_frame_preview , dsize=None(self.preview_width,self.preview_height), interpolation= cv2.INTER_LINEAR)
         except:
             pass # TODO: What if the very first frame is corrupt?
-        return self.last_frame_preview 
+        return self.last_frame_preview
 
     def getLastChunk(self):
         return self.getLast(is_resize=False)
@@ -196,9 +196,9 @@ class CameraBasler:
         #hsize = max(hsize, 25)*10  # minimum ROI size
         #vsize = max(vsize, 3)*10  # minimum ROI size
         hpos = 8*(hpos//8)
-        vpos = 2*(vpos//2)     
-        hsize = 8*(hsize//8)   
-        vsize = 2*(vsize//2) 
+        vpos = 2*(vpos//2)
+        hsize = 8*(hsize//8)
+        vsize = 2*(vsize//2)
 
         if hsize is not None:
             self.ROI_width = hsize
@@ -257,13 +257,13 @@ class CameraBasler:
         elif property_name == "exposure":
             property_value = self.camera.ExposureTime.GetValue()
         elif property_name == "blacklevel":
-            property_value = self.camera.BlackLevel.GetValue()            
+            property_value = self.camera.BlackLevel.GetValue()
         elif property_name == "image_width":
-            property_value = self.camera.Width.GetValue()            
+            property_value = self.camera.Width.GetValue()
         elif property_name == "image_height":
-            property_value = self.camera.Height.GetValue()    
+            property_value = self.camera.Height.GetValue()
         elif property_name == "roi_size":
-            property_value = self.roi_size 
+            property_value = self.roi_size
         elif property_name == "isRGB":
             property_value = self.isRGB
         else:
@@ -276,7 +276,7 @@ class CameraBasler:
 
 
     def getFrameNumber(self):
-        return self.frameNumber 
+        return self.frameNumber
 
     class ImageEventPrinter(pylon.ImageEventHandler):
         img  = None
@@ -315,4 +315,4 @@ class CameraBasler:
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.    
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.

@@ -213,7 +213,7 @@ class Camera:
                 light_intensity=intensity,
                 defocusPSF=defocusPSF,
             )
-            
+
     def getLastChunk(self):
         mFrame = self.getLast()
         return np.expand_dims(mFrame, axis=2)
@@ -670,7 +670,7 @@ if __name__ == "__main__":
 class Objective:
     def __init__(self, parent):
         self._parent = parent
-        
+
 
 class VirtualMicroscopy:
     def __init__(self, filePath="path_to_image.jpeg"):

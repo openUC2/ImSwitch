@@ -27,17 +27,17 @@ class CameraESP32CamSerial:
 
         self.SensorWidth = 320
         self.SensorHeight = 240
-        
+
         self.manufacturer = 'Espressif'
-        
+
         self.frame = np.ones((self.SensorHeight,self.SensorWidth))
         self.isRunning = False
-        
+
         # string to send data to camera
         self.newCommand = ""
         self.exposureTime = -1
         self.gain = -1
-        
+
         self.waitForNextFrame = True
 
 
@@ -86,7 +86,7 @@ class CameraESP32CamSerial:
 
     def start_live(self):
         self.isRunning = True
-        self.mThread = Thread(target=self.startStreamingThread) 
+        self.mThread = Thread(target=self.startStreamingThread)
         self.mThread.start()
 
     def stop_live(self):
@@ -135,7 +135,7 @@ class CameraESP32CamSerial:
     def set_analog_gain(self, gain):
         self.newCommand = "g"+str(gain)
         self.gain = gain
-        
+
     def getLast(self):
         return self.frame
 
@@ -152,19 +152,19 @@ class CameraESP32CamSerial:
         while self.isRunning:
             try:
 
-                # send new comamand to change camera settings, reset command    
+                # send new comamand to change camera settings, reset command
                 if not self.newCommand == "":
                     self.serialdevice.write((self.newCommand+' \n').encode())
                     self.newCommand = ""
 
                 # request new image
                 self.serialdevice.write((' \n').encode())
-                    
+
                 # don't read to early
                 time.sleep(.05)
                 # readline of camera
                 frame_size = 320 * 240
-        
+
                 # Read the base64 string from the serial port
                 lineBreakLength = 2
                 base64_image_string  = self.serialdevice.read(base64_length+lineBreakLength)
@@ -175,10 +175,10 @@ class CameraESP32CamSerial:
 
                 # Reshape the 1D array into a 2D image
                 frame = image_1d.reshape(self.SensorHeight, self.SensorWidth)
-                                
+
                 frame_bytes = self.serialdevice.read(frame_size)
                 frame_flat = np.frombuffer(frame_bytes, dtype=np.uint8)
-                
+
                 # Display the image
                 if waitForNextFrame:
                     waitForNextFrame = False
@@ -186,7 +186,7 @@ class CameraESP32CamSerial:
                 else:
                     # publish frame frame
                     self.frame = frame_flat.reshape((240, 320))
-                
+
                 '''
                 # find 0,1,0,1... pattern to sync
                 pattern = (0,1,0,1,0,1,0,1,0,1)
@@ -195,12 +195,12 @@ class CameraESP32CamSerial:
                     # Check if the elements in the current window match the pattern
                     if np.array_equal(frame_flat[i:i+window_size], pattern):
                         break
-                '''                
+                '''
 
                 nFrame += 1
-                
+
             except Exception as e:
-                # try to reconnect 
+                # try to reconnect
                 #print(e) # most of the time "incorrect padding of the bytes "
                 nFrame = 0
                 nTrial+=1
@@ -211,7 +211,7 @@ class CameraESP32CamSerial:
                 # Re-initialize the camera
                 self.initCam()
                 waitForNextFrame = True
-                
+
                 # Attempt a hard reset every 20 errors
                 if nTrial > 10 and type(e)==serial.serialutil.SerialException:
                     try:
@@ -226,17 +226,17 @@ class CameraESP32CamSerial:
                     except: pass
                     self.serialdevice = self.connect_to_usb_device()
                     nTrial = 0
-                
-                
+
+
     def getLastChunk(self):
         return self.frame
 
     def setROI(self, hpos, vpos, hsize, vsize):
         return #hsize = max(hsize, 256)  # minimum ROI
-        
-        
-        
-        
+
+
+
+
 ''' ESP CODE
 #include "esp_camera.h"
 #include <base64.h>
@@ -400,8 +400,8 @@ void grabImage()
   }
   else
   {
-    // Modify the first 10 pixels of the buffer to indicate framesync 
-    // PRoblem: The reference frame will move over time at random places 
+    // Modify the first 10 pixels of the buffer to indicate framesync
+    // PRoblem: The reference frame will move over time at random places
     // It'S not clear if this is an issue on the client or server side
     // Solution: To align for it we intoduce a known pattern that we can search for
     // in order to align for this on the client side

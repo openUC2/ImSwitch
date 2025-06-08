@@ -7,8 +7,8 @@ import time
 class TriggerAcquisitionController(LiveUpdatedController):
     """
     Simple controller for switching between software- and hardware-trigger
-    acquisition on the current detector (camera).  
-    • Software trigger → emits/returns one frame.  
+    acquisition on the current detector (camera).
+    • Software trigger → emits/returns one frame.
     • Hardware trigger → fills a ring buffer and returns the whole stack.
     """
 
@@ -46,7 +46,7 @@ class TriggerAcquisitionController(LiveUpdatedController):
         self._flush()
 
     @APIExport()
-    def setHardwareTrigger(self, trigger_source:str="External trigger"):   
+    def setHardwareTrigger(self, trigger_source:str="External trigger"):
         """
         Arm camera for external line-trigger acquisition and pre-allocate the
         on-board buffer.

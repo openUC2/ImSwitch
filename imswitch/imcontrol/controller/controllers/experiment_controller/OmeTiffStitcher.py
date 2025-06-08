@@ -3,7 +3,7 @@ import threading
 import numpy as np
 import tifffile
 from collections import deque
-
+import os
 class OmeTiffStitcher:
     def __init__(self, file_path, bigtiff=True):
         """
@@ -63,6 +63,9 @@ class OmeTiffStitcher:
         Background loop: open the OME-TIFF in append mode, pop images from queue,
         and write them with embedded metadata.
         """
+        # ensure the folder exists if it does not create it
+        if not os.path.exists(os.path.dirname(self.file_path)):
+            os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
         with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tif:
             # Keep running until stop() is called AND the queue is empty
             while self.is_running or len(self.queue) > 0:
@@ -74,7 +77,7 @@ class OmeTiffStitcher:
 
                 if image is not None:
                     # Each call writes a new series/plane in append mode.
-                    try:    
+                    try:
                         tif.write(data=image, metadata=metadata)
                     except Exception as e:
                         print(f"Error writing image: {e}")

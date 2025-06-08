@@ -20,14 +20,14 @@ class ThorcamManager(DetectorManager):
         self.__logger = initLogger(self, instanceName=name)
 
         cameraId = detectorInfo.managerProperties['cameraListIndex']
-        self._camera = self._getGXObj(cameraId ) 
-        
+        self._camera = self._getGXObj(cameraId )
+
         for propertyName, propertyValue in detectorInfo.managerProperties['thorcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
 
-        fullShape = (self._camera.SensorWidth, 
+        fullShape = (self._camera.SensorWidth,
                      self._camera.SensorHeight)
-        
+
         model = self._camera.model
         self._running = False
         self._adjustingParameters = False
@@ -40,7 +40,7 @@ class ThorcamManager(DetectorManager):
                         editable=False),
             'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
                         editable=False)
-            }            
+            }
 
         # Prepare actions
         actions = {
@@ -50,7 +50,7 @@ class ThorcamManager(DetectorManager):
 
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=False)
-        
+
 
     def getLatestFrame(self, is_save=False):
         if is_save:
@@ -85,7 +85,7 @@ class ThorcamManager(DetectorManager):
         return value
 
 
-        
+
     def getChunk(self):
         try:
             return self._camera.getLastChunk()
@@ -97,13 +97,13 @@ class ThorcamManager(DetectorManager):
 
     def startAcquisition(self):
         pass
-    
+
     def stopAcquisition(self):
         pass
 
     def stopAcquisitionForROIChange(self):
         pass
-    
+
     def finalize(self) -> None:
         super().finalize()
         self.__logger.debug('Safely disconnecting the camera...')
@@ -114,7 +114,7 @@ class ThorcamManager(DetectorManager):
         return [1, 1, 1]
 
     def crop(self, hpos, vpos, hsize, vsize):
-        pass 
+        pass
 
     def _performSafeCameraAction(self, function):
         """ This method is used to change those camera properties that need

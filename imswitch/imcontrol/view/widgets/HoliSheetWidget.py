@@ -59,7 +59,7 @@ class HoliSheetWidget(NapariHybridWidget):
         self.sliderFocus.setTickInterval(tickInterval)
         self.sliderFocus.setSingleStep(singleStep)
         self.sliderFocus.setValue(0)
-        
+
         # Slider to set the focus value
         valueDecimalsPump = 1
         valueRangePump = (300,700)
@@ -91,7 +91,7 @@ class HoliSheetWidget(NapariHybridWidget):
         self.sliderRotationSpeed.setTickInterval(tickIntervalRotation)
         self.sliderRotationSpeed.setSingleStep(singleStepRotation)
         self.sliderRotationSpeed.setValue(0)
-        
+
         # Focus lock graph
         self.pressureSenseGraph = pg.GraphicsLayoutWidget()
         self.pressureSenseGraph.setAntialiasing(True)
@@ -143,7 +143,7 @@ class HoliSheetWidget(NapariHybridWidget):
         self.sliderRotationSpeed.valueChanged.connect(
             lambda value: self.sigSliderRotationSpeedValueChanged.emit(value)
         )
-        
+
         self.lineRate.textChanged.connect(
             lambda: self.sigUpdateRateChanged.emit(self.getUpdateRate())
         )
@@ -151,7 +151,7 @@ class HoliSheetWidget(NapariHybridWidget):
 
     def updatePumpSpeed(self, speed):
         self.labelPumpSpeed.setText(f'Speed Pump {speed} [stp"\"s]')
-    
+
     def updatePumpPressure(self, pressure):
         self.labelPumpPressure.setText(f'Pump Pressure {"{0:.2f}".format(pressure)} [psi]')
 

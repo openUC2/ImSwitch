@@ -142,7 +142,7 @@ class StandaMotor():
         _ = pyximc.lib.get_move_settings(self._device_id, byref(x_move_settings))
         x_move_settings.Speed = int(speed)
         pyximc.lib.set_move_settings(self._device_id, x_move_settings)
-    
+
     def start_cont_rot(self):
         pyximc.lib.command_right(self._device_id)
 
@@ -150,7 +150,7 @@ class StandaMotor():
         pyximc.lib.command_sstp(self._device_id)
 
     def __initiate_library(self, lib_loc):
-        """ Initiate ximc library, necessary for communicating with motor controller. 
+        """ Initiate ximc library, necessary for communicating with motor controller.
         Import library locally only if standamotor is instantiated, otherwise avoid it. """
         # For correct usage of the library libximc, you need to add the file pyximc.py wrapper with the structures of the library to the python path.
         ximc_dir = os.path.join(lib_loc) # Formation of the directory name with all dependencies. The dependencies for the examples are located in the ximc directory.

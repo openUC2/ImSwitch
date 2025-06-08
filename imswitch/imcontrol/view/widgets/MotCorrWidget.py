@@ -10,7 +10,7 @@ class MotCorrWidget(Widget):
 
         self.motcorrControl = QtGui.QFrame()
         self.motcorrControl.setFrameStyle(QtGui.QFrame.Panel | QtGui.QFrame.Raised)
-        
+
         self.motcorrControl.name = QtGui.QLabel('Glycerol motCorr [%]')
         self.motcorrControl.name.setTextFormat(QtCore.Qt.RichText)
         self.motcorrControl.name.setAlignment(QtCore.Qt.AlignCenter)

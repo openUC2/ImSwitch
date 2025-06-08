@@ -13,7 +13,7 @@ g_bExit = False
 
 # 为线程定义一个函数
 def work_thread(cam=0, pData=0, nDataSize=0):
-    stOutFrame = MV_FRAME_OUT()  
+    stOutFrame = MV_FRAME_OUT()
     memset(byref(stOutFrame), 0, sizeof(stOutFrame))
 
     stInputFrameInfo = MV_CC_INPUT_FRAME_INFO()
@@ -38,7 +38,7 @@ if __name__ == "__main__":
 
     deviceList = MV_CC_DEVICE_INFO_LIST()
     tlayerType = MV_GIGE_DEVICE | MV_USB_DEVICE
-    
+
     # ch:枚举设备 | en:Enum device
     ret = MvCamera.MV_CC_EnumDevices(tlayerType, deviceList)
     if ret != 0:
@@ -89,7 +89,7 @@ if __name__ == "__main__":
 
     # ch:创建相机实例 | en:Creat Camera Object
     cam = MvCamera()
-    
+
     # ch:选择设备并创建句柄 | en:Select device and create handle
     stDeviceList = cast(deviceList.pDeviceInfo[int(nConnectionNum)], POINTER(MV_CC_DEVICE_INFO)).contents
 
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     if ret != 0:
         print ("open device fail! ret[0x%x]" % ret)
         sys.exit()
-    
+
     # ch:探测网络最佳包大小(只对GigE相机有效) | en:Detection network optimal package size(It only works for the GigE camera)
     if stDeviceList.nTLayerType == MV_GIGE_DEVICE:
         nPacketSize = cam.MV_CC_GetOptimalPacketSize()
@@ -131,14 +131,14 @@ if __name__ == "__main__":
     memset(byref(stRecordPar), 0, sizeof(MV_CC_RECORD_PARAM))
     # ch:获取图像高度 | en:Get the width of the image
     ret = cam.MV_CC_GetIntValue("Width", stParam)
-    if ret != 0: 
+    if ret != 0:
         print ("get width fail! nRet [0x%x]" % ret)
         sys.exit()
     stRecordPar.nWidth = stParam.nCurValue
 
     # ch:获取图像高度 | en:Get the height of the image
     ret = cam.MV_CC_GetIntValue("Height", stParam)
-    if ret != 0: 
+    if ret != 0:
         print ("get height fail! nRet [0x%x]"% ret)
         sys.exit()
     stRecordPar.nHeight = stParam.nCurValue
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     stEnumValue = MVCC_ENUMVALUE()
     memset(byref(stEnumValue), 0 ,sizeof(MVCC_ENUMVALUE))
     ret = cam.MV_CC_GetEnumValue("PixelFormat", stEnumValue)
-    if ret != 0: 
+    if ret != 0:
         print ("get PixelFormat fail! nRet [0x%x]" % ret)
         sys.exit()
     stRecordPar.enPixelType = MvGvspPixelType(stEnumValue.nCurValue)
@@ -156,7 +156,7 @@ if __name__ == "__main__":
     stFloatValue = MVCC_FLOATVALUE()
     memset(byref(stFloatValue), 0 ,sizeof(MVCC_FLOATVALUE))
     ret = cam.MV_CC_GetFloatValue("ResultingFrameRate", stFloatValue)
-    if ret != 0: 
+    if ret != 0:
         print ("get ResultingFrameRate value fail! nRet [0x%x]" % ret)
         sys.exit()
     stRecordPar.fFrameRate = stFloatValue.fCurValue
@@ -168,7 +168,7 @@ if __name__ == "__main__":
 
     # ch:开始录像 | en:Start Recording
     nRet = cam.MV_CC_StartRecord(stRecordPar)
-    if ret != 0: 
+    if ret != 0:
         print ("Start Record fail! nRet [0x%x]\n", nRet)
         sys.exit()
 
@@ -183,7 +183,7 @@ if __name__ == "__main__":
         hThreadHandle.start()
     except:
         print ("error: unable to start thread")
-        
+
     print ("press a key to stop grabbing.")
     msvcrt.getch()
 

@@ -19,7 +19,7 @@ def getMainViewAndController(moduleCommChannel, *_args,
     def pickSetup(options):
         from qtpy import QtWidgets
         from imswitch.imcontrol.view import PickSetupDialog
-        
+
         # Let user pick the setup to use
         pickSetupDialog = PickSetupDialog()
         pickSetupDialog.setSetups(configfiletools.getSetupList())
@@ -37,7 +37,7 @@ def getMainViewAndController(moduleCommChannel, *_args,
     if overrideOptions is None:
         options, optionsDidNotExist = configfiletools.loadOptions()
         if not optionsDidNotExist:
-            if not IS_HEADLESS: options = pickSetup(options)  # Setup to use not set, let user pick            
+            if not IS_HEADLESS: options = pickSetup(options)  # Setup to use not set, let user pick
         configfiletools.saveOptions(options)
     else:
         # force the options to use a specific configuration
@@ -90,7 +90,7 @@ def getMainViewAndController(moduleCommChannel, *_args,
 
     # Override Data PAth
     if DEFAULT_DATA_PATH is not None:
-        logger.debug("Overriding data save path with: "+DEFAULT_DATA_PATH) 
+        logger.debug("Overriding data save path with: "+DEFAULT_DATA_PATH)
         options_rec = dataclasses.replace(options.recording, outputFolder=DEFAULT_DATA_PATH)
         options = dataclasses.replace(options, recording=options_rec)
     if not IS_HEADLESS:

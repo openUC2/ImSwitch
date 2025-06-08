@@ -3,7 +3,7 @@ Camera-stage tracker
 
 The :class:`.Tracker` class in this file is used to simplify code for tasks that involve moving the
 stage, and tracking the corresponding motion with the camera.  It maintains a template
-image, a list of previously-measured coordinates, and a coordinate offset.  The offset 
+image, a list of previously-measured coordinates, and a coordinate offset.  The offset
 allows the coordinates to be relative to an arbitrary origin, rather than the current
 template, and the :meth:``.Tracker.leapfrog`` method takes advantage of this to track motion
 relative to the last point visited, while maintaining the coordinate system's zero at the
@@ -60,7 +60,7 @@ def to_tracker_history(dict_or_tuple):
         times = None
     try:
         return TrackerHistory(
-            np.array(dict_or_tuple["stage_positions"]), 
+            np.array(dict_or_tuple["stage_positions"]),
             np.array(dict_or_tuple["image_positions"]),
             times,
         )
@@ -76,7 +76,7 @@ def to_tracker_history(dict_or_tuple):
 
 class Tracker():
     """A class to manage moving the stage and following motion in the image
-    
+
     This class takes care of:
         1. Using image analysis to track the displacement between points
         2. Keeping track of the recovered positions, and the corresponding
@@ -85,7 +85,7 @@ class Tracker():
     It can use a variety of different tracking methods (detailed in the
     constructor).
 
-        
+
     We accept functions because that seems like the easiest way to be
     compatible with many different cameras/stages.  Subclass and override
     ``__init__`` if you want to use a particular object instead.
@@ -97,8 +97,8 @@ class Tracker():
     * max_displacement
     * min_displacement (optional - defaults to -max_displacment)
 
-    NB the ``image_position`` that this class returns may be the negative of 
-    what you might expect.  This is because normally we are looking for 
+    NB the ``image_position`` that this class returns may be the negative of
+    what you might expect.  This is because normally we are looking for
     where a certain object (usually matched to a template image) is within
     an image.  Instead, the ``Tracker`` is following motion of the image
     relative to a template.  Our model is that we have a static image on
@@ -108,7 +108,7 @@ class Tracker():
         """Construct a Tracker object to follow our position using the camera.
 
         The :class:`.Tracker` class keeps track of our position using image
-        analysis, and records corresponding stage positions.  
+        analysis, and records corresponding stage positions.
 
         Arguments
         ---------
@@ -122,16 +122,16 @@ class Tracker():
             a frame from the camera).
         method : ["fft", "direct"], optional
             The tracking method to use (see below)
-        
+
         Additional keyword arguments are passed to the tracking method.
 
         Tracking methods:
-            * **"direct":** uses cross-correlation with the central half of the image.  
+            * **"direct":** uses cross-correlation with the central half of the image.
                 There are currently no options for this method.
-            * **"fft":** uses FFT-based cross-correlation, after a high pass filter.  
+            * **"fft":** uses FFT-based cross-correlation, after a high pass filter.
                 Keyword arguments are accepted:
                     * **pad:** (`boolean`, default=`True`) -
-                        Whether to zero-pad the FFT to remove ambiguity.  If 
+                        Whether to zero-pad the FFT to remove ambiguity.  If
                         false, the answer is only unique modulo one field of
                         view due to the periodic nature of FFTs.  Setting this
                         option to False speeds up tracking by about 4x.
@@ -158,19 +158,19 @@ class Tracker():
         self.method = method
         #self.kwargs = {"error_threshold": 0.2}.update(kwargs)
         self.kwargs = kwargs
-    
+
     def get_position(self):
         """Get the position of the stage
-        
+
         Returns
         -------
         ndarray
         """
         return np.array(self._get_position())
-    
+
     def settle(self):
         """Wait a short time and discard an image so the stage is no longer wobbling.
-        
+
         If no settling function is provided, by default we will wait 0.3 seconds, and
         acquire then discard one frame.
         """
@@ -179,7 +179,7 @@ class Tracker():
         else:
             time.sleep(0.3)
             self._grab_image()
-            
+
     @property
     def template(self):
         """ndarray: The template image"""
@@ -187,21 +187,21 @@ class Tracker():
             raise ValueError("Attempt to use the tracker before setting the template")
         else:
             return self._template
-        
+
     @template.setter
     def template(self, new_value):
         self._template = new_value
-        
+
     def acquire_template(self, settle=True, reset_history=True, relative_positions=True):
         """Take a new image, and use it as the template.  NB this records the initial point.
-        
+
         We will wait for the stage to settle, then acquire a new image to use as the template.
         Immediately afterwards, we record the first point, so we will acquire a second image
         and also read the stage's position.
 
-        The template image will be the central 50% of the starting image, which means the 
+        The template image will be the central 50% of the starting image, which means the
         maximum displacement will be 0.25 fields-of-view in all directions.
-        
+
         Arguments
         ---------
         settle : bool, optional
@@ -256,7 +256,7 @@ class Tracker():
             kwargs = {k: v for k, v in self.kwargs.items() if k in ["pad", "sigma"]}
             return high_pass_fft_template(image, calculate_peak=True, **kwargs)
 
-        
+
     @property
     def max_displacement(self):
         """ndarray: The highest position values that can be tracked"""
@@ -270,39 +270,39 @@ class Tracker():
             # padding, then both these dimensions double, and we return the image size.
             disp = np.array(self.template.shape) // np.array([2,1])
         return disp + self._template_position
-    
+
     @property
     def min_displacement(self):
         """ndarray: The lowest position values that can be tracked"""
-        return self._template_position - self.max_displacement 
+        return self._template_position - self.max_displacement
         # TODO: be cleverer about tracking assymetry? Currently there is none...
-    
+
     @property
     def max_safe_displacement(self):
         """ndarray: The biggest displacement we can safely attempt to track without knowing direction."""
-        return np.min(np.concatenate([self.max_displacement - self._template_position, 
+        return np.min(np.concatenate([self.max_displacement - self._template_position,
                                      -self.min_displacement - self._template_position]))
 
     def point_in_safe_range(self, point):
         """Determine if a given point is within the safe range of the tracker.
-        
+
         Arguments
         ---------
         point : ndarray
             A two-element array representing a point
-            
+
         Returns
         -------
         bool
         """
         return np.all(point > self.min_displacement) and np.all(point < self.max_displacement)
-            
+
     def track_image(self, image):
         """Find the position of the image relative to the template
-        
+
         This uses the method specified at initialisation time to
         track motion of the sample.
-        
+
         NB this class is intended to track motion of the sample - most of
         the time, we're interested in the motion of a (small) object that
         is represented by the template, relative to the (larger) image. In
@@ -316,10 +316,10 @@ class Tracker():
         if self.method=="fft":
             kwargs = {k: v for k, v in self.kwargs.items() if k in ["pad", "fractional_threshold", "error_threshold"]}
             return -displacement_from_fft_template(self.template, image, **kwargs) + self._template_position
-    
+
     def append_point(self, settle=True, image=None):
         """Find the current position using both stage and image, and remember it
-        
+
         Arguments
         ---------
         settle : bool, optional
@@ -346,12 +346,12 @@ class Tracker():
         self._times.append(time.time())
         self._last_point = (image, image_pos)
         return stage_pos, image_pos
-        
+
     @property
     def stage_positions(self):
         """ndarray: An array of positions we have moved the stage to"""
         return np.array(self._stage_positions)
-    
+
     @property
     def image_positions(self):
         """ndarray: An array of positions we have moved the stage to"""
@@ -361,17 +361,17 @@ class Tracker():
     def times(self):
         """ndarray: An array of time values for each position"""
         return np.array(self._times)
-    
+
     @property
     def history(self):
         """TrackerHistory: Return the stage and image positions and times."""
         return TrackerHistory(self.stage_positions, self.image_positions, self.times)
-    
+
     def reset_history(self, leave_first_point=False):
         """Reset the positions and displacements recorded.
-        
+
         This resets the position, displacement, and time arrays to be empty.
-        
+
         Arguments
         ---------
         leave_first_point : bool, optional
@@ -399,16 +399,16 @@ class Tracker():
             return None
         else:
             return norm(self.image_positions[-1,:]) > norm(self.image_positions[-2])
-    
-   
+
+
 def move_until_motion_detected(tracker, move, displacement, threshold=10, multipliers=2**np.arange(16), detect_cumulative_motion=False):
     """Move the stage until we can detect motion in the camera.
-    
-    We move the stage in the direction given by ``displacement`` until the 
+
+    We move the stage in the direction given by ``displacement`` until the
     image has shifted by at least ``threshold`` pixels.  The steps will be
-    given by ``multipliers``, i.e. each time we move to 
+    given by ``multipliers``, i.e. each time we move to
     ``displacement * multipliers[i]`` relative to the starting position.
-    
+
     NB we expect that the ``tracker`` object has already been initialised
     with ``acquire_template``.
 
@@ -420,8 +420,8 @@ def move_until_motion_detected(tracker, move, displacement, threshold=10, multip
     was initialised).  This only matters if the tracker has more than one point
     in its history.
 
-    The return value `i, m` is the number of moves made, and the largest 
-    multiplier value that was used, i.e. we moved by a total of 
+    The return value `i, m` is the number of moves made, and the largest
+    multiplier value that was used, i.e. we moved by a total of
     `displacement * m`.
     """
     displacement = np.array(displacement)
@@ -437,9 +437,9 @@ def move_until_motion_detected(tracker, move, displacement, threshold=10, multip
 
 def concatenate_tracker_histories(histories):
     """Combine a number of separate tracker history entries into one
-    
+
     A "tracker history" refers to the output of `Tracker.history`, as
-    a :class:`.TrackerHistory` object. 
+    a :class:`.TrackerHistory` object.
     Given an array of such tuples, we will concatenate the components,
     returning a single "tracker history" with the segments concatenated.
 

@@ -60,16 +60,16 @@ class AutofocusWidget(NapariHybridWidget):
         grid.addWidget(self.zBackgroundDefocusLabel, 1, 6)
         grid.addWidget(self.zBackgroundDefocusEdit, 1, 7)
         self.layer = None
-        
+
     def setImageNapari(self, im, colormap="gray", isRGB = False, name="", pixelsize=(1,1), translation=(0,0)):
         if len(im.shape) == 2:
             translation = (translation[0], translation[1])
         if self.layer is None or name not in self.viewer.layers:
-            self.layer = self.viewer.add_image(im, rgb=isRGB, colormap=colormap, 
+            self.layer = self.viewer.add_image(im, rgb=isRGB, colormap=colormap,
                                                scale=pixelsize,translate=translation,
                                                name=name, blending='additive')
         self.layer.data = im
-        
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

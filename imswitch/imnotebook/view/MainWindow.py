@@ -112,4 +112,4 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.sigClosing.emit()
         event.accept()
-        
+

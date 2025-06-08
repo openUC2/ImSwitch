@@ -29,6 +29,7 @@ class OMEWriterConfig:
     compression: str = "zlib"
     zarr_compressor = None
     pixel_size: float = 1.0  # pixel size in microns
+    dimension_seperator: str = "/"
     
     def __post_init__(self):
         if self.zarr_compressor is None:
@@ -85,7 +86,7 @@ class OMEWriter:
         # Use path string for Zarr v3 compatibility
         self.store = str(self.file_paths.zarr_dir)
         self.root = zarr.group(store=self.store, overwrite=True)
-        self.canvas = self.root.create_array(
+        self.canvas = self.root.create_dataset(
             "0",
             shape=(1, 1, 1, self.ny * self.tile_h, self.nx * self.tile_w),  # t c z y x
             chunks=(1, 1, 1, self.tile_h, self.tile_w),

@@ -386,7 +386,7 @@ class ExperimentController(ImConWidgetController):
         # Prepare directory and filename for saving
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         drivePath = dirtools.UserFileDirs.Data
-        dirPath = os.path.join(drivePath, 'recordings', timeStamp)
+        dirPath = os.path.join(drivePath, 'ExperimentController', timeStamp)
         if not os.path.exists(dirPath):
             os.makedirs(dirPath)
         mFileName = f"{timeStamp}_{exp_name}"
@@ -452,7 +452,7 @@ class ExperimentController(ImConWidgetController):
 
                 # Set up all OME writers at once (similar to original file_writers approach)
                 for position_center_index, tiles in enumerate(snake_tiles):
-                    experimentName = f"{exp_name}_{position_center_index}"
+                    experimentName = f"{t}_{exp_name}_{position_center_index}"
                     mFilePath = os.path.join(dirPath, mFileName + str(position_center_index) + "_" + experimentName + "_" + ".ome.tif")
                     self._logger.debug(f"OME-TIFF path: {mFilePath}")
                     
@@ -773,7 +773,7 @@ class ExperimentController(ImConWidgetController):
             # Write frame using the specific OME writer from the list
             ome_writer = file_writers[position_center_index]
             chunk_info = ome_writer.write_frame(img, ome_metadata)
-            self.setOmeZarrUrl(ome_writer.store.path.split(dirtools.UserFileDirs.Data)[-1])  # Update OME-Zarr URL in context
+            self.setOmeZarrUrl(ome_writer.store.split(dirtools.UserFileDirs.Data)[-1])  # Update OME-Zarr URL in context
             # Emit signal for frontend updates if Zarr chunk was written
             if chunk_info and "rel_chunk" in chunk_info:
                 sigZarrDict = {

@@ -730,8 +730,16 @@ class ExperimentController(ImConWidgetController):
         minY = min(pt["y"] for pt in all_points)
         maxY = max(pt["y"] for pt in all_points)
         # compute step between two adjacent points in X/Y
-        diffX = np.diff(np.unique([pt["x"] for pt in all_points])).min()
-        diffY = np.diff(np.unique([pt["y"] for pt in all_points])).min()
+        uniqueX = np.unique([pt["x"] for pt in all_points])
+        uniqueY = np.unique([pt["y"] for pt in all_points])
+        if len(uniqueX) == 1:
+            diffX = 0
+        else:
+            diffX = np.diff(uniqueX).min()
+        if len(uniqueY) == 1:
+            diffY = 0
+        else:
+            diffY = np.diff(uniqueY).min()
         return minX, maxX, minY, maxY, diffX, diffY
 
 

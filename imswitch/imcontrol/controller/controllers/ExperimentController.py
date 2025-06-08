@@ -923,7 +923,7 @@ class ExperimentController(ImConWidgetController):
         self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
         #if posY and posX is None:
             
-        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X, self.SPEED_Y), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
+        self.mStage.move(value=(posX, posY), speed=(self.SPEED_X_default, self.SPEED_Y_default), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
         self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
         return (posX, posY)

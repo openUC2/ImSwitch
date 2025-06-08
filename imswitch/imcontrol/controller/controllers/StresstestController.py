@@ -349,7 +349,7 @@ class StresstestController(ImConWidgetController):
         """Get current stress test parameters"""
         return self.params
     
-    @APIExport()
+    @APIExport(requestType="POST")
     def setStresstestParams(self, params: StresstestParams) -> bool:
         """Set stress test parameters"""
         try:
@@ -862,7 +862,10 @@ class StresstestController(ImConWidgetController):
                 self._logger.info(f"Waiting {wait_time:.1f}s before next cycle")
             else:
                 print(f"Waiting {wait_time:.1f}s before next cycle")
-            time.sleep(wait_time)
+            while True:
+                time.sleep(wait_time)
+                if not self.shouldStop:
+                    break
     
     def _finalizeResults(self):
         """Calculate final statistics"""

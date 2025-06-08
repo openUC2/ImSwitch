@@ -174,7 +174,6 @@ class ExperimentController(ImConWidgetController):
         # initialize variables
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
-        self.isPreview = False
 
         # set default values
         self.SPEED_Y_default = 20000
@@ -394,7 +393,7 @@ class ExperimentController(ImConWidgetController):
 
         workflowSteps = []
         step_id = 0
-        tiff_writers = []  # Initialize outside the loop for context storage
+        file_writers = []  # Initialize outside the loop for context storage
 
         for t in range(nTimes):
             '''
@@ -451,8 +450,8 @@ class ExperimentController(ImConWidgetController):
                 using the unified OME writer (TIFF stitching + OME-Zarr).
                 '''
 
-                # Set up all OME writers at once (similar to original tiff_writers approach)
-                for position_center_index, tile in enumerate(snake_tiles):
+                # Set up all OME writers at once (similar to original file_writers approach)
+                for position_center_index, tiles in enumerate(snake_tiles):
                     experimentName = f"{exp_name}_{position_center_index}"
                     mFilePath = os.path.join(dirPath, mFileName + str(position_center_index) + "_" + experimentName + "_" + ".ome.tif")
                     self._logger.debug(f"OME-TIFF path: {mFilePath}")
@@ -463,7 +462,7 @@ class ExperimentController(ImConWidgetController):
                     
                     # Calculate grid parameters from tile
                     all_points = []
-                    for point in tile:
+                    for point in tiles:
                         if point is not None:
                             all_points.append([point["x"], point["y"]])
                     
@@ -499,13 +498,13 @@ class ExperimentController(ImConWidgetController):
                         config=writer_config,
                         logger=self._logger
                     )
-                    tiff_writers.append(ome_writer)
+                    file_writers.append(ome_writer)
 
                 # Loop over each tile (each central point and its neighbors)
-                for position_center_index, tile in enumerate(snake_tiles):
+                for position_center_index, tiles in enumerate(snake_tiles):
                     
                     # iterate over positions
-                    for mIndex, mPoint in enumerate(tile):
+                    for mIndex, mPoint in enumerate(tiles):
                         try:
                             name = f"Move to point {mPoint['iterator']}"
                         except Exception:
@@ -550,27 +549,12 @@ class ExperimentController(ImConWidgetController):
                                     step_id += 1
 
                             # Acquire frame
-                            isPreview = self.isPreview
-                            '''
                             workflowSteps.append(WorkflowStep(
                                 name="Acquire frame",
                                 step_id=step_id,
                                 main_func=self.acquire_frame,
                                 main_params={"channel": "Mono"},
-                                post_funcs=[self.save_frame_tiff, self.add_image_to_canvas] if not isPreview else [self.append_frame_to_stack, self.add_image_to_canvas],
-                                pre_funcs=[self.set_exposure_time_gain],
-                                pre_params={"exposure_time": exposure, "gain": gain},
-                                # Hier übergeben wir posX, posY an das Metadata-Dict
-                                post_params={"posX": mPoint["x"], "posY": mPoint["y"], "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY},
-                            ))
-                            '''
-
-                            workflowSteps.append(WorkflowStep(
-                                name="Acquire frame",
-                                step_id=step_id,
-                                main_func=self.acquire_frame,
-                                main_params={"channel": "Mono"},
-                                post_funcs=[self.save_frame_ome, self.add_image_to_canvas],
+                                post_funcs=[self.save_frame_ome], #, self.add_image_to_canvas],
                                 pre_funcs=[self.set_exposure_time_gain],
                                 pre_params={"exposure_time": exposures[illuIndex], "gain": gains[illuIndex]},
                                 post_params={
@@ -585,7 +569,6 @@ class ExperimentController(ImConWidgetController):
                                     "time_index": t,       # or whatever loop index
                                     "tile_index": mIndex,   # or snake-tile index
                                     "position_center_index": position_center_index,
-                                    "isPreview": isPreview,
                                     "runningNumber": step_id,  # Add running number for compatibility
                                     "illuminationChannel": illuSource,
                                     "illuminationValue": illuminationIntensites[illuIndex],
@@ -619,8 +602,10 @@ class ExperimentController(ImConWidgetController):
                     workflowSteps.append(WorkflowStep(
                         name=f"Finalize OME writer for tile {position_center_index}",
                         step_id=step_id,
-                        main_func=self.finalize_tile_ome_writer,
-                        main_params={"tile_index": position_center_index},
+                        main_func=self.dummy_main_func,  # Placeholder for any pre-finalization logic
+                        main_params={},
+                        post_funcs=[self.finalize_tile_ome_writer],
+                        post_params={"tile_index": position_center_index},
                     ))
                     step_id += 1
 
@@ -643,17 +628,6 @@ class ExperimentController(ImConWidgetController):
             ))
             step_id += 1
 
-            # Emit final canvas
-            if self.isPreview:
-                workflowSteps.append(WorkflowStep(
-                    name="Emit Final Canvas",
-                    step_id=step_id,
-                    main_func=self.dummy_main_func,
-                    main_params={},
-                    pre_funcs=[self.emit_final_canvas],
-                    pre_params={}
-                ))
-                step_id += 1
 
             # Final step: mark done
             workflowSteps.append(WorkflowStep(
@@ -689,9 +663,9 @@ class ExperimentController(ImConWidgetController):
         context.set_metadata("nTimes", nTimes)
         context.set_metadata("tPeriod", tPeriod)
 
-        # Store tiff_writers in context if they were created (non-performance mode)
-        if len(tiff_writers) > 0:
-            context.set_object("tiff_writers", tiff_writers)
+        # Store file_writers in context if they were created (non-performance mode)
+        if len(file_writers) > 0:
+            context.set_object("file_writers", file_writers)
 
 
 
@@ -702,19 +676,6 @@ class ExperimentController(ImConWidgetController):
         mshape = np.int32(np.ceil(size)*self.resolution_scale*pixel_size)          # size of the final image in pixels (i.e. canvas)
         self.stitched_image = np.zeros(mshape.T, dtype=np.uint16)       # create a canvas for the stitched image
         '''
-
-        def compute_canvas_dimensions(minX, maxX, minY, maxY, diffX, diffY, pixelSize):
-            width_pixels = int(np.ceil((maxX - minX + diffX) / pixelSize))
-            height_pixels = int(np.ceil((maxY - minY + diffY) / pixelSize))
-            return width_pixels, height_pixels
-        canvas_width, canvas_height = compute_canvas_dimensions(minX, maxX, minY, maxY, diffX, diffY,  mPixelSize)
-
-        if self.isPreview:
-            if self.mDetector._isRGB:
-                canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
-            else:
-                canvas = np.zeros((canvas_height, canvas_width), dtype=np.uint16) # numpy assigns y,x,z
-            context.set_object("canvas", canvas)
         context.on("progress", sendProgress)
         context.on("rgb_stack", sendProgress)
         context.on("rgb_stack", sendProgress)
@@ -802,17 +763,17 @@ class ExperimentController(ImConWidgetController):
         }
         
         try:
-            # Get tiff_writers list from context
-            tiff_writers = context.get_object("tiff_writers")
-            if tiff_writers is None or position_center_index >= len(tiff_writers):
+            # Get file_writers list from context
+            file_writers = context.get_object("file_writers")
+            if file_writers is None or position_center_index >= len(file_writers):
                 self._logger.error(f"No OME writer found for tile index {position_center_index}")
                 metadata["frame_saved"] = False
                 return
             
             # Write frame using the specific OME writer from the list
-            ome_writer = tiff_writers[position_center_index]
+            ome_writer = file_writers[position_center_index]
             chunk_info = ome_writer.write_frame(img, ome_metadata)
-            
+            self.setOmeZarrUrl(ome_writer.store.path.split(dirtools.UserFileDirs.Data)[-1])  # Update OME-Zarr URL in context
             # Emit signal for frontend updates if Zarr chunk was written
             if chunk_info and "rel_chunk" in chunk_info:
                 sigZarrDict = {
@@ -1271,10 +1232,10 @@ class ExperimentController(ImConWidgetController):
     
     def finalize_tile_ome_writer(self, context: WorkflowContext, metadata: Dict[str, Any], tile_index: int):
         """Finalize the OME writer for a specific tile."""
-        tiff_writers = context.get_object("tiff_writers")
+        file_writers = context.get_object("file_writers")
         
-        if tiff_writers is not None and tile_index < len(tiff_writers):
-            ome_writer = tiff_writers[tile_index]
+        if file_writers is not None and tile_index < len(file_writers):
+            ome_writer = file_writers[tile_index]
             try:
                 self._logger.info(f"Finalizing OME writer for tile: {tile_index}")
                 ome_writer.finalize()
@@ -1288,17 +1249,17 @@ class ExperimentController(ImConWidgetController):
         """Finalize all OME writers and clean up."""
         # Finalize OME writers from context (normal mode)
         if context is not None:
-            # Get tiff_writers list and finalize all
-            tiff_writers = context.get_object("tiff_writers")
-            if tiff_writers is not None:
-                for i, ome_writer in enumerate(tiff_writers):
+            # Get file_writers list and finalize all
+            file_writers = context.get_object("file_writers")
+            if file_writers is not None:
+                for i, ome_writer in enumerate(file_writers):
                     try:
                         self._logger.info(f"Finalizing OME writer for tile {i}")
                         ome_writer.finalize()
                     except Exception as e:
                         self._logger.error(f"Error finalizing OME writer for tile {i}: {e}")
                 # Clear the list from context
-                context.remove_object("tiff_writers")
+                context.remove_object("file_writers")
         
         # Also finalize the instance variable if it exists (performance mode)
         if self._current_ome_writer is not None:

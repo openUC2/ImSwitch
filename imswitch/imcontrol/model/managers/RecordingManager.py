@@ -12,7 +12,7 @@ import numpy as np
 import tifffile as tiff
 import cv2
 
-from imswitch import IS_HEADLESS
+
 from imswitch.imcommon.framework import Signal, SignalInterface, Thread, Worker
 from imswitch.imcommon.model import initLogger
 import abc
@@ -21,20 +21,13 @@ import logging
 from imswitch.imcontrol.model.managers.DetectorsManager import DetectorsManager
 
 logger = logging.getLogger(__name__)
+# Fallback to ome-zarr if vanilla implementation is not available
 try:
-    # Use vanilla Zarr implementation instead of ome-zarr
-    from imswitch.imcontrol.controller.controllers.experiment_controller.vanilla_zarr_ome import (
-        write_multiscales_metadata, format_from_version
-    )
+    from ome_zarr.writer import write_multiscales_metadata # TODO: This fails with newer numpy versions!
+    from ome_zarr.format import format_from_version
     IS_OME_ZARR = True
 except ImportError:
-    # Fallback to ome-zarr if vanilla implementation is not available
-    try:
-        from ome_zarr.writer import write_multiscales_metadata # TODO: This fails with newer numpy versions!
-        from ome_zarr.format import format_from_version
-        IS_OME_ZARR = True
-    except ImportError:
-        IS_OME_ZARR = False
+    IS_OME_ZARR = False
 class AsTemporayFile(object):
     """ A temporary file that when exiting the context manager is renamed to its original name. """
     def __init__(self, filepath, tmp_extension='.tmp'):

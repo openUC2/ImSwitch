@@ -18,7 +18,7 @@ from imswitch.imcontrol.view import guitools
 from imswitch.imcommon.model import initLogger
 from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS
-from imswitch.imcontrol.model import RecMode, SaveMode, SaveFormat
+from imswitch.imcontrol.model import SaveMode, SaveFormat
 
 class FlowStopController(LiveUpdatedController):
     """ Linked to FlowStopWidget."""

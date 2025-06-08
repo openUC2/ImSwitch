@@ -1,0 +1,2 @@
+"use strict";(self.webpackChunkmicroscope_app=self.webpackChunkmicroscope_app||[]).push([[71],{71:(e,c,r)=>{r.r(c),r.d(c,{default:()=>a});var s=r(932),p=r(6659);class a extends p.A{decodeBlock(e){return(0,s.UD)(new Uint8Array(e)).buffer}}}}]);
+//# sourceMappingURL=71.eef473a2.chunk.js.map

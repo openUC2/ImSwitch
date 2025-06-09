@@ -12,7 +12,7 @@ import numcodecs
 import tifffile as tif
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
-
+import numpy as np
 try:
     from .OmeTiffStitcher import OmeTiffStitcher
 except ImportError:
@@ -182,8 +182,8 @@ class OMEWriter:
     def _write_zarr_tile(self, frame, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Write tile to Zarr canvas and return chunk information."""
         # Calculate grid position
-        ix = int(round((metadata["x"] - self.x_start) / self.x_step))
-        iy = int(round((metadata["y"] - self.y_start) / self.y_step))
+        ix = int(round((metadata["x"] - self.x_start) / np.max((self.x_step,1))))
+        iy = int(round((metadata["y"] - self.y_start) / np.max((self.y_step,1))))
         
         # Get time, channel, and z indices from metadata
         t_idx = metadata.get("time_index", 0)
@@ -216,8 +216,8 @@ class OMEWriter:
     def _write_stitched_tiff_tile(self, frame, metadata: Dict[str, Any]):
         """Write tile to stitched TIFF using OmeTiffStitcher."""
         # Calculate grid index from position
-        ix = int(round((metadata["x"] - self.x_start) / self.x_step))
-        iy = int(round((metadata["y"] - self.y_start) / self.y_step))
+        ix = int(round((metadata["x"] - self.x_start) / np.max((self.x_step,1))))
+        iy = int(round((metadata["y"] - self.y_start) / np.max((1,self.y_step))))
         
         self.tiff_stitcher.add_image(
             image=frame,

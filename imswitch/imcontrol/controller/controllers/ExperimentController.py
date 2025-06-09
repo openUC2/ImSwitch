@@ -104,7 +104,10 @@ class Experiment(BaseModel):
     # From your old "ExperimentModel":
     number_z_steps: int = Field(0, description="Number of Z slices")
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
-
+    ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
+    ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
+    ome_write_stitched_tiff: bool = Field(True, description="Whether to write stitched OME-TIFF files")
+        
     # -----------------------------------------------------------
     # A helper to produce the "configuration" dict
     # -----------------------------------------------------------
@@ -245,10 +248,6 @@ class ExperimentController(ImConWidgetController):
         self._ome_write_tiff = False
         self._ome_write_zarr = True
         self._ome_write_stitched_tiff = True
-        self._ome_n_time_points = 1
-        self._ome_n_z_planes = 1
-        self._ome_n_channels = 1
-
 
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
@@ -260,25 +259,9 @@ class ExperimentController(ImConWidgetController):
         return {
             "write_tiff": getattr(self, '_ome_write_tiff', False),
             "write_zarr": getattr(self, '_ome_write_zarr', True),
-            "write_stitched_tiff": getattr(self, '_ome_write_stitched_tiff', True),
-            "n_time_points": getattr(self, '_ome_n_time_points', 1),
-            "n_z_planes": getattr(self, '_ome_n_z_planes', 1),
-            "n_channels": getattr(self, '_ome_n_channels', 1),
+            "write_stitched_tiff": getattr(self, '_ome_write_stitched_tiff', True)
         }
 
-    @APIExport(requestType="POST")
-    def setOMEWriterConfig(self, config: dict):
-        """Set OME writer configuration via REST API."""
-        # Store configuration as instance attributes
-        self._ome_write_tiff = config.get("write_tiff", False)
-        self._ome_write_zarr = config.get("write_zarr", True)
-        self._ome_write_stitched_tiff = config.get("write_stitched_tiff", True)
-        self._ome_n_time_points = config.get("n_time_points", 1)
-        self._ome_n_z_planes = config.get("n_z_planes", 1)
-        self._ome_n_channels = config.get("n_channels", 1)
-        
-        self._logger.info(f"OME writer configuration updated: {config}")
-        return {"status": "success", "config": config}
 
     def get_num_xy_steps(self, pointList):
         # we don't consider the center point as this .. well in the center
@@ -522,9 +505,9 @@ class ExperimentController(ImConWidgetController):
                         write_stitched_tiff=self._ome_write_stitched_tiff,
                         min_period=0.1,  # Faster for normal mode
                         pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0,
-                        n_time_points=self._ome_n_time_points,
-                        n_z_planes=self._ome_n_z_planes,
-                        n_channels=self._ome_n_channels
+                        n_time_points=1,
+                        n_z_planes=len(z_positions),
+                        n_channels = sum(np.array(illuminationIntensites) > 0) # number of illumination sources with intensities >0 
                     )
                     
                     ome_writer = OMEWriter(
@@ -1109,6 +1092,8 @@ class ExperimentController(ImConWidgetController):
                             addDataPoint(metadataList, x, y, channel, value, runningNumber)
         # 2. start writer thread ----------------------------------------------
         saveOMEZarr = True; 
+        nTimePoints = 1  # For now, we assume a single time point
+        nZPlanes = 1  # For now, we assume a single Z plane    
         if saveOMEZarr:
             # ------------------------------------------------------------------+
             # 2. open OME-Zarr canvas                                           |
@@ -1119,7 +1104,7 @@ class ExperimentController(ImConWidgetController):
             omezarr_store = OMEFileStorePaths(self.mFilePath)
             self.setOmeZarrUrl(self.mFilePath.split(dirtools.UserFileDirs.Data)[-1]+".ome.zarr")
             self._writer_thread_ome = threading.Thread(
-                target=self._writer_loop_ome, args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0),
+                target=self._writer_loop_ome, args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0, nTimePoints, nZPlanes, nIlluminations),
                 daemon=True)
             self._stop_writer_evt.clear()            
             self._writer_thread_ome.start()
@@ -1128,7 +1113,7 @@ class ExperimentController(ImConWidgetController):
             self._stop_writer_evt.clear()
             self._writer_thread_ome = threading.Thread(
                 target=self._writer_loop_ome, 
-                args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0.2, True, True, False),  # is_tiff=True, write_stitched_tiff=True, is_performance_mode=False
+                args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0.2, True, True, False, nTimePoints, nZPlanes, nIlluminations),  # is_tiff=True, write_stitched_tiff=True, is_performance_mode=False
                 daemon=True
             )
             self._writer_thread_ome.start()
@@ -1161,6 +1146,9 @@ class ExperimentController(ImConWidgetController):
         is_tiff: bool = False,
         write_stitched_tiff: bool = True,  # Enable stitched TIFF by default
         is_performance_mode: bool = True,  # New parameter to distinguish modes
+        nTimePoints: int = 1,
+        nZ_planes: int = 1,
+        nIlluminations: int = 1
     ):
         """
         Bulk-writer for both fast stage scan (performance mode) and normal stage scan.
@@ -1184,12 +1172,12 @@ class ExperimentController(ImConWidgetController):
         writer_config = OMEWriterConfig(
             write_tiff=is_tiff,
             write_zarr=self._ome_write_zarr,
-            write_stitched_tiff=self._ome_write_stitched_tiff,
+            write_stitched_tiff=write_stitched_tiff,
             min_period=min_period,
             pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0,
-            n_time_points=self._ome_n_time_points,
-            n_z_planes=self._ome_n_z_planes,
-            n_channels=self._ome_n_channels
+            n_time_points=nTimePoints,
+            n_z_planes= nZ_planes,
+            n_channels = nIlluminations
         )
         
         ome_writer = OMEWriter(

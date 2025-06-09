@@ -339,7 +339,7 @@ class SettingsController(ImConWidgetController):
         params.binning.setValue(detector.binning)
         frameStart = detector.frameStart
         shape = detector.shape
-        fullShape = detector.fullShape
+        fullShape = detector.fullShape # width, height of the full chip
         params.x0.setValue(frameStart[0])
         params.y0.setValue(frameStart[1])
         params.width.setValue(shape[0])

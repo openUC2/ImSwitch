@@ -10,6 +10,7 @@ import time
 import zarr
 import numcodecs
 import tifffile as tif
+import threading
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 import numpy as np
@@ -236,44 +237,112 @@ class OMEWriter:
         self.t_last = t_now
     
     def _build_vanilla_zarr_pyramids(self):
-        """Build multiscale pyramids using vanilla Zarr without ome-zarr dependency."""
+        """
+        Build pyramid levels for OME-Zarr format using memory-efficient processing.
+        This creates downsampled versions of the full resolution data.
+        """
         if self.canvas is None:
             return
             
-        # Read the full resolution data from level 0
-        full_data = self.canvas[0, 0, 0, :, :]  # Extract y,x from t,c,z,y,x
+        # Start pyramid generation in background thread for better performance
+        def _generate_pyramids():
+            try:
+                self._generate_pyramids_sync()
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Pyramid generation failed: {e}")
+        
+        # Run in background thread to avoid blocking
+        pyramid_thread = threading.Thread(target=_generate_pyramids, daemon=True)
+        pyramid_thread.start()
+        
+        # For now, wait for completion to maintain backward compatibility
+        # In future versions, this could be made fully asynchronous
+        pyramid_thread.join()
+    
+    def _generate_pyramids_sync(self):
+        """
+        Synchronous pyramid generation with memory-efficient processing.
+        """
+        # Get dimensions of the full resolution data
+        full_shape = self.canvas.shape[-2:]  # Get y,x dimensions from t,c,z,y,x
         
         # Create pyramid levels with 2x downsampling
         max_levels = 4  # Create up to 4 pyramid levels
-        current_shape = full_data.shape
         
         for level in range(1, max_levels):
             # Calculate new shape for this level (2x downsampling)
-            new_shape = (current_shape[0] // 2, current_shape[1] // 2)
+            new_shape = (full_shape[0] // (2**level), full_shape[1] // (2**level))
             
             # Stop if the image becomes too small
             if new_shape[0] < 64 or new_shape[1] < 64:
                 break
-                
-            # Create downsampled data using simple subsampling
-            downsampled = full_data[::2**level, ::2**level]
             
             # Create new dataset for this pyramid level
-            level_canvas = self.root.create_array(
+            level_canvas = self.root.create_dataset(
                 str(level),
-                shape=(1, 1, 1, downsampled.shape[0], downsampled.shape[1]),  # t c z y x
-                chunks=(1, 1, 1, min(self.tile_h, downsampled.shape[0]), min(self.tile_w, downsampled.shape[1])),
+                shape=(1, 1, 1, new_shape[0], new_shape[1]),  # t c z y x
+                chunks=(1, 1, 1, min(self.tile_h, new_shape[0]), min(self.tile_w, new_shape[1])),
                 dtype="uint16",
                 compressor=self.config.zarr_compressor
             )
             
-            # Write the downsampled data
-            level_canvas[0, 0, 0, :, :] = downsampled
+            # Process data in chunks to avoid loading entire array into memory
+            self._downsample_in_chunks(self.canvas, level_canvas, level)
             
             if self.logger:
-                self.logger.debug(f"Created pyramid level {level} with shape {downsampled.shape}")
+                self.logger.debug(f"Created pyramid level {level} with shape {new_shape}")
         
         # Update the multiscales metadata to include all pyramid levels
+        self._update_multiscales_metadata()
+    
+    def _downsample_in_chunks(self, source_canvas, target_canvas, level):
+        """
+        Downsample data in chunks to avoid memory issues with large arrays.
+        
+        Args:
+            source_canvas: Source zarr array
+            target_canvas: Target zarr array for downsampled data
+            level: Pyramid level (1, 2, 3, ...)
+        """
+        # Get source and target shapes
+        source_shape = source_canvas.shape[-2:]  # y, x
+        target_shape = target_canvas.shape[-2:]  # y, x
+        
+        # Define chunk size for processing (adjust based on available memory)
+        chunk_size = min(1024, source_shape[0], source_shape[1])
+        
+        # Process in overlapping chunks to handle downsampling
+        downsample_factor = 2 ** level
+        
+        for y_start in range(0, target_shape[0], chunk_size):
+            y_end = min(y_start + chunk_size, target_shape[0])
+            
+            for x_start in range(0, target_shape[1], chunk_size):
+                x_end = min(x_start + chunk_size, target_shape[1])
+                
+                # Calculate corresponding region in source
+                src_y_start = y_start * downsample_factor
+                src_y_end = min(y_end * downsample_factor, source_shape[0])
+                src_x_start = x_start * downsample_factor
+                src_x_end = min(x_end * downsample_factor, source_shape[1])
+                
+                # Read source data chunk
+                source_chunk = source_canvas[0, 0, 0, src_y_start:src_y_end, src_x_start:src_x_end]
+                
+                # Downsample using simple subsampling
+                downsampled_chunk = source_chunk[::downsample_factor, ::downsample_factor]
+                
+                # Calculate actual target region size
+                actual_y_size = min(downsampled_chunk.shape[0], y_end - y_start)
+                actual_x_size = min(downsampled_chunk.shape[1], x_end - x_start)
+                
+                # Write downsampled chunk to target
+                target_canvas[0, 0, 0, y_start:y_start+actual_y_size, x_start:x_start+actual_x_size] = \
+                    downsampled_chunk[:actual_y_size, :actual_x_size]
+    
+    def _update_multiscales_metadata(self):
+        """Update the multiscales metadata to include all pyramid levels."""
         datasets = []
         for level_name in sorted(self.root.keys(), key=int):
             level_int = int(level_name)

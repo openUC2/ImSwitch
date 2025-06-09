@@ -81,6 +81,9 @@ class OmeTiffStitcher:
                         tif.write(data=image, metadata=metadata)
                     except Exception as e:
                         print(f"Error writing image: {e}")
+                else:
+                    # Sleep briefly to avoid busy loop when queue is empty
+                    time.sleep(0.01)
 
     def close(self):
         """Close the OME-TIFF file. Not strictly necessary if using stop()."""

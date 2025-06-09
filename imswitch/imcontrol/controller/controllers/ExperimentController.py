@@ -437,6 +437,9 @@ class ExperimentController(ImConWidgetController):
             return {"status": "running", "mode": "performance"}
         else:
             # Execute in normal mode using workflow
+            all_workflow_steps = []
+            all_file_writers = []
+            
             for t in range(nTimes):
                 experiment_params = {
                     'mExperiment': mExperiment,
@@ -462,10 +465,14 @@ class ExperimentController(ImConWidgetController):
                     autofocus_step_size=autofocusStepSize,
                     t_period=tPeriod
                 )
-                # TODO: We would need to append the workflow steps and file writers to the context for multiple time points
-                # Append workflow steps and file writers to the context
-                workflowSteps = result["workflow_steps"]
-                file_writers = result["file_writers"]
+                
+                # Append workflow steps and file writers to the accumulated lists
+                all_workflow_steps.extend(result["workflow_steps"])
+                all_file_writers.extend(result["file_writers"])
+            
+            # Use the accumulated workflow steps and file writers
+            workflowSteps = all_workflow_steps
+            file_writers = all_file_writers
             # Create workflow progress handler
             def sendProgress(payload):
                 self.sigExperimentWorkflowUpdate.emit(payload)

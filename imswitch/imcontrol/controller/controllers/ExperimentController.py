@@ -341,8 +341,8 @@ class ExperimentController(ImConWidgetController):
 
         # Illumination-related
         illuSources = p.illumination
-        illuminationIntensites = p.illuIntensities
-        if type(illuminationIntensites) is not List  and type(illuminationIntensites) is not list: illuminationIntensites = [p.illuIntensities]
+        illuminationIntensities = p.illuIntensities
+        if type(illuminationIntensities) is not List  and type(illuminationIntensities) is not list: illuminationIntensities = [p.illuIntensities]
         if type(illuSources) is not List  and type(illuSources) is not list: illuSources = [p.illumination]
         isDarkfield = p.darkfield
         isBrightfield = p.brightfield
@@ -412,56 +412,52 @@ class ExperimentController(ImConWidgetController):
         step_id = 0
         file_writers = []  # Initialize outside the loop for context storage
 
-        for t in range(nTimes):
-            '''
-            THIS IS THE PERFORMANCE MODE:
-             The microcontroller will move the stage in a grid and triggers the camera, 
-             ImSwitch listens to the camera and stores the images in a OME-Zarr format.
-             The microcontroller will also handle the illumination and the Z-positioning.
-             The microcontroller will not handle the autofocus if enabled.
-             
-             Prepare TIFF writer - reuse timeStamp, dirPath from above
-             if performanceMode is True, we will execute on the Hardware directly
-            '''
-            if performanceMode and hasattr(self.mStage, "start_stage_scanning") and hasattr(self.mDetector, "setTriggerSource"):
-                self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
-                for snake_tile in snake_tiles:
-                    # we need to wait if there is another fast stage scan running
-                    while self.fastStageScanIsRunning:
-                        self._logger.debug("Waiting for fast stage scan to finish...")
-                        time.sleep(0.1) # TODO: Probably we want to do that in a thread since we need to return http response here?
-                    # need to compute the pos/net dx and dy and center pos as well as number of images in X / Y
-                    xStart, xEnd, yStart, yEnd, xStep, yStep = self.computeScanRanges([snake_tile])
-                    nx, ny = int((xEnd-xStart)//xStep)+1, int((yEnd-yStart)//yStep)+1
-                    if len(illuminationIntensites) == 1: illumination0 = illuminationIntensites[0]
-                    else: illumination0 = illuminationIntensites[0] if len(illuminationIntensites) > 0 else None
-                    if len(illuminationIntensites) == 2: illumination1 = illuminationIntensites[1]
-                    else: illumination1 = illuminationIntensites[1] if len(illuminationIntensites) > 1 else None
-                    if len(illuminationIntensites) == 3: illumination2 = illuminationIntensites[2]
-                    else: illumination2 = illuminationIntensites[2] if len(illuminationIntensites) > 2 else None
-                    if len(illuminationIntensites) == 4: illumination3 = illuminationIntensites[3]
-                    else: illumination3 = illuminationIntensites[3] if len(illuminationIntensites) > 3 else None
-                    led_index = next((i for i, item in enumerate(mExperiment.parameterValue.illumination) if "led" in item.lower()), None)
-                    if led_index is not None:
-                        # If "LED" is found, get the intensity and limit it to 255
-                        led = min(mExperiment.parameterValue.illuIntensities[led_index], 255)
-                    else:
-                        # Default value if "LED" is not found
-                        led = 0
-                    if nx>100 or ny>100:
-                        self._logger.error("Too many points in X/Y direction. Please reduce the number of points.")
-                        raise HTTPException(status_code=400, detail="Too many points in X/Y direction. Please reduce the number of points.")
-                    # move to inital position first
-                    # xStart/ySTart => 0 means we start from that position
-                    self.startFastStageScanAcquisition(xstart=xStart, xstep=xStep, nx=nx,
-                                                        ystart=yStart, ystep=yStep, ny=ny,
-                                                        tsettle=90, tExposure=50, # TODO: make these parameters adjustable
-                                                        illumination0=illumination0, illumination1=illumination1,
-                                                        illumination2=illumination2, illumination3=illumination3, led=led)
-                    # we need to wait until the acquisition is done so that we can start the next one
-                return
-            else:
-                
+        def performanceMode():
+            self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
+            for snake_tile in snake_tiles:
+                # we need to wait if there is another fast stage scan running
+                while self.fastStageScanIsRunning:
+                    self._logger.debug("Waiting for fast stage scan to finish...")
+                    time.sleep(0.1) # TODO: Probably we want to do that in a thread since we need to return http response here?
+                # need to compute the pos/net dx and dy and center pos as well as number of images in X / Y
+                xStart, xEnd, yStart, yEnd, xStep, yStep = self.computeScanRanges([snake_tile])
+                if xStep == 0:
+                    nx = 1
+                else:
+                    nx = int((xEnd-xStart)//xStep)+1
+                if yStep == 0:
+                    ny = 1
+                else:
+                    ny = int((yEnd-yStart)//yStep)+1
+                if len(illuminationIntensities) == 1: illumination0 = illuminationIntensities[0]
+                else: illumination0 = illuminationIntensities[0] if len(illuminationIntensities) > 0 else None
+                if len(illuminationIntensities) == 2: illumination1 = illuminationIntensities[1]
+                else: illumination1 = illuminationIntensities[1] if len(illuminationIntensities) > 1 else None
+                if len(illuminationIntensities) == 3: illumination2 = illuminationIntensities[2]
+                else: illumination2 = illuminationIntensities[2] if len(illuminationIntensities) > 2 else None
+                if len(illuminationIntensities) == 4: illumination3 = illuminationIntensities[3]
+                else: illumination3 = illuminationIntensities[3] if len(illuminationIntensities) > 3 else None
+                led_index = next((i for i, item in enumerate(mExperiment.parameterValue.illumination) if "led" in item.lower()), None)
+                if led_index is not None:
+                    # If "LED" is found, get the intensity and limit it to 255
+                    led = min(mExperiment.parameterValue.illuIntensities[led_index], 255)
+                else:
+                    # Default value if "LED" is not found
+                    led = 0
+                if nx>100 or ny>100:
+                    self._logger.error("Too many points in X/Y direction. Please reduce the number of points.")
+                    raise HTTPException(status_code=400, detail="Too many points in X/Y direction. Please reduce the number of points.")
+                # move to inital position first
+                # xStart/ySTart => 0 means we start from that position
+                self.startFastStageScanAcquisition(xstart=xStart, xstep=xStep, nx=nx,
+                                                    ystart=yStart, ystep=yStep, ny=ny,
+                                                    tsettle=90, tExposure=50, # TODO: make these parameters adjustable
+                                                    illumination0=illumination0, illumination1=illumination1,
+                                                    illumination2=illumination2, illumination3=illumination3, led=led,
+                                                    tPeriod=tPeriod, nTimes=nTimes)
+                # we need to wait until the acquisition is done so that we can start the next one
+            return
+        def normalMode():                
                 ''' THIS IS THE NORMAL MODE:
                 We will move the stage to each point, set the illumination, acquire the frame and save it 
                 using the unified OME writer (TIFF stitching + OME-Zarr).
@@ -507,7 +503,7 @@ class ExperimentController(ImConWidgetController):
                         pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0,
                         n_time_points=1,
                         n_z_planes=len(z_positions),
-                        n_channels = sum(np.array(illuminationIntensites) > 0) # number of illumination sources with intensities >0 
+                        n_channels = sum(np.array(illuminationIntensities) > 0) # number of illumination sources with intensities >0 
                     )
                     
                     ome_writer = OMEWriter(
@@ -553,11 +549,11 @@ class ExperimentController(ImConWidgetController):
 
                             step_id += 1
                             for illuIndex, illuSource in enumerate(illuSources):
-                                illuIntensity = illuminationIntensites[illuIndex-1]
+                                illuIntensity = illuminationIntensities[illuIndex-1]
                                 if illuIntensity <= 0: continue
 
                                 # Turn on illumination - if we have only one source, we can skip this step after the first stop of mIndex
-                                if sum(np.array(illuminationIntensites)>0) > 1 or  ( mIndex == 0):
+                                if sum(np.array(illuminationIntensities)>0) > 1 or  ( mIndex == 0):
                                     workflowSteps.append(WorkflowStep(
                                         name="Turn on illumination",
                                         step_id=step_id,
@@ -567,44 +563,47 @@ class ExperimentController(ImConWidgetController):
                                         post_params={"seconds": 0.05},
                                     ))
                                     step_id += 1
+                                else:
+                                    self._logger.debug(f"Skipping illumination {illuSource} as it is already on.")
+                                    continue
 
-                            # Acquire frame
-                            workflowSteps.append(WorkflowStep(
-                                name="Acquire frame",
-                                step_id=step_id,
-                                main_func=self.acquire_frame,
-                                main_params={"channel": "Mono"},
-                                post_funcs=[self.save_frame_ome], #, self.add_image_to_canvas],
-                                pre_funcs=[self.set_exposure_time_gain],
-                                pre_params={"exposure_time": exposures[illuIndex], "gain": gains[illuIndex]},
-                                post_params={
-                                    "posX": mPoint["x"],
-                                    "posY": mPoint["y"],
-                                    "posZ": 0, # TODO: Add Z position if needed
-                                    "iX": mPoint["iX"],
-                                    "iY": mPoint["iY"],
-                                    "pixel_size": mPixelSize,
-                                    "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
-                                    "channel": illuSource,
-                                    "time_index": t,       # or whatever loop index
-                                    "tile_index": mIndex,   # or snake-tile index
-                                    "position_center_index": position_center_index,
-                                    "runningNumber": step_id,  # Add running number for compatibility
-                                    "illuminationChannel": illuSource,
-                                    "illuminationValue": illuminationIntensites[illuIndex],
-                                },
-                            ))
-                            step_id += 1
-
-                            # Turn off illumination
-                            if len(illuminationIntensites) > 1 and sum(np.array(illuminationIntensites)>0)>1: # TODO: Is htis the right approach?
+                                # Acquire frame
                                 workflowSteps.append(WorkflowStep(
-                                    name="Turn off illumination",
+                                    name="Acquire frame",
                                     step_id=step_id,
-                                    main_func=self.set_laser_power,
-                                    main_params={"power": 0, "channel": illuSource},
+                                    main_func=self.acquire_frame,
+                                    main_params={"channel": "Mono"},
+                                    post_funcs=[self.save_frame_ome], #, self.add_image_to_canvas],
+                                    pre_funcs=[self.set_exposure_time_gain],
+                                    pre_params={"exposure_time": exposures[illuIndex], "gain": gains[illuIndex]},
+                                    post_params={
+                                        "posX": mPoint["x"],
+                                        "posY": mPoint["y"],
+                                        "posZ": 0, # TODO: Add Z position if needed
+                                        "iX": mPoint["iX"],
+                                        "iY": mPoint["iY"],
+                                        "pixel_size": mPixelSize,
+                                        "minX": minX, "minY": minY, "maxX": maxX, "maxY": maxY,
+                                        "channel": illuSource,
+                                        "time_index": t,       # or whatever loop index
+                                        "tile_index": mIndex,   # or snake-tile index
+                                        "position_center_index": position_center_index,
+                                        "runningNumber": step_id,  # Add running number for compatibility
+                                        "illuminationChannel": illuSource,
+                                        "illuminationValue": illuminationIntensities[illuIndex],
+                                    },
                                 ))
                                 step_id += 1
+
+                                # Turn off illumination
+                                if len(illuminationIntensities) > 1 and sum(np.array(illuminationIntensities)>0)>1: # TODO: Is htis the right approach?
+                                    workflowSteps.append(WorkflowStep(
+                                        name="Turn off illumination",
+                                        step_id=step_id,
+                                        main_func=self.set_laser_power,
+                                        main_params={"power": 0, "channel": illuSource},
+                                    ))
+                                    step_id += 1
 
                     # (Optional) Perform autofocus once per loop, if enabled
                     if isAutoFocus:
@@ -639,69 +638,75 @@ class ExperimentController(ImConWidgetController):
                     pre_params={"seconds": 0.01}
                 ))
 
-            # Finalize OME writer at the end
-            workflowSteps.append(WorkflowStep(
-                name="Finalize OME writer",
-                step_id=step_id,
-                main_func=self.finalize_current_ome_writer,
-                main_params={},
-            ))
-            step_id += 1
-
-
-            # Final step: mark done
-            workflowSteps.append(WorkflowStep(
-                name="Done",
-                step_id=step_id,
-                main_func=self.dummy_main_func,
-                main_params={},
-                pre_funcs=[self.wait_time],
-                pre_params={"seconds": 0.1}
-            ))
-
-            # turn off all illuminations
-            for illuIndex, illuSource in enumerate(illuSources):
-                illuIntensity = illuminationIntensites[illuIndex-1]
-                if illuIntensity <= 0:
-                    continue
-                # Turn off illumination
+                # Finalize OME writer at the end
                 workflowSteps.append(WorkflowStep(
-                    name="Turn off illumination",
+                    name="Finalize OME writer",
                     step_id=step_id,
-                    main_func=self.set_laser_power,
-                    main_params={"power": 0, "channel": illuSource},
+                    main_func=self.finalize_current_ome_writer,
+                    main_params={},
                 ))
+                step_id += 1
 
-        def sendProgress(payload):
-            self.sigExperimentWorkflowUpdate.emit(payload)
+                # turn off all illuminations
+                for illuIndex, illuSource in enumerate(illuSources):
+                    illuIntensity = illuminationIntensities[illuIndex-1]
+                    if illuIntensity <= 0:
+                        continue
+                    # Turn off illumination
+                    workflowSteps.append(WorkflowStep(
+                        name="Turn off illumination",
+                        step_id=step_id,
+                        main_func=self.set_laser_power,
+                        main_params={"power": 0, "channel": illuSource},
+                    ))
 
-        # Create workflow and context
-        wf = Workflow(workflowSteps, self.workflow_manager)
-        context = WorkflowContext()
-        # Set metadata (optional – store whatever data you want)
-        context.set_metadata("experimentName", exp_name)
-        context.set_metadata("nTimes", nTimes)
-        context.set_metadata("tPeriod", tPeriod)
+                # Final step: mark done
+                workflowSteps.append(WorkflowStep(
+                    name="Done",
+                    step_id=step_id,
+                    main_func=self.dummy_main_func,
+                    main_params={},
+                    pre_funcs=[self.wait_time],
+                    pre_params={"seconds": tPeriod}  # Wait for the time period before next iteration
+                ))
+            
+        
+        if performanceMode and hasattr(self.mStage, "start_stage_scanning") and hasattr(self.mDetector, "setTriggerSource"):
+            performanceMode() # TODO: We should return immediately 
+        else:
+            for t in range(nTimes):
+                '''
+                THIS IS THE PERFORMANCE MODE:
+                The microcontroller will move the stage in a grid and triggers the camera, 
+                ImSwitch listens to the camera and stores the images in a OME-Zarr format.
+                The microcontroller will also handle the illumination and the Z-positioning.
+                The microcontroller will not handle the autofocus if enabled.
+                
+                Prepare TIFF writer - reuse timeStamp, dirPath from above
+                if performanceMode is True, we will execute on the Hardware directly
+                '''
+                normalMode()
+            # If we are in performance mode, we will not use the OME writer
+            def sendProgress(payload):
+                self.sigExperimentWorkflowUpdate.emit(payload)
 
-        # Store file_writers in context if they were created (non-performance mode)
-        if len(file_writers) > 0:
-            context.set_object("file_writers", file_writers)
+            # Create workflow and context
+            wf = Workflow(workflowSteps, self.workflow_manager)
+            context = WorkflowContext()
+            # Set metadata (optional – store whatever data you want)
+            context.set_metadata("experimentName", exp_name)
+            context.set_metadata("nTimes", nTimes)
+            context.set_metadata("tPeriod", tPeriod)
 
+            # Store file_writers in context if they were created (non-performance mode)
+            if len(file_writers) > 0:
+                context.set_object("file_writers", file_writers)
+            context.on("progress", sendProgress)
+            context.on("rgb_stack", sendProgress)
+            context.on("rgb_stack", sendProgress)
 
-
-
-        '''
-        image_width, image_height = image_dims[0], image_dims[1]        # physical size of the image in microns
-        size = np.array((max_coords[1]+image_height,max_coords[0]+image_width))/pixel_size # size of the final image that contains all tiles in microns
-        mshape = np.int32(np.ceil(size)*self.resolution_scale*pixel_size)          # size of the final image in pixels (i.e. canvas)
-        self.stitched_image = np.zeros(mshape.T, dtype=np.uint16)       # create a canvas for the stitched image
-        '''
-        context.on("progress", sendProgress)
-        context.on("rgb_stack", sendProgress)
-        context.on("rgb_stack", sendProgress)
-
-        # Start the workflow
-        self.workflow_manager.start_workflow(wf, context)
+            # Start the workflow
+            self.workflow_manager.start_workflow(wf, context)
 
         return {"status": "running"}
 
@@ -1037,7 +1042,8 @@ class ExperimentController(ImConWidgetController):
                       ystart:float=0, ystep:float=500, ny:int=10,
                       tsettle:float=90, tExposure:float=50,
                       illumination0:int=None, illumination1:int=None,
-                      illumination2:int=None, illumination3:int=None, led:float=None):
+                      illumination2:int=None, illumination3:int=None, led:float=None,
+                      tPeriod:int=1, nTimes:int=1):
         """Full workflow: arm camera ➔ launch writer ➔ execute scan."""
         self.fastStageScanIsRunning = True
         self._stop() # ensure all prior runs are stopped
@@ -1099,41 +1105,45 @@ class ExperimentController(ImConWidgetController):
                             runningNumber += 1
                             addDataPoint(metadataList, x, y, channel, value, runningNumber)
         # 2. start writer thread ----------------------------------------------
-        saveOMEZarr = True; 
-        nTimePoints = 1  # For now, we assume a single time point
-        nZPlanes = 1  # For now, we assume a single Z plane    
-        if saveOMEZarr:
-            # ------------------------------------------------------------------+
-            # 2. open OME-Zarr canvas                                           |
-            # ──────────────────────────────────────────────────────────────────+
-            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.mFilePath = os.path.join(self.save_dir,  f"{timeStamp}_FastStageScan")
-            # create directory if it does not exist and file paths
-            omezarr_store = OMEFileStorePaths(self.mFilePath)
-            self.setOmeZarrUrl(self.mFilePath.split(dirtools.UserFileDirs.Data)[-1]+".ome.zarr")
-            self._writer_thread_ome = threading.Thread(
-                target=self._writer_loop_ome, args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0, nTimePoints, nZPlanes, nIlluminations),
-                daemon=True)
-            self._stop_writer_evt.clear()            
-            self._writer_thread_ome.start()
-        else:    
-            # Non-performance mode: also use _writer_loop_ome but configure for TIFF stitching
-            self._stop_writer_evt.clear()
-            self._writer_thread_ome = threading.Thread(
-                target=self._writer_loop_ome, 
-                args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0.2, True, True, False, nTimePoints, nZPlanes, nIlluminations),  # is_tiff=True, write_stitched_tiff=True, is_performance_mode=False
-                daemon=True
+        nLastTime = time.time() 
+        for iTime in range(nTimes):
+            saveOMEZarr = True; 
+            nTimePoints = 1  # For now, we assume a single time point
+            nZPlanes = 1  # For now, we assume a single Z plane    
+            if saveOMEZarr:
+                # ------------------------------------------------------------------+
+                # 2. open OME-Zarr canvas                                           |
+                # ──────────────────────────────────────────────────────────────────+
+                timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                self.mFilePath = os.path.join(self.save_dir,  f"{timeStamp}_FastStageScan")
+                # create directory if it does not exist and file paths
+                omezarr_store = OMEFileStorePaths(self.mFilePath)
+                self.setOmeZarrUrl(self.mFilePath.split(dirtools.UserFileDirs.Data)[-1]+".ome.zarr")
+                self._writer_thread_ome = threading.Thread(
+                    target=self._writer_loop_ome, args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0, nTimePoints, nZPlanes, nIlluminations),
+                    daemon=True)
+                self._stop_writer_evt.clear()            
+                self._writer_thread_ome.start()
+            else:    
+                # Non-performance mode: also use _writer_loop_ome but configure for TIFF stitching
+                self._stop_writer_evt.clear()
+                self._writer_thread_ome = threading.Thread(
+                    target=self._writer_loop_ome, 
+                    args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0.2, True, True, False, nTimePoints, nZPlanes, nIlluminations),  # is_tiff=True, write_stitched_tiff=True, is_performance_mode=False
+                    daemon=True
+                )
+                self._writer_thread_ome.start()
+            illumination=(illumination0, illumination1, illumination2, illumination3) if nIlluminations > 0 else (0,0,0,0)
+            # 3. execute stage scan (blocks until finished) ------------------------
+            self.mStage.start_stage_scanning(
+                xstart=0, xstep=xstep, nx=nx,
+                ystart=0, ystep=ystep, ny=ny,
+                tsettle=tsettle, tExposure=tExposure,
+                illumination=illumination, led=led,
             )
-            self._writer_thread_ome.start()
-        illumination=(illumination0, illumination1, illumination2, illumination3) if nIlluminations > 0 else (0,0,0,0)
-        # 3. execute stage scan (blocks until finished) ------------------------
-        self.mStage.start_stage_scanning(
-            xstart=0, xstep=xstep, nx=nx,
-            ystart=0, ystep=ystep, ny=ny,
-            tsettle=tsettle, tExposure=tExposure,
-            illumination=illumination, led=led,
-        )
-        #TODO: Make path more uniform - e.g. basetype 
+            #TODO: Make path more uniform - e.g. basetype 
+            while nLastTime + tPeriod > time.time() and self.fastStageScanIsRunning:
+                time.sleep(0.1)
         return self.getOmeZarrUrl()  # return relative path to the data directory
 
     # -------------------------------------------------------------------------

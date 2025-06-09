@@ -343,9 +343,9 @@ class ExperimentController(ImConWidgetController):
         zStackStepSize = p.zStackStepSize
         
         # OME writer-related
-        self._ome_write_tiff = p.ome_write_tiff
-        self._ome_write_zarr = p.ome_write_zarr
-        self._ome_write_stitched_tiff = p.ome_write_stitched_tiff
+        self._ome_write_tiff = mExperiment.ome_write_tiff
+        self._ome_write_zarr = mExperiment.ome_write_zarr
+        self._ome_write_stitched_tiff = mExperiment.ome_write_stitched_tiff
 
         # Illumination-related
         illuSources = p.illumination

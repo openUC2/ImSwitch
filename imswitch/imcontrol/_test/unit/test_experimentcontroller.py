@@ -56,7 +56,7 @@ def wait_for_server(port=8001, timeout=30):
     while time.time() - start_time < timeout:
         try:
             # we listen to the HTTP port with a self-signed certificate
-            resp = requests.get(f"https://0.0.0.0:{port}/", verify=False, timeout=2, verify=False)
+            resp = requests.get(f"https://0.0.0.0:{port}/", verify=False, timeout=2)
             if resp.status_code < 500:
                 return True
         except Exception:

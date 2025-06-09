@@ -440,7 +440,7 @@ class ExperimentController(ImConWidgetController):
              Prepare TIFF writer - reuse timeStamp, dirPath from above
              if performanceMode is True, we will execute on the Hardware directly
             '''
-            if performanceMode and hasattr(self.mStage, "startFastStageScanAcquisition") and hasattr(self.mDetector, "setTriggerSource"):
+            if performanceMode and hasattr(self.mStage, "start_stage_scanning") and hasattr(self.mDetector, "setTriggerSource"):
                 self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
                 for snake_tile in snake_tiles:
                     # we need to wait if there is another fast stage scan running
@@ -1186,7 +1186,7 @@ class ExperimentController(ImConWidgetController):
         is_performance_mode  whether using hardware triggering or workflow-based acquisition
         """
         # Set up unified OME writer
-        tile_shape = self.mDetector._shape[-2:]  # (height, width)
+        tile_shape = (self.mDetector._shape[-1], self.mDetector._shape[-2])  # (height, width)        
         grid_shape = (nx, ny)
         grid_geometry = (x_start, y_start, x_step, y_step)
         writer_config = OMEWriterConfig(

@@ -105,7 +105,7 @@ class Experiment(BaseModel):
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
     ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
     ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
-    ome_write_stitched_tiff: bool = Field(True, description="Whether to write stitched OME-TIFF files")
+    ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
         
     # -----------------------------------------------------------
     # A helper to produce the "configuration" dict
@@ -246,7 +246,7 @@ class ExperimentController(ImConWidgetController):
         # OME writer configuration -----------------------------------------------
         self._ome_write_tiff = False
         self._ome_write_zarr = True
-        self._ome_write_stitched_tiff = True
+        self._ome_write_stitched_tiff = False
         
         # Initialize experiment execution modes
         self.performance_mode = ExperimentPerformanceMode(self)
@@ -262,7 +262,7 @@ class ExperimentController(ImConWidgetController):
         return {
             "write_tiff": getattr(self, '_ome_write_tiff', False),
             "write_zarr": getattr(self, '_ome_write_zarr', True),
-            "write_stitched_tiff": getattr(self, '_ome_write_stitched_tiff', True)
+            "write_stitched_tiff": getattr(self, '_ome_write_stitched_tiff', False)
         }
 
 
@@ -341,6 +341,11 @@ class ExperimentController(ImConWidgetController):
         zStackMin = p.zStackMin
         zStackMax = p.zStackMax
         zStackStepSize = p.zStackStepSize
+        
+        # OME writer-related
+        self._ome_write_tiff = p.ome_write_tiff
+        self._ome_write_zarr = p.ome_write_zarr
+        self._ome_write_stitched_tiff = p.ome_write_stitched_tiff
 
         # Illumination-related
         illuSources = p.illumination
@@ -457,10 +462,10 @@ class ExperimentController(ImConWidgetController):
                     autofocus_step_size=autofocusStepSize,
                     t_period=tPeriod
                 )
-                
+                # TODO: We would need to append the workflow steps and file writers to the context for multiple time points
+                # Append workflow steps and file writers to the context
                 workflowSteps = result["workflow_steps"]
                 file_writers = result["file_writers"]
-                
             # Create workflow progress handler
             def sendProgress(payload):
                 self.sigExperimentWorkflowUpdate.emit(payload)

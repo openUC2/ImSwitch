@@ -820,14 +820,7 @@ class ExperimentController(ImConWidgetController):
         self._stop() # ensure all prior runs are stopped
         self.move_stage_xy(posX=xstart, posY=ystart, relative=False)
 
-        # 1. prepare camera ----------------------------------------------------
-        self.mDetector.stopAcquisition()
-        #self.mDetector.NBuffer        = total_frames + 32   # head‑room
-        #self.mDetector.frame_buffer   = collections.deque(maxlen=self.mDetector.NBuffer)
-        #self.mDetector.frameid_buffer = collections.deque(maxlen=self.mDetector.NBuffer)
-        self.mDetector.setTriggerSource("External trigger")
-        self.mDetector.flushBuffers()
-        self.mDetector.startAcquisition()
+
 
         # compute the metadata for the stage scan (e.g. x/y coordinates and illumination channels)
         # stage will start at xstart, ystart and move in steps of xstep, ystep in snake scan logic
@@ -881,6 +874,16 @@ class ExperimentController(ImConWidgetController):
             saveOMEZarr = True; 
             nTimePoints = 1  # For now, we assume a single time point
             nZPlanes = 1  # For now, we assume a single Z plane    
+            
+            # 1. prepare camera ----------------------------------------------------
+            self.mDetector.stopAcquisition()
+            #self.mDetector.NBuffer        = total_frames + 32   # head‑room
+            #self.mDetector.frame_buffer   = collections.deque(maxlen=self.mDetector.NBuffer)
+            #self.mDetector.frameid_buffer = collections.deque(maxlen=self.mDetector.NBuffer)
+            self.mDetector.setTriggerSource("External trigger")
+            self.mDetector.flushBuffers()
+            self.mDetector.startAcquisition()
+            
             if saveOMEZarr:
                 # ------------------------------------------------------------------+
                 # 2. open OME-Zarr canvas                                           |
@@ -906,14 +909,15 @@ class ExperimentController(ImConWidgetController):
                 self._writer_thread_ome.start()
             illumination=(illumination0, illumination1, illumination2, illumination3) if nIlluminations > 0 else (0,0,0,0)
             # 3. execute stage scan (blocks until finished) ------------------------
+            self.fastStageScanIsRunning = True  # Set flag to indicate scan is running
             self.mStage.start_stage_scanning(
-                xstart=0, xstep=xstep, nx=nx,
+                xstart=0, xstep=xstep, nx=nx, # we choose xstart/ystart = 0 since this means we start from here in the positive direction with nsteps
                 ystart=0, ystep=ystep, ny=ny,
                 tsettle=tsettle, tExposure=tExposure,
                 illumination=illumination, led=led,
             )
             #TODO: Make path more uniform - e.g. basetype 
-            while nLastTime + tPeriod > time.time() and self.fastStageScanIsRunning:
+            while nLastTime + tPeriod < time.time() and self.fastStageScanIsRunning:
                 time.sleep(0.1)
         return self.getOmeZarrUrl()  # return relative path to the data directory
 

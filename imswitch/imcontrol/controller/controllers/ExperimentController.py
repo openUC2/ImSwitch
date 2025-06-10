@@ -329,16 +329,14 @@ class ExperimentController(ImConWidgetController):
     def getExperimentStatus(self):
         """Get the current status of running experiments."""
         # Check workflow manager status (normal mode)
-        workflow_status = self.workflow_manager.get_status()
-        
-        # Check performance mode status
-        performance_status = self.performance_mode.get_scan_status()
-        
-        return {
-            "workflow": workflow_status,
-            "performance": performance_status,
-            "fastStageScanIsRunning": self.fastStageScanIsRunning
-        }
+        if self.ExperimentParams.performanceMode:
+            # Check performance mode status
+            workflow_status = self.performance_mode.get_scan_status()
+        else:
+            # Check normal mode status
+            workflow_status = self.workflow_manager.get_status()
+
+        return workflow_status
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
@@ -372,6 +370,7 @@ class ExperimentController(ImConWidgetController):
         isDPC = p.differentialPhaseContrast
 
         # check if we want to use performance mode
+        self.ExperimentParams.performanceMode = p.performanceMode
         performanceMode = p.performanceMode
 
         # camera-related
@@ -784,10 +783,6 @@ class ExperimentController(ImConWidgetController):
             return self.workflow_manager.stop_workflow()
         else:
             raise HTTPException(status_code=400, detail=f"Cannot stop in current state: {status}")
-
-    @APIExport()
-    def getExperimentStatus(self):
-        return self.workflow_manager.get_status()
 
     @APIExport()
     def forceStopExperiment(self):

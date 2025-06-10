@@ -244,6 +244,6 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             Dictionary with scan status information
         """
         return {
-            "running": self._scan_running,
+            "running": "idle" if self._scan_running else "running",
             "mode": "performance"
         }

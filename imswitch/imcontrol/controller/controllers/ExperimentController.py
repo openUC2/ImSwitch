@@ -763,37 +763,84 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport()
     def pauseWorkflow(self):
-        status = self.workflow_manager.get_status()["status"]
-        if status == "running":
+        """Pause the workflow. Only works in normal mode."""
+        # Check workflow manager status (normal mode)
+        workflow_status = self.workflow_manager.get_status()["status"]
+        
+        # Check if performance mode is running
+        performance_status = self.performance_mode.get_scan_status()
+        if performance_status["running"]:
+            raise HTTPException(status_code=400, detail="Cannot pause experiment in performance mode")
+        
+        if workflow_status == "running":
             return self.workflow_manager.pause_workflow()
         else:
-            raise HTTPException(status_code=400, detail=f"Cannot pause in current state: {status}")
+            raise HTTPException(status_code=400, detail=f"Cannot pause in current state: {workflow_status}")
 
     @APIExport()
     def resumeExperiment(self):
-        status = self.workflow_manager.get_status()["status"]
-        if status == "paused":
+        """Resume the experiment. Only works in normal mode."""
+        # Check workflow manager status (normal mode)
+        workflow_status = self.workflow_manager.get_status()["status"]
+        
+        # Check if performance mode is running
+        performance_status = self.performance_mode.get_scan_status()
+        if performance_status["running"]:
+            raise HTTPException(status_code=400, detail="Cannot resume experiment in performance mode")
+        
+        if workflow_status == "paused":
             return self.workflow_manager.resume_workflow()
         else:
-            raise HTTPException(status_code=400, detail=f"Cannot resume in current state: {status}")
+            raise HTTPException(status_code=400, detail=f"Cannot resume in current state: {workflow_status}")
 
     @APIExport()
     def stopExperiment(self):
-        status = self.workflow_manager.get_status()["status"]
-        if status in ["running", "paused", "stopping"]:
-            return self.workflow_manager.stop_workflow()
-        else:
-            raise HTTPException(status_code=400, detail=f"Cannot stop in current state: {status}")
+        """Stop the experiment. Works for both normal and performance modes."""
+        # Check workflow manager status (normal mode)
+        workflow_status = self.workflow_manager.get_status()["status"]
+        
+        # Check performance mode status
+        performance_status = self.performance_mode.get_scan_status()
+        
+        results = {}
+        
+        # Stop workflow if running
+        if workflow_status in ["running", "paused", "stopping"]:
+            results["workflow"] = self.workflow_manager.stop_workflow()
+        
+        # Stop performance mode if running
+        if performance_status["running"]:
+            results["performance"] = self.performance_mode.stop_scan()
+        
+        # If nothing was running, return appropriate message
+        if not results:
+            raise HTTPException(status_code=400, detail="No experiments are currently running")
+        
+        return results
 
-    @APIExport()
-    def getExperimentStatus(self):
-        return self.workflow_manager.get_status()
+
 
     @APIExport()
     def forceStopExperiment(self):
-        self.workflow_manager.stop_workflow()
-        del self.workflow_manager
-        self.workflow_manager = WorkflowsManager()
+        """Force stop the experiment. Works for both normal and performance modes."""
+        results = {}
+        
+        # Force stop workflow
+        try:
+            self.workflow_manager.stop_workflow()
+            del self.workflow_manager
+            self.workflow_manager = WorkflowsManager()
+            results["workflow"] = {"status": "force_stopped", "message": "Workflow force stopped"}
+        except Exception as e:
+            results["workflow"] = {"status": "error", "message": f"Error force stopping workflow: {e}"}
+        
+        # Force stop performance mode
+        try:
+            results["performance"] = self.performance_mode.force_stop_scan()
+        except Exception as e:
+            results["performance"] = {"status": "error", "message": f"Error force stopping performance mode: {e}"}
+        
+        return results
 
 
     """Couples a 2‑D stage scan with external‑trigger camera acquisition.

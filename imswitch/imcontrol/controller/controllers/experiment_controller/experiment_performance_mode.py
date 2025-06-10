@@ -243,7 +243,55 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         Returns:
             Dictionary with scan status information
         """
+        status = "running" if self._scan_running else "idle"
         return {
+            "status": status,
             "running": self._scan_running,
             "mode": "performance"
         }
+    
+    def stop_scan(self) -> Dict[str, Any]:
+        """
+        Stop the performance mode scan.
+        
+        Returns:
+            Dictionary with stop result
+        """
+        if self._scan_running:
+            self._scan_running = False
+            if self._scan_thread and self._scan_thread.is_alive():
+                self._scan_thread.join(timeout=5.0)  # Wait up to 5 seconds for thread to finish
+            return {"status": "stopped", "message": "Performance mode scan stopped"}
+        else:
+            return {"status": "not_running", "message": "No performance mode scan is running"}
+    
+    def force_stop_scan(self) -> Dict[str, Any]:
+        """
+        Force stop the performance mode scan.
+        
+        Returns:
+            Dictionary with force stop result
+        """
+        self._scan_running = False
+        if self._scan_thread and self._scan_thread.is_alive():
+            # Don't wait for thread to finish gracefully in force stop
+            pass
+        return {"status": "force_stopped", "message": "Performance mode scan force stopped"}
+    
+    def pause_scan(self) -> Dict[str, Any]:
+        """
+        Pause is not supported in performance mode.
+        
+        Returns:
+            Dictionary indicating pause is not supported
+        """
+        return {"status": "not_supported", "message": "Pause is not supported in performance mode"}
+    
+    def resume_scan(self) -> Dict[str, Any]:
+        """
+        Resume is not supported in performance mode.
+        
+        Returns:
+            Dictionary indicating resume is not supported
+        """
+        return {"status": "not_supported", "message": "Resume is not supported in performance mode"}

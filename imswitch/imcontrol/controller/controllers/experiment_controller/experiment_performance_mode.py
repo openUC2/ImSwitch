@@ -6,6 +6,7 @@ directly for time-critical operations with hardware triggering.
 """
 
 import time
+import threading
 from typing import List, Dict, Any
 from fastapi import HTTPException
 
@@ -20,6 +21,11 @@ class ExperimentPerformanceMode(ExperimentModeBase):
     and illumination directly for optimal timing performance. ImSwitch mainly
     listens to the camera and stores images.
     """
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._scan_thread = None
+        self._scan_running = False
     
     def execute_experiment(self, 
                          snake_tiles: List[List[Dict]],
@@ -40,27 +46,59 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         """
         self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
         
-        t_period = experiment_params.get('tPeriod', 1)
-        n_times = experiment_params.get('nTimes', 1)
+        # Start the scan in a background thread to make it non-blocking
+        if self._scan_running:
+            raise HTTPException(status_code=400, detail="Performance mode scan is already running.")
         
-        for snake_tile in snake_tiles:
-            # Wait if another fast stage scan is running
-            while self.controller.fastStageScanIsRunning:
-                self._logger.debug("Waiting for fast stage scan to finish...")
-                time.sleep(0.1)
+        # Start background thread to execute the scan
+        self._scan_thread = threading.Thread(
+            target=self._execute_scan_background,
+            args=(snake_tiles, illumination_intensities, experiment_params),
+            daemon=True
+        )
+        self._scan_running = True
+        self._scan_thread.start()
+        
+        return {"status": "running", "mode": "performance"}
+    
+    def _execute_scan_background(self, 
+                               snake_tiles: List[List[Dict]],
+                               illumination_intensities: List[float],
+                               experiment_params: Dict[str, Any]) -> None:
+        """
+        Execute the scan in background thread.
+        
+        Args:
+            snake_tiles: List of tiles containing scan points
+            illumination_intensities: List of illumination values
+            experiment_params: Dictionary containing experiment parameters
+        """
+        try:
+            t_period = experiment_params.get('tPeriod', 1)
+            n_times = experiment_params.get('nTimes', 1)
+            
+            for snake_tile in snake_tiles:
+                # Wait if another fast stage scan is running
+                while self.controller.fastStageScanIsRunning:
+                    self._logger.debug("Waiting for fast stage scan to finish...")
+                    time.sleep(0.1)
+                    
+                # Compute scan parameters
+                scan_params = self._compute_scan_parameters(snake_tile, illumination_intensities, experiment_params)
                 
-            # Compute scan parameters
-            scan_params = self._compute_scan_parameters(snake_tile, illumination_intensities, experiment_params)
+                # Validate scan parameters
+                if scan_params['nx'] > 100 or scan_params['ny'] > 100:
+                    self._logger.error("Too many points in X/Y direction. Please reduce the number of points.")
+                    return
+                
+                # Execute fast stage scan
+                zarr_url = self._execute_fast_stage_scan(scan_params, t_period, n_times)
+                self._logger.info(f"Performance mode scan completed. Data saved to: {zarr_url}")
             
-            # Validate scan parameters
-            if scan_params['nx'] > 100 or scan_params['ny'] > 100:
-                self._logger.error("Too many points in X/Y direction. Please reduce the number of points.")
-                raise HTTPException(status_code=400, detail="Too many points in X/Y direction. Please reduce the number of points.")
-            
-            # Execute fast stage scan
-            self._execute_fast_stage_scan(scan_params, t_period, n_times)
-        
-        return {"status": "completed", "mode": "performance"}
+        except Exception as e:
+            self._logger.error(f"Error in performance mode scan: {str(e)}")
+        finally:
+            self._scan_running = False
     
     def _compute_scan_parameters(self, 
                                 snake_tile: List[Dict],
@@ -188,3 +226,24 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         """
         return (hasattr(self.controller.mStage, "start_stage_scanning") and 
                 hasattr(self.controller.mDetector, "setTriggerSource"))
+    
+    def is_scan_running(self) -> bool:
+        """
+        Check if a performance mode scan is currently running.
+        
+        Returns:
+            True if scan is running, False otherwise
+        """
+        return self._scan_running
+    
+    def get_scan_status(self) -> Dict[str, Any]:
+        """
+        Get the current status of the performance mode scan.
+        
+        Returns:
+            Dictionary with scan status information
+        """
+        return {
+            "running": self._scan_running,
+            "mode": "performance"
+        }

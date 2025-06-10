@@ -325,6 +325,21 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Error while getting last scan as OME-Zarr: {e}")
             raise HTTPException(status_code=500, detail="Error while getting last scan as OME-Zarr.")
 
+    @APIExport(requestType="GET")
+    def getExperimentStatus(self):
+        """Get the current status of running experiments."""
+        # Check workflow manager status (normal mode)
+        workflow_status = self.workflow_manager.get_status()
+        
+        # Check performance mode status
+        performance_status = self.performance_mode.get_scan_status()
+        
+        return {
+            "workflow": workflow_status,
+            "performance": performance_status,
+            "fastStageScanIsRunning": self.fastStageScanIsRunning
+        }
+
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
         # Extract key parameters

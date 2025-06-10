@@ -61,7 +61,7 @@ def write_image(image, group, axes="zyx"):
         chunk_size = min(dim_size, 512)  # Use 512 or dimension size, whichever is smaller
         chunk_shape.append(chunk_size)
     
-    array = group.create_array(
+    array = group.create_dataset(
         "0",
         shape=image.shape,
         chunks=tuple(chunk_shape),

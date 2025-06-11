@@ -11,7 +11,9 @@ isVimba = False
 
 try:
     # Try VimbaX first (new SDK)
-    from vimbax import *
+    from vimbax import VimbaSystem, FrameStatus, Frame, Camera
+    # VimbaX may use different exception types
+    VimbaCameraError = Exception  # Fallback for VimbaX
     isVimbaX = True
     print("VimbaX SDK loaded successfully")
 except ImportError:
@@ -23,6 +25,9 @@ except ImportError:
     except ImportError as e:
         print(e)
         print("Neither VimbaX nor legacy Vimba installed..")
+        # Define dummy exception for when neither SDK is available
+        class VimbaCameraError(Exception):
+            pass
 
 if not (isVimbaX or isVimba):
     print("No Allied Vision SDK available")

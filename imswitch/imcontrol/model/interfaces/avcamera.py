@@ -5,14 +5,27 @@ import numpy as np
 from typing import Optional
 from imswitch.imcommon.model import initLogger
 
-# If VimbaPython is not installed or not found, set isVimba to False
-isVimba = True
+# Try VimbaX first, then fallback to legacy Vimba
+isVimbaX = False
+isVimba = False
+
 try:
-    from vimba import (Vimba, FrameStatus, Frame, VimbaCameraError)
-except ImportError as e:
-    print(e)
-    print("No Vimba installed..")
-    isVimba = False
+    # Try VimbaX first (new SDK)
+    from vimbax import *
+    isVimbaX = True
+    print("VimbaX SDK loaded successfully")
+except ImportError:
+    try:
+        # Fallback to legacy Vimba
+        from vimba import (Vimba, FrameStatus, Frame, VimbaCameraError)
+        isVimba = True
+        print("Legacy Vimba SDK loaded successfully")
+    except ImportError as e:
+        print(e)
+        print("Neither VimbaX nor legacy Vimba installed..")
+
+if not (isVimbaX or isVimba):
+    print("No Allied Vision SDK available")
 
 
 class CameraAV:
@@ -24,12 +37,20 @@ class CameraAV:
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=True)
 
-        if not isVimba:
-            raise RuntimeError("VimbaPython not installed or not found.")
+        if not (isVimbaX or isVimba):
+            raise RuntimeError("Neither VimbaX nor legacy VimbaPython installed or found.")
 
-        # Enter the Vimba context
-        self._vimba = Vimba.get_instance()
-        self._vimba.__enter__()
+        # Initialize based on available SDK
+        if isVimbaX:
+            # VimbaX initialization
+            self._vimba_instance = VimbaSystem.get_instance()
+            self._vimba_instance.startup()
+            self._vimba_context = None
+        else:
+            # Legacy Vimba initialization
+            self._vimba = Vimba.get_instance()
+            self._vimba.__enter__()
+            self._vimba_instance = self._vimba
 
         self._camera = None
         self._running = False
@@ -53,28 +74,66 @@ class CameraAV:
         self.__logger.debug("CameraAV initialized.")
 
     def _open_camera(self, camera_id):
-        cams = self._vimba.get_all_cameras()
-        if not cams:
-            raise RuntimeError("No Allied Vision cameras found.")
+        if isVimbaX:
+            # VimbaX camera discovery and opening
+            cams = self._vimba_instance.get_all_cameras()
+            if not cams:
+                raise RuntimeError("No Allied Vision cameras found.")
 
-        if camera_id is None:
-            self._camera = cams[0]
-        else:
-            # If camera_id is an integer, interpret as index
-            if isinstance(camera_id, int):
-                if camera_id < 0 or camera_id >= len(cams):
-                    raise RuntimeError(f"Invalid camera index: {camera_id}")
-                self._camera = cams[camera_id]
+            if camera_id is None:
+                self._camera = cams[0]
             else:
-                # Otherwise, treat it as a string-based camera ID
-                try:
-                    self._camera = self._vimba.get_camera_by_id(camera_id)
-                except VimbaCameraError as e:
-                    raise RuntimeError(f"Failed to open camera with ID '{camera_id}'.") from e
+                # If camera_id is an integer, interpret as index
+                if isinstance(camera_id, int):
+                    if camera_id < 0 or camera_id >= len(cams):
+                        raise RuntimeError(f"Invalid camera index: {camera_id}")
+                    self._camera = cams[camera_id]
+                else:
+                    # Otherwise, treat it as a string-based camera ID
+                    try:
+                        self._camera = self._vimba_instance.get_camera_by_id(camera_id)
+                    except Exception as e:
+                        raise RuntimeError(f"Failed to open camera with ID '{camera_id}'.") from e
 
-        self._camera._open()
-        self._camera.get_feature_by_name("AcquisitionMode").set("Continuous")
-        self.model = self._camera.get_name()
+            # Open camera in VimbaX
+            self._camera.open()
+            
+            # Set acquisition mode
+            try:
+                self._camera.get_feature_by_name("AcquisitionMode").set("Continuous")
+            except Exception as e:
+                self.__logger.warning(f"Could not set AcquisitionMode: {e}")
+                
+        else:
+            # Legacy Vimba camera discovery and opening
+            cams = self._vimba_instance.get_all_cameras()
+            if not cams:
+                raise RuntimeError("No Allied Vision cameras found.")
+
+            if camera_id is None:
+                self._camera = cams[0]
+            else:
+                # If camera_id is an integer, interpret as index
+                if isinstance(camera_id, int):
+                    if camera_id < 0 or camera_id >= len(cams):
+                        raise RuntimeError(f"Invalid camera index: {camera_id}")
+                    self._camera = cams[camera_id]
+                else:
+                    # Otherwise, treat it as a string-based camera ID
+                    try:
+                        self._camera = self._vimba_instance.get_camera_by_id(camera_id)
+                    except VimbaCameraError as e:
+                        raise RuntimeError(f"Failed to open camera with ID '{camera_id}'.") from e
+
+            self._camera._open()
+            self._camera.get_feature_by_name("AcquisitionMode").set("Continuous")
+        
+        # Get camera model name (both APIs should support this)
+        try:
+            self.model = self._camera.get_name()
+        except:
+            self.model = "AlliedVisionCamera"
+            
         try:
             # Read sensor dimensions
             self.sensor_width = self._camera.get_feature_by_name("SensorWidth").get()
@@ -91,64 +150,120 @@ class CameraAV:
 
         self.__logger.debug(f"Opened camera '{self.model}' (ID/index: {camera_id}).")
 
-    def _frame_handler(self, cam, frame: Frame):
-        if frame.get_status() == FrameStatus.Complete:
-            data = frame.as_numpy_ndarray()
-            self.frame_id = frame.get_id()
+    def _frame_handler(self, cam, frame):
+        if isVimbaX:
+            # VimbaX frame handling
+            if frame.get_status() == FrameStatus.Complete:
+                data = frame.as_numpy_ndarray()
+                self.frame_id = frame.get_id()
 
-            # Apply ROI in software if the hardware ROI is not set
-            if self.vsize and self.hsize:
-                cropped = data[self.vpos:self.vpos + self.vsize,
-                               self.hpos:self.hpos + self.hsize]
-                if cropped.size == 0:
-                    cropped = data
-                self.frame = cropped
-            else:
-                self.frame = data
+                # Apply ROI in software if the hardware ROI is not set
+                if self.vsize and self.hsize:
+                    cropped = data[self.vpos:self.vpos + self.vsize,
+                                   self.hpos:self.hpos + self.hsize]
+                    if cropped.size == 0:
+                        cropped = data
+                    self.frame = cropped
+                else:
+                    self.frame = data
 
-            self.frame_buffer.append(self.frame)
-        cam.queue_frame(frame)
+                self.frame_buffer.append(self.frame)
+            cam.queue_frame(frame)
+        else:
+            # Legacy Vimba frame handling
+            if frame.get_status() == FrameStatus.Complete:
+                data = frame.as_numpy_ndarray()
+                self.frame_id = frame.get_id()
+
+                # Apply ROI in software if the hardware ROI is not set
+                if self.vsize and self.hsize:
+                    cropped = data[self.vpos:self.vpos + self.vsize,
+                                   self.hpos:self.hpos + self.hsize]
+                    if cropped.size == 0:
+                        cropped = data
+                    self.frame = cropped
+                else:
+                    self.frame = data
+
+                self.frame_buffer.append(self.frame)
+            cam.queue_frame(frame)
 
     def start_live(self):
         if not self._running:
             self._running = True
         if not self._streaming:
-            # TODO: THis is not working
-            #self._camera.start_streaming(
-            #    handler=self._frame_handler,
-            #    buffer_count=10
-            #)
-            self._streaming = True
-            self.__logger.debug("Camera streaming started.")
+            if isVimbaX:
+                # VimbaX streaming
+                try:
+                    self._camera.start_streaming(handler=self._frame_handler)
+                    self._streaming = True
+                    self.__logger.debug("VimbaX camera streaming started.")
+                except Exception as e:
+                    self.__logger.error(f"Failed to start VimbaX streaming: {e}")
+            else:
+                # Legacy Vimba streaming 
+                # TODO: THis is not working in legacy code
+                #self._camera.start_streaming(
+                #    handler=self._frame_handler,
+                #    buffer_count=10
+                #)
+                self._streaming = True
+                self.__logger.debug("Legacy Vimba camera streaming started.")
 
     def stop_live(self):
         if self._streaming:
-            self._camera.stop_streaming()
-            self._streaming = False
-            self.__logger.debug("Camera streaming stopped.")
+            try:
+                self._camera.stop_streaming()
+                self._streaming = False
+                self.__logger.debug("Camera streaming stopped.")
+            except Exception as e:
+                self.__logger.warning(f"Error stopping camera streaming: {e}")
+                self._streaming = False
 
     def suspend_live(self):
         # This method just stops acquisition without changing the _running state
         if self._streaming:
-            self._camera.stop_streaming()
-            self._streaming = False
-            self.__logger.debug("Camera streaming suspended.")
+            try:
+                self._camera.stop_streaming()
+                self._streaming = False
+                self.__logger.debug("Camera streaming suspended.")
+            except Exception as e:
+                self.__logger.warning(f"Error suspending camera streaming: {e}")
+                self._streaming = False
 
     def close(self):
         # Stop streaming if active
         if self._streaming:
-            self._camera.stop_streaming()
-            self._streaming = False
+            try:
+                self._camera.stop_streaming()
+                self._streaming = False
+            except Exception as e:
+                self.__logger.warning(f"Error stopping streaming during close: {e}")
+                
         # Close camera
         try:
-            self._camera.close()
+            if isVimbaX:
+                self._camera.close()
+            else:
+                self._camera.close()
         except Exception as e:
             self.__logger.warning(f"Error closing camera: {e}")
-        # Exit Vimba context if not already
-        if self._vimba:
-            self._vimba.__exit__(None, None, None)
-            self._vimba = None
-        self.__logger.debug("Camera closed and Vimba context exited.")
+            
+        # Cleanup SDK context
+        try:
+            if isVimbaX:
+                if self._vimba_instance:
+                    self._vimba_instance.shutdown()
+                    self._vimba_instance = None
+            else:
+                if hasattr(self, '_vimba') and self._vimba:
+                    self._vimba.__exit__(None, None, None)
+                    self._vimba = None
+                self._vimba_instance = None
+        except Exception as e:
+            self.__logger.warning(f"Error during SDK cleanup: {e}")
+            
+        self.__logger.debug("Camera closed and SDK context cleaned up.")
 
     def setROI(self, hpos=None, vpos=None, hsize=None, vsize=None):
         # In principle, we can set the hardware ROI via features:
@@ -177,11 +292,22 @@ class CameraAV:
         self.__logger.debug(f"Set ROI to x={self.hpos}, y={self.vpos}, w={self.hsize}, h={self.vsize}")
 
     def getLast(self, is_resize=True):
-        # Return the most recent frame from self.frame
+        # Return the most recent frame from camera
         # The manager code uses is_resize, but we don't do anything with it here
         # (kept for compatibility).
-        self.frame = self._camera.get_frame(timeout_ms=1000).as_opencv_image()
-        return self.frame
+        try:
+            if isVimbaX:
+                # VimbaX get frame method
+                frame = self._camera.get_frame(timeout_ms=1000)
+                self.frame = frame.as_opencv_image()
+            else:
+                # Legacy Vimba get frame method  
+                frame = self._camera.get_frame(timeout_ms=1000)
+                self.frame = frame.as_opencv_image()
+            return self.frame
+        except Exception as e:
+            self.__logger.warning(f"Error getting frame: {e}")
+            return self.frame if hasattr(self, 'frame') and self.frame is not None else np.zeros((100, 100))
 
     def getLastChunk(self):
         # Return all frames currently in buffer as a single 3D array if desired

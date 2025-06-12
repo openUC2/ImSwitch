@@ -14,9 +14,9 @@ import cv2
 import base64
 from imswitch import SOCKET_STREAM
 import time
+import queue
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
-import os
 import imswitch
 from imswitch import __ssl__, __socketport__
 class Mutex(abstract.Mutex):
@@ -34,6 +34,53 @@ class Mutex(abstract.Mutex):
 # Initialize Socket.IO server
 sio = AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 app = ASGIApp(sio)
+
+# Fallback message queue and worker thread for Socket.IO failures
+_fallback_message_queue = queue.Queue()
+_fallback_worker_thread = None
+_fallback_worker_running = False
+
+
+def _fallback_worker():
+    """Background worker thread to handle Socket.IO fallback messages."""
+    global _fallback_worker_running
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        while _fallback_worker_running:
+            try:
+                message = _fallback_message_queue.get(timeout=1.0)
+                if message is None:  # Poison pill to stop worker
+                    break
+                loop.run_until_complete(sio.emit("signal", message))
+                _fallback_message_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception:
+                # Silently handle errors to avoid spam
+                pass
+    finally:
+        loop.close()
+
+
+def _start_fallback_worker():
+    """Start the fallback worker thread if not already running."""
+    global _fallback_worker_thread, _fallback_worker_running
+    if _fallback_worker_thread is None or not _fallback_worker_thread.is_alive():
+        _fallback_worker_running = True
+        _fallback_worker_thread = threading.Thread(target=_fallback_worker,
+                                                    daemon=True)
+        _fallback_worker_thread.start()
+
+
+def _stop_fallback_worker():
+    """Stop the fallback worker thread."""
+    global _fallback_worker_running
+    if _fallback_worker_running:
+        _fallback_worker_running = False
+        _fallback_message_queue.put(None)  # Poison pill
+
 
 class SignalInterface(abstract.SignalInterface):
     """Base implementation of abstract.SignalInterface."""
@@ -148,33 +195,19 @@ class SignalInstance(psygnal.SignalInstance):
 
         try:
             sio.start_background_task(sio.emit, "signal", json.dumps(mMessage))
-        except Exception as e:
-            #print(f"Error broadcasting message via Socket.IO (first attempt): {e}")
+        except Exception:
+            # Use fallback worker thread instead of creating new threads
             try:
-                def thread_worker(message):
-                    # Eigene Event Loop erstellen
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-
-
-                    try:
-                        loop.run_until_complete(sio.emit("signal", message))
-                    except Exception as e:
-                        print(f"Error loading message: {e}")
-                        return
-
-
-                def send_message(message):
-                    t = threading.Thread(target=thread_worker, args=(message,))
-                    t.start()
-                if type(mMessage) == dict:
-                    mMessage = json.dumps(mMessage)
-                send_message(mMessage)
-                #asyncio.run_coroutine_threadsafe(send_message(), asyncio.new_event_loop())
-                #asyncio.run_coroutine_threadsafe(sio.emit("signal", json.dumps(mMessage)), asyncio.new_event_loop())
-            except Exception as e:
+                _start_fallback_worker()
+                message = (json.dumps(mMessage) if isinstance(mMessage, dict)
+                           else mMessage)
+                _fallback_message_queue.put_nowait(message)
+            except queue.Full:
+                # Queue is full, drop the message to prevent memory buildup
                 pass
-                #print(f"Error broadcasting message via Socket.IO (second attempt): {e}")
+            except Exception:
+                # Silently handle any other errors
+                pass
         del mMessage
 
 class Signal(psygnal.Signal):

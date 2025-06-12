@@ -184,13 +184,10 @@ RUN wget --no-check-certificate https://downloads.alliedvision.com/VimbaX/VimbaX
 RUN cd /opt/VimbaX/cti \
     && ./Install_GenTL_Path.sh
 
-# Install VmbPy from the included wheel file
-RUN python3 -m pip install --upgrade pip --no-cache-dir find . -name "vmbpy-*.whl" -exec pip3 install {} --no-cache-dir \;
-
-
 # Install Python bindings and VimbaPython   
-RUN cd /opt/VimbaX/api/python \
-    && /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install --upgrade pip --no-cache-dir find . -name "vmbpy-*.whl" -exec pip3 install {} --no-cache-dir"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
+    python3 -m pip install --upgrade pip --no-cache-dir && \
+    find /opt/VimbaX -name 'vmbpy-*.whl' -exec python3 -m pip install {} --no-cache-dir \;"
 
 # Set environment variable for GenTL detection
 ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"

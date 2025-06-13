@@ -91,7 +91,7 @@ class SignalInstance(psygnal.SignalInstance):
     last_emit_time = 0
     emit_interval = 0.0  # Emit at most every 100ms
     last_image_emit_time = 0
-    image_emit_interval = .10  # Emit at most every 200ms
+    image_emit_interval = .2  # Emit at most every 200ms
     IMG_QUALITY = 80  # Set the desired quality level (0-100)
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False

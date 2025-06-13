@@ -78,7 +78,8 @@ setup(
         "python-socketio[asyncio]==5.11.4",
         "ashlarUC2", 
         "jupyterlab==4.2.5",
-        "python-dateutil >= 2.8.1"        
+        "python-dateutil >= 2.8.1",
+        "zarr == 2.18.7"    
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

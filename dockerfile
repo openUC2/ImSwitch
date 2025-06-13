@@ -167,22 +167,30 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zar
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
 
 
-# TMP: Install Vimba 
-# Download, extract, and install Vimba
-RUN wget https://downloads.alliedvision.com/Vimba_v6.0_ARM64.tgz -O /tmp/Vimba_arm64.tgz && \
-tar -xzf /tmp/Vimba_arm64.tgz -C /opt && \
-rm /tmp/Vimba_arm64.tgz && \
-cd /opt/Vimba_6_0/VimbaUSBTL && \
-./Install.sh 
+# Install VimbaX 
+# To use this dockerfile:
+# 1. Download VimbaX_Setup-2025-1-Linux_ARM64.tar.gz from:
+#    https://downloads.alliedvision.com/VimbaX/VimbaX_Setup-2025-1-Linux_ARM64.tar.gz
+# 2. Place it in the same directory as this dockerfile
+# 3. Build with: docker build -f dockerfile.full-sdk -t alvium:vimbax-full .
+RUN wget --no-check-certificate https://downloads.alliedvision.com/VimbaX/VimbaX_Setup-2025-1-Linux_ARM64.tar.gz \
+    -O VimbaX_Setup-2025-1-Linux_ARM64.tar.gz || \
+    echo "VimbaX SDK download failed. Please ensure the file is present in the build context." \
+    && tar -xzf VimbaX_Setup-2025-1-Linux_ARM64.tar.gz -C /opt \
+    && mv /opt/VimbaX_2025-1 /opt/VimbaX \
+    && rm VimbaX_Setup-2025-1-Linux_ARM64.tar.gz
+
+# Run VimbaX GenTL installation script
+RUN cd /opt/VimbaX/cti \
+    && ./Install_GenTL_Path.sh
 
 # Install Python bindings and VimbaPython   
-RUN cd /opt/Vimba_6_0/VimbaPython/Source && \
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ." && \
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/alliedvision/VimbaPython/archive/refs/heads/master.zip"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
+    python3 -m pip install --upgrade pip --no-cache-dir && \
+    find /opt/VimbaX -name 'vmbpy-*.whl' -exec python3 -m pip install {} --no-cache-dir \;"
 
 # Set environment variable for GenTL detection
-ENV GENICAM_GENTL64_PATH="${GENICAM_GENTL64_PATH}:/opt/Vimba_6_0/VimbaUSBTL/CTI/arm_64bit"
-
+ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching

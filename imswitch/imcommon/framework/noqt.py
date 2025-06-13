@@ -73,15 +73,6 @@ def _start_fallback_worker():
                                                     daemon=True)
         _fallback_worker_thread.start()
 
-
-def _stop_fallback_worker():
-    """Stop the fallback worker thread."""
-    global _fallback_worker_running
-    if _fallback_worker_running:
-        _fallback_worker_running = False
-        _fallback_message_queue.put(None)  # Poison pill
-
-
 class SignalInterface(abstract.SignalInterface):
     """Base implementation of abstract.SignalInterface."""
     def __init__(self) -> None:

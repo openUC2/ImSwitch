@@ -170,38 +170,59 @@ class CameraOpenCV:
         return cameras
         # check if camera is open
 
+
     def openCamera(self, cameraindex, width, height, isRGB):
-        # open camera
-        if 0: self.listAvailableUSBCameras()
+        """
+        Automatically match the user-chosen 'cameraindex' to the discovered /dev/video entries on Linux.
+        On other platforms, just use cameraindex as provided.
+        """
         from sys import platform
         if self.camera is not None:
             self.camera.release()
-        if platform == "linux" or platform == "linux2" or platform == "darwin":
+
+        if platform == "linux" or platform == "linux2":
+            # Map the requested cameraindex to an actual /dev/video device
+            available_cameras = sorted(self.listAvailableUSBCameras())
+            if isinstance(cameraindex, int):
+                # If out of range, fallback to the last device or device 0
+                if 0 <= cameraindex < len(available_cameras):
+                    dev_path = f"/dev/video{available_cameras[cameraindex]}"
+                else:
+                    dev_path = f"/dev/video{available_cameras[-1]}"
+            else:
+                # Assume the user gave a direct string path like "/dev/video2"
+                dev_path = str(cameraindex)
+
+            self.camera = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
+            self.__logger.debug(f"Using Linux device path: {dev_path}")
+
+        elif platform == "darwin":
+            # macOS: just use cameraindex directly
             self.camera = cv2.VideoCapture(cameraindex)
         else:
+            # Windows: use CAP_DSHOW when opening
             self.camera = cv2.VideoCapture(cameraindex, cv2.CAP_DSHOW)
+
         self.__logger.debug("Camera is open")
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920.0) # 4k/high_res
+        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920.0)  # 4k/high_res
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080.0) # 4k/high_res
-        # let the camera warm up
-        for i in range(5):
+
+        # Let the camera warm up
+        for _ in range(5):
             _, img = self.camera.read()
-        width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
         height = self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
         print(width, height)
         self.__logger.debug("Camera is warmed up")
 
         self.SensorHeight = img.shape[0]
         self.SensorWidth = img.shape[1]
-        self.shape = (self.SensorWidth,self.SensorHeight)
+        self.shape = (self.SensorWidth, self.SensorHeight)
         self.camera_is_open = True
 
-
-        # starting thread
-        self.frameGrabberThread = Thread(target = self.setFrameBuffer, args=(isRGB,))
+        # Start a thread to continuously grab frames
+        self.frameGrabberThread = Thread(target=self.setFrameBuffer, args=(isRGB,))
         self.frameGrabberThread.start()
-
-
 
     def setFrameBuffer(self, isRGB=True):
         while(self.camera_is_open):

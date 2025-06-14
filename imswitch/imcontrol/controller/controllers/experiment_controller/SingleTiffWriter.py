@@ -24,13 +24,13 @@ class SingleTiffWriter:
     with proper OME metadata including spatial coordinates.
     """
     
-    def __init__(self, file_path: str, bigtiff: bool = True):
+    def __init__(self, file_path: str, bigtiff: bool = False):
         """
         Initialize the single TIFF writer.
         
         Args:
             file_path: Path where the TIFF file will be written
-            bigtiff: Whether to use BigTIFF format (recommended for large files)
+            bigtiff: Whether to use BigTIFF format (recommended for large files - but not recommended for Fiji)
         """
         self.file_path = file_path
         self.bigtiff = bigtiff

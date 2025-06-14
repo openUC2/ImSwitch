@@ -93,6 +93,9 @@ class ParameterValue(BaseModel):
     resortPointListToSnakeCoordinates: bool = True
     speed: float = 20000.0
     performanceMode: bool = False
+    ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
+    ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
+    ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
 
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
@@ -103,10 +106,7 @@ class Experiment(BaseModel):
     # From your old "ExperimentModel":
     number_z_steps: int = Field(0, description="Number of Z slices")
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
-    ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
-    ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
-    ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
-
+    
     # -----------------------------------------------------------
     # A helper to produce the "configuration" dict
     # -----------------------------------------------------------
@@ -355,11 +355,6 @@ class ExperimentController(ImConWidgetController):
         zStackMax = p.zStackMax
         zStackStepSize = p.zStackStepSize
 
-        # OME writer-related
-        self._ome_write_tiff = mExperiment.ome_write_tiff
-        self._ome_write_zarr = mExperiment.ome_write_zarr
-        self._ome_write_stitched_tiff = mExperiment.ome_write_stitched_tiff
-
         # Illumination-related
         illuSources = p.illumination
         illuminationIntensities = p.illuIntensities
@@ -433,8 +428,21 @@ class ExperimentController(ImConWidgetController):
         workflowSteps = []
         step_id = 0
         file_writers = []  # Initialize outside the loop for context storage
+        
+        # OME writer-related
+        self._ome_write_tiff = p.ome_write_tiff
+        self._ome_write_zarr = p.ome_write_zarr
+        self._ome_write_stitched_tiff = p.ome_write_stitched_tiff
 
-
+        # determine if each sub scan in snake_tiles is a single tile or a multi-tile scan - if single image we should squah them in a single TIF (e.g. by appending )
+        is_single_tile_scan = all(len(tile) == 1 for tile in snake_tiles)
+        if is_single_tile_scan:
+            self._ome_write_stitched_tiff = False  # Disable stitched TIFF for single tile scans
+            self._ome_write_single_tiff = True  # Enable single TIFF writing
+        else:
+            self._ome_write_single_tiff = False
+            
+            
         # Decide which execution mode to use
         if performanceMode and self.performance_mode.is_hardware_capable():
             # Execute in performance mode
@@ -1026,6 +1034,7 @@ class ExperimentController(ImConWidgetController):
             write_tiff=is_tiff,
             write_zarr=self._ome_write_zarr,
             write_stitched_tiff=write_stitched_tiff,
+            write_tiff_single=self._ome_write_single_tiff,
             min_period=min_period,
             pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0,
             n_time_points=nTimePoints,

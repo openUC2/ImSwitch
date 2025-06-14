@@ -26,6 +26,7 @@ class OMEWriterConfig:
     write_tiff: bool = False
     write_zarr: bool = True
     write_stitched_tiff: bool = False  # New option for stitched TIFF
+    write_tiff_single: bool = False  # Append images in a single TIFF file
     min_period: float = 0.2
     compression: str = "zlib"
     zarr_compressor = None

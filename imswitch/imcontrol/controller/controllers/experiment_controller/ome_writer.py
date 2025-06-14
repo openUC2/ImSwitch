@@ -16,8 +16,10 @@ from dataclasses import dataclass
 import numpy as np
 try:
     from .OmeTiffStitcher import OmeTiffStitcher
+    from .SingleTiffWriter import SingleTiffWriter
 except ImportError:
     from OmeTiffStitcher import OmeTiffStitcher
+    from SingleTiffWriter import SingleTiffWriter
 
 
 @dataclass
@@ -77,6 +79,9 @@ class OMEWriter:
         # Stitched TIFF writer
         self.tiff_stitcher = None
         
+        # Single TIFF writer for appending tiles
+        self.single_tiff_writer = None
+        
         # Timing
         self.t_last = time.time()
         
@@ -86,6 +91,9 @@ class OMEWriter:
         
         if config.write_stitched_tiff:
             self._setup_tiff_stitcher()
+            
+        if config.write_tiff_single:
+            self._setup_single_tiff_writer()
     
     def _setup_zarr_store(self):
         """Set up the OME-Zarr store and canvas."""
@@ -134,6 +142,14 @@ class OMEWriter:
         if self.logger:
             self.logger.debug(f"TIFF stitcher initialized: {stitched_tiff_path}")
     
+    def _setup_single_tiff_writer(self):
+        """Set up the single TIFF writer for appending tiles with metadata."""
+        single_tiff_path = os.path.join(self.file_paths.base_dir, "single_tiles.ome.tif")
+        self.single_tiff_writer = SingleTiffWriter(single_tiff_path, bigtiff=True)
+        self.single_tiff_writer.start()
+        if self.logger:
+            self.logger.debug(f"Single TIFF writer initialized: {single_tiff_path}")
+    
     def write_frame(self, frame, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Write a single frame to both TIFF and/or Zarr formats.
@@ -159,6 +175,10 @@ class OMEWriter:
         # Write to stitched TIFF if requested
         if self.config.write_stitched_tiff and self.tiff_stitcher is not None:
             self._write_stitched_tiff_tile(frame, metadata)
+        
+        # Write to single TIFF if requested
+        if self.config.write_tiff_single and self.single_tiff_writer is not None:
+            self._write_single_tiff_tile(frame, metadata)
         
         # Throttle writes if needed
         self._throttle_writes()
@@ -228,6 +248,17 @@ class OMEWriter:
             index_x=ix,
             index_y=iy,
             pixel_size=self.config.pixel_size
+        )
+    
+    def _write_single_tiff_tile(self, frame, metadata: Dict[str, Any]):
+        """Write tile to single TIFF using SingleTiffWriter."""
+        # Add pixel size to metadata for the single TIFF writer
+        metadata_with_pixel_size = metadata.copy()
+        metadata_with_pixel_size["pixel_size"] = self.config.pixel_size
+        
+        self.single_tiff_writer.add_image(
+            image=frame,
+            metadata=metadata_with_pixel_size
         )
     
     def _throttle_writes(self):
@@ -384,6 +415,12 @@ class OMEWriter:
             self.tiff_stitcher.close()
             if self.logger:
                 self.logger.info("Stitched TIFF file completed")
+        
+        # Close single TIFF writer
+        if self.config.write_tiff_single and self.single_tiff_writer is not None:
+            self.single_tiff_writer.close()
+            if self.logger:
+                self.logger.info("Single TIFF file completed")
         
         if self.logger:
             self.logger.info(f"OME writer finalized for {self.file_paths.base_dir}")

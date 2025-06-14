@@ -138,6 +138,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 write_tiff=self.controller._ome_write_tiff,
                 write_zarr=self.controller._ome_write_zarr,
                 write_stitched_tiff=self.controller._ome_write_stitched_tiff,
+                write_tiff_single=getattr(self.controller, '_ome_write_single_tiff', False),
                 min_period=0.1,  # Faster for normal mode
                 n_time_points=1,
                 n_z_planes=len(z_positions),

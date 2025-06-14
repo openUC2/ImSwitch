@@ -80,6 +80,7 @@ class ExperimentModeBase(ABC):
                            write_tiff: bool = False,
                            write_zarr: bool = True, 
                            write_stitched_tiff: bool = True,
+                           write_tiff_single: bool = False,
                            min_period: float = 0.2,
                            n_time_points: int = 1,
                            n_z_planes: int = 1,
@@ -91,6 +92,7 @@ class ExperimentModeBase(ABC):
             write_tiff: Whether to write individual TIFF files
             write_zarr: Whether to write OME-Zarr format
             write_stitched_tiff: Whether to write stitched TIFF
+            write_tiff_single: Whether to append tiles to a single TIFF file
             min_period: Minimum period between writes
             n_time_points: Number of time points
             n_z_planes: Number of Z planes
@@ -105,6 +107,7 @@ class ExperimentModeBase(ABC):
             write_tiff=write_tiff,
             write_zarr=write_zarr,
             write_stitched_tiff=write_stitched_tiff,
+            write_tiff_single=write_tiff_single,
             min_period=min_period,
             pixel_size=pixel_size,
             n_time_points=n_time_points,

@@ -17,11 +17,12 @@ from typing import Dict, Any, Optional
 
 class SingleTiffWriter:
     """
-    Single TIFF writer that appends tiles with x/y/z locations and channel stacking.
+    Single TIFF writer that appends tiles as a timelapse series with xyz positions and channels.
     
     This writer is specifically designed for single tile scans where each scan position
     contains only one tile, and all tiles should be appended to a single TIFF file
-    with proper OME metadata including spatial coordinates.
+    as a timelapse series. Each tile becomes a timepoint in the series, with spatial
+    coordinates stored in metadata for Fiji compatibility.
     """
     
     def __init__(self, file_path: str, bigtiff: bool = False):
@@ -30,7 +31,7 @@ class SingleTiffWriter:
         
         Args:
             file_path: Path where the TIFF file will be written
-            bigtiff: Whether to use BigTIFF format (recommended for large files - but not recommended for Fiji)
+            bigtiff: Whether to use BigTIFF format (False for Fiji compatibility)
         """
         self.file_path = file_path
         self.bigtiff = bigtiff
@@ -39,6 +40,7 @@ class SingleTiffWriter:
         self.is_running = False
         self._thread = None
         self.image_count = 0
+        self.timepoint_index = 0  # Track current timepoint in series
         
     def start(self):
         """Begin the background thread that writes images to disk as they arrive."""
@@ -68,26 +70,27 @@ class SingleTiffWriter:
     
     def _create_ome_metadata(self, image: np.ndarray, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Create OME metadata dictionary from tile metadata.
+        Create OME metadata dictionary for timelapse series with spatial coordinates.
         
         Args:
             image: Image array
             metadata: Original metadata dictionary
             
         Returns:
-            OME-compatible metadata dictionary
+            OME-compatible metadata dictionary for timelapse series
         """
         # Extract positions and indices
         position_x = metadata.get("x", 0.0)
         position_y = metadata.get("y", 0.0)
+        position_z = metadata.get("z", 0.0)
         z_index = metadata.get("z_index", 0)
-        t_index = metadata.get("time_index", 0)
         c_index = metadata.get("channel_index", 0)
         
         # Get pixel size from metadata or use default
         pixel_size = metadata.get("pixel_size", 1.0)
         
-        # Create OME metadata structure
+        # Create OME metadata structure for timelapse series
+        # Each tile becomes a timepoint with spatial coordinates in metadata
         ome_metadata = {
             "Pixels": {
                 "PhysicalSizeX": pixel_size,
@@ -97,23 +100,33 @@ class SingleTiffWriter:
                 "SizeX": image.shape[1],
                 "SizeY": image.shape[0],
                 "SizeZ": 1,
-                "SizeT": 1,
+                "SizeT": 1,  # Each image is one timepoint
                 "SizeC": 1,
                 "Type": "uint16",
                 "DimensionOrder": "XYZCT"
             },
             "Plane": {
+                # Store spatial coordinates for reconstruction
                 "PositionX": position_x,
-                "PositionY": position_y,
-                "PositionZ": z_index,
+                "PositionY": position_y, 
+                "PositionZ": position_z,
                 "TheZ": z_index,
-                "TheT": t_index,
+                "TheT": self.timepoint_index,  # Use sequential timepoint indexing
                 "TheC": c_index
             },
             "Channel": {
                 "ID": f"Channel:{c_index}",
                 "SamplesPerPixel": 1,
                 "IlluminationType": metadata.get("illuminationChannel", "Unknown")
+            },
+            # Add spatial metadata for reconstruction in Fiji
+            "TilePosition": {
+                "X": position_x,
+                "Y": position_y,
+                "Z": position_z,
+                "ZIndex": z_index,
+                "ChannelIndex": c_index,
+                "TimeIndex": self.timepoint_index
             }
         }
         
@@ -122,13 +135,13 @@ class SingleTiffWriter:
     def _process_queue(self):
         """
         Background loop: open the OME-TIFF in append mode, pop images from queue,
-        and write them with embedded metadata.
+        and write them as sequential timepoints in a timelapse series.
         """
         # Ensure the folder exists
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
             
-        # Use append mode to add multiple images to single file
+        # Use append mode to add multiple images to single file as timelapse series
         with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tif:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
@@ -139,13 +152,14 @@ class SingleTiffWriter:
                 
                 if image is not None:
                     try:
-                        # Write each image as a new page in the TIFF file
+                        # Write each image as a new timepoint in the timelapse series
                         tif.write(
                             data=image,
                             metadata=metadata,
                             contiguous=True
                         )
                         self.image_count += 1
+                        self.timepoint_index += 1  # Increment timepoint for next tile
                     except Exception as e:
                         print(f"Error writing image to single TIFF: {e}")
                 else:
@@ -160,4 +174,4 @@ class SingleTiffWriter:
             self._thread = None
         self.is_running = False
         self.queue.clear()
-        print(f"Single TIFF writer closed. Total images written: {self.image_count}")
+        print(f"Single TIFF timelapse writer closed. Total timepoints written: {self.image_count}")

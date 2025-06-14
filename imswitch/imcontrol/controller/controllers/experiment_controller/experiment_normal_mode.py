@@ -117,35 +117,37 @@ class ExperimentNormalMode(ExperimentModeBase):
         """
         file_writers = []
         
-        for position_center_index, tiles in enumerate(snake_tiles):
-            experiment_name = f"{t}_{exp_name}_{position_center_index}"
-            m_file_path = os.path.join(
-                dir_path, 
-                m_file_name + str(position_center_index) + "_" + experiment_name + "_" + ".ome.tif"
-            )
-            self._logger.debug(f"OME-TIFF path: {m_file_path}")
+        # Check if single TIFF writing is enabled (single tile scan mode)
+        is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
+        
+        if is_single_tiff_mode:
+            # Create a single OME writer for all tiles in single TIFF mode
+            experiment_name = f"{t}_{exp_name}"
+            m_file_path = os.path.join(dir_path, f"{m_file_name}_{experiment_name}.ome.tif")
+            self._logger.debug(f"Single TIFF mode - OME-TIFF path: {m_file_path}")
             
             # Create file paths
             file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""))
             
-            # Calculate tile and grid parameters
+            # Calculate combined tile and grid parameters for all positions
+            all_tiles = [tile for tiles in snake_tiles for tile in tiles]  # Flatten all tiles
             tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
-            grid_shape, grid_geometry = self.calculate_grid_parameters(tiles)
+            grid_shape, grid_geometry = self.calculate_grid_parameters(all_tiles)
             
-            # Create writer configuration
+            # Create writer configuration for single TIFF mode
             n_channels = sum(np.array(illumination_intensities) > 0)
             writer_config = self.create_writer_config(
-                write_tiff=self.controller._ome_write_tiff,
+                write_tiff=False,  # Disable individual TIFF files
                 write_zarr=self.controller._ome_write_zarr,
-                write_stitched_tiff=self.controller._ome_write_stitched_tiff,
-                write_tiff_single=getattr(self.controller, '_ome_write_single_tiff', False),
-                min_period=0.1,  # Faster for normal mode
+                write_stitched_tiff=False,  # Disable stitched TIFF
+                write_tiff_single=True,  # Enable single TIFF writing
+                min_period=0.1,
                 n_time_points=1,
                 n_z_planes=len(z_positions),
                 n_channels=n_channels
             )
             
-            # Create OME writer
+            # Create single OME writer for all positions
             ome_writer = OMEWriter(
                 file_paths=file_paths,
                 tile_shape=tile_shape,
@@ -155,6 +157,47 @@ class ExperimentNormalMode(ExperimentModeBase):
                 logger=self._logger
             )
             file_writers.append(ome_writer)
+            
+        else:
+            # Original behavior: create separate writers for each tile position
+            for position_center_index, tiles in enumerate(snake_tiles):
+                experiment_name = f"{t}_{exp_name}_{position_center_index}"
+                m_file_path = os.path.join(
+                    dir_path, 
+                    m_file_name + str(position_center_index) + "_" + experiment_name + "_" + ".ome.tif"
+                )
+                self._logger.debug(f"OME-TIFF path: {m_file_path}")
+                
+                # Create file paths
+                file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""))
+                
+                # Calculate tile and grid parameters
+                tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
+                grid_shape, grid_geometry = self.calculate_grid_parameters(tiles)
+                
+                # Create writer configuration
+                n_channels = sum(np.array(illumination_intensities) > 0)
+                writer_config = self.create_writer_config(
+                    write_tiff=self.controller._ome_write_tiff,
+                    write_zarr=self.controller._ome_write_zarr,
+                    write_stitched_tiff=self.controller._ome_write_stitched_tiff,
+                    write_tiff_single=False,  # Disable single TIFF for multi-tile mode
+                    min_period=0.1,  # Faster for normal mode
+                    n_time_points=1,
+                    n_z_planes=len(z_positions),
+                    n_channels=n_channels
+                )
+                
+                # Create OME writer
+                ome_writer = OMEWriter(
+                    file_paths=file_paths,
+                    tile_shape=tile_shape,
+                    grid_shape=grid_shape,
+                    grid_geometry=grid_geometry,
+                    config=writer_config,
+                    logger=self._logger
+                )
+                file_writers.append(ome_writer)
         
         return file_writers
     
@@ -251,6 +294,10 @@ class ExperimentNormalMode(ExperimentModeBase):
                     exposure_time = exposures[illu_index] if illu_index < len(exposures) else exposures[0]
                     gain = gains[illu_index] if illu_index < len(gains) else gains[0]
                     
+                    # In single TIFF mode, all positions use the same writer (index 0)
+                    is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
+                    writer_index = 0 if is_single_tiff_mode else position_center_index
+                    
                     workflow_steps.append(WorkflowStep(
                         name="Acquire frame",
                         step_id=step_id,
@@ -270,7 +317,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                             "channel": illu_source,
                             "time_index": t,
                             "tile_index": m_index,
-                            "position_center_index": position_center_index,
+                            "position_center_index": writer_index,  # Use writer_index instead
                             "runningNumber": step_id,
                             "illuminationChannel": illu_source,
                             "illuminationValue": illu_intensity,
@@ -300,16 +347,18 @@ class ExperimentNormalMode(ExperimentModeBase):
             ))
             step_id += 1
 
-        # Finalize OME writer for this tile
-        workflow_steps.append(WorkflowStep(
-            name=f"Finalize OME writer for tile {position_center_index}",
-            step_id=step_id,
-            main_func=self.controller.dummy_main_func,
-            main_params={},
-            post_funcs=[self.controller.finalize_tile_ome_writer],
-            post_params={"tile_index": position_center_index},
-        ))
-        step_id += 1
+        # Finalize OME writer for this tile (skip in single TIFF mode since we only have one writer)
+        is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
+        if not is_single_tiff_mode:
+            workflow_steps.append(WorkflowStep(
+                name=f"Finalize OME writer for tile {position_center_index}",
+                step_id=step_id,
+                main_func=self.controller.dummy_main_func,
+                main_params={},
+                post_funcs=[self.controller.finalize_tile_ome_writer],
+                post_params={"tile_index": position_center_index},
+            ))
+            step_id += 1
 
         return step_id
     

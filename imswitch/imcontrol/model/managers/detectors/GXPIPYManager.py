@@ -85,8 +85,8 @@ class GXPIPYManager(DetectorManager):
             'flipX': DetectorBooleanParameter(group="Misc", value=self.flipX, editable=True),
             'flipY': DetectorBooleanParameter(group="Misc", value=self.flipY, editable=True),
             'trigger_source': DetectorListParameter(group='Acquisition mode',
-                            value='Continous',
-                            options=['Continous',
+                            value='Continuous',
+                            options=['Continuous',
                                         'Internal trigger',
                                         'External trigger'],
                             editable=True),
@@ -170,20 +170,24 @@ class GXPIPYManager(DetectorManager):
 
 
     def setTriggerSource(self, source):
-        if source == 'Continous':
-            self._performSafeCameraAction(
-                lambda: self._camera.setPropertyValue('trigger_source', 0)
-            )
-        elif source == 'Internal trigger':
-            self._performSafeCameraAction(
-                lambda: self._camera.setPropertyValue('trigger_source', 1)
-            )
-        elif source == 'External trigger':
-            self._performSafeCameraAction(
-                lambda: self._camera.setPropertyValue('trigger_source', 2)
-            )
-        else:
-            raise ValueError(f'Invalid trigger source "{source}"')
+        """Set trigger source using the improved camera interface.""" 
+        try:
+            if source in ['Continuous', 'Continous']:  # Handle both old and new spellings
+                self._performSafeCameraAction(
+                    lambda: self._camera.setTriggerSource('Continuous')
+                )
+            elif source == 'Internal trigger':
+                self._performSafeCameraAction(
+                    lambda: self._camera.setTriggerSource('Internal trigger')
+                )
+            elif source == 'External trigger':
+                self._performSafeCameraAction(
+                    lambda: self._camera.setTriggerSource('External trigger')
+                )
+            else:
+                raise ValueError(f'Invalid trigger source "{source}"')
+        except Exception as e:
+            self.__logger.error(f'Failed to set trigger source to {source}: {e}')
 
 
     def getChunk(self):
@@ -191,6 +195,14 @@ class GXPIPYManager(DetectorManager):
             return self._camera.getLastChunk()
         except:
             return None
+
+    def sendSoftwareTrigger(self):
+        """Send software trigger pulse."""
+        try:
+            return self._camera.sendSoftwareTrigger()
+        except Exception as e:
+            self.__logger.error(f'Failed to send software trigger: {e}')
+            return False
 
     def flushBuffers(self):
         self._camera.flushBuffer()
@@ -231,8 +243,8 @@ class GXPIPYManager(DetectorManager):
                 'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
                                         editable=True),
                 'trigger_source': DetectorListParameter(group='Acquisition mode',
-                                value='Continous',
-                                options=['Continous',
+                                value='Continuous',
+                                options=['Continuous',
                                             'Internal trigger',
                                             'External trigger'],
                                 editable=True),

@@ -78,31 +78,44 @@ class SingleTiffWriter:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
                     if self.queue:
-                        image, metadata = self.queue.popleft()
+                        image, input_metadata = self.queue.popleft()
                     else:
                         image = None
                 
                 if image is not None:
                     try:
-                        # Write image using the same method as working HistoScanController
-                        # Pass through the original metadata similar to HistoScanController
-                        metadata = {'Pixels': {
-                            'PhysicalSizeX': 7,
+                        # Convert metadata from experiment format to HistoScanController format
+                        # Extract pixel size (default to 1.0 if not available)
+                        pixel_size = input_metadata.get("pixel_size", 1.0)
+                        
+                        # Extract position coordinates
+                        pos_x = input_metadata.get("x", 0)
+                        pos_y = input_metadata.get("y", 0)
+                        
+                        # Calculate index coordinates (simple sequential numbering for now)
+                        index_x = input_metadata.get("tile_index", self.image_count) % 100  # Reasonable max
+                        index_y = input_metadata.get("tile_index", self.image_count) // 100
+                        
+                        # Create metadata in the same format as HistoScanController
+                        tiff_metadata = {'Pixels': {
+                            'PhysicalSizeX': pixel_size,
                             'PhysicalSizeXUnit': 'µm',
-                            'PhysicalSizeY': 8,
+                            'PhysicalSizeY': pixel_size,
                             'PhysicalSizeYUnit': 'µm'},
 
                             'Plane': {
-                                'PositionX': 8,
-                                'PositionY': 9,
-                                'IndexX': 5,
-                                'IndexY': 4
-                        }, }
-                        tif.write(data=image, metadata=metadata)
+                                'PositionX': pos_x,
+                                'PositionY': pos_y,
+                                'IndexX': index_x,
+                                'IndexY': index_y
+                        }}
+                        
+                        # Write image using exact same method as HistoScanController
+                        tif.write(data=image, metadata=tiff_metadata)
                         
                         self.image_count += 1
                         self.timepoint_index += 1
-                        print(f"Wrote image to timelapse TIFF as T=%d, to path: %s" % (self.image_count-1, self.file_path))
+                        print(f"Wrote image to timelapse TIFF as T=%d, pos=({pos_x:.1f},{pos_y:.1f}), to path: %s" % (self.image_count-1, pos_x, pos_y, self.file_path))
                     except Exception as e:
                         print(f"Error writing image to single TIFF: {e}")
                         import traceback

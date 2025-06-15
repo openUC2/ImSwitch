@@ -501,11 +501,14 @@ class STORMReconController(LiveUpdatedController):
         self.triggerSTORMReconstruction()
         frames_chunk = self.detector.getChunk()
 
-        if frames_chunk is None or len(frames_chunk) == 0:
+        if frames_chunk is None:
             raise ValueError("No frame available from detector")
         
-        # Take the most recent frame from the chunk
-        frame = frames_chunk[-1] if len(frames_chunk.shape) > 2 else frames_chunk
+        # Use normalized frame processing and take the most recent frame
+        frames_list = self._normalizeFrameChunk(frames_chunk)
+        if not frames_list:
+            raise ValueError("No frames in chunk")
+        frame = frames_list[-1]
 
         progress(50, "Processing frame through STORM pipeline...")
 
@@ -607,9 +610,10 @@ class STORMReconController(LiveUpdatedController):
         """ Trigger reconstruction. """
         if frame is None:
             frames_chunk = self.detector.getChunk()
-            if frames_chunk is not None and len(frames_chunk) > 0:
-                # Take the most recent frame from the chunk
-                frame = frames_chunk[-1] if len(frames_chunk.shape) > 2 else frames_chunk
+            if frames_chunk is not None:
+                # Use normalized frame processing and take the most recent frame
+                frames_list = self._normalizeFrameChunk(frames_chunk)
+                frame = frames_list[-1] if frames_list else None
             else:
                 frame = None
         self.imageComputationWorker.reconSTORMFrame(frame=frame)
@@ -725,7 +729,7 @@ class STORMReconController(LiveUpdatedController):
 
         # Finalize saving
         frames_saved = self._frame_count
-        if self._ome_zarr_store is not None or hasattr(self, '_saved_frames'):
+        if self._ome_zarr_store is not None or hasattr(self, '_tiff_writer'):
             self._finalizeSaving()
 
         session_id = self._current_session_id
@@ -762,9 +766,9 @@ class STORMReconController(LiveUpdatedController):
                 # Get all frames from detector since last call to avoid losing frames
                 frames_chunk = self.detector.getChunk()
 
-                if frames_chunk is not None and len(frames_chunk) > 0:
-                    # Process all frames in the chunk
-                    frames_to_process = frames_chunk if len(frames_chunk.shape) > 2 else [frames_chunk]
+                if frames_chunk is not None:
+                    # Use normalized frame processing
+                    frames_to_process = self._normalizeFrameChunk(frames_chunk)
                     
                     for frame in frames_to_process:
                         if frames_yielded >= num_frames:
@@ -904,11 +908,11 @@ class STORMReconController(LiveUpdatedController):
             while self._acquisition_active:
                 try:
                     # Get all frames from detector since last call
-                    frames_chunk, frame_indices = self.detector.getChunk() # returns a chunk of frames with dimensions (height, width, nBuffer)
+                    frames_chunk = self.detector.getChunk()
                     
-                    if frames_chunk is not None and len(frames_chunk) > 0:
-                        # Process all frames in the chunk
-                        frames_to_process = frames_chunk if len(frames_chunk.shape) > 2 else [frames_chunk]
+                    if frames_chunk is not None:
+                        # Handle different chunk formats from different cameras
+                        frames_to_process = self._normalizeFrameChunk(frames_chunk)
                         
                         for frame in frames_to_process:
                             if not self._acquisition_active:
@@ -959,64 +963,107 @@ class STORMReconController(LiveUpdatedController):
         self._acquisition_thread.daemon = True
         self._acquisition_thread.start()
 
+    def _normalizeFrameChunk(self, frames_chunk):
+        """
+        Normalize frame chunk format from different camera implementations.
+        
+        Different cameras return different formats:
+        - Some return (nBuffer, height, width) 
+        - Some return (height, width, nBuffer)
+        - Some return a list of frames
+        - Some return a single frame
+        
+        Returns a list of individual frames.
+        """
+        if frames_chunk is None:
+            return []
+            
+        # Handle single frame case
+        if len(frames_chunk.shape) == 2:
+            return [frames_chunk]
+        
+        # Handle multiple frames case
+        if len(frames_chunk.shape) == 3:
+            # Check which dimension is likely the buffer dimension
+            h, w = frames_chunk.shape[0], frames_chunk.shape[1]
+            z = frames_chunk.shape[2]
+            
+            # If third dimension is much smaller, it's likely the buffer dimension
+            # Common case: (height, width, nBuffer) where nBuffer is small
+            if z < min(h, w) and z < 50:  # Reasonable buffer size limit
+                # Shape is (height, width, nBuffer)
+                return [frames_chunk[:, :, i] for i in range(z)]
+            else:
+                # Shape is likely (nBuffer, height, width)
+                return [frames_chunk[i, :, :] for i in range(frames_chunk.shape[0])]
+        
+        # Handle cases where chunk is already a list/sequence
+        if hasattr(frames_chunk, '__iter__') and not isinstance(frames_chunk, np.ndarray):
+            return list(frames_chunk)
+            
+        # Default: assume it's (nBuffer, height, width)
+        return [frames_chunk[i] for i in range(frames_chunk.shape[0])]
+
     def _initializeOMEZarrSaving(self, saveDirectory: str):
-        """Initialize OME-Zarr saving similar to ExperimentController."""
+        """Initialize simple OME-Zarr saving for time series without pyramids."""
         try:
-            # Try to import OME-Zarr dependencies
-            from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
+            # Use standard data directory structure 
             timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             drivePath = dirtools.UserFileDirs.Data
             dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
             saveDirectory = os.path.join(dirPath, saveDirectory)
+            
             # Ensure directory exists
             os.makedirs(os.path.dirname(saveDirectory), exist_ok=True)
 
-            # Initialize OME-Zarr store
+            # Initialize simplified OME-Zarr store using MinimalZarrDataSource
+            from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
             self._ome_zarr_store = MinimalZarrDataSource(saveDirectory, mode="w")
 
             # Get frame shape for configuration
             sample_chunk = self.detector.getChunk()
-            if sample_chunk is not None and len(sample_chunk) > 0:
-                sample_frame = sample_chunk[-1] if len(sample_chunk.shape) > 2 else sample_chunk
-                if self._cropping_params is not None:
-                    crop = self._cropping_params
-                    shape_y, shape_x = crop['height'], crop['width']
-                else:
-                    shape_y, shape_x = sample_frame.shape
+            if sample_chunk is not None:
+                sample_frames = self._normalizeFrameChunk(sample_chunk)
+                if sample_frames:
+                    sample_frame = sample_frames[0]
+                    if self._cropping_params is not None:
+                        crop = self._cropping_params
+                        shape_y, shape_x = crop['height'], crop['width']
+                    else:
+                        shape_y, shape_x = sample_frame.shape
 
-                # Configure metadata for OME-Zarr
-                config = {
-                    'shape_t': 1000,  # Will be extended as needed
-                    'shape_c': 1,
-                    'shape_z': 1,
-                    'shape_y': shape_y,
-                    'shape_x': shape_x,
-                    'dtype': sample_frame.dtype, 
-                    "experiment": {
-                        "MicroscopeState": {
-                            "number_z_steps": 1,
-                            "timepoints": 1000,
-                            "channels": {
-                                "channel_1": {
-                                    "is_selected": True,
-                                    "name": "Channel 1",
-                                    "color": "#FF0000"
-                                }
+                    # Configure metadata for simple time-series OME-Zarr
+                    config = {
+                        'shape_t': 10000,  # Large number, will be trimmed later
+                        'shape_c': 1,
+                        'shape_z': 1,
+                        'shape_y': shape_y,
+                        'shape_x': shape_x,
+                        'dtype': sample_frame.dtype, 
+                        "experiment": {
+                            "MicroscopeState": {
+                                "number_z_steps": 1,
+                                "timepoints": 10000,
+                                "channels": {
+                                    "channel_1": {
+                                        "is_selected": True,
+                                        "name": "STORM Channel",
+                                        "color": "#FF0000"
+                                    }
+                                },
+                                "microscope_name": "storm_detector",
+                                "stack_cycling_mode": "per_stack"
                             },
-                            "microscope_name": "default_cam",
-                            "stack_cycling_mode": "per_stack"
-                        },
-                        "CameraParameters": {
-                            "default_cam": {
-                                "x_pixels": shape_x,
-                                "y_pixels": shape_y
-                            }
-                        }  
-                    } 
-                }
-                self._ome_zarr_store.set_metadata_from_configuration_experiment(config)
-                #self._ome_zarr_store.new_position(pos_index=0, pos_name="Position 1", pos_x=0, pos_y=0, pos_z=0) # TODO: Adjust position parameters as needed
-
+                            "CameraParameters": {
+                                "storm_detector": {
+                                    "x_pixels": shape_x,
+                                    "y_pixels": shape_y
+                                }
+                            }  
+                        } 
+                    }
+                    self._ome_zarr_store.set_metadata_from_configuration_experiment(config)
+                    self._ome_zarr_store.new_position(pos_index=0, pos_name="STORM Position", pos_x=0, pos_y=0, pos_z=0)
 
         except ImportError:
             self._logger.warning("OME-Zarr dependencies not available, falling back to TIFF")
@@ -1026,70 +1073,62 @@ class STORMReconController(LiveUpdatedController):
             self._ome_zarr_store = None
 
     def _initializeTiffSaving(self, saveDirectory: str):
-        """Initialize TIFF saving as fallback."""
+        """Initialize single TIFF saving following ExperimentController pattern."""
+        # Use standard data directory structure
+        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         drivePath = dirtools.UserFileDirs.Data
-        dirPath = os.path.join(drivePath, 'STORMController')        
-        self._tiff_saveDirectory = os.path.join(dirPath, saveDirectory)
-        self._saved_frames = []
+        dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
+        
+        # Ensure directory exists
+        os.makedirs(dirPath, exist_ok=True)
+        
+        # Create single TIFF file path
+        self._tiff_save_path = os.path.join(dirPath, f"{saveDirectory}_{timeStamp}.tiff")
+        self._tiff_writer = None
+        self._logger.info(f"TIFF saving initialized: {self._tiff_save_path}")
 
     def _saveFrameToZarr(self, frame: np.ndarray, frame_number: int, metadata: dict):
         """Save frame to OME-Zarr store."""
         try:
             if self._ome_zarr_store is not None:
-                # Write frame to zarr store
-                # This is a simplified implementation - in practice you'd need to handle
-                # the proper indexing for time series
-                self._ome_zarr_store.write(frame, ti=frame_number, ci=0, z=0)
+                # Write frame to zarr store using the simple time-series approach
+                self._ome_zarr_store.write(frame, ti=frame_number, ci=0)
         except Exception as e:
             self._logger.error(f"Failed to save frame to Zarr: {e}")
 
     def _saveFrameToTiff(self, frame: np.ndarray, frame_number: int, metadata: dict):
-        """Save frame to TIFF stack."""
+        """Save frame to single TIFF file using append mode."""
         try:
-            if not hasattr(self, '_saved_frames'):
-                self._saved_frames = []
+            # Initialize writer on first frame
+            if self._tiff_writer is None:
+                # Use tifffile to create a single multi-page TIFF
+                self._tiff_writer = tif.TiffWriter(self._tiff_save_path, bigtiff=True)
             
-            self._saved_frames.append(frame)
+            # Write frame to TIFF with metadata
+            self._tiff_writer.write(
+                frame.astype(np.uint16),
+                metadata={'FrameNumber': frame_number, 
+                         'Timestamp': metadata.get('timestamp', ''),
+                         'SessionID': metadata.get('session_id', '')},
+                contiguous=True
+            )
             
-            # Optionally save every N frames to avoid memory issues
-            if len(self._saved_frames) >= 100:  # Save every 100 frames
-                self._flushTiffFrames()
-                
         except Exception as e:
             self._logger.error(f"Failed to save frame to TIFF: {e}")
-
-    def _flushTiffFrames(self):
-        """Flush accumulated TIFF frames to disk."""
-        try:
-            if hasattr(self, '_saved_frames') and self._saved_frames:
-                if hasattr(self, '_tiff_saveDirectory'):
-                    # Create incremental filename to avoid memory issues
-                    base_path = self._tiff_saveDirectory.replace('.tiff', '').replace('.tif', '')
-                    increment_path = f"{base_path}_part_{self._frame_count // 100:04d}.tiff"
-                    
-                    tif.imwrite(increment_path, np.stack(self._saved_frames), append=False)
-                    self._logger.debug(f"Saved {len(self._saved_frames)} frames to {increment_path}")
-                    
-                self._saved_frames = []
-        except Exception as e:
-            self._logger.error(f"Failed to flush TIFF frames: {e}")
 
     def _finalizeSaving(self):
         """Finalize and close saving."""
         try:
+            # Close OME-Zarr store properly
             if self._ome_zarr_store is not None:
-                # Close the store properly
+                self._ome_zarr_store.close()
                 self._ome_zarr_store = None
 
-            if hasattr(self, '_saved_frames') and self._saved_frames:
-                # Save remaining TIFF frames
-                if hasattr(self, '_tiff_saveDirectory'):
-                    if len(self._saved_frames) > 0:
-                        base_path = self._tiff_saveDirectory.replace('.tiff', '').replace('.tif', '')
-                        final_path = f"{base_path}_final.tiff"
-                        tif.imwrite(final_path, np.stack(self._saved_frames), append=False)
-                        self._logger.info(f"Saved final {len(self._saved_frames)} frames to {final_path}")
-                self._saved_frames = []
+            # Close single TIFF writer properly
+            if hasattr(self, '_tiff_writer') and self._tiff_writer is not None:
+                self._tiff_writer.close()
+                self._tiff_writer = None
+                self._logger.info(f"TIFF file finalized: {self._tiff_save_path}")
 
         except Exception as e:
             self._logger.error(f"Failed to finalize saving: {e}")

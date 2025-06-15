@@ -27,7 +27,6 @@ class ExperimentNormalMode(ExperimentModeBase):
                          snake_tiles: List[List[Dict]],
                          illumination_intensities: List[float],
                          illumination_sources: List[str],
-                         experiment_params: Dict[str, Any],
                          **kwargs) -> Dict[str, Any]:
         """
         Execute experiment in normal mode.
@@ -36,7 +35,6 @@ class ExperimentNormalMode(ExperimentModeBase):
             snake_tiles: List of tiles containing scan points
             illumination_intensities: List of illumination values
             illumination_sources: List of illumination source names
-            experiment_params: Dictionary containing experiment parameters
             **kwargs: Additional parameters including z_positions, exposures, gains, etc.
             
         Returns:

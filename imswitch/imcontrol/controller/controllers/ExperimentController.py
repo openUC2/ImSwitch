@@ -363,6 +363,10 @@ class ExperimentController(ImConWidgetController):
         isDarkfield = p.darkfield
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
+        
+        # check if any of the illumination sources is turned on, if not, return error
+        if not any(illuminationIntensities):
+            raise HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
 
         # check if we want to use performance mode
         self.ExperimentParams.performanceMode = p.performanceMode
@@ -473,7 +477,6 @@ class ExperimentController(ImConWidgetController):
                     snake_tiles=snake_tiles,
                     illumination_intensities=illuminationIntensities,
                     illumination_sources=illuSources,
-                    experiment_params=experiment_params,
                     z_positions=z_positions,
                     exposures=exposures,
                     gains=gains,
@@ -680,64 +683,6 @@ class ExperimentController(ImConWidgetController):
 
         time.sleep(0.01)
 
-    def add_image_to_canvas(self, context: WorkflowContext, metadata: Dict[str, Any], emitCurrentProgress=False, **kwargs):
-        # Retrieve the canvas and add the image
-        isPreview = kwargs.get("isPreview", False)
-        if isPreview:
-            self._logger.debug("Preview mode is enabled. Skipping canvas update.")
-            return
-        canvas = context.get_object("canvas")
-        if canvas is None:
-            self._logger.debug("No canvas found in context!")
-            return
-        img = metadata["result"] # After acquire_frame runs, its return (the frame) goes into metadata["result"]. Then each post-func—save_frame_tiff, add_image_to_canvas, etc.—can read it from metadata["result"].
-        if img is None:
-            self._logger.debug("No image found in metadata!")
-            return
-        posX, posY = kwargs['posX'], kwargs['posY']
-        minX,minY,maxX,maxY = kwargs['minX'], kwargs['minY'], kwargs['maxX'], kwargs['maxY']
-        mPixelSize = self.detectorPixelSize
-        posPixels = ((((posY-minY)/mPixelSize[-1]), (posX-minX)/mPixelSize[-1]))
-        utils.paste(canvas, img, posPixels, np.maximum)
-        context.set_object("canvas", canvas)
-        metadata["frame_saved"] = True
-        if emitCurrentProgress:
-            #Signal(str, np.ndarray, bool, list, bool)  # (detectorName, image, init, scale, isCurrentDetector)
-            def mSendCanvas(canvas, init, scale):
-                mCanvas = np.copy(canvas)
-                self.sigExperimentImageUpdate.emit("canvas", mCanvas, init, scale, True)
-            import threading
-            threading.Thread(target=mSendCanvas, args=(canvas, False, 1)).start()
-
-    def emit_final_canvas(self, context: WorkflowContext, metadata: Dict[str, Any]):
-        final_canvas = context.get_object("canvas")
-        if final_canvas is not None:
-            self.sigExperimentImageUpdate.emit("canvas", final_canvas, True, 1, 0)
-            tif.imwrite("final_canvas.tif", final_canvas)
-        else:
-            print("No final canvas found!")
-
-    def append_frame_to_stack(self, context: WorkflowContext, metadata: Dict[str, Any]):
-        # Retrieve the stack writer and append the frame
-        # if we have one stack "full", we need to reset the stack
-        stack_writer = context.get_object("stack_writer")
-        if stack_writer is None:
-            self._logger.debug("No stack writer found in context!")
-            return
-        img = metadata["result"]
-        stack_writer.append(img)
-        context.set_object("stack_writer", stack_writer)
-        metadata["frame_saved"] = True
-
-    def emit_rgb_stack(self, context: WorkflowContext, metadata: Dict[str, Any]):
-        stack_writer = context.get_object("stack_writer")
-        if stack_writer is None:
-            self._logger.debug("No stack writer found in context!")
-            return
-        rgb_stack = np.stack(stack_writer, axis=-1)
-        context.emit_event("rgb_stack", {"rgb_stack": rgb_stack})
-        stack_writer = []
-        context.set_object("stack_writer", stack_writer)
 
     def set_laser_power(self, power: float, channel: str):
         if channel not in self.allIlluNames:

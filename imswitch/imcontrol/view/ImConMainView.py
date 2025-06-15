@@ -315,13 +315,15 @@ class ImConMainViewNoQt(object):
             # Case 2: Check if there is a plugin for the widget using centralized manager
             if plugin_manager.is_plugin_available(widgetKey, 'widget'):
                 try:
-                    widget_class = plugin_manager.load_plugin(widgetKey, 'widget')
+                    widget_class = plugin_manager.load_plugin(widgetKey, 'widget') # this may still fail as we are in headless mode
                     if widget_class:
                         # Try to get React widget class
                         mWidgetClass = getattr(widget_class, f'{widgetKey}ReactWidget', None)
                         if mWidgetClass:
                             self.widgets[widgetKey] = (widgetKey, widget_class, mWidgetClass)
                             continue
+                    elif IS_HEADLESS: # just add it so that we can use the controller - maybe it fails there 
+                        self.widgets[widgetKey] = (widgetKey, None, None)
                 except Exception as e:
                     self.__logger.error(f"Could not load plugin widget {widgetKey} via plugin manager: {e}")
 

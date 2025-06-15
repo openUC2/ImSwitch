@@ -77,11 +77,22 @@ class MinimalZarrDataSource:
     def _setup_store(self):
         """
         Create a FSStore with dimension_separator='/' for OME-Zarr 0.4,
-        then top-level group.
+        then top-level group. Updated for Zarr 3.0 compatibility.
         """
-        store = zarr.storage.FSStore(
-            self.file_name, mode=self.mode, dimension_separator="/"
-        )
+        # Zarr 3.0 compatibility for FSStore
+        if hasattr(zarr.storage, 'FSStore'):
+            # Try to use FSStore with Zarr 3.0 API first
+            try:
+                store = zarr.storage.FSStore(
+                    self.file_name, mode=self.mode, dimension_separator="/"
+                )
+            except TypeError:
+                # Fallback for Zarr 3.0 where FSStore API might have changed
+                store = zarr.storage.FSStore(self.file_name, mode=self.mode)
+        else:
+            # Direct path usage for newer Zarr versions
+            store = self.file_name
+        
         self.image = zarr.group(store=store, overwrite=True)
         self._store = store
         self.image.attrs["description"] = "OME-Zarr from MinimalZarrDataSource"
@@ -152,5 +163,7 @@ class MinimalZarrDataSource:
     def close(self):
         """Close the store if needed."""
         if self._store is not None:
-            self._store.close()
+            # Only close if it's a store object with close method
+            if hasattr(self._store, 'close'):
+                self._store.close()
             self._store = None

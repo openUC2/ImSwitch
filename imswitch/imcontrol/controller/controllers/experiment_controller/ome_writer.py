@@ -95,13 +95,13 @@ class OMEWriter:
         self.canvas = self.root.create_dataset(
             "0",
             shape=(
-                self.config.n_time_points, 
-                self.config.n_channels, 
-                self.config.n_z_planes, 
-                self.ny * self.tile_h, 
-                self.nx * self.tile_w
+                int(self.config.n_time_points), 
+                int(self.config.n_channels), 
+                int(self.config.n_z_planes), 
+                int(self.ny * self.tile_h), 
+                int(self.nx * self.tile_w)
             ),  # t c z y x
-            chunks=(1, 1, 1, self.tile_h, self.tile_w),
+            chunks=(1, 1, 1, int(self.tile_h), int(self.tile_w)),
             dtype="uint16",
             compressor=self.config.zarr_compressor
         )
@@ -282,8 +282,8 @@ class OMEWriter:
             # Create new dataset for this pyramid level
             level_canvas = self.root.create_dataset(
                 str(level),
-                shape=(1, 1, 1, new_shape[0], new_shape[1]),  # t c z y x
-                chunks=(1, 1, 1, min(self.tile_h, new_shape[0]), min(self.tile_w, new_shape[1])),
+                shape=(1, 1, 1, int(new_shape[0]), int(new_shape[1])),  # t c z y x
+                chunks=(1, 1, 1, int(min(self.tile_h, new_shape[0])), int(min(self.tile_w, new_shape[1]))),
                 dtype="uint16",
                 compressor=self.config.zarr_compressor
             )

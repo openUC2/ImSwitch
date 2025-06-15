@@ -5,12 +5,15 @@ This module handles experiment execution where parameters are sent to hardware
 directly for time-critical operations with hardware triggering.
 """
 
+import os
 import time
 import threading
 from typing import List, Dict, Any
 from fastapi import HTTPException
+import numpy as np
 
 from .experiment_mode_base import ExperimentModeBase
+from .ome_writer import OMEWriter
 
 
 class ExperimentPerformanceMode(ExperimentModeBase):
@@ -77,6 +80,16 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             t_period = experiment_params.get('tPeriod', 1)
             n_times = experiment_params.get('nTimes', 1)
 
+            # Check if single TIFF writing is enabled
+            is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
+            file_writers = []
+
+            if is_single_tiff_mode:
+                # Set up OME writers similar to normal mode for single TIFF output
+                file_writers = self._setup_ome_writers(
+                    snake_tiles, illumination_intensities, experiment_params
+                )
+
             for snake_tile in snake_tiles:
                 # Wait if another fast stage scan is running
                 while self.controller.fastStageScanIsRunning:
@@ -94,6 +107,10 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 # Execute fast stage scan
                 zarr_url = self._execute_fast_stage_scan(scan_params, t_period, n_times)
                 self._logger.info(f"Performance mode scan completed. Data saved to: {zarr_url}")
+
+            # Finalize OME writers if they were created
+            if file_writers:
+                self._finalize_ome_writers(file_writers)
 
         except Exception as e:
             self._logger.error(f"Error in performance mode scan: {str(e)}")
@@ -216,6 +233,89 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         )
 
         return zarr_url
+
+    def _setup_ome_writers(self,
+                          snake_tiles: List[List[Dict]],
+                          illumination_intensities: List[float],
+                          experiment_params: Dict[str, Any]) -> List[OMEWriter]:
+        """
+        Set up OME writers for single TIFF output in performance mode.
+        
+        Args:
+            snake_tiles: List of tiles containing scan points
+            illumination_intensities: List of illumination values
+            experiment_params: Dictionary containing experiment parameters
+            
+        Returns:
+            List of OMEWriter instances
+        """
+        file_writers = []
+        
+        # Only create writers if single TIFF mode is enabled
+        is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
+        if not is_single_tiff_mode:
+            return file_writers
+
+        self._logger.debug("Setting up OME writers for single TIFF output in performance mode")
+
+        # Create experiment directory and file paths
+        timeStamp, dirPath, mFileName = self.create_experiment_directory("performance_scan")
+        
+        # Create a single OME writer for all tiles in single TIFF mode
+        experiment_name = f"0_performance_scan"
+        m_file_path = os.path.join(dirPath, f"{mFileName}_{experiment_name}.ome.tif")
+        self._logger.debug(f"Performance mode single TIFF path: {m_file_path}")
+        
+        # Create file paths
+        file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""))
+        
+        # Calculate combined tile and grid parameters for all positions
+        all_tiles = [tile for tiles in snake_tiles for tile in tiles]  # Flatten all tiles
+        if hasattr(self.controller, 'mDetector') and hasattr(self.controller.mDetector, '_shape'):
+            tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
+        else:
+            tile_shape = (512, 512)  # Default shape
+        grid_shape, grid_geometry = self.calculate_grid_parameters(all_tiles)
+        
+        # Create writer configuration for single TIFF mode
+        n_channels = sum(np.array(illumination_intensities) > 0)
+        writer_config = self.create_writer_config(
+            write_tiff=False,  # Disable individual TIFF files
+            write_zarr=getattr(self.controller, '_ome_write_zarr', True),
+            write_stitched_tiff=False,  # Disable stitched TIFF
+            write_tiff_single=True,  # Enable single TIFF writing
+            min_period=0.1,
+            n_time_points=1,
+            n_z_planes=1,  # Performance mode typically single Z
+            n_channels=n_channels
+        )
+        
+        # Create single OME writer for all positions
+        ome_writer = OMEWriter(
+            file_paths=file_paths,
+            tile_shape=tile_shape,
+            grid_shape=grid_shape,
+            grid_geometry=grid_geometry,
+            config=writer_config,
+            logger=self._logger
+        )
+        file_writers.append(ome_writer)
+        
+        return file_writers
+
+    def _finalize_ome_writers(self, file_writers: List[OMEWriter]) -> None:
+        """
+        Finalize OME writers after scan completion.
+        
+        Args:
+            file_writers: List of OMEWriter instances to finalize
+        """
+        for writer in file_writers:
+            try:
+                writer.finalize()
+                self._logger.debug("OME writer finalized successfully")
+            except Exception as e:
+                self._logger.error(f"Error finalizing OME writer: {str(e)}")
 
     def is_hardware_capable(self) -> bool:
         """

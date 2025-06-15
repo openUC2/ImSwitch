@@ -42,7 +42,7 @@ def _create_zarr_store(path):
     """
     if hasattr(zarr.storage, 'DirectoryStore'):
         # Zarr 2.x compatibility
-        return _create_zarr_store(path)
+        return zarr.storage.DirectoryStore(path)
     elif hasattr(zarr.storage, 'LocalStore'):
         # Zarr 3.x with LocalStore
         return zarr.storage.LocalStore(path)

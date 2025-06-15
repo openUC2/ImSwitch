@@ -85,7 +85,7 @@ class SingleMultiscaleZarrWriter:
         # Create a sub-group named '0' (the top-level multiscale image)
         group_0 = self.root_group.create_group("0", overwrite=True)
 
-        shape_5d = (self.shape_t, self.shape_c, self.shape_z, self.bigY, self.bigX)
+        shape_5d = (int(self.shape_t), int(self.shape_c), int(self.shape_z), int(self.bigY), int(self.bigX))
 
         # dataset name is '0' under group '0'
         ds = group_0.create_dataset(

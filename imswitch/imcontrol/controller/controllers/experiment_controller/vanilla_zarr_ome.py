@@ -72,8 +72,8 @@ def write_image(image, group, axes="zyx"):
     
     array = group.create_dataset(
         "0",
-        shape=image.shape,
-        chunks=tuple(chunk_shape),
+        shape=tuple(int(dim) for dim in image.shape),
+        chunks=tuple(int(chunk_size) for chunk_size in chunk_shape),
         dtype=image.dtype
     )
     array[:] = image

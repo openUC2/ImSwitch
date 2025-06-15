@@ -1027,8 +1027,9 @@ class STORMReconController(LiveUpdatedController):
 
     def _initializeTiffSaving(self, saveDirectory: str):
         """Initialize TIFF saving as fallback."""
+        timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         drivePath = dirtools.UserFileDirs.Data
-        dirPath = os.path.join(drivePath, 'STORMController')        
+        dirPath = os.path.join(drivePath, 'STORMController', timeStamp)        
         self._tiff_saveDirectory = os.path.join(dirPath, saveDirectory)
         self._saved_frames = []
 

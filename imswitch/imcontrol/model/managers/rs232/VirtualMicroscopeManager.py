@@ -128,16 +128,15 @@ class Camera:
                 image = np.roll(
                     np.roll(image, int(x_offset), axis=1), int(y_offset), axis=0
                 )
-                image = nip.extract(image, (self.SensorHeight, self.SensorWidth))
+                image = nip.extract(image, (self.SensorHeight, self.SensorWidth)) # extract the image to the sensor size
 
                 # do all post-processing on cropped image
                 if IS_NIP and defocusPSF is not None and not defocusPSF.shape == ():
                     print("Defocus:" + str(defocusPSF.shape))
                     image = np.array(np.real(nip.convolve(image, defocusPSF)))
-                image = (
-                    np.float32(image) / np.max(image) * np.float32(light_intensity)
-                    + self.noiseStack[:, :, np.random.randint(0, 100)]
-                )
+                image = np.float32(image) * np.float32(light_intensity)
+                image += self.noiseStack[:, :, np.random.randint(0, 100)]
+                
 
                 # Adjust illumination
                 image = image.astype(np.uint16)

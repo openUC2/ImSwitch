@@ -83,7 +83,8 @@ class STORMReconController(LiveUpdatedController):
     """ Linked to STORMReconWidget."""
 
     sigImageReceived = Signal()
-
+    sigNSTORMImageAcquired = Signal(int)
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -226,19 +227,6 @@ class STORMReconController(LiveUpdatedController):
         else:
             # this will activate/deactivate the live reconstruction
             self.imageComputationWorker.setActive(enabled)
-
-
-    def update(self, detectorName, im, init, isCurrentDetector):
-        """ Update with new detector frame. """
-        if not isCurrentDetector or not self.active:
-            return
-
-        if self.it == self.updateRate:
-            self.it = 0
-            self.imageComputationWorker.prepareForNewImage(im)
-            self.sigImageReceived.emit()
-        else:
-            self.it += 1
 
     def displayImage(self, im):
         """ Displays the image in the view. """
@@ -628,6 +616,7 @@ class STORMReconController(LiveUpdatedController):
                                   saveDirectory: str = "STORM",
                                   save_format: str = "tiff",
                                   exposure_time: float = None,
+                                  max_frames: int = -1,
                                   process_arkitekt: bool = False) -> Dict[str, Any]:
         """
         Start fast STORM frame acquisition with optional cropping and saving.
@@ -684,7 +673,7 @@ class STORMReconController(LiveUpdatedController):
             # If not using Arkitekt, start direct saving mode
             if (not IS_ARKITEKT or self._arkitekt_app is None) or not process_arkitekt:
                 self._direct_saving_mode = True
-                self._startDirectSavingAcquisition()
+                self._startDirectSavingAcquisition(max_frames=max_frames)
             else:
                 self._direct_saving_mode = False
         else:
@@ -896,8 +885,9 @@ class STORMReconController(LiveUpdatedController):
             self._logger.error(f"Failed to initialize saving: {e}")
             self._ome_zarr_store = None
 
-    def _startDirectSavingAcquisition(self):
-        """Start direct frame acquisition and saving in background thread."""
+    def _startDirectSavingAcquisition(self, max_frames: int = -1):
+        """Start direct frame acquisition and saving in background thread.
+        max_frames: Maximum number of frames to save (-1 for unlimited)."""
         def acquisition_worker():
             """Background worker for continuous frame acquisition and saving."""
             self._logger.info("Starting direct saving acquisition worker")
@@ -908,7 +898,7 @@ class STORMReconController(LiveUpdatedController):
             while self._acquisition_active:
                 try:
                     # Get all frames from detector since last call
-                    frames_chunk = self.detector.getChunk()
+                    frames_chunk, frame_indices = self.detector.getChunk()
 
                     if frames_chunk is not None:
                         # Handle different chunk formats from different cameras
@@ -947,13 +937,18 @@ class STORMReconController(LiveUpdatedController):
 
                             # Optional: Log progress periodically
                             if self._frame_count % 100 == 0:
+                                self.sigNSTORMImageAcquired.emit(self._frame_count)
                                 self._logger.debug(f"Saved {self._frame_count} frames")
-
+                            if max_frames > 0 and self._frame_count >= max_frames:
+                                self._logger.info(f"Reached max frames limit: {max_frames}")
+                                self._acquisition_active = False
+                                break
                     # Small delay to prevent excessive CPU usage
                     time.sleep(0.001)
 
                 except Exception as e:
                     self._logger.error(f"Error in acquisition worker: {e}")
+                    self._acquisition_active = False
                     break
 
             self._logger.info(f"Direct saving acquisition worker stopped. Total frames: {self._frame_count}")

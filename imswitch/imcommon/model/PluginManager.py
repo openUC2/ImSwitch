@@ -55,7 +55,8 @@ class ImSwitchPluginManager:
             for entry_point in pkg_resources.iter_entry_points('imswitch.implugins'):
                 plugin_info = self._parse_entry_point(entry_point)
                 if plugin_info:
-                    self._plugins[plugin_info.name] = plugin_info
+                    # Use entry_point_name as key to support multiple types per plugin
+                    self._plugins[plugin_info.entry_point_name] = plugin_info
                     self.__logger.debug(f"Discovered plugin: {plugin_info.name} ({plugin_info.plugin_type})")
         except Exception as e:
             self.__logger.error(f"Error discovering plugins: {e}")
@@ -100,11 +101,10 @@ class ImSwitchPluginManager:
     
     def get_plugin(self, plugin_name: str, plugin_type: str) -> Optional[PluginInfo]:
         """Get specific plugin info"""
-        key = plugin_name
-        plugin = self._plugins.get(key)
-        if plugin and plugin.plugin_type == plugin_type:
-            return plugin
-        return None
+        # Construct the entry point name based on naming convention
+        entry_point_name = f"{plugin_name}_{plugin_type}"
+        plugin = self._plugins.get(entry_point_name)
+        return plugin
     
     def load_plugin(self, plugin_name: str, plugin_type: str, info_class: Optional[Type] = None) -> Optional[Type]:
         """

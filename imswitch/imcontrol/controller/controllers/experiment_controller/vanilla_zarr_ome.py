@@ -15,7 +15,16 @@ class VanillaZarrStore:
     
     def __init__(self, path):
         self.path = path
-        self.store = zarr.storage.DirectoryStore(path) if hasattr(zarr.storage, 'DirectoryStore') else path
+        # Zarr 3.0 compatibility - DirectoryStore was replaced with LocalStore or direct path usage
+        if hasattr(zarr.storage, 'DirectoryStore'):
+            # Zarr 2.x compatibility
+            self.store = zarr.storage.DirectoryStore(path)
+        elif hasattr(zarr.storage, 'LocalStore'):
+            # Zarr 3.x with LocalStore
+            self.store = zarr.storage.LocalStore(path)
+        else:
+            # Zarr 3.x with direct path usage
+            self.store = path
     
     def close(self):
         """Close the store."""

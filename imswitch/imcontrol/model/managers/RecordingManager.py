@@ -28,6 +28,27 @@ try:
     IS_OME_ZARR = True
 except ImportError:
     IS_OME_ZARR = False
+
+
+def _create_zarr_store(path):
+    """
+    Create a Zarr store compatible with both Zarr 2.x and 3.x
+    
+    Args:
+        path: Path to the store
+        
+    Returns:
+        Store object compatible with current Zarr version
+    """
+    if hasattr(zarr.storage, 'DirectoryStore'):
+        # Zarr 2.x compatibility
+        return _create_zarr_store(path)
+    elif hasattr(zarr.storage, 'LocalStore'):
+        # Zarr 3.x with LocalStore
+        return zarr.storage.LocalStore(path)
+    else:
+        # Zarr 3.x with direct path usage
+        return path
 class AsTemporayFile(object):
     """ A temporary file that when exiting the context manager is renamed to its original name. """
     def __init__(self, filepath, tmp_extension='.tmp'):
@@ -66,7 +87,7 @@ class ZarrStorer(Storer):
             return
         with AsTemporayFile(f'{self.filepath}.zarr') as path:
             datasets: List[dict] = []
-            store = zarr.storage.DirectoryStore(path)
+            store = _create_zarr_store(path)
             root = zarr.group(store=store)
 
             for channel, image in images.items():
@@ -348,7 +369,7 @@ class RecordingManager(SignalInterface):
                 logger.error("OME Zarr is not installed. Please install ome-zarr.")
                 return
             path = self.getSaveFilePath(f'{savename}.{fileExtension}')
-            store = zarr.storage.DirectoryStore(path)
+            store = _create_zarr_store(path)
             root = zarr.group(store=store)
             shape = self.__detectorsManager[detectorName].shape
             d = root.create_dataset(detectorName, data=image, shape=tuple(reversed(shape)), chunks=(512, 512),
@@ -685,7 +706,7 @@ class RecordingWorker(Worker):
                     files[detectorName] = h5py.File(fileDests[detectorName],
                                                     'a' if singleLapseFile else 'w-')
                 elif self.saveFormat == SaveFormat.ZARR:
-                    self.store = zarr.storage.DirectoryStore(fileDests[detectorName])
+                    self.store = _create_zarr_store(fileDests[detectorName])
                     files[detectorName] = zarr.group(store=self.store, overwrite=True)
 
         return files, fileDests, filePaths
@@ -1069,7 +1090,7 @@ class RecordingWorkerNoQt(Worker):
                     files[detectorName] = h5py.File(fileDests[detectorName],
                                                     'a' if singleLapseFile else 'w-')
                 elif self.saveFormat == SaveFormat.ZARR:
-                    self.store = zarr.storage.DirectoryStore(fileDests[detectorName])
+                    self.store = _create_zarr_store(fileDests[detectorName])
                     files[detectorName] = zarr.group(store=self.store, overwrite=True)
 
         return files, fileDests, filePaths

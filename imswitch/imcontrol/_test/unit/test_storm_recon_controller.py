@@ -25,6 +25,8 @@ class TestSTORMReconController(unittest.TestCase):
         
         # Configure mock detector
         self.mock_detector.getLatestFrame.return_value = np.random.randint(0, 255, (100, 100), dtype=np.uint16)
+        # Mock getChunk to return array with batch dimension
+        self.mock_detector.getChunk.return_value = np.random.randint(0, 255, (3, 100, 100), dtype=np.uint16)
         self.mock_detector.startAcquisition = Mock()
         self.mock_detector.stopAcquisition = Mock()
         self.mock_detector.crop = Mock()

@@ -521,7 +521,11 @@ class CameraGXIPY:
             self.__logger.error("Got an incomplete frame")
             return
 
-
+    def set_frame(self, user_param, frame):
+        """Callback function to process frames from the camera."""
+        if frame is None:
+            self.__logger.error("Received None frame")
+            return
         try:
             # if RGB camera
             if self.isRGB:

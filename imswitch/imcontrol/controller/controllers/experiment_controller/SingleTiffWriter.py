@@ -85,7 +85,19 @@ class SingleTiffWriter:
                 if image is not None:
                     try:
                         # Write image using the same method as working HistoScanController
-                        # Pass through the original metadata similar to line 1598 in HistoScanController
+                        # Pass through the original metadata similar to HistoScanController
+                        metadata = {'Pixels': {
+                            'PhysicalSizeX': 7,
+                            'PhysicalSizeXUnit': 'µm',
+                            'PhysicalSizeY': 8,
+                            'PhysicalSizeYUnit': 'µm'},
+
+                            'Plane': {
+                                'PositionX': 8,
+                                'PositionY': 9,
+                                'IndexX': 5,
+                                'IndexY': 4
+                        }, }
                         tif.write(data=image, metadata=metadata)
                         
                         self.image_count += 1

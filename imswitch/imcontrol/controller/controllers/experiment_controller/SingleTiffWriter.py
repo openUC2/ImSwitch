@@ -17,12 +17,12 @@ from typing import Dict, Any, Optional
 
 class SingleTiffWriter:
     """
-    Single TIFF writer that appends tiles as a timelapse series with xyz positions and channels.
+    Single TIFF writer that appends tiles as a multi-page TIFF timelapse series with xyz positions.
     
     This writer is specifically designed for single tile scans where each scan position
     contains only one tile, and all tiles should be appended to a single TIFF file
     as a timelapse series. Each tile becomes a timepoint in the series, with spatial
-    coordinates stored in metadata for Fiji compatibility.
+    coordinates stored in metadata for Fiji/napari compatibility.
     """
     
     def __init__(self, file_path: str, bigtiff: bool = False):
@@ -56,92 +56,24 @@ class SingleTiffWriter:
     
     def add_image(self, image: np.ndarray, metadata: Dict[str, Any]):
         """
-        Enqueue an image for writing with full metadata.
+        Enqueue an image for writing with metadata.
         
         Args:
             image: 2D NumPy array (grayscale image)
             metadata: Dictionary containing position and other metadata
         """
-        # Extract relevant metadata for OME-TIFF
-        ome_metadata = self._create_ome_metadata(image, metadata)
-        
         with self.lock:
-            self.queue.append((image, ome_metadata))
-    
-    def _create_ome_metadata(self, image: np.ndarray, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Create OME metadata dictionary for timelapse series with spatial coordinates.
-        
-        Args:
-            image: Image array
-            metadata: Original metadata dictionary
-            
-        Returns:
-            OME-compatible metadata dictionary for timelapse series
-        """
-        # Extract positions and indices
-        position_x = metadata.get("x", 0.0)
-        position_y = metadata.get("y", 0.0)
-        position_z = metadata.get("z", 0.0)
-        z_index = metadata.get("z_index", 0)
-        c_index = metadata.get("channel_index", 0)
-        
-        # Get pixel size from metadata or use default
-        pixel_size = metadata.get("pixel_size", 1.0)
-        
-        # Create OME metadata structure for timelapse series
-        # Each tile becomes a timepoint with spatial coordinates in metadata
-        ome_metadata = {
-            "Pixels": {
-                "PhysicalSizeX": pixel_size,
-                "PhysicalSizeXUnit": "µm",
-                "PhysicalSizeY": pixel_size,
-                "PhysicalSizeYUnit": "µm",
-                "SizeX": image.shape[1],
-                "SizeY": image.shape[0],
-                "SizeZ": 1,
-                "SizeT": 1,  # Each image is one timepoint
-                "SizeC": 1,
-                "Type": "uint16",
-                "DimensionOrder": "XYZCT"
-            },
-            "Plane": {
-                # Store spatial coordinates for reconstruction
-                "PositionX": position_x,
-                "PositionY": position_y, 
-                "PositionZ": position_z,
-                "TheZ": z_index,
-                "TheT": self.timepoint_index,  # Use sequential timepoint indexing
-                "TheC": c_index
-            },
-            "Channel": {
-                "ID": f"Channel:{c_index}",
-                "SamplesPerPixel": 1,
-                "IlluminationType": metadata.get("illuminationChannel", "Unknown")
-            },
-            # Add spatial metadata for reconstruction in Fiji
-            "TilePosition": {
-                "X": position_x,
-                "Y": position_y,
-                "Z": position_z,
-                "ZIndex": z_index,
-                "ChannelIndex": c_index,
-                "TimeIndex": self.timepoint_index
-            }
-        }
-        
-        return ome_metadata
+            self.queue.append((image, metadata))
     
     def _process_queue(self):
         """
-        Background loop: open the OME-TIFF and write images as pages in a multi-page series.
+        Background loop: write images as pages in a multi-page TIFF timelapse series.
         """
         # Ensure the folder exists
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
             
-        # Open TiffWriter without append mode to create proper multi-page TIFF
-        # Multiple calls to write() will create a multi-page series
+        # Open TiffWriter to create proper multi-page TIFF
         with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff) as tif:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
@@ -152,19 +84,33 @@ class SingleTiffWriter:
                 
                 if image is not None:
                     try:
-                        # Write each image as a new page in the multi-page TIFF
-                        # This creates a proper timelapse series that Fiji can read
+                        # Extract position information for description
+                        position_x = metadata.get("PositionX", metadata.get("TilePosition", {}).get("X", 0.0))
+                        position_y = metadata.get("PositionY", metadata.get("TilePosition", {}).get("Y", 0.0))
+                        position_z = metadata.get("PositionZ", metadata.get("TilePosition", {}).get("Z", 0.0))
+                        pixel_size = metadata.get("PhysicalSizeX", metadata.get("pixel_size", 1.0))
+                        
+                        # Create description with position information
+                        description = f"T={self.image_count} X={position_x:.1f} Y={position_y:.1f} Z={position_z:.1f} pixel_size={pixel_size}"
+                        
+                        # Write image as a page in the multi-page TIFF
+                        # Use simple metadata that won't cause conflicts
                         tif.write(
                             data=image,
-                            photometric='minisblack',  # Grayscale
+                            photometric='minisblack',
                             contiguous=True,
-                            metadata={'axes': 'YX'}  # Simple 2D metadata for each page
+                            description=description,
+                            resolution=(1/pixel_size, 1/pixel_size),  # Set resolution for scale
+                            resolutionunit='MICROMETER'
                         )
+                        
                         self.image_count += 1
-                        self.timepoint_index += 1  # Increment timepoint for next tile
-                        print(f"Wrote image to single TIFF as page %d, to path: %s" % (self.timepoint_index, self.file_path))
+                        self.timepoint_index += 1
+                        print(f"Wrote image to timelapse TIFF as T=%d, to path: %s" % (self.image_count-1, self.file_path))
                     except Exception as e:
                         print(f"Error writing image to single TIFF: {e}")
+                        import traceback
+                        traceback.print_exc()
                 else:
                     # Sleep briefly to avoid busy loop when queue is empty
                     time.sleep(0.01)

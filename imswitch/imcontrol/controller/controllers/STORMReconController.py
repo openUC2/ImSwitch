@@ -6,6 +6,7 @@ from datetime import datetime
 import queue
 from typing import Generator, Optional, Dict, Any
 from dataclasses import dataclass
+import threading
 
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from imswitch.imcommon.model import initLogger, dirtools
@@ -111,6 +112,10 @@ class STORMReconController(LiveUpdatedController):
         self._cropping_params = None
         self._ome_zarr_store = None
         self._current_session_id = None
+        self._direct_saving_mode = False  # True when saving directly without generators
+        self._save_format = "omezarr"
+        self._save_path = None
+        self._frame_count = 0
 
         # Initialize Arkitekt integration if available
         self._arkitekt_app = None
@@ -621,6 +626,10 @@ class STORMReconController(LiveUpdatedController):
         """
         Start fast STORM frame acquisition with optional cropping and saving.
 
+        When not using Arkitekt, this will initialize frame saving and start
+        continuous acquisition to disk. When using Arkitekt, frames are made
+        available via generators.
+
         Parameters:
         - session_id: Unique identifier for this acquisition session
         - crop_x, crop_y: Top-left corner of crop region (None to disable cropping)
@@ -640,6 +649,7 @@ class STORMReconController(LiveUpdatedController):
             session_id = f"storm_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
         self._current_session_id = session_id
+        self._frame_count = 0
 
         # Set cropping parameters
         crop_params_given = (crop_x is not None and crop_y is not None and
@@ -659,27 +669,40 @@ class STORMReconController(LiveUpdatedController):
         if exposure_time is not None and hasattr(self.detector, 'setParameter'):
             self.detector.setParameter('ExposureTime', exposure_time)
 
-        # Initialize saving if requested
+        # Determine acquisition mode and initialize saving
         if save_path is not None:
+            self._save_path = save_path
+            self._save_format = save_format
             self._initializeSaving(save_path, save_format)
+            
+            # If not using Arkitekt, start direct saving mode
+            if not IS_ARKITEKT or self._arkitekt_app is None:
+                self._direct_saving_mode = True
+                self._startDirectSavingAcquisition()
+            else:
+                self._direct_saving_mode = False
+        else:
+            self._direct_saving_mode = False
 
         # Start acquisition
         self._acquisition_active = True
-        self.detector.startAcquisition()
+        if not self._direct_saving_mode:
+            self.detector.startAcquisition()
 
         return {
             "success": True,
             "session_id": session_id,
-            "message": "Fast STORM acquisition started",
+            "message": "Fast STORM acquisition started" + (" (direct saving mode)" if self._direct_saving_mode else ""),
             "cropping": self._cropping_params,
             "save_path": save_path,
-            "save_format": save_format
+            "save_format": save_format,
+            "direct_saving": self._direct_saving_mode
         }
 
     @APIExport(runOnUIThread=False)
     def stopFastSTORMAcquisition(self) -> Dict[str, Any]:
         """
-        Stop fast STORM frame acquisition.
+        Stop fast STORM frame acquisition and finalize saving.
 
         Returns:
         - Dictionary with session info and status
@@ -689,21 +712,31 @@ class STORMReconController(LiveUpdatedController):
 
         self._acquisition_active = False
 
+        # Stop direct saving acquisition thread if running
+        if self._direct_saving_mode and self._acquisition_thread is not None:
+            self._acquisition_thread.join(timeout=5.0)  # Wait up to 5 seconds
+            self._acquisition_thread = None
+
         # Stop detector acquisition
         if hasattr(self.detector, 'stopAcquisition'):
             self.detector.stopAcquisition()
 
         # Finalize saving
-        if self._ome_zarr_store is not None:
+        frames_saved = self._frame_count
+        if self._ome_zarr_store is not None or hasattr(self, '_saved_frames'):
             self._finalizeSaving()
 
         session_id = self._current_session_id
         self._current_session_id = None
+        self._direct_saving_mode = False
+        self._save_path = None
+        self._frame_count = 0
 
         return {
             "success": True,
             "session_id": session_id,
-            "message": "Fast STORM acquisition stopped"
+            "message": f"Fast STORM acquisition stopped. {frames_saved} frames saved.",
+            "frames_saved": frames_saved
         }
 
     @APIExport(runOnUIThread=False)
@@ -801,7 +834,12 @@ class STORMReconController(LiveUpdatedController):
             "cropping_params": self._cropping_params,
             "microeye_available": isMicroEye,
             "processing_active": self.active if hasattr(self, 'active') else False,
-            "detector_running": getattr(self.detector, '_running', False) if hasattr(self.detector, '_running') else None
+            "detector_running": getattr(self.detector, '_running', False) if hasattr(self.detector, '_running') else None,
+            "direct_saving_mode": self._direct_saving_mode,
+            "save_path": self._save_path,
+            "save_format": self._save_format,
+            "frames_saved": self._frame_count,
+            "arkitekt_available": IS_ARKITEKT and self._arkitekt_app is not None
         }
 
     @APIExport()
@@ -851,6 +889,69 @@ class STORMReconController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Failed to initialize saving: {e}")
             self._ome_zarr_store = None
+
+    def _startDirectSavingAcquisition(self):
+        """Start direct frame acquisition and saving in background thread."""
+        def acquisition_worker():
+            """Background worker for continuous frame acquisition and saving."""
+            self._logger.info("Starting direct saving acquisition worker")
+            
+            # Start detector acquisition
+            self.detector.startAcquisition()
+            
+            while self._acquisition_active:
+                try:
+                    # Get all frames from detector since last call
+                    frame_chunk = self.detector.getChunk()
+                    
+                    if frame_chunk is not None and len(frame_chunk) > 0:
+                        # Process all frames in the chunk
+                        frames_to_process = frame_chunk if len(frame_chunk.shape) > 2 else [frame_chunk]
+                        
+                        for frame in frames_to_process:
+                            if not self._acquisition_active:
+                                break
+                                
+                            # Apply cropping if specified
+                            if self._cropping_params is not None:
+                                crop = self._cropping_params
+                                frame = frame[crop['y']:crop['y']+crop['height'],
+                                             crop['x']:crop['x']+crop['width']]
+
+                            # Create metadata
+                            metadata = {
+                                'timestamp': datetime.now().isoformat(),
+                                'frame_number': self._frame_count,
+                                'session_id': self._current_session_id,
+                                'original_shape': frame.shape,
+                                'cropping_params': self._cropping_params
+                            }
+
+                            # Save frame based on format
+                            if self._save_format.lower() == "omezarr" and self._ome_zarr_store is not None:
+                                self._saveFrameToZarr(frame, self._frame_count, metadata)
+                            elif self._save_format.lower() == "tiff":
+                                self._saveFrameToTiff(frame, self._frame_count, metadata)
+
+                            self._frame_count += 1
+                            
+                            # Optional: Log progress periodically
+                            if self._frame_count % 100 == 0:
+                                self._logger.debug(f"Saved {self._frame_count} frames")
+
+                    # Small delay to prevent excessive CPU usage
+                    time.sleep(0.001)
+                    
+                except Exception as e:
+                    self._logger.error(f"Error in acquisition worker: {e}")
+                    break
+            
+            self._logger.info(f"Direct saving acquisition worker stopped. Total frames: {self._frame_count}")
+        
+        # Start the acquisition worker in a separate thread
+        self._acquisition_thread = threading.Thread(target=acquisition_worker)
+        self._acquisition_thread.daemon = True
+        self._acquisition_thread.start()
 
     def _initializeOMEZarrSaving(self, save_path: str):
         """Initialize OME-Zarr saving similar to ExperimentController."""
@@ -910,6 +1011,37 @@ class STORMReconController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Failed to save frame to Zarr: {e}")
 
+    def _saveFrameToTiff(self, frame: np.ndarray, frame_number: int, metadata: dict):
+        """Save frame to TIFF stack."""
+        try:
+            if not hasattr(self, '_saved_frames'):
+                self._saved_frames = []
+            
+            self._saved_frames.append(frame)
+            
+            # Optionally save every N frames to avoid memory issues
+            if len(self._saved_frames) >= 100:  # Save every 100 frames
+                self._flushTiffFrames()
+                
+        except Exception as e:
+            self._logger.error(f"Failed to save frame to TIFF: {e}")
+
+    def _flushTiffFrames(self):
+        """Flush accumulated TIFF frames to disk."""
+        try:
+            if hasattr(self, '_saved_frames') and self._saved_frames:
+                if hasattr(self, '_tiff_save_path'):
+                    # Create incremental filename to avoid memory issues
+                    base_path = self._tiff_save_path.replace('.tiff', '').replace('.tif', '')
+                    increment_path = f"{base_path}_part_{self._frame_count // 100:04d}.tiff"
+                    
+                    tif.imwrite(increment_path, np.stack(self._saved_frames), append=False)
+                    self._logger.debug(f"Saved {len(self._saved_frames)} frames to {increment_path}")
+                    
+                self._saved_frames = []
+        except Exception as e:
+            self._logger.error(f"Failed to flush TIFF frames: {e}")
+
     def _finalizeSaving(self):
         """Finalize and close saving."""
         try:
@@ -918,9 +1050,13 @@ class STORMReconController(LiveUpdatedController):
                 self._ome_zarr_store = None
 
             if hasattr(self, '_saved_frames') and self._saved_frames:
-                # Save accumulated TIFF frames
+                # Save remaining TIFF frames
                 if hasattr(self, '_tiff_save_path'):
-                    tif.imwrite(self._tiff_save_path, np.stack(self._saved_frames), append=False)
+                    if len(self._saved_frames) > 0:
+                        base_path = self._tiff_save_path.replace('.tiff', '').replace('.tif', '')
+                        final_path = f"{base_path}_final.tiff"
+                        tif.imwrite(final_path, np.stack(self._saved_frames), append=False)
+                        self._logger.info(f"Saved final {len(self._saved_frames)} frames to {final_path}")
                 self._saved_frames = []
 
         except Exception as e:

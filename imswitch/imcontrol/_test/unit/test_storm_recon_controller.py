@@ -72,7 +72,7 @@ class TestSTORMReconController(unittest.TestCase):
             self.mock_widget
         )
         
-        # Test starting acquisition
+        # Test starting acquisition without saving
         result = controller.startFastSTORMAcquisition(
             session_id="test_session",
             crop_x=10, crop_y=10, crop_width=50, crop_height=50
@@ -84,10 +84,41 @@ class TestSTORMReconController(unittest.TestCase):
         self.assertIsNotNone(controller._cropping_params)
         self.assertEqual(controller._cropping_params['x'], 10)
         self.assertEqual(controller._cropping_params['width'], 50)
+        self.assertFalse(result.get('direct_saving', False))
         
         # Verify detector methods were called
         self.mock_detector.crop.assert_called_once_with(10, 10, 50, 50)
         self.mock_detector.startAcquisition.assert_called_once()
+    
+    @patch('imswitch.imcontrol.controller.controllers.STORMReconController.isMicroEye', False)
+    @patch('imswitch.imcontrol.controller.controllers.STORMReconController.IS_ARKITEKT', False)
+    def test_start_fast_storm_acquisition_with_saving(self):
+        """Test starting fast STORM acquisition with direct saving."""
+        controller = STORMReconController(
+            self.mock_master, 
+            self.mock_comm_channel, 
+            self.mock_widget
+        )
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            save_path = os.path.join(temp_dir, "test_storm.tiff")
+            
+            # Test starting acquisition with saving (should trigger direct saving mode)
+            result = controller.startFastSTORMAcquisition(
+                session_id="test_session_save",
+                save_path=save_path,
+                save_format="tiff"
+            )
+            
+            self.assertTrue(result['success'])
+            self.assertEqual(result['session_id'], 'test_session_save')
+            self.assertTrue(controller._acquisition_active)
+            self.assertTrue(result.get('direct_saving', False))  # Should be in direct saving mode
+            self.assertEqual(controller._save_path, save_path)
+            self.assertEqual(controller._save_format, "tiff")
+            
+            # Stop acquisition to clean up
+            controller.stopFastSTORMAcquisition()
     
     @patch('imswitch.imcontrol.controller.controllers.STORMReconController.isMicroEye', False)
     def test_stop_fast_storm_acquisition(self):
@@ -126,6 +157,8 @@ class TestSTORMReconController(unittest.TestCase):
         self.assertFalse(status['acquisition_active'])
         self.assertIsNone(status['session_id'])
         self.assertFalse(status['microeye_available'])
+        self.assertFalse(status['direct_saving_mode'])
+        self.assertEqual(status['frames_saved'], 0)
         
         # Start acquisition and test status
         controller.startFastSTORMAcquisition(session_id="test_session")

@@ -114,7 +114,7 @@ class STORMReconController(LiveUpdatedController):
         self._current_session_id = None
         self._direct_saving_mode = False  # True when saving directly without generators
         self._save_format = "omezarr"
-        self._save_path = None
+        self._saveDirectory = "STORM"
         self._frame_count = 0
 
         # Initialize Arkitekt integration if available
@@ -257,8 +257,8 @@ class STORMReconController(LiveUpdatedController):
                                           crop_y: int = None,
                                           crop_width: int = None,
                                           crop_height: int = None,
-                                          save_path: str = None,
-                                          save_format: str = "omezarr",
+                                          saveDirectory: str = None,
+                                          save_format: str = "tiff",
                                           exposure_time: float = None
                                           ) -> Dict[str, Any]:
         """
@@ -273,7 +273,7 @@ class STORMReconController(LiveUpdatedController):
         - session_id: Unique identifier for this acquisition session
         - crop_x, crop_y: Top-left corner of crop region (None to disable)
         - crop_width, crop_height: Dimensions of crop region
-        - save_path: Path to save acquired frames (None to disable saving)
+        - saveDirectory: Path to save acquired frames (None to disable saving)
         - save_format: Format to save frames ('omezarr', 'tiff')
         - exposure_time: Exposure time for frames (None to use current)
 
@@ -288,9 +288,10 @@ class STORMReconController(LiveUpdatedController):
             crop_y=crop_y,
             crop_width=crop_width,
             crop_height=crop_height,
-            save_path=save_path,
+            saveDirectory=saveDirectory,
             save_format=save_format,
-            exposure_time=exposure_time
+            exposure_time=exposure_time,
+            process_arkitekt=True
         )
 
         if result.get("success"):
@@ -498,13 +499,13 @@ class STORMReconController(LiveUpdatedController):
 
         # Trigger reconstruction and get frame
         self.triggerSTORMReconstruction()
-        frame_chunk = self.detector.getChunk()
+        frames_chunk = self.detector.getChunk()
 
-        if frame_chunk is None or len(frame_chunk) == 0:
+        if frames_chunk is None or len(frames_chunk) == 0:
             raise ValueError("No frame available from detector")
         
         # Take the most recent frame from the chunk
-        frame = frame_chunk[-1] if len(frame_chunk.shape) > 2 else frame_chunk
+        frame = frames_chunk[-1] if len(frames_chunk.shape) > 2 else frames_chunk
 
         progress(50, "Processing frame through STORM pipeline...")
 
@@ -605,10 +606,10 @@ class STORMReconController(LiveUpdatedController):
     def triggerSTORMReconstruction(self, frame=None):
         """ Trigger reconstruction. """
         if frame is None:
-            frame_chunk = self.detector.getChunk()
-            if frame_chunk is not None and len(frame_chunk) > 0:
+            frames_chunk = self.detector.getChunk()
+            if frames_chunk is not None and len(frames_chunk) > 0:
                 # Take the most recent frame from the chunk
-                frame = frame_chunk[-1] if len(frame_chunk.shape) > 2 else frame_chunk
+                frame = frames_chunk[-1] if len(frames_chunk.shape) > 2 else frames_chunk
             else:
                 frame = None
         self.imageComputationWorker.reconSTORMFrame(frame=frame)
@@ -620,9 +621,10 @@ class STORMReconController(LiveUpdatedController):
                                   crop_y: int = None,
                                   crop_width: int = None,
                                   crop_height: int = None,
-                                  save_path: str = None,
-                                  save_format: str = "omezarr",
-                                  exposure_time: float = None) -> Dict[str, Any]:
+                                  saveDirectory: str = "STORM",
+                                  save_format: str = "tiff",
+                                  exposure_time: float = None, 
+                                  process_arkitekt: bool = False) -> Dict[str, Any]:
         """
         Start fast STORM frame acquisition with optional cropping and saving.
 
@@ -634,7 +636,7 @@ class STORMReconController(LiveUpdatedController):
         - session_id: Unique identifier for this acquisition session
         - crop_x, crop_y: Top-left corner of crop region (None to disable cropping)
         - crop_width, crop_height: Dimensions of crop region
-        - save_path: Path to save acquired frames (None to disable saving)
+        - saveDirectory: Path to save acquired frames (None to disable saving)
         - save_format: Format to save frames ('omezarr', 'tiff')
         - exposure_time: Exposure time for frames (None to use current)
 
@@ -670,13 +672,13 @@ class STORMReconController(LiveUpdatedController):
             self.detector.setParameter('ExposureTime', exposure_time)
 
         # Determine acquisition mode and initialize saving
-        if save_path is not None:
-            self._save_path = save_path
+        if saveDirectory is not None:
+            self._saveDirectory = saveDirectory
             self._save_format = save_format
-            self._initializeSaving(save_path, save_format)
+            self._initializeSaving(saveDirectory, save_format)
             
             # If not using Arkitekt, start direct saving mode
-            if not IS_ARKITEKT or self._arkitekt_app is None:
+            if (not IS_ARKITEKT or self._arkitekt_app is None) or not process_arkitekt:
                 self._direct_saving_mode = True
                 self._startDirectSavingAcquisition()
             else:
@@ -694,7 +696,7 @@ class STORMReconController(LiveUpdatedController):
             "session_id": session_id,
             "message": "Fast STORM acquisition started" + (" (direct saving mode)" if self._direct_saving_mode else ""),
             "cropping": self._cropping_params,
-            "save_path": save_path,
+            "saveDirectory": saveDirectory,
             "save_format": save_format,
             "direct_saving": self._direct_saving_mode
         }
@@ -729,7 +731,7 @@ class STORMReconController(LiveUpdatedController):
         session_id = self._current_session_id
         self._current_session_id = None
         self._direct_saving_mode = False
-        self._save_path = None
+        self._saveDirectory = None
         self._frame_count = 0
 
         return {
@@ -758,11 +760,11 @@ class STORMReconController(LiveUpdatedController):
         while frames_yielded < num_frames and self._acquisition_active:
             try:
                 # Get all frames from detector since last call to avoid losing frames
-                frame_chunk = self.detector.getChunk()
+                frames_chunk = self.detector.getChunk()
 
-                if frame_chunk is not None and len(frame_chunk) > 0:
+                if frames_chunk is not None and len(frames_chunk) > 0:
                     # Process all frames in the chunk
-                    frames_to_process = frame_chunk if len(frame_chunk.shape) > 2 else [frame_chunk]
+                    frames_to_process = frames_chunk if len(frames_chunk.shape) > 2 else [frames_chunk]
                     
                     for frame in frames_to_process:
                         if frames_yielded >= num_frames:
@@ -836,7 +838,7 @@ class STORMReconController(LiveUpdatedController):
             "processing_active": self.active if hasattr(self, 'active') else False,
             "detector_running": getattr(self.detector, '_running', False) if hasattr(self.detector, '_running') else None,
             "direct_saving_mode": self._direct_saving_mode,
-            "save_path": self._save_path,
+            "saveDirectory": self._saveDirectory,
             "save_format": self._save_format,
             "frames_saved": self._frame_count,
             "arkitekt_available": IS_ARKITEKT and self._arkitekt_app is not None
@@ -877,13 +879,13 @@ class STORMReconController(LiveUpdatedController):
             "update_rate": self.updateRate
         }
 
-    def _initializeSaving(self, save_path: str, save_format: str):
+    def _initializeSaving(self, saveDirectory: str, save_format: str):
         """Initialize saving mechanism based on format."""
         try:
             if save_format.lower() == "omezarr":
-                self._initializeOMEZarrSaving(save_path)
+                self._initializeOMEZarrSaving(saveDirectory)
             elif save_format.lower() == "tiff":
-                self._initializeTiffSaving(save_path)
+                self._initializeTiffSaving(saveDirectory)
             else:
                 raise ValueError(f"Unsupported save format: {save_format}")
         except Exception as e:
@@ -902,11 +904,11 @@ class STORMReconController(LiveUpdatedController):
             while self._acquisition_active:
                 try:
                     # Get all frames from detector since last call
-                    frame_chunk = self.detector.getChunk()
+                    frames_chunk, frame_indices = self.detector.getChunk() # returns a chunk of frames with dimensions (height, width, nBuffer)
                     
-                    if frame_chunk is not None and len(frame_chunk) > 0:
+                    if frames_chunk is not None and len(frames_chunk) > 0:
                         # Process all frames in the chunk
-                        frames_to_process = frame_chunk if len(frame_chunk.shape) > 2 else [frame_chunk]
+                        frames_to_process = frames_chunk if len(frames_chunk.shape) > 2 else [frames_chunk]
                         
                         for frame in frames_to_process:
                             if not self._acquisition_active:
@@ -932,6 +934,10 @@ class STORMReconController(LiveUpdatedController):
                                 self._saveFrameToZarr(frame, self._frame_count, metadata)
                             elif self._save_format.lower() == "tiff":
                                 self._saveFrameToTiff(frame, self._frame_count, metadata)
+                            else:
+                                self._logger.error(f"Unsupported save format: {self._save_format}")
+                                self._acquisition_active = False
+                                break
 
                             self._frame_count += 1
                             
@@ -953,17 +959,20 @@ class STORMReconController(LiveUpdatedController):
         self._acquisition_thread.daemon = True
         self._acquisition_thread.start()
 
-    def _initializeOMEZarrSaving(self, save_path: str):
+    def _initializeOMEZarrSaving(self, saveDirectory: str):
         """Initialize OME-Zarr saving similar to ExperimentController."""
         try:
             # Try to import OME-Zarr dependencies
             from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
-
+            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            drivePath = dirtools.UserFileDirs.Data
+            dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
+            saveDirectory = os.path.join(dirPath, saveDirectory)
             # Ensure directory exists
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            os.makedirs(os.path.dirname(saveDirectory), exist_ok=True)
 
             # Initialize OME-Zarr store
-            self._ome_zarr_store = MinimalZarrDataSource(save_path, mode="w")
+            self._ome_zarr_store = MinimalZarrDataSource(saveDirectory, mode="w")
 
             # Get frame shape for configuration
             sample_chunk = self.detector.getChunk()
@@ -982,22 +991,45 @@ class STORMReconController(LiveUpdatedController):
                     'shape_z': 1,
                     'shape_y': shape_y,
                     'shape_x': shape_x,
-                    'dtype': sample_frame.dtype
+                    'dtype': sample_frame.dtype, 
+                    "experiment": {
+                        "MicroscopeState": {
+                            "number_z_steps": 1,
+                            "timepoints": 1000,
+                            "channels": {
+                                "channel_1": {
+                                    "is_selected": True,
+                                    "name": "Channel 1",
+                                    "color": "#FF0000"
+                                }
+                            },
+                            "microscope_name": "default_cam",
+                            "stack_cycling_mode": "per_stack"
+                        },
+                        "CameraParameters": {
+                            "default_cam": {
+                                "x_pixels": shape_x,
+                                "y_pixels": shape_y
+                            }
+                        }  
+                    } 
                 }
-
                 self._ome_zarr_store.set_metadata_from_configuration_experiment(config)
-                self._ome_zarr_store.new_position()
+                #self._ome_zarr_store.new_position(pos_index=0, pos_name="Position 1", pos_x=0, pos_y=0, pos_z=0) # TODO: Adjust position parameters as needed
+
 
         except ImportError:
             self._logger.warning("OME-Zarr dependencies not available, falling back to TIFF")
-            self._initializeTiffSaving(save_path.replace('.zarr', '.tiff'))
+            self._initializeTiffSaving(saveDirectory.replace('.zarr', '.tiff'))
         except Exception as e:
             self._logger.error(f"Failed to initialize OME-Zarr saving: {e}")
             self._ome_zarr_store = None
 
-    def _initializeTiffSaving(self, save_path: str):
+    def _initializeTiffSaving(self, saveDirectory: str):
         """Initialize TIFF saving as fallback."""
-        self._tiff_save_path = save_path
+        drivePath = dirtools.UserFileDirs.Data
+        dirPath = os.path.join(drivePath, 'STORMController')        
+        self._tiff_saveDirectory = os.path.join(dirPath, saveDirectory)
         self._saved_frames = []
 
     def _saveFrameToZarr(self, frame: np.ndarray, frame_number: int, metadata: dict):
@@ -1007,7 +1039,7 @@ class STORMReconController(LiveUpdatedController):
                 # Write frame to zarr store
                 # This is a simplified implementation - in practice you'd need to handle
                 # the proper indexing for time series
-                self._ome_zarr_store.write(frame, t=frame_number, c=0, z=0)
+                self._ome_zarr_store.write(frame, ti=frame_number, ci=0, z=0)
         except Exception as e:
             self._logger.error(f"Failed to save frame to Zarr: {e}")
 
@@ -1030,9 +1062,9 @@ class STORMReconController(LiveUpdatedController):
         """Flush accumulated TIFF frames to disk."""
         try:
             if hasattr(self, '_saved_frames') and self._saved_frames:
-                if hasattr(self, '_tiff_save_path'):
+                if hasattr(self, '_tiff_saveDirectory'):
                     # Create incremental filename to avoid memory issues
-                    base_path = self._tiff_save_path.replace('.tiff', '').replace('.tif', '')
+                    base_path = self._tiff_saveDirectory.replace('.tiff', '').replace('.tif', '')
                     increment_path = f"{base_path}_part_{self._frame_count // 100:04d}.tiff"
                     
                     tif.imwrite(increment_path, np.stack(self._saved_frames), append=False)
@@ -1051,9 +1083,9 @@ class STORMReconController(LiveUpdatedController):
 
             if hasattr(self, '_saved_frames') and self._saved_frames:
                 # Save remaining TIFF frames
-                if hasattr(self, '_tiff_save_path'):
+                if hasattr(self, '_tiff_saveDirectory'):
                     if len(self._saved_frames) > 0:
-                        base_path = self._tiff_save_path.replace('.tiff', '').replace('.tif', '')
+                        base_path = self._tiff_saveDirectory.replace('.tiff', '').replace('.tif', '')
                         final_path = f"{base_path}_final.tiff"
                         tif.imwrite(final_path, np.stack(self._saved_frames), append=False)
                         self._logger.info(f"Saved final {len(self._saved_frames)} frames to {final_path}")

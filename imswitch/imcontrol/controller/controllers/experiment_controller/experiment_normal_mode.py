@@ -292,9 +292,10 @@ class ExperimentNormalMode(ExperimentModeBase):
                     exposure_time = exposures[illu_index] if illu_index < len(exposures) else exposures[0]
                     gain = gains[illu_index] if illu_index < len(gains) else gains[0]
                     
-                    # In single TIFF mode, all positions use the same writer (index 0)
+                    # In single TIFF mode, all positions within a timepoint use the same writer
+                    # The writer index corresponds to the timepoint for timelapse sequences
                     is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-                    writer_index = 0 if is_single_tiff_mode else position_center_index
+                    writer_index = t if is_single_tiff_mode else position_center_index
                     
                     workflow_steps.append(WorkflowStep(
                         name="Acquire frame",

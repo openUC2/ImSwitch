@@ -514,6 +514,9 @@ class CameraGXIPY:
 
     def openPropertiesGUI(self):
         pass
+
+    def set_frame(self, params, frame):
+        """Callback function to process frames from the camera."""
         if frame is None:
             self.__logger.error("Getting image failed.")
             return
@@ -521,49 +524,41 @@ class CameraGXIPY:
             self.__logger.error("Got an incomplete frame")
             return
 
-    def set_frame(self, user_param, frame):
-        """Callback function to process frames from the camera."""
-        if frame is None:
-            self.__logger.error("Received None frame")
-            return
         try:
             # if RGB camera
             if self.isRGB:
                 rgb_image = frame.convert("RGB")
                 if rgb_image is None:
-                    self.__logger.error("Failed to convert frame to RGB")
                     return
 
-                # improve image quality if parameters are available
-                if any([self.color_correction_param, self.contrast_lut, self.gamma_lut]):
-                    try:
-                        rgb_image.image_improvement(self.color_correction_param, self.contrast_lut, self.gamma_lut)
-                    except Exception as e:
-                        self.__logger.debug(f"Image improvement failed: {e}")
+                # improve image quality
+                try:
+                    rgb_image.image_improvement(self.color_correction_param, self.contrast_lut, self.gamma_lut)
+                except Exception as e:
+                    self.__logger.debug(f"Image improvement failed: {e}")
 
                 # create numpy array with data from raw image
                 numpy_image = rgb_image.get_numpy_array()
                 if numpy_image is None:
-                    self.__logger.error("Failed to get numpy array from RGB image")
                     return
 
             else:
                 numpy_image = frame.get_numpy_array()
-                if numpy_image is None:
-                    self.__logger.error("Failed to get numpy array from frame")
-                    return
 
             # flip image if needed
             if self.flipImage[0]: # Y
                 numpy_image = np.flip(numpy_image, axis=0)
             if self.flipImage[1]: # X
                 numpy_image = np.flip(numpy_image, axis=1)
+            if numpy_image is None:
+                self.__logger.error("Got a None frame")
+                return
                 
             self.frame = numpy_image.copy()
             self.frameNumber = frame.get_frame_id()
             self.timestamp = time.time()
 
-            # Add to ring buffer with thread safety consideration
+            # Add to ring buffer 
             self.frame_buffer.append(numpy_image)
             self.frameid_buffer.append(self.frameNumber)
             

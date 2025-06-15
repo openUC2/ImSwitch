@@ -134,15 +134,15 @@ class SingleTiffWriter:
     
     def _process_queue(self):
         """
-        Background loop: open the OME-TIFF in append mode, pop images from queue,
-        and write them as sequential timepoints in a timelapse series.
+        Background loop: open the OME-TIFF and write images as pages in a multi-page series.
         """
         # Ensure the folder exists
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
             
-        # Use append mode to add multiple images to single file as timelapse series
-        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tif:
+        # Open TiffWriter without append mode to create proper multi-page TIFF
+        # Multiple calls to write() will create a multi-page series
+        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff) as tif:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
                     if self.queue:
@@ -152,14 +152,17 @@ class SingleTiffWriter:
                 
                 if image is not None:
                     try:
-                        # Write each image as a new timepoint in the timelapse series
+                        # Write each image as a new page in the multi-page TIFF
+                        # This creates a proper timelapse series that Fiji can read
                         tif.write(
                             data=image,
-                            metadata=metadata,
-                            contiguous=True
+                            photometric='minisblack',  # Grayscale
+                            contiguous=True,
+                            metadata={'axes': 'YX'}  # Simple 2D metadata for each page
                         )
                         self.image_count += 1
                         self.timepoint_index += 1  # Increment timepoint for next tile
+                        print(f"Wrote image to single TIFF as page %d, to path: %s" % (self.timepoint_index, self.file_path))
                     except Exception as e:
                         print(f"Error writing image to single TIFF: {e}")
                 else:

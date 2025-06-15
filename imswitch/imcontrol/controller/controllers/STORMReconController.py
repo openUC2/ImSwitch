@@ -131,6 +131,14 @@ class STORMReconController(LiveUpdatedController):
             self._widget.sigShowToggled.connect(self.setShowSTORMRecon)
             self._widget.sigUpdateRateChanged.connect(self.changeRate)
             self._widget.sigSliderValueChanged.connect(self.valueChanged)
+            
+            # Connect new Fast Acquisition API signals
+            self._widget.sigStartFastAcquisition.connect(self._onStartFastAcquisition)
+            self._widget.sigStopFastAcquisition.connect(self._onStopFastAcquisition)
+            self._widget.sigGetFrameGenerator.connect(self._onGetFrameGenerator)
+            self._widget.sigGetStatus.connect(self._onGetStatus)
+            self._widget.sigSetParameters.connect(self._onSetParameters)
+            self._widget.sigTriggerReconstruction.connect(self._onTriggerReconstruction)
 
             self.changeRate(self.updateRate)
             self.setShowSTORMRecon(False)
@@ -915,6 +923,89 @@ class STORMReconController(LiveUpdatedController):
 
         except Exception as e:
             self._logger.error(f"Failed to finalize saving: {e}")
+
+    # Signal handlers for widget communication
+    def _onStartFastAcquisition(self, params: Dict[str, Any]):
+        """Handle start fast acquisition signal from widget"""
+        try:
+            result = self.startFastSTORMAcquisition(**params)
+            if result.get("success"):
+                self._widget.updateStatus(f"Fast acquisition started: {result.get('session_id')}")
+                self._widget.setAcquisitionState(True)
+            else:
+                self._widget.updateStatus(f"Failed to start: {result.get('message')}")
+                self._widget.setAcquisitionState(False)
+        except Exception as e:
+            self._logger.error(f"Error starting fast acquisition: {e}")
+            self._widget.updateStatus(f"Error: {str(e)}")
+            self._widget.setAcquisitionState(False)
+
+    def _onStopFastAcquisition(self):
+        """Handle stop fast acquisition signal from widget"""
+        try:
+            result = self.stopFastSTORMAcquisition()
+            if result.get("success"):
+                self._widget.updateStatus(f"Fast acquisition stopped: {result.get('session_id')}")
+            else:
+                self._widget.updateStatus(f"Failed to stop: {result.get('message')}")
+            self._widget.setAcquisitionState(False)
+        except Exception as e:
+            self._logger.error(f"Error stopping fast acquisition: {e}")
+            self._widget.updateStatus(f"Error: {str(e)}")
+            self._widget.setAcquisitionState(False)
+
+    def _onGetFrameGenerator(self, num_frames: int, timeout: float):
+        """Handle get frame generator signal from widget"""
+        try:
+            if not self._acquisition_active:
+                self._widget.updateStatus("No active acquisition for frame generator")
+                return
+                
+            # Note: This would typically be used in a separate thread for async operation
+            # For demonstration in the UI, we just show the status
+            self._widget.updateStatus(f"Frame generator requested: {num_frames} frames, {timeout}s timeout")
+            
+            # In a real implementation, you might start a background thread here
+            # that calls self.getSTORMFrameGenerator(num_frames, timeout)
+            
+        except Exception as e:
+            self._logger.error(f"Error with frame generator: {e}")
+            self._widget.updateStatus(f"Frame generator error: {str(e)}")
+
+    def _onGetStatus(self):
+        """Handle get status signal from widget"""
+        try:
+            status = self.getSTORMStatus()
+            status_text = f"Acquisition: {'Active' if status['acquisition_active'] else 'Inactive'}\n"
+            status_text += f"Session: {status.get('session_id', 'None')}\n"
+            status_text += f"Processing: {'Active' if status.get('processing_active') else 'Inactive'}\n"
+            status_text += f"MicroEye: {'Available' if status.get('microeye_available') else 'Not Available'}"
+            
+            self._widget.updateStatus(status_text)
+            
+        except Exception as e:
+            self._logger.error(f"Error getting status: {e}")
+            self._widget.updateStatus(f"Status error: {str(e)}")
+
+    def _onSetParameters(self, params: Dict[str, Any]):
+        """Handle set parameters signal from widget"""
+        try:
+            result = self.setSTORMParameters(**params)
+            self._widget.updateStatus(f"Parameters updated: {result}")
+            
+        except Exception as e:
+            self._logger.error(f"Error setting parameters: {e}")
+            self._widget.updateStatus(f"Parameter error: {str(e)}")
+
+    def _onTriggerReconstruction(self):
+        """Handle trigger reconstruction signal from widget"""
+        try:
+            self.triggerSTORMReconstruction()
+            self._widget.updateStatus("Reconstruction triggered")
+            
+        except Exception as e:
+            self._logger.error(f"Error triggering reconstruction: {e}")
+            self._widget.updateStatus(f"Reconstruction error: {str(e)}")
 
 
     class STORMReconImageComputationWorker(Worker):

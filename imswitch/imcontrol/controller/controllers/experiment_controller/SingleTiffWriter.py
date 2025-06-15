@@ -73,8 +73,8 @@ class SingleTiffWriter:
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
             
-        # Open TiffWriter to create proper multi-page TIFF
-        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff) as tif:
+        # Open TiffWriter using the same pattern as working HistoScanController
+        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tif:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
                     if self.queue:
@@ -84,25 +84,9 @@ class SingleTiffWriter:
                 
                 if image is not None:
                     try:
-                        # Extract position information for description
-                        position_x = metadata.get("PositionX", metadata.get("TilePosition", {}).get("X", 0.0))
-                        position_y = metadata.get("PositionY", metadata.get("TilePosition", {}).get("Y", 0.0))
-                        position_z = metadata.get("PositionZ", metadata.get("TilePosition", {}).get("Z", 0.0))
-                        pixel_size = metadata.get("PhysicalSizeX", metadata.get("pixel_size", 1.0))
-                        
-                        # Create description with position information
-                        description = f"T={self.image_count} X={position_x:.1f} Y={position_y:.1f} Z={position_z:.1f} pixel_size={pixel_size}"
-                        
-                        # Write image as a page in the multi-page TIFF
-                        # Use simple metadata that won't cause conflicts
-                        tif.write(
-                            data=image,
-                            photometric='minisblack',
-                            contiguous=True,
-                            description=description,
-                            resolution=(1/pixel_size, 1/pixel_size),  # Set resolution for scale
-                            resolutionunit='MICROMETER'
-                        )
+                        # Write image using the same method as working HistoScanController
+                        # Pass through the original metadata similar to line 1598 in HistoScanController
+                        tif.write(data=image, metadata=metadata)
                         
                         self.image_count += 1
                         self.timepoint_index += 1

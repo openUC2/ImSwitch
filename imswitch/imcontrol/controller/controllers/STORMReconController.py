@@ -84,7 +84,7 @@ class STORMReconController(LiveUpdatedController):
         super().__init__(*args, **kwargs)
 
         self._logger = initLogger(self, tryInheritParent=True)
-        
+
         self.updateRate = 0
         self.it = 0
         self.showPos = False
@@ -287,72 +287,77 @@ class STORMReconController(LiveUpdatedController):
 
         return result
 
-    def arkitekt_stop_storm_acquisition(self, storm_state: STORMState) -> Dict[str, Any]:
+    def arkitekt_stop_storm_acquisition(self,
+                                         storm_state: STORMState
+                                         ) -> Dict[str, Any]:
         """
         Stop STORM acquisition via Arkitekt.
-        
+
         Parameters:
         - storm_state: STORMState object for tracking acquisition state
-        
+
         Returns:
         - Dictionary with session info and status
         """
         progress(50, "Stopping STORM acquisition...")
-        
+
         result = self.stopFastSTORMAcquisition()
-        
+
         if result.get("success"):
             storm_state.acquisition_active = False
             storm_state.session_id = None
-            progress(100, f"STORM acquisition stopped. Total frames: {storm_state.total_frames_acquired}")
+            total_frames = storm_state.total_frames_acquired
+            progress(100, f"STORM acquisition stopped. Total frames: {total_frames}")
         else:
-            progress(0, f"Failed to stop acquisition: {result.get('message')}")
-        
+            progress(0, f"Failed to stop: {result.get('message')}")
+
         return result
 
-    def arkitekt_get_storm_frames(self, 
-                                storm_state: STORMState,
-                                num_frames: int = 100,
-                                timeout: float = 10.0,
-                                image_name_prefix: str = "storm_frame") -> Generator[Image, None, None]:
+    def arkitekt_get_storm_frames(self,
+                                  storm_state: STORMState,
+                                  num_frames: int = 100,
+                                  timeout: float = 10.0,
+                                  image_name_prefix: str = "storm_frame"
+                                  ) -> Generator[Image, None, None]:
         """
         Get STORM frames via Arkitekt as Mikro Images.
-        
-        This generator yields acquired STORM frames converted to Mikro Image format
-        for integration with the Arkitekt/Mikro ecosystem.
+
+        This generator yields acquired STORM frames converted to Mikro Image
+        format for integration with the Arkitekt/Mikro ecosystem.
 
         Parameters:
         - storm_state: STORMState object for tracking acquisition state
         - num_frames: Maximum number of frames to yield
         - timeout: Timeout for waiting for each frame
         - image_name_prefix: Prefix for generated image names
-        
+
         Yields:
         - Mikro Image objects containing frame data
         """
         frame_count = 0
-        
-        for frame_data in self.getSTORMFrameGenerator(num_frames=num_frames, timeout=timeout):
+
+        for frame_data in self.getSTORMFrameGenerator(num_frames=num_frames,
+                                                      timeout=timeout):
             if 'error' in frame_data:
                 progress(0, f"Error acquiring frame: {frame_data['error']}")
                 break
-            
+
             frame = frame_data['raw_frame']
             metadata = frame_data['metadata']
-            
+
             # Update state
             storm_state.total_frames_acquired += 1
             frame_count += 1
-            
+
             # Convert to RGB if needed for Mikro
             if len(frame.shape) == 2:
                 frame_rgb = np.repeat(frame[:, :, np.newaxis], 3, axis=2)
             else:
                 frame_rgb = frame
-            
+
             # Create image name
             image_name = f"{image_name_prefix}_{frame_count:04d}"
-            
+
             # Create affine transformation for spatial context
             affine_view = PartialAffineTransformationViewInput(
                 affineMatrix=[
@@ -363,55 +368,58 @@ class STORMReconController(LiveUpdatedController):
                 ],
                 stage=storm_state.stage,
             )
-            
+
             # Create RGB views for visualization
             rgb_views = [
                 PartialRGBViewInput(
-                    cMin=0, cMax=1, 
-                    contrastLimitMax=float(frame_rgb.max()), 
-                    contrastLimitMin=float(frame_rgb.min()), 
-                    colorMap=ColorMap.RED, 
+                    cMin=0, cMax=1,
+                    contrastLimitMax=float(frame_rgb.max()),
+                    contrastLimitMin=float(frame_rgb.min()),
+                    colorMap=ColorMap.RED,
                     baseColor=[0, 0, 0]
                 ),
                 PartialRGBViewInput(
-                    cMin=1, cMax=2, 
-                    contrastLimitMax=float(frame_rgb.max()), 
-                    contrastLimitMin=float(frame_rgb.min()), 
-                    colorMap=ColorMap.GREEN, 
+                    cMin=1, cMax=2,
+                    contrastLimitMax=float(frame_rgb.max()),
+                    contrastLimitMin=float(frame_rgb.min()),
+                    colorMap=ColorMap.GREEN,
                     baseColor=[0, 0, 0]
                 ),
                 PartialRGBViewInput(
-                    cMin=2, cMax=3, 
-                    contrastLimitMax=float(frame_rgb.max()), 
-                    contrastLimitMin=float(frame_rgb.min()), 
-                    colorMap=ColorMap.BLUE, 
+                    cMin=2, cMax=3,
+                    contrastLimitMax=float(frame_rgb.max()),
+                    contrastLimitMin=float(frame_rgb.min()),
+                    colorMap=ColorMap.BLUE,
                     baseColor=[0, 0, 0]
                 )
             ]
-            
-            progress(int((frame_count / num_frames) * 100), 
-                    f"Processing STORM frame {frame_count}/{num_frames}")
-            
+
+            progress_val = int((frame_count / num_frames) * 100)
+            progress(progress_val,
+                     f"Processing STORM frame {frame_count}/{num_frames}")
+
             # Convert to Mikro Image and yield
             yield from_array_like(
-                xr.DataArray(frame_rgb, dims=list("yxc")), 
+                xr.DataArray(frame_rgb, dims=list("yxc")),
                 name=image_name,
                 rgb_views=rgb_views,
                 transformation_views=[affine_view]
             )
 
-    def arkitekt_get_storm_status(self, storm_state: STORMState) -> Dict[str, Any]:
+    def arkitekt_get_storm_status(self,
+                                  storm_state: STORMState
+                                  ) -> Dict[str, Any]:
         """
         Get STORM acquisition status via Arkitekt.
-        
+
         Parameters:
         - storm_state: STORMState object for tracking acquisition state
-        
+
         Returns:
         - Dictionary with current status information including state info
         """
         base_status = self.getSTORMStatus()
-        
+
         # Add Arkitekt-specific state information
         base_status.update({
             "arkitekt_session_active": storm_state.acquisition_active,
@@ -419,23 +427,24 @@ class STORMReconController(LiveUpdatedController):
             "total_frames_acquired": storm_state.total_frames_acquired,
             "arkitekt_available": IS_ARKITEKT
         })
-        
+
         return base_status
 
-    def arkitekt_set_storm_parameters(self, 
-                                    storm_state: STORMState,
-                                    threshold: float = None,
-                                    roi_size: int = None,
-                                    update_rate: int = None) -> Dict[str, Any]:
+    def arkitekt_set_storm_parameters(self,
+                                      storm_state: STORMState,
+                                      threshold: float = None,
+                                      roi_size: int = None,
+                                      update_rate: int = None
+                                      ) -> Dict[str, Any]:
         """
         Set STORM processing parameters via Arkitekt.
-        
+
         Parameters:
         - storm_state: STORMState object for tracking acquisition state
         - threshold: Detection threshold for localization
         - roi_size: ROI size for fitting
         - update_rate: Update rate for live processing
-        
+
         Returns:
         - Dictionary with current parameter values
         """
@@ -444,53 +453,54 @@ class STORMReconController(LiveUpdatedController):
             roi_size=roi_size,
             update_rate=update_rate
         )
-        
+
         # Update state parameters
         storm_state.current_parameters.update(result)
-        
+
         progress(100, f"STORM parameters updated: {result}")
-        
+
         return result
 
-    def arkitekt_capture_storm_image(self, 
-                                   storm_state: STORMState,
-                                   image_name: str = "storm_capture") -> Image:
+    def arkitekt_capture_storm_image(self,
+                                     storm_state: STORMState,
+                                     image_name: str = "storm_capture"
+                                     ) -> Image:
         """
         Capture a single STORM image via Arkitekt.
-        
-        This function captures a single frame and processes it through the STORM
-        reconstruction pipeline, returning a Mikro Image.
+
+        This function captures a single frame and processes it through the
+        STORM reconstruction pipeline, returning a Mikro Image.
 
         Parameters:
         - storm_state: STORMState object for tracking acquisition state
         - image_name: Name for the captured image
-        
+
         Returns:
         - Mikro Image object containing the captured and processed frame
         """
         progress(25, "Capturing STORM image...")
-        
+
         # Trigger reconstruction and get frame
         self.triggerSTORMReconstruction()
         frame = self.detector.getLatestFrame()
-        
+
         if frame is None:
             raise ValueError("No frame available from detector")
-        
+
         progress(50, "Processing frame through STORM pipeline...")
-        
+
         # Apply cropping if active
         if self._cropping_params is not None:
             crop = self._cropping_params
             frame = frame[crop['y']:crop['y']+crop['height'],
                          crop['x']:crop['x']+crop['width']]
-        
+
         # Convert to RGB format for Mikro
         if len(frame.shape) == 2:
             frame = np.repeat(frame[:, :, np.newaxis], 3, axis=2)
-        
+
         progress(75, "Converting to Mikro Image...")
-        
+
         # Create affine transformation
         affine_view = PartialAffineTransformationViewInput(
             affineMatrix=[
@@ -501,48 +511,50 @@ class STORMReconController(LiveUpdatedController):
             ],
             stage=storm_state.stage,
         )
-        
+
         # Create RGB views
         rgb_views = [
             PartialRGBViewInput(
-                cMin=0, cMax=1, 
-                contrastLimitMax=float(frame.max()), 
-                contrastLimitMin=float(frame.min()), 
-                colorMap=ColorMap.RED, 
+                cMin=0, cMax=1,
+                contrastLimitMax=float(frame.max()),
+                contrastLimitMin=float(frame.min()),
+                colorMap=ColorMap.RED,
                 baseColor=[0, 0, 0]
             ),
             PartialRGBViewInput(
-                cMin=1, cMax=2, 
-                contrastLimitMax=float(frame.max()), 
-                contrastLimitMin=float(frame.min()), 
-                colorMap=ColorMap.GREEN, 
+                cMin=1, cMax=2,
+                contrastLimitMax=float(frame.max()),
+                contrastLimitMin=float(frame.min()),
+                colorMap=ColorMap.GREEN,
                 baseColor=[0, 0, 0]
             ),
             PartialRGBViewInput(
-                cMin=2, cMax=3, 
-                contrastLimitMax=float(frame.max()), 
-                contrastLimitMin=float(frame.min()), 
-                colorMap=ColorMap.BLUE, 
+                cMin=2, cMax=3,
+                contrastLimitMax=float(frame.max()),
+                contrastLimitMin=float(frame.min()),
+                colorMap=ColorMap.BLUE,
                 baseColor=[0, 0, 0]
             )
         ]
-        
+
         progress(100, "STORM image captured and processed")
-        
+
         return from_array_like(
-            xr.DataArray(frame, dims=list("yxc")), 
+            xr.DataArray(frame, dims=list("yxc")),
             name=image_name,
             rgb_views=rgb_views,
             transformation_views=[affine_view]
         )
 
-    def arkitekt_trigger_reconstruction(self, storm_state: STORMState) -> str:
+    def arkitekt_trigger_reconstruction(self,
+                                        storm_state: STORMState
+                                        ) -> str:
         """
         Trigger STORM reconstruction via Arkitekt.
-        
+
         Parameters:
         - storm_state: STORMState object for tracking acquisition state
-        
+
         Returns:
         - Status message
         """
@@ -562,7 +574,7 @@ class STORMReconController(LiveUpdatedController):
                 self._arkitekt_app.exit()
             except Exception as e:
                 self._logger.error(f"Error cleaning up Arkitekt: {e}")
-        
+
         # Clean up existing resources
         if hasattr(self, 'imageComputationThread'):
             self.imageComputationThread.quit()
@@ -578,18 +590,18 @@ class STORMReconController(LiveUpdatedController):
         self.imageComputationWorker.reconSTORMFrame(frame=frame)
 
     @APIExport(runOnUIThread=False)
-    def startFastSTORMAcquisition(self, 
+    def startFastSTORMAcquisition(self,
                                   session_id: str = None,
-                                  crop_x: int = None, 
+                                  crop_x: int = None,
                                   crop_y: int = None,
-                                  crop_width: int = None, 
+                                  crop_width: int = None,
                                   crop_height: int = None,
                                   save_path: str = None,
                                   save_format: str = "omezarr",
                                   exposure_time: float = None) -> Dict[str, Any]:
         """
         Start fast STORM frame acquisition with optional cropping and saving.
-        
+
         Parameters:
         - session_id: Unique identifier for this acquisition session
         - crop_x, crop_y: Top-left corner of crop region (None to disable cropping)
@@ -597,23 +609,25 @@ class STORMReconController(LiveUpdatedController):
         - save_path: Path to save acquired frames (None to disable saving)
         - save_format: Format to save frames ('omezarr', 'tiff')
         - exposure_time: Exposure time for frames (None to use current)
-        
+
         Returns:
         - Dictionary with session info and status
         """
         if self._acquisition_active:
             return {"success": False, "message": "Acquisition already active"}
-        
+
         # Generate session ID if not provided
         if session_id is None:
             session_id = f"storm_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
+
         self._current_session_id = session_id
-        
+
         # Set cropping parameters
-        if crop_x is not None and crop_y is not None and crop_width is not None and crop_height is not None:
+        crop_params_given = (crop_x is not None and crop_y is not None and
+                             crop_width is not None and crop_height is not None)
+        if crop_params_given:
             self._cropping_params = {
-                'x': crop_x, 'y': crop_y, 
+                'x': crop_x, 'y': crop_y,
                 'width': crop_width, 'height': crop_height
             }
             # Apply cropping to detector if supported
@@ -621,19 +635,19 @@ class STORMReconController(LiveUpdatedController):
                 self.detector.crop(crop_x, crop_y, crop_width, crop_height)
         else:
             self._cropping_params = None
-        
+
         # Set exposure time if provided
         if exposure_time is not None and hasattr(self.detector, 'setParameter'):
             self.detector.setParameter('ExposureTime', exposure_time)
-        
+
         # Initialize saving if requested
         if save_path is not None:
             self._initializeSaving(save_path, save_format)
-        
+
         # Start acquisition
         self._acquisition_active = True
         self.detector.startAcquisition()
-        
+
         return {
             "success": True,
             "session_id": session_id,
@@ -647,26 +661,26 @@ class STORMReconController(LiveUpdatedController):
     def stopFastSTORMAcquisition(self) -> Dict[str, Any]:
         """
         Stop fast STORM frame acquisition.
-        
+
         Returns:
         - Dictionary with session info and status
         """
         if not self._acquisition_active:
             return {"success": False, "message": "No acquisition active"}
-        
+
         self._acquisition_active = False
-        
+
         # Stop detector acquisition
         if hasattr(self.detector, 'stopAcquisition'):
             self.detector.stopAcquisition()
-        
+
         # Finalize saving
         if self._ome_zarr_store is not None:
             self._finalizeSaving()
-        
+
         session_id = self._current_session_id
         self._current_session_id = None
-        
+
         return {
             "success": True,
             "session_id": session_id,
@@ -674,39 +688,39 @@ class STORMReconController(LiveUpdatedController):
         }
 
     @APIExport(runOnUIThread=False)
-    def getSTORMFrameGenerator(self, 
+    def getSTORMFrameGenerator(self,
                                num_frames: int = 100,
                                timeout: float = 10.0) -> Generator[Dict[str, Any], None, None]:
         """
         Generator that yields acquired STORM frames with metadata.
-        
+
         Parameters:
         - num_frames: Maximum number of frames to yield
         - timeout: Timeout for waiting for each frame
-        
+
         Yields:
         - Dictionary containing frame data, timestamp, and metadata
         """
         frames_yielded = 0
-        
+
         while frames_yielded < num_frames and self._acquisition_active:
             try:
                 # Get latest frame from detector
                 frame = self.detector.getLatestFrame()
-                
+
                 if frame is not None:
                     # Apply cropping if specified
                     if self._cropping_params is not None:
                         crop = self._cropping_params
                         frame = frame[crop['y']:crop['y']+crop['height'],
                                      crop['x']:crop['x']+crop['width']]
-                    
+
                     # Process with microEye if available and enabled
                     processed_frame = None
                     localization_params = None
                     if isMicroEye and self.active:
                         processed_frame, localization_params = self.imageComputationWorker.reconSTORMFrame(frame)
-                    
+
                     # Create metadata
                     metadata = {
                         'timestamp': datetime.now().isoformat(),
@@ -715,26 +729,26 @@ class STORMReconController(LiveUpdatedController):
                         'original_shape': frame.shape,
                         'cropping_params': self._cropping_params
                     }
-                    
+
                     if localization_params is not None:
                         metadata['num_localizations'] = len(localization_params)
-                    
+
                     # Save frame if saving is enabled
                     if self._ome_zarr_store is not None:
                         self._saveFrameToZarr(frame, frames_yielded, metadata)
-                    
+
                     yield {
                         'raw_frame': frame,
                         'processed_frame': processed_frame,
                         'localization_params': localization_params,
                         'metadata': metadata
                     }
-                    
+
                     frames_yielded += 1
-                
+
                 # Small delay to prevent excessive CPU usage
                 time.sleep(0.001)
-                
+
             except Exception as e:
                 yield {
                     'error': str(e),
@@ -742,7 +756,7 @@ class STORMReconController(LiveUpdatedController):
                     'timestamp': datetime.now().isoformat()
                 }
                 break
-        
+
         # Cleanup
         if self._acquisition_active:
             self.stopFastSTORMAcquisition()
@@ -751,7 +765,7 @@ class STORMReconController(LiveUpdatedController):
     def getSTORMStatus(self) -> Dict[str, Any]:
         """
         Get current STORM acquisition status.
-        
+
         Returns:
         - Dictionary with current status information
         """
@@ -765,18 +779,18 @@ class STORMReconController(LiveUpdatedController):
         }
 
     @APIExport()
-    def setSTORMParameters(self, 
+    def setSTORMParameters(self,
                           threshold: float = None,
                           roi_size: int = None,
                           update_rate: int = None) -> Dict[str, Any]:
         """
         Set STORM processing parameters.
-        
+
         Parameters:
         - threshold: Detection threshold for localization
         - roi_size: ROI size for fitting
         - update_rate: Update rate for live processing
-        
+
         Returns:
         - Dictionary with current parameter values
         """
@@ -784,15 +798,15 @@ class STORMReconController(LiveUpdatedController):
             self.threshold = threshold
             if hasattr(self.imageComputationWorker, 'setThreshold'):
                 self.imageComputationWorker.setThreshold(threshold)
-        
+
         if roi_size is not None:
             if hasattr(self.imageComputationWorker, 'setFitRoiSize'):
                 self.imageComputationWorker.setFitRoiSize(roi_size)
-        
+
         if update_rate is not None:
             self.updateRate = update_rate
             self.changeRate(update_rate)
-        
+
         return {
             "threshold": self.threshold,
             "roi_size": getattr(self.imageComputationWorker, 'fit_roi_size', None),
@@ -817,13 +831,13 @@ class STORMReconController(LiveUpdatedController):
         try:
             # Try to import OME-Zarr dependencies
             from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
-            
+
             # Ensure directory exists
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            
+
             # Initialize OME-Zarr store
             self._ome_zarr_store = MinimalZarrDataSource(save_path, mode="w")
-            
+
             # Get frame shape for configuration
             sample_frame = self.detector.getLatestFrame()
             if sample_frame is not None:
@@ -832,7 +846,7 @@ class STORMReconController(LiveUpdatedController):
                     shape_y, shape_x = crop['height'], crop['width']
                 else:
                     shape_y, shape_x = sample_frame.shape
-                
+
                 # Configure metadata for OME-Zarr
                 config = {
                     'shape_t': 1000,  # Will be extended as needed
@@ -842,10 +856,10 @@ class STORMReconController(LiveUpdatedController):
                     'shape_x': shape_x,
                     'dtype': sample_frame.dtype
                 }
-                
+
                 self._ome_zarr_store.set_metadata_from_configuration_experiment(config)
                 self._ome_zarr_store.new_position()
-                
+
         except ImportError:
             self._logger.warning("OME-Zarr dependencies not available, falling back to TIFF")
             self._initializeTiffSaving(save_path.replace('.zarr', '.tiff'))
@@ -875,13 +889,13 @@ class STORMReconController(LiveUpdatedController):
             if self._ome_zarr_store is not None:
                 # Close the store properly
                 self._ome_zarr_store = None
-            
+
             if hasattr(self, '_saved_frames') and self._saved_frames:
                 # Save accumulated TIFF frames
                 if hasattr(self, '_tiff_save_path'):
                     tif.imwrite(self._tiff_save_path, np.stack(self._saved_frames), append=False)
                 self._saved_frames = []
-                
+
         except Exception as e:
             self._logger.error(f"Failed to finalize saving: {e}")
 

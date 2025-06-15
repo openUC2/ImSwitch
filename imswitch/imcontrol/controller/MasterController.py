@@ -1,4 +1,4 @@
-from imswitch.imcommon.model import VFileItem, initLogger
+from imswitch.imcommon.model import VFileItem, initLogger, get_plugin_manager
 
 import pkg_resources
 
@@ -69,12 +69,33 @@ class MasterController:
         if "FOV" in self.__setupInfo.availableWidgets: self.FOVLockManager = FOVLockManager(self.__setupInfo.fovLock)
         if "ISM" in self.__setupInfo.availableWidgets: self.ismManager = ISMManager(self.__setupInfo.ism)
         if "Workflow" in self.__setupInfo.availableWidgets: self.workflowManager = WorkflowManager()
-        # load all implugin-related managers and add them to the class
-        # try to get it from the plugins
-        # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the
-        # MasterController Class
+        # Load plugin-related managers using centralized plugin manager
+        plugin_manager = get_plugin_manager()
+        available_manager_plugins = plugin_manager.get_available_plugins('manager')
+        
+        for plugin_info in available_manager_plugins:
+            try:
+                # Check if there is an info class for this manager
+                info_class = plugin_manager.get_plugin_info_class(plugin_info.name)
+                
+                # Load the manager class
+                manager_class = plugin_manager.load_plugin(plugin_info.name, 'manager', info_class)
+                if manager_class:
+                    # TODO: setupInfo integration needs to be improved for plugin managers
+                    # For now, pass None as moduleInfo until setupInfo supports dynamic plugins
+                    module_info = None
+                    manager = manager_class(module_info)
+                    setattr(self, plugin_info.entry_point_name, manager)
+                    self.__logger.debug(f"Loaded plugin manager: {plugin_info.entry_point_name}")
+            except Exception as e:
+                self.__logger.error(f"Failed to load plugin manager {plugin_info.name}: {e}")
 
+        # Fallback to old plugin loading method for backwards compatibility
         for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
+            if plugin_manager.is_plugin_available(entry_point.name.replace('_manager', ''), 'manager'):
+                # Skip if already handled by new system
+                continue
+                
             InfoClass = None
             print (f"entry_point: {entry_point.name}")
             try:

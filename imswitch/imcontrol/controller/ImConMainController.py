@@ -4,7 +4,8 @@ import h5py
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.controller import MainController, PickDatasetsController
 from imswitch.imcommon.model import (
-    ostools, initLogger, generateAPI, generateUI, generateShortcuts, SharedAttributes
+    ostools, initLogger, generateAPI, generateUI, generateShortcuts, SharedAttributes,
+    get_plugin_manager
 )
 from imswitch.imcommon.framework import Thread
 from .server import ImSwitchServer
@@ -109,12 +110,21 @@ class ImConMainController(MainController):
 
 
     def loadPlugin(self, widgetKey):
-        # try to get it from the plugins
-        foundPluginController = False
+        """Load a plugin controller using the centralized plugin manager"""
+        plugin_manager = get_plugin_manager()
+        
+        # Try to load the controller plugin
+        controller_class = plugin_manager.load_plugin(widgetKey, 'controller')
+        if controller_class:
+            self.__logger.debug(f'Loaded controller plugin: {widgetKey}')
+            return controller_class
+        
+        # Fallback to old method for backwards compatibility
         for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
             if entry_point.name == f'{widgetKey}_controller':
                 packageController = entry_point.load()
                 return packageController
+        
         self.__logger.error(f'No controller found for widget {widgetKey}')
         return None
 

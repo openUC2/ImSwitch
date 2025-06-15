@@ -615,12 +615,20 @@ class SetupInfo:
     _catchAll: CatchAll = None
 
     def add_attribute(self, attr_name, attr_value):
-        # load all implugin-related setup infos and add them to the class
-        # try to get it from the plugins
-        # If there is a imswitch_sim_info, we want to add this as self.imswitch_sim_info to the
-        # SetupInfo Class
-
+        """Add dynamic attributes for plugin-related setup infos using centralized plugin manager"""
+        from imswitch.imcommon.model import get_plugin_manager
         import pkg_resources
+        
+        plugin_manager = get_plugin_manager()
+        
+        # Try to get info class from centralized plugin manager
+        info_class = plugin_manager.get_plugin_info_class(attr_name)
+        if info_class:
+            ManagerDataClass = make_dataclass(attr_name, [(attr_name + "_info", info_class)])
+            setattr(self, attr_name, field(default_factory=ManagerDataClass))
+            return
+        
+        # Fallback to old method for backwards compatibility
         for entry_point in pkg_resources.iter_entry_points('imswitch.implugins'):
             if entry_point.name == attr_name+"_info":
                 ManagerClass = entry_point.load()

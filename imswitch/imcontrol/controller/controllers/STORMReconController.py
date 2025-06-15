@@ -482,10 +482,13 @@ class STORMReconController(LiveUpdatedController):
 
         # Trigger reconstruction and get frame
         self.triggerSTORMReconstruction()
-        frame = self.detector.getLatestFrame()
+        frame_chunk = self.detector.getChunk()
 
-        if frame is None:
+        if frame_chunk is None or len(frame_chunk) == 0:
             raise ValueError("No frame available from detector")
+        
+        # Take the most recent frame from the chunk
+        frame = frame_chunk[-1] if len(frame_chunk.shape) > 2 else frame_chunk
 
         progress(50, "Processing frame through STORM pipeline...")
 
@@ -586,7 +589,12 @@ class STORMReconController(LiveUpdatedController):
     def triggerSTORMReconstruction(self, frame=None):
         """ Trigger reconstruction. """
         if frame is None:
-            frame = self.detector.getLatestFrame()
+            frame_chunk = self.detector.getChunk()
+            if frame_chunk is not None and len(frame_chunk) > 0:
+                # Take the most recent frame from the chunk
+                frame = frame_chunk[-1] if len(frame_chunk.shape) > 2 else frame_chunk
+            else:
+                frame = None
         self.imageComputationWorker.reconSTORMFrame(frame=frame)
 
     @APIExport(runOnUIThread=False)
@@ -705,48 +713,55 @@ class STORMReconController(LiveUpdatedController):
 
         while frames_yielded < num_frames and self._acquisition_active:
             try:
-                # Get latest frame from detector
-                frame = self.detector.getLatestFrame()
+                # Get all frames from detector since last call to avoid losing frames
+                frame_chunk = self.detector.getChunk()
 
-                if frame is not None:
-                    # Apply cropping if specified
-                    if self._cropping_params is not None:
-                        crop = self._cropping_params
-                        frame = frame[crop['y']:crop['y']+crop['height'],
-                                     crop['x']:crop['x']+crop['width']]
+                if frame_chunk is not None and len(frame_chunk) > 0:
+                    # Process all frames in the chunk
+                    frames_to_process = frame_chunk if len(frame_chunk.shape) > 2 else [frame_chunk]
+                    
+                    for frame in frames_to_process:
+                        if frames_yielded >= num_frames:
+                            break
+                            
+                        # Apply cropping if specified
+                        if self._cropping_params is not None:
+                            crop = self._cropping_params
+                            frame = frame[crop['y']:crop['y']+crop['height'],
+                                         crop['x']:crop['x']+crop['width']]
 
-                    # Process with microEye if available and enabled
-                    processed_frame = None
-                    localization_params = None
-                    if isMicroEye and self.active:
-                        processed_frame, localization_params = self.imageComputationWorker.reconSTORMFrame(frame)
+                        # Process with microEye if available and enabled
+                        processed_frame = None
+                        localization_params = None
+                        if isMicroEye and self.active:
+                            processed_frame, localization_params = self.imageComputationWorker.reconSTORMFrame(frame)
 
-                    # Create metadata
-                    metadata = {
-                        'timestamp': datetime.now().isoformat(),
-                        'frame_number': frames_yielded,
-                        'session_id': self._current_session_id,
-                        'original_shape': frame.shape,
-                        'cropping_params': self._cropping_params
-                    }
+                        # Create metadata
+                        metadata = {
+                            'timestamp': datetime.now().isoformat(),
+                            'frame_number': frames_yielded,
+                            'session_id': self._current_session_id,
+                            'original_shape': frame.shape,
+                            'cropping_params': self._cropping_params
+                        }
 
-                    if localization_params is not None:
-                        metadata['num_localizations'] = len(localization_params)
+                        if localization_params is not None:
+                            metadata['num_localizations'] = len(localization_params)
 
-                    # Save frame if saving is enabled
-                    if self._ome_zarr_store is not None:
-                        self._saveFrameToZarr(frame, frames_yielded, metadata)
+                        # Save frame if saving is enabled
+                        if self._ome_zarr_store is not None:
+                            self._saveFrameToZarr(frame, frames_yielded, metadata)
 
-                    yield {
-                        'raw_frame': frame,
-                        'processed_frame': processed_frame,
-                        'localization_params': localization_params,
-                        'metadata': metadata
-                    }
+                        yield {
+                            'raw_frame': frame,
+                            'processed_frame': processed_frame,
+                            'localization_params': localization_params,
+                            'metadata': metadata
+                        }
 
-                    frames_yielded += 1
+                        frames_yielded += 1
 
-                # Small delay to prevent excessive CPU usage
+                # Small delay to prevent excessive CPU usage when no frames available
                 time.sleep(0.001)
 
             except Exception as e:
@@ -839,8 +854,9 @@ class STORMReconController(LiveUpdatedController):
             self._ome_zarr_store = MinimalZarrDataSource(save_path, mode="w")
 
             # Get frame shape for configuration
-            sample_frame = self.detector.getLatestFrame()
-            if sample_frame is not None:
+            sample_chunk = self.detector.getChunk()
+            if sample_chunk is not None and len(sample_chunk) > 0:
+                sample_frame = sample_chunk[-1] if len(sample_chunk.shape) > 2 else sample_chunk
                 if self._cropping_params is not None:
                     crop = self._cropping_params
                     shape_y, shape_x = crop['height'], crop['width']

@@ -128,16 +128,15 @@ class Camera:
                 image = np.roll(
                     np.roll(image, int(x_offset), axis=1), int(y_offset), axis=0
                 )
-                image = nip.extract(image, (self.SensorHeight, self.SensorWidth))
+                image = nip.extract(image, (self.SensorHeight, self.SensorWidth)) # extract the image to the sensor size
 
                 # do all post-processing on cropped image
                 if IS_NIP and defocusPSF is not None and not defocusPSF.shape == ():
                     print("Defocus:" + str(defocusPSF.shape))
                     image = np.array(np.real(nip.convolve(image, defocusPSF)))
-                image = (
-                    np.float32(image) / np.max(image) * np.float32(light_intensity)
-                    + self.noiseStack[:, :, np.random.randint(0, 100)]
-                )
+                image = np.float32(image) * np.float32(light_intensity)
+                image += self.noiseStack[:, :, np.random.randint(0, 100)]
+                
 
                 # Adjust illumination
                 image = image.astype(np.uint16)
@@ -214,10 +213,11 @@ class Camera:
                 defocusPSF=defocusPSF,
             )
 
+
     def getLastChunk(self):
         mFrame = self.getLast()
-        return np.expand_dims(mFrame, axis=2)
-
+        return np.expand_dims(mFrame, axis=0), [self.frameNumber] # we only provide one chunk, so we return a list with one element
+    
     def setPropertyValue(self, propertyName, propertyValue):
         pass
 
@@ -370,118 +370,6 @@ class VirtualMicroscopeManager:
     def finalize(self):
         self._virtualMicroscope.stop()
 
-
-class Camera:
-    def __init__(self, parent, filePath="path_to_image.jpeg"):
-        self._parent = parent
-        self.filePath = filePath
-        self.binning = False  # Flag to determine if binning is active
-
-        if self.filePath == "simplant":
-            self.image = createBranchingTree(width=5000, height=5000)
-            self.image = self.image.astype(np.float32)
-            self.image /= np.max(self.image)
-        elif self.filePath == "smlm":
-            tmp = createBranchingTree(width=5000, height=5000)
-            tmp_min = np.min(tmp)
-            tmp_max = np.max(tmp)
-            self.image = (1 - ((tmp - tmp_min) / (tmp_max - tmp_min))) > 0
-            self.image = self.image.astype(np.float32)
-        else:
-            self.image = cv2.imread(filePath, cv2.IMREAD_GRAYSCALE)
-            self.image = self.image.astype(np.float32)
-            self.image /= np.max(self.image)
-
-        self.lock = threading.Lock()
-        self.SensorHeight = 300
-        self.SensorWidth = 400
-        self.model = "VirtualCamera"
-        self.PixelSize = 1.0
-        self.isRGB = False
-        self.frameNumber = 0
-        self.noiseStack = np.abs(
-            np.random.randn(self.SensorHeight, self.SensorWidth, 100) * 2
-        )
-
-    def produce_frame(self, x_offset=0, y_offset=0, light_intensity=1.0, defocusPSF=None):
-        with self.lock:
-            image = self.image.copy()
-            image = np.roll(np.roll(image, int(x_offset), axis=1), int(y_offset), axis=0)
-            image = nip.extract(image, (self.SensorHeight, self.SensorWidth))
-            if IS_NIP and defocusPSF is not None and defocusPSF.shape != ():
-                image = np.array(np.real(nip.convolve(image, defocusPSF)))
-            image = (np.float32(image) / np.max(image) * np.float32(light_intensity) +
-                     self.noiseStack[:, :, np.random.randint(0, 100)])
-            image = image.astype(np.uint16)
-            time.sleep(0.1)
-            # If binning is enabled, perform 2x2 pixel binning to double the magnification
-            if self.binning:
-                h, w = image.shape
-                # Ensure even dimensions
-                h_new = h - h % 2
-                w_new = w - w % 2
-                image = image[:h_new, :w_new]
-                image = image.reshape((h_new // 2, 2, w_new // 2, 2)).mean(axis=(1, 3)).astype(np.uint16)
-            return np.array(image)
-
-    def produce_smlm_frame(self, x_offset=0, y_offset=0, light_intensity=5000):
-        with self.lock:
-            image = self.image.copy()
-            image = np.roll(np.roll(image, int(x_offset), axis=1), int(y_offset), axis=0)
-            image = nip.extract(image, (self.SensorHeight, self.SensorWidth))
-            yc_array, xc_array = binary2locs(image, density=0.05)
-            photon_array = np.random.normal(light_intensity * 5, light_intensity * 0.05, size=len(xc_array))
-            wavelenght = 6
-            wavelenght_std = 0.5
-            NA = 1.2
-            sigma = 0.21 * wavelenght / NA
-            sigma_std = 0.21 * wavelenght_std / NA
-            sigma_array = np.random.normal(sigma, sigma_std, size=len(xc_array))
-            ADC_per_photon_conversion = 1.0
-            readout_noise = 50
-            ADC_offset = 100
-            out = FromLoc2Image_MultiThreaded(
-                xc_array, yc_array, photon_array, sigma_array,
-                self.SensorHeight, self.SensorWidth, self.PixelSize,
-            )
-            out = (ADC_per_photon_conversion * np.random.poisson(out) +
-                   readout_noise * np.random.normal(size=(self.SensorHeight, self.SensorWidth)) +
-                   ADC_offset)
-            time.sleep(0.1)
-            if self.binning:
-                h, w = out.shape
-                h_new = h - h % 2
-                w_new = w - w % 2
-                out = out[:h_new, :w_new]
-                out = out.reshape((h_new // 2, 2, w_new // 2, 2)).mean(axis=(1, 3))
-            return np.array(out)
-
-    def getLast(self, returnFrameNumber=False):
-        position = self._parent.positioner.get_position()
-        defocusPSF = np.squeeze(self._parent.positioner.get_psf())
-        intensity = self._parent.illuminator.get_intensity(1)
-        self.frameNumber += 1
-        if returnFrameNumber:
-            return (self.produce_frame(
-                x_offset=position["X"],
-                y_offset=position["Y"],
-                light_intensity=intensity,
-                defocusPSF=defocusPSF,
-            ), self.frameNumber)
-        else:
-            return self.produce_frame(
-                x_offset=position["X"],
-                y_offset=position["Y"],
-                light_intensity=intensity,
-                defocusPSF=defocusPSF,
-            )
-
-    def getLastChunk(self):
-        mFrame = self.getLast()
-        return np.expand_dims(mFrame, axis=2)
-
-    def setPropertyValue(self, propertyName, propertyValue):
-        pass
 
 
 class Positioner:

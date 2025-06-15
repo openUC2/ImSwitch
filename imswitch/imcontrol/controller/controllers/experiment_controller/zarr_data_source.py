@@ -49,20 +49,25 @@ class MinimalZarrDataSource:
         Read T, C, Z, X, Y, positions from 'config'.
         Then define shapes for multi-res, plus create 'MinimalMetadata'.
         """
-        ms = config["experiment"]["MicroscopeState"]
-        self.shape_z = ms["number_z_steps"]
-        self.shape_t = ms["timepoints"]
+        # Get "MicroscopeState" or return an empty dict if missing
+        ms = config.get("experiment", {}).get("MicroscopeState", {})
 
-        channels = [ck for ck, cinfo in ms["channels"].items() if cinfo["is_selected"]]
+        # Provide default values if dictionary keys don't exist
+        self.shape_z = ms.get("number_z_steps", 1)
+        self.shape_t = ms.get("timepoints", 1)
+
+        channels_dict = ms.get("channels", {})
+        channels = [ck for ck, cinfo in channels_dict.items() if cinfo.get("is_selected", False)]
         self.shape_c = len(channels)
 
-        cam_key = ms["microscope_name"]
-        cp = config["experiment"]["CameraParameters"][cam_key]
-        self.shape_x = cp["x_pixels"]
-        self.shape_y = cp["y_pixels"]
+        cam_key = ms.get("microscope_name", "default_cam")
+        cp = config.get("experiment", {}).get("CameraParameters", {}).get(cam_key, {})
+        self.shape_x = cp.get("x_pixels", 64)
+        self.shape_y = cp.get("y_pixels", 64)
 
-        # do we let z vary faster or c vary faster
+        # Fallback to 'per_stack' if not specified
         self.per_stack = ms.get("stack_cycling_mode", "per_stack") == "per_stack"
+
 
         # Example: 2-level pyramid
         shape0 = (self.shape_z, self.shape_y, self.shape_x)
@@ -125,7 +130,7 @@ class MinimalZarrDataSource:
         p = frame_id // (self.shape_c*self.shape_z*self.shape_t)
         return c,z,t,p
 
-    def write(self, data: np.ndarray, x=None, y=None, z=None, theta=None, f=None):
+    def write(self, data: np.ndarray, x=None, y=None, z=None, theta=None, f=None, ti=None, ci=None, ):
         """
         Writes a new 2D image to the next (t,c,z,p). If we detect a new position p,
         call new_position(...). Then store a downsample for each resolution.
@@ -134,7 +139,10 @@ class MinimalZarrDataSource:
             self._setup_store()
 
         c,zslice,t,p = self._cztp_indices(self._current_frame)
-
+        if ti is not None:
+            t = ti # allow overriding t index
+        if ci is not None:
+            c = ci # allow overriding c index
         if p != self._current_position:
             self._current_position = p
             self.new_position(p, x=x, y=y, z=z, theta=theta, f=f)

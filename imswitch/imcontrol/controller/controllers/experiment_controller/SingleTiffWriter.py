@@ -74,7 +74,8 @@ class SingleTiffWriter:
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
             
         # Open TiffWriter using the same pattern as working HistoScanController
-        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tif:
+        # Key insight: TiffWriter context must stay open for entire duration (no append mode)
+        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff) as tif:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
                     if self.queue:

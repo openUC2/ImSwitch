@@ -34,7 +34,8 @@ try:
 except ImportError:
     IS_ARKITEKT = False
     # Create dummy decorators and functions when Arkitekt is not available
-
+    Stage = object
+    Image = object
     def state(cls):
         return cls
 
@@ -147,7 +148,7 @@ class STORMReconController(LiveUpdatedController):
             self._logger.debug("Initializing Arkitekt integration for STORM")
 
             # Create Arkitekt app
-            self._arkitekt_app = easy("STORM_Service", url="http://jhnnsrs-lab")
+            self._arkitekt_app = easy("STORM_Service", url="http://go.arkitekt.io",)
 
             # Register STORM-specific functions for remote access
             self._arkitekt_app.register(self.arkitekt_start_storm_acquisition)

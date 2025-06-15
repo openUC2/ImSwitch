@@ -313,6 +313,7 @@ class ImConMainViewNoQt(object):
                     continue
                 except Exception as e:
                     self.__logger.error(f"Could not load plugin widget {widgetKey}: {e}")
+                    self.widgets[widgetKey] = (widgetKey, None, None)
                     continue
             # Case 3: There is no react widget, so we create a default one
             try:

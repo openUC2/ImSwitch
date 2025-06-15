@@ -66,7 +66,9 @@ def init_storm_state(instance_id: str) -> STORMState:
     """Initialize the STORM state for Arkitekt"""
     stage = None
     if IS_ARKITEKT:
-        stage = create_stage(name=f"STORM_Stage_{instance_id}")
+        try:stage = create_stage(name=f"STORM_Stage_{instance_id}")
+        except Exception as e:
+            print(f"Failed to create STORM stage: {e}")
     return STORMState(
         stage=stage,
         acquisition_active=False,

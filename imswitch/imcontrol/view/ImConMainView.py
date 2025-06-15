@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from imswitch import IS_HEADLESS
 # FIXME: We should probably create another file that does not import these files
 from imswitch.imcommon.framework import Signal
-from imswitch.imcommon.model import initLogger
+from imswitch.imcommon.model import initLogger, get_plugin_manager
 from . import widgets
 import pkg_resources
 import importlib
@@ -209,6 +209,7 @@ class ImConMainView(QMainWindow):
 
     def _addDocks(self, dockInfoDict, dockArea, position):
         docks = []
+        plugin_manager = get_plugin_manager()
 
         prevDock = None
         prevDockYPosition = -1
@@ -222,16 +223,22 @@ class ImConMainView(QMainWindow):
                     getattr(widgets, f'{widgetKey}Widget{self.viewSetupInfo.scan.scanWidgetType}')
                 )
             except Exception as e:
-                # try to get it from the plugins
-                foundPluginController = False
-                for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
-                    if entry_point.name == f'{widgetKey}_widget':
-                        packageWidget = entry_point.load()
-                        self.widgets[widgetKey] = self.factory.createWidget(packageWidget)
-                        foundPluginController = True
-                        break
-                if not foundPluginController:
-                    self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
+                # Try to get it from the plugins using centralized manager
+                widget_class = plugin_manager.load_plugin(widgetKey, 'widget')
+                if widget_class:
+                    self.widgets[widgetKey] = self.factory.createWidget(widget_class)
+                else:
+                    # Fallback to old plugin loading method
+                    foundPluginController = False
+                    for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
+                        if entry_point.name == f'{widgetKey}_widget':
+                            packageWidget = entry_point.load()
+                            self.widgets[widgetKey] = self.factory.createWidget(packageWidget)
+                            foundPluginController = True
+                            break
+                    if not foundPluginController:
+                        self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
+                        
             self.docks[widgetKey] = Dock(dockInfo.name, size=(1, 1))
             try:
                 self.docks[widgetKey].addWidget(self.widgets[widgetKey])
@@ -275,7 +282,10 @@ class ImConMainViewNoQt(object):
         event.accept()
 
     def _addWidgetNoQt(self, dockInfoDict):
-        # Preload all available plugins for widgets
+        """Add widgets for headless operation using centralized plugin manager"""
+        plugin_manager = get_plugin_manager()
+        
+        # Preload all available plugins for widgets (fallback)
         availablePlugins = {
             entry_point.name: entry_point
             for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins')
@@ -302,7 +312,20 @@ class ImConMainViewNoQt(object):
                     self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
                     continue
 
-            # Case 2: Check if there is a plugin for the widget
+            # Case 2: Check if there is a plugin for the widget using centralized manager
+            if plugin_manager.is_plugin_available(widgetKey, 'widget'):
+                try:
+                    widget_class = plugin_manager.load_plugin(widgetKey, 'widget')
+                    if widget_class:
+                        # Try to get React widget class
+                        mWidgetClass = getattr(widget_class, f'{widgetKey}ReactWidget', None)
+                        if mWidgetClass:
+                            self.widgets[widgetKey] = (widgetKey, widget_class, mWidgetClass)
+                            continue
+                except Exception as e:
+                    self.__logger.error(f"Could not load plugin widget {widgetKey} via plugin manager: {e}")
+
+            # Case 3: Fallback to old plugin loading method
             plugin_name = f'{widgetKey}_widget'
             if plugin_name in availablePlugins:
                 try:
@@ -314,7 +337,8 @@ class ImConMainViewNoQt(object):
                 except Exception as e:
                     self.__logger.error(f"Could not load plugin widget {widgetKey}: {e}")
                     continue
-            # Case 3: There is no react widget, so we create a default one
+            
+            # Case 4: There is no react widget, so we create a default one
             try:
                 self.widgets[widgetKey] = (widgetKey, None, None)
             except Exception as e:

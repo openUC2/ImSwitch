@@ -936,9 +936,9 @@ class STORMReconController(LiveUpdatedController):
                             self._frame_count += 1
 
                             # Optional: Log progress periodically
-                            if self._frame_count % 100 == 0:
+                            if self._frame_count % 20 == 0:
                                 self.sigNSTORMImageAcquired.emit(self._frame_count)
-                                self._logger.debug(f"Saved {self._frame_count} frames")
+                                #self._logger.debug(f"Saved {self._frame_count} frames")
                             if max_frames > 0 and self._frame_count >= max_frames:
                                 self._logger.info(f"Reached max frames limit: {max_frames}")
                                 self._acquisition_active = False

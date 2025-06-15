@@ -41,8 +41,6 @@ class SingleTiffWriter:
         self._thread = None
         self.image_count = 0
         self.timepoint_index = 0  # Track current timepoint in series
-        self.images_buffer = []  # Buffer to collect images before writing
-        self.metadata_buffer = []  # Buffer to collect metadata
         
     def start(self):
         """Begin the background thread that writes images to disk as they arrive."""
@@ -136,113 +134,47 @@ class SingleTiffWriter:
     
     def _process_queue(self):
         """
-        Background loop: collect images from queue and write them as a multi-page TIFF stack.
+        Background loop: open the OME-TIFF and write images as pages in a multi-page series.
         """
         # Ensure the folder exists
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
             
-        # Process images from queue and buffer them
-        while self.is_running or len(self.queue) > 0:
-            with self.lock:
-                if self.queue:
-                    image, metadata = self.queue.popleft()
+        # Open TiffWriter without append mode to create proper multi-page TIFF
+        # Multiple calls to write() will create a multi-page series
+        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff) as tif:
+            while self.is_running or len(self.queue) > 0:
+                with self.lock:
+                    if self.queue:
+                        image, metadata = self.queue.popleft()
+                    else:
+                        image = None
+                
+                if image is not None:
+                    try:
+                        # Write each image as a new page in the multi-page TIFF
+                        # This creates a proper timelapse series that Fiji can read
+                        tif.write(
+                            data=image,
+                            photometric='minisblack',  # Grayscale
+                            contiguous=True,
+                            metadata={'axes': 'YX'}  # Simple 2D metadata for each page
+                        )
+                        self.image_count += 1
+                        self.timepoint_index += 1  # Increment timepoint for next tile
+                        print(f"Wrote image to single TIFF as page %d, to path: %s" % (self.timepoint_index, self.file_path))
+                    except Exception as e:
+                        print(f"Error writing image to single TIFF: {e}")
                 else:
-                    image = None
-            
-            if image is not None:
-                try:
-                    # Add image and metadata to buffers
-                    self.images_buffer.append(image)
-                    self.metadata_buffer.append(metadata)
-                    self.image_count += 1
-                    self.timepoint_index += 1
-                    print(f"Buffered image as timepoint %d for single TIFF: %s" % (metadata["TilePosition"]["TimeIndex"], self.file_path))
-                except Exception as e:
-                    print(f"Error buffering image for single TIFF: {e}")
-            else:
-                # Sleep briefly to avoid busy loop when queue is empty
-                time.sleep(0.01)
-        
-        # Write all buffered images as a single multi-page TIFF
-        self._write_buffered_images()
-    
-    def _write_buffered_images(self):
-        """
-        Write all buffered images as a single multi-page TIFF stack.
-        """
-        if not self.images_buffer:
-            print("No images to write to single TIFF")
-            return
-            
-        try:
-            # Stack all images into a 3D array (timepoints, height, width)
-            image_stack = np.stack(self.images_buffer, axis=0)
-            
-            # Create combined metadata for the entire stack
-            # Use the metadata from the first image as template
-            if self.metadata_buffer:
-                first_metadata = self.metadata_buffer[0]
-                
-                # Create OME metadata for the entire stack
-                ome_metadata = {
-                    'axes': 'TYX',  # Time, Y, X dimensions
-                    'PhysicalSizeX': first_metadata.get("pixel_size", 1.0),
-                    'PhysicalSizeXUnit': 'µm',
-                    'PhysicalSizeY': first_metadata.get("pixel_size", 1.0), 
-                    'PhysicalSizeYUnit': 'µm',
-                    'SizeT': len(self.images_buffer),
-                    'SizeX': image_stack.shape[2],
-                    'SizeY': image_stack.shape[1],
-                    'SizeZ': 1,
-                    'SizeC': 1
-                }
-                
-                # Add position information for each timepoint
-                positions = []
-                for i, metadata in enumerate(self.metadata_buffer):
-                    tile_pos = metadata.get("TilePosition", {})
-                    positions.append({
-                        'TimeIndex': i,
-                        'PositionX': tile_pos.get("X", 0.0),
-                        'PositionY': tile_pos.get("Y", 0.0),
-                        'PositionZ': tile_pos.get("Z", 0.0)
-                    })
-                
-                # Add position metadata
-                ome_metadata['Positions'] = positions
-            else:
-                ome_metadata = None
-            
-            # Write the entire stack as a single multi-page TIFF
-            tifffile.imwrite(
-                self.file_path,
-                image_stack,
-                metadata=ome_metadata,
-                bigtiff=self.bigtiff,
-                compression='zlib'
-            )
-            
-            print(f"Wrote {len(self.images_buffer)} images to single TIFF stack: {self.file_path}")
-            
-        except Exception as e:
-            print(f"Error writing buffered images to single TIFF: {e}")
-        finally:
-            # Clear buffers
-            self.images_buffer.clear()
-            self.metadata_buffer.clear()
+                    # Sleep briefly to avoid busy loop when queue is empty
+                    time.sleep(0.01)
     
     def close(self):
-        """Close the single TIFF writer and ensure all buffered images are written."""
+        """Close the single TIFF writer."""
         self.stop()
         if self._thread is not None:
             self._thread.join()
             self._thread = None
-        
-        # Write any remaining buffered images
-        if self.images_buffer:
-            self._write_buffered_images()
-            
         self.is_running = False
         self.queue.clear()
         print(f"Single TIFF timelapse writer closed. Total timepoints written: {self.image_count}")

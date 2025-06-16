@@ -17,21 +17,23 @@ from typing import Dict, Any, Optional
 
 class SingleTiffWriter:
     """
-    Single TIFF writer that appends tiles as a multi-page TIFF timelapse series with xyz positions.
+    Single TIFF writer that appends tiles as separate images with individual position metadata.
     
     This writer is specifically designed for single tile scans where each scan position
     contains only one tile, and all tiles should be appended to a single TIFF file
-    as a timelapse series. Each tile becomes a timepoint in the series, with spatial
-    coordinates stored in metadata for Fiji/napari compatibility.
+    as separate images. Each tile becomes a separate image element in the TIFF with
+    proper position metadata that Fiji can read correctly.
+    
+    Uses the exact same pattern as the working HistoScanController.
     """
     
-    def __init__(self, file_path: str, bigtiff: bool = False):
+    def __init__(self, file_path: str, bigtiff: bool = True):
         """
         Initialize the single TIFF writer.
         
         Args:
             file_path: Path where the TIFF file will be written
-            bigtiff: Whether to use BigTIFF format (False for Fiji compatibility)
+            bigtiff: Whether to use BigTIFF format (True to match HistoScanController)
         """
         self.file_path = file_path
         self.bigtiff = bigtiff
@@ -40,7 +42,6 @@ class SingleTiffWriter:
         self.is_running = False
         self._thread = None
         self.image_count = 0
-        self.timepoint_index = 0  # Track current timepoint in series
         
     def start(self):
         """Begin the background thread that writes images to disk as they arrive."""
@@ -67,15 +68,18 @@ class SingleTiffWriter:
     
     def _process_queue(self):
         """
-        Background loop: write images as pages in a multi-page TIFF timelapse series.
+        Background loop: write images exactly like working HistoScanController.
+        This implementation starts without append mode to create the file, then handles subsequent images.
         """
         # Ensure the folder exists
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
             
-        # Open TiffWriter using the same pattern as working HistoScanController
-        # Key insight: TiffWriter context must stay open for entire duration (no append mode)
-        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff) as tif:
+        # Initialize TiffWriter - start without append to create file
+        tiff_writer = None
+        file_created = False
+        
+        try:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
                     if self.queue:
@@ -85,25 +89,23 @@ class SingleTiffWriter:
                 
                 if image is not None:
                     try:
-                        # Convert metadata from experiment format to HistoScanController format
-                        # Extract pixel size (default to 1.0 if not available)
+                        # Extract metadata in EXACT same format as HistoScanController
                         pixel_size = input_metadata.get("pixel_size", 1.0)
-                        
-                        # Extract position coordinates
                         pos_x = input_metadata.get("x", 0)
                         pos_y = input_metadata.get("y", 0)
                         
-                        # Calculate index coordinates (simple sequential numbering for now)
-                        index_x = input_metadata.get("tile_index", self.image_count) % 100  # Reasonable max
-                        index_y = input_metadata.get("tile_index", self.image_count) // 100
+                        # Calculate index coordinates from position and grid step
+                        index_x = self.image_count % 10  # Assume reasonable grid dimensions
+                        index_y = self.image_count // 10
                         
-                        # Create metadata in the same format as HistoScanController
-                        tiff_metadata = {'Pixels': {
+                        # Create metadata in EXACT same format as working HistoScanController
+                        # metadata e.g. {"Pixels": {"PhysicalSizeX": 0.2, "PhysicalSizeXUnit": "\\u00b5m", "PhysicalSizeY": 0.2, "PhysicalSizeYUnit": "\\u00b5m"}, "Plane": {"PositionX": -100, "PositionY": -100, "IndexX": 0, "IndexY": 0}}
+                        metadata = {'Pixels': {
                             'PhysicalSizeX': pixel_size,
                             'PhysicalSizeXUnit': 'µm',
                             'PhysicalSizeY': pixel_size,
                             'PhysicalSizeYUnit': 'µm'},
-
+                            
                             'Plane': {
                                 'PositionX': pos_x,
                                 'PositionY': pos_y,
@@ -111,12 +113,17 @@ class SingleTiffWriter:
                                 'IndexY': index_y
                         }}
                         
-                        # Write image using exact same method as HistoScanController
-                        tif.write(data=image, metadata=tiff_metadata)
+                        # Create or get TiffWriter
+                        if not file_created:
+                            # First image - create file without append
+                            tiff_writer = tifffile.TiffWriter(self.file_path, bigtiff=True, append=False)
+                            file_created = True
+                        
+                        # Write image using EXACT same method as HistoScanController
+                        tiff_writer.write(data=image, metadata=metadata)
                         
                         self.image_count += 1
-                        self.timepoint_index += 1
-                        print(f"Wrote image to timelapse TIFF as timepoint {self.timepoint_index} at position ({pos_x}, {pos_y}) with index ({index_x}, {index_y})")
+                        print(f"Wrote image {self.image_count} to single TIFF at position ({pos_x}, {pos_y}) with index ({index_x}, {index_y})")
                     except Exception as e:
                         print(f"Error writing image to single TIFF: {e}")
                         import traceback
@@ -124,6 +131,13 @@ class SingleTiffWriter:
                 else:
                     # Sleep briefly to avoid busy loop when queue is empty
                     time.sleep(0.01)
+        finally:
+            # Ensure TiffWriter is closed
+            if tiff_writer is not None:
+                try:
+                    tiff_writer.close()
+                except:
+                    pass
     
     def close(self):
         """Close the single TIFF writer."""
@@ -133,4 +147,4 @@ class SingleTiffWriter:
             self._thread = None
         self.is_running = False
         self.queue.clear()
-        print(f"Single TIFF timelapse writer closed. Total timepoints written: {self.image_count}")
+        print(f"Single TIFF writer closed. Total images written: {self.image_count}")

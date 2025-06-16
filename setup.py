@@ -80,7 +80,7 @@ setup(
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
         "numcodecs==0.15.1"
-        "zarr == 2.18.3"
+        "zarr==2.18.3"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

@@ -179,6 +179,31 @@ class CameraGXIPY:
         self.exposure_time = exposure_time
         self.camera.ExposureTime.set(self.exposure_time*1000)
 
+    def set_exposure_mode(self, exposure_mode="manual"):
+        """Set exposure mode to match HIK camera interface."""
+        try:
+            if exposure_mode == "manual":
+                self.camera.ExposureAuto.set(gx.GxAutoEntry.OFF)
+                self.__logger.debug("Exposure mode set to manual")
+            elif exposure_mode == "auto":
+                self.camera.ExposureAuto.set(gx.GxAutoEntry.CONTINUOUS)
+                self.__logger.debug("Exposure mode set to auto continuous")
+            elif exposure_mode == "once":
+                self.camera.ExposureAuto.set(gx.GxAutoEntry.ONCE)
+                self.__logger.debug("Exposure mode set to auto once")
+            else:
+                self.__logger.warning(f"Exposure mode '{exposure_mode}' not recognized. Valid modes: manual, auto, once")
+                return False
+            return True
+        except Exception as e:
+            self.__logger.error(f"Failed to set exposure mode '{exposure_mode}': {e}")
+            return False
+
+    def set_camera_mode(self, isAutomatic):
+        """Set camera mode (automatic/manual) for compatibility with HIK interface."""
+        exposure_mode = "auto" if str(isAutomatic).lower() in ('true', '1', 'automatic', 'auto') else "manual"
+        return self.set_exposure_mode(exposure_mode)
+
     def set_gain(self,gain):
         self.gain = gain
         self.camera.Gain.set(self.gain)
@@ -319,6 +344,8 @@ class CameraGXIPY:
             self.set_gain(property_value)
         elif property_name == "exposure":
             self.set_exposure_time(property_value)
+        elif property_name == "exposure_mode":
+            self.set_exposure_mode(property_value)
         elif property_name == "blacklevel":
             self.set_blacklevel(property_value)
         elif property_name == "flat_fielding":
@@ -329,6 +356,8 @@ class CameraGXIPY:
             self.set_frame_rate(property_value)
         elif property_name == "trigger_source":
             self.setTriggerSource(property_value)
+        elif property_name == 'mode':
+            self.set_camera_mode(property_value)
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
             return False
@@ -342,6 +371,17 @@ class CameraGXIPY:
                 property_value = self.camera.Gain.get()
             elif property_name == "exposure":
                 property_value = self.camera.ExposureTime.get()
+            elif property_name == "exposure_mode":
+                # Get current exposure auto mode and convert to string
+                exposure_auto_value = self.camera.ExposureAuto.get()
+                if exposure_auto_value == gx.GxAutoEntry.OFF:
+                    property_value = "manual"
+                elif exposure_auto_value == gx.GxAutoEntry.CONTINUOUS:
+                    property_value = "auto"
+                elif exposure_auto_value == gx.GxAutoEntry.ONCE:
+                    property_value = "once"
+                else:
+                    property_value = "unknown"
             elif property_name == "blacklevel":
                 property_value = self.camera.BlackLevel.get()
             elif property_name == "image_width":

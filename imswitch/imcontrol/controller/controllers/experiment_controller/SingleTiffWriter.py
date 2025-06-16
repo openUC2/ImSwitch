@@ -12,25 +12,25 @@ import numpy as np
 import tifffile
 from collections import deque
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 
 class SingleTiffWriter:
     """
     Single TIFF writer that appends tiles as separate images with individual position metadata.
-    
+
     This writer is specifically designed for single tile scans where each scan position
     contains only one tile, and all tiles should be appended to a single TIFF file
     as separate images. Each tile becomes a separate image element in the TIFF with
     proper position metadata that Fiji can read correctly.
-    
+
     Uses the exact same pattern as the working HistoScanController.
     """
-    
+
     def __init__(self, file_path: str, bigtiff: bool = True):
         """
         Initialize the single TIFF writer.
-        
+
         Args:
             file_path: Path where the TIFF file will be written
             bigtiff: Whether to use BigTIFF format (True to match HistoScanController)
@@ -42,90 +42,87 @@ class SingleTiffWriter:
         self.is_running = False
         self._thread = None
         self.image_count = 0
-        
+
     def start(self):
         """Begin the background thread that writes images to disk as they arrive."""
         self.is_running = True
         self._thread = threading.Thread(target=self._process_queue, daemon=True)
         self._thread.start()
-    
+
     def stop(self):
         """Signal the thread to stop, then join it."""
         self.is_running = False
         if self._thread is not None:
             self._thread.join()
-    
+
     def add_image(self, image: np.ndarray, metadata: Dict[str, Any]):
         """
         Enqueue an image for writing with metadata.
-        
+
         Args:
             image: 2D NumPy array (grayscale image)
             metadata: Dictionary containing position and other metadata
         """
         with self.lock:
             self.queue.append((image, metadata))
-    
+
     def _process_queue(self):
         """
         Background loop: write images exactly like working HistoScanController.
-        This implementation starts without append mode to create the file, then handles subsequent images.
+        Use append=True and pass metadata directly like HistoScanController does.
         """
         # Ensure the folder exists
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
-            
-        # Initialize TiffWriter - start without append to create file        
-        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tiff_writer:
 
+        # Initialize TiffWriter with append=True exactly like HistoScanController
+        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tif:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
                     if self.queue:
                         image, input_metadata = self.queue.popleft()
                     else:
                         image = None
-                
+
                 if image is not None:
                     try:
-                        # Extract metadata in EXACT same format as HistoScanController
+                        # Extract position and pixel size from input metadata
                         pixel_size = input_metadata.get("pixel_size", 1.0)
                         pos_x = input_metadata.get("x", 0)
                         pos_y = input_metadata.get("y", 0)
-                        
-                        # Calculate index coordinates from position and grid step
-                        index_x = self.image_count # Assuming image_count corresponds to the x index
+
+                        # Calculate index coordinates from image count for now
+                        index_x = self.image_count
                         index_y = 0
-                        
+
                         # Create metadata in EXACT same format as working HistoScanController
-                        # metadata e.g. {"Pixels": {"PhysicalSizeX": 0.2, "PhysicalSizeXUnit": "\\u00b5m", "PhysicalSizeY": 0.2, "PhysicalSizeYUnit": "\\u00b5m"}, "Plane": {"PositionX": -100, "PositionY": -100, "IndexX": 0, "IndexY": 0}}
+                        # with IndexX and IndexY included (they were commented out before)
                         metadata = {'Pixels': {
-                            'ImageDescription': f"ImageID={self.image_count}",
                             'PhysicalSizeX': float(pixel_size),
                             'PhysicalSizeXUnit': 'µm',
                             'PhysicalSizeY': float(pixel_size),
                             'PhysicalSizeYUnit': 'µm'},
-                            
+
                             'Plane': {
                                 'PositionX': float(pos_x),
-                                'PositionY': float(pos_y)
-                                #'IndexX': int(index_x),
-                                #'IndexY': int(index_y)
+                                'PositionY': float(pos_y),
+                                'IndexX': int(index_x),
+                                'IndexY': int(index_y)
                         }}
-                        # Here: {'Pixels': {'PhysicalSizeX': 1.0, 'PhysicalSizeXUnit': 'µm', 'PhysicalSizeY': 1.0, 'PhysicalSizeYUnit': 'µm'}, 'Plane': {'PositionX': 103114.75409836065, 'PositionY': 56782.7868852459, 'IndexX': 0, 'IndexY': 0}}
-                        # Histo:{"Pixels": {"PhysicalSizeX": 0.2, "PhysicalSizeXUnit": "\\u00b5m", "PhysicalSizeY": 0.2, "PhysicalSizeYUnit": "\\u00b5m"}, "Plane": {"PositionX": -100, "PositionY": -100, "IndexX": 0, "IndexY": 0}}
-                        
+
                         # Write image using EXACT same method as HistoScanController
-                        tiff_writer.write(data=image, metadata=metadata)
-                        
+                        tif.write(data=image, metadata=metadata)
+
                         self.image_count += 1
-                        print(f"Wrote image {self.image_count} to single TIFF at position ({pos_x}, {pos_y}) with index ({index_x}, {index_y})")
+                        print(f"Wrote image {self.image_count} to single TIFF at position "
+                              f"({pos_x}, {pos_y}) with index ({index_x}, {index_y})")
                     except Exception as e:
                         print(f"Error writing image to single TIFF: {e}")
                         import traceback
                         traceback.print_exc()
                 else:
                     # Sleep briefly to avoid busy loop when queue is empty
-                        time.sleep(0.01)
+                    time.sleep(0.01)
 
     def close(self):
         """Close the single TIFF writer."""

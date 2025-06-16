@@ -72,6 +72,7 @@ class GXPIPYManager(DetectorManager):
                             value='manual',
                             options=['manual', 'auto', 'once'],
                             editable=True),
+            'mode': DetectorBooleanParameter(group='Misc', value=name, editable=False), # auto or manual exposure settings
             'gain': DetectorNumberParameter(group='Misc', value=5, valueUnits='arb.u.',
                                             editable=True),
             'blacklevel': DetectorNumberParameter(group='Misc', value=0, valueUnits='arb.u.',
@@ -230,44 +231,6 @@ class GXPIPYManager(DetectorManager):
 
             # TODO: Not implemented yet
             self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
-
-
-            # Prepare parameters
-            parameters = {
-                'exposure': DetectorNumberParameter(group='Misc', value=100, valueUnits='ms',
-                                                    editable=True),
-                'exposure_mode': DetectorListParameter(group='Misc',
-                                value='manual',
-                                options=['manual', 'auto', 'once'],
-                                editable=True),
-                'gain': DetectorNumberParameter(group='Misc', value=1, valueUnits='arb.u.',
-                                                editable=True),
-                'blacklevel': DetectorNumberParameter(group='Misc', value=100, valueUnits='arb.u.',
-                                                editable=True),
-                'image_width': DetectorNumberParameter(group='Misc', value=fullShape[0], valueUnits='arb.u.',
-                            editable=False),
-                'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
-                            editable=False),
-                'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
-                                        editable=True),
-                'trigger_source': DetectorListParameter(group='Acquisition mode',
-                                value='Continuous',
-                                options=['Continuous',
-                                            'Internal trigger',
-                                            'External trigger'],
-                                editable=True),
-                'pixelSize': DetectorNumberParameter(group='Miscellaneous', value=1,
-                                                    valueUnits='µm', editable=True)
-                }
-
-            # Prepare actions
-            actions = {
-                'More properties': DetectorAction(group='Misc',
-                                                func=self._camera.openPropertiesGUI)
-            }
-
-            #super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
-            #               model=model, parameters=parameters, actions=actions, croppable=True)
 
         if not self._running:
             self._camera.start_live()

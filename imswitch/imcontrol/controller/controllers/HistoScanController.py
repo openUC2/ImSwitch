@@ -1591,6 +1591,7 @@ class ImageStitcher:
                     img = np.fliplr(img)
                 if self.flipY:
                     img = np.flipud(img)
+                #
                 
                 self._place_on_canvas(img, coords)
                 # write image to disk

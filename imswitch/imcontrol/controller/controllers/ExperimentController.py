@@ -366,7 +366,7 @@ class ExperimentController(ImConWidgetController):
         
         # check if any of the illumination sources is turned on, if not, return error
         if not any(illuminationIntensities):
-            raise HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
+            return HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
 
         # check if we want to use performance mode
         self.ExperimentParams.performanceMode = p.performanceMode

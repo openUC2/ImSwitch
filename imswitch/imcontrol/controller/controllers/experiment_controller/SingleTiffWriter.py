@@ -75,11 +75,9 @@ class SingleTiffWriter:
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
             
-        # Initialize TiffWriter - start without append to create file
-        tiff_writer = None
-        file_created = False
-        
-        try:
+        # Initialize TiffWriter - start without append to create file        
+        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tiff_writer:
+
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
                     if self.queue:
@@ -95,29 +93,26 @@ class SingleTiffWriter:
                         pos_y = input_metadata.get("y", 0)
                         
                         # Calculate index coordinates from position and grid step
-                        index_x = self.image_count % 10  # Assume reasonable grid dimensions
-                        index_y = self.image_count // 10
+                        index_x = self.image_count # Assuming image_count corresponds to the x index
+                        index_y = 0
                         
                         # Create metadata in EXACT same format as working HistoScanController
                         # metadata e.g. {"Pixels": {"PhysicalSizeX": 0.2, "PhysicalSizeXUnit": "\\u00b5m", "PhysicalSizeY": 0.2, "PhysicalSizeYUnit": "\\u00b5m"}, "Plane": {"PositionX": -100, "PositionY": -100, "IndexX": 0, "IndexY": 0}}
                         metadata = {'Pixels': {
-                            'PhysicalSizeX': pixel_size,
+                            'ImageDescription': f"ImageID={self.image_count}",
+                            'PhysicalSizeX': float(pixel_size),
                             'PhysicalSizeXUnit': 'µm',
-                            'PhysicalSizeY': pixel_size,
+                            'PhysicalSizeY': float(pixel_size),
                             'PhysicalSizeYUnit': 'µm'},
                             
                             'Plane': {
-                                'PositionX': pos_x,
-                                'PositionY': pos_y,
-                                'IndexX': index_x,
-                                'IndexY': index_y
+                                'PositionX': float(pos_x),
+                                'PositionY': float(pos_y)
+                                #'IndexX': int(index_x),
+                                #'IndexY': int(index_y)
                         }}
-                        
-                        # Create or get TiffWriter
-                        if not file_created:
-                            # First image - create file without append
-                            tiff_writer = tifffile.TiffWriter(self.file_path, bigtiff=True, append=False)
-                            file_created = True
+                        # Here: {'Pixels': {'PhysicalSizeX': 1.0, 'PhysicalSizeXUnit': 'µm', 'PhysicalSizeY': 1.0, 'PhysicalSizeYUnit': 'µm'}, 'Plane': {'PositionX': 103114.75409836065, 'PositionY': 56782.7868852459, 'IndexX': 0, 'IndexY': 0}}
+                        # Histo:{"Pixels": {"PhysicalSizeX": 0.2, "PhysicalSizeXUnit": "\\u00b5m", "PhysicalSizeY": 0.2, "PhysicalSizeYUnit": "\\u00b5m"}, "Plane": {"PositionX": -100, "PositionY": -100, "IndexX": 0, "IndexY": 0}}
                         
                         # Write image using EXACT same method as HistoScanController
                         tiff_writer.write(data=image, metadata=metadata)
@@ -130,15 +125,8 @@ class SingleTiffWriter:
                         traceback.print_exc()
                 else:
                     # Sleep briefly to avoid busy loop when queue is empty
-                    time.sleep(0.01)
-        finally:
-            # Ensure TiffWriter is closed
-            if tiff_writer is not None:
-                try:
-                    tiff_writer.close()
-                except:
-                    pass
-    
+                        time.sleep(0.01)
+
     def close(self):
         """Close the single TIFF writer."""
         self.stop()

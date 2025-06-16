@@ -75,8 +75,8 @@ class SingleTiffWriter:
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
 
-        # Initialize TiffWriter with append=True exactly like HistoScanController
-        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True, ome=True) as tif:
+        # Initialize TiffWriter with append=True exactly like HistoScanController (no ome=True)
+        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tif:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
                     if self.queue:
@@ -96,7 +96,7 @@ class SingleTiffWriter:
                         index_y = 0
 
                         # Create metadata in EXACT same format as working HistoScanController
-                        # with IndexX and IndexY included (they were commented out before)
+                        # Note: PositionXUnit and PositionYUnit should be added for proper metadata
                         metadata = {'Pixels': {
                             'PhysicalSizeX': float(pixel_size),
                             'PhysicalSizeXUnit': 'µm',
@@ -105,7 +105,9 @@ class SingleTiffWriter:
 
                             'Plane': {
                                 'PositionX': float(pos_x),
+                                'PositionXUnit': 'reference frame',
                                 'PositionY': float(pos_y),
+                                'PositionYUnit': 'reference frame',
                                 'IndexX': int(index_x),
                                 'IndexY': int(index_y)
                         }}

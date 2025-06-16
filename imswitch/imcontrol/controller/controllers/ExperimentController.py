@@ -15,7 +15,6 @@ import time
 import threading
 import collections
 import tifffile as tif
-import zarr, numcodecs
 from fastapi.responses import FileResponse
 
 from imswitch.imcommon.framework import Signal

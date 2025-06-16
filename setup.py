@@ -48,7 +48,7 @@ setup(
         "lantzdev >= 0.5.2",
         "luddite >= 1",
         "nidaqmx >= 0.5.7",
-        "numpy>=1.26.4",
+        "numpy==1.26.4",
         "packaging >= 19",
         "psutil >= 5.4.8",
         "pyserial >= 3.4",
@@ -79,6 +79,7 @@ setup(
         "ashlarUC2", 
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
+        "numcodecs==0.15.1"
         "zarr == 2.18.3"
         ],
 

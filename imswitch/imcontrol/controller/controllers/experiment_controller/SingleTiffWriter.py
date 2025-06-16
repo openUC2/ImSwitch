@@ -116,7 +116,7 @@ class SingleTiffWriter:
                         
                         self.image_count += 1
                         self.timepoint_index += 1
-                        print(f"Wrote image to timelapse TIFF as T=%d, pos=({pos_x:.1f},{pos_y:.1f}), to path: %s" % (self.image_count-1, pos_x, pos_y, self.file_path))
+                        print(f"Wrote image to timelapse TIFF as timepoint {self.timepoint_index} at position ({pos_x}, {pos_y}) with index ({index_x}, {index_y})")
                     except Exception as e:
                         print(f"Error writing image to single TIFF: {e}")
                         import traceback

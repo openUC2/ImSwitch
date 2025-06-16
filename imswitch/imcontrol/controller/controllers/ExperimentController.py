@@ -442,7 +442,7 @@ class ExperimentController(ImConWidgetController):
         is_single_tile_scan = all(len(tile) == 1 for tile in snake_tiles)
         if is_single_tile_scan:
             self._ome_write_stitched_tiff = False  # Disable stitched TIFF for single tile scans
-            self._ome_write_single_tiff = True  # Enable single TIFF writing
+            self._ome_write_single_tiff = True   # Enable single TIFF writing
         else:
             self._ome_write_single_tiff = False
             
@@ -605,7 +605,7 @@ class ExperimentController(ImConWidgetController):
             # Write frame using the specific OME writer from the list
             ome_writer = file_writers[position_center_index]
             chunk_info = ome_writer.write_frame(img, ome_metadata)
-            self.setOmeZarrUrl(ome_writer.store.split(dirtools.UserFileDirs.Data)[-1])  # Update OME-Zarr URL in context
+            if ome_writer.store: self.setOmeZarrUrl(ome_writer.store.split(dirtools.UserFileDirs.Data)[-1])  # Update OME-Zarr URL in context
             # Emit signal for frontend updates if Zarr chunk was written
             if chunk_info and "rel_chunk" in chunk_info:
                 sigZarrDict = {
@@ -814,7 +814,7 @@ class ExperimentController(ImConWidgetController):
     def getOmeZarrUrl(self):
         """Get the OME-Zarr URL for the experiment."""
         if self._omeZarrUrl is None:
-            raise ValueError("OME-Zarr URL is not set.")
+            return -1
         return self._omeZarrUrl
 
     # -------------------------------------------------------------------------

@@ -76,7 +76,7 @@ class SingleTiffWriter:
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
 
         # Initialize TiffWriter with append=True exactly like HistoScanController
-        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tif:
+        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True, ome=True) as tif:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
                     if self.queue:

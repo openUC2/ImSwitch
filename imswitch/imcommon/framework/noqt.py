@@ -128,7 +128,7 @@ class SignalInstance(psygnal.SignalInstance):
 
                     # convert 16 bit to 8 bit for visualization
                     if output_frame.dtype == np.uint16:
-                        output_frame = np.uint8(output_frame//2) 
+                        output_frame = np.uint8(output_frame//64) 
                     try:
                         output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
                     except:

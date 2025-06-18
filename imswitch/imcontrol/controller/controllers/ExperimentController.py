@@ -287,7 +287,7 @@ class ExperimentController(ImConWidgetController):
         
         # Handle case where no XY coordinates are provided but z-stack is enabled
         # In this case, we want to scan at the current position
-        if len(mExperiment.pointList) == 0 and mExperiment.parameterValue.zStack:
+        if len(mExperiment.pointList) == 0 and (mExperiment.parameterValue.zStack or (mExperiment.parameterValue.zStackStepSize > 0 and mExperiment.parameterValue.zStackMax > mExperiment.parameterValue.zStackMin)):
             self._logger.info("No XY coordinates provided but z-stack enabled. Creating fallback point at current position.")
             
             # Get current stage position
@@ -453,12 +453,11 @@ class ExperimentController(ImConWidgetController):
 
         # Generate Z-positions
         currentZ = self.mStage.getPosition()["Z"]
+        isZStack = p.zStack or (p.zStackStepSize > 0 and p.zStackMax > p.zStackMin)
         if isZStack:
             z_positions = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize) + currentZ
         else:
             z_positions = [currentZ]  # Get current Z position
-        minX, maxX, minY, maxY, diffX, diffY = self.computeScanRanges(snake_tiles)
-        mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
 
         # Prepare directory and filename for saving
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -469,7 +468,6 @@ class ExperimentController(ImConWidgetController):
         mFileName = f"{timeStamp}_{exp_name}"
 
         workflowSteps = []
-        step_id = 0
         file_writers = []  # Initialize outside the loop for context storage
         
         # OME writer-related
@@ -1119,10 +1117,11 @@ class ExperimentController(ImConWidgetController):
             except Exception as e:
                 self._logger.error(f"Error finalizing OME writer for tile {tile_index}: {e}")
         else:
-            self._logger.warning(f"No OME writer found for tile index: {tile_index}")
+            self._logger.warning(f"No OME writer found for tile index when finalizing writer: {tile_index}")
 
     def finalize_current_ome_writer(self, context: WorkflowContext = None, metadata: Dict[str, Any] = None, *args, **kwargs):
         """Finalize all OME writers and clean up."""
+        # TODO: This is misleading as the method closes all filewriters, not just the current one.
         # Finalize OME writers from context (normal mode)
         if context is not None:
             # Get file_writers list and finalize all

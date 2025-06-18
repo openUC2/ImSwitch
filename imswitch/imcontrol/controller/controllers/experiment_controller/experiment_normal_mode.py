@@ -237,6 +237,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             Updated step ID
         """
         # Get scan range information
+        initial_z_position = self.controller.mStage.getPosition()["Z"]
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
         
@@ -335,6 +336,18 @@ class ExperimentNormalMode(ExperimentModeBase):
                             main_params={"power": 0, "channel": illu_source},
                         ))
                         step_id += 1
+                        
+        # Move back to the current Z position after processing all points in the tile
+        if len(z_positions) > 1 :
+            workflow_steps.append(WorkflowStep(
+                name="Move back to current Z position",
+                step_id=step_id,
+                main_func=self.controller.move_stage_z,
+                main_params={"posZ": initial_z_position, "relative": False},
+                pre_funcs=[self.controller.wait_time],
+                pre_params={"seconds": 0.1},
+            ))
+            step_id += 1
 
         # Perform autofocus if enabled
         if is_auto_focus:
@@ -416,7 +429,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             main_func=self.controller.dummy_main_func,
             main_params={},
             pre_funcs=[self.controller.wait_time],
-            pre_params={"seconds": t_period}
+            pre_params={"seconds": t_period} # TODO: This is misleading as we need to subtract the time spent in the previous steps
         ))
         step_id += 1
 

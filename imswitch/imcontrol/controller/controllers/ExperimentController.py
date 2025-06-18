@@ -503,6 +503,24 @@ class ExperimentController(ImConWidgetController):
             all_workflow_steps = []
             all_file_writers = []
 
+            # Create file writers once for the entire experiment (not per time point)
+            # This ensures writers stay open across all time points
+            if nTimes > 1:
+                self._logger.info(f"Multi-timepoint experiment detected ({nTimes} timepoints). Creating shared file writers.")
+                # Use the normal mode to create file writers only (without workflow steps)
+                dummy_result = self.normal_mode._setup_ome_writers(
+                    snake_tiles=snake_tiles,
+                    t=0,  # Use t=0 for file naming
+                    exp_name=exp_name,
+                    dir_path=dirPath,
+                    m_file_name=mFileName,
+                    z_positions=z_positions,
+                    illumination_intensities=illuminationIntensities
+                )
+                shared_file_writers = dummy_result
+            else:
+                shared_file_writers = None
+
             for t in range(nTimes):
                 experiment_params = {
                     'mExperiment': mExperiment,
@@ -521,6 +539,8 @@ class ExperimentController(ImConWidgetController):
                     dir_path=dirPath,
                     m_file_name=mFileName,
                     t=t,
+                    n_times=nTimes,  # Pass total number of time points
+                    shared_file_writers=shared_file_writers,  # Pass shared writers for multi-timepoint
                     is_auto_focus=isAutoFocus,
                     autofocus_min=autofocusMin,
                     autofocus_max=autofocusMax,
@@ -530,7 +550,9 @@ class ExperimentController(ImConWidgetController):
 
                 # Append workflow steps and file writers to the accumulated lists
                 all_workflow_steps.extend(result["workflow_steps"])
-                all_file_writers.extend(result["file_writers"])
+                # Only add file writers from the first time point if using shared writers
+                if t == 0 or shared_file_writers is None:
+                    all_file_writers.extend(result["file_writers"])
 
             # Use the accumulated workflow steps and file writers
             workflowSteps = all_workflow_steps
@@ -548,6 +570,10 @@ class ExperimentController(ImConWidgetController):
             context.set_metadata("experimentName", exp_name)
             context.set_metadata("nTimes", nTimes)
             context.set_metadata("tPeriod", tPeriod)
+            # Add timing information for proper period calculation
+            import time
+            context.set_metadata("experiment_start_time", time.time())
+            context.set_metadata("timepoint_times", {})  # Track timing for each timepoint
 
             # Store file_writers in context
             if len(file_writers) > 0:
@@ -594,6 +620,40 @@ class ExperimentController(ImConWidgetController):
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
         import time
         time.sleep(seconds)
+
+    def wait_for_next_timepoint(self, timepoint: int, t_period: float, context: WorkflowContext, metadata: Dict[str, Any]):
+        """
+        Wait for the proper time interval between timepoints, accounting for measurement time.
+        
+        Args:
+            timepoint: Current timepoint index
+            t_period: Target period between timepoints in seconds
+            context: WorkflowContext containing timing information
+            metadata: Metadata dictionary
+        """
+        import time
+        
+        current_time = time.time()
+        experiment_start_time = context.get_metadata("experiment_start_time", current_time)
+        timepoint_times = context.get_metadata("timepoint_times", {})
+        
+        # Calculate expected time for this timepoint
+        expected_time = experiment_start_time + (timepoint + 1) * t_period
+        
+        # Store timing information for this timepoint
+        timepoint_times[str(timepoint)] = current_time
+        context.set_metadata("timepoint_times", timepoint_times)
+        
+        # Calculate how long to wait
+        wait_time = max(0, expected_time - current_time)
+        
+        if wait_time > 0:
+            self._logger.info(f"Waiting {wait_time:.2f}s for next timepoint (timepoint {timepoint})")
+            time.sleep(wait_time)
+        else:
+            self._logger.warning(f"Timepoint {timepoint} is running {abs(wait_time):.2f}s behind schedule")
+            # Small delay to prevent issues
+            time.sleep(0.01)
 
     def save_frame_ome(self, context: WorkflowContext, metadata: Dict[str, Any], **kwargs):
         """

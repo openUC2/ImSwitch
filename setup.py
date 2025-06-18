@@ -79,7 +79,7 @@ setup(
         "ashlarUC2", 
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
-        "numcodecs==0.15.1",
+        "numcodecs==0.13.1",
         "zarr==2.18.3"
         ],
 

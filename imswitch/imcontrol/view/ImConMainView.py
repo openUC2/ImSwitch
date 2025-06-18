@@ -269,7 +269,8 @@ class ImConMainViewNoQt(object):
         disabledKeys = ["Image"]
         widget_keys = {key: _DockInfo(name=key, yPosition=1) for key in enabledDockKeys if key not in disabledKeys}
         self._addWidgetNoQt(widget_keys)
-
+        self.__logger.debug(f"Added widgets: {self.widgets.keys()}")
+        
     def closeEvent(self, event):
         self.sigClosing.emit()
         event.accept()
@@ -300,6 +301,8 @@ class ImConMainViewNoQt(object):
                     continue
                 except ImportError as e:
                     self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
+                    # need a fallback to the normal plugin system
+                    # self.widgets[widgetKey] = (widgetKey, None, None)
                     continue
 
             # Case 2: Check if there is a plugin for the widget

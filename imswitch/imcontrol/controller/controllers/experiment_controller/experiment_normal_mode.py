@@ -383,24 +383,17 @@ class ExperimentNormalMode(ExperimentModeBase):
             Updated step ID
         """
         # Add wait step
+        # Finalize all OME writers
         workflow_steps.append(WorkflowStep(
-            name="Wait for next frame",
+            name="Wait for next frame and finalize OME writers",
             step_id=step_id,
             main_func=self.controller.dummy_main_func,
             main_params={},
-            pre_funcs=[self.controller.wait_time],
+            pre_funcs=[self.controller.wait_time, self.controller.finalize_current_ome_writer],
             pre_params={"seconds": 0.01}
         ))
         step_id += 1
 
-        # Finalize all OME writers
-        workflow_steps.append(WorkflowStep(
-            name="Finalize OME writer",
-            step_id=step_id,
-            main_func=self.controller.finalize_current_ome_writer,
-            main_params={},
-        ))
-        step_id += 1
 
         # Turn off all illuminations
         for illu_index, illu_source in enumerate(illumination_sources):

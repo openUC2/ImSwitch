@@ -1082,7 +1082,7 @@ class ExperimentController(ImConWidgetController):
         else:
             self._logger.warning(f"No OME writer found for tile index: {tile_index}")
 
-    def finalize_current_ome_writer(self, context: WorkflowContext = None, metadata: Dict[str, Any] = None):
+    def finalize_current_ome_writer(self, context: WorkflowContext = None, metadata: Dict[str, Any] = None, *args, **kwargs):
         """Finalize all OME writers and clean up."""
         # Finalize OME writers from context (normal mode)
         if context is not None:

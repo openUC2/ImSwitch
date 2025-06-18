@@ -42,7 +42,6 @@ class SingleTiffWriter:
         self.is_running = False
         self._thread = None
         self.image_count = 0
-        self.tiff_writer = None
         self._finalize_requested = False
         
     def start(self):
@@ -79,9 +78,7 @@ class SingleTiffWriter:
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
             
         # Initialize TiffWriter - keep reference for proper closure        
-        self.tiff_writer = tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True)
-
-        try:
+        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tiff_writer:
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
                     if self.queue:
@@ -119,7 +116,7 @@ class SingleTiffWriter:
                         # Histo:{"Pixels": {"PhysicalSizeX": 0.2, "PhysicalSizeXUnit": "\\u00b5m", "PhysicalSizeY": 0.2, "PhysicalSizeYUnit": "\\u00b5m"}, "Plane": {"PositionX": -100, "PositionY": -100, "IndexX": 0, "IndexY": 0}}
                         
                         # Write image using EXACT same method as HistoScanController
-                        self.tiff_writer.write(data=image, metadata=metadata)
+                        tiff_writer.write(data=image, metadata=metadata)
                         
                         self.image_count += 1
                         print(f"Wrote image {self.image_count} to single TIFF at position ({pos_x}, {pos_y}) with index ({index_x}, {index_y})")
@@ -134,13 +131,7 @@ class SingleTiffWriter:
                 # Check if finalization was requested and queue is empty
                 if self._finalize_requested and len(self.queue) == 0:
                     break
-                    
-        finally:
-            # Properly close the TiffWriter to finalize the file
-            if self.tiff_writer is not None:
-                self.tiff_writer.close()
-                self.tiff_writer = None
-                print(f"Single TIFF writer finalized. File closed: {self.file_path}")
+
 
     def close(self):
         """Close the single TIFF writer."""
@@ -149,10 +140,6 @@ class SingleTiffWriter:
             self._thread.join()
             self._thread = None
         
-        # Ensure TiffWriter is closed
-        if self.tiff_writer is not None:
-            self.tiff_writer.close()
-            self.tiff_writer = None
         
         print(f"Single TIFF writer completed. Total images written: {self.image_count}")
         

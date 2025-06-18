@@ -53,7 +53,7 @@ setup(
         "psutil >= 5.4.8",
         "pyserial >= 3.4",
         "requests >= 2.25",
-        "scikit-image==0.19.3",
+        "scikit-image==0.25.2",
         "Send2Trash >= 1.8",
         "tifffile >= 2020.11.26",
         "dask[complete] >= 2024.8.0",
@@ -79,7 +79,7 @@ setup(
         "ashlarUC2", 
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
-        "numcodecs==0.13.1",
+        "numcodecs==0.16.1",
         "zarr==2.18.3"
         ],
 

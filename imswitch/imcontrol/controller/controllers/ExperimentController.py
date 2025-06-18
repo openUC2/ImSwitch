@@ -284,9 +284,49 @@ class ExperimentController(ImConWidgetController):
 
     def generate_snake_tiles(self, mExperiment):
         tiles = []
+        
+        # Handle case where no XY coordinates are provided but z-stack is enabled
+        # In this case, we want to scan at the current position
+        if len(mExperiment.pointList) == 0 and mExperiment.parameterValue.zStack:
+            self._logger.info("No XY coordinates provided but z-stack enabled. Creating fallback point at current position.")
+            
+            # Get current stage position
+            current_position = self.mStage.getPosition()
+            current_x = current_position.get("X", 0)
+            current_y = current_position.get("Y", 0)
+            
+            # Create a fallback point at current position
+            fallback_tile = [{
+                "iterator": 0,
+                "centerIndex": 0,
+                "iX": 0,
+                "iY": 0,
+                "x": current_x,
+                "y": current_y,
+            }]
+            tiles.append(fallback_tile)
+            return tiles
+        
+        # Original logic for when pointList is provided
         for iCenter, centerPoint in enumerate(mExperiment.pointList):
             # Collect central and neighbour points (without duplicating the center)
             allPoints = [(n.x, n.y) for n in centerPoint.neighborPointList]
+            
+            # Handle case where neighborPointList is empty but centerPoint is provided
+            # This means scan at the center point position only (useful for z-stack-only)
+            if len(allPoints) == 0:
+                self._logger.info(f"Empty neighborPointList for center point {iCenter}. Using center point position for z-stack scanning.")
+                fallback_tile = [{
+                    "iterator": 0,
+                    "centerIndex": iCenter,
+                    "iX": 0,
+                    "iY": 0,
+                    "x": centerPoint.x,
+                    "y": centerPoint.y,
+                }]
+                tiles.append(fallback_tile)
+                continue
+            
             # Sort by y then by x (i.e., raster order)
             allPoints.sort(key=lambda coords: (coords[1], coords[0]))
 

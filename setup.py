@@ -76,7 +76,6 @@ setup(
         "imswitchclient>=0.1.2",  
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
-        "ashlarUC2", 
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
         "numcodecs==0.16.1",

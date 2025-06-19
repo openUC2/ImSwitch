@@ -83,7 +83,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 tiles, position_center_index, step_id, workflow_steps,
                 z_positions, illumination_sources, illumination_intensities,
                 exposures, gains, t, is_auto_focus, autofocus_min, 
-                autofocus_max, autofocus_step_size
+                autofocus_max, autofocus_step_size, n_times, is_last_timepoint
             )
         
         # Add finalization steps
@@ -223,7 +223,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   is_auto_focus: bool,
                                   autofocus_min: float,
                                   autofocus_max: float,
-                                  autofocus_step_size: float) -> int:
+                                  autofocus_step_size: float,
+                                  n_times: int,
+                                  is_last_timepoint: bool) -> int:
         """
         Create workflow steps for a single tile.
         
@@ -370,10 +372,13 @@ class ExperimentNormalMode(ExperimentModeBase):
             step_id += 1
 
         # Finalize OME writer for this tile (skip in single TIFF mode since we only have one writer)
+        # Only finalize tile writers on the last timepoint for multi-timepoint experiments
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-        if not is_single_tiff_mode:
+        should_finalize_tile = not is_single_tiff_mode and (n_times == 1 or is_last_timepoint)
+        
+        if should_finalize_tile:
             workflow_steps.append(WorkflowStep(
-                name=f"Finalize OME writer for tile {position_center_index}",
+                name=f"Finalize OME writer for tile {position_center_index} (timepoint {t})",
                 step_id=step_id,
                 main_func=self.controller.dummy_main_func,
                 main_params={},

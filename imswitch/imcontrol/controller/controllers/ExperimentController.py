@@ -556,7 +556,11 @@ class ExperimentController(ImConWidgetController):
 
             # Use the accumulated workflow steps and file writers
             workflowSteps = all_workflow_steps
-            file_writers = all_file_writers
+            # Use shared file writers for multi-timepoint experiments, otherwise use accumulated writers
+            if shared_file_writers is not None:
+                file_writers = shared_file_writers
+            else:
+                file_writers = all_file_writers
             # Create workflow progress handler
             def sendProgress(payload):
                 self.sigExperimentWorkflowUpdate.emit(payload)

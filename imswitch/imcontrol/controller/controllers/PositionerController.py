@@ -116,6 +116,8 @@ class PositionerController(ImConWidgetController):
                   isBlocking=False)
 
     def setSpeed(self, positionerName, axis, speed=(1000, 1000, 1000)):
+        if positionerName is None or positionerName == "":
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].setSpeed(speed, axis)
         self.setSharedAttr(positionerName, axis, _speedAttr, speed)
         if not IS_HEADLESS: self._widget.setSpeedSize(positionerName, axis, speed)

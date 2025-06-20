@@ -49,16 +49,18 @@ class ObjectiveController(LiveUpdatedController):
         self.homeSpeed = self._master.objectiveManager.homeSpeed
         self.homeAcceleration = self._master.objectiveManager.homeAcceleration
         self.calibrateOnStart = self._master.objectiveManager.calibrateOnStart
-
+        self.isActive = self._master.objectiveManager.isActive
         self.detectorWidth, self.detectorHeight = self.detector._camera.SensorWidth, self.detector._camera.SensorHeight
         self.currentObjective = None  # Will be set after calibration
 
         # Create new objective instance (expects a parent with post_json)
         try:
+            if not self.isActive:
+                raise Exception("Objective is not active in the setup, skipping initialization.")
             self._objective = self._master.rs232sManager["ESP32"]._esp32.objective
         except:
             class dummyObjective:
-                def __init__(self):
+                def __init__(self, pixelsizes, NAs, magnifications, objectiveNames):
                     self.move = lambda slot, isBlocking: None
                     self.home = lambda direction, endstoppolarity, isBlocking: None
                     self.x1 = 0
@@ -67,10 +69,10 @@ class ObjectiveController(LiveUpdatedController):
                     self.isHomed = 0
                     self.z1 = 0
                     self.z2 = 0
-                    self.pixelsizes = [2,4]
-                    self.NAs = [1.0, .5]
-                    self.magnifications = [10, 5]
-                    self.objectiveNames = ["TEST", "TEST2"]
+                    self.pixelsizes = pixelsizes
+                    self.NAs = NAs
+                    self.magnifications = magnifications
+                    self.objectiveNames = objectiveNames
 
                 def home(self, direction, endstoppolarity, isBlocking):
                     if direction is not None:
@@ -116,7 +118,10 @@ class ObjectiveController(LiveUpdatedController):
                     if z2 is not None:
                         self.z2 = z2
 
-            self._objective = dummyObjective()
+            self._objective = dummyObjective(pixelsizes=self.pixelsizes, 
+                                             NAs=self.NAs, 
+                                             magnifications=self.magnifications, 
+                                             objectiveNames=self.objectiveNames)
 
         if self.calibrateOnStart:
             self.calibrateObjective()

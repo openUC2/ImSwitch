@@ -231,7 +231,8 @@ class ExperimentController(ImConWidgetController):
         # where to dump the TIFFs ----------------------------------------------
         save_dir = dirtools.UserFileDirs.Data
         self.save_dir  = os.path.join(save_dir, "ExperimentController")
-        os.mkdir(self.save_dir) if not os.path.exists(self.save_dir) else None
+        # ensure all subfolders are generated:
+        os.makedirs(self.save_dir) if not os.path.exists(self.save_dir) else None
 
         # writer thread control -------------------------------------------------
         self._writer_thread   = None

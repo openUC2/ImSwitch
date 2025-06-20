@@ -57,25 +57,17 @@ class ExperimentNormalMode(ExperimentModeBase):
         t_period = kwargs.get('t_period', 1)
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
-        is_last_timepoint = (t == n_times - 1)  # Check if this is the last time point
-        shared_file_writers = kwargs.get('shared_file_writers', None)  # Pre-created writers for multi-timepoint
         
         # Initialize workflow components
         workflow_steps = []
         file_writers = []
         step_id = 0
         
-        # Set up OME writers for each tile
-        if shared_file_writers is not None:
-            # Use shared file writers for multi-timepoint experiments
-            file_writers = shared_file_writers
-            self._logger.debug(f"Using shared file writers for timepoint {t}")
-        else:
-            # Create new file writers for single timepoint experiments
-            file_writers = self._setup_ome_writers(
-                snake_tiles, t, exp_name, dir_path, m_file_name, 
-                z_positions, illumination_intensities
-            )
+        # Set up OME writers for each tile - create new writers for each timepoint
+        file_writers = self._setup_ome_writers(
+            snake_tiles, t, exp_name, dir_path, m_file_name, 
+            z_positions, illumination_intensities
+        )
         
         # Create workflow steps for each tile
         for position_center_index, tiles in enumerate(snake_tiles):
@@ -83,13 +75,13 @@ class ExperimentNormalMode(ExperimentModeBase):
                 tiles, position_center_index, step_id, workflow_steps,
                 z_positions, illumination_sources, illumination_intensities,
                 exposures, gains, t, is_auto_focus, autofocus_min, 
-                autofocus_max, autofocus_step_size, n_times, is_last_timepoint
+                autofocus_max, autofocus_step_size, n_times
             )
         
         # Add finalization steps
         step_id = self._add_finalization_steps(
             workflow_steps, step_id, snake_tiles, illumination_sources, 
-            illumination_intensities, t_period, t, is_last_timepoint
+            illumination_intensities, t_period, t
         )
         
         return {
@@ -224,8 +216,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   autofocus_min: float,
                                   autofocus_max: float,
                                   autofocus_step_size: float,
-                                  n_times: int,
-                                  is_last_timepoint: bool) -> int:
+                                  n_times: int) -> int:
         """
         Create workflow steps for a single tile.
         
@@ -372,9 +363,9 @@ class ExperimentNormalMode(ExperimentModeBase):
             step_id += 1
 
         # Finalize OME writer for this tile (skip in single TIFF mode since we only have one writer)
-        # Only finalize tile writers on the last timepoint for multi-timepoint experiments
+        # Always finalize tile writers since each timepoint creates its own writers
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-        should_finalize_tile = not is_single_tiff_mode and (n_times == 1 or is_last_timepoint)
+        should_finalize_tile = not is_single_tiff_mode
         
         if should_finalize_tile:
             workflow_steps.append(WorkflowStep(
@@ -396,8 +387,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                               illumination_sources: List[str],
                               illumination_intensities: List[float],
                               t_period: float,
-                              t: int,
-                              is_last_timepoint: bool) -> int:
+                              t: int) -> int:
         """
         Add finalization workflow steps.
         
@@ -409,23 +399,20 @@ class ExperimentNormalMode(ExperimentModeBase):
             illumination_intensities: List of illumination values
             t_period: Time period to wait
             t: Current time point index
-            is_last_timepoint: Whether this is the last time point
             
         Returns:
             Updated step ID
         """
-        # Only finalize OME writers on the last time point to keep them open for multi-timepoint experiments
-        if is_last_timepoint:
-            workflow_steps.append(WorkflowStep(
-                name="Finalize OME writers (last timepoint)",
-                step_id=step_id,
-                main_func=self.controller.dummy_main_func,
-                main_params={},
-                post_funcs=[self.controller.finalize_current_ome_writer],
-                post_params={}
-            ))
-            step_id += 1
-
+        # Always finalize OME writers since each timepoint creates its own writers
+        workflow_steps.append(WorkflowStep(
+            name=f"Finalize OME writers (timepoint {t})",
+            step_id=step_id,
+            main_func=self.controller.dummy_main_func,
+            main_params={},
+            post_funcs=[self.controller.finalize_current_ome_writer],
+            post_params={}
+        ))
+        step_id += 1
 
         # Turn off all illuminations
         for illu_index, illu_source in enumerate(illumination_sources):
@@ -441,28 +428,15 @@ class ExperimentNormalMode(ExperimentModeBase):
             ))
             step_id += 1
 
-        # Add timing calculation for proper period control
-        # Only add wait step if it's not the last time point
-        if not is_last_timepoint:
-            workflow_steps.append(WorkflowStep(
-                name=f"Calculate and wait for proper time period (timepoint {t})",
-                step_id=step_id,
-                main_func=self.controller.dummy_main_func,
-                main_params={},
-                pre_funcs=[self.controller.wait_for_next_timepoint],
-                pre_params={"timepoint": t, "t_period": t_period}
-            ))
-            step_id += 1
-        else:
-            # Final step for last time point
-            workflow_steps.append(WorkflowStep(
-                name="Done (final timepoint)",
-                step_id=step_id,
-                main_func=self.controller.dummy_main_func,
-                main_params={},
-                pre_funcs=[self.controller.wait_time],
-                pre_params={"seconds": 0.01}  # Minimal wait for completion
-            ))
-            step_id += 1
+        # Add timing calculation for proper period control (for all timepoints except implicit last)
+        workflow_steps.append(WorkflowStep(
+            name=f"Calculate and wait for proper time period (timepoint {t})",
+            step_id=step_id,
+            main_func=self.controller.dummy_main_func,
+            main_params={},
+            pre_funcs=[self.controller.wait_for_next_timepoint],
+            pre_params={"timepoint": t, "t_period": t_period}
+        ))
+        step_id += 1
 
         return step_id

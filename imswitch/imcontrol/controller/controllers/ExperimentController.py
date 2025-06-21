@@ -503,24 +503,6 @@ class ExperimentController(ImConWidgetController):
             all_workflow_steps = []
             all_file_writers = []
 
-            # Create file writers once for the entire experiment (not per time point)
-            # This ensures writers stay open across all time points
-            if nTimes > 1:
-                self._logger.info(f"Multi-timepoint experiment detected ({nTimes} timepoints). Creating shared file writers.")
-                # Use the normal mode to create file writers only (without workflow steps)
-                dummy_result = self.normal_mode._setup_ome_writers(
-                    snake_tiles=snake_tiles,
-                    t=0,  # Use t=0 for file naming
-                    exp_name=exp_name,
-                    dir_path=dirPath,
-                    m_file_name=mFileName,
-                    z_positions=z_positions,
-                    illumination_intensities=illuminationIntensities
-                )
-                shared_file_writers = dummy_result
-            else:
-                shared_file_writers = None
-
             for t in range(nTimes):
                 experiment_params = {
                     'mExperiment': mExperiment,
@@ -540,7 +522,6 @@ class ExperimentController(ImConWidgetController):
                     m_file_name=mFileName,
                     t=t,
                     n_times=nTimes,  # Pass total number of time points
-                    shared_file_writers=shared_file_writers,  # Pass shared writers for multi-timepoint
                     is_auto_focus=isAutoFocus,
                     autofocus_min=autofocusMin,
                     autofocus_max=autofocusMax,
@@ -550,17 +531,11 @@ class ExperimentController(ImConWidgetController):
 
                 # Append workflow steps and file writers to the accumulated lists
                 all_workflow_steps.extend(result["workflow_steps"])
-                # Only add file writers from the first time point if using shared writers
-                if t == 0 or shared_file_writers is None:
-                    all_file_writers.extend(result["file_writers"])
+                all_file_writers.extend(result["file_writers"])
 
             # Use the accumulated workflow steps and file writers
             workflowSteps = all_workflow_steps
-            # Use shared file writers for multi-timepoint experiments, otherwise use accumulated writers
-            if shared_file_writers is not None:
-                file_writers = shared_file_writers
-            else:
-                file_writers = all_file_writers
+            file_writers = all_file_writers
             # Create workflow progress handler
             def sendProgress(payload):
                 self.sigExperimentWorkflowUpdate.emit(payload)

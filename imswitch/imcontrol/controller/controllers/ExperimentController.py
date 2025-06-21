@@ -388,7 +388,6 @@ class ExperimentController(ImConWidgetController):
         tPeriod = p.timeLapsePeriod
 
         # Z-steps -related
-        nZSteps = int((mExperiment.parameterValue.zStackMax-mExperiment.parameterValue.zStackMin)//mExperiment.parameterValue.zStackStepSize)+1
         isZStack = p.zStack
         zStackMin = p.zStackMin
         zStackMax = p.zStackMax

@@ -501,7 +501,7 @@ class ExperimentController(ImConWidgetController):
         else:
             # Execute in normal mode using workflow
             all_workflow_steps = []
-            all_file_writers = []
+            timepoint_file_writers = {}  # Store writers per timepoint
 
             for t in range(nTimes):
                 experiment_params = {
@@ -529,13 +529,12 @@ class ExperimentController(ImConWidgetController):
                     t_period=tPeriod
                 )
 
-                # Append workflow steps and file writers to the accumulated lists
+                # Append workflow steps and store file writers per timepoint
                 all_workflow_steps.extend(result["workflow_steps"])
-                all_file_writers.extend(result["file_writers"])
+                timepoint_file_writers[t] = result["file_writers"]
 
-            # Use the accumulated workflow steps and file writers
+            # Use the accumulated workflow steps
             workflowSteps = all_workflow_steps
-            file_writers = all_file_writers
             # Create workflow progress handler
             def sendProgress(payload):
                 self.sigExperimentWorkflowUpdate.emit(payload)
@@ -554,9 +553,10 @@ class ExperimentController(ImConWidgetController):
             context.set_metadata("experiment_start_time", time.time())
             context.set_metadata("timepoint_times", {})  # Track timing for each timepoint
 
-            # Store file_writers in context
-            if len(file_writers) > 0:
-                context.set_object("file_writers", file_writers)
+            # Store file_writers per timepoint in context
+            for t, writers in timepoint_file_writers.items():
+                if len(writers) > 0:
+                    context.set_object(f"file_writers_t{t}", writers)
             context.on("progress", sendProgress)
             context.on("rgb_stack", sendProgress)
 
@@ -1158,22 +1158,37 @@ class ExperimentController(ImConWidgetController):
         else:
             self._logger.warning(f"No OME writer found for tile index when finalizing writer: {tile_index}")
 
-    def finalize_current_ome_writer(self, context: WorkflowContext = None, metadata: Dict[str, Any] = None, *args, **kwargs):
-        """Finalize all OME writers and clean up."""
-        # TODO: This is misleading as the method closes all filewriters, not just the current one.
+    def finalize_current_ome_writer(self, context: WorkflowContext = None, metadata: Dict[str, Any] = None, timepoint: int = None, *args, **kwargs):
+        """Finalize OME writers for a specific timepoint, or all writers if no timepoint specified."""
         # Finalize OME writers from context (normal mode)
         if context is not None:
-            # Get file_writers list and finalize all
-            file_writers = context.get_object("file_writers")
-            if file_writers is not None:
-                for i, ome_writer in enumerate(file_writers):
-                    try:
-                        self._logger.info(f"Finalizing OME writer for tile {i}")
-                        ome_writer.finalize()
-                    except Exception as e:
-                        self._logger.error(f"Error finalizing OME writer for tile {i}: {e}")
-                # Clear the list from context
-                context.remove_object("file_writers")
+            if timepoint is not None:
+                # Finalize only writers for the specified timepoint
+                timepoint_writers_key = f"file_writers_t{timepoint}"
+                timepoint_writers = context.get_object(timepoint_writers_key)
+                if timepoint_writers is not None:
+                    for i, ome_writer in enumerate(timepoint_writers):
+                        try:
+                            self._logger.info(f"Finalizing OME writer for tile {i} (timepoint {timepoint})")
+                            ome_writer.finalize()
+                        except Exception as e:
+                            self._logger.error(f"Error finalizing OME writer for tile {i} (timepoint {timepoint}): {e}")
+                    # Remove this timepoint's writers from context
+                    context.remove_object(timepoint_writers_key)
+                else:
+                    self._logger.warning(f"No OME writers found for timepoint {timepoint}")
+            else:
+                # Legacy behavior: finalize all writers (fallback for single timepoint experiments)
+                file_writers = context.get_object("file_writers")
+                if file_writers is not None:
+                    for i, ome_writer in enumerate(file_writers):
+                        try:
+                            self._logger.info(f"Finalizing OME writer for tile {i}")
+                            ome_writer.finalize()
+                        except Exception as e:
+                            self._logger.error(f"Error finalizing OME writer for tile {i}: {e}")
+                    # Clear the list from context
+                    context.remove_object("file_writers")
 
         # Also finalize the instance variable if it exists (performance mode)
         if self._current_ome_writer is not None:

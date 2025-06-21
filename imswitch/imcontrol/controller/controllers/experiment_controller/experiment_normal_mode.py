@@ -410,7 +410,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             main_func=self.controller.dummy_main_func,
             main_params={},
             post_funcs=[self.controller.finalize_current_ome_writer],
-            post_params={}
+            post_params={"timepoint": t}
         ))
         step_id += 1
 

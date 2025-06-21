@@ -285,9 +285,49 @@ class ExperimentController(ImConWidgetController):
 
     def generate_snake_tiles(self, mExperiment):
         tiles = []
+        
+        # Handle case where no XY coordinates are provided but z-stack is enabled
+        # In this case, we want to scan at the current position
+        if len(mExperiment.pointList) == 0 and (mExperiment.parameterValue.zStack or (mExperiment.parameterValue.zStackStepSize > 0 and mExperiment.parameterValue.zStackMax > mExperiment.parameterValue.zStackMin)):
+            self._logger.info("No XY coordinates provided but z-stack enabled. Creating fallback point at current position.")
+            
+            # Get current stage position
+            current_position = self.mStage.getPosition()
+            current_x = current_position.get("X", 0)
+            current_y = current_position.get("Y", 0)
+            
+            # Create a fallback point at current position
+            fallback_tile = [{
+                "iterator": 0,
+                "centerIndex": 0,
+                "iX": 0,
+                "iY": 0,
+                "x": current_x,
+                "y": current_y,
+            }]
+            tiles.append(fallback_tile)
+            return tiles
+        
+        # Original logic for when pointList is provided
         for iCenter, centerPoint in enumerate(mExperiment.pointList):
             # Collect central and neighbour points (without duplicating the center)
             allPoints = [(n.x, n.y) for n in centerPoint.neighborPointList]
+            
+            # Handle case where neighborPointList is empty but centerPoint is provided
+            # This means scan at the center point position only (useful for z-stack-only)
+            if len(allPoints) == 0:
+                self._logger.info(f"Empty neighborPointList for center point {iCenter}. Using center point position for z-stack scanning.")
+                fallback_tile = [{
+                    "iterator": 0,
+                    "centerIndex": iCenter,
+                    "iX": 0,
+                    "iY": 0,
+                    "x": centerPoint.x,
+                    "y": centerPoint.y,
+                }]
+                tiles.append(fallback_tile)
+                continue
+            
             # Sort by y then by x (i.e., raster order)
             allPoints.sort(key=lambda coords: (coords[1], coords[0]))
 
@@ -349,7 +389,6 @@ class ExperimentController(ImConWidgetController):
         tPeriod = p.timeLapsePeriod
 
         # Z-steps -related
-        nZSteps = int((mExperiment.parameterValue.zStackMax-mExperiment.parameterValue.zStackMin)//mExperiment.parameterValue.zStackStepSize)+1
         isZStack = p.zStack
         zStackMin = p.zStackMin
         zStackMax = p.zStackMax
@@ -414,12 +453,11 @@ class ExperimentController(ImConWidgetController):
 
         # Generate Z-positions
         currentZ = self.mStage.getPosition()["Z"]
+        isZStack = p.zStack or (p.zStackStepSize > 0 and p.zStackMax > p.zStackMin)
         if isZStack:
             z_positions = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize) + currentZ
         else:
             z_positions = [currentZ]  # Get current Z position
-        minX, maxX, minY, maxY, diffX, diffY = self.computeScanRanges(snake_tiles)
-        mPixelSize = self.detectorPixelSize[-1]  # Pixel size in µm
 
         # Prepare directory and filename for saving
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -430,7 +468,6 @@ class ExperimentController(ImConWidgetController):
         mFileName = f"{timeStamp}_{exp_name}"
 
         workflowSteps = []
-        step_id = 0
         file_writers = []  # Initialize outside the loop for context storage
         
         # OME writer-related
@@ -484,6 +521,7 @@ class ExperimentController(ImConWidgetController):
                     dir_path=dirPath,
                     m_file_name=mFileName,
                     t=t,
+                    n_times=nTimes,  # Pass total number of time points
                     is_auto_focus=isAutoFocus,
                     autofocus_min=autofocusMin,
                     autofocus_max=autofocusMax,
@@ -511,6 +549,10 @@ class ExperimentController(ImConWidgetController):
             context.set_metadata("experimentName", exp_name)
             context.set_metadata("nTimes", nTimes)
             context.set_metadata("tPeriod", tPeriod)
+            # Add timing information for proper period calculation
+            import time
+            context.set_metadata("experiment_start_time", time.time())
+            context.set_metadata("timepoint_times", {})  # Track timing for each timepoint
 
             # Store file_writers in context
             if len(file_writers) > 0:
@@ -557,6 +599,40 @@ class ExperimentController(ImConWidgetController):
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
         import time
         time.sleep(seconds)
+
+    def wait_for_next_timepoint(self, timepoint: int, t_period: float, context: WorkflowContext, metadata: Dict[str, Any]):
+        """
+        Wait for the proper time interval between timepoints, accounting for measurement time.
+        
+        Args:
+            timepoint: Current timepoint index
+            t_period: Target period between timepoints in seconds
+            context: WorkflowContext containing timing information
+            metadata: Metadata dictionary
+        """
+        import time
+        
+        current_time = time.time()
+        experiment_start_time = context.get_metadata("experiment_start_time", current_time)
+        timepoint_times = context.get_metadata("timepoint_times", {})
+        
+        # Calculate expected time for this timepoint
+        expected_time = experiment_start_time + (timepoint + 1) * t_period
+        
+        # Store timing information for this timepoint
+        timepoint_times[str(timepoint)] = current_time
+        context.set_metadata("timepoint_times", timepoint_times)
+        
+        # Calculate how long to wait
+        wait_time = max(0, expected_time - current_time)
+        
+        if wait_time > 0:
+            self._logger.info(f"Waiting {wait_time:.2f}s for next timepoint (timepoint {timepoint})")
+            time.sleep(wait_time)
+        else:
+            self._logger.warning(f"Timepoint {timepoint} is running {abs(wait_time):.2f}s behind schedule")
+            # Small delay to prevent issues
+            time.sleep(0.01)
 
     def save_frame_ome(self, context: WorkflowContext, metadata: Dict[str, Any], **kwargs):
         """
@@ -707,7 +783,7 @@ class ExperimentController(ImConWidgetController):
 
     def move_stage_z(self, posZ: float, relative: bool = False):
         self._logger.debug(f"Moving stage to Z={posZ}")
-        self.mStage.move(value=posZ, speed=self.SPEED_Z, axis="Z", is_absolute=not relative, is_blocking=True)
+        self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, 10000)), axis="Z", is_absolute=not relative, is_blocking=True)
         newPosition = self.mStage.getPosition()
         self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
         return newPosition["Z"]
@@ -1080,23 +1156,36 @@ class ExperimentController(ImConWidgetController):
             except Exception as e:
                 self._logger.error(f"Error finalizing OME writer for tile {tile_index}: {e}")
         else:
-            self._logger.warning(f"No OME writer found for tile index: {tile_index}")
+            self._logger.warning(f"No OME writer found for tile index when finalizing writer: {tile_index}")
 
     def finalize_current_ome_writer(self, context: WorkflowContext = None, metadata: Dict[str, Any] = None, *args, **kwargs):
         """Finalize all OME writers and clean up."""
+        # TODO: This is misleading as the method closes all filewriters, not just the current one.
         # Finalize OME writers from context (normal mode)
+        # optional: extract time_point from args/kwargs if needed
+        time_index = kwargs.get("time_index", None)
+
         if context is not None:
             # Get file_writers list and finalize all
             file_writers = context.get_object("file_writers")
             if file_writers is not None:
-                for i, ome_writer in enumerate(file_writers):
+                if time_index is not None:
+                    self._logger.info(f"Finalizing OME writers for time point {time_index}")
                     try:
-                        self._logger.info(f"Finalizing OME writer for tile {i}")
+                        ome_writer = file_writers[time_index]
                         ome_writer.finalize()
+                        self._logger.info(f"OME writer finalized for time point {time_index}")
                     except Exception as e:
-                        self._logger.error(f"Error finalizing OME writer for tile {i}: {e}")
-                # Clear the list from context
-                context.remove_object("file_writers")
+                        self._logger.error(f"Error finalizing OME writer for time point {time_index}: {e}")
+                else:
+                    for i, ome_writer in enumerate(file_writers):
+                        try:
+                            self._logger.info(f"Finalizing OME writer for tile {i}")
+                            ome_writer.finalize()
+                        except Exception as e:
+                            self._logger.error(f"Error finalizing OME writer for tile {i}: {e}")
+                    # Clear the list from context
+                    context.remove_object("file_writers")
 
         # Also finalize the instance variable if it exists (performance mode)
         if self._current_ome_writer is not None:

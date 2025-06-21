@@ -30,6 +30,9 @@ class WorkflowContext:
     def set_metadata(self, key: str, value: Any):
         self.data[key] = value
 
+    def get_metadata(self, key: str, default: Any = None) -> Any:
+        return self.data.get(key, default)
+
     def set_object(self, key: str, obj: Any):
         self.objects[key] = obj
 

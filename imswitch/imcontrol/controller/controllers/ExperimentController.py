@@ -1162,18 +1162,30 @@ class ExperimentController(ImConWidgetController):
         """Finalize all OME writers and clean up."""
         # TODO: This is misleading as the method closes all filewriters, not just the current one.
         # Finalize OME writers from context (normal mode)
+        # optional: extract time_point from args/kwargs if needed
+        time_index = kwargs.get("time_index", None)
+
         if context is not None:
             # Get file_writers list and finalize all
             file_writers = context.get_object("file_writers")
             if file_writers is not None:
-                for i, ome_writer in enumerate(file_writers):
+                if time_index is not None:
+                    self._logger.info(f"Finalizing OME writers for time point {time_index}")
                     try:
-                        self._logger.info(f"Finalizing OME writer for tile {i}")
+                        ome_writer = file_writers[time_index]
                         ome_writer.finalize()
+                        self._logger.info(f"OME writer finalized for time point {time_index}")
                     except Exception as e:
-                        self._logger.error(f"Error finalizing OME writer for tile {i}: {e}")
-                # Clear the list from context
-                context.remove_object("file_writers")
+                        self._logger.error(f"Error finalizing OME writer for time point {time_index}: {e}")
+                else:
+                    for i, ome_writer in enumerate(file_writers):
+                        try:
+                            self._logger.info(f"Finalizing OME writer for tile {i}")
+                            ome_writer.finalize()
+                        except Exception as e:
+                            self._logger.error(f"Error finalizing OME writer for tile {i}: {e}")
+                    # Clear the list from context
+                    context.remove_object("file_writers")
 
         # Also finalize the instance variable if it exists (performance mode)
         if self._current_ome_writer is not None:

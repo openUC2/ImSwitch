@@ -55,13 +55,15 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_max = kwargs.get('autofocus_max', 0)
         autofocus_step_size = kwargs.get('autofocus_step_size', 1)
         t_period = kwargs.get('t_period', 1)
+        # New parameters for multi-timepoint support
+        n_times = kwargs.get('n_times', 1)  # Total number of time points
         
         # Initialize workflow components
         workflow_steps = []
         file_writers = []
         step_id = 0
         
-        # Set up OME writers for each tile
+        # Set up OME writers for each tile - create new writers for each timepoint
         file_writers = self._setup_ome_writers(
             snake_tiles, t, exp_name, dir_path, m_file_name, 
             z_positions, illumination_intensities
@@ -73,13 +75,13 @@ class ExperimentNormalMode(ExperimentModeBase):
                 tiles, position_center_index, step_id, workflow_steps,
                 z_positions, illumination_sources, illumination_intensities,
                 exposures, gains, t, is_auto_focus, autofocus_min, 
-                autofocus_max, autofocus_step_size
+                autofocus_max, autofocus_step_size, n_times
             )
         
         # Add finalization steps
         step_id = self._add_finalization_steps(
             workflow_steps, step_id, snake_tiles, illumination_sources, 
-            illumination_intensities, t_period
+            illumination_intensities, t_period, t
         )
         
         return {
@@ -213,7 +215,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   is_auto_focus: bool,
                                   autofocus_min: float,
                                   autofocus_max: float,
-                                  autofocus_step_size: float) -> int:
+                                  autofocus_step_size: float,
+                                  n_times: int) -> int:
         """
         Create workflow steps for a single tile.
         
@@ -237,6 +240,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             Updated step ID
         """
         # Get scan range information
+        initial_z_position = self.controller.mStage.getPosition()["Z"]
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
         
@@ -335,6 +339,18 @@ class ExperimentNormalMode(ExperimentModeBase):
                             main_params={"power": 0, "channel": illu_source},
                         ))
                         step_id += 1
+                        
+        # Move back to the current Z position after processing all points in the tile
+        if len(z_positions) > 1 :
+            workflow_steps.append(WorkflowStep(
+                name="Move back to current Z position",
+                step_id=step_id,
+                main_func=self.controller.move_stage_z,
+                main_params={"posZ": initial_z_position, "relative": False},
+                pre_funcs=[self.controller.wait_time],
+                pre_params={"seconds": 0.1},
+            ))
+            step_id += 1
 
         # Perform autofocus if enabled
         if is_auto_focus:
@@ -347,10 +363,13 @@ class ExperimentNormalMode(ExperimentModeBase):
             step_id += 1
 
         # Finalize OME writer for this tile (skip in single TIFF mode since we only have one writer)
+        # Always finalize tile writers since each timepoint creates its own writers
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-        if not is_single_tiff_mode:
+        should_finalize_tile = not is_single_tiff_mode
+        
+        if should_finalize_tile:
             workflow_steps.append(WorkflowStep(
-                name=f"Finalize OME writer for tile {position_center_index}",
+                name=f"Finalize OME writer for tile {position_center_index} (timepoint {t})",
                 step_id=step_id,
                 main_func=self.controller.dummy_main_func,
                 main_params={},
@@ -367,7 +386,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                               snake_tiles: List[List[Dict]],
                               illumination_sources: List[str],
                               illumination_intensities: List[float],
-                              t_period: float) -> int:
+                              t_period: float,
+                              t: int) -> int:
         """
         Add finalization workflow steps.
         
@@ -378,22 +398,21 @@ class ExperimentNormalMode(ExperimentModeBase):
             illumination_sources: List of illumination source names
             illumination_intensities: List of illumination values
             t_period: Time period to wait
+            t: Current time point index
             
         Returns:
             Updated step ID
         """
-        # Add wait step
-        # Finalize all OME writers
+        # Always finalize OME writers since each timepoint creates its own writers
         workflow_steps.append(WorkflowStep(
-            name="Wait for next frame and finalize OME writers",
+            name=f"Finalize OME writers (timepoint {t})",
             step_id=step_id,
             main_func=self.controller.dummy_main_func,
             main_params={},
-            pre_funcs=[self.controller.wait_time, self.controller.finalize_current_ome_writer],
-            pre_params={"seconds": 0.01}
+            post_funcs=[self.controller.finalize_current_ome_writer],
+            post_params={"time_index": t}
         ))
         step_id += 1
-
 
         # Turn off all illuminations
         for illu_index, illu_source in enumerate(illumination_sources):
@@ -409,14 +428,14 @@ class ExperimentNormalMode(ExperimentModeBase):
             ))
             step_id += 1
 
-        # Final step
+        # Add timing calculation for proper period control (for all timepoints except implicit last)
         workflow_steps.append(WorkflowStep(
-            name="Done",
+            name=f"Calculate and wait for proper time period (timepoint {t})",
             step_id=step_id,
             main_func=self.controller.dummy_main_func,
             main_params={},
-            pre_funcs=[self.controller.wait_time],
-            pre_params={"seconds": t_period}
+            pre_funcs=[self.controller.wait_for_next_timepoint],
+            pre_params={"timepoint": t, "t_period": t_period}
         ))
         step_id += 1
 

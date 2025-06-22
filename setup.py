@@ -48,12 +48,12 @@ setup(
         "lantzdev >= 0.5.2",
         "luddite >= 1",
         "nidaqmx >= 0.5.7",
-        "numpy>=1.26.4",
+        "numpy==1.26.4",
         "packaging >= 19",
         "psutil >= 5.4.8",
         "pyserial >= 3.4",
         "requests >= 2.25",
-        "scikit-image==0.19.3",
+        "scikit-image==0.25.2",
         "Send2Trash >= 1.8",
         "tifffile >= 2020.11.26",
         "dask[complete] >= 2024.8.0",
@@ -73,13 +73,13 @@ setup(
         "NanoImagingPack==2.1.4",
         "pymba==0.3.7",
         "imjoy-rpc==0.5.59",
-        "imswitchclient>=0.1.2",  
+        "imswitchclient>=0.1.2",
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
-        "ashlarUC2", 
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
-        "zarr >= 3.0.0"
+        "zarr >= 3.0.0",
+                "numcodecs==0.13.1"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

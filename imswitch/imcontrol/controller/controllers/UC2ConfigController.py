@@ -39,9 +39,13 @@ CAN_ADDRESS_MAP = {
 }
 
 GITHUB_API_LATEST_RELEASE = "https://api.github.com/repos/youseetoo/uc2-esp32/releases/latest"
-FIRMWARE_DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "uc2_esp32_fw"
-FIRMWARE_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
+try:
+    FIRMWARE_DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "uc2_esp32_fw"
+    FIRMWARE_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+except:
+    # Fallback for systems where tempfile.gettempdir() does not return a valid path
+    FIRMWARE_DOWNLOAD_DIR = Path("uc2_esp32_fw")
+    FIRMWARE_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 def _fetch_latest_firmware_assets():
     """Return list of (name, download_url) tuples for the latest release."""

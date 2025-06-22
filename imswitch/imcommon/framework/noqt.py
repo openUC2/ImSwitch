@@ -38,17 +38,15 @@ app = ASGIApp(sio)
 # Fallback message queue and worker thread for Socket.IO failures
 _fallback_message_queue = queue.Queue()
 _fallback_worker_thread = None
-_fallback_worker_running = False
 
 
 def _fallback_worker():
     """Background worker thread to handle Socket.IO fallback messages."""
-    global _fallback_worker_running
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     try:
-        while _fallback_worker_running:
+        while True:
             try:
                 message = _fallback_message_queue.get(timeout=1.0)
                 if message is None:  # Poison pill to stop worker
@@ -66,9 +64,8 @@ def _fallback_worker():
 
 def _start_fallback_worker():
     """Start the fallback worker thread if not already running."""
-    global _fallback_worker_thread, _fallback_worker_running
+    global _fallback_worker_thread
     if _fallback_worker_thread is None or not _fallback_worker_thread.is_alive():
-        _fallback_worker_running = True
         _fallback_worker_thread = threading.Thread(target=_fallback_worker,
                                                     daemon=True)
         _fallback_worker_thread.start()
@@ -128,7 +125,7 @@ class SignalInstance(psygnal.SignalInstance):
 
                     # convert 16 bit to 8 bit for visualization
                     if output_frame.dtype == np.uint16:
-                        output_frame = cv2.normalize(output_frame, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+                        output_frame = np.uint8(output_frame//64) 
                     try:
                         output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
                     except:

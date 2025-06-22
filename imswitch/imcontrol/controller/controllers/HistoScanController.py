@@ -1579,6 +1579,7 @@ class ImageStitcher:
             self.queue.append((img, coords, metadata))
 
     def _process_queue(self):
+        #https://forum.image.sc/t/python-tifffile-ome-full-metadata-support/56526/11?u=beniroquai
         with tifffile.TiffWriter(self.file_path, bigtiff=True, append=True) as tif:
             while self.isRunning:
                 if not self.queue:
@@ -1591,6 +1592,7 @@ class ImageStitcher:
                     img = np.fliplr(img)
                 if self.flipY:
                     img = np.flipud(img)
+                #
                 
                 self._place_on_canvas(img, coords)
                 # write image to disk

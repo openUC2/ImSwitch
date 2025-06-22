@@ -48,6 +48,7 @@ class ObjectiveManager(SignalInterface):
         self.homeSpeed = self.__ObjectiveInfo.homeSpeed
         self.homeAcceleration = self.__ObjectiveInfo.homeAcceleration
         self.calibrateOnStart = self.__ObjectiveInfo.calibrateOnStart
+        self.isActive = self.__ObjectiveInfo.active
 
 
 

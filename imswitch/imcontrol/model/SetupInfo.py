@@ -240,6 +240,7 @@ class ObjectiveInfo:
     homeSpeed: int = 20000
     homeAcceleration: int = 20000
     calibrateOnStart: bool = True
+    active: bool = True
 
 @dataclass(frozen=False)
 class MCTInfo:

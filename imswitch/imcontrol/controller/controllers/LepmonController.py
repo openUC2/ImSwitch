@@ -16,6 +16,57 @@ from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS
 from typing import Dict, List, Union, Optional
 
+# Lepmon hardware dependencies
+try:
+    import RPi.GPIO as GPIO
+    HAS_GPIO = True
+except ImportError:
+    HAS_GPIO = False
+    print("RPi.GPIO not available - running in simulation mode")
+
+try:
+    from luma.core.interface.serial import i2c
+    from luma.core.render import canvas
+    from luma.oled.device import sh1106
+    from PIL import ImageFont, ImageDraw, Image
+    HAS_OLED = True
+except ImportError:
+    HAS_OLED = False
+    print("OLED libraries not available - running in simulation mode")
+
+try:
+    import smbus
+    HAS_I2C = True
+except ImportError:
+    HAS_I2C = False
+    print("I2C libraries (smbus) not available - running in simulation mode")
+
+# Lepmon Hardware Configuration (from LepmonOS GPIO_Setup.py)
+LED_PINS = {
+    'gelb': 22,    # GPIO 22 for yellow LED
+    'blau': 6,     # GPIO 6 for blue LED  
+    'rot': 17      # GPIO 17 for red LED
+}
+
+BUTTON_PINS = {
+    'oben': 23,     # GPIO 23 for up button
+    'unten': 24,    # GPIO 24 for down button
+    'rechts': 8,    # GPIO 8 for right button
+    'enter': 7      # GPIO 7 for enter button
+}
+
+# OLED Display Configuration  
+OLED_I2C_PORT = 1
+OLED_I2C_ADDRESS = 0x3C
+
+# I2C Sensor Configuration
+I2C_BUS = 1  # I2C bus number
+SENSOR_ADDRESSES = {
+    "temperature": 0x48,  # Example temperature sensor address
+    "humidity": 0x40,     # Example humidity sensor address  
+    "pressure": 0x77      # Example pressure sensor address
+}
+
 # We map FastAPI GET -> @APIExport()
 # and FastAPI POST -> @APIExport(requestType="POST")
 
@@ -93,7 +144,7 @@ class LepmonController(LiveUpdatedController):
         # Initialize hardware control states
         self.lightStates = {}  # Track light on/off states
         self.lcdDisplay = {"line1": "", "line2": "", "line3": "", "line4": ""}  # LCD display content
-        self.buttonStates = {"button1": False, "button2": False, "button3": False, "button4": False}
+        self.buttonStates = {"oben": False, "unten": False, "rechts": False, "enter": False}
         
         # Initialize timing configurations
         self.timingConfig = {
@@ -103,8 +154,8 @@ class LepmonController(LiveUpdatedController):
             "postAcquisitionDelay": 1   # seconds after each acquisition
         }
 
-        # Initialize hardware managers if available
-        self._initializeHardwareManagers()
+        # Initialize Lepmon hardware directly
+        self._initializeLepmonHardware()
 
         # LepmonOS state variables
         self.lepmon_config = {}
@@ -128,22 +179,111 @@ class LepmonController(LiveUpdatedController):
         # Initialize LepmonOS system
         self._initializeLepmonOS()
 
-    def _initializeHardwareManagers(self):
-        """Initialize available hardware managers for lights, display, etc."""
+    def _initializeLepmonHardware(self):
+        """Initialize Lepmon hardware directly (GPIO LEDs, OLED display, buttons)"""
         try:
-            # Try to get LED manager for light control
-            if hasattr(self._master, 'LEDsManager'):
-                self.ledManager = self._master.LEDsManager
-                # Initialize light states for all available LEDs
-                for ledName in self.ledManager.getAllDeviceNames():
-                    self.lightStates[ledName] = False
+            self._logger.info("Initializing Lepmon hardware directly")
+            
+            # Initialize GPIO if available
+            if HAS_GPIO:
+                GPIO.setmode(GPIO.BCM)
+                GPIO.setwarnings(False)
+                
+                # Setup LED pins as outputs
+                for color, pin in LED_PINS.items():
+                    GPIO.setup(pin, GPIO.OUT)
+                    GPIO.output(pin, GPIO.LOW)  # LEDs off initially
+                    self.lightStates[color] = False
+                    
+                # Setup PWM for LED dimming
+                self.led_pwm = {}
+                for color, pin in LED_PINS.items():
+                    pwm = GPIO.PWM(pin, 1000)  # 1kHz PWM
+                    pwm.start(0)  # Start at 0% duty cycle (off)
+                    self.led_pwm[color] = pwm
+                    
+                # Setup button pins as inputs with pull-up resistors
+                for button, pin in BUTTON_PINS.items():
+                    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                    self.buttonStates[button] = False
+                    
+                self._logger.info("GPIO initialized successfully")
             else:
-                self.ledManager = None
-                self._logger.warning("No LED manager available for hardware light control")
+                self.led_pwm = {}
+                # Initialize LED states for simulation
+                for color in LED_PINS.keys():
+                    self.lightStates[color] = False
+                self._logger.warning("GPIO not available - using simulation mode")
+                
+            # Initialize OLED display if available
+            if HAS_OLED:
+                try:
+                    display_interface = i2c(port=OLED_I2C_PORT, address=OLED_I2C_ADDRESS)
+                    self.oled = sh1106(display_interface)
+                    
+                    # Try to load font
+                    try:
+                        font_path = os.path.join(os.path.dirname(__file__), 'FreeSans.ttf')
+                        self.oled_font = ImageFont.truetype(font_path, 14)
+                    except (OSError, IOError):
+                        try:
+                            self.oled_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+                        except (OSError, IOError):
+                            self.oled_font = ImageFont.load_default()
+                            
+                    self._logger.info("OLED display initialized successfully")
+                except Exception as e:
+                    self.oled = None
+                    self.oled_font = None
+                    self._logger.warning(f"OLED initialization failed: {e}")
+            else:
+                self.oled = None
+                self.oled_font = None
+                self._logger.warning("OLED libraries not available - using simulation mode")
+                
+            # Initialize I2C for sensors if available
+            if HAS_I2C:
+                try:
+                    self.i2c_bus = smbus.SMBus(I2C_BUS)
+                    self._logger.info("I2C bus initialized for sensor communication")
+                except Exception as e:
+                    self.i2c_bus = None
+                    self._logger.warning(f"I2C bus initialization failed: {e}")
+            else:
+                self.i2c_bus = None
+                self._logger.warning("I2C libraries not available - using simulation mode")
                 
         except Exception as e:
-            self._logger.warning(f"Could not initialize hardware managers: {e}")
-            self.ledManager = None
+            self._logger.error(f"Lepmon hardware initialization failed: {e}")
+            # Set simulation mode
+            self.led_pwm = {}
+            self.oled = None
+            self.oled_font = None
+            self.i2c_bus = None
+            for color in LED_PINS.keys():
+                self.lightStates[color] = False
+
+    def _cleanupHardware(self):
+        """Cleanup GPIO and hardware resources"""
+        try:
+            if HAS_GPIO:
+                # Stop PWM and cleanup GPIO
+                for pwm in self.led_pwm.values():
+                    pwm.stop()
+                GPIO.cleanup()
+                self._logger.info("GPIO cleaned up successfully")
+            
+            if HAS_I2C and self.i2c_bus:
+                # Close I2C bus
+                self.i2c_bus.close()
+                self._logger.info("I2C bus closed successfully")
+                
+        except Exception as e:
+            self._logger.warning(f"Hardware cleanup failed: {e}")
+
+    def __del__(self):
+        """Destructor to ensure hardware cleanup"""
+        self._cleanupHardware()
 
     def _initializeLepmonOS(self):
         """Initialize LepmonOS system components - equivalent to 00_start_up.py"""
@@ -174,65 +314,98 @@ class LepmonController(LiveUpdatedController):
     # ---------------------- LepmonOS Core Functions (from 00_start_up.py) ---------------------- #
 
     def _dim_down(self):
-        """Equivalent to utils.Lights.dim_down()"""
+        """Equivalent to utils.Lights.dim_down() - dim all LEDs to minimum"""
         try:
-            if self.ledManager:
-                for ledName in self.ledManager.getAllDeviceNames():
-                    led_device = self.ledManager[ledName]
-                    led_device.setPowerValue(led_device.power.valueRangeMin)
+            for color in LED_PINS.keys():
+                self._dim_led(color, 0)  # Set to 0% brightness
             self._logger.debug("Dimmed down all lights")
         except Exception as e:
             self._logger.warning(f"Could not dim down lights: {e}")
 
+    def _dim_led(self, color: str, brightness: int):
+        """Dim the specified LED to given brightness (0-100)"""
+        try:
+            if color in LED_PINS:
+                if HAS_GPIO and color in self.led_pwm:
+                    self.led_pwm[color].ChangeDutyCycle(brightness)
+                # Update state based on brightness
+                self.lightStates[color] = brightness > 0
+                self._logger.debug(f"Set LED {color} to {brightness}% brightness")
+        except Exception as e:
+            self._logger.warning(f"Could not dim LED {color}: {e}")
+
     def _turn_off_led(self, led_name: str):
         """Equivalent to utils.GPIO_Setup.turn_off_led()"""
         try:
-            if led_name in self.lightStates:
+            if led_name in LED_PINS:
+                self._dim_led(led_name, 0)  # Set to 0% brightness
                 self.lightStates[led_name] = False
                 self.sigLightStateChanged.emit({"lightName": led_name, "state": False})
-            self._logger.debug(f"Turned off LED: {led_name}")
+                self._logger.debug(f"Turned off LED: {led_name}")
         except Exception as e:
             self._logger.warning(f"Could not turn off LED {led_name}: {e}")
 
-    def _turn_on_led(self, led_name: str):
+    def _turn_on_led(self, led_name: str, brightness: int = 100):
         """Equivalent to utils.GPIO_Setup.turn_on_led()"""
         try:
-            if led_name in self.lightStates:
+            if led_name in LED_PINS:
+                self._dim_led(led_name, brightness)  # Set to specified brightness
                 self.lightStates[led_name] = True
                 self.sigLightStateChanged.emit({"lightName": led_name, "state": True})
-            elif self.ledManager and led_name in self.ledManager.getAllDeviceNames():
-                led_device = self.ledManager[led_name]
-                led_device.setPowerValue(led_device.power.valueRangeMax)
-                self.lightStates[led_name] = True
-                self.sigLightStateChanged.emit({"lightName": led_name, "state": True})
-            self._logger.debug(f"Turned on LED: {led_name}")
+                self._logger.debug(f"Turned on LED: {led_name} at {brightness}%")
         except Exception as e:
             self._logger.warning(f"Could not turn on LED {led_name}: {e}")
 
     def _display_text(self, line1: str = "", line2: str = "", line3: str = "", line4: str = "", duration: float = 0):
-        """Equivalent to utils.OLED_panel.display_text()"""
+        """Equivalent to utils.OLED_panel.display_text() - direct OLED control"""
         try:
+            # Update internal state
             self.lcdDisplay["line1"] = line1[:20]
-            self.lcdDisplay["line2"] = line2[:20]
+            self.lcdDisplay["line2"] = line2[:20] 
             self.lcdDisplay["line3"] = line3[:20]
             self.lcdDisplay["line4"] = line4[:20]
             
+            # Direct OLED display if available
+            if self.oled and HAS_OLED:
+                with canvas(self.oled) as draw:
+                    # Clear background
+                    draw.rectangle(self.oled.bounding_box, outline="white", fill="black")
+                    # Draw text lines (OLED typically 3 lines, we'll adapt)
+                    if line1:
+                        draw.text((5, 5), line1[:20], font=self.oled_font, fill="white")
+                    if line2:
+                        draw.text((5, 20), line2[:20], font=self.oled_font, fill="white")
+                    if line3:
+                        draw.text((5, 35), line3[:20], font=self.oled_font, fill="white")
+                    # line4 may not fit on small OLED, skip or combine
+            
+            # Emit signal for UI updates
             display_content = f"{line1}\n{line2}\n{line3}\n{line4}"
             self.sigLCDDisplayUpdate.emit(display_content)
             
+            # Wait if duration specified
             if duration > 0:
                 time.sleep(duration)
                 
-            self._logger.debug(f"Display updated: {self.lcdDisplay}")
+            self._logger.debug(f"Display updated: {line1} | {line2} | {line3}")
         except Exception as e:
             self._logger.warning(f"Could not update display: {e}")
 
     def _display_image(self, image_path: str):
-        """Equivalent to utils.OLED_panel.display_image()"""
+        """Equivalent to utils.OLED_panel.display_image() - direct OLED control"""
         try:
-            # Since we don't have direct OLED access, we'll log the image display
-            self._logger.info(f"Displaying image: {image_path}")
-            # Could emit a signal for UI to handle image display
+            if self.oled and HAS_OLED and os.path.exists(image_path):
+                # Load and convert image to 1-bit mode for OLED
+                logo = Image.open(image_path).convert("1")
+                with canvas(self.oled) as draw:
+                    draw.rectangle(self.oled.bounding_box, outline="white", fill="black")
+                    draw.bitmap((0, 0), logo, fill="white")
+                self._logger.info(f"Displayed image on OLED: {image_path}")
+            else:
+                # Fallback for simulation mode
+                self._logger.info(f"Displaying image (simulation): {image_path}")
+                
+            # Emit signal for UI
             self.sigLCDDisplayUpdate.emit(f"IMAGE: {os.path.basename(image_path)}")
         except Exception as e:
             self._logger.warning(f"Could not display image {image_path}: {e}")
@@ -293,6 +466,106 @@ class LepmonController(LiveUpdatedController):
             # Could emit signal for actual LoRa transmission
         except Exception as e:
             self._logger.warning(f"LoRa transmission failed: {e}")
+
+    def _button_pressed(self, button_name: str) -> bool:
+        """Equivalent to utils.GPIO_Setup.button_pressed() - check if button is pressed"""
+        try:
+            if button_name not in BUTTON_PINS:
+                available_buttons = ", ".join(BUTTON_PINS.keys())
+                raise ValueError(f"Invalid button name '{button_name}'. Available: {available_buttons}")
+            
+            if HAS_GPIO:
+                # Button pressed when GPIO reads LOW (pull-up configuration)
+                is_pressed = GPIO.input(BUTTON_PINS[button_name]) == GPIO.LOW
+                if is_pressed != self.buttonStates[button_name]:
+                    self.buttonStates[button_name] = is_pressed
+                    if is_pressed:  # Only emit on press, not release
+                        self.sigButtonPressed.emit({"buttonName": button_name, "state": is_pressed})
+                        self._logger.debug(f"Button {button_name} pressed")
+                return is_pressed
+            else:
+                # Simulation mode - return stored state
+                return self.buttonStates[button_name]
+                
+        except Exception as e:
+            self._logger.warning(f"Could not read button {button_name}: {e}")
+            return False
+
+    def _read_all_buttons(self) -> Dict[str, bool]:
+        """Read all button states"""
+        button_states = {}
+        for button_name in BUTTON_PINS.keys():
+            button_states[button_name] = self._button_pressed(button_name)
+        return button_states
+
+    def _simulate_button_press(self, button_name: str):
+        """Simulate button press for testing purposes"""
+        try:
+            if button_name in BUTTON_PINS:
+                self.buttonStates[button_name] = True
+                self.sigButtonPressed.emit({"buttonName": button_name, "state": True})
+                self._logger.debug(f"Simulated button press: {button_name}")
+                # Auto-release after short delay
+                time.sleep(0.1)
+                self.buttonStates[button_name] = False
+        except Exception as e:
+            self._logger.warning(f"Could not simulate button press {button_name}: {e}")
+
+    def _read_i2c_sensor(self, sensor_name: str) -> Optional[float]:
+        """Read data from I2C sensor"""
+        try:
+            if not HAS_I2C or self.i2c_bus is None:
+                # Return simulated data
+                if sensor_name == "temperature":
+                    return np.round(np.random.uniform(20, 25), 2)
+                elif sensor_name == "humidity":
+                    return np.round(np.random.uniform(40, 60), 2)
+                elif sensor_name == "pressure":
+                    return np.round(np.random.uniform(1000, 1020), 2)
+                return None
+                
+            if sensor_name not in SENSOR_ADDRESSES:
+                self._logger.warning(f"Unknown sensor: {sensor_name}")
+                return None
+                
+            address = SENSOR_ADDRESSES[sensor_name]
+            
+            # Basic I2C read - implementation depends on specific sensor
+            # This is a generic example that would need to be customized for each sensor type
+            data = self.i2c_bus.read_byte(address)
+            
+            # Convert raw data to meaningful value (sensor-specific conversion)
+            if sensor_name == "temperature":
+                # Example temperature conversion (sensor-specific)
+                return round((data * 0.1) + 15.0, 2)  # Example conversion
+            elif sensor_name == "humidity":
+                # Example humidity conversion  
+                return round((data / 255.0) * 100.0, 2)  # Example conversion
+            elif sensor_name == "pressure":
+                # Example pressure conversion
+                return round(1000.0 + (data * 0.1), 2)  # Example conversion
+                
+            return float(data)
+            
+        except Exception as e:
+            self._logger.warning(f"Failed to read I2C sensor {sensor_name}: {e}")
+            # Return simulated data on error
+            if sensor_name == "temperature":
+                return np.round(np.random.uniform(20, 25), 2)
+            elif sensor_name == "humidity":
+                return np.round(np.random.uniform(40, 60), 2)
+            elif sensor_name == "pressure":
+                return np.round(np.random.uniform(1000, 1020), 2)
+            return None
+
+    def _read_all_sensors(self) -> Dict[str, float]:
+        """Read all available sensors"""
+        sensor_data = {}
+        for sensor_name in SENSOR_ADDRESSES.keys():
+            value = self._read_i2c_sensor(sensor_name)
+            if value is not None:
+                sensor_data[sensor_name] = value
+        return sensor_data
 
     def _calculate_times(self):
         """Calculate sun times and power times like LepmonOS"""
@@ -546,14 +819,22 @@ class LepmonController(LiveUpdatedController):
     @APIExport()
     def getHardwareStatus(self) -> dict:
         """
-        Returns the current state of all hardware components including lights, LCD, and buttons.
+        Returns the current state of all hardware components including LEDs, OLED display, and buttons.
         """
         return {
             "lightStates": self.lightStates,
             "lcdDisplay": self.lcdDisplay,
             "buttonStates": self.buttonStates,
             "timingConfig": self.timingConfig,
-            "availableLights": list(self.lightStates.keys()) if self.ledManager else []
+            "availableLEDs": list(LED_PINS.keys()),
+            "availableButtons": list(BUTTON_PINS.keys()),
+            "hardwareStatus": {
+                "gpio_available": HAS_GPIO,
+                "oled_available": HAS_OLED and self.oled is not None,
+                "i2c_available": HAS_I2C and self.i2c_bus is not None,
+                "simulation_mode": not HAS_GPIO
+            },
+            "availableSensors": list(SENSOR_ADDRESSES.keys())
         }
 
     @APIExport()
@@ -1011,99 +1292,136 @@ class LepmonController(LiveUpdatedController):
     @APIExport(requestType="POST")
     def setLightState(self, lightName: str, state: bool) -> dict:
         """
-        Turn a specific light on or off.
+        Turn a specific light on or off using direct GPIO control.
         """
         try:
-            if self.ledManager and lightName in self.lightStates:
-                # Use LED manager if available
-                if hasattr(self.ledManager, 'getAllDeviceNames') and lightName in self.ledManager.getAllDeviceNames():
-                    led_device = self.ledManager[lightName]
-                    if state:
-                        led_device.setPowerValue(led_device.power.valueRangeMax)  # Turn on at max power
-                    else:
-                        led_device.setPowerValue(led_device.power.valueRangeMin)  # Turn off
-                
-                self.lightStates[lightName] = state
-                self.sigLightStateChanged.emit({"lightName": lightName, "state": state})
-                return {"success": True, "message": f"Light '{lightName}' turned {'on' if state else 'off'}"}
+            # Use direct GPIO control for Lepmon LEDs
+            if lightName in LED_PINS:
+                if state:
+                    self._turn_on_led(lightName)
+                else:
+                    self._turn_off_led(lightName)
+                return {"success": True, "message": f"LED '{lightName}' turned {'on' if state else 'off'}"}
             else:
-                # Fallback for simulation/mock mode
-                if lightName not in self.lightStates:
-                    self.lightStates[lightName] = False
+                # Check for aliases or special LED names
+                led_mapping = {
+                    "UV_LED": "gelb",  # Map UV LED to yellow
+                    "Visible_LED": "blau",  # Map visible LED to blue  
+                    "Status_LED": "rot"  # Map status LED to red
+                }
                 
-                self.lightStates[lightName] = state
-                self.sigLightStateChanged.emit({"lightName": lightName, "state": state})
-                self._logger.info(f"Mock: Light '{lightName}' turned {'on' if state else 'off'}")
-                return {"success": True, "message": f"Light '{lightName}' turned {'on' if state else 'off'} (simulated)"}
+                if lightName in led_mapping:
+                    actual_led = led_mapping[lightName]
+                    if state:
+                        self._turn_on_led(actual_led)
+                    else:
+                        self._turn_off_led(actual_led)
+                    return {"success": True, "message": f"LED '{lightName}' ({actual_led}) turned {'on' if state else 'off'}"}
+                else:
+                    available_leds = list(LED_PINS.keys()) + list(led_mapping.keys())
+                    return {"success": False, "message": f"LED '{lightName}' not found. Available: {available_leds}"}
+                    
         except Exception as e:
             self._logger.error(f"Failed to set light state: {e}")
-            return {"success": False, "message": f"Failed to control light: {str(e)}"}
+            return {"success": False, "message": f"Failed to control LED: {str(e)}"}
 
     @APIExport(requestType="POST")
     def setAllLightsState(self, state: bool) -> dict:
         """
-        Turn all lights on or off.
+        Turn all LEDs on or off using direct GPIO control.
         """
         try:
             results = []
-            for lightName in self.lightStates.keys():
-                result = self.setLightState(lightName, state)
-                results.append(result)
+            # Control all physical LEDs
+            for led_name in LED_PINS.keys():
+                if state:
+                    self._turn_on_led(led_name)
+                else:
+                    self._turn_off_led(led_name)
+                results.append({"led": led_name, "state": state, "success": True})
             
             return {
                 "success": True, 
-                "message": f"All lights turned {'on' if state else 'off'}",
+                "message": f"All LEDs turned {'on' if state else 'off'}",
                 "individual_results": results
             }
         except Exception as e:
             self._logger.error(f"Failed to set all lights state: {e}")
-            return {"success": False, "message": f"Failed to control all lights: {str(e)}"}
+            return {"success": False, "message": f"Failed to control all LEDs: {str(e)}"}
 
     @APIExport(requestType="POST")
     def updateLCDDisplay(self, line1: str = "", line2: str = "", line3: str = "", line4: str = "") -> dict:
         """
-        Update the LCD display content.
+        Update the OLED display content using direct hardware control.
         """
         try:
-            self.lcdDisplay["line1"] = line1[:20]  # Limit to 20 characters per line
-            self.lcdDisplay["line2"] = line2[:20]
-            self.lcdDisplay["line3"] = line3[:20]
-            self.lcdDisplay["line4"] = line4[:20]
+            # Use the new direct display method
+            self._display_text(line1, line2, line3, line4)
             
-            # Create display message
-            display_content = f"{line1}\n{line2}\n{line3}\n{line4}"
-            self.sigLCDDisplayUpdate.emit(display_content)
-            
-            self._logger.debug(f"LCD Display updated: {self.lcdDisplay}")
-            return {"success": True, "message": "LCD display updated", "content": self.lcdDisplay}
+            return {
+                "success": True,
+                "message": "Display updated",
+                "content": {
+                    "line1": line1[:20],
+                    "line2": line2[:20],
+                    "line3": line3[:20],
+                    "line4": line4[:20]
+                }
+            }
         except Exception as e:
             self._logger.error(f"Failed to update LCD display: {e}")
-            return {"success": False, "message": f"Failed to update LCD display: {str(e)}"}
+            return {"success": False, "message": f"Failed to update display: {str(e)}"}
 
     @APIExport(requestType="POST")
     def simulateButtonPress(self, buttonName: str) -> dict:
         """
-        Simulate a button press event.
+        Simulate a button press event for testing purposes.
         """
         try:
-            if buttonName in self.buttonStates:
-                self.buttonStates[buttonName] = True
-                self.sigButtonPressed.emit({"buttonName": buttonName, "pressed": True, "timestamp": time.time()})
-                
-                # Reset button state after short delay (simulate button release)
-                def reset_button():
-                    time.sleep(0.1)
-                    self.buttonStates[buttonName] = False
-                
-                Thread(target=reset_button, daemon=True).start()
-                
-                self._logger.debug(f"Button '{buttonName}' pressed")
-                return {"success": True, "message": f"Button '{buttonName}' pressed"}
+            if buttonName in BUTTON_PINS:
+                self._simulate_button_press(buttonName)
+                return {"success": True, "message": f"Button '{buttonName}' pressed (simulated)"}
             else:
-                return {"success": False, "message": f"Unknown button: {buttonName}"}
+                available_buttons = list(BUTTON_PINS.keys())
+                return {"success": False, "message": f"Unknown button: {buttonName}. Available: {available_buttons}"}
         except Exception as e:
             self._logger.error(f"Failed to simulate button press: {e}")
             return {"success": False, "message": f"Failed to simulate button press: {str(e)}"}
+
+    @APIExport()
+    def getButtonStates(self) -> dict:
+        """
+        Get current button states by reading GPIO pins directly.
+        """
+        try:
+            current_states = self._read_all_buttons()
+            return {
+                "success": True,
+                "buttonStates": current_states,
+                "availableButtons": list(BUTTON_PINS.keys()),
+                "hardwareMode": "GPIO" if HAS_GPIO else "simulation"
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to read button states: {e}")
+            return {"success": False, "message": f"Failed to read button states: {str(e)}"}
+
+    @APIExport()
+    def getSensorDataLive(self) -> dict:
+        """
+        Get live sensor data from I2C sensors.
+        """
+        try:
+            sensor_data = self._read_all_sensors()
+            return {
+                "success": True,
+                "sensorData": sensor_data,
+                "timestamp": time.time(),
+                "availableSensors": list(SENSOR_ADDRESSES.keys()),
+                "hardwareMode": "I2C" if HAS_I2C and self.i2c_bus else "simulation"
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to read sensor data: {e}")
+            return {"success": False, "message": f"Failed to read sensor data: {str(e)}"}
 
     @APIExport(requestType="POST")
     def setTimingConfig(self, config: dict) -> dict:

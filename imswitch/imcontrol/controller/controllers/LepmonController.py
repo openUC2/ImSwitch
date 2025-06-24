@@ -5,6 +5,10 @@ import subprocess
 import platform
 import numpy as np
 import cv2
+import json
+import shutil
+import struct
+from datetime import timedelta
 from threading import Thread, Event
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from imswitch.imcommon.framework import Signal
@@ -102,6 +106,28 @@ class LepmonController(LiveUpdatedController):
         # Initialize hardware managers if available
         self._initializeHardwareManagers()
 
+        # LepmonOS state variables
+        self.lepmon_config = {}
+        self.sensor_data = {}
+        self.version = "V1.0"
+        self.date = "2024"
+        self.serial_number = "LEPMON001"
+        
+        # LepmonOS experiment control
+        self.stop_event = Event()
+        self.uv_led_active = False
+        self.visible_led_active = False
+        self.experiment_start_time = None
+        self.experiment_end_time = None
+        self.lepiled_end_time = None
+        
+        # LepmonOS menu system
+        self.menu_open = False
+        self.current_menu_state = "main"
+        
+        # Initialize LepmonOS system
+        self._initializeLepmonOS()
+
     def _initializeHardwareManagers(self):
         """Initialize available hardware managers for lights, display, etc."""
         try:
@@ -118,6 +144,353 @@ class LepmonController(LiveUpdatedController):
         except Exception as e:
             self._logger.warning(f"Could not initialize hardware managers: {e}")
             self.ledManager = None
+
+    def _initializeLepmonOS(self):
+        """Initialize LepmonOS system components - equivalent to 00_start_up.py"""
+        try:
+            self._logger.info("Starting LepmonOS initialization sequence")
+            
+            # Equivalent to dim_down() and turn_off_led("blau")
+            self._dim_down()
+            self._turn_off_led("blau")
+            
+            # Display startup sequence
+            self._display_startup_sequence()
+            
+            # Read configuration
+            self._read_lepmon_config()
+            
+            # Initialize system components
+            self._initialize_system_components()
+            
+            # Calculate sun and power times
+            self._calculate_times()
+            
+            self._logger.info("LepmonOS initialization completed successfully")
+            
+        except Exception as e:
+            self._logger.error(f"LepmonOS initialization failed: {e}")
+
+    # ---------------------- LepmonOS Core Functions (from 00_start_up.py) ---------------------- #
+
+    def _dim_down(self):
+        """Equivalent to utils.Lights.dim_down()"""
+        try:
+            if self.ledManager:
+                for ledName in self.ledManager.getAllDeviceNames():
+                    led_device = self.ledManager[ledName]
+                    led_device.setPowerValue(led_device.power.valueRangeMin)
+            self._logger.debug("Dimmed down all lights")
+        except Exception as e:
+            self._logger.warning(f"Could not dim down lights: {e}")
+
+    def _turn_off_led(self, led_name: str):
+        """Equivalent to utils.GPIO_Setup.turn_off_led()"""
+        try:
+            if led_name in self.lightStates:
+                self.lightStates[led_name] = False
+                self.sigLightStateChanged.emit({"lightName": led_name, "state": False})
+            self._logger.debug(f"Turned off LED: {led_name}")
+        except Exception as e:
+            self._logger.warning(f"Could not turn off LED {led_name}: {e}")
+
+    def _turn_on_led(self, led_name: str):
+        """Equivalent to utils.GPIO_Setup.turn_on_led()"""
+        try:
+            if led_name in self.lightStates:
+                self.lightStates[led_name] = True
+                self.sigLightStateChanged.emit({"lightName": led_name, "state": True})
+            elif self.ledManager and led_name in self.ledManager.getAllDeviceNames():
+                led_device = self.ledManager[led_name]
+                led_device.setPowerValue(led_device.power.valueRangeMax)
+                self.lightStates[led_name] = True
+                self.sigLightStateChanged.emit({"lightName": led_name, "state": True})
+            self._logger.debug(f"Turned on LED: {led_name}")
+        except Exception as e:
+            self._logger.warning(f"Could not turn on LED {led_name}: {e}")
+
+    def _display_text(self, line1: str = "", line2: str = "", line3: str = "", line4: str = "", duration: float = 0):
+        """Equivalent to utils.OLED_panel.display_text()"""
+        try:
+            self.lcdDisplay["line1"] = line1[:20]
+            self.lcdDisplay["line2"] = line2[:20]
+            self.lcdDisplay["line3"] = line3[:20]
+            self.lcdDisplay["line4"] = line4[:20]
+            
+            display_content = f"{line1}\n{line2}\n{line3}\n{line4}"
+            self.sigLCDDisplayUpdate.emit(display_content)
+            
+            if duration > 0:
+                time.sleep(duration)
+                
+            self._logger.debug(f"Display updated: {self.lcdDisplay}")
+        except Exception as e:
+            self._logger.warning(f"Could not update display: {e}")
+
+    def _display_image(self, image_path: str):
+        """Equivalent to utils.OLED_panel.display_image()"""
+        try:
+            # Since we don't have direct OLED access, we'll log the image display
+            self._logger.info(f"Displaying image: {image_path}")
+            # Could emit a signal for UI to handle image display
+            self.sigLCDDisplayUpdate.emit(f"IMAGE: {os.path.basename(image_path)}")
+        except Exception as e:
+            self._logger.warning(f"Could not display image {image_path}: {e}")
+
+    def _display_startup_sequence(self):
+        """Display startup sequence like LepmonOS"""
+        try:
+            # Display manual link
+            self._display_text("Beachte", "Anleitung", "", "", 3)
+            
+            # Logo startup sequence (simulated)
+            for i in range(1, 10):
+                self._display_text("LepMon", f"Loading {i}/9", "", "", 1)
+            
+            self._display_text("Willkommen", f"Version {self.version}", "", "", 3)
+            
+        except Exception as e:
+            self._logger.warning(f"Startup sequence display failed: {e}")
+
+    def _read_lepmon_config(self):
+        """Read configuration from LepmonOS config files"""
+        try:
+            # Simulate reading from JSON config
+            self.lepmon_config = {
+                "software": {
+                    "version": self.version,
+                    "date": self.date
+                },
+                "general": {
+                    "serielnumber": self.serial_number
+                },
+                "capture_mode": {
+                    "dusk_treshold": 50,
+                    "interval": 60,
+                    "initial_exposure": 100
+                }
+            }
+            self._logger.debug(f"Loaded LepmonOS configuration")
+        except Exception as e:
+            self._logger.warning(f"Could not read LepmonOS config: {e}")
+
+    def _initialize_system_components(self):
+        """Initialize system components like LepmonOS"""
+        try:
+            # Equivalent to erstelle_ordner(), initialisiere_logfile()
+            self._logger.info("System components initialized")
+            
+            # Send startup message (equivalent to send_lora)
+            self._send_lora("Starte Lepmon Software")
+            
+        except Exception as e:
+            self._logger.warning(f"System component initialization failed: {e}")
+
+    def _send_lora(self, message: str):
+        """Equivalent to utils.lora.send_lora()"""
+        try:
+            self._logger.info(f"LoRa message: {message}")
+            # Could emit signal for actual LoRa transmission
+        except Exception as e:
+            self._logger.warning(f"LoRa transmission failed: {e}")
+
+    def _calculate_times(self):
+        """Calculate sun times and power times like LepmonOS"""
+        try:
+            # Simulate sun time calculation
+            now = datetime.datetime.now()
+            sunset = now.replace(hour=18, minute=30, second=0)
+            sunrise = now.replace(hour=6, minute=30, second=0)
+            
+            self.experiment_start_time = sunset.strftime('%H:%M:%S')
+            self.experiment_end_time = sunrise.strftime('%H:%M:%S')
+            self.lepiled_end_time = (sunset + timedelta(hours=6)).strftime('%H:%M:%S')
+            
+            self._logger.info(f"Sonnenuntergang: {sunset.strftime('%H:%M:%S')}")
+            self._logger.info(f"Sonnenaufgang: {sunrise.strftime('%H:%M:%S')}")
+            
+            self._send_lora(f"Sonnenuntergang: {sunset.strftime('%H:%M:%S')}\nSonnenaufgang: {sunrise.strftime('%H:%M:%S')}")
+            
+        except Exception as e:
+            self._logger.warning(f"Time calculation failed: {e}")
+
+    # ---------------------- LepmonOS HMI Functions (from 02_trap_hmi.py) ---------------------- #
+
+    def _button_pressed(self, button_name: str) -> bool:
+        """Equivalent to utils.GPIO_Setup.button_pressed()"""
+        try:
+            # Check if button is currently pressed
+            return self.buttonStates.get(button_name, False)
+        except Exception as e:
+            self._logger.warning(f"Could not check button {button_name}: {e}")
+            return False
+
+    def _open_hmi_menu(self):
+        """Equivalent to the HMI menu system from 02_trap_hmi.py"""
+        try:
+            self.menu_open = True
+            self._turn_on_led("blau")
+            self._display_text("Menü öffnen", "bitte rechte Taste", "drücken")
+            self._logger.info("HMI menu opened")
+            
+            # Start menu monitoring thread
+            menu_thread = Thread(target=self._monitor_menu_buttons, daemon=True)
+            menu_thread.start()
+            
+        except Exception as e:
+            self._logger.error(f"Failed to open HMI menu: {e}")
+
+    def _monitor_menu_buttons(self):
+        """Monitor button presses for menu navigation"""
+        try:
+            for _ in range(100):  # Monitor for button presses
+                if self._button_pressed("enter"):
+                    self._handle_menu_enter()
+                    break
+                elif self._button_pressed("rechts"):
+                    self._handle_focus_menu()
+                    break
+                elif self._button_pressed("oben"):
+                    self._handle_update_menu()
+                    break
+                time.sleep(0.05)
+                
+            if not self.menu_open:
+                self._logger.info("Menu timeout - no interaction")
+                
+        except Exception as e:
+            self._logger.error(f"Menu monitoring failed: {e}")
+
+    def _handle_menu_enter(self):
+        """Handle enter button press in menu"""
+        try:
+            self._display_text("Eingabe Menü", "geöffnet", "")
+            self._logger.info("Menu entered")
+            # Additional menu logic would go here
+        except Exception as e:
+            self._logger.error(f"Menu enter handling failed: {e}")
+
+    def _handle_focus_menu(self):
+        """Handle focus menu - equivalent to focus() function"""
+        try:
+            self._display_text("Fokussierhilfe", "aufgerufen", "")
+            self._logger.info("Focus mode activated")
+            # Implement focus assistance logic
+            self._run_focus_mode()
+        except Exception as e:
+            self._logger.error(f"Focus menu handling failed: {e}")
+
+    def _run_focus_mode(self):
+        """Run focus assistance mode"""
+        try:
+            start_time = time.time()
+            while time.time() - start_time < 15.0:
+                # Calculate focus sharpness
+                frame = self.detectorlepmonCam.getLatestFrame()
+                if frame is not None:
+                    # Calculate Laplacian variance as sharpness measure
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+                    sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+                    self.sigFocusSharpness.emit(float(sharpness))
+                time.sleep(0.5)
+        except Exception as e:
+            self._logger.error(f"Focus mode failed: {e}")
+
+    def _handle_update_menu(self):
+        """Handle update menu"""
+        try:
+            self._display_text("Update Menü", "geöffnet", "")
+            self._logger.info("Update menu opened")
+            # Update logic would go here
+        except Exception as e:
+            self._logger.error(f"Update menu handling failed: {e}")
+
+    # ---------------------- LepmonOS LED Control Functions ---------------------- #
+
+    def _lepiled_start(self):
+        """Equivalent to utils.Lights.LepiLED_start()"""
+        try:
+            self.uv_led_active = True
+            self._turn_on_led("UV_LED")
+            self._logger.info("UV LED (LepiLED) started")
+            self._send_lora("LepiLED eingeschaltet")
+        except Exception as e:
+            self._logger.error(f"Failed to start UV LED: {e}")
+
+    def _lepiled_ende(self):
+        """Equivalent to utils.Lights.LepiLED_ende()"""
+        try:
+            self.uv_led_active = False
+            self._turn_off_led("UV_LED")
+            self._logger.info("UV LED (LepiLED) stopped")
+            self._send_lora("LepiLED ausgeschaltet")
+        except Exception as e:
+            self._logger.error(f"Failed to stop UV LED: {e}")
+
+    def _visible_led_start(self):
+        """Equivalent to VisibleLED_start()"""
+        try:
+            self.visible_led_active = True
+            self._turn_on_led("Visible_LED")
+            self._logger.info("Visible LED started")
+        except Exception as e:
+            self._logger.error(f"Failed to start Visible LED: {e}")
+
+    def _visible_led_ende(self):
+        """Equivalent to VisibleLED_ende()"""
+        try:
+            self.visible_led_active = False
+            self._turn_off_led("Visible_LED")
+            self._logger.info("Visible LED stopped")
+        except Exception as e:
+            self._logger.error(f"Failed to stop Visible LED: {e}")
+
+    # ---------------------- LepmonOS Sensor and Data Functions ---------------------- #
+
+    def _read_sensor_data(self, code: str, local_time: str):
+        """Equivalent to utils.sensor_data.read_sensor_data()"""
+        try:
+            # Simulate sensor data reading
+            self.sensor_data = {
+                "LUX": np.round(np.random.uniform(0, 100), 2),
+                "Temp_in": self.innerTemp,
+                "Temp_out": self.outerTemp,
+                "humidity": self.humidity,
+                "bus_voltage": np.round(np.random.uniform(11.5, 12.5), 2),
+                "power": np.round(np.random.uniform(500, 1500), 2),
+                "timestamp": local_time,
+                "code": code
+            }
+            return self.sensor_data
+        except Exception as e:
+            self._logger.error(f"Failed to read sensor data: {e}")
+            return {}
+
+    def _get_disk_space(self):
+        """Equivalent to utils.service.get_disk_space()"""
+        try:
+            usage = dirtools.getDiskusage()
+            total_space_gb = 100.0  # Mock value
+            used_space_gb = total_space_gb * usage
+            free_space_gb = total_space_gb - used_space_gb
+            used_percent = usage * 100
+            free_percent = 100 - used_percent
+            
+            return total_space_gb, used_space_gb, free_space_gb, used_percent, free_percent
+        except Exception as e:
+            self._logger.error(f"Failed to get disk space: {e}")
+            return 0, 0, 0, 0, 0
+
+    def _zeit_aktualisieren(self):
+        """Equivalent to utils.times.Zeit_aktualisieren()"""
+        try:
+            now = datetime.datetime.now()
+            utc_time = now.strftime("%Y-%m-%d %H:%M:%S")
+            local_time = now.strftime("%H:%M:%S")
+            return utc_time, local_time
+        except Exception as e:
+            self._logger.error(f"Failed to update time: {e}")
+            return "", ""
 
 
     # ---------------------- GET-Like Endpoints ---------------------- #
@@ -298,7 +671,342 @@ class LepmonController(LiveUpdatedController):
         # e.g. os.system("sudo reboot")
         return {"success": True, "message": "System is rebooting (mock)"}
 
-    # ---------------------- Hardware Control Endpoints ---------------------- #
+    # ---------------------- LepmonOS API Endpoints (matching 03_capturing.py) ---------------------- #
+
+    @APIExport(requestType="POST")
+    def lepmonStartup(self) -> dict:
+        """Equivalent to 00_start_up.py main execution"""
+        try:
+            self._initializeLepmonOS()
+            return {"success": True, "message": "LepmonOS startup sequence completed"}
+        except Exception as e:
+            self._logger.error(f"LepmonOS startup failed: {e}")
+            return {"success": False, "message": f"Startup failed: {str(e)}"}
+
+    @APIExport(requestType="POST") 
+    def lepmonWelcome(self) -> dict:
+        """Equivalent to 01_start_up.py"""
+        try:
+            self._display_text("Willkommen", "Laden... 2/2", "")
+            self._logger.info("Welcome message displayed")
+            time.sleep(2)
+            return {"success": True, "message": "Welcome sequence completed"}
+        except Exception as e:
+            self._logger.error(f"Welcome sequence failed: {e}")
+            return {"success": False, "message": f"Welcome failed: {str(e)}"}
+
+    @APIExport(requestType="POST")
+    def lepmonOpenHMI(self) -> dict:
+        """Equivalent to 02_trap_hmi.py main menu system"""
+        try:
+            self._open_hmi_menu()
+            return {"success": True, "message": "HMI menu opened", "menu_state": self.current_menu_state}
+        except Exception as e:
+            self._logger.error(f"HMI menu opening failed: {e}")
+            return {"success": False, "message": f"HMI menu failed: {str(e)}"}
+
+    @APIExport(requestType="POST")
+    def lepmonStartCapturing(self, override_timecheck: bool = True) -> dict:
+        """Equivalent to 03_capturing.py main capturing loop"""
+        try:
+            # Initialize capturing parameters from config
+            dusk_threshold = self.lepmon_config.get("capture_mode", {}).get("dusk_treshold", 50)
+            interval = self.lepmon_config.get("capture_mode", {}).get("interval", 60)
+            initial_exposure = self.lepmon_config.get("capture_mode", {}).get("initial_exposure", 100)
+            
+            # Set camera exposure
+            self.changeExposureTime(initial_exposure)
+            
+            # Start main capturing thread
+            capture_thread = Thread(target=self._lepmon_main_loop, 
+                                  args=(dusk_threshold, interval, initial_exposure, override_timecheck), 
+                                  daemon=True)
+            capture_thread.start()
+            
+            return {"success": True, "message": "LepmonOS capturing started", 
+                   "parameters": {"dusk_threshold": dusk_threshold, "interval": interval, "exposure": initial_exposure}}
+        except Exception as e:
+            self._logger.error(f"LepmonOS capturing start failed: {e}")
+            return {"success": False, "message": f"Capturing start failed: {str(e)}"}
+
+    @APIExport(requestType="POST")
+    def lepmonShutdown(self) -> dict:
+        """Equivalent to 04_end.py shutdown sequence"""
+        try:
+            self._logger.info("Starting LepmonOS shutdown sequence")
+            
+            # Send shutdown message
+            self._send_lora("Falle fährt in 1 Minute herunter und startet dann neu. Letzte Nachricht im aktuellen Run")
+            
+            # Countdown display
+            for i in range(60, 0, -1):
+                self._display_text("Falle startet", "neu in", f"{i} Sekunden")
+                time.sleep(1)
+                if i % 10 == 0:  # Update every 10 seconds
+                    self._logger.info(f"Shutdown in {i} seconds")
+            
+            # Stop all activities
+            self.stop_event.set()
+            self.is_measure = False
+            
+            # Turn off all LEDs
+            self._lepiled_ende()
+            self._visible_led_ende()
+            
+            self._logger.info("LepmonOS shutdown sequence completed")
+            return {"success": True, "message": "LepmonOS shutdown completed"}
+            
+        except Exception as e:
+            self._logger.error(f"LepmonOS shutdown failed: {e}")
+            return {"success": False, "message": f"Shutdown failed: {str(e)}"}
+
+    @APIExport()
+    def lepmonGetConfig(self) -> dict:
+        """Get complete LepmonOS configuration"""
+        return {
+            "config": self.lepmon_config,
+            "lightStates": self.lightStates,
+            "lcdDisplay": self.lcdDisplay,
+            "buttonStates": self.buttonStates,
+            "timingConfig": self.timingConfig,
+            "version": self.version,
+            "serial_number": self.serial_number,
+            "experiment_times": {
+                "start": self.experiment_start_time,
+                "end": self.experiment_end_time,
+                "lepiled_end": self.lepiled_end_time
+            }
+        }
+
+    @APIExport(requestType="POST")
+    def lepmonUVLed(self, action: str) -> dict:
+        """Control UV LED (LepiLED) - equivalent to LepiLED_start/ende"""
+        try:
+            if action == "on":
+                self._lepiled_start()
+                return {"success": True, "message": "UV LED turned on", "state": True}
+            elif action == "off":
+                self._lepiled_ende()
+                return {"success": True, "message": "UV LED turned off", "state": False}
+            else:
+                return {"success": False, "message": "Invalid action. Use 'on' or 'off'"}
+        except Exception as e:
+            self._logger.error(f"UV LED control failed: {e}")
+            return {"success": False, "message": f"UV LED control failed: {str(e)}"}
+
+    @APIExport(requestType="POST")
+    def lepmonVisibleLed(self, action: str) -> dict:
+        """Control Visible LED - equivalent to VisibleLED_start/ende"""
+        try:
+            if action == "on":
+                self._visible_led_start()
+                return {"success": True, "message": "Visible LED turned on", "state": True}
+            elif action == "off":
+                self._visible_led_ende()
+                return {"success": True, "message": "Visible LED turned off", "state": False}
+            else:
+                return {"success": False, "message": "Invalid action. Use 'on' or 'off'"}
+        except Exception as e:
+            self._logger.error(f"Visible LED control failed: {e}")
+            return {"success": False, "message": f"Visible LED control failed: {str(e)}"}
+
+    @APIExport(requestType="POST")
+    def lepmonSnapImage(self, format: str = "tiff", log_type: str = "log", error_count: int = 0, exposure: float = None) -> dict:
+        """Take image - equivalent to snap_image function"""
+        try:
+            if exposure:
+                self.changeExposureTime(exposure)
+            
+            current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"lepmon_{current_time}_{self.imagesTaken}"
+            
+            # Take the image
+            self.snapImagelepmonCam(filename, fileFormat=format.upper())
+            
+            self.imagesTaken += 1
+            self.sigImagesTaken.emit(self.imagesTaken)
+            
+            return {
+                "success": True, 
+                "message": "Image captured successfully",
+                "filename": filename,
+                "format": format,
+                "image_count": self.imagesTaken,
+                "exposure": exposure or self.mExperimentParameters["exposureTime"]
+            }
+        except Exception as e:
+            error_count += 1
+            self._logger.error(f"Image capture failed: {e}")
+            return {
+                "success": False, 
+                "message": f"Image capture failed: {str(e)}",
+                "error_count": error_count
+            }
+
+    @APIExport()
+    def lepmonGetSensorData(self) -> dict:
+        """Get sensor data - equivalent to read_sensor_data function"""
+        try:
+            _, local_time = self._zeit_aktualisieren()
+            sensor_data = self._read_sensor_data("api_request", local_time)
+            return {
+                "success": True,
+                "sensor_data": sensor_data,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+        except Exception as e:
+            self._logger.error(f"Sensor data retrieval failed: {e}")
+            return {"success": False, "message": f"Sensor data failed: {str(e)}"}
+
+    @APIExport()
+    def lepmonGetStatus(self) -> dict:
+        """Get complete LepmonOS status"""
+        try:
+            total_space, used_space, free_space, used_pct, free_pct = self._get_disk_space()
+            _, local_time = self._zeit_aktualisieren()
+            
+            return {
+                "success": True,
+                "status": {
+                    "is_running": self.is_measure,
+                    "uv_led_active": self.uv_led_active,
+                    "visible_led_active": self.visible_led_active,
+                    "menu_open": self.menu_open,
+                    "images_taken": self.imagesTaken,
+                    "current_time": local_time,
+                    "disk_space": {
+                        "total_gb": total_space,
+                        "free_gb": free_space,
+                        "used_percent": used_pct
+                    },
+                    "experiment_times": {
+                        "start": self.experiment_start_time,
+                        "end": self.experiment_end_time,
+                        "lepiled_end": self.lepiled_end_time
+                    }
+                }
+            }
+        except Exception as e:
+            self._logger.error(f"Status retrieval failed: {e}")
+            return {"success": False, "message": f"Status retrieval failed: {str(e)}"}
+
+    def _lepmon_main_loop(self, dusk_threshold: float, interval: int, initial_exposure: float, override_timecheck: bool):
+        """Main capturing loop - equivalent to the main loop in 03_capturing.py"""
+        try:
+            self._logger.info("Starting LepmonOS main capturing loop")
+            
+            # Store USB space information (equivalent to FRAM writing)
+            total_space, used_space, free_space, used_pct, free_pct = self._get_disk_space()
+            self._logger.info(f"USB Storage - Total: {total_space}GB, Free: {free_space}GB ({free_pct:.1f}%)")
+            
+            fang_begonnen = False
+            kamera_fehlerserie = 0
+            
+            while not self.stop_event.is_set():
+                _, local_time = self._zeit_aktualisieren()
+                sensors = self._read_sensor_data("check_lux", local_time)
+                ambient_light = sensors["LUX"]
+                
+                # Check if we should capture (time and light conditions)
+                should_capture = (
+                    (ambient_light <= dusk_threshold and not self._is_in_time_range(self.experiment_end_time, self.experiment_start_time, local_time)) or
+                    (ambient_light > dusk_threshold and not self._is_in_time_range(self.experiment_start_time, self.experiment_start_time, local_time)) or
+                    override_timecheck
+                )
+                
+                if should_capture:
+                    if not fang_begonnen:
+                        self._lepiled_start()
+                        fang_begonnen = True
+                    
+                    # Capture sequence
+                    exposure = initial_exposure
+                    
+                    # Adjust exposure based on time
+                    if self._is_in_first_hour(local_time):
+                        exposure -= 30
+                    
+                    if self._is_after_lepiled_end(local_time):
+                        exposure -= 30
+                        if self.uv_led_active:
+                            self._lepiled_ende()
+                    
+                    # Take image
+                    result = self.lepmonSnapImage("tiff", "log", kamera_fehlerserie, exposure)
+                    if not result["success"]:
+                        kamera_fehlerserie = result.get("error_count", kamera_fehlerserie)
+                    else:
+                        kamera_fehlerserie = 0
+                    
+                    # Update sensor data
+                    sensors = self._read_sensor_data(f"img_{self.imagesTaken}", local_time)
+                    sensors.update({"Status_Kamera": result["success"], "Exposure": exposure})
+                    
+                    # Update display
+                    self._display_text(
+                        f"Image: {self.imagesTaken}",
+                        f"Time: {local_time}",
+                        f"Exp: {exposure}ms",
+                        f"Lux: {ambient_light}"
+                    )
+                    
+                    # Check for camera error series
+                    if kamera_fehlerserie >= 3:
+                        self._logger.error("Camera error series detected, stopping")
+                        break
+                    
+                    # Wait for next image
+                    self._logger.info(f"Waiting {interval} seconds until next image")
+                    for _ in range(interval):
+                        if self.stop_event.is_set():
+                            break
+                        time.sleep(1)
+                
+                else:
+                    self._logger.info("Conditions not met for capturing, ending loop")
+                    break
+                    
+        except Exception as e:
+            self._logger.error(f"Main loop error: {e}")
+        finally:
+            self._logger.info("LepmonOS main loop ended")
+
+    def _is_in_time_range(self, start_time: str, end_time: str, current_time: str) -> bool:
+        """Check if current time is within a time range"""
+        try:
+            start = datetime.datetime.strptime(start_time, "%H:%M:%S").time()
+            end = datetime.datetime.strptime(end_time, "%H:%M:%S").time()
+            current = datetime.datetime.strptime(current_time, "%H:%M:%S").time()
+            
+            if start <= end:
+                return start <= current <= end
+            else:  # Time range crosses midnight
+                return current >= start or current <= end
+        except:
+            return False
+
+    def _is_in_first_hour(self, current_time: str) -> bool:
+        """Check if we're in the first hour of experiment"""
+        try:
+            exp_start = datetime.datetime.strptime(self.experiment_start_time, "%H:%M:%S")
+            current = datetime.datetime.strptime(current_time, "%H:%M:%S")
+            diff = (current - exp_start).total_seconds()
+            return 0 <= diff <= 3600  # First hour
+        except:
+            return False
+
+    def _is_after_lepiled_end(self, current_time: str) -> bool:
+        """Check if we're after the LepiLED end time"""
+        try:
+            lepiled_end = datetime.datetime.strptime(self.lepiled_end_time, "%H:%M:%S").time()
+            exp_end = datetime.datetime.strptime(self.experiment_end_time, "%H:%M:%S").time()
+            current = datetime.datetime.strptime(current_time, "%H:%M:%S").time()
+            
+            return lepiled_end <= current < exp_end
+        except:
+            return False
+
+    # ---------------------- Hardware Control Endpoints (existing ImSwitch integration) ---------------------- #
 
     @APIExport(requestType="POST")
     def setLightState(self, lightName: str, state: bool) -> dict:

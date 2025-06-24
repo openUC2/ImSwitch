@@ -3,12 +3,13 @@ import os
 import tempfile
 import importlib.util
 import sys
+import pathlib
 
-# Import the controller directly to avoid ImSwitch dependency issues.
-# Updated the path to match the local file location on your system.
+# Use a relative path for the controller file so tests work in CI and locally
+controller_path = pathlib.Path(__file__).parent.parent.parent / "controller/controllers/StresstestController.py"
 spec = importlib.util.spec_from_file_location(
     'StresstestController',
-    '/Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/MicronController/ImSwitch/imswitch/imcontrol/controller/controllers/StresstestController.py'
+    str(controller_path.resolve())
 )
 stresstest_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(stresstest_module)

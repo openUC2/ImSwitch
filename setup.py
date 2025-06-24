@@ -73,13 +73,13 @@ setup(
         "NanoImagingPack==2.1.4",
         "pymba==0.3.7",
         "imjoy-rpc==0.5.59",
-        "imswitchclient>=0.1.2",  
+        "imswitchclient>=0.1.2",
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
-        "numcodecs==0.13.1",
-        "zarr==2.18.3"
+        "zarr >= 3.0.0",
+                "numcodecs==0.13.1"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

@@ -16,13 +16,22 @@ from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS
 from typing import Dict, List, Union, Optional
 
-# Lepmon hardware dependencies
+# Lepmon hardware dependencies with fallback support for Raspberry Pi 5
 try:
     import RPi.GPIO as GPIO
     HAS_GPIO = True
+    GPIO_BACKEND = "RPi.GPIO"
 except ImportError:
-    HAS_GPIO = False
-    print("RPi.GPIO not available - running in simulation mode")
+    try:
+        # Fallback to gpiozero for Raspberry Pi 5 and newer systems
+        import gpiozero
+        from gpiozero import LED, Button, PWMOutputDevice
+        HAS_GPIO = True
+        GPIO_BACKEND = "gpiozero"
+    except ImportError:
+        HAS_GPIO = False
+        GPIO_BACKEND = "simulation"
+        print("No GPIO libraries available - running in simulation mode")
 
 try:
     from luma.core.interface.serial import i2c
@@ -180,100 +189,149 @@ class LepmonController(LiveUpdatedController):
         self._initializeLepmonOS()
 
     def _initializeLepmonHardware(self):
-        """Initialize Lepmon hardware directly (GPIO LEDs, OLED display, buttons)"""
+        """Initialize Lepmon hardware directly (GPIO LEDs, OLED display, buttons) with fallback support"""
         try:
-            self._logger.info("Initializing Lepmon hardware directly")
+            self._logger.info(f"Initializing Lepmon hardware using {GPIO_BACKEND} backend")
             
-            # Initialize GPIO if available
-            if HAS_GPIO:
-                GPIO.setmode(GPIO.BCM)
-                GPIO.setwarnings(False)
-                
-                # Setup LED pins as outputs
-                for color, pin in LED_PINS.items():
-                    GPIO.setup(pin, GPIO.OUT)
-                    GPIO.output(pin, GPIO.LOW)  # LEDs off initially
-                    self.lightStates[color] = False
-                    
-                # Setup PWM for LED dimming
-                self.led_pwm = {}
-                for color, pin in LED_PINS.items():
-                    pwm = GPIO.PWM(pin, 1000)  # 1kHz PWM
-                    pwm.start(0)  # Start at 0% duty cycle (off)
-                    self.led_pwm[color] = pwm
-                    
-                # Setup button pins as inputs with pull-up resistors
-                for button, pin in BUTTON_PINS.items():
-                    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-                    self.buttonStates[button] = False
-                    
-                self._logger.info("GPIO initialized successfully")
+            # Initialize GPIO based on available backend
+            if HAS_GPIO and GPIO_BACKEND == "RPi.GPIO":
+                self._initialize_rpi_gpio()
+            elif HAS_GPIO and GPIO_BACKEND == "gpiozero":
+                self._initialize_gpiozero()
             else:
-                self.led_pwm = {}
-                # Initialize LED states for simulation
-                for color in LED_PINS.keys():
-                    self.lightStates[color] = False
-                self._logger.warning("GPIO not available - using simulation mode")
+                self._initialize_simulation_mode()
                 
-            # Initialize OLED display if available
-            if HAS_OLED:
-                try:
-                    display_interface = i2c(port=OLED_I2C_PORT, address=OLED_I2C_ADDRESS)
-                    self.oled = sh1106(display_interface)
-                    
-                    # Try to load font
-                    try:
-                        font_path = os.path.join(os.path.dirname(__file__), 'FreeSans.ttf')
-                        self.oled_font = ImageFont.truetype(font_path, 14)
-                    except (OSError, IOError):
-                        try:
-                            self.oled_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
-                        except (OSError, IOError):
-                            self.oled_font = ImageFont.load_default()
-                            
-                    self._logger.info("OLED display initialized successfully")
-                except Exception as e:
-                    self.oled = None
-                    self.oled_font = None
-                    self._logger.warning(f"OLED initialization failed: {e}")
-            else:
-                self.oled = None
-                self.oled_font = None
-                self._logger.warning("OLED libraries not available - using simulation mode")
+            # Initialize OLED display if available (independent of GPIO backend)
+            self._initialize_oled_display()
+            
+            # Initialize I2C for sensors if available  
+            self._initialize_i2c_sensors()
                 
-            # Initialize I2C for sensors if available
-            if HAS_I2C:
-                try:
-                    self.i2c_bus = smbus.SMBus(I2C_BUS)
-                    self._logger.info("I2C bus initialized for sensor communication")
-                except Exception as e:
-                    self.i2c_bus = None
-                    self._logger.warning(f"I2C bus initialization failed: {e}")
-            else:
-                self.i2c_bus = None
-                self._logger.warning("I2C libraries not available - using simulation mode")
-                
+            self._logger.info(f"Hardware initialization completed using {GPIO_BACKEND}")
+            
         except Exception as e:
             self._logger.error(f"Lepmon hardware initialization failed: {e}")
-            # Set simulation mode
-            self.led_pwm = {}
+            # Fall back to simulation mode
+            self.GPIO_BACKEND = "simulation"
+            self._initialize_simulation_mode()
+
+    def _initialize_oled_display(self):
+        """Initialize OLED display"""
+        if HAS_OLED:
+            try:
+                display_interface = i2c(port=OLED_I2C_PORT, address=OLED_I2C_ADDRESS)
+                self.oled = sh1106(display_interface)
+                
+                # Try to load font
+                try:
+                    font_path = os.path.join(os.path.dirname(__file__), 'FreeSans.ttf')
+                    self.oled_font = ImageFont.truetype(font_path, 14)
+                except (OSError, IOError):
+                    try:
+                        self.oled_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+                    except (OSError, IOError):
+                        self.oled_font = ImageFont.load_default()
+                        
+                self._logger.info("OLED display initialized successfully")
+            except Exception as e:
+                self.oled = None
+                self.oled_font = None
+                self._logger.warning(f"OLED initialization failed: {e}")
+        else:
             self.oled = None
             self.oled_font = None
+            self._logger.warning("OLED libraries not available - using simulation mode")
+
+    def _initialize_i2c_sensors(self):
+        """Initialize I2C for sensors"""
+        if HAS_I2C:
+            try:
+                self.i2c_bus = smbus.SMBus(I2C_BUS)
+                self._logger.info("I2C bus initialized for sensor communication")
+            except Exception as e:
+                self.i2c_bus = None
+                self._logger.warning(f"I2C bus initialization failed: {e}")
+        else:
             self.i2c_bus = None
-            for color in LED_PINS.keys():
-                self.lightStates[color] = False
+            self._logger.warning("I2C libraries not available - using simulation mode")
+
+    def _initialize_rpi_gpio(self):
+        """Initialize hardware using RPi.GPIO library"""
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+        
+        # Setup LED pins as outputs
+        for color, pin in LED_PINS.items():
+            GPIO.setup(pin, GPIO.OUT)
+            GPIO.output(pin, GPIO.LOW)  # LEDs off initially
+            self.lightStates[color] = False
+            
+        # Setup PWM for LED dimming
+        self.led_pwm = {}
+        for color, pin in LED_PINS.items():
+            pwm = GPIO.PWM(pin, 1000)  # 1kHz PWM
+            pwm.start(0)  # Start at 0% duty cycle (off)
+            self.led_pwm[color] = pwm
+            
+        # Setup button pins as inputs with pull-up resistors
+        self.gpio_buttons = {}
+        for button, pin in BUTTON_PINS.items():
+            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            self.buttonStates[button] = False
+            
+        self._logger.info("RPi.GPIO initialized successfully")
+
+    def _initialize_gpiozero(self):
+        """Initialize hardware using gpiozero library (Raspberry Pi 5 compatible)"""
+        # Setup LEDs with PWM support
+        self.led_pwm = {}
+        for color, pin in LED_PINS.items():
+            led = PWMOutputDevice(pin)
+            led.value = 0  # Start with LED off
+            self.led_pwm[color] = led
+            self.lightStates[color] = False
+            
+        # Setup buttons with pull-up resistors
+        self.gpio_buttons = {}
+        for button, pin in BUTTON_PINS.items():
+            btn = Button(pin, pull_up=True)
+            self.gpio_buttons[button] = btn
+            self.buttonStates[button] = False
+            
+        self._logger.info("gpiozero initialized successfully")
+
+    def _initialize_simulation_mode(self):
+        """Initialize simulation mode when no GPIO is available"""
+        self.led_pwm = {}
+        self.gpio_buttons = {}
+        # Initialize LED states for simulation
+        for color in LED_PINS.keys():
+            self.lightStates[color] = False
+        # Initialize button states for simulation
+        for button in BUTTON_PINS.keys():
+            self.buttonStates[button] = False
+        self._logger.warning("GPIO not available - using simulation mode")
 
     def _cleanupHardware(self):
-        """Cleanup GPIO and hardware resources"""
+        """Cleanup GPIO and hardware resources with multi-backend support"""
         try:
-            if HAS_GPIO:
-                # Stop PWM and cleanup GPIO
-                for pwm in self.led_pwm.values():
-                    pwm.stop()
-                GPIO.cleanup()
-                self._logger.info("GPIO cleaned up successfully")
+            if HAS_GPIO and hasattr(self, 'led_pwm') and self.led_pwm:
+                if GPIO_BACKEND == "RPi.GPIO":
+                    # Stop PWM and cleanup GPIO
+                    for pwm in self.led_pwm.values():
+                        pwm.stop()
+                    GPIO.cleanup()
+                    self._logger.info("RPi.GPIO cleaned up successfully")
+                elif GPIO_BACKEND == "gpiozero":
+                    # Close gpiozero devices
+                    for led in self.led_pwm.values():
+                        led.close()
+                    if hasattr(self, 'gpio_buttons'):
+                        for button in self.gpio_buttons.values():
+                            button.close()
+                    self._logger.info("gpiozero devices closed successfully")
             
-            if HAS_I2C and self.i2c_bus:
+            if HAS_I2C and hasattr(self, 'i2c_bus') and self.i2c_bus:
                 # Close I2C bus
                 self.i2c_bus.close()
                 self._logger.info("I2C bus closed successfully")
@@ -323,14 +381,17 @@ class LepmonController(LiveUpdatedController):
             self._logger.warning(f"Could not dim down lights: {e}")
 
     def _dim_led(self, color: str, brightness: int):
-        """Dim the specified LED to given brightness (0-100)"""
+        """Dim the specified LED to given brightness (0-100) with multi-backend support"""
         try:
             if color in LED_PINS:
                 if HAS_GPIO and color in self.led_pwm:
-                    self.led_pwm[color].ChangeDutyCycle(brightness)
+                    if GPIO_BACKEND == "RPi.GPIO":
+                        self.led_pwm[color].ChangeDutyCycle(brightness)
+                    elif GPIO_BACKEND == "gpiozero":
+                        self.led_pwm[color].value = brightness / 100.0
                 # Update state based on brightness
                 self.lightStates[color] = brightness > 0
-                self._logger.debug(f"Set LED {color} to {brightness}% brightness")
+                self._logger.debug(f"Set LED {color} to {brightness}% brightness using {GPIO_BACKEND}")
         except Exception as e:
             self._logger.warning(f"Could not dim LED {color}: {e}")
 
@@ -468,20 +529,28 @@ class LepmonController(LiveUpdatedController):
             self._logger.warning(f"LoRa transmission failed: {e}")
 
     def _button_pressed(self, button_name: str) -> bool:
-        """Equivalent to utils.GPIO_Setup.button_pressed() - check if button is pressed"""
+        """Check if button is pressed with multi-backend support"""
         try:
             if button_name not in BUTTON_PINS:
                 available_buttons = ", ".join(BUTTON_PINS.keys())
                 raise ValueError(f"Invalid button name '{button_name}'. Available: {available_buttons}")
             
             if HAS_GPIO:
-                # Button pressed when GPIO reads LOW (pull-up configuration)
-                is_pressed = GPIO.input(BUTTON_PINS[button_name]) == GPIO.LOW
+                if GPIO_BACKEND == "RPi.GPIO":
+                    # Button pressed when GPIO reads LOW (pull-up configuration)
+                    is_pressed = GPIO.input(BUTTON_PINS[button_name]) == GPIO.LOW
+                elif GPIO_BACKEND == "gpiozero":
+                    # Button pressed when button object is pressed
+                    is_pressed = self.gpio_buttons[button_name].is_pressed
+                else:
+                    # Fallback to simulation
+                    is_pressed = self.buttonStates[button_name]
+                    
                 if is_pressed != self.buttonStates[button_name]:
                     self.buttonStates[button_name] = is_pressed
                     if is_pressed:  # Only emit on press, not release
                         self.sigButtonPressed.emit({"buttonName": button_name, "state": is_pressed})
-                        self._logger.debug(f"Button {button_name} pressed")
+                        self._logger.debug(f"Button {button_name} pressed ({GPIO_BACKEND})")
                 return is_pressed
             else:
                 # Simulation mode - return stored state
@@ -830,9 +899,10 @@ class LepmonController(LiveUpdatedController):
             "availableButtons": list(BUTTON_PINS.keys()),
             "hardwareStatus": {
                 "gpio_available": HAS_GPIO,
-                "oled_available": HAS_OLED and self.oled is not None,
-                "i2c_available": HAS_I2C and self.i2c_bus is not None,
-                "simulation_mode": not HAS_GPIO
+                "gpio_backend": GPIO_BACKEND,
+                "oled_available": HAS_OLED and hasattr(self, 'oled') and self.oled is not None,
+                "i2c_available": HAS_I2C and hasattr(self, 'i2c_bus') and self.i2c_bus is not None,
+                "simulation_mode": GPIO_BACKEND == "simulation"
             },
             "availableSensors": list(SENSOR_ADDRESSES.keys())
         }
@@ -1399,7 +1469,8 @@ class LepmonController(LiveUpdatedController):
                 "success": True,
                 "buttonStates": current_states,
                 "availableButtons": list(BUTTON_PINS.keys()),
-                "hardwareMode": "GPIO" if HAS_GPIO else "simulation"
+                "hardwareMode": GPIO_BACKEND,
+                "gpio_available": HAS_GPIO
             }
         except Exception as e:
             self._logger.error(f"Failed to read button states: {e}")

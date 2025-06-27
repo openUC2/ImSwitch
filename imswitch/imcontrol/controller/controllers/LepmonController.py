@@ -1718,4 +1718,234 @@ class LepmonController(LiveUpdatedController):
                     external_drives.append(drive_letter)
         return external_drives
 
+    # ---------------------- Enhanced System Monitoring API Endpoints ---------------------- #
+    
+    @APIExport()
+    def getSystemHealth(self) -> dict:
+        """
+        Comprehensive system health check for LepmonOS integration.
+        Returns detailed status of all hardware and software components.
+        """
+        try:
+            # Get basic hardware status
+            hardware_status = self.getHardwareStatus()
+            
+            # Add system-level health checks
+            health_status = {
+                "overall_status": "healthy",
+                "warnings": [],
+                "errors": [],
+                "last_updated": datetime.datetime.now().isoformat()
+            }
+            
+            # Check GPIO system health
+            if not HAS_GPIO:
+                health_status["warnings"].append("GPIO libraries not available - running in simulation mode")
+                health_status["overall_status"] = "degraded"
+            
+            # Check OLED display health
+            if not HAS_OLED:
+                health_status["warnings"].append("OLED display libraries not available")
+            elif not hasattr(self, 'oled') or self.oled is None:
+                health_status["warnings"].append("OLED display not initialized")
+                
+            # Check I2C sensor health
+            if not HAS_I2C:
+                health_status["warnings"].append("I2C libraries not available - sensor data simulated")
+            elif not hasattr(self, 'i2c_bus') or self.i2c_bus is None:
+                health_status["warnings"].append("I2C bus not initialized")
+                
+            # Check disk space
+            try:
+                free_space = self._computeFreeSpace()
+                health_status["disk_space"] = free_space
+                # Warn if less than 10% free space
+                free_percent = float(free_space.split('%')[0])
+                if free_percent < 10:
+                    health_status["warnings"].append(f"Low disk space: {free_space}")
+                    if health_status["overall_status"] == "healthy":
+                        health_status["overall_status"] = "degraded"
+            except Exception as e:
+                health_status["warnings"].append(f"Could not check disk space: {e}")
+            
+            # Check sensor data freshness
+            try:
+                current_sensor_data = self._read_all_sensors()
+                health_status["sensor_count"] = len(current_sensor_data)
+                health_status["sensors_active"] = len([v for v in current_sensor_data.values() if v is not None])
+            except Exception as e:
+                health_status["warnings"].append(f"Sensor health check failed: {e}")
+            
+            # Determine overall status
+            if health_status["errors"]:
+                health_status["overall_status"] = "critical"
+            elif health_status["warnings"] and health_status["overall_status"] == "healthy":
+                health_status["overall_status"] = "degraded"
+            
+            return {
+                "success": True,
+                "system_health": health_status,
+                "hardware_status": hardware_status,
+                "lepmon_config": {
+                    "version": getattr(self, 'version', 'unknown'),
+                    "serial_number": getattr(self, 'serial_number', 'unknown'),
+                    "gpio_backend": GPIO_BACKEND
+                }
+            }
+            
+        except Exception as e:
+            self._logger.error(f"System health check failed: {e}")
+            return {
+                "success": False,
+                "message": f"System health check failed: {str(e)}",
+                "system_health": {
+                    "overall_status": "critical",
+                    "errors": [f"Health check system error: {str(e)}"]
+                }
+            }
+
+    @APIExport(requestType="POST")
+    def validateConfiguration(self, config: dict) -> dict:
+        """
+        Validate a LepmonOS configuration before applying it.
+        """
+        try:
+            validation_results = {
+                "valid": True,
+                "warnings": [],
+                "errors": []
+            }
+            
+            # Define valid configuration schema
+            valid_timing_keys = {"acquisitionInterval", "stabilizationTime", "preAcquisitionDelay", "postAcquisitionDelay"}
+            valid_led_names = set(LED_PINS.keys())
+            valid_button_names = set(BUTTON_PINS.keys())
+            
+            # Validate timing configuration
+            if "timingConfig" in config:
+                timing_config = config["timingConfig"]
+                if not isinstance(timing_config, dict):
+                    validation_results["errors"].append("timingConfig must be a dictionary")
+                    validation_results["valid"] = False
+                else:
+                    for key, value in timing_config.items():
+                        if key not in valid_timing_keys:
+                            validation_results["warnings"].append(f"Unknown timing config key: {key}")
+                        elif not isinstance(value, (int, float)) or value < 0:
+                            validation_results["errors"].append(f"Invalid timing value for {key}: must be positive number")
+                            validation_results["valid"] = False
+                        elif value > 3600:  # More than 1 hour
+                            validation_results["warnings"].append(f"Large timing value for {key}: {value} seconds")
+            
+            # Validate light states
+            if "lightStates" in config:
+                light_states = config["lightStates"]
+                if not isinstance(light_states, dict):
+                    validation_results["errors"].append("lightStates must be a dictionary")
+                    validation_results["valid"] = False
+                else:
+                    for led_name, state in light_states.items():
+                        if led_name not in valid_led_names:
+                            validation_results["warnings"].append(f"Unknown LED name: {led_name}")
+                        if not isinstance(state, bool):
+                            validation_results["errors"].append(f"LED state for {led_name} must be boolean")
+                            validation_results["valid"] = False
+            
+            # Validate LCD display content
+            if "lcdDisplay" in config:
+                lcd_config = config["lcdDisplay"]
+                if not isinstance(lcd_config, dict):
+                    validation_results["errors"].append("lcdDisplay must be a dictionary")
+                    validation_results["valid"] = False
+                else:
+                    for line_key, content in lcd_config.items():
+                        if not line_key.startswith("line"):
+                            validation_results["warnings"].append(f"Unknown LCD line key: {line_key}")
+                        elif isinstance(content, str) and len(content) > 20:
+                            validation_results["warnings"].append(f"{line_key} content too long (max 20 chars): '{content[:30]}...'")
+            
+            # Validate experiment parameters
+            numeric_params = {
+                "flowRate": (1, 1000),
+                "frameRate": (0.1, 100),
+                "numImages": (1, 10000),
+                "volumePerImage": (1, 10000),
+                "timeToStabilize": (0, 3600)
+            }
+            
+            for param, (min_val, max_val) in numeric_params.items():
+                if param in config:
+                    value = config[param]
+                    if not isinstance(value, (int, float)):
+                        validation_results["errors"].append(f"{param} must be a number")
+                        validation_results["valid"] = False
+                    elif value < min_val or value > max_val:
+                        validation_results["errors"].append(f"{param} must be between {min_val} and {max_val}")
+                        validation_results["valid"] = False
+            
+            return {
+                "success": True,
+                "validation": validation_results,
+                "message": "Configuration validation completed"
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Configuration validation failed: {e}")
+            return {
+                "success": False,
+                "message": f"Configuration validation failed: {str(e)}",
+                "validation": {
+                    "valid": False,
+                    "errors": [f"Validation system error: {str(e)}"]
+                }
+            }
+
+    @APIExport()
+    def getLepmonOSInfo(self) -> dict:
+        """
+        Get comprehensive information about the LepmonOS integration status.
+        """
+        try:
+            return {
+                "success": True,
+                "lepmon_info": {
+                    "integration_version": "2.0",
+                    "lepmon_version": getattr(self, 'version', 'V1.0'),
+                    "serial_number": getattr(self, 'serial_number', 'LEPMON001'),
+                    "hardware_backend": GPIO_BACKEND,
+                    "available_features": {
+                        "gpio_control": HAS_GPIO,
+                        "oled_display": HAS_OLED,
+                        "i2c_sensors": HAS_I2C,
+                        "led_control": True,
+                        "button_input": True,
+                        "timing_control": True,
+                        "image_acquisition": True,
+                        "sensor_monitoring": True
+                    },
+                    "api_endpoints": {
+                        "system_health": "/LepmonController/getSystemHealth",
+                        "hardware_status": "/LepmonController/getHardwareStatus", 
+                        "light_control": "/LepmonController/setLightState",
+                        "display_control": "/LepmonController/updateLCDDisplay",
+                        "button_states": "/LepmonController/getButtonStates",
+                        "sensor_data": "/LepmonController/getSensorDataLive",
+                        "timing_config": "/LepmonController/setTimingConfig",
+                        "config_validation": "/LepmonController/validateConfiguration"
+                    },
+                    "experiment_status": {
+                        "is_running": getattr(self, 'is_measure', False),
+                        "images_taken": getattr(self, 'imagesTaken', 0),
+                        "start_time": getattr(self, 'experiment_start_time', None),
+                        "end_time": getattr(self, 'experiment_end_time', None)
+                    }
+                }
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to get LepmonOS info: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to get LepmonOS info: {str(e)}"
+            }
+
 

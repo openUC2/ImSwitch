@@ -10,6 +10,7 @@ from .view import LaunchNotebookServer
 
 def getMainViewAndController(moduleCommChannel, multiModuleWindowController, moduleMainControllers,
                              *_args, **_kwargs):
+    webaddr = None  # Ensure webaddr is always defined
     if IS_HEADLESS:
         view = None
         notebookServer = LaunchNotebookServer()

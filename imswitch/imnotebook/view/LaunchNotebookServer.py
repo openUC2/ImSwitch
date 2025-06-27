@@ -39,4 +39,8 @@ class LaunchNotebookServer:
         return webaddr
 
     def stopServer(self):
-        stopnotebook()
+        try:stopnotebook()
+        except Exception as e:
+            if not IS_HEADLESS: QMessageBox.information(None, "Error", "Could not stop Jupyter Notebook server: %s" % str(e), QMessageBox.Ok)
+            else: print("Could not stop Jupyter Notebook server: %s" % str(e))
+        return True

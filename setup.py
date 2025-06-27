@@ -97,6 +97,36 @@ setup(
         'Ashlar': [
             "ashlarUC2"
         ],
+        'Lepmon': [
+            "RPi.GPIO",
+            "VPi",
+            "adafruit-circuitpython-bh1750",
+            "adafruit-circuitpython-pct2075",
+            "smbus2",
+            "smbus",
+            "bme280",
+            "pytz",
+            "ephem",
+            "opencv-python-headless",
+            "Pillow",
+            "luma.oled",
+            "numpy",
+            "timezonefinder==6.5.7",
+            "board",
+            "luma.core",
+            "gpiozero",
+            "adafruit-circuitpython-ds3231",
+            "imutils",
+            "pyserial",
+            "adafruit-blinka",
+            "imutils",
+            "pyyaml",
+            # URLs must be last in the list
+            #"https://github.com/alliedvision/VimbaPython/archive/refs/heads/master.zip",
+            "https://github.com/e71828/pi_ina226/archive/refs/heads/main.zip",
+            "https://github.com/openUC2/imswitchclient/archive/refs/heads/main.zip",
+            #"https://github.com/BLavery/lib_oled96/archive/refs/heads/master.zip",
+        ],
         'arkitekt':
             [
             "arkitekt==0.7.8",

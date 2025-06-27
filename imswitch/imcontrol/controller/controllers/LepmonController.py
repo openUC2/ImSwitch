@@ -37,6 +37,17 @@ except ImportError:
 try:
     import smbus
     HAS_I2C = True
+    # check if i2C is activated via i2cdetect if not activate it using raspi-config
+    if platform.system() == "Linux":
+        try:
+            # TODO: We have to activate it - not sure if we may have sudo access via sudo raspi-config
+            output = subprocess.check_output(["i2cdetect", "-l"])
+            if "i2c-1" not in output.decode():
+                print("I2C bus not detected - please enable I2C in raspi-config")
+            else:
+                print("I2C bus detected successfully")
+        except subprocess.CalledProcessError as e:
+            print(f"Error checking I2C bus: {e}")
 except ImportError:
     HAS_I2C = False
     print("I2C libraries (smbus) not available - running in simulation mode")
@@ -185,6 +196,8 @@ class LepmonController(LiveUpdatedController):
             self._logger.info("Initializing Lepmon hardware directly")
             
             # Initialize GPIO if available
+            # TODO: We need to have a fallback version in case we use the raspberry pi which needs 
+            # a different gpio interface (https://gpiozero.readthedocs.io/en/stable/migrating_from_rpigpio.html)
             if HAS_GPIO:
                 GPIO.setmode(GPIO.BCM)
                 GPIO.setwarnings(False)
@@ -215,6 +228,10 @@ class LepmonController(LiveUpdatedController):
                     self.lightStates[color] = False
                 self._logger.warning("GPIO not available - using simulation mode")
                 
+        except Exception as e:
+            self._logger.error(f"Lepmon hardware initialization failed: {e}")
+        
+        try:
             # Initialize OLED display if available
             if HAS_OLED:
                 try:

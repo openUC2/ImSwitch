@@ -16,22 +16,55 @@ from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS
 from typing import Dict, List, Union, Optional
 
-# Lepmon hardware dependencies with fallback support for Raspberry Pi 5
-try:
-    import RPi.GPIO as GPIO
-    HAS_GPIO = True
-    GPIO_BACKEND = "RPi.GPIO"
-except ImportError:
+''' Lepmon hardware dependencies with fallback support for Raspberry Pi 5
+
+ cat /proc/cpuinfo | grep Model | cut -d ":" -f 2
+ gives => Raspberry Pi 5 Model B Rev 1.0
+ '''
+
+from pathlib import Path
+
+def _is_pi5() -> bool:
     try:
-        # Fallback to gpiozero for Raspberry Pi 5 and newer systems
-        import gpiozero
-        from gpiozero import LED, Button, PWMOutputDevice
-        HAS_GPIO = True
-        GPIO_BACKEND = "gpiozero"
-    except ImportError:
-        HAS_GPIO = False
-        GPIO_BACKEND = "simulation"
-        print("No GPIO libraries available - running in simulation mode")
+        return "Raspberry Pi 5" in Path("/proc/cpuinfo").read_text()
+    except FileNotFoundError:
+        return False
+
+def _select_gpio():
+    # 1. Raspberry Pi ≤ 4 → RPi.GPIO
+    if not _is_pi5():
+        try:
+            import RPi.GPIO as gpio
+            gpio.setmode(gpio.BCM)
+            return True, "RPi.GPIO", gpio
+        except Exception:
+            pass
+
+    # 2. Primary choice → gpiozero + LGPIOFactory
+    try:
+        from gpiozero import Device
+        from gpiozero.pins.lgpio import LGPIOFactory
+        Device.pin_factory = LGPIOFactory()
+        return True, "lgpio", Device.pin_factory
+    except Exception as e:
+        print(e)
+        pass
+
+    # 3. Fallback → gpiozero native
+    try:
+        from gpiozero import Device
+        from gpiozero.pins.native import NativeFactory
+        Device.pin_factory = NativeFactory()
+        return True, "gpiozero-native", Device.pin_factory
+    except Exception as e:
+        print(e) 
+        pass
+
+    # 4. Simulation / no GPIO
+    return False, "simulation", None
+
+HAS_GPIO, GPIO_BACKEND, GPIO = _select_gpio()
+
 
 try:
     from luma.core.interface.serial import i2c
@@ -192,15 +225,19 @@ class LepmonController(LiveUpdatedController):
         """Initialize Lepmon hardware directly (GPIO LEDs, OLED display, buttons) with fallback support"""
         try:
             self._logger.info(f"Initializing Lepmon hardware using {GPIO_BACKEND} backend")
-            
+            # TODO: This still uses the wrong GPIO backend for Raspberry Pi 5 - should be 'lgpio' for raspi5
             # Initialize GPIO based on available backend
             if HAS_GPIO and GPIO_BACKEND == "RPi.GPIO":
                 self._initialize_rpi_gpio()
             elif HAS_GPIO and GPIO_BACKEND == "gpiozero":
                 self._initialize_gpiozero()
             else:
-                self._initialize_simulation_mode()
-                
+                raise ImportError("No GPIO libraries available - running in simulation mode")
+        except Exception as e:
+            self._logger.error(f"Lepmon hardware initialization failed: {e}")        
+            self._initialize_simulation_mode()
+             
+        try:
             # Initialize OLED display if available (independent of GPIO backend)
             self._initialize_oled_display()
             

@@ -240,6 +240,12 @@ class LepmonController(LiveUpdatedController):
         
         # Initialize LepmonOS system
         self._initializeLepmonOS()
+        
+        # TODO: We have to start the Expimerent automatically on startup/initialization in case the time is correct (e.g. based on sunset/sunrise)
+        # parameters like deviceTime, deviceLat, deviceLng, exposureTime, gain, timelapsePeriod, time, date, should be loaded from 
+        # the LepmonOS configuration file or set to default values.
+        # startExperiment()
+    
 
     def _initializeLepmonHardware(self):
         """Initialize Lepmon hardware directly (GPIO LEDs, OLED display, buttons) with fallback support"""
@@ -292,7 +298,7 @@ class LepmonController(LiveUpdatedController):
                         self.oled_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
                     except (OSError, IOError):
                         self.oled_font = ImageFont.load_default()
-                        
+                        self._logger.error("Default font not found, using fallback font")
                 self._logger.info("OLED display initialized successfully")
             except Exception as e:
                 self.oled = None
@@ -580,14 +586,30 @@ class LepmonController(LiveUpdatedController):
 
     def _read_lepmon_config(self):
         """Read configuration from LepmonOS config files"""
-        try:
+        # TODO: read from LepmonOS config file in data
+        # TODO: We need to repliacte the config handling from LepmonOS
+        # The exact same behaviour by reading and writing values such as site, etc. have to be merged here 
+        '''
+        sites.json 
+        sensor_values.json 
+        Lepmon_config.json 
+        LepmonOS_serial_number.json
+        '''
+        LEPMON_FOLDER = os.path.join(dirtools.UserFileDirs.Root, "Lepmon")
+        if not os.path.exists(LEPMON_FOLDER):
+            self._logger.warning(f"Lepmon folder does not exist: {LEPMON_FOLDER}")
+            # TODO: PRoceed with default values or create folder and json files 
+        else:
+            self._logger.debug(f"Lepmon folder exists: {LEPMON_FOLDER}")
+            # TODO: Attempt to read LepmonOS configuration files
+        try: # TODO: if no LepmonOS config file exists, create it with default values and write it to disk!
             # Simulate reading from JSON config
             self.lepmon_config = {
                 "software": {
                     "version": self.version,
                     "date": self.date
                 },
-                "general": {
+                "general": { # 
                     "serielnumber": self.serial_number
                 },
                 "capture_mode": {
@@ -736,6 +758,8 @@ class LepmonController(LiveUpdatedController):
         """Calculate sun times and power times like LepmonOS"""
         try:
             # Simulate sun time calculation
+            # TODO: This has to be replaced with the exact same calculation as in LepmonOS 
+            
             now = datetime.datetime.now()
             sunset = now.replace(hour=18, minute=30, second=0)
             sunrise = now.replace(hour=6, minute=30, second=0)
@@ -897,6 +921,7 @@ class LepmonController(LiveUpdatedController):
 
     def _get_disk_space(self):
         """Equivalent to utils.service.get_disk_space()"""
+        # if LepmonFolder exists use it to load the parameters 
         try:
             usage = dirtools.getDiskusage()
             total_space_gb = 100.0  # Mock value
@@ -1092,8 +1117,27 @@ class LepmonController(LiveUpdatedController):
             while time.time() - start_time < 15.0:
                 # Example: generate a random "sharpness" or measure it from camera
                 # For now, let's just do random
-                import random
-                sharp_val = random.uniform(10, 300)
+                # TODO: We read frames and calculate sharpness here
+                def calculate_focus_measure(image, method="LAPE"):
+                    if len(image.shape) == 3:
+                        image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)  # optional
+                    if method == "LAPE":
+                        if image.dtype == np.uint16:
+                            lap = cv2.Laplacian(image, cv2.CV_32F)
+                        else:
+                            lap = cv2.Laplacian(image, cv2.CV_16S)
+                        focus_measure = np.mean(np.square(lap))
+                    elif method == "GLVA":
+                        focus_measure = np.std(image, axis=None)  # GLVA
+                    else:
+                        focus_measure = np.std(image, axis=None)  # GLVA
+                    return focus_measure
+                mImage = self.detectorlepmonCam.getLatestFrame()
+                if mImage is None:
+                    self._logger.warning("No image available for focus measurement")
+                    continue
+                # Calculate focus sharpness
+                sharp_val = calculate_focus_measure(mImage, method="LAPE")
                 self.sigFocusSharpness.emit(sharp_val)
                 time.sleep(0.5)
         t = Thread(target=focus_thread, daemon=True)

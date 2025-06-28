@@ -31,39 +31,59 @@ def _is_pi5() -> bool:
         return False
 
 def _select_gpio():
-    # 1. Raspberry Pi ≤ 4 → RPi.GPIO
+    """Select the most appropriate GPIO backend for the current platform"""
+    
+    # 1. Raspberry Pi ≤ 4 → RPi.GPIO (traditional GPIO interface)
     if not _is_pi5():
         try:
             import RPi.GPIO as gpio
             gpio.setmode(gpio.BCM)
-            return True, "RPi.GPIO", gpio
+            return True, "RPi.GPIO", gpio, None
         except Exception:
             pass
 
-    # 2. Primary choice → gpiozero + LGPIOFactory
+    # 2. Raspberry Pi 5+ → gpiozero with LGPIOFactory (preferred for Pi 5)
     try:
-        from gpiozero import Device
+        from gpiozero import Device, LED, Button, PWMOutputDevice
         from gpiozero.pins.lgpio import LGPIOFactory
+        
+        # Set lgpio as the pin factory for Raspberry Pi 5
         Device.pin_factory = LGPIOFactory()
-        return True, "lgpio", Device.pin_factory
+        
+        # Return gpiozero components for use in initialization
+        gpio_components = {
+            'Device': Device,
+            'LED': LED,
+            'Button': Button,
+            'PWMOutputDevice': PWMOutputDevice
+        }
+        return True, "lgpio", Device.pin_factory, gpio_components
     except Exception as e:
-        print(e)
+        print(f"lgpio backend failed: {e}")
         pass
 
-    # 3. Fallback → gpiozero native
+    # 3. Fallback → gpiozero with native factory
     try:
-        from gpiozero import Device
+        from gpiozero import Device, LED, Button, PWMOutputDevice
         from gpiozero.pins.native import NativeFactory
+        
         Device.pin_factory = NativeFactory()
-        return True, "gpiozero-native", Device.pin_factory
+        
+        gpio_components = {
+            'Device': Device,
+            'LED': LED,
+            'Button': Button,
+            'PWMOutputDevice': PWMOutputDevice
+        }
+        return True, "gpiozero-native", Device.pin_factory, gpio_components
     except Exception as e:
-        print(e) 
+        print(f"gpiozero-native backend failed: {e}")
         pass
 
-    # 4. Simulation / no GPIO
-    return False, "simulation", None
+    # 4. Final fallback → simulation mode
+    return False, "simulation", None, None
 
-HAS_GPIO, GPIO_BACKEND, GPIO = _select_gpio()
+HAS_GPIO, GPIO_BACKEND, GPIO, GPIOZERO_COMPONENTS = _select_gpio()
 
 
 try:
@@ -225,11 +245,15 @@ class LepmonController(LiveUpdatedController):
         """Initialize Lepmon hardware directly (GPIO LEDs, OLED display, buttons) with fallback support"""
         try:
             self._logger.info(f"Initializing Lepmon hardware using {GPIO_BACKEND} backend")
-            # TODO: This still uses the wrong GPIO backend for Raspberry Pi 5 - should be 'lgpio' for raspi5
+            
             # Initialize GPIO based on available backend
             if HAS_GPIO and GPIO_BACKEND == "RPi.GPIO":
                 self._initialize_rpi_gpio()
+            elif HAS_GPIO and GPIO_BACKEND in ["lgpio", "gpiozero-native"]:
+                self._initialize_gpiozero()
             elif HAS_GPIO and GPIO_BACKEND == "gpiozero":
+                # Legacy gpiozero support (deprecated, use lgpio instead)
+                self._logger.warning("Using legacy gpiozero backend - consider updating to lgpio")
                 self._initialize_gpiozero()
             else:
                 raise ImportError("No GPIO libraries available - running in simulation mode")
@@ -319,23 +343,50 @@ class LepmonController(LiveUpdatedController):
         self._logger.info("RPi.GPIO initialized successfully")
 
     def _initialize_gpiozero(self):
-        """Initialize hardware using gpiozero library (Raspberry Pi 5 compatible)"""
-        # Setup LEDs with PWM support
+        """Initialize hardware using gpiozero library with proper backend support (lgpio for Pi 5)"""
+        
+        # Ensure we have the required gpiozero components
+        if not GPIOZERO_COMPONENTS:
+            raise ImportError("gpiozero components not available")
+            
+        PWMOutputDevice = GPIOZERO_COMPONENTS['PWMOutputDevice']
+        Button = GPIOZERO_COMPONENTS['Button']
+        
+        # Setup LEDs with PWM support using lgpio backend
         self.led_pwm = {}
         for color, pin in LED_PINS.items():
-            led = PWMOutputDevice(pin)
-            led.value = 0  # Start with LED off
-            self.led_pwm[color] = led
-            self.lightStates[color] = False
-            
-        # Setup buttons with pull-up resistors
+            try:
+                led = PWMOutputDevice(pin)
+                led.value = 0  # Start with LED off
+                self.led_pwm[color] = led
+                self.lightStates[color] = False
+                self._logger.debug(f"Initialized LED {color} on pin {pin} using {GPIO_BACKEND}")
+            except Exception as e:
+                self._logger.error(f"Failed to initialize LED {color} on pin {pin}: {e}")
+                
+        # Setup buttons with pull-up resistors using lgpio backend
         self.gpio_buttons = {}
         for button, pin in BUTTON_PINS.items():
-            btn = Button(pin, pull_up=True)
-            self.gpio_buttons[button] = btn
-            self.buttonStates[button] = False
+            try:
+                btn = Button(pin, pull_up=True)
+                self.gpio_buttons[button] = btn
+                self.buttonStates[button] = False
+                self._logger.debug(f"Initialized button {button} on pin {pin} using {GPIO_BACKEND}")
+            except Exception as e:
+                self._logger.error(f"Failed to initialize button {button} on pin {pin}: {e}")
+                
+        self._logger.info(f"gpiozero initialized successfully using {GPIO_BACKEND} backend")
+        
+        # Log which pin factory is being used for debugging
+        if GPIO_BACKEND == "lgpio":
+            self._logger.info(f"Using LGPIOFactory for Raspberry Pi 5 GPIO control")
+        elif GPIO_BACKEND == "gpiozero-native":
+            self._logger.info(f"Using NativeFactory for GPIO control")
             
-        self._logger.info("gpiozero initialized successfully")
+        # Verify initialization
+        initialized_leds = len([led for led in self.led_pwm.values() if led])
+        initialized_buttons = len([btn for btn in self.gpio_buttons.values() if btn])
+        self._logger.info(f"Successfully initialized {initialized_leds}/{len(LED_PINS)} LEDs and {initialized_buttons}/{len(BUTTON_PINS)} buttons")
 
     def _initialize_simulation_mode(self):
         """Initialize simulation mode when no GPIO is available"""
@@ -356,17 +407,20 @@ class LepmonController(LiveUpdatedController):
                 if GPIO_BACKEND == "RPi.GPIO":
                     # Stop PWM and cleanup GPIO
                     for pwm in self.led_pwm.values():
-                        pwm.stop()
+                        if pwm:
+                            pwm.stop()
                     GPIO.cleanup()
                     self._logger.info("RPi.GPIO cleaned up successfully")
-                elif GPIO_BACKEND == "gpiozero":
+                elif GPIO_BACKEND in ["lgpio", "gpiozero-native", "gpiozero"]:
                     # Close gpiozero devices
                     for led in self.led_pwm.values():
-                        led.close()
+                        if led:
+                            led.close()
                     if hasattr(self, 'gpio_buttons'):
                         for button in self.gpio_buttons.values():
-                            button.close()
-                    self._logger.info("gpiozero devices closed successfully")
+                            if button:
+                                button.close()
+                    self._logger.info(f"gpiozero devices closed successfully ({GPIO_BACKEND})")
             
             if HAS_I2C and hasattr(self, 'i2c_bus') and self.i2c_bus:
                 # Close I2C bus
@@ -421,10 +475,11 @@ class LepmonController(LiveUpdatedController):
         """Dim the specified LED to given brightness (0-100) with multi-backend support"""
         try:
             if color in LED_PINS:
-                if HAS_GPIO and color in self.led_pwm:
+                if HAS_GPIO and color in self.led_pwm and self.led_pwm[color]:
                     if GPIO_BACKEND == "RPi.GPIO":
                         self.led_pwm[color].ChangeDutyCycle(brightness)
-                    elif GPIO_BACKEND == "gpiozero":
+                    elif GPIO_BACKEND in ["lgpio", "gpiozero-native", "gpiozero"]:
+                        # gpiozero uses 0.0-1.0 range for PWM value
                         self.led_pwm[color].value = brightness / 100.0
                 # Update state based on brightness
                 self.lightStates[color] = brightness > 0
@@ -576,9 +631,13 @@ class LepmonController(LiveUpdatedController):
                 if GPIO_BACKEND == "RPi.GPIO":
                     # Button pressed when GPIO reads LOW (pull-up configuration)
                     is_pressed = GPIO.input(BUTTON_PINS[button_name]) == GPIO.LOW
-                elif GPIO_BACKEND == "gpiozero":
-                    # Button pressed when button object is pressed
-                    is_pressed = self.gpio_buttons[button_name].is_pressed
+                elif GPIO_BACKEND in ["lgpio", "gpiozero-native", "gpiozero"]:
+                    # Button pressed when button object is pressed (gpiozero with any backend)
+                    if button_name in self.gpio_buttons and self.gpio_buttons[button_name]:
+                        is_pressed = self.gpio_buttons[button_name].is_pressed
+                    else:
+                        # Fallback to simulation if button not initialized
+                        is_pressed = self.buttonStates[button_name]
                 else:
                     # Fallback to simulation
                     is_pressed = self.buttonStates[button_name]
@@ -694,15 +753,6 @@ class LepmonController(LiveUpdatedController):
             self._logger.warning(f"Time calculation failed: {e}")
 
     # ---------------------- LepmonOS HMI Functions (from 02_trap_hmi.py) ---------------------- #
-
-    def _button_pressed(self, button_name: str) -> bool:
-        """Equivalent to utils.GPIO_Setup.button_pressed()"""
-        try:
-            # Check if button is currently pressed
-            return self.buttonStates.get(button_name, False)
-        except Exception as e:
-            self._logger.warning(f"Could not check button {button_name}: {e}")
-            return False
 
     def _open_hmi_menu(self):
         """Equivalent to the HMI menu system from 02_trap_hmi.py"""

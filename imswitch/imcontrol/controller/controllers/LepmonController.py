@@ -126,7 +126,8 @@ I2C_BUS = 1  # I2C bus number
 SENSOR_ADDRESSES = {
     "temperature": 0x48,  # Example temperature sensor address
     "humidity": 0x40,     # Example humidity sensor address  
-    "pressure": 0x77      # Example pressure sensor address
+    "pressure": 0x77,     # Example pressure sensor address
+    "LUX": 0x23          # Example light sensor address (TSL2561, BH1750, etc.)
 }
 
 # We map FastAPI GET -> @APIExport()
@@ -241,10 +242,12 @@ class LepmonController(LiveUpdatedController):
         # Initialize LepmonOS system
         self._initializeLepmonOS()
         
-        # TODO: We have to start the Expimerent automatically on startup/initialization in case the time is correct (e.g. based on sunset/sunrise)
-        # parameters like deviceTime, deviceLat, deviceLng, exposureTime, gain, timelapsePeriod, time, date, should be loaded from 
-        # the LepmonOS configuration file or set to default values.
-        # startExperiment()
+        # Start auto-start monitoring thread
+        self.auto_start_thread = Thread(target=self._auto_start_monitor, daemon=True)
+        self.auto_start_thread.start()
+        
+        # Check if we should auto-start immediately after initialization
+        self._check_and_auto_start_experiment()
     
 
     def _initializeLepmonHardware(self):
@@ -585,42 +588,311 @@ class LepmonController(LiveUpdatedController):
             self._logger.warning(f"Startup sequence display failed: {e}")
 
     def _read_lepmon_config(self):
-        """Read configuration from LepmonOS config files"""
-        # TODO: read from LepmonOS config file in data
-        # TODO: We need to repliacte the config handling from LepmonOS
-        # The exact same behaviour by reading and writing values such as site, etc. have to be merged here 
-        '''
-        sites.json 
-        sensor_values.json 
-        Lepmon_config.json 
-        LepmonOS_serial_number.json
-        '''
-        LEPMON_FOLDER = os.path.join(dirtools.UserFileDirs.Root, "Lepmon")
-        if not os.path.exists(LEPMON_FOLDER):
-            self._logger.warning(f"Lepmon folder does not exist: {LEPMON_FOLDER}")
-            # TODO: PRoceed with default values or create folder and json files 
-        else:
-            self._logger.debug(f"Lepmon folder exists: {LEPMON_FOLDER}")
-            # TODO: Attempt to read LepmonOS configuration files
-        try: # TODO: if no LepmonOS config file exists, create it with default values and write it to disk!
-            # Simulate reading from JSON config
-            self.lepmon_config = {
-                "software": {
-                    "version": self.version,
-                    "date": self.date
-                },
-                "general": { # 
-                    "serielnumber": self.serial_number
-                },
-                "capture_mode": {
-                    "dusk_treshold": 50,
-                    "interval": 60,
-                    "initial_exposure": 100
-                }
-            }
-            self._logger.debug(f"Loaded LepmonOS configuration")
+        """Read configuration from LepmonOS config files with exact LepmonOS behavior"""
+        try:
+            # Create Lepmon folder structure in ImSwitch user directory
+            self.lepmon_folder = os.path.join(dirtools.UserFileDirs.Root, "Lepmon")
+            self._ensure_lepmon_folder_structure()
+            
+            # Load all configuration files
+            self.lepmon_config = self._load_lepmon_config_file()
+            self.sensor_values = self._load_sensor_values_file()
+            self.serial_number_config = self._load_serial_number_file() 
+            self.sites_config = self._load_sites_file()
+            
+            # Update internal variables from loaded config
+            self._update_internal_config()
+            
+            self._logger.info("LepmonOS configuration loaded successfully")
+            
         except Exception as e:
-            self._logger.warning(f"Could not read LepmonOS config: {e}")
+            self._logger.error(f"Failed to read LepmonOS config: {e}")
+            # Fall back to defaults
+            self._create_default_configuration()
+
+    def _ensure_lepmon_folder_structure(self):
+        """Create LepmonOS folder structure if it doesn't exist"""
+        try:
+            if not os.path.exists(self.lepmon_folder):
+                os.makedirs(self.lepmon_folder)
+                self._logger.info(f"Created Lepmon folder: {self.lepmon_folder}")
+            
+            # Create subfolders if needed (matching LepmonOS structure)
+            data_folder = os.path.join(self.lepmon_folder, "data")
+            if not os.path.exists(data_folder):
+                os.makedirs(data_folder)
+                self._logger.info(f"Created Lepmon data folder: {data_folder}")
+                
+        except Exception as e:
+            self._logger.error(f"Failed to create Lepmon folder structure: {e}")
+
+    def _load_lepmon_config_file(self) -> dict:
+        """Load main Lepmon_config.json file"""
+        config_file = os.path.join(self.lepmon_folder, "Lepmon_config.json")
+        
+        try:
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                self._logger.debug(f"Loaded Lepmon_config.json from {config_file}")
+                return config
+            else:
+                self._logger.info("Lepmon_config.json not found, creating default")
+                default_config = self._create_default_lepmon_config()
+                self._save_lepmon_config_file(default_config)
+                return default_config
+                
+        except Exception as e:
+            self._logger.error(f"Failed to load Lepmon_config.json: {e}")
+            return self._create_default_lepmon_config()
+
+    def _create_default_lepmon_config(self) -> dict:
+        """Create default LepmonOS configuration matching the structure from provided file"""
+        return {
+            "general": {
+                "serielnumber": self.serial_number,
+                "project_name": "Lepmon#",
+                "current_folder": "",
+                "current_log": ""
+            },
+            "locality": {
+                "country": "Germany",
+                "province": "TH", 
+                "city": "J"
+            },
+            "capture_mode": {
+                "time_buffer": 30,
+                "LepiLed_buffer": 60,
+                "flash": 0.25,
+                "interval": 2,
+                "dusk_treshold": 90,
+                "initial_exposure": 160,
+                "error_code": 0
+            },
+            "GPS": {
+                "latitude": 50.924009,
+                "Pol": "N",
+                "longitude": 11.584009,
+                "Block": "E"
+            },
+            "software": {
+                "version": self.version,
+                "date": self.date
+            }
+        }
+
+    def _save_lepmon_config_file(self, config: dict):
+        """Save Lepmon_config.json file"""
+        config_file = os.path.join(self.lepmon_folder, "Lepmon_config.json")
+        
+        try:
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+            self._logger.debug(f"Saved Lepmon_config.json to {config_file}")
+        except Exception as e:
+            self._logger.error(f"Failed to save Lepmon_config.json: {e}")
+
+    def _load_sensor_values_file(self) -> dict:
+        """Load sensor_values.json file"""
+        sensor_file = os.path.join(self.lepmon_folder, "sensor_values.json")
+        
+        try:
+            if os.path.exists(sensor_file):
+                with open(sensor_file, 'r', encoding='utf-8') as f:
+                    sensor_values = json.load(f)
+                self._logger.debug(f"Loaded sensor_values.json from {sensor_file}")
+                return sensor_values
+            else:
+                self._logger.info("sensor_values.json not found, creating default")
+                default_values = self._create_default_sensor_values()
+                self._save_sensor_values_file(default_values)
+                return default_values
+                
+        except Exception as e:
+            self._logger.error(f"Failed to load sensor_values.json: {e}")
+            return self._create_default_sensor_values()
+
+    def _create_default_sensor_values(self) -> dict:
+        """Create default sensor values matching LepmonOS structure"""
+        return {
+            "time_read": "00:00:00",
+            "LUX": 0.0,
+            "Sensorstatus_Licht": 1,
+            "Temp_in": 20.0,
+            "Sensorstatus_Inne": 1,
+            "bus_voltage": 12.0,
+            "shunt_voltage": 0.0,
+            "current": 0.0,
+            "power": 0.0,
+            "Sensorstatus_Strom": 1,
+            "Temp_out": 15.0,
+            "air_pressure": 1013.25,
+            "air_humidity": 50.0,
+            "Status_aussen": 1
+        }
+
+    def _save_sensor_values_file(self, sensor_values: dict):
+        """Save sensor_values.json file"""
+        sensor_file = os.path.join(self.lepmon_folder, "sensor_values.json")
+        
+        try:
+            with open(sensor_file, 'w', encoding='utf-8') as f:
+                json.dump(sensor_values, f, indent=4, ensure_ascii=False)
+            self._logger.debug(f"Saved sensor_values.json to {sensor_file}")
+        except Exception as e:
+            self._logger.error(f"Failed to save sensor_values.json: {e}")
+
+    def _load_serial_number_file(self) -> dict:
+        """Load LepmonOS_serial_number.json file"""
+        serial_file = os.path.join(self.lepmon_folder, "LepmonOS_serial_number.json")
+        
+        try:
+            if os.path.exists(serial_file):
+                with open(serial_file, 'r', encoding='utf-8') as f:
+                    serial_config = json.load(f)
+                self._logger.debug(f"Loaded LepmonOS_serial_number.json from {serial_file}")
+                return serial_config
+            else:
+                self._logger.info("LepmonOS_serial_number.json not found, creating default")
+                default_serial = self._create_default_serial_config()
+                self._save_serial_number_file(default_serial)
+                return default_serial
+                
+        except Exception as e:
+            self._logger.error(f"Failed to load LepmonOS_serial_number.json: {e}")
+            return self._create_default_serial_config()
+
+    def _create_default_serial_config(self) -> dict:
+        """Create default serial number configuration"""
+        return {
+            "general": {
+                "serielnumber": self.serial_number,
+                "Fallenversion": "Pro_Gen_2"
+            }
+        }
+
+    def _save_serial_number_file(self, serial_config: dict):
+        """Save LepmonOS_serial_number.json file"""
+        serial_file = os.path.join(self.lepmon_folder, "LepmonOS_serial_number.json")
+        
+        try:
+            with open(serial_file, 'w', encoding='utf-8') as f:
+                json.dump(serial_config, f, indent=4, ensure_ascii=False)
+            self._logger.debug(f"Saved LepmonOS_serial_number.json to {serial_file}")
+        except Exception as e:
+            self._logger.error(f"Failed to save LepmonOS_serial_number.json: {e}")
+
+    def _load_sites_file(self) -> dict:
+        """Load sites.json file"""
+        sites_file = os.path.join(self.lepmon_folder, "sites.json")
+        
+        try:
+            if os.path.exists(sites_file):
+                with open(sites_file, 'r', encoding='utf-8') as f:
+                    sites_config = json.load(f)
+                self._logger.debug(f"Loaded sites.json from {sites_file}")
+                return sites_config
+            else:
+                self._logger.info("sites.json not found, creating default")
+                default_sites = self._create_default_sites_config()
+                self._save_sites_file(default_sites)
+                return default_sites
+                
+        except Exception as e:
+            self._logger.error(f"Failed to load sites.json: {e}")
+            return self._create_default_sites_config()
+
+    def _create_default_sites_config(self) -> dict:
+        """Create default sites configuration with subset from provided file"""
+        return {
+            "Germany": {
+                "Thüringen": ["TH", "EF", "GTH", "J", "MHL", "SHK", "SLF", "SÖM", "UH", "WE"],
+                "Bayern": ["BY", "A", "AB", "AN", "AÖ", "AS", "BA", "BT", "BY", "CO", "DON"],
+                "Baden-Württemberg": ["BW", "AA", "AB", "BC", "BL", "FR", "HD", "HN", "KA"],
+                "Berlin": ["BE", "B"],
+                "Brandenburg": ["BB", "BAR", "BRB", "CB", "EE", "FF", "HVL", "LDS"]
+            },
+            "Austria": {
+                "Tirol": ["T", "IL", "IM", "KB", "KU", "LA", "RE", "SZ"],
+                "Wien": ["W", "W"],
+                "Salzburg": ["S", "HA", "JO", "SL", "TA", "ZE"]
+            },
+            "Switzerland": {
+                "Zürich": ["ZH", "ZH"],
+                "Bern": ["BE", "BE"],
+                "Genf": ["GE", "GE"]
+            }
+        }
+
+    def _save_sites_file(self, sites_config: dict):
+        """Save sites.json file"""
+        sites_file = os.path.join(self.lepmon_folder, "sites.json")
+        
+        try:
+            with open(sites_file, 'w', encoding='utf-8') as f:
+                json.dump(sites_config, f, indent=4, ensure_ascii=False)
+            self._logger.debug(f"Saved sites.json to {sites_file}")
+        except Exception as e:
+            self._logger.error(f"Failed to save sites.json: {e}")
+
+    def _update_internal_config(self):
+        """Update internal variables from loaded configuration"""
+        try:
+            # Update from main config
+            if self.lepmon_config:
+                # Update capture mode settings
+                capture_mode = self.lepmon_config.get("capture_mode", {})
+                self.mExperimentParameters["timelapsePeriod"] = capture_mode.get("interval", 60)
+                self.mExperimentParameters["exposureTime"] = capture_mode.get("initial_exposure", 160)
+                
+                # Update software info
+                software = self.lepmon_config.get("software", {})
+                self.version = software.get("version", self.version)
+                self.date = software.get("date", self.date)
+                
+                # Update serial number from general config
+                general = self.lepmon_config.get("general", {})
+                if general.get("serielnumber"):
+                    self.serial_number = general["serielnumber"]
+            
+            # Update from serial number config  
+            if self.serial_number_config:
+                serial_general = self.serial_number_config.get("general", {})
+                if serial_general.get("serielnumber"):
+                    self.serial_number = serial_general["serielnumber"]
+            
+            # Update sensor values if available
+            if self.sensor_values:
+                self.innerTemp = self.sensor_values.get("Temp_in", self.innerTemp)
+                self.outerTemp = self.sensor_values.get("Temp_out", self.outerTemp) 
+                self.humidity = self.sensor_values.get("air_humidity", self.humidity)
+                
+            self._logger.debug("Updated internal configuration from loaded files")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to update internal configuration: {e}")
+
+    def _create_default_configuration(self):
+        """Create default configuration when loading fails"""
+        try:
+            self._logger.warning("Creating default LepmonOS configuration")
+            
+            self.lepmon_config = self._create_default_lepmon_config()
+            self.sensor_values = self._create_default_sensor_values()
+            self.serial_number_config = self._create_default_serial_config()
+            self.sites_config = self._create_default_sites_config()
+            
+            # Ensure folder exists and save defaults
+            self._ensure_lepmon_folder_structure()
+            self._save_lepmon_config_file(self.lepmon_config)
+            self._save_sensor_values_file(self.sensor_values)
+            self._save_serial_number_file(self.serial_number_config)
+            self._save_sites_file(self.sites_config)
+            
+            self._logger.info("Default LepmonOS configuration created and saved")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to create default configuration: {e}")
 
     def _initialize_system_components(self):
         """Initialize system components like LepmonOS"""
@@ -699,16 +971,24 @@ class LepmonController(LiveUpdatedController):
             self._logger.warning(f"Could not simulate button press {button_name}: {e}")
 
     def _read_i2c_sensor(self, sensor_name: str) -> Optional[float]:
-        """Read data from I2C sensor"""
+        """Read data from I2C sensor with enhanced LepmonOS compatibility"""
         try:
             if not HAS_I2C or self.i2c_bus is None:
-                # Return simulated data
+                # Return simulated data that matches LepmonOS sensor ranges
                 if sensor_name == "temperature":
                     return np.round(np.random.uniform(20, 25), 2)
                 elif sensor_name == "humidity":
                     return np.round(np.random.uniform(40, 60), 2)
                 elif sensor_name == "pressure":
                     return np.round(np.random.uniform(1000, 1020), 2)
+                elif sensor_name == "LUX":
+                    # Simulate day/night cycle based on time
+                    now = datetime.datetime.now()
+                    hour = now.hour
+                    if 6 <= hour <= 18:  # Daytime
+                        return np.round(np.random.uniform(50, 200), 2)
+                    else:  # Nighttime
+                        return np.round(np.random.uniform(0, 50), 2)
                 return None
                 
             if sensor_name not in SENSOR_ADDRESSES:
@@ -731,18 +1011,28 @@ class LepmonController(LiveUpdatedController):
             elif sensor_name == "pressure":
                 # Example pressure conversion
                 return round(1000.0 + (data * 0.1), 2)  # Example conversion
+            elif sensor_name == "LUX":
+                # Light sensor conversion
+                return round((data / 255.0) * 1000.0, 2)  # Example conversion
                 
             return float(data)
             
         except Exception as e:
             self._logger.warning(f"Failed to read I2C sensor {sensor_name}: {e}")
-            # Return simulated data on error
+            # Return simulated data on error (same as above)
             if sensor_name == "temperature":
                 return np.round(np.random.uniform(20, 25), 2)
             elif sensor_name == "humidity":
                 return np.round(np.random.uniform(40, 60), 2)
             elif sensor_name == "pressure":
                 return np.round(np.random.uniform(1000, 1020), 2)
+            elif sensor_name == "LUX":
+                now = datetime.datetime.now()
+                hour = now.hour
+                if 6 <= hour <= 18:
+                    return np.round(np.random.uniform(50, 200), 2)
+                else:
+                    return np.round(np.random.uniform(0, 50), 2)
             return None
 
     def _read_all_sensors(self) -> Dict[str, float]:
@@ -755,11 +1045,87 @@ class LepmonController(LiveUpdatedController):
         return sensor_data
 
     def _calculate_times(self):
-        """Calculate sun times and power times like LepmonOS"""
+        """Calculate sun times and power times using LepmonOS configuration and GPS coordinates"""
         try:
-            # Simulate sun time calculation
-            # TODO: This has to be replaced with the exact same calculation as in LepmonOS 
+            # Get GPS coordinates from configuration
+            gps_config = self.lepmon_config.get("GPS", {})
+            latitude = gps_config.get("latitude", 50.924009)  # Default to Jena, Germany
+            longitude = gps_config.get("longitude", 11.584009)
             
+            # Get capture mode settings
+            capture_mode = self.lepmon_config.get("capture_mode", {})
+            time_buffer = capture_mode.get("time_buffer", 30)  # minutes
+            lepiled_buffer = capture_mode.get("LepiLed_buffer", 60)  # minutes
+            
+            # Calculate sunset and sunrise times for current date
+            # This is a simplified calculation - in real LepmonOS this would use more sophisticated astronomical calculations
+            now = datetime.datetime.now()
+            
+            # Approximate sunset/sunrise calculation (simplified)
+            # In production, this should use a proper astronomical library like ephem or astral
+            day_of_year = now.timetuple().tm_yday
+            
+            # Rough approximation for Central Europe
+            sunrise_hour = 6.5 + 1.5 * np.cos(2 * np.pi * (day_of_year - 172) / 365)
+            sunset_hour = 18.5 + 1.5 * np.cos(2 * np.pi * (day_of_year - 172) / 365)
+            
+            # Adjust for longitude (very rough approximation)
+            longitude_adjustment = (longitude - 15) / 15  # 15 degrees per hour
+            sunrise_hour += longitude_adjustment
+            sunset_hour += longitude_adjustment
+            
+            # Create datetime objects
+            sunrise_time = now.replace(
+                hour=int(sunrise_hour), 
+                minute=int((sunrise_hour % 1) * 60), 
+                second=0, 
+                microsecond=0
+            )
+            sunset_time = now.replace(
+                hour=int(sunset_hour), 
+                minute=int((sunset_hour % 1) * 60), 
+                second=0, 
+                microsecond=0
+            )
+            
+            # Apply time buffers from configuration
+            experiment_start = sunset_time - timedelta(minutes=time_buffer)
+            experiment_end = sunrise_time + timedelta(minutes=time_buffer)
+            lepiled_end = sunset_time + timedelta(minutes=lepiled_buffer * 60)  # LepiLed runs for X hours
+            
+            # Store calculated times
+            self.experiment_start_time = experiment_start.strftime('%H:%M:%S')
+            self.experiment_end_time = experiment_end.strftime('%H:%M:%S')
+            self.lepiled_end_time = lepiled_end.strftime('%H:%M:%S')
+            
+            # Store full datetime objects for more precise calculations
+            self.experiment_start_datetime = experiment_start
+            self.experiment_end_datetime = experiment_end
+            self.lepiled_end_datetime = lepiled_end
+            self.sunrise_datetime = sunrise_time
+            self.sunset_datetime = sunset_time
+            
+            self._logger.info(f"Calculated times for coordinates ({latitude}, {longitude}):")
+            self._logger.info(f"Sonnenuntergang: {sunset_time.strftime('%H:%M:%S')}")
+            self._logger.info(f"Sonnenaufgang: {sunrise_time.strftime('%H:%M:%S')}")
+            self._logger.info(f"Experiment start: {experiment_start.strftime('%H:%M:%S')}")
+            self._logger.info(f"Experiment end: {experiment_end.strftime('%H:%M:%S')}")
+            self._logger.info(f"LepiLED end: {lepiled_end.strftime('%H:%M:%S')}")
+            
+            # Send notification
+            self._send_lora(f"Sonnenuntergang: {sunset_time.strftime('%H:%M:%S')}\nSonnenaufgang: {sunrise_time.strftime('%H:%M:%S')}")
+            
+            return {
+                "sunset": sunset_time.strftime('%H:%M:%S'),
+                "sunrise": sunrise_time.strftime('%H:%M:%S'),
+                "experiment_start": experiment_start.strftime('%H:%M:%S'),
+                "experiment_end": experiment_end.strftime('%H:%M:%S'),
+                "lepiled_end": lepiled_end.strftime('%H:%M:%S')
+            }
+            
+        except Exception as e:
+            self._logger.warning(f"Time calculation failed: {e}")
+            # Fallback to default times if calculation fails
             now = datetime.datetime.now()
             sunset = now.replace(hour=18, minute=30, second=0)
             sunrise = now.replace(hour=6, minute=30, second=0)
@@ -768,13 +1134,179 @@ class LepmonController(LiveUpdatedController):
             self.experiment_end_time = sunrise.strftime('%H:%M:%S')
             self.lepiled_end_time = (sunset + timedelta(hours=6)).strftime('%H:%M:%S')
             
-            self._logger.info(f"Sonnenuntergang: {sunset.strftime('%H:%M:%S')}")
-            self._logger.info(f"Sonnenaufgang: {sunrise.strftime('%H:%M:%S')}")
+            return {
+                "sunset": sunset.strftime('%H:%M:%S'),
+                "sunrise": sunrise.strftime('%H:%M:%S'),
+                "experiment_start": sunset.strftime('%H:%M:%S'),
+                "experiment_end": sunrise.strftime('%H:%M:%S'),
+                "lepiled_end": (sunset + timedelta(hours=6)).strftime('%H:%M:%S')
+            }
+
+    def _should_auto_start_experiment(self) -> bool:
+        """Check if experiment should be automatically started based on time and configuration"""
+        try:
+            if not hasattr(self, 'experiment_start_datetime') or not hasattr(self, 'experiment_end_datetime'):
+                self._calculate_times()
             
-            self._send_lora(f"Sonnenuntergang: {sunset.strftime('%H:%M:%S')}\nSonnenaufgang: {sunrise.strftime('%H:%M:%S')}")
+            now = datetime.datetime.now()
+            
+            # Check if we're in the experiment time window
+            in_experiment_window = self._is_time_in_range(
+                self.experiment_start_datetime.time(),
+                self.experiment_end_datetime.time(),
+                now.time()
+            )
+            
+            # Check if experiment is not already running
+            not_running = not getattr(self, 'is_measure', False)
+            
+            # Get capture mode settings for additional checks
+            capture_mode = self.lepmon_config.get("capture_mode", {})
+            dusk_threshold = capture_mode.get("dusk_treshold", 90)
+            
+            # Check light level (if sensor available)
+            current_lux = self._read_i2c_sensor("LUX") if hasattr(self, 'i2c_bus') and self.i2c_bus else None
+            light_condition_met = current_lux is None or current_lux <= dusk_threshold
+            
+            should_start = in_experiment_window and not_running and light_condition_met
+            
+            if should_start:
+                self._logger.info(f"Auto-start conditions met: time={in_experiment_window}, not_running={not_running}, light={light_condition_met}")
+            
+            return should_start
             
         except Exception as e:
-            self._logger.warning(f"Time calculation failed: {e}")
+            self._logger.error(f"Failed to check auto-start conditions: {e}")
+            return False
+
+    def _is_time_in_range(self, start_time, end_time, current_time) -> bool:
+        """Check if current time is within a time range, handling overnight ranges"""
+        try:
+            if start_time <= end_time:
+                # Same day range
+                return start_time <= current_time <= end_time
+            else:
+                # Overnight range (crosses midnight)
+                return current_time >= start_time or current_time <= end_time
+        except Exception:
+            return False
+
+    def _check_and_auto_start_experiment(self):
+        """Check conditions and automatically start experiment if appropriate"""
+        try:
+            if self._should_auto_start_experiment():
+                self._logger.info("Starting experiment automatically based on schedule")
+                
+                # Get experiment parameters from configuration
+                capture_mode = self.lepmon_config.get("capture_mode", {})
+                
+                # Start experiment with configuration-based parameters
+                result = self.startExperiment(
+                    deviceTime=datetime.datetime.now().isoformat(),
+                    deviceLat=self.lepmon_config.get("GPS", {}).get("latitude", 50.924009),
+                    deviceLng=self.lepmon_config.get("GPS", {}).get("longitude", 11.584009),
+                    exposureTime=capture_mode.get("initial_exposure", 160),
+                    gain=0.0,
+                    timelapsePeriod=capture_mode.get("interval", 60),
+                    time=datetime.datetime.now().strftime("%H:%M:%S"),
+                    date=datetime.datetime.now().strftime("%Y-%m-%d")
+                )
+                
+                if result.get("success"):
+                    self._logger.info("Automatic experiment start successful")
+                    self._send_lora("Experiment automatically started")
+                else:
+                    self._logger.error(f"Automatic experiment start failed: {result.get('message')}")
+                    
+        except Exception as e:
+            self._logger.error(f"Auto-start check failed: {e}")
+
+    @APIExport()
+    def getCalculatedTimes(self) -> dict:
+        """Get calculated sun times and experiment schedule"""
+        try:
+            times = self._calculate_times()
+            
+            return {
+                "success": True,
+                "calculated_times": times,
+                "gps_coordinates": {
+                    "latitude": self.lepmon_config.get("GPS", {}).get("latitude", 50.924009),
+                    "longitude": self.lepmon_config.get("GPS", {}).get("longitude", 11.584009)
+                },
+                "capture_settings": self.lepmon_config.get("capture_mode", {}),
+                "auto_start_enabled": True,
+                "current_time": datetime.datetime.now().strftime('%H:%M:%S')
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to get calculated times: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to calculate times: {str(e)}"
+            }
+
+    @APIExport(requestType="POST")
+    def checkAutoStartConditions(self) -> dict:
+        """Check if conditions are met for automatic experiment start"""
+        try:
+            should_start = self._should_auto_start_experiment()
+            
+            # Get detailed condition status
+            now = datetime.datetime.now()
+            in_time_window = False
+            light_condition = "unknown"
+            
+            if hasattr(self, 'experiment_start_datetime') and hasattr(self, 'experiment_end_datetime'):
+                in_time_window = self._is_time_in_range(
+                    self.experiment_start_datetime.time(),
+                    self.experiment_end_datetime.time(),
+                    now.time()
+                )
+            
+            current_lux = self._read_i2c_sensor("LUX") if hasattr(self, 'i2c_bus') and self.i2c_bus else None
+            if current_lux is not None:
+                dusk_threshold = self.lepmon_config.get("capture_mode", {}).get("dusk_treshold", 90)
+                light_condition = "dark" if current_lux <= dusk_threshold else "bright"
+            
+            return {
+                "success": True,
+                "should_auto_start": should_start,
+                "conditions": {
+                    "in_time_window": in_time_window,
+                    "experiment_running": getattr(self, 'is_measure', False),
+                    "light_condition": light_condition,
+                    "current_lux": current_lux,
+                    "current_time": now.strftime('%H:%M:%S')
+                },
+                "next_check": "Continuous monitoring active"
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to check auto-start conditions: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to check conditions: {str(e)}"
+            }
+
+    def _auto_start_monitor(self):
+        """Background thread that monitors for auto-start conditions"""
+        try:
+            self._logger.info("Auto-start monitoring thread started")
+            
+            while True:
+                try:
+                    # Check auto-start conditions every 60 seconds
+                    time.sleep(60)
+                    
+                    # Only check if not already measuring
+                    if not getattr(self, 'is_measure', False):
+                        self._check_and_auto_start_experiment()
+                        
+                except Exception as e:
+                    self._logger.warning(f"Auto-start monitor cycle failed: {e}")
+                    continue
+                    
+        except Exception as e:
+            self._logger.error(f"Auto-start monitoring thread failed: {e}")
 
     # ---------------------- LepmonOS HMI Functions (from 02_trap_hmi.py) ---------------------- #
 
@@ -901,20 +1433,36 @@ class LepmonController(LiveUpdatedController):
     # ---------------------- LepmonOS Sensor and Data Functions ---------------------- #
 
     def _read_sensor_data(self, code: str, local_time: str):
-        """Equivalent to utils.sensor_data.read_sensor_data()"""
+        """Read sensor data and update sensor_values.json file matching LepmonOS format"""
         try:
-            # Simulate sensor data reading
-            self.sensor_data = {
-                "LUX": np.round(np.random.uniform(0, 100), 2),
-                "Temp_in": self.innerTemp,
-                "Temp_out": self.outerTemp,
-                "humidity": self.humidity,
+            # Read current sensor values
+            sensor_data = {
+                "time_read": local_time,
+                "LUX": self._read_i2c_sensor("LUX") or np.round(np.random.uniform(0, 100), 2),
+                "Sensorstatus_Licht": 1,
+                "Temp_in": self._read_i2c_sensor("temperature") or self.innerTemp,
+                "Sensorstatus_Inne": 1,
                 "bus_voltage": np.round(np.random.uniform(11.5, 12.5), 2),
+                "shunt_voltage": np.round(np.random.uniform(0, 5), 2),
+                "current": np.round(np.random.uniform(500, 1000), 2),
                 "power": np.round(np.random.uniform(500, 1500), 2),
-                "timestamp": local_time,
-                "code": code
+                "Sensorstatus_Strom": 1,
+                "Temp_out": self._read_i2c_sensor("temperature") or self.outerTemp,
+                "air_pressure": self._read_i2c_sensor("pressure") or np.round(np.random.uniform(1000, 1020), 2),
+                "air_humidity": self._read_i2c_sensor("humidity") or self.humidity,
+                "Status_aussen": 1
             }
-            return self.sensor_data
+            
+            # Update internal sensor values
+            self.sensor_data = sensor_data
+            
+            # Update stored sensor values and save to file
+            if hasattr(self, 'sensor_values'):
+                self.sensor_values.update(sensor_data)
+                self._save_sensor_values_file(self.sensor_values)
+            
+            return sensor_data
+            
         except Exception as e:
             self._logger.error(f"Failed to read sensor data: {e}")
             return {}
@@ -1848,6 +2396,248 @@ class LepmonController(LiveUpdatedController):
                     drive_letter = drive_info[0]
                     external_drives.append(drive_letter)
         return external_drives
+
+    # ---------------------- LepmonOS Configuration Management API Endpoints ---------------------- #
+
+    @APIExport()
+    def getLepmonConfig(self) -> dict:
+        """Get complete LepmonOS configuration from all config files"""
+        try:
+            return {
+                "success": True,
+                "configuration": {
+                    "lepmon_config": getattr(self, 'lepmon_config', {}),
+                    "sensor_values": getattr(self, 'sensor_values', {}),
+                    "serial_number": getattr(self, 'serial_number_config', {}),
+                    "sites": getattr(self, 'sites_config', {}),
+                    "config_folder": getattr(self, 'lepmon_folder', 'unknown')
+                },
+                "message": "LepmonOS configuration retrieved successfully"
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to get LepmonOS configuration: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to get configuration: {str(e)}"
+            }
+
+    @APIExport(requestType="POST")
+    def updateLepmonConfig(self, config_section: str, config_data: dict) -> dict:
+        """Update specific section of LepmonOS configuration"""
+        try:
+            if config_section == "lepmon_config":
+                # Validate and update main config
+                if not hasattr(self, 'lepmon_config'):
+                    self.lepmon_config = self._create_default_lepmon_config()
+                
+                # Update specific sections
+                for section, data in config_data.items():
+                    if section in ["general", "locality", "capture_mode", "GPS", "software"]:
+                        if section not in self.lepmon_config:
+                            self.lepmon_config[section] = {}
+                        self.lepmon_config[section].update(data)
+                
+                # Save updated config
+                self._save_lepmon_config_file(self.lepmon_config)
+                
+                # Update internal parameters
+                self._update_internal_config()
+                
+                return {
+                    "success": True,
+                    "message": f"LepmonOS main configuration updated",
+                    "updated_sections": list(config_data.keys())
+                }
+                
+            elif config_section == "sensor_values":
+                # Update sensor values
+                if not hasattr(self, 'sensor_values'):
+                    self.sensor_values = self._create_default_sensor_values()
+                
+                self.sensor_values.update(config_data)
+                self._save_sensor_values_file(self.sensor_values)
+                
+                return {
+                    "success": True,
+                    "message": "Sensor values configuration updated"
+                }
+                
+            elif config_section == "serial_number":
+                # Update serial number config
+                if not hasattr(self, 'serial_number_config'):
+                    self.serial_number_config = self._create_default_serial_config()
+                
+                if "general" in config_data:
+                    self.serial_number_config["general"].update(config_data["general"])
+                
+                self._save_serial_number_file(self.serial_number_config)
+                
+                return {
+                    "success": True,
+                    "message": "Serial number configuration updated"
+                }
+                
+            elif config_section == "sites":
+                # Update sites config
+                if not hasattr(self, 'sites_config'):
+                    self.sites_config = self._create_default_sites_config()
+                
+                self.sites_config.update(config_data)
+                self._save_sites_file(self.sites_config)
+                
+                return {
+                    "success": True,
+                    "message": "Sites configuration updated"
+                }
+                
+            else:
+                return {
+                    "success": False,
+                    "message": f"Unknown configuration section: {config_section}"
+                }
+                
+        except Exception as e:
+            self._logger.error(f"Failed to update LepmonOS configuration: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to update configuration: {str(e)}"
+            }
+
+    @APIExport()
+    def getAvailableSites(self) -> dict:
+        """Get available sites for location configuration"""
+        try:
+            if not hasattr(self, 'sites_config') or not self.sites_config:
+                self._load_sites_file()
+            
+            return {
+                "success": True,
+                "sites": self.sites_config,
+                "countries": list(self.sites_config.keys()) if self.sites_config else []
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to get available sites: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to get sites: {str(e)}"
+            }
+
+    @APIExport(requestType="POST")
+    def setSiteLocation(self, country: str, province: str, city: str) -> dict:
+        """Set the device location using site configuration"""
+        try:
+            # Validate site configuration
+            if not hasattr(self, 'sites_config') or not self.sites_config:
+                self._load_sites_file()
+            
+            if country not in self.sites_config:
+                available_countries = list(self.sites_config.keys())
+                return {
+                    "success": False,
+                    "message": f"Country '{country}' not found. Available: {available_countries}"
+                }
+            
+            if province not in self.sites_config[country]:
+                available_provinces = list(self.sites_config[country].keys())
+                return {
+                    "success": False,
+                    "message": f"Province '{province}' not found in {country}. Available: {available_provinces}"
+                }
+            
+            if city not in self.sites_config[country][province]:
+                available_cities = self.sites_config[country][province]
+                return {
+                    "success": False,
+                    "message": f"City '{city}' not found in {province}. Available: {available_cities}"
+                }
+            
+            # Update locality in main config
+            if not hasattr(self, 'lepmon_config'):
+                self.lepmon_config = self._create_default_lepmon_config()
+            
+            self.lepmon_config["locality"] = {
+                "country": country,
+                "province": province,
+                "city": city
+            }
+            
+            # Save updated config
+            self._save_lepmon_config_file(self.lepmon_config)
+            
+            return {
+                "success": True,
+                "message": f"Location set to {city}, {province}, {country}",
+                "location": {
+                    "country": country,
+                    "province": province,
+                    "city": city
+                }
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to set site location: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to set location: {str(e)}"
+            }
+
+    @APIExport(requestType="POST")
+    def reloadLepmonConfig(self) -> dict:
+        """Reload LepmonOS configuration from files"""
+        try:
+            self._read_lepmon_config()
+            return {
+                "success": True,
+                "message": "LepmonOS configuration reloaded successfully",
+                "config_folder": getattr(self, 'lepmon_folder', 'unknown')
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to reload LepmonOS configuration: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to reload configuration: {str(e)}"
+            }
+
+    @APIExport(requestType="POST")
+    def resetLepmonConfig(self) -> dict:
+        """Reset LepmonOS configuration to defaults"""
+        try:
+            # Create default configuration
+            self._create_default_configuration()
+            
+            return {
+                "success": True,
+                "message": "LepmonOS configuration reset to defaults"
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to reset LepmonOS configuration: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to reset configuration: {str(e)}"
+            }
+
+    @APIExport()
+    def getLepmonConfigPath(self) -> dict:
+        """Get the path to LepmonOS configuration folder"""
+        try:
+            config_path = getattr(self, 'lepmon_folder', 'Not initialized')
+            config_files = []
+            
+            if hasattr(self, 'lepmon_folder') and os.path.exists(self.lepmon_folder):
+                config_files = [f for f in os.listdir(self.lepmon_folder) if f.endswith('.json')]
+            
+            return {
+                "success": True,
+                "config_path": config_path,
+                "config_files": config_files,
+                "folder_exists": os.path.exists(config_path) if config_path != 'Not initialized' else False
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to get config path: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to get config path: {str(e)}"
+            }
 
     # ---------------------- Enhanced System Monitoring API Endpoints ---------------------- #
     

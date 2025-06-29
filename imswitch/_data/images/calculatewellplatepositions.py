@@ -4,16 +4,24 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import os
 
 #%%
 # read in the json file with the coordinates
 pixelsize_eff = .31 # um from camera
 overlap = 0.75 # 25% overlap
 n_pix_x, n_pix_y = 4000,3000
-mFiles = ('/Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/MicronController/ImSwitch/imswitch/_data/images/6_well_plate.json',
-          '/Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/MicronController/ImSwitch/imswitch/_data/images/24_well_plate.json',
-            '/Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/MicronController/ImSwitch/imswitch/_data/images/96_well_plate.json',
-            '/Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/MicronController/ImSwitch/imswitch/_data/images/4_slide_carrier.json',)
+
+# Get the directory of the current script
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Define the well plate JSON files using relative paths based on the script's location
+mFiles = (
+    os.path.join(base_dir, "6_well_plate.json"),
+    os.path.join(base_dir, "24_well_plate.json"),
+    os.path.join(base_dir, "96_well_plate.json"),
+    os.path.join(base_dir, "4_slide_carrier.json"),
+)
 for mFile in mFiles:
     with open(mFile) as f:
         data = json.load(f)

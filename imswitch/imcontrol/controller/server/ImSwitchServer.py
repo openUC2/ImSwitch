@@ -403,6 +403,50 @@ class ImSwitchServer(Worker):
         hostname = socket.gethostname()
         return {"hostname": hostname}
 
+    @app.get("/sthutdown")
+    def shutdown():
+        """
+        Shuts down the computer.
+        """
+        import platform
+        if platform.system() == "Linux":
+            os.system("sudo shutdown now")
+        elif platform.system() == "Windows":
+            os.system("shutdown /s /t 1")
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported operating system for shutdown")
+        return {"message": "System is shutting down"}
+
+    @app.get("/stopImSwitch")
+    def stopImSwitch(self):
+        self._commChannel.sigExperimentStop.emit()
+        return {"message": "ImSwitch is shutting down"}
+
+    @app.get("/restartImSwitch")
+    def restartImSwitch(self):
+        ostools.restartSoftware()
+        return {"message": "ImSwitch is restarting"}
+
+    @app.get("/isImSwitchRunning")
+    def isImSwitchRunning(self):
+        return True
+
+    @app.get("/getDiskUsage")
+    def getDiskUsage(self):
+        return dirtools.getDiskusage()
+
+    @app.get("/getDataPath")
+    def getDataPath(self):
+        return dirtools.UserFileDirs.Data
+
+    @app.get("/setDataPathFolder")
+    def setDataPathFolder(self, path):
+        dirtools.UserFileDirs.Data = path
+        self._logger.debug(f"Data path set to {path}")
+        return {"message": f"Data path set to {path}"}
+
+
+
     def createAPI(self):
         api_dict = self._api._asdict()
         functions = api_dict.keys()

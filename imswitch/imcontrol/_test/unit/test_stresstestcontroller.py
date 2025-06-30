@@ -4,11 +4,17 @@ import tempfile
 import importlib.util
 import sys
 
-# Import the controller directly to avoid ImSwitch dependency issues.
-# Updated the path to match the local file location on your system.
+# Dynamically build the path to StresstestController.py based on this test file's location
+current_dir = os.path.dirname(os.path.abspath(__file__))
+controller_path = os.path.join(
+    current_dir,
+    "..", "..", "controller", "controllers", "StresstestController.py"
+)
+controller_path = os.path.abspath(controller_path)
+
 spec = importlib.util.spec_from_file_location(
     'StresstestController',
-    '/Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/MicronController/ImSwitch/imswitch/imcontrol/controller/controllers/StresstestController.py'
+    controller_path
 )
 stresstest_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(stresstest_module)

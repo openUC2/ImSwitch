@@ -17,7 +17,6 @@ import numpy as np
 import numpy as np
 from av import VideoFrame
 from imjoy_rpc.hypha.sync import connect_to_server, register_rtc_service, login
-import aiortc
 import cv2
 import logging
 import os

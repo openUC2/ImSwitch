@@ -39,7 +39,7 @@ def prepareApp():
     # TODO: Some weird combination of the below settings may help us to scale Napari?
     # Set environment variables for high DPI scaling
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
-    #os.environ["QT_SCALE_FACTOR"] = ".9"  # Adjust this value as needed
+    #os.environ["QT_SCALE_FACTOR"] = ".8"  # Adjust this value as needed
     from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QApplication
     # Set application attributes
@@ -51,6 +51,7 @@ def prepareApp():
     # https://stackoverflow.com/questions/72131093/pyqt5-qwebengineview-doesnt-load-url
     # The following element (sandbox) is to keep the app from crashing when using QWebEngineView
     app = QtWidgets.QApplication(['', '--no-sandbox'])
+    app.setStyleSheet("QWidget { font-size: 9pt; }")  # Smaller default font
     app.setWindowIcon(QtGui.QIcon(os.path.join(dirtools.DataFileDirs.Root, 'icon.png')))
     app.setStyleSheet(getBaseStyleSheet())
     return app

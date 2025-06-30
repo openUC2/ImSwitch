@@ -39,7 +39,7 @@ setup(
     include_package_data=True,
     python_requires=">=3.9",
     install_requires=[
-        "pydantic >=1.10.16",
+        "pydantic==2.11.4",
         "coloredlogs >= 15",
         "colour-science >= 0.3",
         "dataclasses-json >= 0.5",
@@ -62,8 +62,6 @@ setup(
         "matplotlib == 3.9.2",
         "opencv-python",
         "dataclasses-json >= 0.5",
-        "imjoy_rpc",
-        "imjoy",
         "aiortc >= 1.9.0",
         "UC2-REST",
         "tk >= 0.1.0",
@@ -71,15 +69,15 @@ setup(
         "python-multipart >= 0.0.5",
         "piexif >= 1.1.3",
         "NanoImagingPack==2.1.4",
-        "pymba==0.3.7",
-        "imjoy-rpc==0.5.59",
+        "pymba==0.3.7",        
         "imswitchclient>=0.1.2",  
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
         "numcodecs==0.13.1",
-        "zarr==2.18.3"
+        "zarr==2.18.3", 
+        "aiohttp >= 3.9.4",
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
@@ -101,7 +99,12 @@ setup(
             [
             "arkitekt==0.7.8",
             "arkitekt_next>=0.8.6"
-        ],},
+        ],
+        'imjoy':[        
+            "imjoy-rpc==0.5.59",
+            "imjoy_rpc",
+            "imjoy",]
+        },
 
     entry_points={
         "console_scripts": [

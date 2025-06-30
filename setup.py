@@ -76,7 +76,8 @@ setup(
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
         "numcodecs==0.13.1",
-        "zarr==2.18.3"
+        "zarr==2.18.3", 
+        "aiohttp >= 3.9.4",
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

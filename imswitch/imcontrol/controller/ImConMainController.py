@@ -10,12 +10,14 @@ from imswitch.imcommon.framework import Thread
 from .server import ImSwitchServer
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view import guitools
-from . import controllers
+#from . import controllers
 from .CommunicationChannel import CommunicationChannel
 from .MasterController import MasterController
 from .PickSetupController import PickSetupController
 from .basecontrollers import ImConWidgetControllerFactory
 import threading
+import importlib
+import logging
 
 class ImConMainController(MainController):
     def __init__(self, options, setupInfo, mainView, moduleCommChannel):
@@ -54,24 +56,31 @@ class ImConMainController(MainController):
         for widgetKey, widget in self.__mainView.widgets.items():
             self.__logger.debug(f'Creating controller for widget {widgetKey}')
 
-            # Check if the controller is available
             controller_name = f'{widgetKey}Controller'
             if widgetKey == 'Scan':
                 controller_name = f'{widgetKey}Controller{self.__setupInfo.scan.scanWidgetType}'
             if widgetKey == 'ImSwitchServer':
                 continue
 
-            if hasattr(controllers, controller_name):
-                # Controller is available in the imcontrol module
-                self.controllers[widgetKey] = self.__factory.createController(
-                       getattr(controllers, controller_name), widget)
+            controller_class = None
+            # Try to get controller from controllers module (static import)
+            #if hasattr(controllers, controller_name):
+            #    controller_class = getattr(controllers, controller_name)
+            try:
+                module = importlib.import_module(f'imswitch.imcontrol.controller.controllers.{controller_name}')
+                controller_class = getattr(module, controller_name)
+                module = importlib.import_module(f'.{controller_name}', package='imswitch.imcontrol.controller.controllers')
+            except Exception as e:
+                self.__logger.warning(f"Could not dynamically import {controller_name}: {e}")
+                continue
+            if controller_class is not None:
+                self.controllers[widgetKey] = self.__factory.createController(controller_class, widget)
             else:
                 try:
                     mPlugin = self.loadPlugin(widgetKey)
                     if mPlugin is None:
                         raise ValueError(f'No controller found for widget {widgetKey}')
-                    self.controllers[widgetKey] = self.__factory.createController(
-                        mPlugin, widget)
+                    self.controllers[widgetKey] = self.__factory.createController(mPlugin, widget)
                 except Exception as e:
                     self.__logger.debug(e)
 

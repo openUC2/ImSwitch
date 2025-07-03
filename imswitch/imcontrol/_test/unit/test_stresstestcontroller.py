@@ -3,6 +3,8 @@ import os
 import tempfile
 import importlib.util
 import sys
+import pathlib
+
 
 # Dynamically build the path to StresstestController.py based on this test file's location
 current_dir = os.path.dirname(os.path.abspath(__file__))

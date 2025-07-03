@@ -61,19 +61,31 @@ class SingleMultiscaleZarrWriter:
         """
         Create the FSStore with dimension_separator='/', create group '0'
         with a single dataset '0' shaped (t, c, z, bigY, bigX).
+        Updated for Zarr 3.0 compatibility.
 
         We'll define a minimal 'multiscales' attribute so napari recognizes
         it as one image. There's only one scale, so there's just one item
         in 'datasets'.
         """
-        store = zarr.storage.FSStore(self.file_name, mode=self.mode, dimension_separator="/")
+        # Zarr 3.0 compatibility for FSStore
+        if hasattr(zarr.storage, 'FSStore'):
+            # Try to use FSStore with Zarr 3.0 API first
+            try:
+                store = zarr.storage.FSStore(self.file_name, mode=self.mode, dimension_separator="/")
+            except TypeError:
+                # Fallback for Zarr 3.0 where FSStore API might have changed
+                store = zarr.storage.FSStore(self.file_name, mode=self.mode)
+        else:
+            # Direct path usage for newer Zarr versions
+            store = self.file_name
+        
         self.root_group = zarr.group(store=store, overwrite=True)
         self._store = store
 
         # Create a sub-group named '0' (the top-level multiscale image)
         group_0 = self.root_group.create_group("0", overwrite=True)
 
-        shape_5d = (self.shape_t, self.shape_c, self.shape_z, self.bigY, self.bigX)
+        shape_5d = (int(self.shape_t), int(self.shape_c), int(self.shape_z), int(self.bigY), int(self.bigX))
 
         # dataset name is '0' under group '0'
         ds = group_0.create_dataset(
@@ -131,5 +143,7 @@ class SingleMultiscaleZarrWriter:
     def close(self):
         """Close the store if needed."""
         if self._store:
-            self._store.close()
+            # Only close if it's a store object with close method
+            if hasattr(self._store, 'close'):
+                self._store.close()
             self._store = None

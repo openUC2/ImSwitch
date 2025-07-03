@@ -842,7 +842,7 @@ class ExperimentController(ImConWidgetController):
 
         # If nothing was running, return appropriate message
         if not results:
-            raise HTTPException(status_code=400, detail="No experiments are currently running")
+            return "No experiments are currently running"
 
         return results
 

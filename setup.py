@@ -69,14 +69,13 @@ setup(
         "python-multipart >= 0.0.5",
         "piexif >= 1.1.3",
         "NanoImagingPack==2.1.4",
-        "pymba==0.3.7",        
         "imswitchclient>=0.1.2",  
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
-        "numcodecs==0.13.1",
-        "zarr==2.18.3", 
+        "zarr>=3.0.9",
+        "numcodecs==0.13.1"
         "aiohttp >= 3.9.4",
         ],
 

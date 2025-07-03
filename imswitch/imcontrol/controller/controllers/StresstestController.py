@@ -8,31 +8,11 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from typing import List
-try:
-    from imswitch.imcommon.model import initLogger, APIExport, dirtools
-    from imswitch.imcommon.framework import Signal, Timer
-    from ..basecontrollers import ImConWidgetController
-    from imswitch import IS_HEADLESS
-    _HAS_IMSWITCH = True
-except ImportError:
-    # Fallback for testing without full ImSwitch environment
-    _HAS_IMSWITCH = False
-    
-    class APIExport:
-        def __call__(self, func):
-            return func
-    
-    class Signal:
-        def emit(self, *args):
-            pass
-    
-    class ImConWidgetController:
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    def initLogger(obj):
-        import logging
-        return logging.getLogger(__name__)
+from imswitch.imcommon.model import initLogger, APIExport, dirtools
+from imswitch.imcommon.framework import Signal, Timer
+from ..basecontrollers import ImConWidgetController
+from imswitch import IS_HEADLESS
+_HAS_IMSWITCH = True
 
 try:
     import numpy as np
@@ -231,10 +211,7 @@ class StresstestController(ImConWidgetController):
         # Set default output path
         self._setDefaultOutputPath()
         
-        if _HAS_IMSWITCH:
-            self._logger.info("StresstestController initialized")
-        else:
-            print("StresstestController initialized (testing mode)")
+        self._logger.info("StresstestController initialized")
         
     def _initializeHardware(self):
         """Initialize hardware managers"""

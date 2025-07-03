@@ -23,7 +23,8 @@ class LepmonManager(SignalInterface):
                                  "experimentName","frameRate","savePath",
                                  "fileFormat", "axisFocus",
                                  "axisFlow", "delayTimeAfterRestart", "isRecordVideo", "numImages", "uniqueId",
-                                 "volumePerImage", "timeToStabilize", "pumpSpeed"]
+                                 "volumePerImage", "timeToStabilize", "pumpSpeed", "timingConfig", 
+                                 "lightStates", "lcdDisplay", "buttonStates"]
 
         # get default configs
         self.defaultConfigPath = os.path.join(dirtools.UserFileDirs.Root, "flowStopController")
@@ -60,12 +61,25 @@ class LepmonManager(SignalInterface):
             self.defaultConfig["volumePerImage"] = 1000
             self.defaultConfig["timeToStabilize"] = 1
             self.defaultConfig["pumpSpeed"] = 100
+            # Add new configuration parameters for enhanced Lepmon functionality
+            self.defaultConfig["timingConfig"] = {
+                "acquisitionInterval": 60,
+                "stabilizationTime": 5,
+                "preAcquisitionDelay": 2,
+                "postAcquisitionDelay": 1
+            }
+            self.defaultConfig["lightStates"] = {}
+            self.defaultConfig["lcdDisplay"] = {"line1": "", "line2": "", "line3": "", "line4": ""}
+            self.defaultConfig["buttonStates"] = {"button1": False, "button2": False, "button3": False, "button4": False}
             self.writeConfig(self.defaultConfig)
 
     def updateConfig(self, parameterName, value):
+        with open(os.path.join(self.defaultConfigPath, self.flowStopConfigFilename), "r") as infile:
+            mDict = json.load(infile)
+        
+        mDict[parameterName] = value
+        
         with open(os.path.join(self.defaultConfigPath, self.flowStopConfigFilename), "w") as outfile:
-            mDict = json.load(outfile)
-            mDict[parameterName] = value
             json.dump(mDict, outfile, indent=4)
 
     def writeConfig(self, data):

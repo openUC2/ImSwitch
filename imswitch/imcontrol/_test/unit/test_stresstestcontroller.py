@@ -5,11 +5,18 @@ import importlib.util
 import sys
 import pathlib
 
-# Use a relative path for the controller file so tests work in CI and locally
-controller_path = pathlib.Path(__file__).parent.parent.parent / "controller/controllers/StresstestController.py"
+
+# Dynamically build the path to StresstestController.py based on this test file's location
+current_dir = os.path.dirname(os.path.abspath(__file__))
+controller_path = os.path.join(
+    current_dir,
+    "..", "..", "controller", "controllers", "StresstestController.py"
+)
+controller_path = os.path.abspath(controller_path)
+
 spec = importlib.util.spec_from_file_location(
     'StresstestController',
-    str(controller_path.resolve())
+    controller_path
 )
 stresstest_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(stresstest_module)

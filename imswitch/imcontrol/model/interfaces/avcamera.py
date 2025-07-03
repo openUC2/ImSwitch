@@ -45,8 +45,8 @@ class CameraAV:
 
         # Initialize based on available SDK
         if isVmbPy:
-            # VmbPy uses context managers for operations
-            pass
+            # VmbPy will use context managers in methods as needed
+            self._vimba = None
         else:
             # Legacy Vimba initialization
             self._vimba = Vimba.get_instance()
@@ -76,7 +76,7 @@ class CameraAV:
     def _open_camera(self, camera_id):
         if isVmbPy:
             # VmbPy camera discovery and opening
-            with self._vmb_system as vmb:
+            with VmbSystem.get_instance() as vmb:
                 cams = vmb.get_all_cameras()
                 if not cams:
                     raise RuntimeError("No Allied Vision cameras found.")
@@ -159,23 +159,27 @@ class CameraAV:
 
     def _frame_handler(self, cam, frame):
         if isVmbPy:
-            # VmbPy frame handling
-            if frame.get_status() == FrameStatus.Complete:
-                data = frame.as_numpy_ndarray()
-                self.frame_id = frame.get_id()
+            # VmbPy frame handling - following the example pattern
+            try:
+                if frame.get_status() == FrameStatus.Complete:
+                    data = frame.as_numpy_ndarray()
+                    self.frame_id = frame.get_id()
 
-                # Apply ROI in software if the hardware ROI is not set
-                if self.vsize and self.hsize:
-                    cropped = data[self.vpos:self.vpos + self.vsize,
-                                   self.hpos:self.hpos + self.hsize]
-                    if cropped.size == 0:
-                        cropped = data
-                    self.frame = cropped
-                else:
-                    self.frame = data
+                    # Apply ROI in software if the hardware ROI is not set
+                    if self.vsize and self.hsize:
+                        cropped = data[self.vpos:self.vpos + self.vsize,
+                                      self.hpos:self.hpos + self.hsize]
+                        if cropped.size == 0:
+                            cropped = data
+                        self.frame = cropped
+                    else:
+                        self.frame = data
 
-                self.frame_buffer.append(self.frame)
-            cam.queue_frame(frame)
+                    self.frame_buffer.append(self.frame)
+                # Re-queue frame for VmbPy
+                cam.queue_frame(frame)
+            except Exception as e:
+                self.__logger.error(f"Error in VmbPy frame handler: {e}")
         else:
             # Legacy Vimba frame handling
             if frame.get_status() == FrameStatus.Complete:
@@ -199,24 +203,23 @@ class CameraAV:
         if not self._running:
             self._running = True
         if not self._streaming:
-            if isVmbPy:
-                # VmbPy streaming - needs to maintain context managers
-                try:
-                    # For VmbPy, we need to keep the system and camera contexts alive
-                    # This will be handled in the streaming thread
+            try:
+                if isVmbPy:
+                    # VmbPy streaming - simplified approach for now 
+                    # The actual streaming will be handled in getLast() method
                     self._streaming = True
                     self.__logger.debug("VmbPy camera streaming started.")
-                except Exception as e:
-                    self.__logger.error(f"Failed to start VmbPy streaming: {e}")
-            else:
-                # Legacy Vimba streaming 
-                # TODO: This is not working in legacy code
-                #self._camera.start_streaming(
-                #    handler=self._frame_handler,
-                #    buffer_count=10
-                #)
-                self._streaming = True
-                self.__logger.debug("Legacy Vimba camera streaming started.")
+                else:
+                    # Legacy Vimba streaming 
+                    # TODO: This is not working in legacy code
+                    #self._camera.start_streaming(
+                    #    handler=self._frame_handler,
+                    #    buffer_count=10
+                    #)
+                    self._streaming = True
+                    self.__logger.debug("Legacy Vimba camera streaming started.")
+            except Exception as e:
+                self.__logger.error(f"Failed to start streaming: {e}")
 
     def stop_live(self):
         if self._streaming:
@@ -305,7 +308,7 @@ class CameraAV:
         try:
             if isVmbPy:
                 # VmbPy get frame method - following the provided example pattern
-                with VmbSystem.get_instance() as vmb:
+                with VmbSystem.get_instance():
                     with self._camera:
                         frame = self._camera.get_frame(timeout_ms=1000)
                         self.frame = frame.as_numpy_ndarray()

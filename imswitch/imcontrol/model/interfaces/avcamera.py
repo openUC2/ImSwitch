@@ -5,17 +5,15 @@ import numpy as np
 from typing import Optional
 from imswitch.imcommon.model import initLogger
 
-# Try VimbaX first, then fallback to legacy Vimba
-isVimbaX = False
+# Try VmbPy first (official Allied Vision SDK), then fallback to legacy Vimba
+isVmbPy = False
 isVimba = False
 
 try:
-    # Try VimbaX first (new SDK)
-    from vimbax import VimbaSystem, FrameStatus, Frame, Camera
-    # VimbaX may use different exception types
-    VimbaCameraError = Exception  # Fallback for VimbaX
-    isVimbaX = True
-    print("VimbaX SDK loaded successfully")
+    # Try VmbPy first (official new SDK)
+    from vmbpy import *
+    isVmbPy = True
+    print("VmbPy SDK loaded successfully")
 except ImportError:
     try:
         # Fallback to legacy Vimba
@@ -24,12 +22,12 @@ except ImportError:
         print("Legacy Vimba SDK loaded successfully")
     except ImportError as e:
         print(e)
-        print("Neither VimbaX nor legacy Vimba installed..")
+        print("Neither VmbPy nor legacy Vimba installed..")
         # Define dummy exception for when neither SDK is available
         class VimbaCameraError(Exception):
             pass
 
-if not (isVimbaX or isVimba):
+if not (isVmbPy or isVimba):
     print("No Allied Vision SDK available")
 
 
@@ -42,20 +40,17 @@ class CameraAV:
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=True)
 
-        if not (isVimbaX or isVimba):
-            raise RuntimeError("Neither VimbaX nor legacy VimbaPython installed or found.")
+        if not (isVmbPy or isVimba):
+            raise RuntimeError("Neither VmbPy nor legacy VimbaPython installed or found.")
 
         # Initialize based on available SDK
-        if isVimbaX:
-            # VimbaX initialization
-            self._vimba_instance = VimbaSystem.get_instance()
-            self._vimba_instance.startup()
-            self._vimba_context = None
+        if isVmbPy:
+            # VmbPy uses context managers for operations
+            pass
         else:
             # Legacy Vimba initialization
             self._vimba = Vimba.get_instance()
             self._vimba.__enter__()
-            self._vimba_instance = self._vimba
 
         self._camera = None
         self._running = False
@@ -79,39 +74,52 @@ class CameraAV:
         self.__logger.debug("CameraAV initialized.")
 
     def _open_camera(self, camera_id):
-        if isVimbaX:
-            # VimbaX camera discovery and opening
-            cams = self._vimba_instance.get_all_cameras()
-            if not cams:
-                raise RuntimeError("No Allied Vision cameras found.")
+        if isVmbPy:
+            # VmbPy camera discovery and opening
+            with self._vmb_system as vmb:
+                cams = vmb.get_all_cameras()
+                if not cams:
+                    raise RuntimeError("No Allied Vision cameras found.")
 
-            if camera_id is None:
-                self._camera = cams[0]
-            else:
-                # If camera_id is an integer, interpret as index
-                if isinstance(camera_id, int):
-                    if camera_id < 0 or camera_id >= len(cams):
-                        raise RuntimeError(f"Invalid camera index: {camera_id}")
-                    self._camera = cams[camera_id]
+                if camera_id is None:
+                    self._camera = cams[0]
                 else:
-                    # Otherwise, treat it as a string-based camera ID
-                    try:
-                        self._camera = self._vimba_instance.get_camera_by_id(camera_id)
-                    except Exception as e:
-                        raise RuntimeError(f"Failed to open camera with ID '{camera_id}'.") from e
+                    # If camera_id is an integer, interpret as index
+                    if isinstance(camera_id, int):
+                        if camera_id < 0 or camera_id >= len(cams):
+                            raise RuntimeError(f"Invalid camera index: {camera_id}")
+                        self._camera = cams[camera_id]
+                    else:
+                        # Otherwise, treat it as a string-based camera ID
+                        try:
+                            self._camera = vmb.get_camera_by_id(camera_id)
+                        except VmbCameraError as e:
+                            raise RuntimeError(f"Failed to open camera with ID '{camera_id}'.") from e
 
-            # Open camera in VimbaX
-            self._camera.open()
-            
-            # Set acquisition mode
-            try:
-                self._camera.get_feature_by_name("AcquisitionMode").set("Continuous")
-            except Exception as e:
-                self.__logger.warning(f"Could not set AcquisitionMode: {e}")
-                
+                # Open camera with VmbPy
+                with self._camera:
+                    # Set acquisition mode
+                    try:
+                        self._camera.get_feature_by_name("AcquisitionMode").set("Continuous")
+                    except Exception as e:
+                        self.__logger.warning(f"Could not set AcquisitionMode: {e}")
+                    
+                    # Get camera model name
+                    try:
+                        self.model = self._camera.get_name()
+                    except:
+                        self.model = "AlliedVisionCamera"
+                        
+                    try:
+                        # Read sensor dimensions
+                        self.sensor_width = self._camera.get_feature_by_name("SensorWidth").get()
+                        self.sensor_height = self._camera.get_feature_by_name("SensorHeight").get()
+                    except Exception:
+                        self.sensor_width = 0
+                        self.sensor_height = 0
         else:
             # Legacy Vimba camera discovery and opening
-            cams = self._vimba_instance.get_all_cameras()
+            cams = self._vimba.get_all_cameras()
             if not cams:
                 raise RuntimeError("No Allied Vision cameras found.")
 
@@ -126,26 +134,20 @@ class CameraAV:
                 else:
                     # Otherwise, treat it as a string-based camera ID
                     try:
-                        self._camera = self._vimba_instance.get_camera_by_id(camera_id)
+                        self._camera = self._vimba.get_camera_by_id(camera_id)
                     except VimbaCameraError as e:
                         raise RuntimeError(f"Failed to open camera with ID '{camera_id}'.") from e
 
             self._camera._open()
             self._camera.get_feature_by_name("AcquisitionMode").set("Continuous")
-        
-        # Get camera model name (both APIs should support this)
-        try:
             self.model = self._camera.get_name()
-        except:
-            self.model = "AlliedVisionCamera"
-            
-        try:
-            # Read sensor dimensions
-            self.sensor_width = self._camera.get_feature_by_name("SensorWidth").get()
-            self.sensor_height = self._camera.get_feature_by_name("SensorHeight").get()
-        except Exception:
-            self.sensor_width = 0
-            self.sensor_height = 0
+            try:
+                # Read sensor dimensions
+                self.sensor_width = self._camera.get_feature_by_name("SensorWidth").get()
+                self.sensor_height = self._camera.get_feature_by_name("SensorHeight").get()
+            except Exception:
+                self.sensor_width = 0
+                self.sensor_height = 0
 
         # Default ROI equals full sensor
         self.hpos = 0
@@ -156,8 +158,8 @@ class CameraAV:
         self.__logger.debug(f"Opened camera '{self.model}' (ID/index: {camera_id}).")
 
     def _frame_handler(self, cam, frame):
-        if isVimbaX:
-            # VimbaX frame handling
+        if isVmbPy:
+            # VmbPy frame handling
             if frame.get_status() == FrameStatus.Complete:
                 data = frame.as_numpy_ndarray()
                 self.frame_id = frame.get_id()
@@ -197,17 +199,18 @@ class CameraAV:
         if not self._running:
             self._running = True
         if not self._streaming:
-            if isVimbaX:
-                # VimbaX streaming
+            if isVmbPy:
+                # VmbPy streaming - needs to maintain context managers
                 try:
-                    self._camera.start_streaming(handler=self._frame_handler)
+                    # For VmbPy, we need to keep the system and camera contexts alive
+                    # This will be handled in the streaming thread
                     self._streaming = True
-                    self.__logger.debug("VimbaX camera streaming started.")
+                    self.__logger.debug("VmbPy camera streaming started.")
                 except Exception as e:
-                    self.__logger.error(f"Failed to start VimbaX streaming: {e}")
+                    self.__logger.error(f"Failed to start VmbPy streaming: {e}")
             else:
                 # Legacy Vimba streaming 
-                # TODO: THis is not working in legacy code
+                # TODO: This is not working in legacy code
                 #self._camera.start_streaming(
                 #    handler=self._frame_handler,
                 #    buffer_count=10
@@ -247,7 +250,7 @@ class CameraAV:
                 
         # Close camera
         try:
-            if isVimbaX:
+            if isVmbPy:
                 self._camera.close()
             else:
                 self._camera.close()
@@ -256,15 +259,14 @@ class CameraAV:
             
         # Cleanup SDK context
         try:
-            if isVimbaX:
-                if self._vimba_instance:
-                    self._vimba_instance.shutdown()
-                    self._vimba_instance = None
+            if isVmbPy:
+                # VmbPy uses context managers, no explicit cleanup needed
+                pass
             else:
+                # Exit legacy Vimba context if not already
                 if hasattr(self, '_vimba') and self._vimba:
                     self._vimba.__exit__(None, None, None)
                     self._vimba = None
-                self._vimba_instance = None
         except Exception as e:
             self.__logger.warning(f"Error during SDK cleanup: {e}")
             
@@ -301,10 +303,12 @@ class CameraAV:
         # The manager code uses is_resize, but we don't do anything with it here
         # (kept for compatibility).
         try:
-            if isVimbaX:
-                # VimbaX get frame method
-                frame = self._camera.get_frame(timeout_ms=1000)
-                self.frame = frame.as_opencv_image()
+            if isVmbPy:
+                # VmbPy get frame method - following the provided example pattern
+                with VmbSystem.get_instance() as vmb:
+                    with self._camera:
+                        frame = self._camera.get_frame(timeout_ms=1000)
+                        self.frame = frame.as_numpy_ndarray()
             else:
                 # Legacy Vimba get frame method  
                 frame = self._camera.get_frame(timeout_ms=1000)

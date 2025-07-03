@@ -75,7 +75,7 @@ setup(
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
         "zarr>=3.0.9",
-        "numcodecs==0.13.1"
+        "numcodecs==0.13.1",
         "aiohttp >= 3.9.4",
         ],
 

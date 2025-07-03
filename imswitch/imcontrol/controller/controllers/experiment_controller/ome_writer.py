@@ -39,9 +39,23 @@ class OMEWriterConfig:
     n_z_planes: int = 1     # Number of z planes
     n_channels: int = 1     # Number of channels
     
+    
     def __post_init__(self):
+        def get_zarr_compressor(zarr_version="3"):
+            if zarr_version == "3":
+                # Use the v3 codec
+                return zarr.codecs.BloscCodec(cname="zstd", clevel=3, shuffle=zarr.codecs.BloscShuffle.bitshuffle)
+            else:
+                # Use the v2 codec
+                import numcodecs
+                return numcodecs.Blosc("zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
+            
         if self.zarr_compressor is None:
-            self.zarr_compressor = numcodecs.Blosc("zstd", clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE)
+            if zarr.__version__.startswith("3"):
+                self.zarr_compressor = get_zarr_compressor("3")
+            else:
+                self.zarr_compressor = get_zarr_compressor("2")
+            
 
 
 class OMEWriter:
@@ -99,21 +113,22 @@ class OMEWriter:
         """Set up the OME-Zarr store and canvas."""
         # Use path string for Zarr v3 compatibility
         self.store = str(self.file_paths.zarr_dir)
-        self.root = zarr.group(store=self.store, overwrite=True)
-        self.canvas = self.root.create_dataset(
-            "0",
+        # Use context manager to ensure proper closing (if supported)
+        self.root = zarr.open_group(store=self.store, mode="w")
+        self.canvas = self.root.create_array(
+            name="0",
             shape=(
-                int(self.config.n_time_points), 
-                int(self.config.n_channels), 
-                int(self.config.n_z_planes), 
-                int(self.ny * self.tile_h), 
+                int(self.config.n_time_points),
+                int(self.config.n_channels),
+                int(self.config.n_z_planes),
+                int(self.ny * self.tile_h),
                 int(self.nx * self.tile_w)
             ),  # t c z y x
             chunks=(1, 1, 1, int(self.tile_h), int(self.tile_w)),
             dtype="uint16",
-            compressor=self.config.zarr_compressor
+            compressor=self.config.zarr_compressor # Has proper BLOSC compression (based on v3)
         )
-        
+
         # Set OME-Zarr metadata
         self.root.attrs["multiscales"] = [{
             "version": "0.4",

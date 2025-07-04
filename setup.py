@@ -117,3 +117,5 @@ setup(
 
 # For NIP install it using:
 # python -m pip install https://gitlab.com/bionanoimaging/nanoimagingpack/-/archive/master/nanoimagingpack-master.zip
+
+# Note: Automatic version bumping is now enabled via GitHub Actions

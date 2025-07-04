@@ -1,0 +1,115 @@
+name: Auto Version Bump and PyPI Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.gitignore'
+      - '.github/workflows/**'
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+
+    - name: Check if last commit was a version bump
+      id: check_commit
+      run: |
+        last_commit_msg=$(git log -1 --pretty=%B)
+        if [[ "$last_commit_msg" == "Bump version to"* ]]; then
+          echo "Last commit was a version bump, skipping workflow"
+          echo "skip=true" >> $GITHUB_OUTPUT
+        else
+          echo "Last commit was not a version bump, proceeding"
+          echo "skip=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up Python 3.9
+      if: steps.check_commit.outputs.skip != 'true'
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
+
+    - name: Get current version
+      if: steps.check_commit.outputs.skip != 'true'
+      id: current_version
+      run: |
+        version=$(python -c "
+        version_file = 'imswitch/__init__.py'
+        with open(version_file, 'r') as file:
+            for line in file:
+                if line.startswith('__version__'):
+                    print(line.strip().split('=')[1].strip().strip('\\'\\\"'))
+                    break
+        ")
+        echo "version=$version" >> $GITHUB_OUTPUT
+        echo "Current version: $version"
+
+    - name: Bump patch version
+      if: steps.check_commit.outputs.skip != 'true'
+      id: new_version
+      run: |
+        current="${{ steps.current_version.outputs.version }}"
+        IFS='.' read -ra ADDR <<< "$current"
+        major=${ADDR[0]}
+        minor=${ADDR[1]}
+        patch=${ADDR[2]}
+        new_patch=$((patch + 1))
+        new_version="$major.$minor.$new_patch"
+        echo "new_version=$new_version" >> $GITHUB_OUTPUT
+        echo "New version: $new_version"
+
+    - name: Update version in source
+      if: steps.check_commit.outputs.skip != 'true'
+      run: |
+        new_version="${{ steps.new_version.outputs.new_version }}"
+        sed -i "s/__version__ = \".*\"/__version__ = \"$new_version\"/" imswitch/__init__.py
+        echo "Updated version to $new_version in imswitch/__init__.py"
+
+    - name: Verify version update
+      if: steps.check_commit.outputs.skip != 'true'
+      run: |
+        updated_version=$(python -c "
+        version_file = 'imswitch/__init__.py'
+        with open(version_file, 'r') as file:
+            for line in file:
+                if line.startswith('__version__'):
+                    print(line.strip().split('=')[1].strip().strip('\\'\\\"'))
+                    break
+        ")
+        echo "Verified updated version: $updated_version"
+        if [ "$updated_version" != "${{ steps.new_version.outputs.new_version }}" ]; then
+          echo "Version update failed!"
+          exit 1
+        fi
+
+    - name: Configure Git
+      if: steps.check_commit.outputs.skip != 'true'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Commit version bump
+      if: steps.check_commit.outputs.skip != 'true'
+      run: |
+        git add imswitch/__init__.py
+        git commit -m "Bump version to ${{ steps.new_version.outputs.new_version }}"
+
+    - name: Create and push tag
+      if: steps.check_commit.outputs.skip != 'true'
+      run: |
+        tag_name="v${{ steps.new_version.outputs.new_version }}"
+        git tag -a "$tag_name" -m "Release $tag_name"
+        git push origin main
+        git push origin "$tag_name"
+        echo "Created and pushed tag: $tag_name"
+        echo "The existing imswitch-pypi.yml workflow will automatically publish to PyPI"

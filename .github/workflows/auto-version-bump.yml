@@ -5,6 +5,7 @@ name: Auto Version Bump and PyPI Release
 # will then automatically publish the new version to PyPI when the tag is created.
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -13,6 +14,7 @@ on:
       - 'docs/**'
       - '.gitignore'
       - '.github/workflows/**'
+    
 
 jobs:
   bump-version:

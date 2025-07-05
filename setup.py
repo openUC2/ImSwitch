@@ -19,7 +19,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="ImSwitch",
+    name="ImSwitchUC2",
     version=get_version(),
     author="Benedict Diederich, Xavier Casas Moreno, et al.",
     author_email="benedictdied@gmail.com",

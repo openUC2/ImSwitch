@@ -124,6 +124,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         logger.info(f'Config folder: {imswitch.DEFAULT_CONFIG_PATH}')
         logger.info(f'Data folder: {imswitch.DEFAULT_DATA_PATH}')
 
+        # TODO: check if port is already in use
+        
         if imswitch.IS_HEADLESS:
             app = None
         else:

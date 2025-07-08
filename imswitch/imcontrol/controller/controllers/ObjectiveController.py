@@ -139,7 +139,10 @@ class ObjectiveController(LiveUpdatedController):
             self.homePolarity = homePolarity
         # Calibrate (home) the objective on the microcontroller side (blocking)
         # self._objective.calibrate(isBlocking=True)
-        self._objective.home(direction=self.homeDirection, endstoppolarity=self.homePolarity, isBlocking=True)
+        if not self._master.positionersManager.getAllDeviceNames()[0] == "ESP32Stage":
+            self._logger.error("ESP32Stage is not available in the positioners manager, cannot home objective.")
+            return
+        self._master.positionersManager["ESP32Stage"].home_a() # will home the objective - only the 
         status = self._objective.getstatus()
         # Assume status is structured as: {"objective": {"state": 1, ...}}
         try:state = status.get("objective", {}).get("state", 1)

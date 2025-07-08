@@ -5,3 +5,5 @@ graft imswitch/imreconstruct/_test
 graft imswitch/imscripting/_test
 global-exclude __pycache__
 global-exclude *.py[co]
+recursive-include imswitch/imcontrol/model/interfaces/hikrobotWin/dll *.dll
+recursive-include imswitch/imcontrol/model/interfaces/

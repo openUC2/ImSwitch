@@ -119,3 +119,21 @@ jobs:
         git push origin "$tag_name"
         echo "Created and pushed tag: $tag_name"
         echo "The existing imswitch-pypi.yml workflow will automatically publish to PyPI"
+
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+
+    - name: Install build backend
+      run: |
+        python -m pip install --upgrade pip build
+
+    - name: Build sdist and wheel
+      run: |
+        python -m build --sdist --wheel --outdir dist
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}

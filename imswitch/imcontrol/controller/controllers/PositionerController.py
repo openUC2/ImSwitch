@@ -267,36 +267,24 @@ class PositionerController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def resetStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
-        """ 
-        Resets the stage offset for the given axis to 0. 
+        """
+        Resets the stage offset for the given axis to 0.
         """
         self._logger.debug(f'Resetting stage offset for {axis} axis.')
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-        self._master.positionersManager[positionerName].setStageOffsetAxis(knownOffset=0, axis=axis)
-        self.saveStageOffset(positionerName=positionerName, offsetValue=0, axis=axis)
+        self._master.positionersManager[positionerName].resetStageOffsetAxis(axis=axis)
 
     @APIExport(runOnUIThread=True)
     def setStageOffsetAxis(self, positionerName: Optional[str]=None, knownPosition:float=0, currentPosition:Optional[float]=None, knownOffset:Optional[float]=None,  axis:str="X"):
         """
         Sets the stage to a known offset aside from the home position.
         knownPosition and currentPosition have to be in physical coordinates (i.e. prior to applying the stepsize)
-        # TODO: Make this permanent (e.g. reflect change in config)
         """
         self._logger.debug(f'Setting stage offset for {axis} axis.')
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-
-        if currentPosition is None:
-            currentPosition = self.getPos()[positionerName][axis]
-        if knownOffset is None:
-            offset = currentPosition - knownPosition
-        else:
-            offset = knownOffset
-
-        self._master.positionersManager[positionerName].setStageOffsetAxis(knownOffset=offset, axis=axis)
-
-        self.saveStageOffset(positionerName=positionerName, offsetValue=offset, axis=axis)
+        self._master.positionersManager[positionerName].setStageOffsetAxis(knownPosition=knownPosition, currentPosition=currentPosition, knownOffset=knownOffset, axis=axis)
 
     @APIExport(runOnUIThread=True)
     def getStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
@@ -309,28 +297,12 @@ class PositionerController(ImConWidgetController):
         return self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)
 
     def saveStageOffset(self, positionerName=None, offsetValue=None, axis="X"):
-        """ Save the current stage offset to the config file.
-        If no name is given, the current stage is used.
-        """
-        try:
-            if not positionerName:
-                positionerName = self._positionerInfo.name
-                if not positionerName:
-                    return
-
-            stageOffsets = {
-                "stageOffsetPositionX": self._master.positionersManager[positionerName].stageOffsetPositions["X"],
-                "stageOffsetPositionY": self._master.positionersManager[positionerName].stageOffsetPositions["Y"],
-                "stageOffsetPositionZ": self._master.positionersManager[positionerName].stageOffsetPositions["Z"],
-                "stageOffsetPositionA": self._master.positionersManager[positionerName].stageOffsetPositions["A"]
-            }
-            stageOffsets["stageOffsetPosition"+axis]=offsetValue
-            # Set in setup info
-            self._setupInfo.setStageOffset(positionerName, stageOffsets)
-            configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
-        except Exception as e:
-            self.__logger.error(f"Could not save stage offset: {e}")
-            return
+        """ Save the current stage offset to the config file. """
+        # This logic is now handled in the manager.
+        if positionerName is None:
+            positionerName = self._positionerInfo.name if hasattr(self, '_positionerInfo') else None
+        if positionerName:
+            self._master.positionersManager[positionerName].saveStageOffset(offsetValue=offsetValue, axis=axis)
 
     @APIExport(runOnUIThread=True, requestType="POST")
     def startStageScan(self, positionerName=None, xstart:float=0, xstep:float=1000, nx:int=20, ystart:float=0,

@@ -105,6 +105,12 @@ class CameraAV:
                         except VmbCameraError as e:
                             raise RuntimeError(f"Failed to open camera with ID '{camera_id}'.") from e
 
+                # Try to close camera if it was left open from previous session
+                try:
+                    self._camera.close()
+                except:
+                    pass  # Ignore if camera wasn't open
+                    
                 # Enter camera context and keep it persistent
                 self._camera_context = self._camera.__enter__()
                 
@@ -155,6 +161,12 @@ class CameraAV:
                     except VimbaCameraError as e:
                         raise RuntimeError(f"Failed to open camera with ID '{camera_id}'.") from e
 
+            # Try to close camera if it was left open from previous session
+            try:
+                self._camera.close()
+            except:
+                pass  # Ignore if camera wasn't open
+                
             self._camera._open()
             self._camera.get_feature_by_name("AcquisitionMode").set("Continuous")
             self.model = self._camera.get_name()
@@ -218,6 +230,35 @@ class CameraAV:
                     self._vmb_system = None
             except Exception as e:
                 self.__logger.warning(f"Error exiting VmbSystem context: {e}")
+
+    @classmethod
+    def cleanup_all_cameras(cls):
+        """Class method to cleanup any lingering camera resources - useful for graceful restart"""
+        if isVmbPy:
+            try:
+                # Try to shutdown any existing VmbSystem instances
+                with VmbSystem.get_instance() as vmb:
+                    cameras = vmb.get_all_cameras()
+                    for cam in cameras:
+                        try:
+                            cam.close()
+                        except:
+                            pass  # Ignore errors during cleanup
+            except Exception as e:
+                print(f"Warning: Error during camera cleanup: {e}")
+        else:
+            try:
+                # Try to cleanup legacy Vimba
+                vimba = Vimba.get_instance()
+                with vimba:
+                    cameras = vimba.get_all_cameras()
+                    for cam in cameras:
+                        try:
+                            cam.close()
+                        except:
+                            pass  # Ignore errors during cleanup
+            except Exception as e:
+                print(f"Warning: Error during legacy camera cleanup: {e}")
 
     def _frame_handler(self, cam, frame):
         """Frame handler for asynchronous streaming"""
@@ -288,6 +329,7 @@ class CameraAV:
                     self.__logger.debug("Legacy Vimba camera streaming started.")
             except Exception as e:
                 self.__logger.error(f"Failed to start streaming: {e}")
+                self._streaming = False
 
     def stop_live(self):
         if self._streaming:
@@ -379,7 +421,7 @@ class CameraAV:
             if self._streaming and len(self.frame_buffer) > 0:
                 # Use the latest frame from the streaming buffer
                 with self._frame_lock:
-                    return self.frame_buffer[-1]
+                    return self.frame_buffer[-1].copy()
             else:
                 # Fallback to direct frame capture if not streaming
                 if isVmbPy:
@@ -389,11 +431,19 @@ class CameraAV:
                 else:
                     # Legacy Vimba get frame method  
                     frame = self._camera.get_frame(timeout_ms=1000)
-                    self.frame = frame.as_opencv_image()
-                return self.frame
+                    if hasattr(frame, 'as_opencv_image'):
+                        self.frame = frame.as_opencv_image()
+                    else:
+                        self.frame = frame.as_numpy_ndarray()
+                return self.frame.copy() if self.frame is not None else np.zeros((100, 100))
         except Exception as e:
             self.__logger.warning(f"Error getting frame: {e}")
-            return self.frame if hasattr(self, 'frame') and self.frame is not None else np.zeros((100, 100))
+            # Return last known good frame or a placeholder
+            if hasattr(self, 'frame') and self.frame is not None:
+                return self.frame.copy()
+            else:
+                # Return a small placeholder frame to avoid crashes
+                return np.zeros((100, 100), dtype=np.uint8)
 
     def getLastChunk(self):
         # Return all frames currently in buffer as a single 3D array if desired

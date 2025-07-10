@@ -114,6 +114,18 @@ class CameraAV:
                 # Enter camera context and keep it persistent
                 self._camera_context = self._camera.__enter__()
                 
+                # Try to adjust GeV packet size. This Feature is only available for GigE cameras.
+                try:
+                    streams = self._camera.get_streams()
+                    if streams:
+                        stream = streams[0]
+                        if hasattr(stream, 'GVSPAdjustPacketSize'):
+                            stream.GVSPAdjustPacketSize.run()
+                            while not stream.GVSPAdjustPacketSize.is_done():
+                                time.sleep(0.001)  # Small delay
+                except (AttributeError, VmbFeatureError):
+                    pass  # Not a GigE camera or feature not available
+                
                 # Set acquisition mode
                 try:
                     self._camera.get_feature_by_name("AcquisitionMode").set("Continuous")

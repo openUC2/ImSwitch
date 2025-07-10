@@ -301,7 +301,7 @@ class HistoScanController(LiveUpdatedController):
 
     @APIExport()
     def computeOptimalScanStepSize(self, overlap: float = 0.75):
-        mFrameSize = (self.microscopeDetector._camera.SensorHeight, self.microscopeDetector._camera.SensorWidth)
+        mFrameSize = (self.microscopeDetector.fullShape[1], self.microscopeDetector.fullShape[0])
         bestScanSizeX = mFrameSize[1]*self.microscopeDetector.pixelSizeUm[-1]*overlap
         bestScanSizeY = mFrameSize[0]*self.microscopeDetector.pixelSizeUm[-1]*overlap
         return (bestScanSizeX, bestScanSizeY)

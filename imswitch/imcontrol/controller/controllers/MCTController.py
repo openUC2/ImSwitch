@@ -95,7 +95,8 @@ class MCTController(ImConWidgetController):
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
-        self.isRGB = self.detector._camera.isRGB
+        try:self.isRGB = self.detector._camera.isRGB
+        except: self.isRGB = False
         self.detectorPixelSize = self.detector.pixelSizeUm
 
         # select lasers

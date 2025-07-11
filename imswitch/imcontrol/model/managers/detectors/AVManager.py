@@ -42,7 +42,6 @@ class AVManager(DetectorManager):
                      self._camera.getPropertyValue('image_height'))
 
 
-
         self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
         self.pixel_format = self._camera.getPropertyValue("pixel_format")
         # Prepare parameters

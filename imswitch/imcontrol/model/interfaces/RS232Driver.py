@@ -22,6 +22,7 @@ class RS232Driver(MessageBasedDriver):
                              'parity': set_par,
                              'stop_bits': set_stopb,
                              'encoding': settings["encoding"],
+                             'interface_type': settings["interface_type"],
                              }}
         return defaults
 

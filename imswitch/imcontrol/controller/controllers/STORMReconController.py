@@ -718,7 +718,6 @@ class STORMReconController(LiveUpdatedController):
             "frames_saved": frames_saved
         }
 
-    @APIExport(runOnUIThread=False)
     def getSTORMFrameGenerator(self,
                                num_frames: int = 100,
                                timeout: float = 10.0) -> Generator[Dict[str, Any], None, None]:
@@ -869,7 +868,7 @@ class STORMReconController(LiveUpdatedController):
         Start local STORM reconstruction with microeye processing.
         
         Args:
-            **kwargs: Acquisition and processing parameters
+            **kwargs: Acquisition and processing parameters {"processing":1, "acquisition":1}
             
         Returns:
             Status dictionary

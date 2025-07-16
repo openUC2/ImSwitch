@@ -15,10 +15,10 @@ from ..basecontrollers import LiveUpdatedController
 from imswitch.imcommon.model import APIExport
 
 try:
-    from microEye.Filters import BandpassFilter
-    from microEye.fitting.fit import CV_BlobDetector
-    from microEye.fitting.results import FittingMethod
-    from microEye.fitting.fit import localize_frame
+    from .microEye.Filters import BandpassFilter
+    from .microEye.fitting.fit import CV_BlobDetector
+    from .microEye.fitting.results import FittingMethod
+    from .microEye.fitting.fit import localize_frame
     isMicroEye = True
 except ImportError:
     isMicroEye = False
@@ -90,17 +90,9 @@ class STORMReconController(LiveUpdatedController):
 
         self._logger = initLogger(self, tryInheritParent=True)
 
-        self.updateRate = 0
-        self.it = 0
-        self.showPos = False
-        self.threshold = 0.2
-
         # reconstruction related settings
         # TODO: Make parameters adaptable from Plugin
         # Prepare image computation worker
-        self.imageComputationWorker = self.STORMReconImageComputationWorker()
-        self.imageComputationWorker.sigSTORMReconImageComputed.connect(
-            self.displayImage)
 
         # get the detector
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
@@ -125,6 +117,7 @@ class STORMReconController(LiveUpdatedController):
             self._initializeArkitekt()
 
         if isMicroEye:
+            # TODO: We want to move all the microeye related settings away from the QT-UI and expose parameters, etc. over HTTP / APIExport 
             self.imageComputationThread = Thread()
             self.imageComputationWorker.moveToThread(
                 self.imageComputationThread)
@@ -1189,29 +1182,21 @@ class STORMReconController(LiveUpdatedController):
 
         except Exception as e:
             self._logger.error(f"Error getting status: {e}")
-            self._widget.updateStatus(f"Status error: {str(e)}")
 
     def _onSetParameters(self, params: Dict[str, Any]):
         """Handle set parameters signal from widget"""
         try:
             result = self.setSTORMParameters(**params)
-            self._widget.updateStatus(f"Parameters updated: {result}")
 
         except Exception as e:
             self._logger.error(f"Error setting parameters: {e}")
-            self._widget.updateStatus(f"Parameter error: {str(e)}")
 
     def _onTriggerReconstruction(self):
         """Handle trigger reconstruction signal from widget"""
         try:
             self.triggerSTORMReconstruction()
-            self._widget.updateStatus("Reconstruction triggered")
-
         except Exception as e:
             self._logger.error(f"Error triggering reconstruction: {e}")
-            self._widget.updateStatus(f"Reconstruction error: {str(e)}")
-
-
     class STORMReconImageComputationWorker(Worker):
         sigSTORMReconImageComputed = Signal(np.ndarray)
 
@@ -1263,8 +1248,8 @@ class STORMReconController(LiveUpdatedController):
                         roiSize,
                         method)
 
-            # create a simple render
-            frameLocalized = np.zeros(frame.shape)
+            # create a simple render # TODO: Ensure this is working properly
+            frameLocalized = frames
             try:
                 allX = np.int32(params[:,0])
                 allY = np.int32(params[:,1])

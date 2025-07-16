@@ -77,6 +77,7 @@ setup(
         "zarr>=3.0.0",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
+        "numba>=0.61.2"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

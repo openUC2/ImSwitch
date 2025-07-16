@@ -96,6 +96,7 @@ class STORMReconController(LiveUpdatedController):
 
     sigImageReceived = Signal()
     sigNSTORMImageAcquired = Signal(int)
+    sigUpdatedSTORMReconstruction = Signal(list)
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1387,7 +1388,8 @@ class STORMReconImageComputationWorker:
                 preFilter, peakDetector, rel_threshold,
                 PSFparam, roiSize, method
             )
-
+            # emit current frame reconstruction signal
+            self.sigUpdatedSTORMReconstruction.emit(params)
             # Create simple reconstruction visualization
             frameLocalized = np.zeros_like(frame, dtype=np.float32)
             if params is not None and len(params) > 0:

@@ -938,8 +938,8 @@ class STORMReconController(LiveUpdatedController):
             "arkitekt_available": IS_ARKITEKT and self._arkitekt_app is not None
         }
 
-    @APIExport()
-    def setSTORMProcessingParameters(self, request: 'STORMProcessingRequest' = None, **kwargs) -> Dict[str, Any]:
+    @APIExport(requestType="POST")
+    def setSTORMProcessingParameters(self, request: STORMProcessingRequest = None, **kwargs) -> Dict[str, Any]:
         """
         Set STORM processing parameters via pydantic model validation.
 
@@ -989,8 +989,8 @@ class STORMReconController(LiveUpdatedController):
             self._logger.error(f"Failed to set processing parameters: {e}")
             return {"success": False, "error": str(e)}
 
-    @APIExport()
-    def startSTORMReconstructionLocal(self, request: 'STORMReconstructionRequest' = None, **kwargs) -> Dict[str, Any]:
+    @APIExport(requestType="POST")
+    def startSTORMReconstructionLocal(self, request: STORMReconstructionRequest = None, **kwargs) -> Dict[str, Any]:
         """
         Start local STORM reconstruction with microeye processing.
 

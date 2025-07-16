@@ -23,6 +23,53 @@ class FilterType(str, Enum):
     TEMPORAL_MEDIAN = "temporal_median"
 
 
+class BandpassFilterParameters(BaseModel):
+    """Parameters for bandpass filter."""
+    
+    center: float = Field(default=40.0, gt=0, 
+                         description="Center frequency for bandpass filter")
+    
+    width: float = Field(default=90.0, gt=0,
+                        description="Width of bandpass filter")
+    
+    filter_type: str = Field(default="gauss", pattern="^(gauss|butterworth|ideal)$",
+                           description="Type of bandpass filter")
+    
+    show_filter: bool = Field(default=False,
+                            description="Show filter visualization")
+
+
+class BlobDetectorParameters(BaseModel):
+    """Parameters for OpenCV blob detector."""
+    
+    min_threshold: float = Field(default=0.0, ge=0, le=255,
+                               description="Minimum threshold for blob detection")
+    
+    max_threshold: float = Field(default=255.0, ge=0, le=255,
+                               description="Maximum threshold for blob detection")
+    
+    min_area: float = Field(default=1.5, gt=0,
+                          description="Minimum area for blob detection")
+    
+    max_area: float = Field(default=80.0, gt=0,
+                          description="Maximum area for blob detection")
+    
+    min_circularity: Optional[float] = Field(default=None, ge=0, le=1,
+                                           description="Minimum circularity (None to disable)")
+    
+    min_convexity: Optional[float] = Field(default=None, ge=0, le=1,
+                                         description="Minimum convexity (None to disable)")
+    
+    min_inertia_ratio: Optional[float] = Field(default=None, ge=0, le=1,
+                                             description="Minimum inertia ratio (None to disable)")
+    
+    blob_color: int = Field(default=255, ge=0, le=255,
+                          description="Color of blobs to detect")
+    
+    min_dist_between_blobs: float = Field(default=0.0, ge=0,
+                                        description="Minimum distance between blobs")
+
+
 class STORMProcessingParameters(BaseModel):
     """Parameters for STORM frame processing via microeye."""
     
@@ -52,6 +99,14 @@ class STORMProcessingParameters(BaseModel):
     
     super_resolution_pixel_size_nm: float = Field(default=10.0, gt=0,
                                                  description="Super-resolution pixel size in nanometers")
+    
+    # Bandpass filter parameters
+    bandpass_filter: BandpassFilterParameters = Field(default_factory=BandpassFilterParameters,
+                                                     description="Bandpass filter parameters")
+    
+    # Blob detector parameters
+    blob_detector: BlobDetectorParameters = Field(default_factory=BlobDetectorParameters,
+                                                 description="Blob detector parameters")
     
     class Config:
         """Pydantic config."""
@@ -104,6 +159,10 @@ class STORMAcquisitionParameters(BaseModel):
     
     process_arkitekt: bool = Field(default=False,
                                  description="Process frames via Arkitekt")
+    
+    # Processing parameters for local processing
+    processing_parameters: Optional[Dict[str, Any]] = Field(default=None,
+                                                          description="Processing parameters for local reconstruction")
 
 
 class STORMReconstructionResult(BaseModel):
@@ -171,13 +230,51 @@ class STORMControlCommand(BaseModel):
                                      description="Command parameters")
 
 
+class STORMReconstructionRequest(BaseModel):
+    """Request model for starting STORM reconstruction."""
+    
+    # Session information
+    session_id: Optional[str] = Field(default=None,
+                                    description="Unique session identifier")
+    
+    # Acquisition parameters
+    acquisition_parameters: STORMAcquisitionParameters = Field(
+        default_factory=STORMAcquisitionParameters,
+        description="Parameters for acquisition")
+    
+    # Processing parameters
+    processing_parameters: STORMProcessingParameters = Field(
+        default_factory=STORMProcessingParameters,
+        description="Parameters for processing")
+    
+    # Additional options
+    save_enabled: bool = Field(default=True,
+                             description="Enable saving of results")
+
+
+class STORMProcessingRequest(BaseModel):
+    """Request model for setting STORM processing parameters."""
+    
+    processing_parameters: STORMProcessingParameters = Field(
+        description="Processing parameters to set")
+
+
 class STORMErrorResponse(BaseModel):
     """Error response model."""
     
+    success: bool = Field(default=False, description="Operation success status")
     error: bool = Field(default=True, description="Indicates this is an error response")
     message: str = Field(description="Error message")
     error_code: Optional[str] = Field(default=None, description="Error code")
     details: Optional[Dict[str, Any]] = Field(default=None, description="Additional error details")
+
+
+class STORMSuccessResponse(BaseModel):
+    """Success response model."""
+    
+    success: bool = Field(default=True, description="Operation success status")
+    message: str = Field(description="Success message")
+    data: Optional[Dict[str, Any]] = Field(default=None, description="Response data")
 
 
 if __name__ == "__main__":
@@ -186,10 +283,17 @@ if __name__ == "__main__":
     
     # Test default parameters
     proc_params = STORMProcessingParameters()
-    print(f"✓ Default processing parameters: {proc_params.dict()}")
+    print(f"✓ Default processing parameters: {proc_params.model_dump()}")
     
     acq_params = STORMAcquisitionParameters()  
-    print(f"✓ Default acquisition parameters: {acq_params.dict()}")
+    print(f"✓ Default acquisition parameters: {acq_params.model_dump()}")
+    
+    # Test the new models
+    bandpass_params = BandpassFilterParameters()
+    print(f"✓ Default bandpass parameters: {bandpass_params.model_dump()}")
+    
+    blob_params = BlobDetectorParameters()
+    print(f"✓ Default blob detector parameters: {blob_params.model_dump()}")
     
     # Test validation
     try:

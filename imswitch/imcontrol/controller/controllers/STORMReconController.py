@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import threading
 from pathlib import Path
 
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
+from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger, dirtools
 from ..basecontrollers import LiveUpdatedController
 from imswitch.imcommon.model import APIExport
@@ -205,18 +205,11 @@ class STORMReconController(LiveUpdatedController):
             self._arkitekt_app = None
             self._arkitekt_handle = None
 
-    def __del__(self):
-        """Cleanup resources."""
-        try:
-            if self._acquisition_active:
-                self.stopFastSTORMAcquisition()
-                
-            if hasattr(self, '_arkitekt_handle') and self._arkitekt_handle is not None:
-                self._arkitekt_app.cancel()
-                self._arkitekt_app.exit()
-        except Exception as e:
-            self._logger.error(f"Error during cleanup: {e}")
-
+    '''
+    ################ 
+    # ARKITEKT  ###
+    # #############
+    '''
     # Arkitekt remote callable functions
     def arkitekt_start_storm_acquisition(self,
                                           storm_state: STORMState,
@@ -563,6 +556,9 @@ class STORMReconController(LiveUpdatedController):
             try:
                 self._arkitekt_app.cancel()
                 self._arkitekt_app.exit()
+                if self._acquisition_active:
+                    self.stopFastSTORMAcquisition()
+                self._arkitekt_handle = None
             except Exception as e:
                 self._logger.error(f"Error cleaning up Arkitekt: {e}")
 
@@ -572,10 +568,17 @@ class STORMReconController(LiveUpdatedController):
             self.imageComputationThread.wait()
         if hasattr(super(), '__del__'):
             super().__del__()
+            
 
+    '''
+    ################ 
+    # MICROEYE  ###
+    # #############
+    '''
+    
     @APIExport()
     def triggerSTORMReconstruction(self, frame=None):
-        """ Trigger reconstruction. """
+        """ Trigger reconstruction of a single frame. """
         if frame is None:
             frames_chunk = self.detector.getChunk()
             if frames_chunk is not None:
@@ -1333,156 +1336,156 @@ class STORMReconController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Failed to finalize saving: {e}")
 
-    # Enhanced Worker Class for microEye processing without Qt threading
-    class STORMReconImageComputationWorker:
-        """
-        Modern STORM reconstruction worker without Qt dependencies.
-        Handles frame processing, localization, and result storage.
-        """
+# Enhanced Worker Class for microEye processing without Qt threading
+class STORMReconImageComputationWorker:
+    """
+    Modern STORM reconstruction worker without Qt dependencies.
+    Handles frame processing, localization, and result storage.
+    """
 
-        def __init__(self):
-            self._logger = initLogger(self, tryInheritParent=False)
+    def __init__(self):
+        self._logger = initLogger(self, tryInheritParent=False)
+        
+        # Processing parameters
+        self.threshold = 0.2
+        self.fit_roi_size = 13
+        self.active = False
+        
+        # Storage for reconstruction results
+        self.sumReconstruction = None
+        self.allParameters = []
+        
+        # Processing components (will be set externally)
+        self.preFilter = None
+        self.peakDetector = None
+        self.fittingMethod = None
+        self.tempEnabled = False
+
+    def reconSTORMFrame(self, frame, preFilter=None, peakDetector=None,
+                        rel_threshold=0.4, PSFparam=np.array([1.5]),
+                        roiSize=13, method=None):
+        """Reconstruct STORM frame with localization."""
+        if not isMicroEye:
+            return frame, None
             
-            # Processing parameters
-            self.threshold = 0.2
-            self.fit_roi_size = 13
-            self.active = False
-            
-            # Storage for reconstruction results
-            self.sumReconstruction = None
-            self.allParameters = []
-            
-            # Processing components (will be set externally)
-            self.preFilter = None
-            self.peakDetector = None
-            self.fittingMethod = None
-            self.tempEnabled = False
+        # Use provided or default components
+        if method is None:
+            method = FittingMethod._2D_Phasor_CPU if 'FittingMethod' in globals() else None
+        if preFilter is None:
+            preFilter = self.preFilter
+        if peakDetector is None:
+            peakDetector = self.peakDetector
 
-        def reconSTORMFrame(self, frame, preFilter=None, peakDetector=None,
-                            rel_threshold=0.4, PSFparam=np.array([1.5]),
-                            roiSize=13, method=None):
-            """Reconstruct STORM frame with localization."""
-            if not isMicroEye:
-                return frame, None
-                
-            # Use provided or default components
-            if method is None:
-                method = FittingMethod._2D_Phasor_CPU if 'FittingMethod' in globals() else None
-            if preFilter is None:
-                preFilter = self.preFilter
-            if peakDetector is None:
-                peakDetector = self.peakDetector
+        try:
+            index = 1
+            filtered = frame.copy()
+            varim = None
 
-            try:
-                index = 1
-                filtered = frame.copy()
-                varim = None
-
-                # Perform localization
-                frames, params, crlbs, loglike = localize_frame(
-                    index, frame, filtered, varim,
-                    preFilter, peakDetector, rel_threshold,
-                    PSFparam, roiSize, method
-                )
-
-                # Create simple reconstruction visualization
-                frameLocalized = np.zeros_like(frame, dtype=np.float32)
-                if params is not None and len(params) > 0:
-                    try:
-                        allX = np.clip(params[:, 0].astype(int), 0, frame.shape[1] - 1)
-                        allY = np.clip(params[:, 1].astype(int), 0, frame.shape[0] - 1)
-                        frameLocalized[allY, allX] = 1.0
-                    except Exception as e:
-                        self._logger.warning(f"Error creating localization visualization: {e}")
-
-                return frameLocalized, params
-                
-            except Exception as e:
-                self._logger.error(f"Error in STORM frame reconstruction: {e}")
-                return frame, None
-
-        def processFrame(self, frame):
-            """Process a single frame (modern interface)."""
-            if not self.active:
-                return None, None
-                
-            return self.reconSTORMFrame(
-                frame=frame,
-                preFilter=self.preFilter,
-                peakDetector=self.peakDetector,
-                rel_threshold=self.threshold,
-                roiSize=self.fit_roi_size
+            # Perform localization
+            frames, params, crlbs, loglike = localize_frame(
+                index, frame, filtered, varim,
+                preFilter, peakDetector, rel_threshold,
+                PSFparam, roiSize, method
             )
 
-        def setThreshold(self, threshold):
-            """Set detection threshold."""
-            self.threshold = threshold
+            # Create simple reconstruction visualization
+            frameLocalized = np.zeros_like(frame, dtype=np.float32)
+            if params is not None and len(params) > 0:
+                try:
+                    allX = np.clip(params[:, 0].astype(int), 0, frame.shape[1] - 1)
+                    allY = np.clip(params[:, 1].astype(int), 0, frame.shape[0] - 1)
+                    frameLocalized[allY, allX] = 1.0
+                except Exception as e:
+                    self._logger.warning(f"Error creating localization visualization: {e}")
 
-        def setFitRoiSize(self, roiSize):
-            """Set fitting ROI size."""
-            self.fit_roi_size = roiSize
-
-        def setFittingMethod(self, method):
-            """Set fitting method."""
-            self.fittingMethod = method
+            return frameLocalized, params
             
-        def setFilter(self, filter):
-            """Set preprocessing filter."""
-            self.preFilter = filter
+        except Exception as e:
+            self._logger.error(f"Error in STORM frame reconstruction: {e}")
+            return frame, None
 
-        def setTempEnabled(self, tempEnabled):
-            """Set temporal filtering enabled."""
-            self.tempEnabled = tempEnabled
+    def processFrame(self, frame):
+        """Process a single frame (modern interface)."""
+        if not self.active:
+            return None, None
+            
+        return self.reconSTORMFrame(
+            frame=frame,
+            preFilter=self.preFilter,
+            peakDetector=self.peakDetector,
+            rel_threshold=self.threshold,
+            roiSize=self.fit_roi_size
+        )
 
-        def setDetector(self, detector):
-            """Set peak detector."""
-            self.peakDetector = detector
+    def setThreshold(self, threshold):
+        """Set detection threshold."""
+        self.threshold = threshold
 
-        def setActive(self, enabled):
-            """Set processing active state."""
-            self.active = enabled
+    def setFitRoiSize(self, roiSize):
+        """Set fitting ROI size."""
+        self.fit_roi_size = roiSize
 
-        def saveImage(self, filename="STORMRecon", fileExtension="tif"):
-            """Save accumulated reconstruction to file."""
-            if self.sumReconstruction is None:
-                return None
+    def setFittingMethod(self, method):
+        """Set fitting method."""
+        self.fittingMethod = method
+        
+    def setFilter(self, filter):
+        """Set preprocessing filter."""
+        self.preFilter = filter
 
-            try:
-                timestamp = datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-                filepath = self.getSaveFilePath(
-                    date=timestamp,
-                    filename=filename,
-                    extension=fileExtension
-                )
+    def setTempEnabled(self, tempEnabled):
+        """Set temporal filtering enabled."""
+        self.tempEnabled = tempEnabled
 
-                # Convert to appropriate format for saving
-                if self.sumReconstruction.dtype == np.float32 or self.sumReconstruction.dtype == np.float64:
-                    image_to_save = (self.sumReconstruction / self.sumReconstruction.max() * 65535).astype(np.uint16)
-                else:
-                    image_to_save = self.sumReconstruction.astype(np.uint16)
+    def setDetector(self, detector):
+        """Set peak detector."""
+        self.peakDetector = detector
 
-                tif.imwrite(filepath, image_to_save, append=False)
-                self._logger.info(f"STORM reconstruction saved: {filepath}")
+    def setActive(self, enabled):
+        """Set processing active state."""
+        self.active = enabled
 
-                # Reset reconstruction
-                self.sumReconstruction = None
-                self.allParameters = []
+    def saveImage(self, filename="STORMRecon", fileExtension="tif"):
+        """Save accumulated reconstruction to file."""
+        if self.sumReconstruction is None:
+            return None
 
-                return filepath
-                
-            except Exception as e:
-                self._logger.error(f"Error saving STORM reconstruction: {e}")
-                return None
+        try:
+            timestamp = datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
+            filepath = self.getSaveFilePath(
+                date=timestamp,
+                filename=filename,
+                extension=fileExtension
+            )
 
-        def getSaveFilePath(self, date, filename, extension):
-            """Get save file path following data directory structure."""
-            mFilename = f"{date}_{filename}.{extension}"
-            dirPath = os.path.join(dirtools.UserFileDirs.Data, 'STORMController', 'reconstructions', date)
+            # Convert to appropriate format for saving
+            if self.sumReconstruction.dtype == np.float32 or self.sumReconstruction.dtype == np.float64:
+                image_to_save = (self.sumReconstruction / self.sumReconstruction.max() * 65535).astype(np.uint16)
+            else:
+                image_to_save = self.sumReconstruction.astype(np.uint16)
 
-            if not os.path.exists(dirPath):
-                os.makedirs(dirPath)
+            tif.imwrite(filepath, image_to_save, append=False)
+            self._logger.info(f"STORM reconstruction saved: {filepath}")
 
-            return os.path.join(dirPath, mFilename)
+            # Reset reconstruction
+            self.sumReconstruction = None
+            self.allParameters = []
+
+            return filepath
+            
+        except Exception as e:
+            self._logger.error(f"Error saving STORM reconstruction: {e}")
+            return None
+
+    def getSaveFilePath(self, date, filename, extension):
+        """Get save file path following data directory structure."""
+        mFilename = f"{date}_{filename}.{extension}"
+        dirPath = os.path.join(dirtools.UserFileDirs.Data, 'STORMController', 'reconstructions', date)
+
+        if not os.path.exists(dirPath):
+            os.makedirs(dirPath)
+
+        return os.path.join(dirPath, mFilename)
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

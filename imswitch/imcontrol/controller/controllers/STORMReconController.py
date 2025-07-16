@@ -7,12 +7,24 @@ import queue
 from typing import Generator, Optional, Dict, Any
 from dataclasses import dataclass
 import threading
+from pathlib import Path
 
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from imswitch.imcommon.model import initLogger, dirtools
 from ..basecontrollers import LiveUpdatedController
-
 from imswitch.imcommon.model import APIExport
+
+# Import pydantic models for parameter management
+try:
+    from imswitch.imcontrol.model.storm_models import (
+        STORMProcessingParameters, 
+        STORMAcquisitionParameters,
+        STORMReconstructionResult,
+        STORMStatusResponse
+    )
+    HAS_STORM_MODELS = True
+except ImportError:
+    HAS_STORM_MODELS = False
 
 try:
     from .microEye.Filters import BandpassFilter
@@ -90,10 +102,6 @@ class STORMReconController(LiveUpdatedController):
 
         self._logger = initLogger(self, tryInheritParent=True)
 
-        # reconstruction related settings
-        # TODO: Make parameters adaptable from Plugin
-        # Prepare image computation worker
-
         # get the detector
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
@@ -116,40 +124,56 @@ class STORMReconController(LiveUpdatedController):
         if IS_ARKITEKT:
             self._initializeArkitekt()
 
+        # Enhanced microEye integration without widget dependencies
         if isMicroEye:
-            # TODO: We want to move all the microeye related settings away from the QT-UI and expose parameters, etc. over HTTP / APIExport 
-            self.imageComputationThread = Thread()
-            self.imageComputationWorker.moveToThread(
-                self.imageComputationThread)
-            self.sigImageReceived.connect(
-                self.imageComputationWorker.computeSTORMReconImage)
-            self.imageComputationThread.start()
+            self._initializeMicroEyeComponents()
+            
+        # Initialize processing parameters via pydantic models
+        self._initializeProcessingParameters()
 
-            # Connect CommunicationChannel signals
-            self._commChannel.sigUpdateImage.connect(self.update)
-
-            # Connect STORMReconWidget signals
-            self._widget.sigShowToggled.connect(self.setShowSTORMRecon)
-            self._widget.sigUpdateRateChanged.connect(self.changeRate)
-            self._widget.sigSliderValueChanged.connect(self.valueChanged)
-
-            # Connect new Fast Acquisition API signals
-            self._widget.sigStartFastAcquisition.connect(self._onStartFastAcquisition)
-            self._widget.sigStopFastAcquisition.connect(self._onStopFastAcquisition)
-            self._widget.sigGetFrameGenerator.connect(self._onGetFrameGenerator)
-            self._widget.sigGetStatus.connect(self._onGetStatus)
-            self._widget.sigSetParameters.connect(self._onSetParameters)
-            self._widget.sigTriggerReconstruction.connect(self._onTriggerReconstruction)
-
-            self.changeRate(self.updateRate)
-            self.setShowSTORMRecon(False)
-
-            # setup reconstructor
+    def _initializeMicroEyeComponents(self):
+        """Initialize microEye components without widget dependencies."""
+        try:
+            # Create modern worker without thread-based approach
+            self.imageComputationWorker = STORMReconImageComputationWorker()
+            
+            # Setup reconstructor components
             self.peakDetector = CV_BlobDetector()
             self.preFilter = BandpassFilter()
-
+            
+            # Set default parameters
             self.imageComputationWorker.setDetector(self.peakDetector)
             self.imageComputationWorker.setFilter(self.preFilter)
+            self.imageComputationWorker.setThreshold(0.2)
+            self.imageComputationWorker.setFitRoiSize(13)
+            
+            # Initialize reconstruction storage
+            self._last_reconstruction_path = None
+            self._session_directory = None
+            
+            self._logger.info("MicroEye components initialized without widget dependencies")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to initialize microEye components: {e}")
+
+    def _initializeProcessingParameters(self):
+        """Initialize processing parameters using pydantic models."""
+        if HAS_STORM_MODELS:
+            self._processing_params = STORMProcessingParameters()
+            self._acquisition_params = STORMAcquisitionParameters()
+        else:
+            # Fallback to basic parameters
+            self._processing_params = {
+                'threshold': 0.2,
+                'fit_roi_size': 13,
+                'update_rate': 10
+            }
+            self._acquisition_params = {
+                'session_id': None,
+                'save_enabled': False
+            }
+        
+        self._logger.debug("Processing parameters initialized")
 
     def _initializeArkitekt(self):
         """Initialize Arkitekt connection and register functions"""
@@ -181,54 +205,17 @@ class STORMReconController(LiveUpdatedController):
             self._arkitekt_app = None
             self._arkitekt_handle = None
 
-    def valueChanged(self, magnitude):
-        """ Change magnitude. """
-        self.dz = magnitude*1e-3
-        self.imageComputationWorker.set_dz(self.dz)
-
     def __del__(self):
-        self.imageComputationThread.quit()
-        self.imageComputationThread.wait()
-        if hasattr(super(), '__del__'):
-            super().__del__()
-
-    def setShowSTORMRecon(self, enabled):
-        """ Show or hide STORMRecon. """
-
-        # read parameters from GUI for reconstruction the data on the fly
-        # Filters + Blob detector params
-        filter = self._widget.image_filter.currentData().filter
-        tempEnabled = self._widget.tempMedianFilter.enabled.isChecked()
-        detector = self._widget.detection_method.currentData().detector
-        threshold = self._widget.th_min_slider.value()
-        fit_roi_size = self._widget.fit_roi_size.value()
-        fitting_method = self._widget.fitting_cbox.currentData()
-
-        # write parameters to worker
-        self.imageComputationWorker.setFilter(filter)
-        self.imageComputationWorker.setTempEnabled(tempEnabled)
-        self.imageComputationWorker.setDetector(detector)
-        self.imageComputationWorker.setThreshold(threshold)
-        self.imageComputationWorker.setFitRoiSize(fit_roi_size)
-        self.imageComputationWorker.setFittingMethod(fitting_method)
-
-        self.active = enabled
-
-        # if it will be deactivated, trigger an image-save operation
-        if not self.active:
-            self.imageComputationWorker.saveImage()
-        else:
-            # this will activate/deactivate the live reconstruction
-            self.imageComputationWorker.setActive(enabled)
-
-    def displayImage(self, im):
-        """ Displays the image in the view. """
-        self._widget.setImage(im)
-
-    def changeRate(self, updateRate):
-        """ Change update rate. """
-        self.updateRate = updateRate
-        self.it = 0
+        """Cleanup resources."""
+        try:
+            if self._acquisition_active:
+                self.stopFastSTORMAcquisition()
+                
+            if hasattr(self, '_arkitekt_handle') and self._arkitekt_handle is not None:
+                self._arkitekt_app.cancel()
+                self._arkitekt_app.exit()
+        except Exception as e:
+            self._logger.error(f"Error during cleanup: {e}")
 
     # Arkitekt remote callable functions
     def arkitekt_start_storm_acquisition(self,
@@ -831,39 +818,264 @@ class STORMReconController(LiveUpdatedController):
         }
 
     @APIExport()
+    def setSTORMProcessingParameters(self, **kwargs) -> Dict[str, Any]:
+        """
+        Set STORM processing parameters via pydantic model validation.
+        
+        Args:
+            **kwargs: Processing parameters to update
+            
+        Returns:
+            Updated processing parameters
+        """
+        try:
+            if HAS_STORM_MODELS:
+                # Update using pydantic validation
+                updated_params = self._processing_params.copy(update=kwargs)
+                self._processing_params = updated_params
+                
+                # Update microEye worker if available
+                if isMicroEye:
+                    self.imageComputationWorker.setThreshold(updated_params.threshold)
+                    self.imageComputationWorker.setFitRoiSize(updated_params.fit_roi_size)
+                
+                result = updated_params.dict()
+            else:
+                # Fallback to basic parameter handling
+                self._processing_params.update(kwargs)
+                
+                if isMicroEye:
+                    if 'threshold' in kwargs:
+                        self.imageComputationWorker.setThreshold(kwargs['threshold'])
+                    if 'fit_roi_size' in kwargs:
+                        self.imageComputationWorker.setFitRoiSize(kwargs['fit_roi_size'])
+                
+                result = self._processing_params.copy()
+            
+            self._logger.info(f"Processing parameters updated: {kwargs}")
+            return {"success": True, "parameters": result}
+            
+        except Exception as e:
+            self._logger.error(f"Failed to set processing parameters: {e}")
+            return {"success": False, "error": str(e)}
+
+    @APIExport()
+    def startSTORMReconstructionLocal(self, **kwargs) -> Dict[str, Any]:
+        """
+        Start local STORM reconstruction with microeye processing.
+        
+        Args:
+            **kwargs: Acquisition and processing parameters
+            
+        Returns:
+            Status dictionary
+        """
+        if not isMicroEye:
+            return {"success": False, "error": "MicroEye not available"}
+            
+        if self._acquisition_active:
+            return {"success": False, "error": "Acquisition already active"}
+
+        try:
+            # Update parameters if provided
+            if 'processing' in kwargs:
+                self.setSTORMProcessingParameters(**kwargs['processing'])
+            if 'acquisition' in kwargs:
+                self._updateAcquisitionParameters(kwargs['acquisition'])
+            
+            # Setup session and data storage
+            session_id = kwargs.get('session_id', f"storm_local_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            self._current_session_id = session_id
+            self._setupLocalDataDirectory()
+            
+            # Start acquisition with local processing
+            result = self.startFastSTORMAcquisition(
+                session_id=session_id,
+                saveDirectory=str(self._session_directory / "frames"),
+                save_format="tiff",
+                process_locally=True,
+                **kwargs
+            )
+            
+            if result.get("success"):
+                # Activate enhanced local processing
+                self.imageComputationWorker.setActive(True)
+                
+                self._logger.info(f"Local STORM reconstruction started: {session_id}")
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "data_directory": str(self._session_directory),
+                    "message": "Local STORM reconstruction started"
+                }
+            else:
+                return result
+                
+        except Exception as e:
+            self._logger.error(f"Failed to start local STORM reconstruction: {e}")
+            return {"success": False, "error": str(e)}
+
+    @APIExport()
+    def stopSTORMReconstructionLocal(self) -> Dict[str, Any]:
+        """
+        Stop local STORM reconstruction and save final results.
+        
+        Returns:
+            Status dictionary with final statistics
+        """
+        if not self._acquisition_active:
+            return {"success": False, "error": "No acquisition active"}
+
+        try:
+            # Stop acquisition
+            result = self.stopFastSTORMAcquisition()
+            
+            # Finalize local processing
+            if isMicroEye:
+                self.imageComputationWorker.setActive(False)
+                final_path = self.imageComputationWorker.saveImage()
+                self._last_reconstruction_path = final_path
+            
+            session_id = self._current_session_id
+            
+            self._logger.info(f"Local STORM reconstruction stopped: {session_id}")
+            
+            return {
+                "success": True,
+                "session_id": session_id,
+                "final_reconstruction_path": self._last_reconstruction_path,
+                "data_directory": str(self._session_directory) if self._session_directory else None,
+                "message": "Local STORM reconstruction completed"
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to stop local STORM reconstruction: {e}")
+            return {"success": False, "error": str(e)}
+
+    @APIExport()
+    def getLastReconstructedImagePath(self) -> Optional[str]:
+        """
+        Get the filepath of the last reconstructed STORM image.
+        
+        Returns:
+            Filepath to last reconstructed image (TIF format) or None
+        """
+        return self._last_reconstruction_path
+
+    @APIExport()
+    def getSTORMReconstructionStatus(self) -> Dict[str, Any]:
+        """
+        Get enhanced STORM reconstruction status including local processing info.
+        
+        Returns:
+            Comprehensive status information
+        """
+        base_status = self.getSTORMStatus()
+        
+        # Add local processing specific information
+        enhanced_status = {
+            **base_status,
+            "local_processing_active": isMicroEye and getattr(self.imageComputationWorker, 'active', False) if hasattr(self, 'imageComputationWorker') else False,
+            "last_reconstruction_path": self._last_reconstruction_path,
+            "session_directory": str(self._session_directory) if self._session_directory else None,
+            "processing_parameters": self._processing_params.dict() if HAS_STORM_MODELS else self._processing_params,
+            "microeye_worker_available": hasattr(self, 'imageComputationWorker')
+        }
+        
+        return enhanced_status
+
+    def _updateAcquisitionParameters(self, params: Dict[str, Any]):
+        """Update acquisition parameters."""
+        if HAS_STORM_MODELS:
+            self._acquisition_params = self._acquisition_params.copy(update=params)
+        else:
+            self._acquisition_params.update(params)
+
+    def _setupLocalDataDirectory(self):
+        """Setup local data directory following experimentcontroller pattern."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_path = dirtools.UserFileDirs.Data
+        
+        # Create STORM-specific directory structure similar to experimentcontroller
+        storm_base = Path(base_path) / "STORMController"
+        self._data_directory = storm_base / timestamp
+        self._session_directory = self._data_directory / self._current_session_id
+        
+        # Create necessary subdirectories
+        self._session_directory.mkdir(parents=True, exist_ok=True)
+        (self._session_directory / "raw_frames").mkdir(exist_ok=True)
+        (self._session_directory / "reconstructed_frames").mkdir(exist_ok=True)
+        (self._session_directory / "localizations").mkdir(exist_ok=True)
+        
+        self._logger.info(f"Local data directory setup: {self._session_directory}")
+
+    def _enhancedProcessFrame(self, frame: np.ndarray) -> Optional[str]:
+        """
+        Enhanced frame processing that saves results locally.
+        
+        Args:
+            frame: Input frame to process
+            
+        Returns:
+            Path to saved reconstructed frame or None
+        """
+        if not isMicroEye or not hasattr(self, 'imageComputationWorker'):
+            return None
+
+        try:
+            # Process frame with microEye
+            reconstructed_frame, localizations = self.imageComputationWorker.reconSTORMFrame(frame)
+            
+            if reconstructed_frame is not None and self._session_directory:
+                # Save reconstructed frame
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                filename = f"recon_{timestamp}.tif"
+                filepath = self._session_directory / "reconstructed_frames" / filename
+                
+                # Convert to appropriate format for saving
+                if reconstructed_frame.dtype == np.float32 or reconstructed_frame.dtype == np.float64:
+                    frame_to_save = (reconstructed_frame * 65535).astype(np.uint16)
+                else:
+                    frame_to_save = reconstructed_frame.astype(np.uint16)
+                
+                tif.imwrite(str(filepath), frame_to_save)
+                self._last_reconstruction_path = str(filepath)
+                
+                # Save localizations if available
+                if localizations is not None and len(localizations) > 0:
+                    loc_filename = f"localizations_{timestamp}.csv"
+                    loc_filepath = self._session_directory / "localizations" / loc_filename
+                    np.savetxt(str(loc_filepath), localizations, delimiter=',', 
+                              header='x,y,background,intensity,magnitude_x,magnitude_y')
+                
+                return str(filepath)
+                
+        except Exception as e:
+            self._logger.error(f"Error in enhanced frame processing: {e}")
+            
+        return None
+
+    # Legacy API compatibility - kept for backward compatibility but deprecated
+    @APIExport()
     def setSTORMParameters(self,
                           threshold: float = None,
                           roi_size: int = None,
                           update_rate: int = None) -> Dict[str, Any]:
         """
-        Set STORM processing parameters.
-
-        Parameters:
-        - threshold: Detection threshold for localization
-        - roi_size: ROI size for fitting
-        - update_rate: Update rate for live processing
-
-        Returns:
-        - Dictionary with current parameter values
+        Legacy method for setting STORM parameters (deprecated).
+        Use setSTORMProcessingParameters instead.
         """
+        self._logger.warning("setSTORMParameters is deprecated, use setSTORMProcessingParameters instead")
+        
+        params = {}
         if threshold is not None:
-            self.threshold = threshold
-            if hasattr(self.imageComputationWorker, 'setThreshold'):
-                self.imageComputationWorker.setThreshold(threshold)
-
+            params['threshold'] = threshold
         if roi_size is not None:
-            if hasattr(self.imageComputationWorker, 'setFitRoiSize'):
-                self.imageComputationWorker.setFitRoiSize(roi_size)
-
+            params['fit_roi_size'] = roi_size
         if update_rate is not None:
-            self.updateRate = update_rate
-            self.changeRate(update_rate)
-
-        return {
-            "threshold": self.threshold,
-            "roi_size": getattr(self.imageComputationWorker, 'fit_roi_size', None),
-            "update_rate": self.updateRate
-        }
+            params['update_rate'] = update_rate
+            
+        return self.setSTORMProcessingParameters(**params)
 
     def _initializeSaving(self, saveDirectory: str, save_format: str):
         """Initialize saving mechanism based on format."""
@@ -1121,224 +1333,156 @@ class STORMReconController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Failed to finalize saving: {e}")
 
-    # Signal handlers for widget communication
-    def _onStartFastAcquisition(self, params: Dict[str, Any]):
-        """Handle start fast acquisition signal from widget"""
-        try:
-            result = self.startFastSTORMAcquisition(**params)
-            if result.get("success"):
-                self._widget.updateStatus(f"Fast acquisition started: {result.get('session_id')}")
-                self._widget.setAcquisitionState(True)
-            else:
-                self._widget.updateStatus(f"Failed to start: {result.get('message')}")
-                self._widget.setAcquisitionState(False)
-        except Exception as e:
-            self._logger.error(f"Error starting fast acquisition: {e}")
-            self._widget.updateStatus(f"Error: {str(e)}")
-            self._widget.setAcquisitionState(False)
-
-    def _onStopFastAcquisition(self):
-        """Handle stop fast acquisition signal from widget"""
-        try:
-            result = self.stopFastSTORMAcquisition()
-            if result.get("success"):
-                self._widget.updateStatus(f"Fast acquisition stopped: {result.get('session_id')}")
-            else:
-                self._widget.updateStatus(f"Failed to stop: {result.get('message')}")
-            self._widget.setAcquisitionState(False)
-        except Exception as e:
-            self._logger.error(f"Error stopping fast acquisition: {e}")
-            self._widget.updateStatus(f"Error: {str(e)}")
-            self._widget.setAcquisitionState(False)
-
-    def _onGetFrameGenerator(self, num_frames: int, timeout: float):
-        """Handle get frame generator signal from widget"""
-        try:
-            if not self._acquisition_active:
-                self._widget.updateStatus("No active acquisition for frame generator")
-                return
-
-            # Note: This would typically be used in a separate thread for async operation
-            # For demonstration in the UI, we just show the status
-            self._widget.updateStatus(f"Frame generator requested: {num_frames} frames, {timeout}s timeout")
-
-            # In a real implementation, you might start a background thread here
-            # that calls self.getSTORMFrameGenerator(num_frames, timeout)
-
-        except Exception as e:
-            self._logger.error(f"Error with frame generator: {e}")
-            self._widget.updateStatus(f"Frame generator error: {str(e)}")
-
-    def _onGetStatus(self):
-        """Handle get status signal from widget"""
-        try:
-            status = self.getSTORMStatus()
-            status_text = f"Acquisition: {'Active' if status['acquisition_active'] else 'Inactive'}\n"
-            status_text += f"Session: {status.get('session_id', 'None')}\n"
-            status_text += f"Processing: {'Active' if status.get('processing_active') else 'Inactive'}\n"
-            status_text += f"MicroEye: {'Available' if status.get('microeye_available') else 'Not Available'}"
-
-            self._widget.updateStatus(status_text)
-
-        except Exception as e:
-            self._logger.error(f"Error getting status: {e}")
-
-    def _onSetParameters(self, params: Dict[str, Any]):
-        """Handle set parameters signal from widget"""
-        try:
-            result = self.setSTORMParameters(**params)
-
-        except Exception as e:
-            self._logger.error(f"Error setting parameters: {e}")
-
-    def _onTriggerReconstruction(self):
-        """Handle trigger reconstruction signal from widget"""
-        try:
-            self.triggerSTORMReconstruction()
-        except Exception as e:
-            self._logger.error(f"Error triggering reconstruction: {e}")
-    class STORMReconImageComputationWorker(Worker):
-        sigSTORMReconImageComputed = Signal(np.ndarray)
+    # Enhanced Worker Class for microEye processing without Qt threading
+    class STORMReconImageComputationWorker:
+        """
+        Modern STORM reconstruction worker without Qt dependencies.
+        Handles frame processing, localization, and result storage.
+        """
 
         def __init__(self):
-            super().__init__()
-
-            self.threshold = 0.2 # default threshold
-            self.fit_roi_size = 13 # default roi size
-
             self._logger = initLogger(self, tryInheritParent=False)
-            self._numQueuedImages = 0
-            self._numQueuedImagesMutex = Mutex()
-
-            # store the sum of all reconstructed frames
+            
+            # Processing parameters
+            self.threshold = 0.2
+            self.fit_roi_size = 13
+            self.active = False
+            
+            # Storage for reconstruction results
             self.sumReconstruction = None
             self.allParameters = []
-
-            self.active = False
-
+            
+            # Processing components (will be set externally)
+            self.preFilter = None
+            self.peakDetector = None
+            self.fittingMethod = None
+            self.tempEnabled = False
 
         def reconSTORMFrame(self, frame, preFilter=None, peakDetector=None,
                             rel_threshold=0.4, PSFparam=np.array([1.5]),
                             roiSize=13, method=None):
-            # tune parameters
-            if method is None: # avoid error when microeye is not installed..
-                method = FittingMethod._2D_Phasor_CPU
+            """Reconstruct STORM frame with localization."""
+            if not isMicroEye:
+                return frame, None
+                
+            # Use provided or default components
+            if method is None:
+                method = FittingMethod._2D_Phasor_CPU if 'FittingMethod' in globals() else None
             if preFilter is None:
                 preFilter = self.preFilter
             if peakDetector is None:
                 peakDetector = self.peakDetector
 
-            # parameters are read only once the SMLM reconstruction is initiated
-            # cannot be altered during recroding
-            index = 1
-            filtered = frame.copy() # nip.gaussf(frame, 1.5)
-            varim = None
-
-            # localize  frame
-            # params = > x,y,background, max(0, intensity), magnitudeX / magnitudeY
-            frames, params, crlbs, loglike = localize_frame(
-                        index,
-                        frame,
-                        filtered,
-                        varim,
-                        preFilter,
-                        peakDetector,
-                        rel_threshold,
-                        PSFparam,
-                        roiSize,
-                        method)
-
-            # create a simple render # TODO: Ensure this is working properly
-            frameLocalized = frames
             try:
-                allX = np.int32(params[:,0])
-                allY = np.int32(params[:,1])
-                frameLocalized[(allY, allX)] = 1
-            except Exception as e:
-                pass
+                index = 1
+                filtered = frame.copy()
+                varim = None
 
-            return frameLocalized, params
+                # Perform localization
+                frames, params, crlbs, loglike = localize_frame(
+                    index, frame, filtered, varim,
+                    preFilter, peakDetector, rel_threshold,
+                    PSFparam, roiSize, method
+                )
+
+                # Create simple reconstruction visualization
+                frameLocalized = np.zeros_like(frame, dtype=np.float32)
+                if params is not None and len(params) > 0:
+                    try:
+                        allX = np.clip(params[:, 0].astype(int), 0, frame.shape[1] - 1)
+                        allY = np.clip(params[:, 1].astype(int), 0, frame.shape[0] - 1)
+                        frameLocalized[allY, allX] = 1.0
+                    except Exception as e:
+                        self._logger.warning(f"Error creating localization visualization: {e}")
+
+                return frameLocalized, params
+                
+            except Exception as e:
+                self._logger.error(f"Error in STORM frame reconstruction: {e}")
+                return frame, None
+
+        def processFrame(self, frame):
+            """Process a single frame (modern interface)."""
+            if not self.active:
+                return None, None
+                
+            return self.reconSTORMFrame(
+                frame=frame,
+                preFilter=self.preFilter,
+                peakDetector=self.peakDetector,
+                rel_threshold=self.threshold,
+                roiSize=self.fit_roi_size
+            )
 
         def setThreshold(self, threshold):
+            """Set detection threshold."""
             self.threshold = threshold
 
         def setFitRoiSize(self, roiSize):
+            """Set fitting ROI size."""
             self.fit_roi_size = roiSize
 
-        def computeSTORMReconImage(self):
-            """ Compute STORMRecon of an image. """
-            try:
-                if self._numQueuedImages > 1 or not self.active:
-                    return  # Skip this frame in order to catch up
-                STORMReconrecon, params = self.reconSTORMFrame(frame=self._image,
-                                                               preFilter=self.preFilter,
-                                                               peakDetector=self.peakDetector,
-                                                               rel_threshold=self.threshold,
-                                                               roiSize=self.fit_roi_size)
-                self.allParameters.append(params)
-
-                if self.sumReconstruction is None:
-                    self.sumReconstruction = STORMReconrecon
-                else:
-                    self.sumReconstruction += STORMReconrecon
-                self.sigSTORMReconImageComputed.emit(np.array(self.sumReconstruction))
-            finally:
-                self._numQueuedImagesMutex.lock()
-                self._numQueuedImages -= 1
-                self._numQueuedImagesMutex.unlock()
-
-        def prepareForNewImage(self, image):
-            """ Must always be called before the worker receives a new image. """
-            self._image = image
-            self._numQueuedImagesMutex.lock()
-            self._numQueuedImages += 1
-            self._numQueuedImagesMutex.unlock()
-
         def setFittingMethod(self, method):
+            """Set fitting method."""
             self.fittingMethod = method
+            
         def setFilter(self, filter):
+            """Set preprocessing filter."""
             self.preFilter = filter
 
         def setTempEnabled(self, tempEnabled):
+            """Set temporal filtering enabled."""
             self.tempEnabled = tempEnabled
 
         def setDetector(self, detector):
+            """Set peak detector."""
             self.peakDetector = detector
 
+        def setActive(self, enabled):
+            """Set processing active state."""
+            self.active = enabled
+
         def saveImage(self, filename="STORMRecon", fileExtension="tif"):
+            """Save accumulated reconstruction to file."""
             if self.sumReconstruction is None:
-                return
+                return None
 
-            # wait to finish all queued images
-            while self._numQueuedImages > 0:
-                time.sleep(0.1)
+            try:
+                timestamp = datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
+                filepath = self.getSaveFilePath(
+                    date=timestamp,
+                    filename=filename,
+                    extension=fileExtension
+                )
 
-            Ntime = datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-            filePath = self.getSaveFilePath(date=Ntime,
-                                filename=filename,
-                                extension=fileExtension)
+                # Convert to appropriate format for saving
+                if self.sumReconstruction.dtype == np.float32 or self.sumReconstruction.dtype == np.float64:
+                    image_to_save = (self.sumReconstruction / self.sumReconstruction.max() * 65535).astype(np.uint16)
+                else:
+                    image_to_save = self.sumReconstruction.astype(np.uint16)
 
-            # self.switchOffIllumination()
-            self._logger.debug(filePath)
-            tif.imwrite(filePath, self.sumReconstruction, append=False)
+                tif.imwrite(filepath, image_to_save, append=False)
+                self._logger.info(f"STORM reconstruction saved: {filepath}")
 
-            # Reset sumReconstruction
-            self.sumReconstruction *= 0
-            self.allParameters = []
+                # Reset reconstruction
+                self.sumReconstruction = None
+                self.allParameters = []
+
+                return filepath
+                
+            except Exception as e:
+                self._logger.error(f"Error saving STORM reconstruction: {e}")
+                return None
 
         def getSaveFilePath(self, date, filename, extension):
-            mFilename =  f"{date}_{filename}.{extension}"
-            dirPath  = os.path.join(dirtools.UserFileDirs.Root, 'recordings', date)
-
-            newPath = os.path.join(dirPath,mFilename)
+            """Get save file path following data directory structure."""
+            mFilename = f"{date}_{filename}.{extension}"
+            dirPath = os.path.join(dirtools.UserFileDirs.Data, 'STORMController', 'reconstructions', date)
 
             if not os.path.exists(dirPath):
                 os.makedirs(dirPath)
 
-            return newPath
-
-        def setActive(self, enabled):
-            self.active = enabled
+            return os.path.join(dirPath, mFilename)
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

@@ -103,6 +103,8 @@ class STORMReconController(LiveUpdatedController):
     sigImageReceived = Signal()
     sigNSTORMImageAcquired = Signal(int)
     sigUpdatedSTORMReconstruction = Signal(list)
+    sigUpdatedSTORMReconstructionImage = Signal()
+    sigExperimentImageUpdate = Signal(str, np.ndarray, bool, list, bool)  # (detectorName, image, init, scale, isCurrentDetector)
 
     # Enhanced signals for frontend integration
     sigFrameAcquired = Signal(int)  # Frame count updates
@@ -131,23 +133,29 @@ class STORMReconController(LiveUpdatedController):
         self._saveDirectory = "STORM"
         self._frame_count = 0
         self._local_processing_enabled = False  # Flag for local processing during acquisition
-
+        self._last_reconstruction_path = ""
+        self._last_reconstruction_path = None
         # Initialize Arkitekt integration if available
         self._arkitekt_app = None
         self._arkitekt_handle = None
         if IS_ARKITEKT:
             self._initializeArkitekt()
+            
+        # Initialize processing parameters via pydantic models
+        self._initializeProcessingParameters()
 
         # Enhanced microEye integration without widget dependencies
         if isMicroEye:
             self._initializeMicroEyeComponents()
 
-        # Initialize processing parameters via pydantic models
-        self._initializeProcessingParameters()
 
     def _initializeMicroEyeComponents(self):
         """Initialize microEye components without widget dependencies."""
         try:
+            # Initialize reconstruction storage
+            self._last_reconstruction_path = ""
+            self._session_directory = ""
+            
             # Create modern worker without thread-based approach
             self.imageComputationWorker = STORMReconImageComputationWorker(parent_controller=self)
 
@@ -165,9 +173,6 @@ class STORMReconController(LiveUpdatedController):
             self.imageComputationWorker.setThreshold(self._processing_params.threshold if HAS_STORM_MODELS else 0.2)
             self.imageComputationWorker.setFitRoiSize(self._processing_params.fit_roi_size if HAS_STORM_MODELS else 13)
 
-            # Initialize reconstruction storage
-            self._last_reconstruction_path = None
-            self._session_directory = None
 
             self._logger.info("MicroEye components initialized without widget dependencies")
 
@@ -644,7 +649,7 @@ class STORMReconController(LiveUpdatedController):
     def triggerSTORMReconstruction(self, frame=None):
         """ Trigger reconstruction of a single frame. """
         if frame is None:
-            frames_chunk = self.detector.getChunk()
+            frames_chunk, frames_indices = self.detector.getChunk()
             if frames_chunk is not None:
                 # Use normalized frame processing and take the most recent frame
                 frames_list = self._normalizeFrameChunk(frames_chunk)
@@ -666,6 +671,7 @@ class STORMReconController(LiveUpdatedController):
                                   max_frames: int = -1,
                                   process_arkitekt: bool = False,
                                   process_locally: bool = False,
+                                  update_rate: int = 10,
                                   processing_parameters: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Start fast STORM frame acquisition with optional cropping and saving.
@@ -697,7 +703,7 @@ class STORMReconController(LiveUpdatedController):
         self._current_session_id = session_id
         self._frame_count = 0
         self._local_processing_enabled = process_locally
-
+        
         # Update processing parameters if provided
         if processing_parameters and process_locally:
             self._updateProcessingParametersFromDict(processing_parameters)
@@ -718,7 +724,9 @@ class STORMReconController(LiveUpdatedController):
 
         # Set exposure time if provided
         if exposure_time is not None and hasattr(self.detector, 'setParameter'):
-            self.detector.setParameter('ExposureTime', exposure_time)
+            try:self.detector.setParameter('ExposureTime', exposure_time)
+            except Exception as e:
+                self._logger.warning(f"Failed to set exposure time: {e}")
 
         # Enable local processing if requested
         if process_locally and isMicroEye:
@@ -775,7 +783,7 @@ class STORMReconController(LiveUpdatedController):
                     self._configureDetectorFromParams(updated_params.blob_detector)
                     self.imageComputationWorker.setThreshold(updated_params.threshold)
                     self.imageComputationWorker.setFitRoiSize(updated_params.fit_roi_size)
-
+                    self.imageComputationWorker.setUpdateRate(updated_params.update_rate)
             except Exception as e:
                 self._logger.warning(f"Failed to update processing parameters: {e}")
         else:
@@ -939,38 +947,20 @@ class STORMReconController(LiveUpdatedController):
         }
 
     @APIExport(requestType="POST")
-    def setSTORMProcessingParameters(self, request: STORMProcessingRequest = None, **kwargs) -> Dict[str, Any]:
+    def setSTORMProcessingParameters(self, request: STORMProcessingRequest = None) -> Dict[str, Any]:
         """
         Set STORM processing parameters via pydantic model validation.
 
         Args:
             request: STORMProcessingRequest with processing parameters
-            **kwargs: Fallback for legacy usage (deprecated)
 
         Returns:
             Updated processing parameters
         """
         try:
-            if request is not None:
-                # Use the pydantic model from the request
-                new_params = request.processing_parameters
-            elif HAS_STORM_MODELS and kwargs:
-                # Try to create from kwargs for legacy compatibility
-                new_params = self._processing_params.copy(update=kwargs)
-            elif kwargs:
-                # Fallback to basic parameter handling
-                self._processing_params.update(kwargs)
-
-                if isMicroEye:
-                    if 'threshold' in kwargs:
-                        self.imageComputationWorker.setThreshold(kwargs['threshold'])
-                    if 'fit_roi_size' in kwargs:
-                        self.imageComputationWorker.setFitRoiSize(kwargs['fit_roi_size'])
-
-                return {"success": True, "parameters": self._processing_params.copy()}
-            else:
-                return {"success": False, "error": "No parameters provided"}
-
+            # Use the pydantic model from the request
+            new_params = request.processing_parameters
+            
             # Update the stored parameters
             self._processing_params = new_params
 
@@ -990,13 +980,12 @@ class STORMReconController(LiveUpdatedController):
             return {"success": False, "error": str(e)}
 
     @APIExport(requestType="POST")
-    def startSTORMReconstructionLocal(self, request: STORMReconstructionRequest = None, **kwargs) -> Dict[str, Any]:
+    def startSTORMReconstructionLocal(self, request: STORMReconstructionRequest = None) -> Dict[str, Any]:
         """
         Start local STORM reconstruction with microeye processing.
 
         Args:
             request: STORMReconstructionRequest with parameters
-            **kwargs: Fallback for legacy usage (deprecated)
 
         Returns:
             Status dictionary
@@ -1009,17 +998,10 @@ class STORMReconController(LiveUpdatedController):
 
         try:
             # Extract parameters from request or kwargs
-            if request is not None:
-                session_id = request.session_id
-                acq_params = request.acquisition_parameters
-                proc_params = request.processing_parameters
-                save_enabled = request.save_enabled
-            else:
-                # Legacy handling with kwargs
-                session_id = kwargs.get('session_id')
-                acq_params = STORMAcquisitionParameters(**kwargs.get('acquisition', {})) if HAS_STORM_MODELS else kwargs.get('acquisition', {})
-                proc_params = STORMProcessingParameters(**kwargs.get('processing', {})) if HAS_STORM_MODELS else kwargs.get('processing', {})
-                save_enabled = kwargs.get('save_enabled', True)
+            session_id = request.session_id
+            acq_params = request.acquisition_parameters
+            proc_params = request.processing_parameters
+            save_enabled = request.save_enabled
 
             # Update processing parameters
             if HAS_STORM_MODELS:
@@ -1040,32 +1022,23 @@ class STORMReconController(LiveUpdatedController):
 
             # Prepare acquisition parameters
             acquisition_kwargs = {}
-            if HAS_STORM_MODELS:
-                acquisition_kwargs.update({
-                    'session_id': session_id,
-                    'crop_x': acq_params.crop_x,
-                    'crop_y': acq_params.crop_y,
-                    'crop_width': acq_params.crop_width,
-                    'crop_height': acq_params.crop_height,
-                    'exposure_time': acq_params.exposure_time,
-                    'max_frames': acq_params.max_frames,
-                    'process_locally': acq_params.process_locally,
-                    'processing_parameters': proc_params.model_dump() if proc_params else None
-                })
+            acquisition_kwargs.update({
+                'session_id': session_id,
+                'crop_x': acq_params.crop_x,
+                'crop_y': acq_params.crop_y,
+                'crop_width': acq_params.crop_width,
+                'crop_height': acq_params.crop_height,
+                'exposure_time': acq_params.exposure_time,
+                'max_frames': acq_params.max_frames,
+                'process_locally': acq_params.process_locally,
+                'processing_parameters': proc_params.model_dump() if proc_params else None
+            })
 
-                if save_enabled:
-                    acquisition_kwargs.update({
-                        'saveDirectory': str(self._session_directory / "frames"),
-                        'save_format': acq_params.save_format
-                    })
-            else:
-                # Legacy fallback
-                acquisition_kwargs.update(kwargs)
-                acquisition_kwargs['session_id'] = session_id
-                acquisition_kwargs['process_locally'] = True
-                if save_enabled:
-                    acquisition_kwargs['saveDirectory'] = str(self._session_directory / "frames")
-                    acquisition_kwargs['save_format'] = "tiff"
+            if save_enabled:
+                acquisition_kwargs.update({
+                    'saveDirectory': str(self._session_directory / "frames"),
+                    'save_format': acq_params.save_format
+                })
 
             # Start acquisition with local processing
             result = self.startFastSTORMAcquisition(**acquisition_kwargs)
@@ -1455,28 +1428,7 @@ class STORMReconController(LiveUpdatedController):
 
         return None
 
-    # Legacy API compatibility - kept for backward compatibility but deprecated
-    @APIExport()
-    def setSTORMParameters(self,
-                          threshold: float = None,
-                          roi_size: int = None,
-                          update_rate: int = None) -> Dict[str, Any]:
-        """
-        Legacy method for setting STORM parameters (deprecated).
-        Use setSTORMProcessingParameters instead.
-        """
-        self._logger.warning("setSTORMParameters is deprecated, use setSTORMProcessingParameters instead")
-
-        params = {}
-        if threshold is not None:
-            params['threshold'] = threshold
-        if roi_size is not None:
-            params['fit_roi_size'] = roi_size
-        if update_rate is not None:
-            params['update_rate'] = update_rate
-
-        return self.setSTORMProcessingParameters(**params)
-
+    
     def _initializeSaving(self, saveDirectory: str, save_format: str):
         """Initialize saving mechanism based on format."""
         try:
@@ -1760,6 +1712,8 @@ class STORMReconImageComputationWorker:
         self.threshold = 0.2
         self.fit_roi_size = 13
         self.active = False
+        self.update_rate = 10
+        self.frameIterator = 0
 
         # Storage for reconstruction results
         self.sumReconstruction = None
@@ -1770,6 +1724,7 @@ class STORMReconImageComputationWorker:
         self.peakDetector = None
         self.fittingMethod = None
         self.tempEnabled = False
+        self.accumulatedReconstruction = None
 
     def reconSTORMFrame(self, frame, preFilter=None, peakDetector=None,
                         rel_threshold=0.4, PSFparam=np.array([1.5]),
@@ -1797,10 +1752,7 @@ class STORMReconImageComputationWorker:
                 preFilter, peakDetector, rel_threshold,
                 PSFparam, roiSize, method
             )
-
-            # emit current frame reconstruction signal through parent controller
-            if self._parent_controller is not None:
-                self._parent_controller.sigUpdatedSTORMReconstruction.emit(params)
+            self.frameIterator += 1 
 
             # Create simple reconstruction visualization
             frameLocalized = np.zeros_like(frame, dtype=np.float32)
@@ -1811,6 +1763,22 @@ class STORMReconImageComputationWorker:
                     frameLocalized[allY, allX] = 1.0
                 except Exception as e:
                     self._logger.warning(f"Error creating localization visualization: {e}")
+
+            # accumulate reconstructed localization maps 
+            try:
+                if self.accumulatedReconstruction is None: 
+                    self.accumulatedReconstruction = frameLocalized
+                else:
+                    self.accumulatedReconstruction += frameLocalized
+            except Exception as e:
+                self._logger.error(f"Error in accumulating frames:  {e}")
+                
+            # emit current frame reconstruction signal through parent controller
+            if self._parent_controller is not None:
+                if self.frameIterator % self.update_rate == 0:
+                    #self._parent_controller.sigUpdatedSTORMReconstruction.emit(params)
+                    #self._parent_controller.sigUpdatedSTORMReconstructionImage(frameLocalized)
+                    self._parent_controller.sigExperimentImageUpdate.emit("STORM", self.accumulatedReconstruction/np.max(self.accumulatedReconstruction)*255, False, [], False)
 
             return frameLocalized, params
 
@@ -1838,6 +1806,10 @@ class STORMReconImageComputationWorker:
     def setFitRoiSize(self, roiSize):
         """Set fitting ROI size."""
         self.fit_roi_size = roiSize
+        
+    def setUpdateRate(self, updateRate):
+        """Set update rate for displaying / trigger signal"""
+        self.update_rate = updateRate
 
     def setFittingMethod(self, method):
         """Set fitting method."""

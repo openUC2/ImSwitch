@@ -26,6 +26,8 @@ class VirtualCameraManager(DetectorManager):
         pixelSize = self._camera.PixelSize
         model = self._camera.model
         self._running = True
+        self.ExposureTime  = 0
+        self.Gain = 0
 
         # Prepare parameters
         parameters = {

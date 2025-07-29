@@ -598,6 +598,13 @@ class SettingsController(ImConWidgetController):
         self.setDetectorParameter(detectorName, 'exposure', exposureTime)
 
     @APIExport(runOnUIThread=True)
+    def setDetectorBlackLevel(self, detectorName: str=None, blackLevel: float=0) -> None:
+        """ Sets the blacklevel for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        self.setDetectorParameter(detectorName, 'blacklevel', blackLevel)
+
+    @APIExport(runOnUIThread=True)
     def setDetectorTriggerType(self, detectorName: str=None, triggerType: str='Software') -> None:
         """ Sets the trigger type for the specified detector. """
         if detectorName is None:

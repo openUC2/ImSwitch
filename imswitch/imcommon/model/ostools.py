@@ -60,6 +60,7 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
             args.append('--scan-ext-drive-mount')
         if ext_drive_mount:
             args.append('--ext-drive-mount')
+            args.append(ext_drive_mount)
         # execute script with new arguments
         os.execv(sys.executable, args)
     else:

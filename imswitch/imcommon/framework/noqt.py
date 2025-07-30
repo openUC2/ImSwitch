@@ -183,7 +183,7 @@ class SignalInstance(psygnal.SignalInstance):
 
         try:
             sio.start_background_task(sio.emit, "signal", json.dumps(mMessage))
-        except Exception:
+        except Exception as e:
             # Use fallback worker thread instead of creating new threads
             try:
                 _start_fallback_worker()
@@ -193,8 +193,9 @@ class SignalInstance(psygnal.SignalInstance):
             except queue.Full:
                 # Queue is full, drop the message to prevent memory buildup
                 pass
-            except Exception:
+            except Exception as e:
                 # Silently handle any other errors
+                print(f"Error broadcasting message: {e}")
                 pass
         del mMessage
 

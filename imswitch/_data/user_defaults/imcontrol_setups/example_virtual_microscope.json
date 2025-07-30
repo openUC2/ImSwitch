@@ -42,7 +42,7 @@
       },
       "wavelength": 635,
       "valueRangeMin": 0,
-      "valueRangeMax": 1023
+      "valueRangeMax": 32000
     },
     "LASER": {
       "analogChannel": null,
@@ -54,7 +54,7 @@
       },
       "wavelength": 488,
       "valueRangeMin": 0,
-      "valueRangeMax": 1023
+      "valueRangeMax": 32000
     }    
   },
   "detectors": {

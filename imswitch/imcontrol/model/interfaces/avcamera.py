@@ -272,7 +272,9 @@ class CameraAV:
             except Exception as e:
                 print(f"Warning: Error during legacy camera cleanup: {e}")
 
-    def _frame_handler(self, cam, frame):
+
+    
+    def _frame_handler(self, cam: Camera, stream: Stream, frame: Frame):
         """Frame handler for asynchronous streaming"""
         if isVmbPy:
             # VmbPy frame handling - following the example pattern
@@ -326,7 +328,7 @@ class CameraAV:
                     # VmbPy asynchronous streaming following the example pattern
                     self._camera.start_streaming(
                         handler=self._frame_handler,
-                        buffer_count=10,
+                        buffer_count=3,
                         allocation_mode=AllocationMode.AnnounceFrame
                     )
                     self._streaming = True
@@ -425,7 +427,7 @@ class CameraAV:
         self.frame_buffer.clear()
         self.__logger.debug(f"Set ROI to x={self.hpos}, y={self.vpos}, w={self.hsize}, h={self.vsize}")
 
-    def getLast(self, is_resize=True):
+    def getLast(self):
         # Return the most recent frame from buffer (streaming) or direct capture
         # The manager code uses is_resize, but we don't do anything with it here
         # (kept for compatibility).
@@ -433,7 +435,9 @@ class CameraAV:
             if self._streaming and len(self.frame_buffer) > 0:
                 # Use the latest frame from the streaming buffer
                 with self._frame_lock:
-                    return self.frame_buffer[-1].copy()
+                    frame = self.frame_buffer[-1].copy()
+                    return frame.copy() if frame is not None else np.zeros((100, 100))
+            '''
             else:
                 # Fallback to direct frame capture if not streaming
                 if isVmbPy:
@@ -448,6 +452,7 @@ class CameraAV:
                     else:
                         self.frame = frame.as_numpy_ndarray()
                 return self.frame.copy() if self.frame is not None else np.zeros((100, 100))
+            '''
         except Exception as e:
             self.__logger.warning(f"Error getting frame: {e}")
             # Return last known good frame or a placeholder

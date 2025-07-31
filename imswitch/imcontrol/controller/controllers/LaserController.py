@@ -280,7 +280,7 @@ class LaserController(ImConWidgetController):
         else:
             try:
                 return self._master.lasersManager[laserName].power
-            except KeyError:
+            except Exception as e:
                 return 0
 
     @APIExport(runOnUIThread=True)

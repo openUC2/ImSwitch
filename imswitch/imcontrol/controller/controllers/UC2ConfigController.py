@@ -306,6 +306,16 @@ class UC2ConfigController(ImConWidgetController):
         return {"firmware": firmware_names, "ports": ports}
 
     @APIExport(runOnUIThread=False)
+    def espRestart(self):
+        if not HAS_ESPTOOL:
+            return {"error": "esptool not installed"}
+        try:
+            self._master.UC2ConfigManager.restartESP()
+            return {"status": "ESP32 restarted successfully"}
+        except Exception as e:
+            return {"error": str(e)}
+          
+    @APIExport(runOnUIThread=False)
     def flash_firmware(
         self,
         filename: str,

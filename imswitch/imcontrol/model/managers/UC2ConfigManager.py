@@ -68,6 +68,9 @@ class UC2ConfigManager(SignalInterface):
     def setDebug(self, debug):
         self.ESP32.serial.DEBUG = debug
 
+    def restartESP(self):
+        self.ESP32.state.espRestart()
+
     def restartCANDevice(self, device_id):
         """
         Restart a CAN device by sending a reboot command to the ESP32.

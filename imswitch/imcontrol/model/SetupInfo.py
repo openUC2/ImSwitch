@@ -327,26 +327,20 @@ class FocusLockInfo:
     updateFreq: int
     """ Update frequency, in milliseconds. """
 
-    frameCropx: int
-    """ Starting X position of camera frame crop. """
+    cropCenter: list 
+    """ Center point for cropping the camera image. """
 
-    frameCropy: int
-    """ Starting Y position of camera frame crop. """
-
-    frameCropw: int
-    """ Width of camera frame crop. """
-
-    frameCroph: int
-    """ Height of camera frame crop. """
-
-    swapImageAxes: bool
-    """ Swap camera image axes when grabbing camera frame. """
+    cropSize: int 
+    """ Size of the cropped camera image. """
 
     piKp: float
     """ Default kp value of feedback loop. """
 
     piKi: float
     """ Default ki value of feedback loop. """
+    
+    focusLockMetric: str
+    """ Method to use for focus lock. Options: 'astigmatism', 'phase', 'defocus'. """
 
 @dataclass(frozen=False)
 class FOVLockInfo:
@@ -371,8 +365,6 @@ class FOVLockInfo:
     frameCroph: int
     """ Height of camera frame crop. """
 
-    swapImageAxes: bool
-    """ Swap camera image axes when grabbing camera frame. """
 
     piKp: float
     """ Default kp value of feedback loop. """

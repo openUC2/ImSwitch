@@ -17,6 +17,11 @@ from imswitch import IS_HEADLESS
 from typing import Dict, List, Union, Optional
 
 # Lepmon hardware dependencies
+'''
+pip install RPi.GPIO
+pip install luma.oled
+pip install smbus2
+'''
 try:
     import RPi.GPIO as GPIO
     HAS_GPIO = True

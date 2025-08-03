@@ -185,9 +185,10 @@ RUN cd /opt/VimbaX/cti \
     && ./Install_GenTL_Path.sh
 
 # Install Python bindings and VimbaPython   
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
-    python3 -m pip install --upgrade pip --no-cache-dir && \
-    find /opt/VimbaX -name 'vmbpy-*.whl' -exec python3 -m pip install {} --no-cache-dir \;"
+#RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
+#    python3 -m pip install --upgrade pip --no-cache-dir && \
+#    find /opt/VimbaX -name 'vmbpy-*.whl' -exec python3 -m pip install {} --no-cache-dir \;"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl"
 
 # Set environment variable for GenTL detection
 ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"

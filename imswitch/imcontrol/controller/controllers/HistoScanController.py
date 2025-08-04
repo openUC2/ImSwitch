@@ -287,6 +287,10 @@ class HistoScanController(LiveUpdatedController):
         else:
             image = frame
         # using an in-memory image
+        if image.dtype != np.uint8:
+            # Normalize and convert to uint8 if necessary
+            image = np.clip(image, 0, 255)
+            image = image.astype(np.uint8)
         im = Image.fromarray(image)
 
         # save image to an in-memory bytes buffer

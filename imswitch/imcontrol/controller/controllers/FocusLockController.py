@@ -31,6 +31,7 @@ class FocusLockParams:
     update_freq: float = 10.0
     two_foci_enabled: bool = False
     z_stack_enabled: bool = False
+    z_step_limit_nm: float = 40.0  # Minimum z-stack step in nanometers
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API serialization."""
@@ -43,6 +44,7 @@ class FocusLockParams:
             "update_freq": self.update_freq,
             "two_foci_enabled": self.two_foci_enabled,
             "z_stack_enabled": self.z_stack_enabled,
+            "z_step_limit_nm": self.z_step_limit_nm,
         }
 
 
@@ -649,10 +651,30 @@ class FocusLockController(LiveUpdatedController):
             self._logger.info(f"Focus locked at position {zpos} with set point {self.setPointSignal}")
 
     def updateZStepLimits(self):
+        """Update z-step limits from parameters or GUI."""
         try:
-            self.zStepLimLo = 0.001 * float(self._widget.zStepFromEdit.text())
+            if not IS_HEADLESS and hasattr(self, '_widget'):
+                self.zStepLimLo = 0.001 * float(self._widget.zStepFromEdit.text())
+                # Also update the parameter for consistency
+                self._focus_params.z_step_limit_nm = float(self._widget.zStepFromEdit.text())
+            else:
+                # Use parameter from dataclass (converted to micrometers)
+                self.zStepLimLo = 0.001 * self._focus_params.z_step_limit_nm
         except Exception:
-            self.zStepLimLo = 0.0 # TODO: Make this a setting in the setupInfo or the GUI/API
+            # Fallback to parameter value
+            self.zStepLimLo = 0.001 * self._focus_params.z_step_limit_nm
+
+    @APIExport(runOnUIThread=True)
+    def setZStepLimit(self, limit_nm: float):
+        """Set the minimum z-step limit in nanometers."""
+        self._focus_params.z_step_limit_nm = float(limit_nm)
+        self.updateZStepLimits()
+        return self._focus_params.z_step_limit_nm
+
+    @APIExport(runOnUIThread=True)
+    def getZStepLimit(self) -> float:
+        """Get the current z-step limit in nanometers."""
+        return self._focus_params.z_step_limit_nm
 
     @APIExport(runOnUIThread=True)
     def returnLastCroppedImage(self) -> Response:

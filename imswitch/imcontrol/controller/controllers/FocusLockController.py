@@ -286,7 +286,7 @@ class FocusLockController(LiveUpdatedController):
                 self.noStepVar = False
         return move
 
-    def lockFocus(self, zpos):
+    def lockFocus(self, zpos) -> bool:
         if not self.locked:
             if IS_HEADLESS:
                 kp, ki = self.kp, self.ki
@@ -305,6 +305,7 @@ class FocusLockController(LiveUpdatedController):
                 except Exception:
                     pass
             self.updateZStepLimits()
+        return self.locked
 
     def updateZStepLimits(self):
         try:

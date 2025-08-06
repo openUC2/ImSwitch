@@ -54,7 +54,7 @@ class ImConMainController(MainController):
         self.controllers = {}
 
         for widgetKey, widget in self.__mainView.widgets.items():
-            self.__logger.debug(f'Creating controller for widget {widgetKey}')
+            self.__logger.info(f'Creating controller for widget {widgetKey}')
 
             controller_name = f'{widgetKey}Controller'
             if widgetKey == 'Scan':

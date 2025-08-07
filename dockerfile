@@ -132,14 +132,14 @@ ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/li
 
 
 # install numcodecs via conda
-RUN /opt/conda/bin/conda install numcodecs=0.15.0
+RUN /opt/conda/bin/conda install numcodecs=0.15.0 numpy=2.1.2
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
     conda install scikit-image=0.19.3 -c conda-forge"
     
 
 # fix the version of OME-ZARR 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
+
 
 
 # Install UC2-REST first - as it will be installed via ImSwitch again
@@ -164,7 +164,6 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal
 # fix the version of OME-ZARR 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install zarr==2.11.3"
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install numpy==1.26.4"
 
 
 # Install VimbaX 

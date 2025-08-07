@@ -5,7 +5,6 @@ import os
 
 import numpy as np
 from PIL import Image
-from scipy import signal as sg
 import os
 from imswitch.imcommon.model import dirtools
 

@@ -1,5 +1,5 @@
 # used to be, but actions will replace this with the current release TAG -> >2.1.0
-__version__ = "2.1.24"
+__version__ = "2.1.25"
 __httpport__ = 8001
 __socketport__ = 8002
 __ssl__ = True

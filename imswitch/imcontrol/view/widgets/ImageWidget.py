@@ -112,8 +112,8 @@ class ImageWidget(QtWidgets.QWidget):
     def addItem(self, item):
         item.attach(self.napariViewer,
                     canvas=self.napariViewer.window.qt_viewer.canvas,
-                    view=self.napariViewer.window.qt_viewer.view,
-                    parent=self.napariViewer.window.qt_viewer.view.scene,
+                    view=self.napariViewer.window.qt_viewer.canvas.view,
+                    parent=self.napariViewer.window.qt_viewer.canvas.view.scene,
                     order=1e6 + 8000)
 
     def removeItem(self, item):

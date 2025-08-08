@@ -53,14 +53,61 @@ set SETUPTOOLS_USE_DISTUTILS=stdlib
 ImSwitch.exe
 ```
 
-### Option B: Install using pip
+### Option B: Install using UV (Recommended)
 
-ImSwitch is also published on PyPI and can be installed using pip. Python 3.7 or later is required. Additionally, certain components (the image reconstruction module and support for TIS cameras) require the software to be running on Windows, but most of the functionality is available on other operating systems as well.
+ImSwitch can be installed using UV, a fast Python package installer written in Rust that's significantly faster than pip. Python 3.9 or later is required. Additionally, certain components (the image reconstruction module and support for TIS cameras) require the software to be running on Windows, but most of the functionality is available on other operating systems as well.
+
+**Why UV?**
+- **~10-100x faster** package installation and dependency resolution
+- **Better dependency resolution** - finds compatible package versions more reliably
+- **Lock file support** - ensures reproducible builds across environments
+- **Drop-in replacement** for pip with improved caching and parallelization
+
+First, install UV:
+
+```bash
+# On macOS and Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# On Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Then install ImSwitch:
+
+```bash
+uv pip install ImSwitchUC2
+```
+
+**For developers working from source:**
+
+```bash
+# Clone the repository
+git clone https://github.com/openUC2/ImSwitch/
+cd ImSwitch
+
+# Create a virtual environment and install with UV
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv pip install -e .[PyQt5,dev]
+
+# UV automatically creates a uv.lock file for reproducible builds
+```
+
+You will then be able to start ImSwitch with this command:
+
+```
+imswitch
+```
+
+### Option C: Install using pip
+
+ImSwitch is also published on PyPI and can be installed using pip. Python 3.9 or later is required.
 
 To install ImSwitch from PyPI, run the following command:
 
 ```
-pip install ImSwitch
+pip install ImSwitchUC2
 ```
 
 You will then be able to start ImSwitch with this command:
@@ -70,7 +117,7 @@ imswitch
 ```
 
 
-### Option C: Install from Github (UC2 version)
+### Option D: Install from Github (UC2 version)
 
 **Installation**
 ```
@@ -80,10 +127,15 @@ cd ImSwitch
 # alternatively download this repo, unzip the .zip-file and open the command prompt in this directory
 conda create -n imswitch python=3.9 -y
 conda activate imswitch
-pip install -r requirements.txt --user
-#pip install -e ./
-pip install -e . --use-deprecated=legacy-resolver
-pip install git+https://gitlab.com/bionanoimaging/nanoimagingpack
+
+# Install UV (recommended for faster package management)
+curl -LsSf https://astral.sh/uv/install.sh | sh  # On macOS/Linux
+# OR on Windows: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Install dependencies with UV (faster and more reliable)
+uv pip install -r requirements.txt
+uv pip install -e .
+uv pip install git+https://gitlab.com/bionanoimaging/nanoimagingpack
 
 cd ~/Documents/
 # if there is a folder called ImSwitchConfig => rename it!

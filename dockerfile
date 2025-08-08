@@ -54,9 +54,13 @@ RUN apt-get update -o Acquire::AllowInsecureRepositories=true \
                    -o Acquire::AllowUnsignedRepositories=true \
                    && apt-get install -y --allow-unauthenticated \
                       wget unzip python3 python3-pip build-essential git \
-                      mesa-utils libhdf5-dev nano usbutils sudo libglib2.0-0 \
+                      mesa-utils libhdf5-dev nano usbutils sudo libglib2.0-0 curl \
                    && apt-get clean \
                    && rm -rf /var/lib/apt/lists/*
+
+# Install UV globally
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
 
 # Install Miniforge based on architecture
 RUN if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
@@ -138,32 +142,32 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
     
 
 # fix the version of OME-ZARR 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install ome-zarr==0.9.0"
 
 
 
 # Install UC2-REST first - as it will be installed via ImSwitch again
 RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \
     cd /tmp/UC2-REST && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install /tmp/UC2-REST"
 
 
 # first install all the dependencies not not to install them again in a potential "breaking update"
 # Clone the repository and install dependencies
 RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
     cd /tmp/ImSwitch && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install /tmp/ImSwitch"
 
 # Clone the config folder
 RUN git clone https://github.com/openUC2/ImSwitchConfig /tmp/ImSwitchConfig
 
 # we want psygnal to be installed without binaries - so first remove it 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip uninstall psygnal -y"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install psygnal --no-binary :all:"
 
 # fix the version of OME-ZARR 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install zarr==2.11.3"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install zarr==2.11.3"
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install ome-zarr==0.9.0"
 
 
 # Install VimbaX only for ARM64
@@ -175,7 +179,7 @@ RUN if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
     mv /opt/VimbaX_2025-1 /opt/VimbaX ; \
     rm VimbaX_Setup-2025-1-Linux_ARM64.tar.gz ; \
     cd /opt/VimbaX/cti && ./Install_GenTL_Path.sh ; \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl" ; \
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl" ; \
     export GENICAM_GENTL64_PATH="/opt/VimbaX/cti" ; \
     ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"; \
 fi
@@ -192,15 +196,15 @@ RUN cd /tmp/ImSwitchConfig && \
 # now update potential breaking changes
 RUN cd /tmp/ImSwitch && \
     git pull && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install /tmp/ImSwitch"
 
 # Install UC2-REST
 RUN cd /tmp/UC2-REST && \
     git pull && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install /tmp/UC2-REST"
 
 # install arkitekt 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip" 
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip" 
     
 # Expose FTP port and HTTP port
 EXPOSE  8001 8002 8003 8888 8889

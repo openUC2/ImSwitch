@@ -15,6 +15,11 @@ def get_version():
     raise RuntimeError('Unable to find version string.')
 
 
+# NOTE: This setup.py is maintained for backward compatibility.
+# The primary configuration is now in pyproject.toml for UV support.
+# When using UV, this file is not needed, but it's kept for pip compatibility.
+
+
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 

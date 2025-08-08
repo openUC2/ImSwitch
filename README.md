@@ -94,6 +94,8 @@ uv pip install -e .[PyQt5,dev]
 # UV automatically creates a uv.lock file for reproducible builds
 ```
 
+For detailed UV usage instructions, see [docs/uv-guide.md](docs/uv-guide.md).
+
 You will then be able to start ImSwitch with this command:
 
 ```

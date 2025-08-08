@@ -71,7 +71,12 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # On Windows
 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# On Linux 
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+
 
 Then install ImSwitch:
 

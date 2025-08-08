@@ -82,11 +82,7 @@ setup(
         "zarr>=3.0.0",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
-        "numba>=0.61.2", 
-        "RPi.GPIO",
-        "luma.oled",
-        "smbus2", 
-        "smbus"
+        "numba>=0.61.2"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
@@ -97,9 +93,15 @@ setup(
             "QScintilla >= 2.12",
             "PyQtWebEngine >= 5.15.2",
             "pyqtgraph >= 0.12.1",
-            "napari[pyqt5] == 0.4.19",
+            "napari[pyqt5] >= 0.6.0",
             "lantzdev[qt] >= 0.5.2",
             "qtpy >= 1.9"
+        ],
+        'lepmont': [
+            "smbus2",
+            "smbus",
+            "RPi.GPIO",
+            "luma.oled"
         ],
         'Ashlar': [
             "ashlarUC2"

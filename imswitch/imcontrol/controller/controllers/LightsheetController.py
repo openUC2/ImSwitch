@@ -40,13 +40,7 @@ class LightsheetController(ImConWidgetController):
         self.stages = self._master.positionersManager[self.stageName]
         self.isLightsheetRunning = False
         
-        # turn on the galvo in case it's available
-        try:
-            self._master.lasersManager[self.laser].setGalvo(channel=1, frequency=10, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1)
-            self._master.lasersManager[self.laser].setGalvo(channel=2, frequency=10, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1)
-        except  Exception as e:
-            self._logger.error(e)
-            
+         
 
         # connect signals
         self.sigImageReceived.connect(self.displayImage)
@@ -312,7 +306,7 @@ class LightsheetController(ImConWidgetController):
         self.detector.startAcquisition()
         # move to minPos
         self.stages.move(value=minPosZ, axis=axis, is_absolute=False, is_blocking=True)
-
+        time.sleep(1)
         # now start acquiring images and move the stage in Background
         controller = MovementController(self.stages)
         controller.move_to_position(maxPosZ+np.abs(minPosZ), axis, speed, is_absolute=False)

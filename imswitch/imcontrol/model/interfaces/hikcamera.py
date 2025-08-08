@@ -3,28 +3,7 @@ import numpy as np
 import time
 import cv2
 from imswitch.imcommon.model import initLogger
-# Import skimage filters with fallback for compatibility issues
-try:
-    from skimage.filters import gaussian, median
-except Exception as e:
-    print(f"Warning: skimage.filters import failed ({e}). Using fallback implementations.")
-    # Fallback implementations using scipy or cv2
-    try:
-        from scipy.ndimage import gaussian_filter as gaussian
-        from scipy.ndimage import median_filter as median
-    except ImportError:
-        # Final fallback using cv2
-        import cv2
-        def gaussian(image, sigma=1.0, **kwargs):
-            # Convert sigma to kernel size for cv2
-            ksize = int(2 * int(4 * sigma + 0.5) + 1)
-            return cv2.GaussianBlur(image.astype(np.float32), (ksize, ksize), sigma).astype(image.dtype)
-        
-        def median(image, selem=None, **kwargs):
-            # Use a default kernel size if selem is provided
-            ksize = 5 if selem is None else selem.shape[0]
-            return cv2.medianBlur(image.astype(np.uint8), ksize)
-
+from skimage.filters import gaussian, median
 from typing import List, Optional, Union
 import sys
 import threading

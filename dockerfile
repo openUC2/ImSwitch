@@ -177,8 +177,10 @@ RUN if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
     cd /opt/VimbaX/cti && ./Install_GenTL_Path.sh ; \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl" ; \
     export GENICAM_GENTL64_PATH="/opt/VimbaX/cti" ; \
-    ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"; \
 fi
+
+# Set GENICAM_GENTL64_PATH globally for all containers
+ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching

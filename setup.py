@@ -48,7 +48,7 @@ setup(
         "lantzdev >= 0.5.2",
         "luddite >= 1",
         "nidaqmx >= 0.5.7",
-        "numpy==1.26.4",
+        "numpy==2.1.2",
         "packaging >= 19",
         "psutil >= 5.4.8",
         "pyserial >= 3.4",

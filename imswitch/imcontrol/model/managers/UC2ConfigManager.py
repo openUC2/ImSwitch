@@ -6,7 +6,6 @@ import threading
 
 import numpy as np
 from PIL import Image
-from scipy import signal as sg
 import uc2rest as uc2
 import json
 

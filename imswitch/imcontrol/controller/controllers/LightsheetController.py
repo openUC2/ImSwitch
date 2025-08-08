@@ -34,10 +34,19 @@ class LightsheetController(ImConWidgetController):
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
 
         # select lasers and add to gui
-        allLaserNames = self._master.lasersManager.getAllDeviceNames()
+        self.lasers = self._master.lasersManager.getAllDeviceNames()
+        self.laser = self.lasers[0]
         self.stageName = self._master.positionersManager.getAllDeviceNames()[0]
         self.stages = self._master.positionersManager[self.stageName]
         self.isLightsheetRunning = False
+        
+        # turn on the galvo in case it's available
+        try:
+            self._master.lasersManager[self.laser].setGalvo(channel=1, frequency=10, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1)
+            self._master.lasersManager[self.laser].setGalvo(channel=2, frequency=10, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1)
+        except  Exception as e:
+            self._logger.error(e)
+            
 
         # connect signals
         self.sigImageReceived.connect(self.displayImage)
@@ -49,7 +58,7 @@ class LightsheetController(ImConWidgetController):
             return
         self._widget.startButton.clicked.connect(self.startLightsheet)
         self._widget.stopButton.clicked.connect(self.stopLightsheet)
-        self._widget.setAvailableIlluSources(allLaserNames)
+        self._widget.setAvailableIlluSources(self.lasers)
         self._widget.setAvailableStageAxes(self.stages.axes)
         self._widget.sigSliderIlluValueChanged.connect(self.valueIlluChanged)
 
@@ -116,6 +125,7 @@ class LightsheetController(ImConWidgetController):
         self._logger.info("Scan started")
         mThread = threading.Thread(target=performScanning, args=(xyPositions, mScanParams['z_min'], mScanParams['z_max'], mScanParams['speed'], mScanParams['stage_axis'], mScanParams['illu_source'], mScanParams['illu_value']))
         mThread.start()
+
 
 
     def onButtonScanStop(self):
@@ -250,6 +260,19 @@ class LightsheetController(ImConWidgetController):
 
         self.performScanningRecording(minPos, maxPos, speed, stageAxis, illuSource, 0)
 
+    @APIExport()
+    def setGalvo(self, channel:int=1, frequency:float=10, offset:float=0, amplitude:float=1, clk_div:int=0, phase:int=0, invert:int=1):
+        '''Sets the galvo parameters for the lightsheet.'''
+        if not self.isLightsheetRunning:
+            try:
+                self._master.lasersManager[self.laser].setGalvo(channel=channel, frequency=frequency, offset=offset, amplitude=amplitude, clk_div=clk_div, phase=phase, invert=invert)
+                self._logger.info(f"Set galvo parameters: channel={channel}, frequency={frequency}, offset={offset}, amplitude={amplitude}, clk_div={clk_div}, phase={phase}, invert={invert}")
+            except Exception as e:
+                self._logger.error(f"Error setting galvo parameters: {e}")
+        else:
+            self._logger.warning("Cannot set galvo parameters while lightsheet is running.")
+            
+            
     @APIExport()
     def performScanningRecording(self, minPos:int=0, maxPos:int=1000, speed:int=1000, axis:str="A", illusource:int=-1, illuvalue:int=512):
         if not self.isLightsheetRunning:

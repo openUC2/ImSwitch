@@ -27,9 +27,14 @@ jobs:
         python-version: 3.9
     - name: Install dependencies
       run: |
-        python3 -m pip install --upgrade pip
-        python3 -m pip install .
-        python3 -m pip install pyinstaller==5.4.1
+        # Install UV
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        source $HOME/.local/bin/uv
+        export PATH="$HOME/.local/bin:$PATH"
+        
+        # Install with UV
+        uv pip install --system .
+        uv pip install --system pyinstaller==5.4.1
       shell: bash
     - name: Find latest tag of dependency
       id: remote_chart

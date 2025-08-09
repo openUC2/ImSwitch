@@ -13,6 +13,10 @@ call C:\Miniforge\Scripts\activate.bat
 conda create -y --name imswitch311 python=3.11
 conda install -y -n imswitch311 -c conda-forge h5py numcodecs scikit-image=0.19.3
 
+echo Installing UV
+call activate imswitch311
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
 echo Cloning ImSwitchConfig if not present
 if not exist "%USERPROFILE%\ImSwitchConfig" (
     git clone https://github.com/openUC2/ImSwitchConfig "%USERPROFILE%\ImSwitchConfig"
@@ -23,16 +27,16 @@ if not exist "%USERPROFILE%\ImSwitch" (
     git clone https://github.com/openUC2/imSwitch "%USERPROFILE%\ImSwitch"
 )
 call activate imswitch311
-pip install -e "%USERPROFILE%\ImSwitch"
+uv pip install -e "%USERPROFILE%\ImSwitch"
 
 echo Installing UC2-REST
 if not exist "%USERPROFILE%\UC2-REST" (
     git clone https://github.com/openUC2/UC2-REST "%USERPROFILE%\UC2-REST"
 )
-pip install -e "%USERPROFILE%\UC2-REST"
+uv pip install -e "%USERPROFILE%\UC2-REST"
 
 echo Installing specific versions of ome-zarr, numpy, and scikit-image
-pip install ome-zarr==0.9.0
+uv pip install ome-zarr==0.9.0
 conda install -y -c conda-forge --strict-channel-priority numpy==1.26.4 scikit-image==0.19.3
 
 echo Installation complete. 

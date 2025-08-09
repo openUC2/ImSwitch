@@ -31,9 +31,14 @@ jobs:
               libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0
         fi
 
-        python3 -m pip install --upgrade pip
-        python3 -m pip install .[PyQt5]
-        python3 -m pip install flake8 pytest pytest-qt
+        # Install UV
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        source $HOME/.local/bin/uv
+        export PATH="$HOME/.local/bin:$PATH"
+        
+        # Install with UV
+        uv pip install --system .[PyQt5]
+        uv pip install --system flake8 pytest pytest-qt
       shell: bash
     - name: Lint with flake8
       run: |

@@ -509,7 +509,7 @@ class FocusLockController(ImConWidgetController):
                 "timestamp": time.time(),
                 "is_locked": self.locked,
                 "lock_position": self.lockPosition if self.locked else None,
-                "current_position": self.stage.getPosition()["Z"],
+                "current_position": 0 ,# TODO: Don't poll this all the time! self.stage.getPosition()["Z"],
                 "focus_metric": self._focus_params.focus_metric,
             }
             self.sigUpdateFocusValue.emit(focus_data)
@@ -518,7 +518,7 @@ class FocusLockController(ImConWidgetController):
             if self.locked:
                 value_move = self.updatePI()
                 if self.noStepVar and abs(value_move) > self._pi_params.min_step_threshold:
-                    self.stage.move(value_move, 0)
+                    self.stage.move(value = value_move, axis = "Z", speed = 1000, is_blocking=False, is_absolute=False) #     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=gTIMEOUT, is_reduced=True):
             elif self.aboutToLock:
                 if not hasattr(self, "aboutToLockDataPoints"):
                     self.aboutToLockDataPoints = np.zeros(5, dtype=float)

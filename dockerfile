@@ -142,12 +142,10 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
     
 
 # Install UC2-REST first - as it will be installed via ImSwitch again
-RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \
-    cd /tmp/UC2-REST && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install /tmp/UC2-REST"
+RUN git/bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install UC2-REST"
 
 
-# first install all the dependencies not not to install them again in a potential "breaking update"
+# first install all the dependencies not  to install them again in a potential "breaking update"
 # Clone the repository and install dependencies
 RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
     cd /tmp/ImSwitch && \
@@ -157,9 +155,8 @@ RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
 RUN git clone https://github.com/openUC2/ImSwitchConfig /tmp/ImSwitchConfig
 
 # we want psygnal to be installed without binaries - so first remove it 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip uninstall psygnal -y"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install psygnal --no-binary :all:"
-
+RUN /opt/conda/bin/conda run -n imswitch uv pip uninstall psygnal -y
+RUN /opt/conda/bin/conda run -n imswitch uv pip install psygnal --no-binary :all:
 
 # Install VimbaX only for ARM64
 RUN if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \

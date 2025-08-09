@@ -179,7 +179,7 @@ class ExperimentController(ImConWidgetController):
         # set default values
         self.SPEED_Y_default = 20000
         self.SPEED_X_default = 20000
-        self.SPEED_Z_default = 20000
+        self.SPEED_Z_default = 10000
         self.ACCELERATION = 500000
 
         # select detectors
@@ -781,9 +781,9 @@ class ExperimentController(ImConWidgetController):
         self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
         return (posX, posY)
 
-    def move_stage_z(self, posZ: float, relative: bool = False):
+    def move_stage_z(self, posZ: float, relative: bool = False, maxSpeedZ=5000):
         self._logger.debug(f"Moving stage to Z={posZ}")
-        self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, 10000)), axis="Z", is_absolute=not relative, is_blocking=True)
+        self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, maxSpeedZ)), axis="Z", is_absolute=not relative, is_blocking=True)
         newPosition = self.mStage.getPosition()
         self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
         return newPosition["Z"]

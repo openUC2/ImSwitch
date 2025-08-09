@@ -142,14 +142,14 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
     
 
 # Install UC2-REST first - as it will be installed via ImSwitch again
-RUN git/bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install UC2-REST"
+RUN /opt/conda/bin/conda run -n imswitch uv pip install UC2-REST
 
 
 # first install all the dependencies not  to install them again in a potential "breaking update"
 # Clone the repository and install dependencies
 RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
     cd /tmp/ImSwitch && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install /tmp/ImSwitch"
+    /opt/conda/bin/conda run -n imswitch uv pip install /tmp/ImSwitch
 
 # Clone the config folder
 RUN git clone https://github.com/openUC2/ImSwitchConfig /tmp/ImSwitchConfig

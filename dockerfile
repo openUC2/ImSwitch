@@ -141,11 +141,6 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
     conda install scikit-image=0.19.3 -c conda-forge"
     
 
-# fix the version of OME-ZARR 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install ome-zarr==0.9.0"
-
-
-
 # Install UC2-REST first - as it will be installed via ImSwitch again
 RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \
     cd /tmp/UC2-REST && \
@@ -164,10 +159,6 @@ RUN git clone https://github.com/openUC2/ImSwitchConfig /tmp/ImSwitchConfig
 # we want psygnal to be installed without binaries - so first remove it 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip uninstall psygnal -y"
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install psygnal --no-binary :all:"
-
-# fix the version of OME-ZARR 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install zarr==2.11.3"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install ome-zarr==0.9.0"
 
 
 # Install VimbaX only for ARM64

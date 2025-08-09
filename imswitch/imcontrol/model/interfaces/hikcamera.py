@@ -108,7 +108,10 @@ class CameraHIK:
         # gather all devices (GigE then USB)
         infos: list[MV_CC_DEVICE_INFO] = []
         for layer in (MV_GIGE_DEVICE, MV_USB_DEVICE):
-            lst = MV_CC_DEVICE_INFO_LIST(); memset(byref(lst), 0, sizeof(lst))
+            lst = MV_CC_DEVICE_INFO_LIST()
+            # print available cameras 
+            self.__logger.debug(f"Searching for cameras on layer {layer}...")
+            memset(byref(lst), 0, sizeof(lst))
             if MvCamera.MV_CC_EnumDevices(layer, lst) == 0:
                 for i in range(lst.nDeviceNum):
                     infos.append(cast(lst.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents)

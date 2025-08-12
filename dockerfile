@@ -140,7 +140,11 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
 # fix the version of OME-ZARR 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
 
-
+# install nmcli
+RUN apt-get update && \
+    apt-get install -y --allow-unauthenticated network-manager && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install UC2-REST first - as it will be installed via ImSwitch again
 RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \

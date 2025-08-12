@@ -79,18 +79,17 @@ RUN /opt/conda/bin/conda create -y --name imswitch python=3.11 && \
 
 # Download and install the appropriate Hik driver based on architecture
 RUN cd /tmp && \
-    wget https://www.hikrobotics.com/cn2/source/support/software/MVS_STD_GML_V2.1.2_231116.zip && \
-    unzip MVS_STD_GML_V2.1.2_231116.zip && \
     if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
-        dpkg -i MVS-2.1.2_aarch64_20231116.deb && \
-        rm -f MVS-2.1.2_aarch64_20231116.deb; \
+        wget https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/MVS-3.0.1_aarch64_20241128.deb && \
+        dpkg -i MVS-3.0.1_aarch64_20241128.deb && \
+        rm -f MVS-3.0.1_aarch64_20241128.deb; \
     elif [ "${TARGETPLATFORM}" = "linux/amd64" ]; then \
-        dpkg -i MVS-2.1.2_x86_64_20231116.deb && \
-        rm -f MVS-2.1.2_x86_64_20231116.deb; \
-    fi && \
-    rm -rf /tmp/MVS_STD_GML_V2.1.2_231116.zip /tmp/MVS_STD_GML_V2.1.2_231116/
+        wget https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/MVS-3.0.1_x86_64_20241128.deb && \
+        dpkg -i MVS-3.0.1_x86_64_20241128.deb && \
+        rm -f MVS-3.0.1_x86_64_20241128.deb; \
+    fi
 
-## Install Daheng Camera 
+## Install Daheng Camera
 # Create the udev rules directory
 RUN mkdir -p /etc/udev/rules.d
 

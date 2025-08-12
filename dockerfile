@@ -46,7 +46,8 @@
 FROM ubuntu:22.04
 
 ARG TARGETPLATFORM
-ENV TZ=America/Los_Angeles
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
 
 # Install necessary dependencies and prepare the environment as usual
 RUN apt-get update -o Acquire::AllowInsecureRepositories=true \

@@ -8,11 +8,14 @@ from ..basecontrollers import ImConWidgetController
 class WiFiController(ImConWidgetController):
     """
     Linux/Raspberry Pi only (uses `sudo nmcli`).
+
     Exposes:
-      - scanNetworks() -> list of networks
-      - getAvailableNetworks() -> last scan result
-      - connectNetwork(ssid, password=None, ifname=None) -> status
-      - getCurrentSSID(ifname=None) -> ssid or None
+      - scanNetworks(ifname=None) -> {"networks":[...], "ifname": "..."}
+      - getAvailableNetworks() -> [...]
+      - connectNetwork(ssid, password=None, ifname=None) -> {"status": ..., ...}
+      - getCurrentSSID(ifname=None) -> {"ssid": "...", "ifname": "..."}
+      - startAccessPoint(ssid, password, ifname=None, con_name="imswitch-hotspot", band="bg", channel=None)
+      - stopAccessPoint(con_name="imswitch-hotspot")  # down+delete
     """
 
     def __init__(self, *args, **kwargs):
@@ -25,26 +28,20 @@ class WiFiController(ImConWidgetController):
     # ---------- helpers ----------
 
     def _run(self, args: List[str]) -> subprocess.CompletedProcess:
-        cmd = [self._sudo, self._nmcli] + args
+        cmd = [self._sudo, "-n", self._nmcli] + args
         self._logger.debug(f"Running: {' '.join(cmd)}")
-        return subprocess.run(
-            cmd,
-            check=False,
-            text=True,
-            capture_output=True,
-        )
+        return subprocess.run(cmd, check=False, text=True, capture_output=True)
 
     def _get_wifi_ifname(self) -> Optional[str]:
-        # nmcli -t -f DEVICE,TYPE,STATE device status
-        p = self._run(["-t", "-f", "DEVICE,TYPE,STATE", "device", "status"])
+        # nmcli -t -f DEVICE,TYPE device status
+        p = self._run(["-t", "-f", "DEVICE,TYPE", "device", "status"])
         if p.returncode != 0:
             self._logger.error(p.stderr.strip())
             return None
         for line in p.stdout.strip().splitlines():
-            # e.g. "wlan0:wifi:connected"
-            parts = line.split(":")
-            if len(parts) >= 3 and parts[1] == "wifi":
-                return parts[0]
+            dev, typ = (line.split(":") + ["", ""])[:2]
+            if typ == "wifi":
+                return dev
         return None
 
     def _parse_scan(self, text: str) -> List[Dict]:
@@ -54,7 +51,6 @@ class WiFiController(ImConWidgetController):
             if not line:
                 continue
             parts = line.split(":")
-            # SSID can be empty; keep but mark as hidden
             ssid = parts[0]
             signal = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
             security = parts[2] if len(parts) > 2 else ""
@@ -64,23 +60,43 @@ class WiFiController(ImConWidgetController):
                 "ssid": ssid if ssid else "(hidden)",
                 "hidden": ssid == "",
                 "signal": signal,
-                "security": security,  # e.g. WPA2, WPA3, WEP, --
+                "security": security,
                 "channel": chan,
                 "freq_mhz": freq,
             }
-            # Deduplicate by SSID, keep strongest
             key = entry["ssid"]
             if key not in nets or (entry["signal"] or -1) > (nets[key]["signal"] or -1):
                 nets[key] = entry
         return sorted(nets.values(), key=lambda d: d["signal"] if d["signal"] is not None else -1, reverse=True)
 
+    def _con_exists(self, name: str) -> bool:
+        r = self._run(["-t", "-f", "NAME", "connection", "show"])
+        if r.returncode != 0:
+            return False
+        return any(line.strip() == name for line in r.stdout.splitlines())
+
+    def _con_active(self, name: str) -> bool:
+        r = self._run(["-t", "-f", "NAME", "connection", "show", "--active"])
+        if r.returncode != 0:
+            return False
+        return any(line.strip() == name for line in r.stdout.splitlines())
+
+    def _get_if_ipv4(self, ifname: str) -> Optional[str]:
+        r = self._run(["-t", "-f", "IP4.ADDRESS", "device", "show", ifname])
+        if r.returncode != 0:
+            return None
+        # e.g. "IP4.ADDRESS[1]:10.42.0.1/24"
+        for line in r.stdout.splitlines():
+            if ":" in line:
+                val = line.split(":", 1)[1].strip()
+                if val and val != "--":
+                    return val
+        return None
+
     # ---------- API ----------
 
     @APIExport(runOnUIThread=False)
     def scanNetworks(self, ifname: Optional[str] = None) -> Dict:
-        """
-        Returns: {"networks":[{ssid, hidden, signal, security, channel, freq_mhz}], "ifname": "..."}
-        """
         ifname = ifname or self._get_wifi_ifname()
         args = ["-t", "-f", "SSID,SIGNAL,SECURITY,CHAN,FREQ", "device", "wifi", "list"]
         if ifname:
@@ -95,20 +111,18 @@ class WiFiController(ImConWidgetController):
 
     @APIExport(runOnUIThread=False)
     def getAvailableNetworks(self) -> List[Dict]:
-        """Return last scan result without rescanning."""
         return self._last_scan
 
     @APIExport(runOnUIThread=False)
     def connectNetwork(self, ssid: str, password: Optional[str] = None, ifname: Optional[str] = None) -> Dict:
-        """
-        Connect by SSID. For open networks leave password=None.
-        Returns: {"status":"connected","ssid":..., "ifname":...} or {"error": "..."}
-        """
         if not ssid:
             return {"error": "SSID required"}
-
         ifname = ifname or self._get_wifi_ifname()
-        # Prefer interface-bound connect if available
+
+        # If an AP is active, bring it down before trying STA mode.
+        if self._con_active("imswitch-hotspot"):
+            self.stopAccessPoint()
+
         args = ["device", "wifi", "connect", ssid]
         if ifname:
             args += ["ifname", ifname]
@@ -117,13 +131,12 @@ class WiFiController(ImConWidgetController):
 
         p = self._run(args)
         if p.returncode != 0:
-            # If connection name exists, try activating it
             msg = p.stderr.strip()
             self._logger.warning(f"Direct connect failed: {msg}. Trying to activate existing connection...")
             alt = self._run(["connection", "up", ssid] + (["ifname", ifname] if ifname else []))
             if alt.returncode != 0:
                 return {"error": alt.stderr.strip() or msg}
-        # success -> verify
+
         current = self.getCurrentSSID(ifname=ifname).get("ssid")
         if current == ssid:
             return {"status": "connected", "ssid": ssid, "ifname": ifname}
@@ -131,18 +144,13 @@ class WiFiController(ImConWidgetController):
 
     @APIExport(runOnUIThread=False)
     def getCurrentSSID(self, ifname: Optional[str] = None) -> Dict:
-        """
-        Returns: {"ssid": "...", "ifname": "..."} or {"ssid": None}
-        """
         ifname = ifname or self._get_wifi_ifname()
         if not ifname:
             return {"ssid": None}
 
-        # nmcli -t -f GENERAL.CONNECTION device show wlan0
         p = self._run(["-t", "-f", "GENERAL.CONNECTION", "device", "show", ifname])
         if p.returncode != 0:
             return {"ssid": None, "error": p.stderr.strip()}
-        # Output like: "GENERAL.CONNECTION:My-WiFi"
         line = p.stdout.strip()
         ssid = None
         if ":" in line:
@@ -150,3 +158,75 @@ class WiFiController(ImConWidgetController):
             if conn_name and conn_name != "--":
                 ssid = conn_name
         return {"ssid": ssid, "ifname": ifname}
+
+    # ---------- Access Point / Hotspot ----------
+
+    @APIExport(runOnUIThread=False)
+    def startAccessPoint(
+        self,
+        ssid: str,
+        password: str,
+        ifname: Optional[str] = None,
+        con_name: str = "imswitch-hotspot",
+        band: str = "bg",            # "bg" (2.4GHz) or "a" (5GHz), if supported
+        channel: Optional[int] = None
+    ) -> Dict:
+        """
+        Create & bring up an AP with given SSID/password.
+        Returns: {"status":"up","ssid":..., "ifname":..., "con_name":..., "ipv4":...} or {"error": ...}
+        """
+        if not ssid:
+            return {"error": "SSID required"}
+        if not password or len(password) < 8:
+            return {"error": "Password (WPA2/WPA3) must be ≥ 8 characters"}
+
+        ifname = ifname or self._get_wifi_ifname()
+        if not ifname:
+            return {"error": "No Wi-Fi interface found"}
+
+        # Disconnect from any current STA connection to free the radio.
+        self._run(["device", "disconnect", ifname])
+
+        # Clean any stale hotspot connection
+        if self._con_active(con_name):
+            self._run(["connection", "down", con_name])
+        if self._con_exists(con_name):
+            self._run(["connection", "delete", con_name])
+
+        args = ["device", "wifi", "hotspot", "ifname", ifname, "con-name", con_name, "ssid", ssid, "password", password]
+        # Optional band/channel (depends on driver/regdomain support)
+        if band in ("a", "bg"):
+            args += ["band", band]
+        if channel is not None:
+            args += ["channel", str(channel)]
+
+        p = self._run(args)
+        if p.returncode != 0:
+            return {"error": p.stderr.strip() or "Failed to create hotspot"}
+
+        # Ensure IPv4 sharing is enabled (usually done automatically by hotspot)
+        # nmcli con modify <con_name> ipv4.method shared
+        self._run(["connection", "modify", con_name, "ipv4.method", "shared"])
+
+        # Bring it up (idempotent)
+        up = self._run(["connection", "up", con_name])
+        if up.returncode != 0:
+            return {"error": up.stderr.strip() or "Failed to activate hotspot"}
+
+        ipv4 = self._get_if_ipv4(ifname)  # typically 10.42.0.1/24
+        return {"status": "up", "ssid": ssid, "ifname": ifname, "con_name": con_name, "ipv4": ipv4}
+
+    @APIExport(runOnUIThread=False)
+    def stopAccessPoint(self, con_name: str = "imswitch-hotspot") -> Dict:
+        """
+        Bring down and delete the AP connection.
+        """
+        if self._con_active(con_name):
+            d = self._run(["connection", "down", con_name])
+            if d.returncode != 0:
+                return {"error": d.stderr.strip() or f"Failed to down {con_name}"}
+        if self._con_exists(con_name):
+            rm = self._run(["connection", "delete", con_name])
+            if rm.returncode != 0:
+                return {"error": rm.stderr.strip() or f"Failed to delete {con_name}"}
+        return {"status": "removed", "con_name": con_name}

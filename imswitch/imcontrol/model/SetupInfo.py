@@ -341,6 +341,12 @@ class FocusLockInfo:
     
     focusLockMetric: str
     """ Method to use for focus lock. Options: 'astigmatism', 'phase', 'defocus'. """
+    
+    laserName: str
+    """ Name of the laser to use for focus lock. """
+    
+    laserValue: int
+    """ Value of the laser to use for focus lock. This is usually a wavelength in nm. """
 
 @dataclass(frozen=False)
 class FOVLockInfo:

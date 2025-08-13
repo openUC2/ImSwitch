@@ -12,7 +12,7 @@ from scipy.optimize import curve_fit
 from scipy.ndimage import gaussian_filter
 from skimage.feature import peak_local_max
 import threading
-from imswitch.imcommon.framework import Thread, Signal  # noqa: F401 (Timer kept for context)
+from imswitch.imcommon.framework import Thread, Signal
 from imswitch.imcommon.model import initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch import IS_HEADLESS
@@ -20,9 +20,11 @@ from imswitch import IS_HEADLESS
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
+# =========================
+# Dataclasses (API-stable)
+# =========================
 @dataclass
 class FocusLockParams:
-    """Parameters for focus lock measurement and processing."""
     focus_metric: str = "JPG"
     crop_center: Optional[List[int]] = None
     crop_size: Optional[int] = None
@@ -31,10 +33,9 @@ class FocusLockParams:
     update_freq: float = 10.0
     two_foci_enabled: bool = False
     z_stack_enabled: bool = False
-    z_step_limit_nm: float = 40.0  # Minimum z-stack step in nanometers
-    
+    z_step_limit_nm: float = 40.0
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for API serialization."""
         return {
             "focus_metric": self.focus_metric,
             "crop_center": self.crop_center,
@@ -50,17 +51,23 @@ class FocusLockParams:
 
 @dataclass
 class PIControllerParams:
-    """Parameters for PI controller feedback loop."""
+    # API-compatible: keep name/fields; extend silently
     kp: float = 0.0
     ki: float = 0.0
     set_point: float = 0.0
-    safety_distance_limit: float = 50.0
-    safety_move_limit: float = 3.0
-    min_step_threshold: float = 0.002
+    safety_distance_limit: float = 500.0   # treated as travel budget (µm)
+    safety_move_limit: float = 3.0         # per-update clamp (µm)
+    min_step_threshold: float = 0.002      # deadband (µm)
     safety_motion_active: bool = False
-    
+    # New (does not break API)
+    kd: float = 0.0
+    scale_um_per_unit: float = 1.0         # focus-units -> µm
+    sample_time: float = 0.1               # s, updated from update_freq
+    output_lowpass_alpha: float = 0.0      # 0..1 smoothing of controller output
+    integral_limit: float = 100.0          # anti-windup (controller units)
+    meas_lowpass_alpha: float = 0.0        # pre-filter focus value (0..1 EMA)
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for API serialization."""
         return {
             "kp": self.kp,
             "ki": self.ki,
@@ -69,19 +76,24 @@ class PIControllerParams:
             "safety_move_limit": self.safety_move_limit,
             "min_step_threshold": self.min_step_threshold,
             "safety_motion_active": self.safety_motion_active,
+            # expose new params too (non-breaking)
+            "kd": self.kd,
+            "scale_um_per_unit": self.scale_um_per_unit,
+            "sample_time": self.sample_time,
+            "output_lowpass_alpha": self.output_lowpass_alpha,
+            "integral_limit": self.integral_limit,
+            "meas_lowpass_alpha": self.meas_lowpass_alpha,
         }
 
 
-@dataclass 
+@dataclass
 class CalibrationParams:
-    """Parameters for focus calibration."""
     from_position: float = 49.0
     to_position: float = 51.0
     num_steps: int = 20
     settle_time: float = 0.5
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for API serialization."""
         return {
             "from_position": self.from_position,
             "to_position": self.to_position,
@@ -92,7 +104,6 @@ class CalibrationParams:
 
 @dataclass
 class FocusLockState:
-    """Current state of the focus lock system."""
     is_measuring: bool = False
     is_locked: bool = False
     about_to_lock: bool = False
@@ -100,9 +111,8 @@ class FocusLockState:
     lock_position: float = 0.0
     current_position: float = 0.0
     measurement_active: bool = False
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for API serialization."""
         return {
             "is_measuring": self.is_measuring,
             "is_locked": self.is_locked,
@@ -114,12 +124,73 @@ class FocusLockState:
         }
 
 
-class FocusLockController(ImConWidgetController):
-    """Linked to FocusLockWidget."""
+# =========================
+# Robust PID (keeps self.pi API name)
+# =========================
+class _PID:
+    """Discrete 2-DOF style (β on SP via caller if needed), derivative on measurement, anti-windup."""
 
-    sigUpdateFocusValue = Signal(object)  # (focus_data_dict)
+    def __init__(self, set_point: float, kp: float = 0.0, ki: float = 0.0, kd: float = 0.0,
+                 sample_time: float = 0.1, integral_limit: float = 100.0, output_lowpass_alpha: float = 0.0):
+        self.set_point = float(set_point)
+        self.kp, self.ki, self.kd = float(kp), float(ki), float(kd)
+        self.dt = max(float(sample_time), 1e-6)
+        self.integral = 0.0
+        self.integral_limit = float(integral_limit)
+        self.last_meas = None
+        self.out = 0.0
+        self.alpha = float(output_lowpass_alpha)  # output EMA 0..1
+        # derivative filter
+        self.dpv_f = 0.0
+        self.dpv_alpha = 0.85  # fixed light smoothing; can be exposed if needed
+
+    def setParameters(self, kp: float, ki: float):
+        self.kp, self.ki = float(kp), float(ki)
+
+    def updateParameters(self, **kwargs):
+        for k, v in kwargs.items():
+            if k == "kp": self.kp = float(v)
+            elif k == "ki": self.ki = float(v)
+            elif k == "kd": self.kd = float(v)
+            elif k == "sample_time": self.dt = max(float(v), 1e-6)
+            elif k == "integral_limit": self.integral_limit = float(v)
+            elif k == "output_lowpass_alpha": self.alpha = float(v)
+            elif k == "set_point": self.set_point = float(v)
+
+    def update(self, meas: float) -> float:
+        e = self.set_point - float(meas)
+
+        # integral w/ clamp (anti-windup)
+        self.integral += e * self.dt
+        self.integral = max(min(self.integral, self.integral_limit), -self.integral_limit)
+
+        # derivative on measurement w/ light low-pass
+        if self.last_meas is None:
+            d_meas = 0.0
+        else:
+            d_meas = (float(meas) - self.last_meas) / self.dt
+        self.last_meas = float(meas)
+        self.dpv_f = self.dpv_alpha * self.dpv_f + (1.0 - self.dpv_alpha) * d_meas
+
+        u_raw = self.kp * e + self.ki * self.integral - self.kd * self.dpv_f
+        self.out = self.alpha * self.out + (1.0 - self.alpha) * u_raw if self.alpha > 0.0 else u_raw
+        return self.out
+
+    def restart(self):
+        self.integral = 0.0
+        self.last_meas = None
+        self.out = 0.0
+
+
+# =========================
+# Controller
+# =========================
+class FocusLockController(ImConWidgetController):
+    """Linked to FocusLockWidget. Public API (APIExport) kept stable."""
+
+    sigUpdateFocusValue = Signal(object)       # (focus_data_dict)
     sigFocusLockStateChanged = Signal(object)  # (state_dict)
-    sigCalibrationProgress = Signal(object)  # (progress_dict)
+    sigCalibrationProgress = Signal(object)    # (progress_dict)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -133,27 +204,59 @@ class FocusLockController(ImConWidgetController):
         try:
             self.stage = self._master.positionersManager[self.positioner]
         except KeyError:
-            self._logger.error(f"Positioner '{self.positioner}' not found using first in list. ")
+            self._logger.error(f"Positioner '{self.positioner}' not found using first in list.")
             self.positioner = self._master.positionersManager.getAllDeviceNames()[0]
             self.stage = self._master.positionersManager[self.positioner]
 
-        # Initialize parameters from setup info
+        # Params
         self._focus_params = FocusLockParams(
             focus_metric=getattr(self._setupInfo.focusLock, "focusLockMetric", "JPG"),
             crop_center=getattr(self._setupInfo.focusLock, "cropCenter", None),
             crop_size=getattr(self._setupInfo.focusLock, "cropSize", None),
             update_freq=self._setupInfo.focusLock.updateFreq or 10,
         )
-        
+
+        # Laser (optional)
+        laserName = getattr(self._setupInfo.focusLock, "laserName", None)
+        laserValue = getattr(self._setupInfo.focusLock, "laserValue", None)
+        if laserName and laserValue is not None:
+            try:
+                self._master.lasersManager[laserName].setEnabled(True)
+                self._master.lasersManager[laserName].setValue(laserValue)
+            except KeyError:
+                self._logger.error(f"Laser '{laserName}' not found. Cannot set power to {laserValue}.")
+
+        # PI parameters (API names preserved), add extras
+        piKp = getattr(self._setupInfo.focusLock, "piKp", 0.0)
+        piKi = getattr(self._setupInfo.focusLock, "piKi", 0.0)
+        piKd = getattr(self._setupInfo.focusLock, "piKd", 0.0)
+        setPoint = getattr(self._setupInfo.focusLock, "setPoint", 0.0)
+        safety_distance_limit = getattr(self._setupInfo.focusLock, "safetyDistanceLimit", 500.0)
+        safetyMoveLimit = getattr(self._setupInfo.focusLock, "safetyMoveLimit", 3.0)
+        minStepThreshold = getattr(self._setupInfo.focusLock, "minStepThreshold", 0.002)
+        safety_motion_active = getattr(self._setupInfo.focusLock, "safetyMotionActive", False)
+        scale_um_per_unit = getattr(self._setupInfo.focusLock, "scaleUmPerUnit", 1.0)
+        output_lowpass_alpha = getattr(self._setupInfo.focusLock, "outputLowpassAlpha", 0.0)
+        integral_limit = getattr(self._setupInfo.focusLock, "integralLimit", 100.0)
+        meas_lowpass_alpha = getattr(self._setupInfo.focusLock, "measLowpassAlpha", 0.0)
+
         self._pi_params = PIControllerParams(
-            kp=self._setupInfo.focusLock.piKp,
-            ki=self._setupInfo.focusLock.piKi,
+            kp=piKp, ki=piKi, kd=piKd, set_point=setPoint,
+            safety_distance_limit=safety_distance_limit,
+            safety_move_limit=safetyMoveLimit,
+            min_step_threshold=minStepThreshold,
+            safety_motion_active=safety_motion_active,
+            scale_um_per_unit=scale_um_per_unit,
+            sample_time=1.0 / (self._focus_params.update_freq or 10.0),
+            output_lowpass_alpha=output_lowpass_alpha,
+            integral_limit=integral_limit,
+            meas_lowpass_alpha=meas_lowpass_alpha,
         )
-        
+
         self._calib_params = CalibrationParams()
         self._state = FocusLockState()
 
-        # Legacy compatibility parameters - keep for backward compatibility
+        # Legacy/GUI mirrors
         self.setPointSignal = 0.0
         self.locked = False
         self.aboutToLock = False
@@ -161,60 +264,62 @@ class FocusLockController(ImConWidgetController):
         self.twoFociVar = self._focus_params.two_foci_enabled
         self.noStepVar = True
         self.__isPollingFramesActive = True
-        self.pollingFrameUpdateRate = 1.0 / self._focus_params.update_freq  # Update frequency in seconds
-        
+        self.pollingFrameUpdateRate = 1.0 / self._focus_params.update_freq
         self.zStepLimLo = 0.0
         self.aboutToLockDiffMax = 0.4
         self.lockPosition = 0.0
-        self.currentPosition = 0.0
+        self.currentPosition = 0.0  # kept for API/state, not used in loop
         self.lastPosition = 0.0
         self.buffer = 40
         self.currPoint = 0
         self.setPointData = np.zeros(self.buffer, dtype=float)
         self.timeData = np.zeros(self.buffer, dtype=float)
-        self.reduceImageScaleFactor  = 1
-        # Legacy parameters for astigmatism (from dataclass)
+        self.reduceImageScaleFactor = 1
+
         self.gaussianSigma = self._focus_params.gaussian_sigma
         self.backgroundThreshold = self._focus_params.background_threshold
         self.cropCenter = self._focus_params.crop_center
         self.cropSize = self._focus_params.crop_size
         self.kp = self._pi_params.kp
         self.ki = self._pi_params.ki
-        
 
-        # Threads and Workers for focus lock
+        # Travel budget (use safety_distance_limit semantics)
+        self._travel_used_um = 0.0
+
+        # Measurement smoothing
+        self._meas_filt = None
+
+        # Camera acquisition
         try:
             self._master.detectorsManager[self.camera].startAcquisition()
         except Exception as e:
             self._logger.error(f"Failed to start acquisition on camera '{self.camera}': {e}")
 
+        # Threads
         self.__processDataThread = ProcessDataThread(self)
         self.__focusCalibThread = FocusCalibThread(self)
         self.__processDataThread.setFocusLockMetric(self._focus_params.focus_metric)
 
-        # start update thread
+        # PID instance (kept as self.pi for API stability)
+        self.pi: Optional[_PID] = None
+
+        # Start polling
         self.updateThread()
 
-        # In case we run on QT, assign the widgets
-        if IS_HEADLESS:
-            return
-        self._widget.setKp(self._pi_params.kp)
-        self._widget.setKi(self._pi_params.ki)
-
-        # Connect FocusLockWidget buttons
-        self._widget.kpEdit.textChanged.connect(self.unlockFocus)
-        self._widget.kiEdit.textChanged.connect(self.unlockFocus)
-
-        self._widget.lockButton.clicked.connect(self.toggleFocus)
-        self._widget.camDialogButton.clicked.connect(self.cameraDialog)
-        self._widget.focusCalibButton.clicked.connect(self.focusCalibrationStart)
-        self._widget.calibCurveButton.clicked.connect(self.showCalibrationCurve)
-
-        self._widget.zStackBox.stateChanged.connect(self.zStackVarChange)
-        self._widget.twoFociBox.stateChanged.connect(self.twoFociVarChange)
-
-        self._widget.sigSliderExpTValueChanged.connect(self.setExposureTime)
-        self._widget.sigSliderGainValueChanged.connect(self.setGain)
+        # GUI bindings
+        if not IS_HEADLESS:
+            self._widget.setKp(self._pi_params.kp)
+            self._widget.setKi(self._pi_params.ki)
+            self._widget.kpEdit.textChanged.connect(self.unlockFocus)
+            self._widget.kiEdit.textChanged.connect(self.unlockFocus)
+            self._widget.lockButton.clicked.connect(self.toggleFocus)
+            self._widget.camDialogButton.clicked.connect(self.cameraDialog)
+            self._widget.focusCalibButton.clicked.connect(self.focusCalibrationStart)
+            self._widget.calibCurveButton.clicked.connect(self.showCalibrationCurve)
+            self._widget.zStackBox.stateChanged.connect(self.zStackVarChange)
+            self._widget.twoFociBox.stateChanged.connect(self.twoFociVarChange)
+            self._widget.sigSliderExpTValueChanged.connect(self.setExposureTime)
+            self._widget.sigSliderGainValueChanged.connect(self.setGain)
 
     def __del__(self):
         try:
@@ -245,66 +350,65 @@ class FocusLockController(ImConWidgetController):
                 pass
 
     def updateThread(self):
-        """start pulling the update() function in a thread continously until the end of the lifetime of ImSwitch
-        to pull the frames continously - we assume we don't have a camera in forAcquisition mode """
         self._pollFramesThread = threading.Thread(target=self._pollFrames, name="FocusLockPollFramesThread")
         self._pollFramesThread.daemon = True
         self._pollFramesThread.start()
-        
-        
-    # === API Methods for Parameter Management ===
-    
-    
+
+    # =========================
+    # API: Params/state
+    # =========================
     @APIExport(runOnUIThread=True)
     def getFocusLockParams(self) -> Dict[str, Any]:
-        """Get current focus lock parameters."""
         return self._focus_params.to_dict()
 
     @APIExport(runOnUIThread=True)
     def setFocusLockParams(self, **kwargs) -> Dict[str, Any]:
-        """Set focus lock parameters. Returns updated parameters."""
         for key, value in kwargs.items():
             if hasattr(self._focus_params, key):
                 setattr(self._focus_params, key, value)
-                # Update legacy attributes for backward compatibility
                 if key == "focus_metric":
                     self.__processDataThread.setFocusLockMetric(value)
                 elif key == "two_foci_enabled":
                     self.twoFociVar = value
                 elif key == "z_stack_enabled":
                     self.zStackVar = value
+                elif key == "update_freq":
+                    self.pollingFrameUpdateRate = 1.0 / max(1e-3, float(value))
+                    # keep PID dt in sync
+                    self._pi_params.sample_time = self.pollingFrameUpdateRate
+                    if self.pi:
+                        self.pi.updateParameters(sample_time=self._pi_params.sample_time)
         return self._focus_params.to_dict()
 
     @APIExport(runOnUIThread=True)
     def getPIControllerParams(self) -> Dict[str, Any]:
-        """Get current PI controller parameters."""
         return self._pi_params.to_dict()
 
     @APIExport(runOnUIThread=True)
     def setPIControllerParams(self, **kwargs) -> Dict[str, Any]:
-        """Set PI controller parameters. Returns updated parameters."""
         for key, value in kwargs.items():
             if hasattr(self._pi_params, key):
                 setattr(self._pi_params, key, value)
-                # Update PI controller if it exists
-                if hasattr(self, "pi") and key in ["kp", "ki"]:
-                    self.pi.setParameters(self._pi_params.kp, self._pi_params.ki)
-        
-        # Update GUI if not headless
+        if hasattr(self, "pi") and self.pi:
+            self.pi.setParameters(self._pi_params.kp, self._pi_params.ki)
+            self.pi.updateParameters(
+                kd=self._pi_params.kd,
+                set_point=self._pi_params.set_point,
+                sample_time=self._pi_params.sample_time,
+                integral_limit=self._pi_params.integral_limit,
+                output_lowpass_alpha=self._pi_params.output_lowpass_alpha,
+            )
         if not IS_HEADLESS:
             self._widget.setKp(self._pi_params.kp)
             self._widget.setKi(self._pi_params.ki)
-        
         return self._pi_params.to_dict()
 
     @APIExport(runOnUIThread=True)
     def getCalibrationParams(self) -> Dict[str, Any]:
-        """Get current calibration parameters."""
         return self._calib_params.to_dict()
 
     @APIExport(runOnUIThread=True)
     def setCalibrationParams(self, **kwargs) -> Dict[str, Any]:
-        """Set calibration parameters. Returns updated parameters."""
         for key, value in kwargs.items():
             if hasattr(self._calib_params, key):
                 setattr(self._calib_params, key, value)
@@ -312,8 +416,6 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def getFocusLockState(self) -> Dict[str, Any]:
-        """Get current focus lock state."""
-        # Update state from current values
         self._state.is_locked = self.locked
         self._state.about_to_lock = self.aboutToLock
         self._state.current_focus_value = self.setPointSignal
@@ -322,11 +424,11 @@ class FocusLockController(ImConWidgetController):
         self._state.measurement_active = hasattr(self, '__processDataThread') and self.__processDataThread.isRunning()
         return self._state.to_dict()
 
-    # === Focus Measurement Control ===
-
+    # =========================
+    # API: Measurement control
+    # =========================
     @APIExport(runOnUIThread=True)
     def startFocusMeasurement(self) -> bool:
-        """Start focus value measurements from camera frames."""
         try:
             if not self._state.is_measuring:
                 self._state.is_measuring = True
@@ -340,11 +442,10 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def stopFocusMeasurement(self) -> bool:
-        """Stop focus value measurements."""
         try:
             if self._state.is_measuring:
                 self._state.is_measuring = False
-                self.unlockFocus()  # Also unlock if locked
+                self.unlockFocus()
                 self._emitStateChangedSignal()
                 self._logger.info("Focus measurement stopped")
                 return True
@@ -353,11 +454,11 @@ class FocusLockController(ImConWidgetController):
             self._logger.error(f"Failed to stop focus measurement: {e}")
             return False
 
-    # === Focus Locking Control ===
-
+    # =========================
+    # API: Lock control
+    # =========================
     @APIExport(runOnUIThread=True)
     def enableFocusLock(self, enable: bool = True) -> bool:
-        """Enable or disable focus locking (PI controller feedback)."""
         try:
             if enable and not self.locked:
                 if not self._state.is_measuring:
@@ -375,20 +476,20 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def isFocusLocked(self) -> bool:
-        """Check if focus is currently locked."""
         return self.locked
 
     def _emitStateChangedSignal(self):
-        """Emit state changed signal for WebSocket updates."""
-        state_data = self.getFocusLockState()
-        self.sigFocusLockStateChanged.emit(state_data)
+        self.sigFocusLockStateChanged.emit(self.getFocusLockState())
 
-    # === Legacy Methods (maintained for backward compatibility) ===
-
+    # =========================
+    # Legacy-compatible methods
+    # =========================
     @APIExport(runOnUIThread=True)
     def unlockFocus(self):
         if self.locked:
             self.locked = False
+            if self.pi:
+                self.pi.restart()
             if not IS_HEADLESS:
                 self._widget.lockButton.setChecked(False)
                 try:
@@ -396,16 +497,18 @@ class FocusLockController(ImConWidgetController):
                 except Exception:
                     pass
 
-    @APIExport(runOnUIThread=True)  
-    def toggleFocus(self, toLock:bool=None):
+    @APIExport(runOnUIThread=True)
+    def toggleFocus(self, toLock: bool = None):
         self.aboutToLock = False
-        if (not IS_HEADLESS and self._widget.lockButton.isChecked()) or (toLock is not None and toLock and self.locked is False):
+        if (not IS_HEADLESS and self._widget.lockButton.isChecked()) or (toLock is not None and toLock and not self.locked):
             zpos = self.stage.getPosition()["Z"]
             self.lockFocus(zpos)
-            if not IS_HEADLESS: self._widget.lockButton.setText("Unlock")
+            if not IS_HEADLESS:
+                self._widget.lockButton.setText("Unlock")
         else:
             self.unlockFocus()
-            if not IS_HEADLESS:  self._widget.lockButton.setText("Lock")
+            if not IS_HEADLESS:
+                self._widget.lockButton.setText("Lock")
 
     def cameraDialog(self):
         try:
@@ -415,16 +518,13 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def focusCalibrationStart(self):
-        """Start focus calibration with current parameters."""
         self.__focusCalibThread.start()
 
     @APIExport(runOnUIThread=True)
-    def runFocusCalibration(self, from_position: Optional[float] = None, 
-                           to_position: Optional[float] = None,
-                           num_steps: Optional[int] = None,
-                           settle_time: Optional[float] = None) -> Dict[str, Any]:
-        """Run focus calibration with specified parameters and return results."""
-        # Update calibration parameters if provided
+    def runFocusCalibration(self, from_position: Optional[float] = None,
+                            to_position: Optional[float] = None,
+                            num_steps: Optional[int] = None,
+                            settle_time: Optional[float] = None) -> Dict[str, Any]:
         if from_position is not None:
             self._calib_params.from_position = from_position
         if to_position is not None:
@@ -433,22 +533,16 @@ class FocusLockController(ImConWidgetController):
             self._calib_params.num_steps = num_steps
         if settle_time is not None:
             self._calib_params.settle_time = settle_time
-            
-        # Start calibration in background thread
         self.__focusCalibThread.start()
-        
-        # Wait for completion and return results
         self.__focusCalibThread.wait()
         return self.__focusCalibThread.getData()
 
     @APIExport(runOnUIThread=True)
     def getCalibrationResults(self) -> Dict[str, Any]:
-        """Get the results from the last calibration run."""
         return self.__focusCalibThread.getData()
 
     @APIExport(runOnUIThread=True)
     def isCalibrationRunning(self) -> bool:
-        """Check if calibration is currently running."""
         return self.__focusCalibThread.isRunning()
 
     def showCalibrationCurve(self):
@@ -465,16 +559,14 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def setExposureTime(self, exposure_time: float):
-        """Set camera exposure time."""
         try:
             self._master.detectorsManager[self.camera].setParameter('exposure', exposure_time)
             self._logger.debug(f"Set exposure time to {exposure_time}")
         except Exception as e:
             self._logger.error(f"Failed to set exposure time: {e}")
 
-    @APIExport(runOnUIThread=True)  
+    @APIExport(runOnUIThread=True)
     def setGain(self, gain: float):
-        """Set camera gain."""
         try:
             self._master.detectorsManager[self.camera].setParameter('gain', gain)
             self._logger.debug(f"Set gain to {gain}")
@@ -482,83 +574,99 @@ class FocusLockController(ImConWidgetController):
             self._logger.error(f"Failed to set gain: {e}")
 
     def _pollFrames(self):
-        
         while self.__isPollingFramesActive:
-            # Only process if measurement is enabled or legacy behavior is active
-            time.sleep(self.pollingFrameUpdateRate)  # Sleep for the configured update frequency
+            time.sleep(self.pollingFrameUpdateRate)
 
             im = self._master.detectorsManager[self.camera].getLatestFrame()
-            # Crop the image before processing
-            import NanoImagingPack as nip
-            if 1:
-                self.cropped_im = nip.extract(img=im, ROIsize=(self._focus_params.crop_size, self._focus_params.crop_size), centerpos=self._focus_params.crop_center, PadValue=0.0, checkComplex=True)
-            else:
-                self.cropped_im = self.extract(
-                im,
-                crop_center=self._focus_params.crop_center,
-                crop_size=self._focus_params.crop_size,
+
+            # Crop (prefer NiP if present)
+            try:
+                import NanoImagingPack as nip
+                self.cropped_im = nip.extract(
+                    img=im,
+                    ROIsize=(self._focus_params.crop_size, self._focus_params.crop_size),
+                    centerpos=self._focus_params.crop_center,
+                    PadValue=0.0,
+                    checkComplex=True,
                 )
+            except Exception:
+                self.cropped_im = self.extract(im, crop_size=self._focus_params.crop_size,
+                                               crop_center=self._focus_params.crop_center)
+
             if not self._state.is_measuring and not self.locked and not self.aboutToLock:
-                # For backward compatibility, still process if locked or about to lock
                 continue
+
             self.setPointSignal = self.__processDataThread.update(self.cropped_im, self.twoFociVar)
-            
-            # Emit enhanced focus value signal with more context
+
+            # Emit enhanced focus value
             focus_data = {
                 "focus_value": self.setPointSignal,
                 "timestamp": time.time(),
                 "is_locked": self.locked,
                 "lock_position": self.lockPosition if self.locked else None,
-                "current_position": 0 ,# TODO: Don't poll this all the time! self.stage.getPosition()["Z"],
+                "current_position": 0,
                 "focus_metric": self._focus_params.focus_metric,
             }
             self.sigUpdateFocusValue.emit(focus_data)
-            
-            # move
-            if self.locked:
-                value_move = self.updatePI()
-                if self.noStepVar and abs(value_move) > self._pi_params.min_step_threshold:
-                    self.stage.move(value = value_move, axis = "Z", speed = 1000, is_blocking=False, is_absolute=False) #     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=gTIMEOUT, is_reduced=True):
+
+            # === Control action (relative moves only) ===
+            if self.locked and self.pi is not None:
+                meas = float(self.setPointSignal)
+                if self._pi_params.meas_lowpass_alpha > 0.0:
+                    a = self._pi_params.meas_lowpass_alpha
+                    self._meas_filt = meas if self._meas_filt is None else a * self._meas_filt + (1 - a) * meas
+                    meas_for_pid = self._meas_filt
+                else:
+                    meas_for_pid = meas
+
+                u = self.pi.update(meas_for_pid)                       # controller units
+                step_um = u * self._pi_params.scale_um_per_unit        # convert to µm
+
+                # deadband
+                if abs(step_um) < self._pi_params.min_step_threshold:
+                    step_um = 0.0
+
+                # per-update clamp & optional safety gating
+                limit = abs(self._pi_params.safety_move_limit) if self._pi_params.safety_motion_active else abs(self._pi_params.safety_move_limit)
+                step_um = max(min(step_um, limit), -limit)
+
+                if step_um != 0.0:
+                    self.stage.move(value=step_um, axis="Z", speed=1000, is_blocking=False, is_absolute=False)
+                    self._travel_used_um += abs(step_um)
+                    # travel budget acts like safety_distance_limit
+                    if self._pi_params.safety_motion_active and self._travel_used_um > self._pi_params.safety_distance_limit:
+                        self._logger.warning("Travel budget exceeded; unlocking focus.")
+                        self.unlockFocus()
+
             elif self.aboutToLock:
                 if not hasattr(self, "aboutToLockDataPoints"):
                     self.aboutToLockDataPoints = np.zeros(5, dtype=float)
                 self.aboutToLockUpdate()
 
-            # update graphics
+            # Update plotting buffers
             self.updateSetPointData()
-            if IS_HEADLESS:
-                continue
-            try:
-                self._widget.camImg.setImage(im)
-                if self.currPoint < self.buffer:
-                    self._widget.focusPlotCurve.setData(
-                        self.timeData[1:self.currPoint],
-                        self.setPointData[1:self.currPoint],
-                    )
-                else:
-                    self._widget.focusPlotCurve.setData(self.timeData, self.setPointData)
-            except Exception:
-                pass
-            
+            if not IS_HEADLESS:
+                try:
+                    self._widget.camImg.setImage(im)
+                    if self.currPoint < self.buffer:
+                        self._widget.focusPlotCurve.setData(self.timeData[1:self.currPoint],
+                                                            self.setPointData[1:self.currPoint])
+                    else:
+                        self._widget.focusPlotCurve.setData(self.timeData, self.setPointData)
+                except Exception:
+                    pass
 
+        # (kept nested as in original)
         @APIExport(runOnUIThread=True)
-        def setParamsAstigmatism(
-            self,
-            gaussianSigma: float,
-            backgroundThreshold: float,
-            cropSize: int,
-            cropCenter: Optional[List[int]] = None,
-        ):
-            """Set parameters for astigmatism focus metric."""
-            # Update the new dataclass-based parameters
+        def setParamsAstigmatism(self, gaussianSigma: float, backgroundThreshold: float,
+                                 cropSize: int, cropCenter: Optional[List[int]] = None):
             self._focus_params.gaussian_sigma = float(gaussianSigma)
-            self._focus_params.background_threshold = float(backgroundThreshold) 
+            self._focus_params.background_threshold = float(backgroundThreshold)
             self._focus_params.crop_size = int(cropSize)
             if cropCenter is None:
                 cropCenter = [cropSize // 2, cropSize // 2]
             self._focus_params.crop_center = cropCenter
-            
-            # Keep legacy attributes for backward compatibility
+
             self.gaussianSigma = float(gaussianSigma)
             self.backgroundThreshold = float(backgroundThreshold)
             self.cropSize = int(cropSize)
@@ -568,8 +676,6 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def getParamsAstigmatism(self):
-        """Get parameters for astigmatism focus metric."""
-        # Return from dataclass for consistency
         return {
             "gaussianSigma": self._focus_params.gaussian_sigma,
             "backgroundThreshold": self._focus_params.background_threshold,
@@ -589,7 +695,7 @@ class FocusLockController(ImConWidgetController):
     def updateSetPointData(self):
         if self.currPoint < self.buffer:
             self.setPointData[self.currPoint] = self.setPointSignal
-            self.timeData[self.currPoint] = 0.0  # placeholder for potential timing
+            self.timeData[self.currPoint] = 0.0
         else:
             self.setPointData = np.roll(self.setPointData, -1)
             self.setPointData[-1] = self.setPointSignal
@@ -599,106 +705,97 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def setPIParameters(self, kp: float, ki: float):
-        """Set parameters for the PI controller."""
-        # Update dataclass parameters
         self._pi_params.kp = float(kp)
         self._pi_params.ki = float(ki)
-        
-        if not hasattr(self, "pi"):
-            self.pi = PI(self.setPointSignal, kp, ki)
+        if not self.pi:
+            self.pi = _PID(
+                set_point=self._pi_params.set_point,
+                kp=self._pi_params.kp, ki=self._pi_params.ki, kd=self._pi_params.kd,
+                sample_time=self._pi_params.sample_time,
+                integral_limit=self._pi_params.integral_limit,
+                output_lowpass_alpha=self._pi_params.output_lowpass_alpha,
+            )
         else:
             self.pi.setParameters(kp, ki)
-            
-        # Keep legacy attributes for backward compatibility
         self.ki = ki
         self.kp = kp
-        
         if not IS_HEADLESS:
             self._widget.setKp(kp)
             self._widget.setKi(ki)
-         
+
     @APIExport(runOnUIThread=True)
     def getPIParameters(self) -> Tuple[float, float]:
-        """Get parameters for the PI controller."""
         return self._pi_params.kp, self._pi_params.ki
-       
-    def updatePI(self):
-        if not self.noStepVar:
-            self.noStepVar = True
-        self.currentPosition = float(self.stage.getPosition()["Z"])
-        self.stepDistance = abs(self.currentPosition - self.lastPosition)
-        distance = self.currentPosition - self.lockPosition
-        move = self.pi.update(self.setPointSignal)
-        self.lastPosition = self.currentPosition
 
-        # Use parameters from dataclass
-        if abs(distance) > self._pi_params.safety_distance_limit or abs(move) > self._pi_params.safety_move_limit and self._pi_params.safety_motion_active:
-            self._logger.warning(
-                f"Safety unlocking! Distance to lock: {distance:.3f}, current move step: {move:.3f}."
-            )
-            # Emit signal for WebSocket notification 
-            safety_data = {
-                "event": "safety_unlock",
-                "distance_to_lock": distance,
-                "move_step": move,
-                "timestamp": time.time(),
-            }
-            self.sigFocusLockStateChanged.emit(safety_data)
-            self.unlockFocus()
-        elif self.zStackVar:
-            if self.stepDistance > self.zStepLimLo:
-                self.unlockFocus()
-                self.aboutToLockDataPoints = np.zeros(5, dtype=float)
-                self.aboutToLock = True
-                self.noStepVar = False
-        return move
+    def updatePI(self) -> float:
+        """Kept for compatibility; returns last computed move in µm (no position reads)."""
+        if not self.locked or not self.pi:
+            return 0.0
+        meas = float(self.setPointSignal)
+        if self._pi_params.meas_lowpass_alpha > 0.0:
+            a = self._pi_params.meas_lowpass_alpha
+            self._meas_filt = meas if self._meas_filt is None else a * self._meas_filt + (1 - a) * meas
+            meas_for_pid = self._meas_filt
+        else:
+            meas_for_pid = meas
+        u = self.pi.update(meas_for_pid)
+        step_um = u * self._pi_params.scale_um_per_unit
+        # apply deadband + clamp, mirror of _pollFrames logic
+        if abs(step_um) < self._pi_params.min_step_threshold:
+            step_um = 0.0
+        limit = abs(self._pi_params.safety_move_limit)
+        step_um = max(min(step_um, limit), -limit)
+        return step_um
 
     def lockFocus(self, zpos):
-        if not self.locked:
-            if IS_HEADLESS:
-                kp, ki = self._pi_params.kp, self._pi_params.ki # TODO: who is master of states here? PI or FocusLockController?
-            else:
-                kp = float(self._widget.kpEdit.text())
-                ki = float(self._widget.kiEdit.text())
-                # Update dataclass with GUI values
-                self._pi_params.kp = kp
-                self._pi_params.ki = ki
-            
-            self._pi_params.set_point = self.setPointSignal
-            self.pi = PI(self.setPointSignal, kp, ki)
-            self.lockPosition = float(zpos)
-            self.locked = True
-            
-            if not IS_HEADLESS:
-                try:
-                    self._widget.focusLockGraph.lineLock = self._widget.focusPlot.addLine(
-                        y=self.setPointSignal, pen="r"
-                    )
-                    self._widget.lockButton.setChecked(True)
-                except Exception:
-                    pass
-            
-            self.updateZStepLimits()
-            self._emitStateChangedSignal()
-            self._logger.info(f"Focus locked at position {zpos} with set point {self.setPointSignal}")
+        if self.locked:
+            return
+        if IS_HEADLESS:
+            kp, ki = self._pi_params.kp, self._pi_params.ki
+        else:
+            kp = float(self._widget.kpEdit.text())
+            ki = float(self._widget.kiEdit.text())
+            self._pi_params.kp = kp
+            self._pi_params.ki = ki
+
+        # Setpoint is current measured focus
+        self._pi_params.set_point = float(self.setPointSignal)
+        self.pi = _PID(
+            set_point=self._pi_params.set_point,
+            kp=self._pi_params.kp,
+            ki=self._pi_params.ki,
+            kd=self._pi_params.kd,
+            sample_time=self._pi_params.sample_time,
+            integral_limit=self._pi_params.integral_limit,
+            output_lowpass_alpha=self._pi_params.output_lowpass_alpha,
+        )
+        self.lockPosition = float(zpos)  # kept for legacy visualization only
+        self.locked = True
+        self._travel_used_um = 0.0
+
+        if not IS_HEADLESS:
+            try:
+                self._widget.focusLockGraph.lineLock = self._widget.focusPlot.addLine(y=self.setPointSignal, pen="r")
+                self._widget.lockButton.setChecked(True)
+            except Exception:
+                pass
+
+        self.updateZStepLimits()
+        self._emitStateChangedSignal()
+        self._logger.info(f"Focus locked at position {zpos} with set point {self.setPointSignal}")
 
     def updateZStepLimits(self):
-        """Update z-step limits from parameters or GUI."""
         try:
             if not IS_HEADLESS and hasattr(self, '_widget'):
                 self.zStepLimLo = 0.001 * float(self._widget.zStepFromEdit.text())
-                # Also update the parameter for consistency
                 self._focus_params.z_step_limit_nm = float(self._widget.zStepFromEdit.text())
             else:
-                # Use parameter from dataclass (converted to micrometers)
                 self.zStepLimLo = 0.001 * self._focus_params.z_step_limit_nm
         except Exception:
-            # Fallback to parameter value
             self.zStepLimLo = 0.001 * self._focus_params.z_step_limit_nm
 
     @staticmethod
     def extract(marray: np.ndarray, crop_size: Optional[int] = None, crop_center: Optional[List[int]] = None) -> np.ndarray:
-        """Extract/crop a region from an image array."""
         h, w = marray.shape[:2]
         if crop_center is None:
             center_x, center_y = w // 2, h // 2
@@ -714,33 +811,27 @@ class FocusLockController(ImConWidgetController):
         y_start = max(0, center_y - half)
         x_end = min(w, x_start + crop_size)
         y_end = min(h, y_start + crop_size)
-
-        # Adjust starts if we hit a boundary on the end
         x_start = max(0, x_end - crop_size)
         y_start = max(0, y_end - crop_size)
-
         return marray[y_start:y_end, x_start:x_end]
 
     @APIExport(runOnUIThread=True)
     def setZStepLimit(self, limit_nm: float):
-        """Set the minimum z-step limit in nanometers."""
         self._focus_params.z_step_limit_nm = float(limit_nm)
         self.updateZStepLimits()
         return self._focus_params.z_step_limit_nm
 
     @APIExport(runOnUIThread=True)
     def getZStepLimit(self) -> float:
-        """Get the current z-step limit in nanometers."""
         return self._focus_params.z_step_limit_nm
 
     @APIExport(runOnUIThread=True)
     def returnLastCroppedImage(self) -> Response:
-        """Returns the last cropped image from the camera."""
         try:
             arr = self.cropped_im
             im = Image.fromarray(arr.astype(np.uint8))
             with io.BytesIO() as buf:
-                im = im.convert("L")  # ensure grayscale
+                im = im.convert("L")
                 im.save(buf, format="PNG")
                 im_bytes = buf.getvalue()
             headers = {"Content-Disposition": 'inline; filename="crop.png"'}
@@ -751,7 +842,6 @@ class FocusLockController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def returnLastImage(self) -> Response:
         lastFrame = self._master.detectorsManager[self.camera].getLatestFrame()
-        # reduce side
         lastFrame = lastFrame[::self.reduceImageScaleFactor, ::self.reduceImageScaleFactor]
         if lastFrame is None:
             raise RuntimeError("No image available. Please run update() first.")
@@ -767,18 +857,11 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True, requestType="POST")
     def setCropFrameParameters(self, cropSize: int, cropCenter: List[int] = None, frameSize: List[int] = None):
-        """Set the crop frame parameters for the camera in pixelvalues
-            cropSize - same for x/y
-            cropCenter - center of the crop in pixelvalues, if None, center of the frame is used
-            frameSize - size of the frame in pixelvalues, if None, the current camera frame
-        """
-        # first scale the values to real pixel values
         detectorSize = self._master.detectorsManager[self.camera].shape
-        # scale the crop size to pixel values
         if frameSize is None:
-            mRatio = 1/self.reduceImageScaleFactor
+            mRatio = 1 / self.reduceImageScaleFactor
         else:
-            mRatio =  detectorSize[0] / frameSize[0]  
+            mRatio = detectorSize[0] / frameSize[0]
         self._focus_params.crop_size = int(cropSize * mRatio)
         if cropCenter is None:
             cropCenter = [detectorSize[1] // 2, detectorSize[0] // 2]
@@ -794,7 +877,10 @@ class FocusLockController(ImConWidgetController):
         self._focus_params.crop_center = cropCenter
         self._logger.info(f"Set crop parameters: size={self._focus_params.crop_size}, center={self._focus_params.crop_center}")
 
-        
+
+# =========================
+# Processing thread
+# =========================
 class ProcessDataThread(Thread):
     def __init__(self, controller, *args, **kwargs):
         self._controller = controller
@@ -805,13 +891,11 @@ class ProcessDataThread(Thread):
         self.focusLockMetric = focuslockMetric
 
     def getCroppedImage(self) -> np.ndarray:
-        """Returns the last processed (cropped) image array."""
         if hasattr(self, "imagearraygf"):
             return self.imagearraygf
         raise RuntimeError("No image processed yet. Please run update() first.")
 
     def _jpeg_size_metric(self, img: np.ndarray) -> int:
-        # Ensure uint8 grayscale for JPEG encode
         if img.dtype != np.uint8:
             img_u8 = np.clip(img, 0, 255).astype(np.uint8)
         else:
@@ -823,7 +907,6 @@ class ProcessDataThread(Thread):
         return int(len(buffer))
 
     def update(self, cropped_img: np.ndarray, twoFociVar: bool) -> float:
-        """Update focus metric with pre-cropped image."""
         self.imagearraygf = cropped_img
         if self.focusLockMetric == "JPG":
             focusMetricGlobal = float(self._jpeg_size_metric(self.imagearraygf))
@@ -841,10 +924,7 @@ class ProcessDataThread(Thread):
                 f"Focus computation result: {result}, Focus value: {result['focus']:.4f}, Timestamp: {result['t']}"
             )
         else:
-            # Gaussian filter to remove noise for better center estimate
             self.imagearraygf = gaussian_filter(self.imagearraygf.astype(float), 7)
-
-            # Update the focus signal
             if twoFociVar:
                 allmaxcoords = peak_local_max(self.imagearraygf, min_distance=60)
                 size = allmaxcoords.shape[0]
@@ -869,7 +949,6 @@ class ProcessDataThread(Thread):
                         ycenter = allmaxcoords[maxvalpos[1]][1]
                     centercoords2 = np.array([xcenter, ycenter])
                 else:
-                    # Fallback to global max if not enough peaks
                     centercoords = np.where(self.imagearraygf == np.max(self.imagearraygf))
                     centercoords2 = np.array([centercoords[0][0], centercoords[1][0]])
             else:
@@ -882,16 +961,18 @@ class ProcessDataThread(Thread):
             xlow = max(0, int(centercoords2[0] - subsizex))
             xhigh = min(h, int(centercoords2[0] + subsizex))
             ylow = max(0, int(centercoords2[1] - subsizey))
-            yhigh = min(w, int(centercoords2[1] + subsizey))
+            yhigh = min(w, int(centercoords2[1] + subsizex))
 
             self.imagearraygfsub = self.imagearraygf[xlow:xhigh, ylow:yhigh]
             massCenter = np.array(ndi.center_of_mass(self.imagearraygfsub))
-            # Add the information about where the center of the subarray is
             focusMetricGlobal = float(massCenter[1] + centercoords2[1])
 
         return focusMetricGlobal
 
 
+# =========================
+# Calibration thread
+# =========================
 class FocusCalibThread(Thread):
     def __init__(self, controller, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -902,108 +983,90 @@ class FocusCalibThread(Thread):
         self.calibrationResult = None
 
     def run(self):
-        """Run calibration using parameters from controller's dataclass."""
         self.signalData = []
         self.positionData = []
-        
+
         calib_params = self._controller._calib_params
-        
-        # Use calibration parameters from dataclass or fallback to GUI
+
         if not IS_HEADLESS and hasattr(self._controller, '_widget'):
             try:
                 from_val = float(self._controller._widget.calibFromEdit.text())
-                to_val = float(self._controller._widget.calibToEdit.text()) 
+                to_val = float(self._controller._widget.calibToEdit.text())
             except (ValueError, AttributeError):
                 from_val = calib_params.from_position
                 to_val = calib_params.to_position
         else:
             from_val = calib_params.from_position
             to_val = calib_params.to_position
-            
+
         scan_list = np.round(np.linspace(from_val, to_val, calib_params.num_steps), 2)
-        
-        # Emit progress signal for WebSocket updates
-        progress_data = {
-            "event": "calibration_started", 
+
+        self._controller.sigCalibrationProgress.emit({
+            "event": "calibration_started",
             "total_steps": len(scan_list),
             "from_position": from_val,
             "to_position": to_val,
-        }
-        self._controller.sigCalibrationProgress.emit(progress_data)
-        
+        })
+
         for i, z in enumerate(scan_list):
             self._controller._master.positionersManager[self._controller.positioner].setPosition(z, 0)
             time.sleep(calib_params.settle_time)
             focus_signal = float(self._controller.setPointSignal)
-            actual_position = float(
-                self._controller._master.positionersManager[self._controller.positioner].get_abs()
-            )
-            
+            actual_position = float(self._controller._master.positionersManager[self._controller.positioner].get_abs())
+
             self.signalData.append(focus_signal)
             self.positionData.append(actual_position)
-            
-            # Emit progress updates
-            progress_data = {
+
+            self._controller.sigCalibrationProgress.emit({
                 "event": "calibration_progress",
                 "step": i + 1,
                 "total_steps": len(scan_list),
                 "position": actual_position,
                 "focus_value": focus_signal,
                 "progress_percent": ((i + 1) / len(scan_list)) * 100,
-            }
-            self._controller.sigCalibrationProgress.emit(progress_data)
-            
+            })
+
         self.poly = np.polyfit(self.positionData, self.signalData, 1)
         self.calibrationResult = np.around(self.poly, 4)
-        
-        # Emit completion signal
-        completion_data = {
+
+        self._controller.sigCalibrationProgress.emit({
             "event": "calibration_completed",
             "coefficients": self.poly.tolist(),
             "r_squared": self._calculate_r_squared(),
             "sensitivity_nm_per_px": self._get_sensitivity_nm_per_px(),
-        }
-        self._controller.sigCalibrationProgress.emit(completion_data)
-        
+        })
+
         self.show()
 
     def _calculate_r_squared(self) -> float:
-        """Calculate R-squared value for the calibration fit."""
         if self.poly is None or len(self.signalData) == 0:
             return 0.0
-        
         y_pred = np.polyval(self.poly, self.positionData)
         ss_res = np.sum((self.signalData - y_pred) ** 2)
         ss_tot = np.sum((self.signalData - np.mean(self.signalData)) ** 2)
-        
         if ss_tot == 0:
             return 0.0
         return 1 - (ss_res / ss_tot)
 
     def _get_sensitivity_nm_per_px(self) -> float:
-        """Get calibration sensitivity in nm per pixel."""
         if self.poly is None or self.poly[0] == 0:
             return 0.0
-        return float(1000 / self.poly[0])  # Convert to nm/px
+        return float(1000 / self.poly[0])
 
     def show(self):
-        """Update GUI display if available."""
         if IS_HEADLESS or not hasattr(self._controller, '_widget'):
             return
-            
         if self.poly is None or self.poly[0] == 0:
             cal_text = "Calibration invalid"
         else:
             cal_nm = self._get_sensitivity_nm_per_px()
             cal_text = f"1 px --> {cal_nm:.1f} nm"
-        
         try:
             self._controller._widget.calibrationDisplay.setText(cal_text)
         except AttributeError:
             pass
 
     def getData(self) -> Dict[str, Any]:
-        """Get calibration data for API or GUI use."""
         return {
             "signalData": self.signalData,
             "positionData": self.positionData,
@@ -1014,117 +1077,29 @@ class FocusCalibThread(Thread):
         }
 
 
-class PI:
-    """Simple implementation of a discrete PI controller.
-    Taken from http://code.activestate.com/recipes/577231-discrete-pid-controller/
-    Author: Federico Barabas
-    """
-
-    def __init__(self, setPoint: float, kp: float = 0.0, ki: float = 0.0):
-        self._kp = kp
-        self._ki = ki
-        self._setPoint = float(setPoint)
-        self.error = 0.0
-        self._started = False
-        self.out = 0.0
-        self.lastError = 0.0
-
-    def setParameters(self, kp: float, ki: float):
-        self.kp = kp
-        self.ki = ki
-
-    def update(self, currentValue: float) -> float:
-        """Calculate PI output value for given reference input and feedback.
-        Using the iterative formula to avoid integrative part building."""
-        self.error = self.setPoint - float(currentValue)
-        if self.started:
-            self.dError = self.error - self.lastError
-            self.out = self.out + self.kp * self.dError + self.ki * self.error
-        else:
-            self.out = self.kp * self.error
-            self.started = True
-        self.lastError = self.error
-        return self.out
-
-    def restart(self):
-        self.started = False
-        self.out = 0.0
-        self.lastError = 0.0
-
-    @property
-    def started(self) -> bool:
-        return self._started
-
-    @started.setter
-    def started(self, value: bool):
-        self._started = bool(value)
-
-    @property
-    def setPoint(self) -> float:
-        return self._setPoint
-
-    @setPoint.setter
-    def setPoint(self, value: float):
-        self._setPoint = float(value)
-
-    @property
-    def kp(self) -> float:
-        return self._kp
-
-    @kp.setter
-    def kp(self, value: float):
-        self._kp = float(value)
-
-    @property
-    def ki(self) -> float:
-        return self._ki
-
-    @ki.setter
-    def ki(self, value: float):
-        self._ki = float(value)
-
-
-"""
-Focus Metric Algorithm Implementation
-
-Based on the specification in section 5:
-1. Convert frame to grayscale (numpy uint8)
-2. Optional Gaussian blur σ ≈ 11 px to suppress noise
-3. Threshold: im[im < background] = 0, background configurable
-4. Compute mean projections projX, projY
-5. Fit projX with double-Gaussian, projY with single-Gaussian (SciPy curve_fit)
-6. Focus value F = σx / σy (float32)
-7. Return timestamped JSON {"t": timestamp, "focus": F}
-"""
-
-
+# =========================
+# Focus metric
+# =========================
 @dataclass
 class FocusConfig:
-    """Configuration for focus metric computation"""
-    gaussian_sigma: float = 11.0  # Gaussian blur sigma
-    background_threshold: int = 40  # Background threshold value
-    crop_radius: int = 300  # Radius for cropping around max intensity
-    enable_gaussian_blur: bool = True  # Enable/disable Gaussian preprocessing
+    gaussian_sigma: float = 11.0
+    background_threshold: int = 40
+    crop_radius: int = 300
+    enable_gaussian_blur: bool = True
 
 
 class FocusMetric:
-    """Focus metric computation using double/single Gaussian fitting"""
-
     def __init__(self, config: Optional[FocusConfig] = None):
         self.config = config or FocusConfig()
 
     @staticmethod
     def gaussian_1d(xdata: np.ndarray, i0: float, x0: float, sigma: float, amp: float) -> np.ndarray:
-        """Single Gaussian model function"""
         x = xdata
         x0 = float(x0)
         return i0 + amp * np.exp(-((x - x0) ** 2) / (2 * sigma ** 2))
 
     @staticmethod
-    def double_gaussian_1d(
-        xdata: np.ndarray, i0: float, x0: float, sigma: float, amp: float, dist: float
-    ) -> np.ndarray:
-        """Double Gaussian model function"""
+    def double_gaussian_1d(xdata: np.ndarray, i0: float, x0: float, sigma: float, amp: float, dist: float) -> np.ndarray:
         x = xdata
         x0 = float(x0)
         return (
@@ -1134,90 +1109,43 @@ class FocusMetric:
         )
 
     def preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
-        """
-        Preprocess frame according to specification steps 1-3
-
-        Args:
-            frame: Input frame (can be RGB or grayscale)
-
-        Returns:
-            Preprocessed grayscale frame
-        """
-        # Step 1: Convert to grayscale if needed
         if frame.ndim == 3:
             im = np.mean(frame, axis=-1).astype(np.uint8)
         else:
             im = frame.astype(np.uint8)
 
-        # Convert to float for processing
         im = im.astype(float)
 
-        # Find maximum intensity location for cropping
         if self.config.crop_radius > 0:
-            # Apply heavy Gaussian blur to find general maximum location
             im_gauss = gaussian_filter(im, sigma=111)
             max_coord = np.unravel_index(np.argmax(im_gauss), im_gauss.shape)
-
-            # Crop around maximum with specified radius
             h, w = im.shape
             y_min = max(0, max_coord[0] - self.config.crop_radius)
             y_max = min(h, max_coord[0] + self.config.crop_radius)
             x_min = max(0, max_coord[1] - self.config.crop_radius)
             x_max = min(w, max_coord[1] + self.config.crop_radius)
-
             im = im[y_min:y_max, x_min:x_max]
 
-        # Step 2: Optional Gaussian blur to suppress noise
         if self.config.enable_gaussian_blur:
             im = gaussian_filter(im, sigma=self.config.gaussian_sigma)
 
-        # Mean subtraction
         im = im - np.mean(im) / 2.0
-
-        # Step 3: Threshold background
         im[im < self.config.background_threshold] = 0
-
         return im
 
     def preprocess_frame_rainer(self, frame: np.ndarray) -> np.ndarray:
-        """
-        Alternate preprocessor (kept for context). Implemented as a thin wrapper
-        around `preprocess_frame` to avoid undefined references in the original.
-        """
         return self.preprocess_frame(frame)
 
     def compute_projections(self, im: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Step 4: Compute mean projections projX, projY
-
-        Args:
-            im: Preprocessed image
-
-        Returns:
-            (projX, projY) - mean projections along y and x axes
-        """
-        projX = np.mean(im, axis=0)  # Project along y-axis
-        projY = np.mean(im, axis=1)  # Project along x-axis
+        projX = np.mean(im, axis=0)
+        projY = np.mean(im, axis=1)
         return projX, projY
 
-    def fit_projections(
-        self, projX: np.ndarray, projY: np.ndarray, isDoubleGaussX: bool = False
-    ) -> Tuple[float, float]:
-        """
-        Steps 5-6: Fit projections and compute focus value
-
-        Args:
-            projX: X projection (fit with double-Gaussian if requested)
-            projY: Y projection (fit with single-Gaussian)
-
-        Returns:
-            (sigma_x, sigma_y) - fitted standard deviations
-        """
+    def fit_projections(self, projX: np.ndarray, projY: np.ndarray, isDoubleGaussX: bool = False) -> Tuple[float, float]:
         h1, w1 = len(projY), len(projX)
         x = np.arange(w1)
         y = np.arange(h1)
 
-        # Initial guess parameters
         i0_x = float(np.mean(projX))
         amp_x = float(np.max(projX) - i0_x)
         sigma_x_init = float(np.std(projX))
@@ -1242,24 +1170,13 @@ class FocusMetric:
             popt_y, _ = curve_fit(self.gaussian_1d, y, projY, p0=init_guess_y, maxfev=50000)
             sigma_y = abs(float(popt_y[2]))
         except Exception:
-            # Fallback to standard deviation if fitting fails
             sigma_x = float(np.std(projX))
             sigma_y = float(np.std(projY))
 
         return sigma_x, sigma_y
 
     def compute(self, frame: np.ndarray) -> Dict[str, Any]:
-        """
-        Main computation method - implements complete focus metric algorithm
-
-        Args:
-            frame: Input camera frame (RGB or grayscale)
-
-        Returns:
-            Timestamped JSON with focus value: {"t": timestamp, "focus": focus_value}
-        """
         timestamp = time.time()
-
         try:
             im = self.preprocess_frame(frame)
             projX, projY = self.compute_projections(im)
@@ -1267,30 +1184,11 @@ class FocusMetric:
             focus_value = 12334567 if sigma_y == 0 else float(sigma_x / sigma_y)
         except Exception:
             focus_value = 12334567
-
         return {"t": timestamp, "focus": focus_value}
 
     def update_config(self, **kwargs) -> None:
-        """Update configuration parameters"""
         for key, value in kwargs.items():
             if hasattr(self.config, key):
                 setattr(self.config, key, value)
             else:
                 raise ValueError(f"Unknown configuration parameter: {key}")
-
-
-# Copyright (C) 2020-2024 ImSwitch developers
-# This file is part of ImSwitch.
-#
-# ImSwitch is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# ImSwitch is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.

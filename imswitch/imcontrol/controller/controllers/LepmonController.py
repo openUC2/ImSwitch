@@ -15,6 +15,8 @@ from imswitch.imcommon.framework import Signal
 from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS
 from typing import Dict, List, Union, Optional
+from fastapi import Response
+import io
 
 # Lepmon hardware dependencies
 '''
@@ -180,9 +182,17 @@ class LepmonController(LiveUpdatedController):
         # LepmonOS menu system
         self.menu_open = False
         self.current_menu_state = "main"
+        self.hmi_stop_event = Event()  # Event to stop continuous button monitoring
         
         # Initialize LepmonOS system
         self._initializeLepmonOS()
+        
+        # Start continuous button monitoring thread for HMI
+        self.buttonMonitoringThread = Thread(target=self._continuous_button_monitoring, daemon=True)
+        self.buttonMonitoringThread.start()
+        
+        # Automatically start HMI menu system
+        self._open_hmi_menu()
 
     def _initializeLepmonHardware(self):
         """Initialize Lepmon hardware directly (GPIO LEDs, OLED display, buttons)"""
@@ -197,13 +207,16 @@ class LepmonController(LiveUpdatedController):
                 # Setup LED pins as outputs
                 for color, pin in LED_PINS.items():
                     GPIO.setup(pin, GPIO.OUT)
+                    GPIO.output(pin, GPIO.HIGH)  # LEDs off initially
+                    time.sleep(0.1)
                     GPIO.output(pin, GPIO.LOW)  # LEDs off initially
-                    self.lightStates[color] = False
-                    
+                    self.lightStates[color] = False                
                 # Setup PWM for LED dimming
                 self.led_pwm = {}
                 for color, pin in LED_PINS.items():
                     pwm = GPIO.PWM(pin, 1000)  # 1kHz PWM
+                    pwm.start(1)  # Turn on
+                    time.sleep(0.1)
                     pwm.start(0)  # Start at 0% duty cycle (off)
                     self.led_pwm[color] = pwm
                     
@@ -271,6 +284,10 @@ class LepmonController(LiveUpdatedController):
     def _cleanupHardware(self):
         """Cleanup GPIO and hardware resources"""
         try:
+            # Stop continuous button monitoring
+            if hasattr(self, 'hmi_stop_event'):
+                self.hmi_stop_event.set()
+            
             if HAS_GPIO:
                 # Stop PWM and cleanup GPIO
                 for pwm in self.led_pwm.values():
@@ -594,47 +611,56 @@ class LepmonController(LiveUpdatedController):
 
     # ---------------------- LepmonOS HMI Functions (from 02_trap_hmi.py) ---------------------- #
 
-    def _button_pressed(self, button_name: str) -> bool:
-        """Equivalent to utils.GPIO_Setup.button_pressed()"""
-        try:
-            # Check if button is currently pressed
-            return self.buttonStates.get(button_name, False)
-        except Exception as e:
-            self._logger.warning(f"Could not check button {button_name}: {e}")
-            return False
-
     def _open_hmi_menu(self):
         """Equivalent to the HMI menu system from 02_trap_hmi.py"""
         try:
             self.menu_open = True
             self._turn_on_led("blau")
-            self._display_text("Menü öffnen", "bitte rechte Taste", "drücken")
-            self._logger.info("HMI menu opened")
-            
-            # Start menu monitoring thread
-            menu_thread = Thread(target=self._monitor_menu_buttons, daemon=True)
-            menu_thread.start()
+            self._display_text("Menü bereit", "Tasten nutzen:", "rechts=Fokus", "enter=Menü")
+            self._logger.info("HMI menu opened and running continuously")
             
         except Exception as e:
             self._logger.error(f"Failed to open HMI menu: {e}")
 
-    def _monitor_menu_buttons(self):
-        """Monitor button presses for menu navigation"""
-        try:
-            for _ in range(100):  # Monitor for button presses
-                if self._button_pressed("enter"):
-                    self._handle_menu_enter()
-                    break
-                elif self._button_pressed("rechts"):
-                    self._handle_focus_menu()
-                    break
-                elif self._button_pressed("oben"):
-                    self._handle_update_menu()
-                    break
-                time.sleep(0.05)
+    def _continuous_button_monitoring(self):
+        """Continuously monitor button presses for menu navigation"""
+        self._logger.info("Starting continuous button monitoring thread")
+        
+        while not self.hmi_stop_event.is_set():
+            try:
+                # Read all button states continuously
+                current_states = self._read_all_buttons()
                 
-            if not self.menu_open:
-                self._logger.info("Menu timeout - no interaction")
+                # Only process if menu is open
+                if self.menu_open:
+                    # Handle button presses based on current menu state
+                    if current_states.get("enter", False) and not self.buttonStates.get("enter", False):
+                        self._handle_menu_enter()
+                    elif current_states.get("rechts", False) and not self.buttonStates.get("rechts", False):
+                        self._handle_focus_menu()
+                    elif current_states.get("oben", False) and not self.buttonStates.get("oben", False):
+                        self._handle_update_menu()
+                    elif current_states.get("unten", False) and not self.buttonStates.get("unten", False):
+                        self._handle_navigation_down()
+                
+                # Update stored button states for edge detection
+                self.buttonStates.update(current_states)
+                
+                # Small delay to prevent excessive CPU usage
+                time.sleep(0.1)
+                
+            except Exception as e:
+                self._logger.error(f"Continuous button monitoring error: {e}")
+                time.sleep(1)  # Longer delay on error
+        
+        self._logger.info("Continuous button monitoring thread stopped")
+
+    def _monitor_menu_buttons(self):
+        """Monitor button presses for menu navigation - legacy method kept for compatibility"""
+        try:
+            # This method is now handled by _continuous_button_monitoring
+            # Keep for backward compatibility but just log
+            self._logger.info("Legacy menu monitoring called - using continuous monitoring instead")
                 
         except Exception as e:
             self._logger.error(f"Menu monitoring failed: {e}")
@@ -642,19 +668,30 @@ class LepmonController(LiveUpdatedController):
     def _handle_menu_enter(self):
         """Handle enter button press in menu"""
         try:
-            self._display_text("Eingabe Menü", "geöffnet", "")
-            self._logger.info("Menu entered")
-            # Additional menu logic would go here
+            if self.current_menu_state == "main":
+                self._display_text("Hauptmenü", "Eingabe", "ausgewählt", "")
+                # Could expand to show submenu options
+                time.sleep(1)
+                self._display_text("Menü bereit", "Tasten nutzen:", "rechts=Fokus", "enter=Menü")
+            elif self.current_menu_state == "settings":
+                self._display_text("Einstellungen", "Eingabe", "ausgewählt", "")
+                time.sleep(1)
+                self._display_text("Einstellungen", "Menü", "oben=Zurück", "enter=Auswahl")
+            self._logger.info("Menu enter pressed")
         except Exception as e:
             self._logger.error(f"Menu enter handling failed: {e}")
 
     def _handle_focus_menu(self):
         """Handle focus menu - equivalent to focus() function"""
         try:
-            self._display_text("Fokussierhilfe", "aufgerufen", "")
+            self._display_text("Fokussierhilfe", "aktiviert", "15 Sekunden", "")
             self._logger.info("Focus mode activated")
             # Implement focus assistance logic
             self._run_focus_mode()
+            # Return to main menu display after focus mode
+            time.sleep(1)
+            if self.menu_open:
+                self._display_text("Menü bereit", "Tasten nutzen:", "rechts=Fokus", "enter=Menü")
         except Exception as e:
             self._logger.error(f"Focus menu handling failed: {e}")
 
@@ -682,6 +719,19 @@ class LepmonController(LiveUpdatedController):
             # Update logic would go here
         except Exception as e:
             self._logger.error(f"Update menu handling failed: {e}")
+
+    def _handle_navigation_down(self):
+        """Handle down button press for menu navigation"""
+        try:
+            if self.current_menu_state == "main":
+                self.current_menu_state = "settings"
+                self._display_text("Einstellungen", "Menü", "oben=Zurück", "enter=Auswahl")
+            elif self.current_menu_state == "settings":
+                self.current_menu_state = "main"
+                self._display_text("Hauptmenü", "rechts=Fokus", "enter=Eingabe", "unten=Settings")
+            self._logger.info(f"Menu navigation: {self.current_menu_state}")
+        except Exception as e:
+            self._logger.error(f"Navigation down handling failed: {e}")
 
     # ---------------------- LepmonOS LED Control Functions ---------------------- #
 
@@ -992,6 +1042,34 @@ class LepmonController(LiveUpdatedController):
             return {"success": False, "message": f"HMI menu failed: {str(e)}"}
 
     @APIExport(requestType="POST")
+    def lepmonCloseHMI(self) -> dict:
+        """Close HMI menu system"""
+        try:
+            self.menu_open = False
+            self._turn_off_led("blau")
+            self._display_text("HMI geschlossen", "", "", "")
+            self._logger.info("HMI menu closed")
+            return {"success": True, "message": "HMI menu closed"}
+        except Exception as e:
+            self._logger.error(f"HMI menu closing failed: {e}")
+            return {"success": False, "message": f"HMI menu close failed: {str(e)}"}
+
+    @APIExport()
+    def getHMIStatus(self) -> dict:
+        """Get HMI menu status"""
+        try:
+            return {
+                "success": True,
+                "hmi_open": self.menu_open,
+                "current_menu_state": self.current_menu_state,
+                "button_states": self.buttonStates,
+                "monitoring_active": not self.hmi_stop_event.is_set() if hasattr(self, 'hmi_stop_event') else False
+            }
+        except Exception as e:
+            self._logger.error(f"HMI status retrieval failed: {e}")
+            return {"success": False, "message": f"HMI status failed: {str(e)}"}
+
+    @APIExport(requestType="POST")
     def lepmonStartCapturing(self, override_timecheck: bool = True) -> dict:
         """Equivalent to 03_capturing.py main capturing loop"""
         try:
@@ -1107,7 +1185,7 @@ class LepmonController(LiveUpdatedController):
             filename = f"lepmon_{current_time}_{self.imagesTaken}"
             
             # Take the image
-            self.snapImagelepmonCam(filename, fileFormat=format.upper())
+            self.mFrame = self.snapImagelepmonCam(filename, fileFormat=format.upper())
             
             self.imagesTaken += 1
             self.sigImagesTaken.emit(self.imagesTaken)
@@ -1128,6 +1206,27 @@ class LepmonController(LiveUpdatedController):
                 "message": f"Image capture failed: {str(e)}",
                 "error_count": error_count
             }
+
+
+    @APIExport(runOnUIThread=True)
+    def returnLastSnappedImage(self) -> Response:
+        """Returns the last captured image from the camera."""
+        try:
+            try:
+                arr = self.mFrame
+            except:
+                arr = self.detectorlepmonCam.getLatestFrame()
+
+            im = Image.fromarray(arr.astype(np.uint8))
+            with io.BytesIO() as buf:
+                im = im.convert("L")  # ensure grayscale
+                im.save(buf, format="PNG")
+                im_bytes = buf.getvalue()
+            headers = {"Content-Disposition": 'inline; filename="crop.png"'}
+            return Response(im_bytes, headers=headers, media_type="image/png")
+        except Exception as e:
+            raise RuntimeError("No cropped image available. Please run update() first.") from e
+
 
     @APIExport()
     def lepmonGetSensorData(self) -> dict:
@@ -1573,7 +1672,7 @@ class LepmonController(LiveUpdatedController):
             cv2.imwrite(fileName + ".png", frame)
         else:
             self._logger.warning(f"No valid fileFormat selected: {fileFormat}")
-
+        return frame
     # ----------------------- Camera controls ------------------------- #
     @APIExport(runOnUIThread=True)
     def changeExposureTime(self, value):

@@ -136,16 +136,14 @@ RUN /opt/conda/bin/conda install numcodecs=0.15.0 numpy=2.1.2
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
     conda install scikit-image=0.19.3 -c conda-forge"
     
-
-# fix the version of OME-ZARR 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
-
+    
 # install nmcli
 RUN apt-get update && \
     apt-get install -y --allow-unauthenticated network-manager && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
+RUN systemctl enable network-manager
+    
 # Install UC2-REST first - as it will be installed via ImSwitch again
 RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \
     cd /tmp/UC2-REST && \
@@ -167,7 +165,6 @@ RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal
 
 # fix the version of OME-ZARR 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install zarr==2.11.3"
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install ome-zarr==0.9.0"
 
 
 # Install VimbaX only for ARM64

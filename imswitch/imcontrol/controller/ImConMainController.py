@@ -69,7 +69,7 @@ class ImConMainController(MainController):
             try:
                 module = importlib.import_module(f'imswitch.imcontrol.controller.controllers.{controller_name}')
                 controller_class = getattr(module, controller_name)
-                module = importlib.import_module(f'.{controller_name}', package='imswitch.imcontrol.controller.controllers')
+                #module = importlib.import_module(f'.{controller_name}', package='imswitch.imcontrol.controller.controllers')
             except Exception as e:
                 self.__logger.warning(f"Could not dynamically import {controller_name}: {e}")
                 continue
@@ -84,6 +84,17 @@ class ImConMainController(MainController):
                 except Exception as e:
                     self.__logger.debug(e)
 
+        # Add WiFiController in any way # TODO: Better would be to add this to the widget dict 
+        try: 
+            self.__logger.info(f'Creating controller for widget WiFi')
+            module = importlib.import_module(f'imswitch.imcontrol.controller.controllers.WiFiController')
+            controller_class = getattr(module, controller_name)
+            if controller_class is not None:
+                self.controllers["WiFi"] = self.__factory.createController(controller_class, widget)
+        except Exception as e:
+            self.__logger.warning(f"Could not dynamically import {controller_name}: {e}")
+        
+        
         # Generate API
         self.__api = None
         apiObjs = list(self.controllers.values()) + [self.__commChannel]
@@ -104,6 +115,8 @@ class ImConMainController(MainController):
                                                     f' is not included in your currently active'
                                                     f' hardware setup file.'
             )
+            
+            
         # Generate Shorcuts
         if not IS_HEADLESS:
             self.__shortcuts = None

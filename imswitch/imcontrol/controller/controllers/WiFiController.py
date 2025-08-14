@@ -30,7 +30,30 @@ class WiFiController(ImConWidgetController):
     def _run(self, args: List[str]) -> subprocess.CompletedProcess:
         cmd = [self._sudo, "-n", self._nmcli] + args
         self._logger.debug(f"Running: {' '.join(cmd)}")
-        return subprocess.run(cmd, check=False, text=True, capture_output=True)
+        result = subprocess.run(cmd, check=False, text=True, capture_output=True)
+        
+        # Check for NetworkManager connection issues
+        if result.returncode != 0 and "Could not create NMClient object" in result.stderr:
+            self._logger.error("NetworkManager service is not accessible. Ensure D-Bus and NetworkManager services are running.")
+            # Try to start services if possible
+            try:
+                subprocess.run(["service", "dbus", "start"], check=False, capture_output=True)
+                subprocess.run(["service", "network-manager", "start"], check=False, capture_output=True)
+                # Retry the original command once
+                result = subprocess.run(cmd, check=False, text=True, capture_output=True)
+            except Exception as e:
+                self._logger.error(f"Failed to restart services: {e}")
+        
+        return result
+
+    def _check_networkmanager_status(self) -> bool:
+        """Check if NetworkManager is accessible and running."""
+        try:
+            result = subprocess.run([self._nmcli, "general", "status"], 
+                                  check=False, text=True, capture_output=True)
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def _get_wifi_ifname(self) -> Optional[str]:
         # nmcli -t -f DEVICE,TYPE device status
@@ -94,6 +117,12 @@ class WiFiController(ImConWidgetController):
         return None
 
     # ---------- API ----------
+
+    @APIExport(runOnUIThread=False)
+    def getNetworkManagerStatus(self) -> Dict:
+        """Check if NetworkManager is running and accessible."""
+        status = self._check_networkmanager_status()
+        return {"running": status, "accessible": status}
 
     @APIExport(runOnUIThread=False)
     def scanNetworks(self, ifname: Optional[str] = None) -> Dict:

@@ -182,6 +182,13 @@ fi
 # Set GENICAM_GENTL64_PATH globally for all containers
 ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
+# TODO: For now - move upwards later to the top
+# Install D-Bus and systemd for NetworkManager support
+RUN apt-get update -o Acquire::AllowInsecureRepositories=true \
+    && apt-get install -y --allow-unauthenticated dbus systemd \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE

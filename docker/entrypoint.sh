@@ -15,10 +15,11 @@ then
     ls /tmp/ImSwitchConfig/imcontrol_setups
     
     # start network manager
+    echo 'Starting Network Manager'
     service network-manager start
-    exec "$@"
+    echo 'Checking Network Manager status'
     nmcli general status
-    
+
     PATCH_DIR=/tmp/ImSwitch-changes
     PATCH_FILE=$PATCH_DIR/diff.patch 
 

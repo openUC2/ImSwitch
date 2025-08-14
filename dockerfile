@@ -142,7 +142,6 @@ RUN apt-get update && \
     apt-get install -y --allow-unauthenticated network-manager && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-RUN systemctl enable network-manager
     
 # Install UC2-REST first - as it will be installed via ImSwitch again
 RUN git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST && \

@@ -25,7 +25,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 # =========================
 @dataclass
 class FocusLockParams:
-    focus_metric: str = "JPG"
+    focus_metric: str = "JPG" # "JPG", "astigmatism", "gaussian", "gradient"
     crop_center: Optional[List[int]] = None
     crop_size: Optional[int] = None
     gaussian_sigma: float = 11.0
@@ -124,9 +124,6 @@ class FocusLockState:
         }
 
 
-# =========================
-# Robust PID (keeps self.pi API name)
-# =========================
 class _PID:
     """Discrete 2-DOF style (β on SP via caller if needed), derivative on measurement, anti-windup."""
 
@@ -673,6 +670,7 @@ class FocusLockController(ImConWidgetController):
             if cropCenter is None:
                 cropCenter = [self.cropSize // 2, self.cropSize // 2]
             self.cropCenter = np.asarray(cropCenter, dtype=int)
+            # TODO: self.cropCenter / self.cropSize are not used 
 
     @APIExport(runOnUIThread=True)
     def getParamsAstigmatism(self):

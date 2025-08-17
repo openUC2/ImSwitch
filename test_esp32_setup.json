@@ -77,21 +77,6 @@
         "wavelength":488,
         "valueRangeMin":0,
         "valueRangeMax":1024
-     },
-     "LED Ring":{
-        "analogChannel":null,
-        "digitalLine":null,
-        "managerName":"ESP32LEDLaserManager",
-        "managerProperties":{
-           "rs232device":"ESP32",
-           "channel_index":"LED",
-           "filter_change":false,
-           "laser_despeckle_period":10,
-           "laser_despeckle_amplitude":0
-        },
-        "wavelength":635,
-        "valueRangeMin":0,
-        "valueRangeMax":1024
      }
   },
   "detectors":{
@@ -99,84 +84,20 @@
         "ExtPackage":"imswitch_det_webcam",
         "analogChannel":null,
         "digitalLine":null,
-        "managerName":"GXPIPYManager",
+        "managerName":"WebcamManager",
         "managerProperties":{
-           "cameraListIndex":1,
-           "cameraEffPixelsize":0.45,
-           "gxipycam":{
-              "exposure":20,
-              "gain":0,
-              "blacklevel":10,
-              "image_width":1000,
-              "image_height":1000
+           "cameraListIndex":0,
+           "ESP32Camera":{
+              "host":"192.168.4.1",
+              "port":80
            }
         },
         "forAcquisition":true,
         "forFocusLock":true
      }
   },
-  "rois":{
-     "Full chip":{
-        "x":600,
-        "y":600,
-        "w":1200,
-        "h":1200
-     }
-  },
-  "HistoScan":{
-     "PreviewCamera1":"ESP32Cam"
-  },
-  "autofocus":{
-     "camera":"WidefieldCamera",
-     "positioner":"ESP32Stage",
-     "updateFreq":10,
-     "frameCropx":780,
-     "frameCropy":400,
-     "frameCropw":500,
-     "frameCroph":100
-  },
-  "mct":{
-     "monitorIdx":2,
-     "width":1080,
-     "height":1920,
-     "wavelength":0,
-     "pixelSize":0,
-     "angleMount":0,
-     "patternsDirWin":"C:\\Users\\wanghaoran\\Documents\\ImSwitchConfig\\imcontrol_slm\\488\\",
-     "patternsDir":"/users/bene/ImSwitchConfig/imcontrol_sim/488"
-  },
-  "dpc":{
-     "wavelength":0.53,
-     "pixelsize":0.2,
-     "NA":0.3,
-     "NAi":0.3,
-     "n":1.0,
-     "rotations":[
-        0,
-        180,
-        90,
-        270
-     ]
-  },
-  "webrtc":{
-     
-  },
-  "PixelCalibration":{
-     
-  },
-  "focusLock":{
-     "camera":"WidefieldCamera",
-     "positioner":"ESP32StageManager",
-     "updateFreq":4,
-     "frameCropx":0,
-     "frameCropy":0,
-     "frameCropw":0,
-     "frameCroph":0
-  },
   "LEDMatrixs":{
      "ESP32 LEDMatrix":{
-        "analogChannel":null,
-        "digitalLine":null,
         "managerName":"ESP32LEDMatrixManager",
         "managerProperties":{
            "rs232device":"ESP32",
@@ -192,23 +113,13 @@
      "Image",
      "Laser",
      "Positioner",
-     "Autofocus",
-     "MCT",
-     "UC2Config",
-     "ImSwitchServer",
-     "PixelCalibration",
-     "HistoScan",
-     "Hypha",
      "LEDMatrix",
-     "Joystick",
-     "ROIScan",
      "ESP32InfoScreen"
   ],
   "nonAvailableWidgets":[
      "STORMRecon",
      "DPC",
      "FocusLock",
-     "HistoScan",
-     "FocusLock"
+     "HistoScan"
   ]
 }

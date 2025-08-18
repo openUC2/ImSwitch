@@ -1,3 +1,11 @@
+# Install test mocks for missing dependencies when running tests
+import sys
+if 'pytest' in sys.modules or any('pytest' in arg for arg in sys.argv):
+    try:
+        from . import _test_mocks
+    except ImportError:
+        pass
+
 # used to be, but actions will replace this with the current release TAG -> >2.1.0
 __version__ = "2.1.41"
 __httpport__ = 8001

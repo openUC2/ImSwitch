@@ -1,5 +1,17 @@
 import warnings
 
+# Import mocks for optional dependencies
+from .mock_modules import install_mock_modules
+install_mock_modules()
+
+# Import mock cv2 to make it available for all managers that need it
+try:
+    import cv2
+except ImportError:
+    from .mock_cv2 import MockCV2
+    import sys
+    sys.modules['cv2'] = MockCV2()
+
 from .AutofocusManager import AutofocusManager
 from .FOVLockManager import FOVLockManager
 from .DetectorsManager import DetectorsManager, NoDetectorsError

@@ -5,7 +5,10 @@ import traceback
 import time
 import threading
 # somewhere after all your variables & functions exist
-from ipykernel.embed import embed_kernel   # pip install ipykernel
+try:
+    from ipykernel.embed import embed_kernel   # pip install ipykernel
+except ImportError:
+    embed_kernel = None
 
 from .model import dirtools, pythontools, initLogger
 from imswitch.imcommon.framework import Signal, Thread

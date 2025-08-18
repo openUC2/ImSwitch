@@ -25,6 +25,9 @@ class MockModule:
             return lambda x: x
         elif name in ['Color', 'Compound', 'Line', 'Markers']:
             return MockModule
+        elif name == 'APIExport':
+            # Return a mock decorator that accepts arguments
+            return MockDecorator
         return MockModule(f"{self._name}.{name}")
     
     def __call__(self, *args, **kwargs):
@@ -43,11 +46,26 @@ class MockModule:
         """Required for classes that might be used as base classes."""
         return (object,)  # Return object as fallback base class
     
+    def __getitem__(self, key):
+        """Make the mock subscriptable for array-like operations."""
+        return MockModule(f"{self._name}[{key}]")
+    
     def __str__(self):
         return f"<MockModule: {self._name}>"
     
     def __repr__(self):
         return self.__str__()
+
+
+class MockDecorator:
+    """Mock decorator class that can handle arguments and be used as a decorator."""
+    
+    def __init__(self, *args, **kwargs):
+        pass  # Accept any arguments
+    
+    def __call__(self, func):
+        """Allow the mock to be used as a decorator."""
+        return func  # Just return the original function unchanged
 
 
 def install_all_mocks():
@@ -92,8 +110,11 @@ def install_all_mocks():
         'vispy.visuals.transforms',
         'pyqtgraph',
         'pyqtgraph.dockarea',
-        'pyqtgraph.console',
+        'pyqtgraph.console', 
         'pyqtgraph.Qt',
+        'pyqtgraph.parametertree',
+        'pyqtgraph.widgets',
+        'pyqtgraph.opengl',
         'QScintilla',
         'PyQtWebEngine',
         
@@ -114,6 +135,7 @@ def install_all_mocks():
         'aiortc',
         'aiohttp',
         'numba',
+        'numba.types',
         
         # Hardware specific
         'RPi',

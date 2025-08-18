@@ -34,6 +34,8 @@ try:
     from .UC2ConfigManager import UC2ConfigManager
 except ModuleNotFoundError:
     warnings.warn("UC2ConfigManager not available; please install uc2rest module")
+    # Create a mock UC2ConfigManager class so imports work
+    UC2ConfigManager = type('UC2ConfigManager', (), {})
 from .SIMManager import SIMManager
 from .DPCManager import DPCManager
 from .MCTManager import MCTManager

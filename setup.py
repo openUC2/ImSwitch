@@ -37,7 +37,7 @@ setup(
     ],
     packages=find_packages(),
     include_package_data=True,
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     install_requires=[
         "pydantic==2.11.4",
         "coloredlogs >= 15",
@@ -92,7 +92,7 @@ setup(
             "QScintilla >= 2.12",
             "PyQtWebEngine >= 5.15.2",
             "pyqtgraph >= 0.12.1",
-            "napari[pyqt5] == 0.4.19",
+            "napari[pyqt5] == 0.6.4",
             "lantzdev[qt] >= 0.5.2",
             "qtpy >= 1.9"
         ],

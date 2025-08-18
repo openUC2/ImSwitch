@@ -78,10 +78,6 @@ setup(
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
         "numba>=0.61.2", 
-        "RPi.GPIO",
-        "luma.oled",
-        "smbus2", 
-        "smbus"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
@@ -95,6 +91,12 @@ setup(
             "napari[pyqt5] == 0.6.4",
             "lantzdev[qt] >= 0.5.2",
             "qtpy >= 1.9"
+        ],
+        'Lepmon': [
+            "RPi.GPIO",
+            "luma.oled",
+            "smbus2", 
+            "smbus"
         ],
         'Ashlar': [
             "ashlarUC2"

@@ -1,9 +1,4 @@
-import numpy as np
-try:
-    import NanoImagingPack as nip
-    isNIP = True
-except:
-    isNIP = False
+
 import time
 import threading
 import collections
@@ -22,7 +17,7 @@ class ESP32InfoScreenController(ImConWidgetController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+        # TODO: In general, we should not poll information from the device too often to cause problems with the serial communication => have a rate limit somehow (e.g. every 0.5 s a message)
         # Initialize ESP32 serial controller
         self.esp32_controller = None
         self._connected = False
@@ -63,8 +58,6 @@ class ESP32InfoScreenController(ImConWidgetController):
             self.ledMatrix = self._master.LEDMatrixsManager[allLEDMatrixNames[0]]
         else:
             self.ledMatrix = None
-            if not IS_HEADLESS: 
-                self._widget.replaceWithError('No LEDMatrix found in your setup file.')
             self._logger.warning("No LEDMatrix found")
             return
 
@@ -74,9 +67,6 @@ class ESP32InfoScreenController(ImConWidgetController):
         # Connect ImSwitch signals to send updates to ESP32
         self._connectImSwitchSignals()
         
-        # Connect widget signals if not headless
-        if not IS_HEADLESS:
-            self._connectWidgetSignals()
 
     def _initializeESP32Connection(self):
         """Initialize ESP32 serial connection and setup callbacks"""
@@ -98,9 +88,6 @@ class ESP32InfoScreenController(ImConWidgetController):
             if self.esp32_controller.connect():
                 self._connected = True
                 self._logger.info(f"Connected to ESP32 InfoScreen on port: {port}")
-                # Update widget status if not headless
-                if not IS_HEADLESS:
-                    self._widget.setConnectionStatus(self._connected)
             else:
                 self._logger.error("Failed to connect to ESP32 InfoScreen")
                 
@@ -129,7 +116,7 @@ class ESP32InfoScreenController(ImConWidgetController):
             slot = data.get('slot', 1)
             self._logger.info(f"ESP32: User selected objective slot {slot}")
             # Emit signal to switch objective
-            self._commChannel.sigToggleObjective.emit(slot)
+            self._commChannel.sigToggleObjective.emit(slot) # TODO: Check if this causes recursions
         except Exception as e:
             self._logger.error(f"Error handling objective slot command: {e}")
             
@@ -138,7 +125,8 @@ class ESP32InfoScreenController(ImConWidgetController):
         try:
             if not self.positioner:
                 return
-                
+            # TODO: Check in case we don't get a position, we probably want to go for move forever 
+            # TODO: Zero-speed means => stop!
             motor = data.get('motor', 0)
             speed = data.get('speed', 0)
             self._logger.info(f"ESP32: User set motor {motor} to speed {speed}")
@@ -151,6 +139,8 @@ class ESP32InfoScreenController(ImConWidgetController):
                 # Convert speed to relative movement
                 # Note: This is a simplified mapping - actual implementation may need calibration
                 if speed != 0:
+                    # TODO: if we get positions they map to relative motions in units of imswitch
+                    # TODO: If we get speed, then we have to move forever at the given speed 
                     step_size = speed / 1000.0  # Convert speed to step size
                     self.positioner.move(step_size, axis, is_absolute=False, is_blocking=False)
                     
@@ -162,6 +152,8 @@ class ESP32InfoScreenController(ImConWidgetController):
         try:
             if not self.positioner:
                 return
+            
+            # TODO: This means isforever 
                 
             speed_x = data.get('speedX', 0)
             speed_y = data.get('speedY', 0)
@@ -209,7 +201,7 @@ class ESP32InfoScreenController(ImConWidgetController):
             channel = data.get('channel', 0)
             value = data.get('value', 0)
             self._logger.info(f"ESP32: User set PWM channel {channel} to {value}")
-            
+            # TODO: We need to check if we are enabled already
             # Map PWM channel to laser (assuming channel 1-4 maps to laser indices)
             if channel > 0 and channel <= len(self.lasers):
                 laser_name = self.lasers[channel - 1]
@@ -252,9 +244,6 @@ class ESP32InfoScreenController(ImConWidgetController):
         status = "Connected" if connected else "Disconnected"
         self._logger.info(f"ESP32 InfoScreen: {status}")
         
-        # Update widget status
-        if not IS_HEADLESS:
-            self._widget.setConnectionStatus(self._connected)
 
     def _connectImSwitchSignals(self):
         """Connect ImSwitch signals to send updates to ESP32 display"""
@@ -265,7 +254,9 @@ class ESP32InfoScreenController(ImConWidgetController):
         try:
             # Update LED status when laser/LED state changes
             if hasattr(self._commChannel, 'sigUpdateImage'):
-                self._commChannel.sigUpdateImage.connect(self._onImageUpdate)
+                # TODO: THis we don't need as we use getLastImage and push this - in case it's necessary 
+                # self._commChannel.sigUpdateImage.connect(self._onImageUpdate)
+                pass
                 
             # Update position when stage moves  
             if hasattr(self._commChannel, 'sigUpdateMotorPosition'):
@@ -275,6 +266,9 @@ class ESP32InfoScreenController(ImConWidgetController):
             if hasattr(self._commChannel, 'sigToggleObjective'): 
                 self._commChannel.sigToggleObjective.connect(self._onObjectiveSlotUpdate)
                 
+            # TODO: Implement Laser / PWM  - this requires probably the addition of the signal in the commmmanger
+            # TODO: Implement LEDMatrix - this requires the additional of the signal in the commmmanager
+            
         except Exception as e:
             self._logger.error(f"Error connecting ImSwitch signals: {e}")
             
@@ -308,32 +302,18 @@ class ESP32InfoScreenController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error sending objective update to ESP32: {e}")
             
-    def _connectWidgetSignals(self):
-        """Connect widget button signals"""
-        if not IS_HEADLESS and hasattr(self._widget, 'connectButton'):
-            self._widget.connectButton.clicked.connect(self._onConnectClicked)
-            self._widget.disconnectButton.clicked.connect(self._onDisconnectClicked)
-            self._widget.testLEDButton.clicked.connect(self._onTestLEDClicked)
-            self._widget.sendTestImageButton.clicked.connect(self._onSendTestImageClicked)
-            
-            # Update initial widget status
-            self._widget.setConnectionStatus(self._connected)
-    
+
     def _onConnectClicked(self):
         """Handle connect button click"""
         if not self._connected:
             self._initializeESP32Connection()
-            if not IS_HEADLESS:
-                self._widget.setConnectionStatus(self._connected)
-                
+
     def _onDisconnectClicked(self):
         """Handle disconnect button click"""
         if self._connected and self.esp32_controller:
             self.esp32_controller.disconnect()
             self._connected = False
-            if not IS_HEADLESS:
-                self._widget.setConnectionStatus(self._connected)
-                
+
     def _onTestLEDClicked(self):
         """Handle test LED button click"""
         if self._connected and self.esp32_controller:

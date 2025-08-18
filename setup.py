@@ -74,7 +74,7 @@ setup(
         "python-socketio[asyncio]==5.11.4",
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
-        "zarr>=3.0.0",
+        "zarr>=3",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
         "numba>=0.61.2", 

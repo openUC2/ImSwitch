@@ -17,10 +17,19 @@ class ESP32InfoScreenController(ImConWidgetController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # TODO: In general, we should not poll information from the device too often to cause problems with the serial communication => have a rate limit somehow (e.g. every 0.5 s a message)
         # Initialize ESP32 serial controller
         self.esp32_controller = None
         self._connected = False
+        
+        # Rate limiting for ESP32 communication (0.5s minimum interval)
+        self._last_update_time = 0
+        self._update_rate_limit = 0.5  # seconds
+        self._rate_limit_timer = Timer()
+        self._rate_limit_timer.setSingleShot(True)
+        self._pending_updates = {}
+        
+        # Recursion prevention
+        self._in_objective_update = False
         
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
@@ -115,8 +124,13 @@ class ESP32InfoScreenController(ImConWidgetController):
         try:
             slot = data.get('slot', 1)
             self._logger.info(f"ESP32: User selected objective slot {slot}")
-            # Emit signal to switch objective
-            self._commChannel.sigToggleObjective.emit(slot) # TODO: Check if this causes recursions
+            # Emit signal to switch objective - using direct method call to avoid recursion
+            if hasattr(self._master, 'objectiveManager'):
+                self._master.objectiveManager.setCurrentObjective(slot)
+            else:
+                # Fallback: emit signal but check to prevent recursion
+                if not getattr(self, '_in_objective_update', False):
+                    self._commChannel.sigToggleObjective.emit(slot)
         except Exception as e:
             self._logger.error(f"Error handling objective slot command: {e}")
             
@@ -125,24 +139,39 @@ class ESP32InfoScreenController(ImConWidgetController):
         try:
             if not self.positioner:
                 return
-            # TODO: Check in case we don't get a position, we probably want to go for move forever 
-            # TODO: Zero-speed means => stop!
+                
             motor = data.get('motor', 0)
             speed = data.get('speed', 0)
-            self._logger.info(f"ESP32: User set motor {motor} to speed {speed}")
+            position = data.get('position', None)
+            self._logger.info(f"ESP32: User set motor {motor} to speed {speed}, position {position}")
             
             # Map motor ID to axis (assuming 0=X, 1=Y, 2=Z, 3=A)
             axis_map = {0: 'X', 1: 'Y', 2: 'Z', 3: 'A'}
             axis = axis_map.get(motor, 'X')
             
             if hasattr(self.positioner, 'move') and axis in self.positioner.axes:
-                # Convert speed to relative movement
-                # Note: This is a simplified mapping - actual implementation may need calibration
-                if speed != 0:
-                    # TODO: if we get positions they map to relative motions in units of imswitch
-                    # TODO: If we get speed, then we have to move forever at the given speed 
-                    step_size = speed / 1000.0  # Convert speed to step size
-                    self.positioner.move(step_size, axis, is_absolute=False, is_blocking=False)
+                # Zero speed means stop motor
+                if speed == 0:
+                    if hasattr(self.positioner, 'stop'):
+                        self.positioner.stop(axis)
+                    return
+                
+                # If we have position data, use it for relative moves 
+                if position is not None:
+                    # Position-based movement in ImSwitch units
+                    self.positioner.move(position, axis, is_absolute=False, is_blocking=False)
+                else:
+                    # Speed-based movement - continuous motion
+                    if hasattr(self.positioner, 'setSpeed'):
+                        # Set continuous speed if supported
+                        self.positioner.setSpeed(speed, axis)
+                        if hasattr(self.positioner, 'moveForever'):
+                            direction = 1 if speed > 0 else -1
+                            self.positioner.moveForever(axis, direction)
+                    else:
+                        # Fallback: convert speed to small relative steps
+                        step_size = speed / 1000.0  # Convert speed to step size
+                        self.positioner.move(step_size, axis, is_absolute=False, is_blocking=False)
                     
         except Exception as e:
             self._logger.error(f"Error handling motor command: {e}")
@@ -152,21 +181,28 @@ class ESP32InfoScreenController(ImConWidgetController):
         try:
             if not self.positioner:
                 return
-            
-            # TODO: This means isforever 
                 
             speed_x = data.get('speedX', 0)
             speed_y = data.get('speedY', 0)
             self._logger.info(f"ESP32: User moved XY joystick: X={speed_x}, Y={speed_y}")
             
-            # Convert speeds to relative movements
-            if speed_x != 0 and 'X' in self.positioner.axes:
-                step_x = speed_x / 1000.0
-                self.positioner.move(step_x, 'X', is_absolute=False, is_blocking=False)
-                
-            if speed_y != 0 and 'Y' in self.positioner.axes:
-                step_y = speed_y / 1000.0 
-                self.positioner.move(step_y, 'Y', is_absolute=False, is_blocking=False)
+            # Handle continuous movement (speed-based)
+            for axis, speed in [('X', speed_x), ('Y', speed_y)]:
+                if axis in self.positioner.axes:
+                    if speed == 0:
+                        # Stop movement
+                        if hasattr(self.positioner, 'stop'):
+                            self.positioner.stop(axis)
+                    else:
+                        # Continuous movement
+                        if hasattr(self.positioner, 'setSpeed') and hasattr(self.positioner, 'moveForever'):
+                            self.positioner.setSpeed(abs(speed), axis)
+                            direction = 1 if speed > 0 else -1
+                            self.positioner.moveForever(axis, direction)
+                        else:
+                            # Fallback: convert to relative movement
+                            step_size = speed / 1000.0
+                            self.positioner.move(step_size, axis, is_absolute=False, is_blocking=False)
                 
         except Exception as e:
             self._logger.error(f"Error handling XY motor command: {e}")
@@ -201,17 +237,28 @@ class ESP32InfoScreenController(ImConWidgetController):
             channel = data.get('channel', 0)
             value = data.get('value', 0)
             self._logger.info(f"ESP32: User set PWM channel {channel} to {value}")
-            # TODO: We need to check if we are enabled already
+            
             # Map PWM channel to laser (assuming channel 1-4 maps to laser indices)
             if channel > 0 and channel <= len(self.lasers):
                 laser_name = self.lasers[channel - 1]
                 laser_manager = self._master.lasersManager[laser_name]
+                
+                # Check if laser needs to be enabled first
+                if hasattr(laser_manager, 'enabled') and not laser_manager.enabled:
+                    if value > 0:  # Only enable if we're setting a positive value
+                        laser_manager.setEnabled(True)
+                        self._logger.info(f"Enabled laser {laser_name}")
                 
                 if hasattr(laser_manager, 'setValue'):
                     # Convert 0-1024 range to laser's value range
                     max_value = getattr(laser_manager, 'valueRangeMax', 1024)
                     normalized_value = int((value / 1024.0) * max_value)
                     laser_manager.setValue(normalized_value)
+                    
+                    # If value is 0, we can optionally disable the laser
+                    if value == 0 and hasattr(laser_manager, 'setEnabled'):
+                        laser_manager.setEnabled(False)
+                        self._logger.info(f"Disabled laser {laser_name}")
                     
         except Exception as e:
             self._logger.error(f"Error handling PWM command: {e}")
@@ -252,55 +299,143 @@ class ESP32InfoScreenController(ImConWidgetController):
             
         # Connect to relevant signals to update ESP32 display
         try:
-            # Update LED status when laser/LED state changes
-            if hasattr(self._commChannel, 'sigUpdateImage'):
-                # TODO: THis we don't need as we use getLastImage and push this - in case it's necessary 
-                # self._commChannel.sigUpdateImage.connect(self._onImageUpdate)
-                pass
-                
             # Update position when stage moves  
             if hasattr(self._commChannel, 'sigUpdateMotorPosition'):
                 self._commChannel.sigUpdateMotorPosition.connect(self._onMotorPositionUpdate)
                 
-            # Update objective slot when changed
+            # Update objective slot when changed - prevent recursion
             if hasattr(self._commChannel, 'sigToggleObjective'): 
                 self._commChannel.sigToggleObjective.connect(self._onObjectiveSlotUpdate)
                 
-            # TODO: Implement Laser / PWM  - this requires probably the addition of the signal in the commmmanger
-            # TODO: Implement LEDMatrix - this requires the additional of the signal in the commmmanager
+            # Connect to laser manager signals for PWM updates
+            try:
+                for laser_name in self.lasers:
+                    laser_manager = self._master.lasersManager[laser_name]
+                    if hasattr(laser_manager, 'sigLaserValueChanged'):
+                        laser_manager.sigLaserValueChanged.connect(
+                            lambda value, name=laser_name: self._onLaserValueUpdate(name, value)
+                        )
+                    if hasattr(laser_manager, 'sigLaserEnabledChanged'):
+                        laser_manager.sigLaserEnabledChanged.connect(
+                            lambda enabled, name=laser_name: self._onLaserEnabledUpdate(name, enabled)
+                        )
+            except Exception as e:
+                self._logger.warning(f"Could not connect to laser signals: {e}")
+                
+            # Connect to LED Matrix manager signals
+            try:
+                if self.ledMatrix and hasattr(self.ledMatrix, 'sigLEDMatrixValueChanged'):
+                    self.ledMatrix.sigLEDMatrixValueChanged.connect(self._onLEDMatrixUpdate)
+            except Exception as e:
+                self._logger.warning(f"Could not connect to LED matrix signals: {e}")
             
         except Exception as e:
             self._logger.error(f"Error connecting ImSwitch signals: {e}")
             
-    def _onImageUpdate(self, detectorName, image, *args):
-        """Send updated image to ESP32 display"""
-        try:
-            if self.esp32_controller and self._connected and image is not None:
-                timestamp = time.strftime("%H:%M:%S")
-                self.esp32_controller.send_image(image, f"Live {timestamp}")
-        except Exception as e:
-            self._logger.error(f"Error sending image update to ESP32: {e}")
-            
     def _onMotorPositionUpdate(self, positions):
-        """Send motor position update to ESP32 display"""
+        """Send motor position update to ESP32 display with rate limiting"""
         try:
-            if self.esp32_controller and self._connected:
-                # Update sample position based on X,Y coordinates (normalize to 0-1)
-                if len(positions) >= 2:
-                    # Simple normalization - may need calibration for actual setup
-                    x_norm = min(max((positions[0] + 50) / 100.0, 0), 1)  # Assuming ±50mm range
-                    y_norm = min(max((positions[1] + 50) / 100.0, 0), 1)
-                    self.esp32_controller.update_sample_position(x_norm, y_norm)
+            if not self.esp32_controller or not self._connected:
+                return
+                
+            current_time = time.time()
+            if current_time - self._last_update_time < self._update_rate_limit:
+                # Store pending update for rate-limited sending
+                self._pending_updates['motor_position'] = positions
+                if not self._rate_limit_timer.isActive():
+                    remaining_time = self._update_rate_limit - (current_time - self._last_update_time)
+                    self._rate_limit_timer.timeout.connect(lambda: self._sendPendingUpdate('motor_position'))
+                    self._rate_limit_timer.start(int(remaining_time * 1000))
+                return
+            
+            self._sendMotorPositionUpdate(positions)
+            
+        except Exception as e:
+            self._logger.error(f"Error handling position update: {e}")
+            
+    def _sendMotorPositionUpdate(self, positions):
+        """Actually send the motor position update"""
+        try:
+            # Update sample position based on X,Y coordinates (normalize to 0-1)
+            if len(positions) >= 2:
+                # Simple normalization - may need calibration for actual setup
+                x_norm = min(max((positions[0] + 50) / 100.0, 0), 1)  # Assuming ±50mm range
+                y_norm = min(max((positions[1] + 50) / 100.0, 0), 1)
+                self.esp32_controller.update_sample_position(x_norm, y_norm)
+                self._last_update_time = time.time()
         except Exception as e:
             self._logger.error(f"Error sending position update to ESP32: {e}")
             
     def _onObjectiveSlotUpdate(self, slot):
         """Send objective slot update to ESP32 display"""
         try:
+            # Prevent recursion when this controller triggers the signal
+            if getattr(self, '_in_objective_update', False):
+                return
+                
+            self._in_objective_update = True
             if self.esp32_controller and self._connected:
                 self.esp32_controller.set_objective_slot(slot)
+            self._in_objective_update = False
         except Exception as e:
             self._logger.error(f"Error sending objective update to ESP32: {e}")
+            self._in_objective_update = False
+            
+    def _onLaserValueUpdate(self, laser_name, value):
+        """Send laser value update to ESP32 display"""
+        try:
+            if self.esp32_controller and self._connected:
+                # Map laser name to channel (assuming order matches self.lasers)
+                try:
+                    channel = self.lasers.index(laser_name) + 1
+                    # Convert value to 0-1024 range expected by ESP32
+                    laser_manager = self._master.lasersManager[laser_name]
+                    max_value = getattr(laser_manager, 'valueRangeMax', 1024)
+                    normalized_value = int((value / max_value) * 1024)
+                    self.esp32_controller.set_pwm(channel, normalized_value)
+                except (ValueError, AttributeError) as e:
+                    self._logger.warning(f"Could not update laser {laser_name} on ESP32: {e}")
+        except Exception as e:
+            self._logger.error(f"Error sending laser value update to ESP32: {e}")
+            
+    def _onLaserEnabledUpdate(self, laser_name, enabled):
+        """Send laser enabled state update to ESP32 display"""
+        try:
+            if self.esp32_controller and self._connected:
+                # If disabled, set PWM to 0
+                if not enabled:
+                    try:
+                        channel = self.lasers.index(laser_name) + 1
+                        self.esp32_controller.set_pwm(channel, 0)
+                    except ValueError:
+                        pass
+        except Exception as e:
+            self._logger.error(f"Error sending laser enabled update to ESP32: {e}")
+            
+    def _onLEDMatrixUpdate(self, color_data):
+        """Send LED matrix update to ESP32 display"""
+        try:
+            if self.esp32_controller and self._connected:
+                # Extract RGB values from color data
+                if isinstance(color_data, (tuple, list)) and len(color_data) >= 3:
+                    r, g, b = int(color_data[0] * 255), int(color_data[1] * 255), int(color_data[2] * 255)
+                    enabled = any(c > 0 for c in color_data[:3])
+                    self.esp32_controller.set_led(enabled, r, g, b)
+        except Exception as e:
+            self._logger.error(f"Error sending LED matrix update to ESP32: {e}")
+            
+    def _sendPendingUpdate(self, update_type):
+        """Send pending rate-limited updates"""
+        try:
+            if update_type in self._pending_updates:
+                if update_type == 'motor_position':
+                    self._sendMotorPositionUpdate(self._pending_updates[update_type])
+                del self._pending_updates[update_type]
+        except Exception as e:
+            self._logger.error(f"Error sending pending update: {e}")
+        finally:
+            # Disconnect the timeout signal
+            self._rate_limit_timer.timeout.disconnect()
             
 
     def _onConnectClicked(self):
@@ -342,7 +477,13 @@ class ESP32InfoScreenController(ImConWidgetController):
                 self._logger.error(f"Error sending test image: {e}")
             
     def finalize(self):
-        """Clean up ESP32 connection on shutdown"""
+        """Clean up ESP32 connection and timers on shutdown"""
+        try:
+            if self._rate_limit_timer and self._rate_limit_timer.isActive():
+                self._rate_limit_timer.stop()
+        except Exception as e:
+            self._logger.warning(f"Error stopping rate limit timer: {e}")
+            
         if self.esp32_controller and self._connected:
             self.esp32_controller.disconnect()
             self._logger.info("Disconnected from ESP32 InfoScreen")

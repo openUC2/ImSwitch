@@ -28,6 +28,12 @@ class MockModule:
         elif name == 'APIExport':
             # Return a mock decorator that accepts arguments
             return MockDecorator
+        elif name == 'sip':
+            # Return a mock sip module with common functions
+            return MockSip()
+        elif name == 'unwrapinstance':
+            # Mock sip.unwrapinstance function
+            return lambda obj: obj
         return MockModule(f"{self._name}.{name}")
     
     def __call__(self, *args, **kwargs):
@@ -57,6 +63,84 @@ class MockModule:
         return self.__str__()
 
 
+class MockQtClass:
+    """Mock class specifically for Qt classes that can be used as base classes"""
+    
+    def __init__(self, name=None):
+        self._name = name or 'MockQtClass'
+    
+    def __mro_entries__(self, bases):
+        """Required for classes that might be used as base classes."""
+        return (object,)  # Return object as fallback base class
+    
+    def __call__(self, *args, **kwargs):
+        """Allow the mock to be called like a function."""
+        return MockModule(f"{self._name}()")
+    
+    def __getattr__(self, name):
+        """Return mock objects for any missing attributes."""
+        return MockModule(f"{self._name}.{name}")
+
+
+class MockQtCore:
+    """Specialized mock for QtCore module with proper Qt classes"""
+    
+    def __init__(self):
+        # Mock Qt classes that are commonly used as base classes
+        self.QObject = MockQtClass('QObject')
+        self.QMutex = MockQtClass('QMutex') 
+        self.QThread = MockQtClass('QThread')
+        self.QTimer = MockQtClass('QTimer')
+        self.Signal = lambda *args: MockModule('Signal')
+        self.QAbstractEventDispatcher = MockQtClass('QAbstractEventDispatcher')
+        self.QEventLoop = MockQtClass('QEventLoop')
+        
+        # Mock enums and constants
+        self.Qt = MockModule('Qt')
+        
+    def __getattr__(self, name):
+        """Return mock for any other QtCore attributes"""
+        return MockQtClass(f"QtCore.{name}")
+
+
+class MockQtWidgets:
+    """Specialized mock for QtWidgets module"""
+    
+    def __init__(self):
+        self.QApplication = MockQtClass('QApplication')
+        self.QWidget = MockQtClass('QWidget') 
+        self.QLabel = MockQtClass('QLabel')
+        
+    def __getattr__(self, name):
+        """Return mock for any other QtWidgets attributes"""
+        return MockQtClass(f"QtWidgets.{name}")
+
+
+class MockQtGui:
+    """Specialized mock for QtGui module"""
+    
+    def __init__(self):
+        self.QPainter = MockQtClass('QPainter')
+        self.QBrush = MockQtClass('QBrush')
+        self.QPen = MockQtClass('QPen')
+        
+    def __getattr__(self, name):
+        """Return mock for any other QtGui attributes"""
+        return MockQtClass(f"QtGui.{name}")
+
+
+class MockSip:
+    """Mock for PyQt5.sip module"""
+    
+    def unwrapinstance(self, obj):
+        """Mock sip.unwrapinstance function"""
+        return obj
+        
+    def __getattr__(self, name):
+        """Return mock for any other sip attributes"""
+        return MockModule(f"sip.{name}")
+
+
 class MockDecorator:
     """Mock decorator class that can handle arguments and be used as a decorator."""
     
@@ -70,6 +154,7 @@ class MockDecorator:
 
 def install_all_mocks():
     """Install mock modules for all optional dependencies used in ImSwitch."""
+    
     mock_modules = [
         # Data acquisition
         'nidaqmx',
@@ -117,6 +202,9 @@ def install_all_mocks():
         'pyqtgraph.opengl',
         'QScintilla',
         'PyQtWebEngine',
+        
+        # HDF5 support  
+        'h5py',
         
         # Image processing (already installed via mock_cv2.py but adding for completeness)
         'cv2',

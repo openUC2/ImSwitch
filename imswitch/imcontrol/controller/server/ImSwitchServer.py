@@ -158,7 +158,7 @@ def preview_file(file_path: str):
     Provides file previews by serving the file from disk.
     - `file_path` is the relative path to the file within BASE_DIR.
     """
-    # Resolve the absolute file path
+    # Resolve the absolute file path 
     absolute_path = BASE_DIR / file_path
 
     # Check if the file exists and is a file

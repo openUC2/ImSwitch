@@ -18,19 +18,126 @@ class CommunicationChannel(SignalInterface):
     Communication Channel is a class that handles the communication between Master Controller
     and Widgets, or between Widgets.
     """
+
+    sigUpdateImage = Signal(
+        str, np.ndarray, bool, list, bool
+    )  # (detectorName, image, init, scale, isCurrentDetector)
+
+    sigAcquisitionStarted = Signal()
+
+    sigAcquisitionStopped = Signal()
+
+    sigScriptExecutionFinished = Signal()
+
+    sigAdjustFrame = Signal(object)  # (shape)
+
+    sigDetectorSwitched = Signal(str, str)  # (newDetectorName, oldDetectorName)
+
+    sigGridToggled = Signal(bool)  # (enabled)
+
+    sigCrosshairToggled = Signal(bool)  # (enabled)
+
+    sigAddItemToVb = Signal(object)  # (item)
+
+    sigRemoveItemFromVb = Signal(object)  # (item)
+
+    sigRecordingStarted = Signal()
+
+    sigRecordingEnded = Signal()
+
+    sigUpdateRecFrameNum = Signal(int)  # (frameNumber)
+
+    sigUpdateRecTime = Signal(int)  # (recTime)
+
+    sigMemorySnapAvailable = Signal(
+        str, np.ndarray, object, bool
+    )  # (name, image, filePath, savedToDisk)
+
+    sigRunScan = Signal(bool, bool)  # (recalculateSignals, isNonFinalPartOfSequence)
+
+    sigAbortScan = Signal()
+
+    sigScanStarting = Signal()
+
+    sigScanBuilt = Signal(object)  # (deviceList)
+
+    sigScanStarted = Signal()
+
+    sigScanDone = Signal()
+
+    sigScanEnded = Signal()
+
+    sigSLMMaskUpdated = Signal(object)  # (mask)
+    sigSIMMaskUpdated = Signal(object) # (mask)
+
+    sigToggleBlockScanWidget = Signal(bool)
+
+    sigSnapImg = Signal()
+
+    sigSnapImgPrev = Signal(str, np.ndarray, str)  # (detector, image, nameSuffix)
+
+    sigRequestScanParameters = Signal()
+
+    sigSendScanParameters = Signal(dict, dict, object)  # (analogParams, digitalParams, scannerList)
+
+    sigSetAxisCenters = Signal(object, object)  # (axisDeviceList, axisCenterList)
+
+    sigStartRecordingExternal = Signal()
+
+    sigRequestScanFreq = Signal()
+
+    sigSendScanFreq = Signal(float)  # (scanPeriod)
+
+    sigPixelSizeChange = Signal(float)  # (pixelSize)
+
+    sigExperimentStop = Signal()
     #sigRequestScannersInScan = Signal()
 
     #sigSendScannersInScan = Signal(object)  # (scannerList)
+    sigFlatFieldRunning = Signal(bool)
+    sigFlatFieldImage = Signal(object)
+
+    sigAutoFocus =  Signal(float, float) # scanrange and stepsize
+    sigAutoFocusRunning = Signal(bool) # indicate if autofocus is running or not
 
     # Objective 
+    sigToggleObjective = Signal(int) # objective slot number 1,2
+    sigStartLiveAcquistion = Signal(bool)
+    sigStopLiveAcquisition = Signal(bool)
+
+    sigInitialFocalPlane = Signal(float) # initial focal plane for DeckScanController
+
+    sigBroadcast = Signal(str, str, object)
+
+    sigSaveFocus = Signal()
+
+    sigScanFrameFinished = Signal()  # TODO: emit this signal when a scanning frame finished, maybe in scanController if possible? Otherwise in APDManager for now, even if that is not general if you want to do camera-based experiments. Could also create a signal specifically for this from the scan curve generator perhaps, specifically for the rotation experiments, would that be smarter?
+
+    sigUpdateRotatorPosition = Signal(str, str)  # (rotatorName)
+
+    sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI
+
+    sigSetSyncInMovementSettings = Signal(str, float)  # (rotatorName, position)
+
+    sigNewFrame = Signal()
 
     # signal to control actions from the ESP32
+    sigESP32Message = Signal(str, str)  # (key, message)
 
     # useq-schema related signals
+    sigSetXYPosition = Signal(float, float)
+    sigSetZPosition = Signal(float)
+    sigSetExposure = Signal(float)
+    sigSetSpeed = Signal(float)
 
     # light-sheet related signals
+    sigStartLightSheet = Signal(float, float, float, str, str, float) # (startX, startY, speed, axis, lightsource, lightsourceIntensity)
+    sigStopLightSheet = Signal()
 
     # scanning-related signals
+    sigStartTileBasedTileScanning = Signal(int, int, int, int, int, int, str, int, int, bool, bool, bool) # (numb erTilesX, numberTilesY, stepSizeX, stepSizeY, nTimes, tPeriod, illuSource, initPosX, initPosY, isStitchAshlar, isStitchAshlarFlipX, isStitchAshlarFlipY)
+    sigStopTileBasedTileScanning = Signal()
+    sigOnResultTileBasedTileScanning = Signal(np.ndarray, np.ndarray) # (tiles, postions)
 
 
     @property
@@ -38,71 +145,7 @@ class CommunicationChannel(SignalInterface):
         return self.__sharedAttrs
 
     def __init__(self, main, setupInfo):
-super().__init__()
-        self.sigUpdateImage = Signal(
-        str, np.ndarray, bool, list, bool
-    )  # (detectorName, image, init, scale, isCurrentDetector)  # (detectorName, image, init, scale, isCurrentDetector)
-        self.sigAcquisitionStarted = Signal()
-        self.sigAcquisitionStopped = Signal()
-        self.sigScriptExecutionFinished = Signal()
-        self.sigAdjustFrame = Signal(object)  # (shape)  # (shape)
-        self.sigDetectorSwitched = Signal(str, str)  # (newDetectorName, oldDetectorName)  # (newDetectorName, oldDetectorName)
-        self.sigGridToggled = Signal(bool)  # (enabled)  # (enabled)
-        self.sigCrosshairToggled = Signal(bool)  # (enabled)  # (enabled)
-        self.sigAddItemToVb = Signal(object)  # (item)  # (item)
-        self.sigRemoveItemFromVb = Signal(object)  # (item)  # (item)
-        self.sigRecordingStarted = Signal()
-        self.sigRecordingEnded = Signal()
-        self.sigUpdateRecFrameNum = Signal(int)  # (frameNumber)  # (frameNumber)
-        self.sigUpdateRecTime = Signal(int)  # (recTime)  # (recTime)
-        self.sigMemorySnapAvailable = Signal(
-        str, np.ndarray, object, bool
-    )  # (name, image, filePath, savedToDisk)  # (name, image, filePath, savedToDisk)
-        self.sigRunScan = Signal(bool, bool)  # (recalculateSignals, isNonFinalPartOfSequence)  # (recalculateSignals, isNonFinalPartOfSequence)
-        self.sigAbortScan = Signal()
-        self.sigScanStarting = Signal()
-        self.sigScanBuilt = Signal(object)  # (deviceList)  # (deviceList)
-        self.sigScanStarted = Signal()
-        self.sigScanDone = Signal()
-        self.sigScanEnded = Signal()
-        self.sigSLMMaskUpdated = Signal(object)  # (mask)  # (mask)
-        self.sigSIMMaskUpdated = Signal(object) # (mask)  # (mask)
-        self.sigToggleBlockScanWidget = Signal(bool)
-        self.sigSnapImg = Signal()
-        self.sigSnapImgPrev = Signal(str, np.ndarray, str)  # (detector, image, nameSuffix)  # (detector, image, nameSuffix)
-        self.sigRequestScanParameters = Signal()
-        self.sigSendScanParameters = Signal(dict, dict, object)  # (analogParams, digitalParams, scannerList)  # (analogParams, digitalParams, scannerList)
-        self.sigSetAxisCenters = Signal(object, object)  # (axisDeviceList, axisCenterList)  # (axisDeviceList, axisCenterList)
-        self.sigStartRecordingExternal = Signal()
-        self.sigRequestScanFreq = Signal()
-        self.sigSendScanFreq = Signal(float)  # (scanPeriod)  # (scanPeriod)
-        self.sigPixelSizeChange = Signal(float)  # (pixelSize)  # (pixelSize)
-        self.sigExperimentStop = Signal()
-        self.sigFlatFieldRunning = Signal(bool)
-        self.sigFlatFieldImage = Signal(object)
-        self.sigAutoFocus = Signal(float, float) # scanrange and stepsize  # scanrange and stepsize
-        self.sigAutoFocusRunning = Signal(bool) # indicate if autofocus is running or not  # indicate if autofocus is running or not
-        self.sigToggleObjective = Signal(int) # objective slot number 1,2  # objective slot number 1,2
-        self.sigStartLiveAcquistion = Signal(bool)
-        self.sigStopLiveAcquisition = Signal(bool)
-        self.sigInitialFocalPlane = Signal(float) # initial focal plane for DeckScanController  # initial focal plane for DeckScanController
-        self.sigBroadcast = Signal(str, str, object)
-        self.sigSaveFocus = Signal()
-        self.sigScanFrameFinished = Signal()  # TODO: emit this signal when a scanning frame finished, maybe in scanController if possible? Otherwise in APDManager for now, even if that is not general if you want to do camera-based experiments. Could also create a signal specifically for this from the scan curve generator perhaps, specifically for the rotation experiments, would that be smarter?  # TODO: emit this signal when a scanning frame finished, maybe in scanController if possible? Otherwise in APDManager for now, even if that is not general if you want to do camera-based experiments. Could also create a signal specifically for this from the scan curve generator perhaps, specifically for the rotation experiments, would that be smarter?
-        self.sigUpdateRotatorPosition = Signal(str, str)  # (rotatorName)  # (rotatorName)
-        self.sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI  # # TODO: Just forcely update the positoin in the GUI
-        self.sigSetSyncInMovementSettings = Signal(str, float)  # (rotatorName, position)  # (rotatorName, position)
-        self.sigNewFrame = Signal()
-        self.sigESP32Message = Signal(str, str)  # (key, message)  # (key, message)
-        self.sigSetXYPosition = Signal(float, float)
-        self.sigSetZPosition = Signal(float)
-        self.sigSetExposure = Signal(float)
-        self.sigSetSpeed = Signal(float)
-        self.sigStartLightSheet = Signal(float, float, float, str, str, float) # (startX, startY, speed, axis, lightsource, lightsourceIntensity)  # (startX, startY, speed, axis, lightsource, lightsourceIntensity)
-        self.sigStopLightSheet = Signal()
-        self.sigStartTileBasedTileScanning = Signal(int, int, int, int, int, int, str, int, int, bool, bool, bool) # (numb erTilesX, numberTilesY, stepSizeX, stepSizeY, nTimes, tPeriod, illuSource, initPosX, initPosY, isStitchAshlar, isStitchAshlarFlipX, isStitchAshlarFlipY)  # (numb erTilesX, numberTilesY, stepSizeX, stepSizeY, nTimes, tPeriod, illuSource, initPosX, initPosY, isStitchAshlar, isStitchAshlarFlipX, isStitchAshlarFlipY)
-        self.sigStopTileBasedTileScanning = Signal()
-        self.sigOnResultTileBasedTileScanning = Signal(np.ndarray, np.ndarray) # (tiles, postions)  # (tiles, postions)
+        super().__init__()
         self.__main = main
         self.__sharedAttrs = SharedAttributes()
         self.__logger = initLogger(self)

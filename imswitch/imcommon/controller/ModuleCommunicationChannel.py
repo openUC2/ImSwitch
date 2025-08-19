@@ -13,9 +13,9 @@ class ModuleCommunicationChannel(SignalInterface):
         return self.__memoryRecordings
 
     def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.sigRunScript = Signal(str)
         self.sigExecutionFinished = Signal()
-super().__init__(*args, **kwargs)
         self.__memoryRecordings = VFileCollection()
         self.__registeredModules = set()
 

@@ -4,14 +4,6 @@ import warnings
 from .mock_modules import install_mock_modules
 install_mock_modules()
 
-# Import mock cv2 to make it available for all managers that need it
-try:
-    import cv2
-except ImportError:
-    from .mock_cv2 import MockCV2
-    import sys
-    sys.modules['cv2'] = MockCV2()
-
 from .AutofocusManager import AutofocusManager
 from .FOVLockManager import FOVLockManager
 from .DetectorsManager import DetectorsManager, NoDetectorsError
@@ -22,7 +14,6 @@ from .MultiManager import MultiManager
 from .NidaqManager import NidaqManager
 from .PositionersManager import PositionersManager
 from .RS232sManager import RS232sManager
-from .OFMsManager import OFMsManager
 from .RecordingManager import RecordingManager, RecMode, SaveMode, SaveFormat
 from .SLMManager import SLMManager
 from .ScanManagerPointScan import ScanManagerPointScan
@@ -45,8 +36,6 @@ from .ROIScanManager import ROIScanManager
 from .LightsheetManager import LightsheetManager
 from .WebRTCManager import WebRTCManager
 from .HyphaManager import HyphaManager
-from .MockXXManager import MockXXManager
-from .JetsonNanoManager import JetsonNanoManager
 from .HistoScanManager import HistoScanManager
 from .StresstestManager import StresstestManager
 from .ObjectiveManager import ObjectiveManager
@@ -55,4 +44,3 @@ from .FlowStopManager import FlowStopManager
 from .LepmonManager import LepmonManager
 from .FlatfieldManager import FlatfieldManager
 from .PixelCalibrationManager import PixelCalibrationManager
-from .ISMManager import ISMManager

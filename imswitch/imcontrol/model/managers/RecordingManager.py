@@ -208,17 +208,17 @@ class RecordingManager(SignalInterface):
     recordings of detector data. """
 
     def __init__(self, detectorsManager, storerMap: Optional[Dict[str, Type[Storer]]] = None):
-super().__init__()
+        super().__init__()
         self.sigRecordingStarted = Signal()
         self.sigRecordingEnded = Signal()
-        self.sigRecordingFrameNumUpdated = Signal(int)  # (frameNumber)  # (frameNumber)
-        self.sigRecordingTimeUpdated = Signal(int)  # (recTime)  # (recTime)
+        self.sigRecordingFrameNumUpdated = Signal(int)  # (frameNumber)
+        self.sigRecordingTimeUpdated = Signal(int)  # (recTime)
         self.sigMemorySnapAvailable = Signal(
-        str, np.ndarray, object, bool
-    )  # (name, image, filePath, savedToDisk)  # (name, image, filePath, savedToDisk)
+            str, np.ndarray, object, bool
+        )  # (name, image, filePath, savedToDisk)
         self.sigMemoryRecordingAvailable = Signal(
-        str, object, object, bool
-    )  # (name, file, filePath, savedToDisk)  # (name, file, filePath, savedToDisk)
+            str, object, object, bool
+        )  # (name, file, filePath, savedToDisk)
         self.__logger = initLogger(self)
         self.__storerMap = storerMap or DEFAULT_STORER_MAP
         self._memRecordings = {}  # { filePath: bytesIO }

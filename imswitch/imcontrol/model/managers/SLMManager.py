@@ -14,8 +14,8 @@ from imswitch.imcommon.model import initLogger
 class SLMManager(SignalInterface):
 
     def __init__(self, slmInfo, *args, **kwargs):
-        self.sigSLMMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
+        self.sigSLMMaskUpdated = Signal(object)  # (maskCombined)
         self.__logger = initLogger(self)
 
         if slmInfo is None:

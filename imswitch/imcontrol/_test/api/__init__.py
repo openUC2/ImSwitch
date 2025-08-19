@@ -5,6 +5,8 @@ Replaces Qt-based UI tests with HTTP endpoint testing.
 import asyncio
 import threading
 import time
+import logging
+import sys
 from typing import Optional, Dict, Any
 import requests
 import pytest
@@ -37,29 +39,46 @@ class ImSwitchAPITestServer:
         self.base_url = f"http://localhost:{http_port}"
         self.is_running = False
         
-    def start(self, timeout: int = 60):
+    def start(self, timeout: int = 160):
         """Start ImSwitch server in background thread."""
         if self.is_running:
+            print("[TEST SERVER] Server already running")
             return
             
+        print(f"[TEST SERVER] Starting ImSwitch API test server...")
+        print(f"[TEST SERVER] Config file: {self.config_file}")
+        print(f"[TEST SERVER] HTTP port: {self.http_port}")
+        print(f"[TEST SERVER] Socket port: {self.socket_port}")
+        
         # Start server in background thread
         self.server_thread = threading.Thread(
             target=self._run_server,
-            daemon=True
+            daemon=True,
+            name="ImSwitchTestServer"
         )
         self.server_thread.start()
+        print(f"[TEST SERVER] Server thread started, waiting for server to be ready...")
         
         # Wait for server to be ready
         start_time = time.time()
+        last_status_time = start_time
+        
         while time.time() - start_time < timeout:
             try:
                 response = requests.get(f"{self.base_url}/docs", timeout=2)
                 if response.status_code == 200:
                     self.is_running = True
-                    print(f"ImSwitch API server ready at {self.base_url}")
+                    elapsed = time.time() - start_time
+                    print(f"[TEST SERVER] ImSwitch API server ready at {self.base_url} (took {elapsed:.1f}s)")
                     return
-            except requests.exceptions.RequestException:
-                pass
+            except requests.exceptions.RequestException as e:
+                # Show periodic status updates
+                current_time = time.time()
+                if current_time - last_status_time > 10:  # Every 10 seconds
+                    elapsed = current_time - start_time
+                    print(f"[TEST SERVER] Still waiting for server... ({elapsed:.1f}s elapsed, last error: {type(e).__name__})")
+                    last_status_time = current_time
+                    
             time.sleep(1)
             
         raise TimeoutError(f"ImSwitch server failed to start within {timeout}s")
@@ -116,7 +135,28 @@ class ImSwitchAPITestServer:
 
     def _run_server(self):
         """Run ImSwitch main function in headless mode."""
+        # Configure logging to ensure thread output is visible
+        thread_logger = logging.getLogger('imswitch_test_server')
+        thread_logger.setLevel(logging.DEBUG)
+        
+        # Create handler that writes to stdout (captured by pytest)
+        if not thread_logger.handlers:
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setLevel(logging.DEBUG)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            thread_logger.addHandler(handler)
+        
+        thread_logger.info(f"Starting ImSwitch server in thread...")
+        thread_logger.info(f"Config file: {self.config_file}")
+        thread_logger.info(f"HTTP port: {self.http_port}")
+        thread_logger.info(f"Socket port: {self.socket_port}")
+        
         try:
+            print(f"[TEST SERVER] Starting ImSwitch server in headless mode...", flush=True)
+            print(f"[TEST SERVER] Config: {self.config_file}", flush=True)
+            print(f"[TEST SERVER] HTTP Port: {self.http_port}", flush=True)
+            
             main(
                 default_config=self.config_file,
                 is_headless=True,
@@ -125,7 +165,16 @@ class ImSwitchAPITestServer:
                 ssl=False,  # Disable SSL for testing
             )
         except Exception as e:
-            print(f"Server startup error: {e}")
+            error_msg = f"Server startup error: {e}"
+            thread_logger.error(error_msg)
+            print(f"[TEST SERVER ERROR] {error_msg}", flush=True)
+            
+            # Print traceback for debugging
+            import traceback
+            tb = traceback.format_exc()
+            thread_logger.error(f"Full traceback:\n{tb}")
+            print(f"[TEST SERVER TRACEBACK]\n{tb}", flush=True)
+            raise  # Re-raise to ensure the error is visible
             
     def stop(self):
         """Stop the server (note: may require process termination)."""

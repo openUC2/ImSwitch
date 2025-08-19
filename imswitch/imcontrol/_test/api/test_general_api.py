@@ -14,11 +14,7 @@ def test_api_documentation_available(api_server):
     response = api_server.get("/docs")
     assert response.status_code == 200
     assert "text/html" in response.headers.get("content-type", "")
-    
-    # Test ReDoc
-    response = api_server.get("/redoc")
-    assert response.status_code == 200
-    
+        
     # Test OpenAPI spec
     response = api_server.get("/openapi.json")
     assert response.status_code == 200

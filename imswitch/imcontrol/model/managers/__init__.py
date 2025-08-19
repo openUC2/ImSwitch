@@ -1,9 +1,5 @@
 import warnings
 
-# Import mocks for optional dependencies
-from .mock_modules import install_mock_modules
-install_mock_modules()
-
 from .AutofocusManager import AutofocusManager
 from .FOVLockManager import FOVLockManager
 from .DetectorsManager import DetectorsManager, NoDetectorsError

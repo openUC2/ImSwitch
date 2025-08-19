@@ -68,6 +68,9 @@ class DetectorManager(SignalInterface):
     """ Abstract base class for managers that control detectors. Each type of
     detector corresponds to a manager derived from this class. """
 
+    sigImageUpdated = Signal(np.ndarray, bool, list)
+    sigNewFrame = Signal()
+    
     @abstractmethod
     def __init__(self, detectorInfo, name: str, fullShape: Tuple[int, int],
                  supportedBinnings: List[int], model: str, *,

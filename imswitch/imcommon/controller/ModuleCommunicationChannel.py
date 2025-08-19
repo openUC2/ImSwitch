@@ -8,14 +8,15 @@ class ModuleCommunicationChannel(SignalInterface):
     between modules.
     """
 
+    sigRunScript = Signal(str)
+    sigExecutionFinished = Signal()
+    
     @property
     def memoryRecordings(self):
         return self.__memoryRecordings
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.sigRunScript = Signal(str)
-        self.sigExecutionFinished = Signal()
         self.__memoryRecordings = VFileCollection()
         self.__registeredModules = set()
 

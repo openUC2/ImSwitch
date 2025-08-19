@@ -19,15 +19,15 @@ else:
 
 
 class ImConMainView(QMainWindow):
+    sigLoadParamsFromHDF5 = Signal()
+    sigPickSetup = Signal()
+    sigClosing = Signal()
+    
     def __init__(self, options, viewSetupInfo, *args, **kwargs):
         self.__logger = initLogger(self)
         self.__logger.debug('Initializing ImConMainView')
 
         super().__init__(*args, **kwargs)
-        
-        self.sigLoadParamsFromHDF5 = Signal()
-        self.sigPickSetup = Signal()
-        self.sigClosing = Signal()
 
         self.factory = widgets.WidgetFactory(options)
         self.docks = {}
@@ -276,10 +276,6 @@ class ImConMainViewNoQt(object):
     def closeEvent(self, event):
         self.sigClosing.emit()
         event.accept()
-        
-    def close(self):
-        """Close the view - compatibility method for headless mode"""
-        self.sigClosing.emit()
 
     def _addWidgetNoQt(self, dockInfoDict):
         # Preload all available plugins for widgets
@@ -307,8 +303,6 @@ class ImConMainViewNoQt(object):
                     continue
                 except ImportError as e:
                     self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
-                    # need a fallback to the normal plugin system
-                    # self.widgets[widgetKey] = (widgetKey, None, None)
                     continue
 
             # Case 2: Check if there is a plugin for the widget

@@ -111,10 +111,10 @@ def generateAPI(objs, *, missingAttributeErrorMsg=None):
 
 class _UIThreadExecWrapper(SignalInterface):
     """ Wrapper for executing the specified function on the UI thread. """
+    wrappingSignal = Signal()
 
     def __init__(self, apiFunc):
         super().__init__()
-        self.wrappingSignal = Signal()
 
         self.__name__ = apiFunc.__name__
         self.__signature__ = inspect.signature(apiFunc)

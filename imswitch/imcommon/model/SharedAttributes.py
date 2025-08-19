@@ -4,9 +4,10 @@ from imswitch.imcommon.framework import Signal, SignalInterface
 
 
 class SharedAttributes(SignalInterface):
+    sigAttributeSet = Signal(object, object)  # (key, value)
+
     def __init__(self):
         super().__init__()
-        self.sigAttributeSet = Signal(object, object)  # (key, value)
         self._data = {}
 
     def getHDF5Attributes(self):

@@ -3,7 +3,7 @@ import traceback
 import logging
 import argparse
 import os
-
+# TODO: This file needs a heavy re-write! 
 import imswitch
 def main(is_headless:bool=None, default_config:str=None, http_port:int=None, socket_port:int=None, ssl:bool=None, config_folder:str=None,
          data_folder: str=None, scan_ext_data_folder:bool=None, ext_drive_mount:str=None):
@@ -25,64 +25,77 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         python -m imswitch --headless 1 --config-file example_virtual_microscope.json --config-folder /Users/bene/Downloads --scan-ext-drive-mount true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes
     '''
     try:
-        try: # Google Colab does not support argparse
-            parser = argparse.ArgumentParser(description='Process some integers.')
+        # Set headless mode IMMEDIATELY if provided, before any imports
+        if is_headless is not None:
+            imswitch.IS_HEADLESS = is_headless
+        # Only parse command line arguments if no parameters were passed to main()
+        # This prevents argparse conflicts when called from test threads
+        if (is_headless is None and default_config is None and http_port is None and 
+            socket_port is None and ssl is None and config_folder is None and 
+            data_folder is None and scan_ext_data_folder is None and ext_drive_mount is None):
+            
+            try: # Google Colab does not support argparse
+                parser = argparse.ArgumentParser(description='Process some integers.')
 
-            # specify if run in headless mode
-            parser.add_argument('--headless', dest='headless', default=False, action='store_true',
-                                help='run in headless mode')
+                # specify if run in headless mode
+                parser.add_argument('--headless', dest='headless', default=False, action='store_true',
+                                    help='run in headless mode')
 
-            # specify config file name - None for default
-            parser.add_argument('--config-file', dest='config_file', type=str, default=None,
-                                help='specify run with config file')
+                # specify config file name - None for default
+                parser.add_argument('--config-file', dest='config_file', type=str, default=None,
+                                    help='specify run with config file')
 
-            # specify http port
-            parser.add_argument('--http-port', dest='http_port', type=int, default=8001,
-                                help='specify http port')
+                # specify http port
+                parser.add_argument('--http-port', dest='http_port', type=int, default=8001,
+                                    help='specify http port')
 
-            # specify socket port
-            parser.add_argument('--socket-port', dest='socket_port', type=int, default=8002,
-                                help='specify socket port')
-            # specify ssl
-            parser.add_argument('--no-ssl', dest='ssl', default=True, action='store_false',
-                                help='specify ssl')
+                # specify socket port
+                parser.add_argument('--socket-port', dest='socket_port', type=int, default=8002,
+                                    help='specify socket port')
+                # specify ssl
+                parser.add_argument('--no-ssl', dest='ssl', default=True, action='store_false',
+                                    help='specify ssl')
 
-            # specify the config folder (e.g. if running from a different location / container)
-            parser.add_argument('--config-folder', dest='config_folder', type=str, default=None,
-                                help='specify config folder')
+                # specify the config folder (e.g. if running from a different location / container)
+                parser.add_argument('--config-folder', dest='config_folder', type=str, default=None,
+                                    help='specify config folder')
 
-            parser.add_argument('--ext-data-folder', dest='data_folder', type=str, default=None,
-                                help='point to a folder to store the data. This is the default location for the data folder. If not specified, the default location will be used.')
+                parser.add_argument('--ext-data-folder', dest='data_folder', type=str, default=None,
+                                    help='point to a folder to store the data. This is the default location for the data folder. If not specified, the default location will be used.')
 
-            parser.add_argument('--scan-ext-drive-mount', dest='scan_ext_data_folder', default=False, action='store_true',
-                                help='scan the external mount (linux only) if we have a USB drive to save to')
+                parser.add_argument('--scan-ext-drive-mount', dest='scan_ext_data_folder', default=False, action='store_true',
+                                    help='scan the external mount (linux only) if we have a USB drive to save to')
 
-            parser.add_argument('--ext-drive-mount', dest='ext_drive_mount', type=str, default=None,
-                                help='specify the external drive mount point (e.g. /Volumes or /media)')
+                parser.add_argument('--ext-drive-mount', dest='ext_drive_mount', type=str, default=None,
+                                    help='specify the external drive mount point (e.g. /Volumes or /media)')
 
+                args = parser.parse_args()
 
+                imswitch.IS_HEADLESS = args.headless            # if True, no QT will be loaded
+                imswitch.__httpport__ = args.http_port          # e.g. 8001
+                imswitch.__ssl__ = args.ssl                     # if True, ssl will be used (e.g. https)
+                imswitch.__socketport__ = args.socket_port      # e.g. 8002
 
-            args = parser.parse_args()
+                if type(args.config_file)==str and args.config_file.find("json")>=0:  # e.g. example_virtual_microscope.json
+                    imswitch.DEFAULT_SETUP_FILE = args.config_file
+                if args.config_folder and os.path.isdir(args.config_folder):
+                    imswitch.DEFAULT_CONFIG_PATH = args.config_folder # e.g. /Users/USER/ in case an alternative path is used
+                if args.data_folder and os.path.isdir(args.data_folder):
+                    imswitch.DEFAULT_DATA_PATH = args.data_folder # e.g. /Users/USER/ in case an alternative path is used
+                if args.scan_ext_data_folder:
+                    imswitch.SCAN_EXT_DATA_FOLDER = args.scan_ext_data_folder
+                if args.ext_drive_mount:
+                    imswitch.EXT_DRIVE_MOUNT = args.ext_drive_mount
 
-            imswitch.IS_HEADLESS = args.headless            # if True, no QT will be loaded
-            imswitch.__httpport__ = args.http_port          # e.g. 8001
-            imswitch.__ssl__ = args.ssl                     # if True, ssl will be used (e.g. https)
-            imswitch.__socketport__ = args.socket_port      # e.g. 8002
-
-            if type(args.config_file)==str and args.config_file.find("json")>=0:  # e.g. example_virtual_microscope.json
-                imswitch.DEFAULT_SETUP_FILE = args.config_file
-            if args.config_folder and os.path.isdir(args.config_folder):
-                imswitch.DEFAULT_CONFIG_PATH = args.config_folder # e.g. /Users/USER/ in case an alternative path is used
-            if args.data_folder and os.path.isdir(args.data_folder):
-                imswitch.DEFAULT_DATA_PATH = args.data_folder # e.g. /Users/USER/ in case an alternative path is used
-            if args.scan_ext_data_folder:
-                imswitch.SCAN_EXT_DATA_FOLDER = args.scan_ext_data_folder
-            if args.ext_drive_mount:
-                imswitch.EXT_DRIVE_MOUNT = args.ext_drive_mount
-
-        except Exception as e:
-            print(e)
-            pass
+            except Exception as e:
+                print(f"Argparse error: {e}")
+                pass
+        else:
+            # Set default values when called programmatically (e.g., from tests)
+            imswitch.IS_HEADLESS = False
+            imswitch.__httpport__ = 8001
+            imswitch.__ssl__ = True
+            imswitch.__socketport__ = 8002
         # override settings if provided as argument
         if is_headless is not None:
             print("We use the user-provided headless flag: " + str(is_headless))

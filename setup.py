@@ -109,7 +109,15 @@ setup(
         'imjoy':[        
             "imjoy-rpc==0.5.59",
             "imjoy_rpc",
-            "imjoy",]
+            "imjoy",
+        ],
+        # Test dependencies for API testing
+        'testing': [
+            "pytest>=6.0",
+            "pytest-asyncio", 
+            "requests>=2.25",
+            "httpx>=0.24.0",  # Alternative HTTP client for async testing
+        ],
         },
 
     entry_points={

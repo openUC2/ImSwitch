@@ -14,7 +14,7 @@ class MockXXManager(SignalInterface):
 
     def __init__(self, MockXXInfo, *args, **kwargs):
         self.sigMockXXMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         if MockXXInfo is None:

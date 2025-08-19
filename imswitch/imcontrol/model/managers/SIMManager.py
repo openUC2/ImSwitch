@@ -13,8 +13,8 @@ from imswitch.imcommon.model import initLogger
 class SIMManager(SignalInterface):
 
     def __init__(self, simInfo, *args, **kwargs):
-        self.sigSIMMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
+        self.sigSIMMaskUpdated = Signal(object)  # (maskCombined)
         self.__logger = initLogger(self)
 
         if simInfo is None:

@@ -14,7 +14,7 @@ class ROIScanManager(SignalInterface):
 
     def __init__(self, mctInfo, *args, **kwargs):
         self.sigROIScanMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         if mctInfo is None:

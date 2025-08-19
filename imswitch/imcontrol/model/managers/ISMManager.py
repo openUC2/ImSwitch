@@ -14,7 +14,7 @@ class ISMManager(SignalInterface):
 
     def __init__(self, ISMInfo, *args, **kwargs):
         self.sigISMMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         if ISMInfo is None:

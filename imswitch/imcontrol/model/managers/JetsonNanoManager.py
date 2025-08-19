@@ -14,7 +14,7 @@ class JetsonNanoManager(SignalInterface):
 
     def __init__(self, jetsonnanoInfo, *args, **kwargs):
         self.sigJetsonNanoMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         if jetsonnanoInfo is None:

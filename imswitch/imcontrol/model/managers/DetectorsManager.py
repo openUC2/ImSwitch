@@ -14,7 +14,7 @@ class DetectorsManager(MultiManager, SignalInterface):
     def __init__(self, detectorInfos, updatePeriod, **lowLevelManagers):
         MultiManager.__init__(self, detectorInfos, 'detectors', **lowLevelManagers)
         SignalInterface.__init__(self)
-        
+
         self.sigAcquisitionStarted = Signal()
         self.sigAcquisitionStopped = Signal()
         self.sigDetectorSwitched = Signal(str, str)  # (newDetectorName, oldDetectorName)

@@ -14,7 +14,7 @@ class MCTManager(SignalInterface):
 
     def __init__(self, mctInfo, *args, **kwargs):
         self.sigMCTMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         if mctInfo is not None and mctInfo.tWait is not None:

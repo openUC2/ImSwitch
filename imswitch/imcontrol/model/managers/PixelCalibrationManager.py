@@ -14,7 +14,7 @@ class PixelCalibrationManager(SignalInterface):
 
     def __init__(self, PixelCalibrationInfo, *args, **kwargs):
         self.sigPixelCalibrationMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         if PixelCalibrationInfo is None:

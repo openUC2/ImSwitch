@@ -5,7 +5,7 @@ class ExperimentManager(SignalInterface):
 
     def __init__(self, *args, **kwargs):
         self.sigExperimentMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
         self.tWait = 0.1
 

@@ -17,7 +17,7 @@ class FlatfieldManager(SignalInterface):
 
     def __init__(self, FlatfieldInfo, *args, **kwargs):
         self.sigFlatfieldMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         self.FlatfieldImage = None

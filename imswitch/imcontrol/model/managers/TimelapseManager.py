@@ -5,7 +5,7 @@ class TimelapseManager(SignalInterface):
 
     def __init__(self, *args, **kwargs):
         self.sigTimelapseMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
-super().__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
         self.tWait = 0.1
 

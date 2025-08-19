@@ -6,6 +6,7 @@ from imswitch.imcommon.model import initLogger
 from . import widgets
 import pkg_resources
 import importlib
+import importlib.util
 
 if not IS_HEADLESS:
     from pyqtgraph.dockarea import Dock, DockArea
@@ -18,15 +19,15 @@ else:
 
 
 class ImConMainView(QMainWindow):
-    sigLoadParamsFromHDF5 = Signal()
-    sigPickSetup = Signal()
-    sigClosing = Signal()
-
     def __init__(self, options, viewSetupInfo, *args, **kwargs):
         self.__logger = initLogger(self)
         self.__logger.debug('Initializing ImConMainView')
 
         super().__init__(*args, **kwargs)
+        
+        self.sigLoadParamsFromHDF5 = Signal()
+        self.sigPickSetup = Signal()
+        self.sigClosing = Signal()
 
         self.factory = widgets.WidgetFactory(options)
         self.docks = {}
@@ -257,6 +258,7 @@ class ImConMainViewNoQt(object):
         self.__logger.debug('Initializing')
 
         super().__init__(*args, **kwargs)
+        self.sigClosing = Signal()
         self.docks = {}
         self.widgets = {}
         self.shortcuts = {}
@@ -274,6 +276,10 @@ class ImConMainViewNoQt(object):
     def closeEvent(self, event):
         self.sigClosing.emit()
         event.accept()
+        
+    def close(self):
+        """Close the view - compatibility method for headless mode"""
+        self.sigClosing.emit()
 
     def _addWidgetNoQt(self, dockInfoDict):
         # Preload all available plugins for widgets

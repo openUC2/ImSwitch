@@ -14,14 +14,12 @@ from imswitch.imcommon.model import initLogger
 class NidaqManager(SignalInterface):
     """ For interaction with NI-DAQ hardware interfaces. """
 
-    sigScanBuilt = Signal(object, object, object)  # (scanInfoDict, signalDict, deviceList)
-    sigScanStarted = Signal()
-    sigScanDone = Signal()
-
-    sigScanBuildFailed = Signal()
-
     def __init__(self, setupInfo):
         super().__init__()
+        self.sigScanBuilt = Signal(object, object, object)  # (scanInfoDict, signalDict, deviceList)
+        self.sigScanStarted = Signal()
+        self.sigScanDone = Signal()
+        self.sigScanBuildFailed = Signal()
         self.__logger = initLogger(self)
 
         self.__setupInfo = setupInfo

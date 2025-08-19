@@ -206,19 +206,19 @@ DEFAULT_STORER_MAP: Dict[str, Type[Storer]] = {
 class RecordingManager(SignalInterface):
     """ RecordingManager handles single frame captures as well as continuous
     recordings of detector data. """
-    sigRecordingStarted = Signal()
-    sigRecordingEnded = Signal()
-    sigRecordingFrameNumUpdated = Signal(int)  # (frameNumber)
-    sigRecordingTimeUpdated = Signal(int)  # (recTime)
-    sigMemorySnapAvailable = Signal(
-        str, np.ndarray, object, bool
-    )  # (name, image, filePath, savedToDisk)
-    sigMemoryRecordingAvailable = Signal(
-        str, object, object, bool
-    )  # (name, file, filePath, savedToDisk)
 
     def __init__(self, detectorsManager, storerMap: Optional[Dict[str, Type[Storer]]] = None):
-        super().__init__()
+super().__init__()
+        self.sigRecordingStarted = Signal()
+        self.sigRecordingEnded = Signal()
+        self.sigRecordingFrameNumUpdated = Signal(int)  # (frameNumber)  # (frameNumber)
+        self.sigRecordingTimeUpdated = Signal(int)  # (recTime)  # (recTime)
+        self.sigMemorySnapAvailable = Signal(
+        str, np.ndarray, object, bool
+    )  # (name, image, filePath, savedToDisk)  # (name, image, filePath, savedToDisk)
+        self.sigMemoryRecordingAvailable = Signal(
+        str, object, object, bool
+    )  # (name, file, filePath, savedToDisk)  # (name, file, filePath, savedToDisk)
         self.__logger = initLogger(self)
         self.__storerMap = storerMap or DEFAULT_STORER_MAP
         self._memRecordings = {}  # { filePath: bytesIO }

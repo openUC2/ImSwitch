@@ -2,10 +2,10 @@ from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import initLogger
 
 class TimelapseManager(SignalInterface):
-    sigTimelapseMaskUpdated = Signal(object)  # (maskCombined)
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        self.sigTimelapseMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
+super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
         self.tWait = 0.1
 

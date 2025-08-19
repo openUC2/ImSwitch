@@ -9,19 +9,19 @@ class DetectorsManager(MultiManager, SignalInterface):
     """ DetectorsManager is an interface for dealing with DetectorManagers. It
     is a MultiManager for detectors. """
 
-    sigAcquisitionStarted = Signal()
-    sigAcquisitionStopped = Signal()
-    sigDetectorSwitched = Signal(str, str)  # (newDetectorName, oldDetectorName)
-    sigImageUpdated = Signal(
-        str, np.ndarray, bool, list, bool
-    )  # (detectorName, image, init, scale, isCurrentDetector)
-    sigNewFrame = Signal()
-
     detectorParams = {}
 
     def __init__(self, detectorInfos, updatePeriod, **lowLevelManagers):
         MultiManager.__init__(self, detectorInfos, 'detectors', **lowLevelManagers)
         SignalInterface.__init__(self)
+        
+        self.sigAcquisitionStarted = Signal()
+        self.sigAcquisitionStopped = Signal()
+        self.sigDetectorSwitched = Signal(str, str)  # (newDetectorName, oldDetectorName)
+        self.sigImageUpdated = Signal(
+            str, np.ndarray, bool, list, bool
+        )  # (detectorName, image, init, scale, isCurrentDetector)
+        self.sigNewFrame = Signal()
 
         self._activeAcqHandles = []
         self._activeAcqLVHandles = []

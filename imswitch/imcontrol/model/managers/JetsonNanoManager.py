@@ -11,10 +11,10 @@ from imswitch.imcommon.model import initLogger
 
 
 class JetsonNanoManager(SignalInterface):
-    sigJetsonNanoMaskUpdated = Signal(object)  # (maskCombined)
 
     def __init__(self, jetsonnanoInfo, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        self.sigJetsonNanoMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
+super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         if jetsonnanoInfo is None:

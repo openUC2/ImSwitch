@@ -11,10 +11,10 @@ from imswitch.imcommon.model import initLogger
 
 
 class PixelCalibrationManager(SignalInterface):
-    sigPixelCalibrationMaskUpdated = Signal(object)  # (maskCombined)
 
     def __init__(self, PixelCalibrationInfo, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        self.sigPixelCalibrationMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
+super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         if PixelCalibrationInfo is None:

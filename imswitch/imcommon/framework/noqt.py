@@ -10,7 +10,10 @@ import numpy as np
 from socketio import AsyncServer, ASGIApp
 import uvicorn
 import imswitch.imcommon.framework.base as abstract
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 import base64
 from imswitch import SOCKET_STREAM
 import time
@@ -70,7 +73,7 @@ def _start_fallback_worker():
                                                     daemon=True)
         _fallback_worker_thread.start()
 
-class SignalInterface(abstract.SignalInterface):
+class SignalInterface:
     """Base implementation of abstract.SignalInterface."""
     def __init__(self) -> None:
         ...
@@ -135,11 +138,16 @@ class SignalInstance(psygnal.SignalInstance):
                         jpegQuality = args[5]["compressionlevel"]
                     except:
                         jpegQuality = self.IMG_QUALITY
-                    encode_params = [cv2.IMWRITE_JPEG_QUALITY, jpegQuality]
-
-                    # Compress image using JPEG format
-                    flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
-                    encoded_image = base64.b64encode(compressed).decode('utf-8')
+                    
+                    if cv2 is not None:
+                        encode_params = [cv2.IMWRITE_JPEG_QUALITY, jpegQuality]
+                        # Compress image using JPEG format
+                        flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
+                        encoded_image = base64.b64encode(compressed).decode('utf-8')
+                    else:
+                        # Fallback when cv2 is not available - just use base64 on raw data
+                        # This won't be compressed but should work for testing
+                        encoded_image = base64.b64encode(output_frame.tobytes()).decode('utf-8')
 
                     # Create a minimal message
                     message = {
@@ -231,23 +239,30 @@ class Signal(psygnal.Signal):
         return self._info
 
 # Threaded workers for async tasks
-class Worker(abstract.Worker):
+class Worker:
     def __init__(self) -> None:
         self._thread = None
 
-    def moveToThread(self, thread: abstract.Thread) -> None:
+    def moveToThread(self, thread) -> None:
         self._thread = thread
         thread._worker = self
 
-class Thread(abstract.Thread):
-    _started = Signal()
-    _finished = Signal()
-
+class Thread:
     def __init__(self):
+        self._started = Signal()
+        self._finished = Signal()
         self._thread = None
         self._loop = None
         self._running = threading.Event()
         self._worker: Worker = None
+
+    @property
+    def started(self) -> Signal:
+        return self._started
+    
+    @property
+    def finished(self) -> Signal:
+        return self._finished
 
     def start(self):
         if self._thread is None or not self._thread.is_alive():
@@ -288,15 +303,18 @@ class Thread(abstract.Thread):
         return self._finished
 
 # Timer utility
-class Timer(abstract.Timer):
-    _timeout = Signal()
-
+class Timer:
     def __init__(self, singleShot=False):
+        self._timeout = Signal()
         self._task = None
         self._singleShot = singleShot
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
+    
+    @property
+    def timeout(self) -> Signal:
+        return self._timeout
 
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)

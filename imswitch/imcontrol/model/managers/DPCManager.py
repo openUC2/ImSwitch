@@ -11,10 +11,10 @@ from imswitch.imcommon.model import initLogger
 
 
 class DPCManager(SignalInterface):
-    sigDPCMaskUpdated = Signal(object)  # (maskCombined)
 
     def __init__(self, dpcInfo, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        self.sigDPCMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
+super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         if dpcInfo is None:

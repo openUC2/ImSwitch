@@ -37,12 +37,8 @@ def test_positioner_discovery(api_server):
     """Test positioner discovery and enumeration."""
     # Common positioner discovery endpoints
     discovery_endpoints = [
-        "/PositionerController/getPositioners",
-        "/PositionerController/getAllPositioners",
         "/PositionerController/getPositionerNames",
-        "/positioners",  # RESTful style
-        "/stages",       # Alternative naming
-    ]
+        ]
     
     positioners = None
     working_endpoint = None
@@ -86,10 +82,7 @@ def test_positioner_position_reading(api_server):
     # Position reading endpoints
     position_endpoints = [
         f"/PositionerController/getPosition?positionerName={first_positioner}",
-        f"/PositionerController/getCurrentPosition?positioner={first_positioner}",
-        f"/positioners/{first_positioner}/position",
-        f"/stages/{first_positioner}/position",
-    ]
+        ]
     
     for endpoint in position_endpoints:
         try:
@@ -134,12 +127,82 @@ def test_absolute_positioning(api_server):
     
     # Absolute positioning endpoints
     positioning_endpoints = [
-        "/PositionerController/setPosition",
-        "/PositionerController/moveTo",
-        f"/positioners/{first_positioner}/position",
-        f"/stages/{first_positioner}/move",
+        "/PositionerController/movePositioner",
     ]
     
+    # TODO: adhere to the following interface: 
+    '''
+            "parameters": [
+          {
+            "name": "positionerName",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [{ "type": "string" }, { "type": "null" }],
+              "title": "Positionername"
+            }
+          },
+          {
+            "name": "axis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [{ "type": "string" }, { "type": "null" }],
+              "default": "X",
+              "title": "Axis"
+            }
+          },
+          {
+            "name": "dist",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [{ "type": "number" }, { "type": "null" }],
+              "title": "Dist"
+            }
+          },
+          {
+            "name": "isAbsolute",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Isabsolute"
+            }
+          },
+          {
+            "name": "isBlocking",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Isblocking"
+            }
+          },
+          {
+            "name": "speed",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "number", "title": "Speed" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+
+    '''
     for endpoint in positioning_endpoints:
         try:
             # Try different payload formats
@@ -191,12 +254,90 @@ def test_relative_positioning(api_server):
     
     # Relative positioning endpoints
     relative_endpoints = [
-        "/PositionerController/moveRelative",
-        "/PositionerController/move",
-        f"/positioners/{first_positioner}/move/relative",
-        f"/stages/{first_positioner}/jog",
+        "/PositionerController/movePositioner",
     ]
+
+    #TODO: Adjust to following intercae:
     
+    '''
+        "/PositionerController/movePositioner": {
+      "get": {
+        "summary": "Movepositioner",
+        "description": "Moves the specified positioner axis by the specified number of\nmicrometers.",
+        "operationId": "movePositioner_PositionerController_movePositioner_get",
+        "parameters": [
+          {
+            "name": "positionerName",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [{ "type": "string" }, { "type": "null" }],
+              "title": "Positionername"
+            }
+          },
+          {
+            "name": "axis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [{ "type": "string" }, { "type": "null" }],
+              "default": "X",
+              "title": "Axis"
+            }
+          },
+          {
+            "name": "dist",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [{ "type": "number" }, { "type": "null" }],
+              "title": "Dist"
+            }
+          },
+          {
+            "name": "isAbsolute",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Isabsolute"
+            }
+          },
+          {
+            "name": "isBlocking",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Isblocking"
+            }
+          },
+          {
+            "name": "speed",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "number", "title": "Speed" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    '''    
     for endpoint in relative_endpoints:
         try:
             payloads = [
@@ -256,12 +397,53 @@ def test_positioner_speed_control(api_server):
     
     # Speed control endpoints
     speed_endpoints = [
-        "/PositionerController/setSpeed",
-        "/PositionerController/setVelocity",
-        f"/positioners/{first_positioner}/speed",
-        f"/stages/{first_positioner}/velocity",
+        "//PositionerController/setPositionerSpeed",
     ]
     
+    '''TODO: Adjust to following interface:
+        "/PositionerController/setPositionerSpeed": {
+      "get": {
+        "summary": "Setpositionerspeed",
+        "description": "Moves the specified positioner axis to the specified position.",
+        "operationId": "setPositionerSpeed_PositionerController_setPositionerSpeed_get",
+        "parameters": [
+          {
+            "name": "positionerName",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "title": "Positionername" }
+          },
+          {
+            "name": "axis",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "title": "Axis" }
+          },
+          {
+            "name": "speed",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number", "title": "Speed" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    '''
     test_speed = {"X": 5000, "Y": 5000}  # Example speeds
     
     for endpoint in speed_endpoints:
@@ -295,44 +477,55 @@ def test_positioner_speed_control(api_server):
     print("? No working speed control endpoints found")
 
 
-def test_positioner_limits_and_bounds(api_server):
-    """Test positioner limits and boundary information."""
-    try:
-        positioners, _ = test_positioner_discovery(api_server)
-        if not positioners:
-            pytest.skip("No positioners found")
-        first_positioner = list(positioners.keys())[0]
-    except:
-        first_positioner = "testPositioner"
-    
-    # Limits information endpoints
-    limits_endpoints = [
-        f"/PositionerController/getLimits?positionerName={first_positioner}",
-        f"/PositionerController/getBounds?positioner={first_positioner}",
-        f"/positioners/{first_positioner}/limits",
-        f"/stages/{first_positioner}/bounds",
-    ]
-    
-    for endpoint in limits_endpoints:
-        try:
-            response = api_server.get(endpoint)
-            if response.status_code == 200:
-                limits = response.json()
-                print(f"✓ Got limits via {endpoint}: {limits}")
-                # Validate limits format
-                if isinstance(limits, dict):
-                    for axis, limit_info in limits.items():
-                        if isinstance(limit_info, dict):
-                            assert "min" in limit_info or "max" in limit_info, f"Invalid limit format for {axis}"
-                return
-                
-        except Exception as e:
-            print(f"Limits check via {endpoint} failed: {e}")
-    
-    print("? No working limits endpoints found")
-
-
 def test_positioner_homing(api_server):
+    '''TODO: Use following interface:
+    
+        "/PositionerController/homeAxis": {
+      "get": {
+        "summary": "Homeaxis",
+        "operationId": "homeAxis_PositionerController_homeAxis_get",
+        "parameters": [
+          {
+            "name": "positionerName",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "title": "Positionername" }
+          },
+          {
+            "name": "axis",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "default": "X", "title": "Axis" }
+          },
+          {
+            "name": "isBlocking",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Isblocking"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+'''
     """Test positioner homing functionality."""
     try:
         positioners, _ = test_positioner_discovery(api_server)
@@ -344,10 +537,7 @@ def test_positioner_homing(api_server):
     
     # Homing endpoints
     homing_endpoints = [
-        f"/PositionerController/home?positionerName={first_positioner}",
-        f"/PositionerController/homeAxes?positioner={first_positioner}",
-        f"/positioners/{first_positioner}/home",
-        f"/stages/{first_positioner}/home",
+        f"/PositionerController/homeAxis",
     ]
     
     for endpoint in homing_endpoints:
@@ -366,6 +556,43 @@ def test_positioner_homing(api_server):
 
 def test_positioner_stop_emergency(api_server):
     """Test emergency stop functionality."""
+    '''TODO: Use following interace 
+    
+        "/PositionerController/stopAxis": {
+      "get": {
+        "summary": "Stopaxis",
+        "operationId": "stopAxis_PositionerController_stopAxis_get",
+        "parameters": [
+          {
+            "name": "positionerName",
+            "in": "query",
+            "required": false,
+            "schema": { "title": "Positionername" }
+          },
+          {
+            "name": "axis",
+            "in": "query",
+            "required": false,
+            "schema": { "default": "X", "title": "Axis" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+'''
     try:
         positioners, _ = test_positioner_discovery(api_server)
         if not positioners:
@@ -376,11 +603,8 @@ def test_positioner_stop_emergency(api_server):
     
     # Emergency stop endpoints
     stop_endpoints = [
-        f"/PositionerController/stop?positionerName={first_positioner}",
-        f"/PositionerController/emergencyStop?positioner={first_positioner}",
-        f"/positioners/{first_positioner}/stop",
-        f"/stages/{first_positioner}/abort",
-        "/PositionerController/stopAll",
+        f"/PositionerController/stopAxis",
+        
     ]
     
     for endpoint in stop_endpoints:
@@ -396,39 +620,90 @@ def test_positioner_stop_emergency(api_server):
     print("? No working stop endpoints found")
 
 
-def test_positioner_status_monitoring(api_server):
-    """Test positioner status and motion state monitoring."""
-    try:
-        positioners, _ = test_positioner_discovery(api_server)
-        if not positioners:
-            pytest.skip("No positioners found")
-        first_positioner = list(positioners.keys())[0]
-    except:
-        first_positioner = "testPositioner"
-    
-    # Status monitoring endpoints
-    status_endpoints = [
-        f"/PositionerController/getStatus?positionerName={first_positioner}",
-        f"/PositionerController/isMoving?positioner={first_positioner}",
-        f"/positioners/{first_positioner}/status",
-        f"/stages/{first_positioner}/state",
-    ]
-    
-    for endpoint in status_endpoints:
-        try:
-            response = api_server.get(endpoint)
-            if response.status_code == 200:
-                status = response.json()
-                print(f"✓ Got status via {endpoint}: {status}")
-                return
-                
-        except Exception as e:
-            print(f"Status check via {endpoint} failed: {e}")
-    
-    print("? No working status endpoints found")
-
 
 def test_multi_axis_coordination(api_server):
+    
+    '''TODO: Use following interface
+    
+        "/PositionerController/movePositioner": {
+      "get": {
+        "summary": "Movepositioner",
+        "description": "Moves the specified positioner axis by the specified number of\nmicrometers.",
+        "operationId": "movePositioner_PositionerController_movePositioner_get",
+        "parameters": [
+          {
+            "name": "positionerName",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [{ "type": "string" }, { "type": "null" }],
+              "title": "Positionername"
+            }
+          },
+          {
+            "name": "axis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [{ "type": "string" }, { "type": "null" }],
+              "default": "X",
+              "title": "Axis"
+            }
+          },
+          {
+            "name": "dist",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [{ "type": "number" }, { "type": "null" }],
+              "title": "Dist"
+            }
+          },
+          {
+            "name": "isAbsolute",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Isabsolute"
+            }
+          },
+          {
+            "name": "isBlocking",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Isblocking"
+            }
+          },
+          {
+            "name": "speed",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "number", "title": "Speed" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+'''
     """Test coordinated multi-axis movements."""
     try:
         positioners, _ = test_positioner_discovery(api_server)

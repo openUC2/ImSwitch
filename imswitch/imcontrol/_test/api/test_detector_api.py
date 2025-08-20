@@ -11,11 +11,12 @@ from ..api import api_server, base_url
 def test_detector_endpoints_available(api_server):
     """Test that detector API endpoints are accessible."""
     # Test API documentation is available
+
     response = api_server.get("/docs")
     assert response.status_code == 200
     
     # Test that we can reach the detector endpoints
-    response = api_server.get("/DetectorController/getAllDetectorNames")
+    response = api_server.get("/SettingsController/getDetectorNames")
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -24,14 +25,14 @@ def test_detector_endpoints_available(api_server):
 def test_detector_names_and_info(api_server):
     """Test getting detector names and information."""
     # Get all detector names
-    response = api_server.get("/DetectorController/getAllDetectorNames")
+    response = api_server.get("/SettingsController/getDetectorNames")
     assert response.status_code == 200
     detector_names = response.json()
     assert len(detector_names) > 0  # Should have at least one detector
     
     # Get info for first detector
     first_detector = detector_names[0]
-    response = api_server.get(f"/DetectorController/getDetectorInfo?detectorName={first_detector}")
+    response = api_server.get(f"/SettingsController/getDetectorParameters")
     assert response.status_code == 200
     info = response.json()
     assert "width" in info
@@ -40,28 +41,28 @@ def test_detector_names_and_info(api_server):
 
 def test_liveview_functionality(api_server):
     """Test liveview start/stop functionality via API (replaces Qt button test)."""
-    detector_names = api_server.get("/DetectorController/getAllDetectorNames").json()
+    detector_names = api_server.get("/SettingsController/getDetectorNames").json()
     first_detector = detector_names[0]
     
     # Start liveview
-    response = api_server.post(f"/DetectorController/startLiveview?detectorName={first_detector}")
+    response = api_server.get(f"/ViewController/setLiveViewActive?active=true")
     assert response.status_code == 200
     
     # Check if liveview is running
-    response = api_server.get(f"/DetectorController/isLiveviewRunning?detectorName={first_detector}")
+    response = api_server.get(f"/ViewController/getLiveViewActive")
     assert response.status_code == 200
     is_running = response.json()
     assert is_running is True
     
     # Let liveview run for a moment
     time.sleep(1)
-    
-    # Stop liveview  
-    response = api_server.post(f"/DetectorController/stopLiveview?detectorName={first_detector}")
+
+    # Stop liveview
+    response = api_server.post(f"/ViewController/setLiveViewActive?active=false")
     assert response.status_code == 200
     
     # Check if liveview stopped
-    response = api_server.get(f"/DetectorController/isLiveviewRunning?detectorName={first_detector}")
+    response = api_server.get(f"/ViewController/getLiveViewActive")
     assert response.status_code == 200
     is_running = response.json()
     assert is_running is False

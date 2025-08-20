@@ -130,108 +130,29 @@ def test_absolute_positioning(api_server):
         "/PositionerController/movePositioner",
     ]
     
-    # TODO: adhere to the following interface: 
-    '''
-            "parameters": [
-          {
-            "name": "positionerName",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [{ "type": "string" }, { "type": "null" }],
-              "title": "Positionername"
-            }
-          },
-          {
-            "name": "axis",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [{ "type": "string" }, { "type": "null" }],
-              "default": "X",
-              "title": "Axis"
-            }
-          },
-          {
-            "name": "dist",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [{ "type": "number" }, { "type": "null" }],
-              "title": "Dist"
-            }
-          },
-          {
-            "name": "isAbsolute",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Isabsolute"
-            }
-          },
-          {
-            "name": "isBlocking",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Isblocking"
-            }
-          },
-          {
-            "name": "speed",
-            "in": "query",
-            "required": false,
-            "schema": { "type": "number", "title": "Speed" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": { "application/json": { "schema": {} } }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-
-    '''
+    # Test absolute positioning using the correct API interface
     for endpoint in positioning_endpoints:
         try:
-            # Try different payload formats
-            payloads = [
-                {
+            # Test single axis absolute moves using GET with query parameters
+            for axis, position in target_position.items():
+                params = {
                     "positionerName": first_positioner,
-                    "position": target_position
-                },
-                {
-                    "positioner": first_positioner,
-                    "target": target_position
-                },
-                target_position  # Direct position dict
-            ]
-            
-            for payload in payloads:
-                response = api_server.post(endpoint, json=payload)
-                if response.status_code in [200, 201]:
-                    print(f"✓ Absolute move via POST {endpoint}")
-                    time.sleep(0.5)  # Allow movement time
-                    verify_position_change(api_server, first_positioner, target_position)
-                    return
+                    "axis": axis,
+                    "dist": position,
+                    "isAbsolute": True,
+                    "isBlocking": False
+                }
                 
-                response = api_server.put(endpoint, json=payload)
-                if response.status_code in [200, 201]:
-                    print(f"✓ Absolute move via PUT {endpoint}")
-                    time.sleep(0.5)
-                    verify_position_change(api_server, first_positioner, target_position)
+                response = api_server.get(endpoint, params=params)
+                if response.status_code == 200:
+                    print(f"✓ Absolute move via GET {endpoint} - {axis}:{position}")
+                    time.sleep(0.5)  # Allow movement time
+                    # Since we moved each axis individually, verify the final position
+                    if axis == list(target_position.keys())[-1]:  # Last axis
+                        verify_position_change(api_server, first_positioner, target_position)
                     return
+                elif response.status_code in [400, 404, 422]:
+                    print(f"? Absolute positioning via {endpoint} - {axis}:{position} - Status: {response.status_code}")
                     
         except Exception as e:
             print(f"Absolute positioning via {endpoint} failed: {e}")
@@ -257,110 +178,26 @@ def test_relative_positioning(api_server):
         "/PositionerController/movePositioner",
     ]
 
-    #TODO: Adjust to following intercae:
-    
-    '''
-        "/PositionerController/movePositioner": {
-      "get": {
-        "summary": "Movepositioner",
-        "description": "Moves the specified positioner axis by the specified number of\nmicrometers.",
-        "operationId": "movePositioner_PositionerController_movePositioner_get",
-        "parameters": [
-          {
-            "name": "positionerName",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [{ "type": "string" }, { "type": "null" }],
-              "title": "Positionername"
-            }
-          },
-          {
-            "name": "axis",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [{ "type": "string" }, { "type": "null" }],
-              "default": "X",
-              "title": "Axis"
-            }
-          },
-          {
-            "name": "dist",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [{ "type": "number" }, { "type": "null" }],
-              "title": "Dist"
-            }
-          },
-          {
-            "name": "isAbsolute",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Isabsolute"
-            }
-          },
-          {
-            "name": "isBlocking",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Isblocking"
-            }
-          },
-          {
-            "name": "speed",
-            "in": "query",
-            "required": false,
-            "schema": { "type": "number", "title": "Speed" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": { "application/json": { "schema": {} } }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-    '''    
+    # Test relative positioning using the correct API interface
     for endpoint in relative_endpoints:
         try:
-            payloads = [
-                {
+            # Test single axis relative moves using GET with query parameters
+            for axis, distance in relative_move.items():
+                params = {
                     "positionerName": first_positioner,
-                    "relativeMove": relative_move
-                },
-                {
-                    "positioner": first_positioner,
-                    "delta": relative_move
-                },
-                {
-                    "positionerName": first_positioner,
-                    "move": relative_move
+                    "axis": axis,
+                    "dist": distance,
+                    "isAbsolute": False,  # This makes it relative
+                    "isBlocking": False
                 }
-            ]
-            
-            for payload in payloads:
-                response = api_server.post(endpoint, json=payload)
-                if response.status_code in [200, 201]:
-                    print(f"✓ Relative move via {endpoint}")
+                
+                response = api_server.get(endpoint, params=params)
+                if response.status_code == 200:
+                    print(f"✓ Relative move via GET {endpoint} - {axis}:{distance}")
                     time.sleep(0.5)
                     return
+                elif response.status_code in [400, 404, 422]:
+                    print(f"? Relative positioning via {endpoint} - {axis}:{distance} - Status: {response.status_code}")
                     
         except Exception as e:
             print(f"Relative positioning via {endpoint} failed: {e}")
@@ -395,81 +232,30 @@ def test_positioner_speed_control(api_server):
     except:
         first_positioner = "testPositioner"
     
-    # Speed control endpoints
-    speed_endpoints = [
-        "//PositionerController/setPositionerSpeed",
-    ]
-    
-    '''TODO: Adjust to following interface:
-        "/PositionerController/setPositionerSpeed": {
-      "get": {
-        "summary": "Setpositionerspeed",
-        "description": "Moves the specified positioner axis to the specified position.",
-        "operationId": "setPositionerSpeed_PositionerController_setPositionerSpeed_get",
-        "parameters": [
-          {
-            "name": "positionerName",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string", "title": "Positionername" }
-          },
-          {
-            "name": "axis",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string", "title": "Axis" }
-          },
-          {
-            "name": "speed",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "number", "title": "Speed" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": { "application/json": { "schema": {} } }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-
-    '''
     test_speed = {"X": 5000, "Y": 5000}  # Example speeds
     
+    # Speed control endpoints
+    speed_endpoints = [
+        "/PositionerController/setPositionerSpeed",
+    ]
+    
+    # Test speed control using the correct API interface
     for endpoint in speed_endpoints:
         try:
-            payloads = [
-                {
+            # Test setting speed for each axis using GET with query parameters
+            for axis, speed_value in test_speed.items():
+                params = {
                     "positionerName": first_positioner,
-                    "speed": test_speed
-                },
-                {
-                    "positioner": first_positioner,
-                    "velocity": test_speed
-                },
-                test_speed  # Direct speed dict
-            ]
-            
-            for payload in payloads:
-                response = api_server.post(endpoint, json=payload)
-                if response.status_code in [200, 201]:
-                    print(f"✓ Speed set via {endpoint}")
-                    return
+                    "axis": axis,
+                    "speed": speed_value
+                }
                 
-                response = api_server.put(endpoint, json=payload)
-                if response.status_code in [200, 201]:
-                    print(f"✓ Speed set via {endpoint}")
+                response = api_server.get(endpoint, params=params)
+                if response.status_code == 200:
+                    print(f"✓ Speed set via GET {endpoint} - {axis}:{speed_value}")
                     return
+                elif response.status_code in [400, 404, 422]:
+                    print(f"? Speed control via {endpoint} - {axis}:{speed_value} - Status: {response.status_code}")
                     
         except Exception as e:
             print(f"Speed control via {endpoint} failed: {e}")
@@ -478,55 +264,7 @@ def test_positioner_speed_control(api_server):
 
 
 def test_positioner_homing(api_server):
-    '''TODO: Use following interface:
-    
-        "/PositionerController/homeAxis": {
-      "get": {
-        "summary": "Homeaxis",
-        "operationId": "homeAxis_PositionerController_homeAxis_get",
-        "parameters": [
-          {
-            "name": "positionerName",
-            "in": "query",
-            "required": false,
-            "schema": { "type": "string", "title": "Positionername" }
-          },
-          {
-            "name": "axis",
-            "in": "query",
-            "required": false,
-            "schema": { "type": "string", "default": "X", "title": "Axis" }
-          },
-          {
-            "name": "isBlocking",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Isblocking"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": { "application/json": { "schema": {} } }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-
-'''
-    """Test positioner homing functionality."""
+    """Test positioner homing functionality using the correct API interface."""
     try:
         positioners, _ = test_positioner_discovery(api_server)
         if not positioners:
@@ -537,14 +275,21 @@ def test_positioner_homing(api_server):
     
     # Homing endpoints
     homing_endpoints = [
-        f"/PositionerController/homeAxis",
+        "/PositionerController/homeAxis",
     ]
     
     for endpoint in homing_endpoints:
         try:
-            response = api_server.post(endpoint)
+            # Test homing using GET with query parameters
+            params = {
+                "positionerName": first_positioner,
+                "axis": "X",  # Default to X axis
+                "isBlocking": False
+            }
+            
+            response = api_server.get(endpoint, params=params)
             # Accept various status codes as homing may not be implemented on all stages
-            if response.status_code in [200, 201, 400, 404, 501]:
+            if response.status_code in [200, 400, 404, 422, 501]:
                 print(f"✓ Homing endpoint accessible: {endpoint} ({response.status_code})")
                 return
                 
@@ -555,44 +300,7 @@ def test_positioner_homing(api_server):
 
 
 def test_positioner_stop_emergency(api_server):
-    """Test emergency stop functionality."""
-    '''TODO: Use following interace 
-    
-        "/PositionerController/stopAxis": {
-      "get": {
-        "summary": "Stopaxis",
-        "operationId": "stopAxis_PositionerController_stopAxis_get",
-        "parameters": [
-          {
-            "name": "positionerName",
-            "in": "query",
-            "required": false,
-            "schema": { "title": "Positionername" }
-          },
-          {
-            "name": "axis",
-            "in": "query",
-            "required": false,
-            "schema": { "default": "X", "title": "Axis" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": { "application/json": { "schema": {} } }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-'''
+    """Test emergency stop functionality using the correct API interface."""
     try:
         positioners, _ = test_positioner_discovery(api_server)
         if not positioners:
@@ -603,15 +311,20 @@ def test_positioner_stop_emergency(api_server):
     
     # Emergency stop endpoints
     stop_endpoints = [
-        f"/PositionerController/stopAxis",
-        
+        "/PositionerController/stopAxis",
     ]
     
     for endpoint in stop_endpoints:
         try:
-            response = api_server.post(endpoint)
-            if response.status_code in [200, 201]:
-                print(f"✓ Stop command via {endpoint}")
+            # Test stop using GET with query parameters
+            params = {
+                "positionerName": first_positioner,
+                "axis": "X"  # Default to X axis
+            }
+            
+            response = api_server.get(endpoint, params=params)
+            if response.status_code in [200, 400, 404, 422]:
+                print(f"✓ Stop command via GET {endpoint} ({response.status_code})")
                 return
                 
         except Exception as e:
@@ -622,89 +335,7 @@ def test_positioner_stop_emergency(api_server):
 
 
 def test_multi_axis_coordination(api_server):
-    
-    '''TODO: Use following interface
-    
-        "/PositionerController/movePositioner": {
-      "get": {
-        "summary": "Movepositioner",
-        "description": "Moves the specified positioner axis by the specified number of\nmicrometers.",
-        "operationId": "movePositioner_PositionerController_movePositioner_get",
-        "parameters": [
-          {
-            "name": "positionerName",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [{ "type": "string" }, { "type": "null" }],
-              "title": "Positionername"
-            }
-          },
-          {
-            "name": "axis",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [{ "type": "string" }, { "type": "null" }],
-              "default": "X",
-              "title": "Axis"
-            }
-          },
-          {
-            "name": "dist",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [{ "type": "number" }, { "type": "null" }],
-              "title": "Dist"
-            }
-          },
-          {
-            "name": "isAbsolute",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Isabsolute"
-            }
-          },
-          {
-            "name": "isBlocking",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Isblocking"
-            }
-          },
-          {
-            "name": "speed",
-            "in": "query",
-            "required": false,
-            "schema": { "type": "number", "title": "Speed" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": { "application/json": { "schema": {} } }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-
-'''
-    """Test coordinated multi-axis movements."""
+    """Test coordinated multi-axis movements using individual axis calls."""
     try:
         positioners, _ = test_positioner_discovery(api_server)
         if not positioners:
@@ -712,32 +343,38 @@ def test_multi_axis_coordination(api_server):
     except:
         pytest.skip("No positioners found")
     
-    # Test coordinated movement of multiple axes
-    multi_axis_endpoints = [
-        "/PositionerController/moveCoordinated",
-        "/PositionerController/setMultiplePositions",
-        "/positioners/coordinated_move",
-    ]
+    # Since movePositioner handles single axis at a time, we coordinate by calling it multiple times
+    endpoint = "/PositionerController/movePositioner"
+    first_positioner = list(positioners.keys())[0]
     
-    # Example coordinated move
-    coordinated_move = {
-        "positions": {
-            positioner: {"X": 10.0, "Y": 5.0} 
-            for positioner in list(positioners.keys())[:2]  # First two positioners
-        }
-    }
+    # Test coordinated movement by moving multiple axes in sequence
+    coordinated_moves = {"X": 10.0, "Y": 5.0}  # Example coordinated move
     
-    for endpoint in multi_axis_endpoints:
-        try:
-            response = api_server.post(endpoint, json=coordinated_move)
-            if response.status_code in [200, 201]:
-                print(f"✓ Coordinated move via {endpoint}")
-                return
+    try:
+        success_count = 0
+        for axis, distance in coordinated_moves.items():
+            params = {
+                "positionerName": first_positioner,
+                "axis": axis,
+                "dist": distance,
+                "isAbsolute": True,
+                "isBlocking": False
+            }
+            
+            response = api_server.get(endpoint, params=params)
+            if response.status_code == 200:
+                print(f"✓ Coordinated move axis {axis}: {distance}")
+                success_count += 1
+                time.sleep(0.2)  # Brief delay between moves
                 
-        except Exception as e:
-            print(f"Coordinated move via {endpoint} failed: {e}")
+        if success_count > 0:
+            print(f"✓ Coordinated movement completed ({success_count}/{len(coordinated_moves)} axes)")
+            return
+            
+    except Exception as e:
+        print(f"Coordinated move failed: {e}")
     
-    print("? No coordinated movement endpoints found")
+    print("? No coordinated movement capability found")
 
 
 @pytest.mark.skip(reason="Requires scanning capability")

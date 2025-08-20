@@ -95,7 +95,7 @@ def test_laser_control(api_server, lasers):
 
 
 def test_recording_controller_endpoints(api_server):
-    """Test recording and acquisition controller endpoints."""
+    """Test recording and acquisition controller endpoints comprehensively."""
     response = api_server.get("/openapi.json")
     assert response.status_code == 200
     spec = response.json()
@@ -108,39 +108,208 @@ def test_recording_controller_endpoints(api_server):
     
     print(f"Found {len(recording_endpoints)} recording endpoints")
     
-    # Test recording status
-    status_endpoints = [
-        "/RecordingController/getStatus",
-        "/RecordingController/isRecording",
-        "/recording/status"
-    ]
-    
-    for endpoint in status_endpoints:
-        try:
-            response = api_server.get(endpoint)
-            if response.status_code == 200:
-                status = response.json()
-                print(f"✓ Recording status via {endpoint}: {status}")
-                break
-        except Exception as e:
-            print(f"Recording status via {endpoint} failed: {e}")
+    # Test recording start/stop functionality
+    test_recording_control(api_server)
     
     # Test recording configuration
-    config_endpoints = [
-        "/RecordingController/getConfig",
-        "/RecordingController/getSettings",
-        "/recording/config"
+    test_recording_configuration(api_server)
+    
+    # Test image snapping functionality  
+    test_snap_functionality(api_server)
+
+
+def test_recording_control(api_server):
+    """Test recording start and stop functionality."""
+    # Test starting recording
+    start_endpoints = [
+        "/RecordingController/startRecording",
+        "/recording/start"
     ]
     
-    for endpoint in config_endpoints:
+    recording_started = False
+    for endpoint in start_endpoints:
         try:
             response = api_server.get(endpoint)
             if response.status_code == 200:
-                config = response.json()
-                print(f"✓ Recording config via {endpoint}")
+                print(f"✓ Recording started via {endpoint}")
+                recording_started = True
                 break
         except Exception as e:
-            print(f"Recording config via {endpoint} failed: {e}")
+            print(f"Recording start via {endpoint} failed: {e}")
+    
+    # Test stopping recording if we managed to start it
+    if recording_started:
+        stop_endpoints = [
+            "/RecordingController/stopRecording", 
+            "/recording/stop"
+        ]
+        
+        time.sleep(1)  # Brief recording time
+        
+        for endpoint in stop_endpoints:
+            try:
+                response = api_server.get(endpoint)
+                if response.status_code == 200:
+                    print(f"✓ Recording stopped via {endpoint}")
+                    return
+            except Exception as e:
+                print(f"Recording stop via {endpoint} failed: {e}")
+
+
+def test_recording_configuration(api_server):
+    """Test recording configuration endpoints."""
+    # Test setting recording filename
+    filename_endpoints = [
+        "/RecordingController/setRecFilename"
+    ]
+    
+    test_filename = "test_recording"
+    
+    for endpoint in filename_endpoints:
+        try:
+            params = {"filename": test_filename}
+            response = api_server.get(endpoint, params=params)
+            if response.status_code == 200:
+                print(f"✓ Recording filename set via {endpoint}: {test_filename}")
+                break
+        except Exception as e:
+            print(f"Set filename via {endpoint} failed: {e}")
+    
+    # Test setting recording folder
+    folder_endpoints = [
+        "/RecordingController/setRecFolder"
+    ]
+    
+    test_folder = "/tmp/test_recordings"
+    
+    for endpoint in folder_endpoints:
+        try:
+            params = {"folderPath": test_folder}
+            response = api_server.get(endpoint, params=params)
+            if response.status_code in [200, 400]:  # 400 might occur if path doesn't exist
+                print(f"✓ Recording folder endpoint accessible via {endpoint}: {response.status_code}")
+                break
+        except Exception as e:
+            print(f"Set folder via {endpoint} failed: {e}")
+    
+    # Test recording mode settings
+    mode_endpoints = [
+        "/RecordingController/setRecModeScanOnce",
+        "/RecordingController/setRecModeSpecFrames",
+        "/RecordingController/setRecModeScanTimelapse"
+    ]
+    
+    for endpoint in mode_endpoints:
+        try:
+            if "Timelapse" in endpoint:
+                params = {"lapsesToRec": 5, "freqSeconds": 1.0}
+                response = api_server.get(endpoint, params=params)
+            elif "SpecFrames" in endpoint:
+                params = {"framesToRec": 10}
+                response = api_server.get(endpoint, params=params)
+            else:
+                response = api_server.get(endpoint)
+                
+            if response.status_code == 200:
+                print(f"✓ Recording mode set via {endpoint}")
+                break
+        except Exception as e:
+            print(f"Set recording mode via {endpoint} failed: {e}")
+
+
+def test_snap_functionality(api_server):
+    """Test image snapping functionality."""
+    # Test basic snap
+    snap_endpoints = [
+        "/RecordingController/snapImage",
+        "/RecordingController/snapImageToPath"
+    ]
+    
+    for endpoint in snap_endpoints:
+        try:
+            if "ToPath" in endpoint:
+                params = {"fileName": "/tmp/test_snap.tiff"}
+                response = api_server.get(endpoint, params=params)
+            else:
+                params = {"output": False}  # Don't return image data in test
+                response = api_server.get(endpoint, params=params)
+                
+            if response.status_code == 200:
+                print(f"✓ Image snap via {endpoint}")
+                if endpoint == "/RecordingController/snapImage":
+                    # Test with output=True to get image data
+                    try:
+                        params = {"output": True, "toList": True}
+                        response = api_server.get(endpoint, params=params)
+                        if response.status_code == 200:
+                            data = response.json()
+                            print(f"✓ Image snap with data output: {type(data)}")
+                    except Exception as e:
+                        print(f"Snap with output failed: {e}")
+                break
+        except Exception as e:
+            print(f"Snap via {endpoint} failed: {e}")
+    
+    # Test detector selection for recording
+    detector_endpoints = [
+        "/RecordingController/setDetectorToRecord"
+    ]
+    
+    for endpoint in detector_endpoints:
+        try:
+            # Test with special values
+            test_detectors = ["-1", "-2"]  # -1 for current, -2 for all
+            
+            for detector in test_detectors:
+                response = api_server.get(endpoint, json=detector)
+                if response.status_code in [200, 400, 422]:  # Accept various responses
+                    print(f"✓ Detector selection endpoint accessible: {endpoint} ({response.status_code})")
+                    break
+        except Exception as e:
+            print(f"Detector selection via {endpoint} failed: {e}")
+
+
+def test_video_streaming(api_server):
+    """Test video streaming functionality."""
+    streaming_endpoints = [
+        "/RecordingController/video_feeder"
+    ]
+    
+    for endpoint in streaming_endpoints:
+        try:
+            params = {"startStream": True}
+            response = api_server.get(endpoint, params=params)
+            if response.status_code in [200, 400, 501]:  # Various acceptable responses
+                print(f"✓ Video streaming endpoint accessible: {endpoint} ({response.status_code})")
+                
+                # Test stopping stream
+                params = {"startStream": False}
+                response = api_server.get(endpoint, params=params)
+                if response.status_code in [200, 400, 501]:
+                    print(f"✓ Video streaming stop via {endpoint} ({response.status_code})")
+                break
+        except Exception as e:
+            print(f"Video streaming via {endpoint} failed: {e}")
+
+
+def test_recording_variables(api_server):
+    """Test recording variable management."""
+    variable_endpoints = [
+        "/RecordingController/getVariable"
+    ]
+    
+    test_variables = ["recording_status", "current_filename", "frame_count"]
+    
+    for endpoint in variable_endpoints:
+        try:
+            for var_name in test_variables:
+                params = {"variable_name": var_name}
+                response = api_server.get(endpoint, params=params)
+                if response.status_code in [200, 400, 404]:  # Variable might not exist
+                    print(f"✓ Variable query via {endpoint} - {var_name}: {response.status_code}")
+                    break
+        except Exception as e:
+            print(f"Variable query via {endpoint} failed: {e}")
 
 
 def test_scan_controller_endpoints(api_server):

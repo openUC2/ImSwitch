@@ -10,7 +10,10 @@ import numpy as np
 from socketio import AsyncServer, ASGIApp
 import uvicorn
 import imswitch.imcommon.framework.base as abstract
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 import base64
 from imswitch import SOCKET_STREAM
 import time
@@ -240,10 +243,10 @@ class Worker(abstract.Worker):
         thread._worker = self
 
 class Thread(abstract.Thread):
-    _started = Signal()
-    _finished = Signal()
 
     def __init__(self):
+        self._started = Signal()
+        self._finished = Signal()
         self._thread = None
         self._loop = None
         self._running = threading.Event()
@@ -289,9 +292,9 @@ class Thread(abstract.Thread):
 
 # Timer utility
 class Timer(abstract.Timer):
-    _timeout = Signal()
 
     def __init__(self, singleShot=False):
+        self._timeout = Signal()
         self._task = None
         self._singleShot = singleShot
         self._loop = asyncio.new_event_loop()

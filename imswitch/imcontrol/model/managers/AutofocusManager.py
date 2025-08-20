@@ -1,6 +1,9 @@
 import enum
 import glob
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 import os
 
 import numpy as np

@@ -17,13 +17,13 @@ class VFileItem:
 class VFileCollection(SignalInterface):
     """ VFileCollection is a collection of virtual file-like objects. In
     addition to holding the data, it also handles saving it to the disk. """
-    sigDataSet = Signal(str, VFileItem)  # (name, vFileItem)
-    sigDataSavedToDisk = Signal(str, str)  # (name, filePath)
-    sigDataWillRemove = Signal(str)  # (name)
-    sigDataRemoved = Signal(str)  # (name)
     
     def __init__(self):
         super().__init__()
+        self.sigDataSet = Signal(str, VFileItem)  # (name, vFileItem)
+        self.sigDataSavedToDisk = Signal(str, str)  # (name, filePath)
+        self.sigDataWillRemove = Signal(str)  # (name)
+        self.sigDataRemoved = Signal(str)  # (name)
         self._data = {}
 
     def getSavePath(self, name):

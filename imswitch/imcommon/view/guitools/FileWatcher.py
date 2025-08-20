@@ -8,10 +8,10 @@ import socket
 from imswitch.imcommon.framework import Thread, Signal
 
 class FileWatcher(Thread):
-    sigNewFiles = Signal(list)
-
     def __init__(self, path, extension, pollTime):
         super().__init__()
+        self.sigNewFiles = Signal(list)
+
         self.path = path
         self.extension = extension
         self.pollTime = pollTime

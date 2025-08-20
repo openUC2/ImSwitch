@@ -3,20 +3,20 @@ from imswitch.imcommon.model import VFileCollection
 
 
 class ModuleCommunicationChannel(SignalInterface):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sigRunScript = Signal(str)
+        self.sigExecutionFinished = Signal()
     """
     ModuleCommunicationChannel is a class that handles the communication
     between modules.
     """
 
-    sigRunScript = Signal(str)
-    sigExecutionFinished = Signal()
     
     @property
     def memoryRecordings(self):
         return self.__memoryRecordings
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.__memoryRecordings = VFileCollection()
         self.__registeredModules = set()
 

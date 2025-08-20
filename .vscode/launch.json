@@ -27,7 +27,9 @@
             "request": "launch",
             "module": "pytest",
             "args": [
-                "${file}" // Runs the currently open test file
+                "${file}", // Runs the currently open test file
+                "-s", // Allows print statements to show in the terminal
+
             ],
             "console": "integratedTerminal",
             "justMyCode": false, // Ensures you can debug library code as well

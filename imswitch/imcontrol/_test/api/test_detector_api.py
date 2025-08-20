@@ -37,10 +37,7 @@ def test_detector_discovery_endpoints(api_server):
     """Test detector discovery and enumeration endpoints."""
     # Common detector discovery endpoints
     discovery_endpoints = [
-        "/DetectorController/getAllDetectorNames",
-        "/DetectorController/getDetectorNames", 
-        "/SettingsController/getDetectorNames",
-        "/detectors",  # RESTful style
+        "/SettingsController/getDetectorNames"
     ]
     
     detector_names = None
@@ -84,10 +81,7 @@ def test_detector_parameters_endpoints(api_server):
     
     # Test parameter endpoints
     param_endpoints = [
-        f"/DetectorController/getDetectorParameters?detectorName={first_detector}",
-        f"/DetectorController/getParameters?detector={first_detector}",
-        f"/SettingsController/getDetectorParameters",
-        f"/detectors/{first_detector}/parameters",
+        f"/SettingsController/getDetectorParameters"
     ]
     
     for endpoint in param_endpoints:
@@ -100,7 +94,7 @@ def test_detector_parameters_endpoints(api_server):
                 
                 # Test parameter modification if we have parameters
                 if params and "exposureTime" in params:
-                    test_parameter_modification(api_server, first_detector, params)
+                    _test_parameter_modification(api_server, first_detector, params)
                 return
                 
         except Exception as e:
@@ -109,7 +103,7 @@ def test_detector_parameters_endpoints(api_server):
     print("? No working parameter endpoints found")
 
 
-def test_parameter_modification(api_server, detector_name: str, current_params: Dict):
+def _test_parameter_modification(api_server, detector_name: str, current_params: Dict):
     """Test modifying detector parameters."""
     if "exposureTime" not in current_params:
         return
@@ -119,9 +113,7 @@ def test_parameter_modification(api_server, detector_name: str, current_params: 
     
     # Common parameter setting endpoints
     param_set_endpoints = [
-        "/DetectorController/setDetectorParameter",
-        "/DetectorController/setParameter", 
-        f"/detectors/{detector_name}/parameters",
+        "/SettingsController/setDetectorParameter",
     ]
     
     for endpoint in param_set_endpoints:
@@ -162,16 +154,13 @@ def test_detector_acquisition_control(api_server):
     """Test detector acquisition and liveview control."""
     # Live view control endpoints
     liveview_endpoints = [
-        "/ViewController/setLiveViewActive",
-        "/DetectorController/startLiveView",
-        "/acquisition/liveview",
-        "/liveview/start"
+        "/ViewController/setLiveViewActive"
     ]
     
     for endpoint in liveview_endpoints:
         try:
             # Test starting liveview
-            response = api_server.post(f"{endpoint}?active=true")
+            response = api_server.get(f"{endpoint}?active=true")
             if response.status_code not in [200, 201]:
                 response = api_server.get(f"{endpoint}?active=true")
             
@@ -180,7 +169,7 @@ def test_detector_acquisition_control(api_server):
                 
                 # Test stopping liveview
                 time.sleep(0.5)
-                stop_response = api_server.post(f"{endpoint}?active=false")
+                stop_response = api_server.get(f"{endpoint}?active=false")
                 if stop_response.status_code not in [200, 201]:
                     stop_response = api_server.get(f"{endpoint}?active=false")
                 
@@ -207,15 +196,12 @@ def test_detector_image_capture(api_server):
     
     # Image capture endpoints
     capture_endpoints = [
-        f"/DetectorController/captureImage?detectorName={first_detector}",
-        f"/DetectorController/snap?detector={first_detector}",
-        f"/acquisition/capture?detector={first_detector}",
-        f"/detectors/{first_detector}/capture",
+        f"/RecordingController/snapNumpyToFastAPI", # TODO parse response 
     ]
     
     for endpoint in capture_endpoints:
         try:
-            response = api_server.post(endpoint)
+            response = api_server.get(endpoint)
             if response.status_code in [200, 201]:
                 result = response.json()
                 print(f"✓ Image captured via {endpoint}")
@@ -242,15 +228,28 @@ def test_detector_recording_control(api_server):
     
     # Recording control endpoints
     recording_endpoints = [
-        f"/RecordingController/startRecording?detectorName={first_detector}",
-        f"/DetectorController/startRecording?detector={first_detector}",
-        f"/recording/start?detector={first_detector}",
-    ]
+        f"/RecordingController/startRecording?detectorName={first_detector}"
+        ]
+    '''
+    # TOOD: add the following parameters mSaveFormat = "TIF"
+    "parameters": [
+          {
+            "name": "mSaveFormat",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "title": "Msaveformat"
+            }
+          }
+        ],
+        '''
     
     for endpoint in recording_endpoints:
         try:
             # Start recording
-            response = api_server.post(endpoint)
+            response = api_server.get(endpoint)
             if response.status_code in [200, 201]:
                 print(f"✓ Recording started via {endpoint}")
                 
@@ -259,7 +258,7 @@ def test_detector_recording_control(api_server):
                 
                 # Stop recording
                 stop_endpoint = endpoint.replace("start", "stop")
-                stop_response = api_server.post(stop_endpoint)
+                stop_response = api_server.get(stop_endpoint)
                 if stop_response.status_code in [200, 201]:
                     print(f"✓ Recording stopped via {stop_endpoint}")
                 return
@@ -274,10 +273,7 @@ def test_detector_status_monitoring(api_server):
     """Test detector status and health monitoring."""
     # Status endpoints
     status_endpoints = [
-        "/DetectorController/getDetectorStatus", 
-        "/DetectorController/getStatus",
-        "/detectors/status",
-        "/health/detectors"
+        "/ViewController/getLiveViewActive"
     ]
     
     for endpoint in status_endpoints:
@@ -295,35 +291,8 @@ def test_detector_status_monitoring(api_server):
     print("? No working detector status endpoints found")
 
 
-def test_detector_calibration_endpoints(api_server):
-    """Test detector calibration and characterization."""
-    calibration_endpoints = [
-        "/DetectorController/calibrate",
-        "/detectors/calibration",
-        "/calibration/detectors"
-    ]
-    
-    for endpoint in calibration_endpoints:
-        try:
-            response = api_server.get(endpoint)
-            if response.status_code in [200, 400, 404]:  # 400/404 acceptable for missing calibration
-                print(f"✓ Calibration endpoint accessible: {endpoint}")
-                return
-                
-        except Exception as e:
-            print(f"Calibration endpoint {endpoint} failed: {e}")
-    
-    print("? No calibration endpoints found")
-
-
-@pytest.mark.skip(reason="Requires specific detector hardware")
-def test_detector_hardware_specific(api_server):
-    """Test hardware-specific detector functionality."""
-    # This would test specific detector types like:
-    # - Camera-specific settings (gain, binning, etc.)
-    # - Advanced triggering modes
-    # - Hardware synchronization
-    pass
+# TODO: Add endpoint for setting and getting exposure parameters "/SettingsController/setDetectorExposureTime": {
+# TODO: Add endpoint for setting and getting gain "/SettingsController/setDetectorGain": {
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

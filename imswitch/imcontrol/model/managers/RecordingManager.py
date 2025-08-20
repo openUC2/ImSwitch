@@ -713,7 +713,7 @@ class RecordingWorker(Worker):
         return files, fileDests, filePaths
 
     def _getNewFrames(self, detectorName):
-        newFrames = self.__recordingManager.detectorsManager[detectorName].getChunk()
+        newFrames, frameIndices = self.__recordingManager.detectorsManager[detectorName].getChunk()
         newFrames = np.array(newFrames)
         return newFrames
 

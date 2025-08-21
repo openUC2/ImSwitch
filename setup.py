@@ -37,7 +37,7 @@ setup(
     ],
     packages=find_packages(),
     include_package_data=True,
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     install_requires=[
         "pydantic==2.11.4",
         "coloredlogs >= 15",
@@ -48,7 +48,7 @@ setup(
         "lantzdev >= 0.5.2",
         "luddite >= 1",
         "nidaqmx >= 0.5.7",
-        "numpy==2.1.2",
+        "numpy==2.0.2",
         "packaging >= 19",
         "psutil >= 5.4.8",
         "pyserial >= 3.4",
@@ -74,14 +74,10 @@ setup(
         "python-socketio[asyncio]==5.11.4",
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
-        "zarr>=3.0.0",
+        "zarr>=3",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
         "numba>=0.61.2", 
-        "RPi.GPIO",
-        "luma.oled",
-        "smbus2", 
-        "smbus"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
@@ -92,9 +88,15 @@ setup(
             "QScintilla >= 2.12",
             "PyQtWebEngine >= 5.15.2",
             "pyqtgraph >= 0.12.1",
-            "napari[pyqt5] == 0.4.19",
+            "napari[pyqt5] == 0.6.4",
             "lantzdev[qt] >= 0.5.2",
             "qtpy >= 1.9"
+        ],
+        'Lepmon': [
+            "RPi.GPIO",
+            "luma.oled",
+            "smbus2", 
+            "smbus"
         ],
         'Ashlar': [
             "ashlarUC2"
@@ -107,7 +109,15 @@ setup(
         'imjoy':[        
             "imjoy-rpc==0.5.59",
             "imjoy_rpc",
-            "imjoy",]
+            "imjoy",
+        ],
+        # Test dependencies for API testing
+        'testing': [
+            "pytest>=6.0",
+            "pytest-asyncio", 
+            "requests>=2.25",
+            "httpx>=0.24.0",  # Alternative HTTP client for async testing
+        ],
         },
 
     entry_points={

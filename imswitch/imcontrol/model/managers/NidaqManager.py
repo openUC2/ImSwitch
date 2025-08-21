@@ -14,14 +14,12 @@ from imswitch.imcommon.model import initLogger
 class NidaqManager(SignalInterface):
     """ For interaction with NI-DAQ hardware interfaces. """
 
-    sigScanBuilt = Signal(object, object, object)  # (scanInfoDict, signalDict, deviceList)
-    sigScanStarted = Signal()
-    sigScanDone = Signal()
-
-    sigScanBuildFailed = Signal()
-
     def __init__(self, setupInfo):
         super().__init__()
+        self.sigScanBuilt = Signal(object, object, object)  # (scanInfoDict, signalDict, deviceList)
+        self.sigScanStarted = Signal()
+        self.sigScanDone = Signal()
+        self.sigScanBuildFailed = Signal()
         self.__logger = initLogger(self)
 
         self.__setupInfo = setupInfo
@@ -435,18 +433,18 @@ class NidaqManagerError(Exception):
         self.message = message
 
 
-# Copyright (C) 2020-2024 ImSwitch developers
-# This file is part of ImSwitch.
-#
-# ImSwitch is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# ImSwitch is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+        # Copyright (C) 2020-2024 ImSwitch developers
+        # This file is part of ImSwitch.
+        #
+        # ImSwitch is free software: you can redistribute it and/or modify
+        # it under the terms of the GNU General Public License as published by
+        # the Free Software Foundation, either version 3 of the License, or
+        # (at your option) any later version.
+        #
+        # ImSwitch is distributed in the hope that it will be useful,
+        # but WITHOUT ANY WARRANTY; without even the implied warranty of
+        # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+        # GNU General Public License for more details.
+        #
+        # You should have received a copy of the GNU General Public License
+        # along with this program.  If not, see <https://www.gnu.org/licenses/>.

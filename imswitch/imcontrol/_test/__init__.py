@@ -78,8 +78,8 @@ setupInfoBasic = ViewSetupInfo.from_json("""
                 "exposure": 0,
                 "gain": 0,
                 "blacklevel": 100,
-                "image_width": 1000,
-                "image_height": 1000
+                "image_width": 400,
+                "image_height": 300
             }
         },
         "forAcquisition": true,
@@ -224,8 +224,8 @@ setupInfoWithoutWidgets = ViewSetupInfo.from_json("""
           "exposure": 0,
           "gain": 0,
           "blacklevel": 100,
-          "image_width": 1000,
-          "image_height": 1000
+          "image_width": 400,
+          "image_height": 300
         }
       },
       "forAcquisition": true,

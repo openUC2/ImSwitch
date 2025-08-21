@@ -1,7 +1,7 @@
 import os
 import subprocess
 import sys
-from imswitch import IS_HEADLESS
+from imswitch.config import get_config
 import imswitch
 def openFolderInOS(folderPath):
     """ Open a folder in the OS's default file browser. """
@@ -18,10 +18,11 @@ def openFolderInOS(folderPath):
 
 def restartSoftware(module='imswitch', forceConfigFile=False):
     """ Restarts the software. """
-    if IS_HEADLESS:
-        # we read the args from __argparse__ and restart the software using the same arguments
+    config = get_config()
+    
+    if config.is_headless:
+        # we read the args from the config and restart the software using the same arguments
         # we need to add the module name to the arguments
-        from imswitch import __argparse__
 
         '''
         in docker:
@@ -33,34 +34,44 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
         params+=" --scan-ext-drive-mount $(SCAN_EXT_DATA_FOLDER:-false)"
         python3 /tmp/ImSwitch/main.py $params
         '''
-        headless = str(imswitch.IS_HEADLESS)
-        http_port = str(imswitch.__httpport__)
-        socket_port = str(imswitch.__socketport__)
-        config_folder = str(imswitch.DEFAULT_CONFIG_PATH)
-        config_file = str(imswitch.DEFAULT_SETUP_FILE)
-        is_ssl = str(imswitch.__ssl__)
-        scan_ext_drive_mount = bool(imswitch.SCAN_EXT_DATA_FOLDER)
-        ext_drive_mount = imswitch.EXT_DRIVE_MOUNT
+        headless = config.is_headless
+        http_port = str(config.http_port)
+        socket_port = str(config.socket_port)
+        config_folder = str(config.config_folder) if config.config_folder else "None"
+        config_file = str(config.default_config) if config.default_config else "None"
+        is_ssl = config.ssl
+        scan_ext_drive_mount = config.scan_ext_data_folder
+        ext_drive_mount = config.ext_drive_mount
+        
         # Erstellen der Argumentliste
         args = [
             sys.executable,
             os.path.abspath(sys.argv[0]),
             '--http-port', http_port,
             '--socket-port', socket_port,
-            '--config-folder', config_folder,
         ]
-        if forceConfigFile:
-            args.append('--config-file')
-            args.append(config_file)
-        if headless == 'True':
+        
+        if config_folder != "None":
+            args.extend(['--config-folder', config_folder])
+            
+        if forceConfigFile and config_file != "None":
+            args.extend(['--config-file', config_file])
+            
+        if headless:
             args.append('--headless')
-        if is_ssl == 'False':
+            
+        if not is_ssl:
             args.append('--no-ssl')
+            
         if scan_ext_drive_mount:
             args.append('--scan-ext-drive-mount')
+            
         if ext_drive_mount:
-            args.append('--ext-drive-mount')
-            args.append(ext_drive_mount)
+            args.extend(['--ext-drive-mount', ext_drive_mount])
+            
+        if config.data_folder:
+            args.extend(['--ext-data-folder', config.data_folder])
+        
         # execute script with new arguments
         os.execv(sys.executable, args)
     else:

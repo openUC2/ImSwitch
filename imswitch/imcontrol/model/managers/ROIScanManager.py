@@ -11,9 +11,9 @@ from imswitch.imcommon.model import initLogger
 
 
 class ROIScanManager(SignalInterface):
-    sigROIScanMaskUpdated = Signal(object)  # (maskCombined)
 
     def __init__(self, mctInfo, *args, **kwargs):
+        self.sigROIScanMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 

@@ -142,6 +142,112 @@ class VirtualStageManager(PositionerManager):
         if axis == "XY": self._positioner.set_stage_offset(xy=offset)
         #self._commChannel.sigUpdateMotorPosition.emit()
 
+    def start_stage_scanning(self, xstart=0, xstep=1, nx=100,
+                             ystart=0, ystep=1, ny=100, tsettle=0.1, tExposure=50, illumination=None, led=None):
+        """
+        Start a stage scanning operation with the given parameters.
+        Virtual implementation that simulates the scanning process.
+        
+        :param xstart: Starting position in X direction.
+        :param xstep: Step size in X direction.
+        :param nx: Number of steps in X direction.
+        :param ystart: Starting position in Y direction.
+        :param ystep: Step size in Y direction.
+        :param ny: Number of steps in Y direction.
+        :param tsettle: Settle time after each step.
+        :param tExposure: Exposure time for each position.
+        :param illumination: Optional illumination settings.
+        :param led: Optional LED settings.
+        """
+        self.__logger.info(f"Starting virtual stage scanning: {nx}x{ny} grid")
+        self.__logger.info(f"X: start={xstart}, step={xstep}, count={nx}")
+        self.__logger.info(f"Y: start={ystart}, step={ystep}, count={ny}")
+        self.__logger.info(f"Timing: settle={tsettle}ms, exposure={tExposure}ms")
+        
+        # Set default values for optional parameters
+        if illumination is None:
+            illumination = (0, 0, 0, 0)  # Default to no illumination
+        if led is None:
+            led = 0
+            
+        # For virtual stage, we simulate the scanning by updating positions
+        # The actual movement will be handled by the experiment controller
+        scan_params = {
+            'xstart': xstart,
+            'xstep': xstep, 
+            'nx': nx,
+            'ystart': ystart,
+            'ystep': ystep,
+            'ny': ny,
+            'tsettle': tsettle,
+            'tExposure': tExposure,
+            'illumination': illumination,
+            'led': led,
+            'status': 'started'
+        }
+        
+        # Store scan parameters for tracking
+        self._scan_params = scan_params
+        
+        # Move to starting position
+        self.move(value=xstart, axis="X", is_absolute=True)
+        self.move(value=ystart, axis="Y", is_absolute=True)
+        
+        self.__logger.info("Virtual stage scanning started successfully")
+        return {"success": True, "message": "Virtual stage scanning started", "params": scan_params}
+
+    def stop_stage_scanning(self):
+        """
+        Stop the current stage scanning operation.
+        Virtual implementation that stops the scanning simulation.
+        """
+        self.__logger.info("Stopping virtual stage scanning")
+        
+        # Clear scan parameters
+        if hasattr(self, '_scan_params'):
+            self._scan_params['status'] = 'stopped'
+            self.__logger.info("Virtual stage scanning stopped successfully")
+        else:
+            self.__logger.warning("No active stage scanning to stop")
+            
+        return {"success": True, "message": "Virtual stage scanning stopped"}
+
+    def get_stage_scan_status(self):
+        """
+        Get the current status of stage scanning.
+        Virtual implementation that returns scan parameters and status.
+        """
+        if hasattr(self, '_scan_params') and self._scan_params:
+            return self._scan_params
+        else:
+            return {"status": "idle", "message": "No active scanning"}
+            
+    def simulate_scan_position(self, tile_x, tile_y):
+        """
+        Simulate moving to a specific tile position during scanning.
+        
+        :param tile_x: X tile index (0-based)
+        :param tile_y: Y tile index (0-based)
+        """
+        if hasattr(self, '_scan_params') and self._scan_params:
+            x_pos = self._scan_params['xstart'] + tile_x * self._scan_params['xstep']
+            y_pos = self._scan_params['ystart'] + tile_y * self._scan_params['ystep']
+            
+            self.__logger.debug(f"Simulating move to tile ({tile_x}, {tile_y}) -> position ({x_pos}, {y_pos})")
+            
+            # Move to the calculated position
+            self.move(value=x_pos, axis="X", is_absolute=True)
+            self.move(value=y_pos, axis="Y", is_absolute=True)
+            
+            # Simulate settle time
+            if self._scan_params['tsettle'] > 0:
+                time.sleep(self._scan_params['tsettle'] / 1000.0)  # Convert ms to seconds
+                
+            return {"x": x_pos, "y": y_pos, "tile_x": tile_x, "tile_y": tile_y}
+        else:
+            self.__logger.warning("No active scan parameters for position simulation")
+            return None
+
 
 # Copyright (C) 2020, 2021 The imswitch developers
 # This file is part of ImSwitch.

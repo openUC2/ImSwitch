@@ -247,6 +247,7 @@ class ExperimentController(ImConWidgetController):
         self._ome_write_tiff = False
         self._ome_write_zarr = True
         self._ome_write_stitched_tiff = False
+        self._ome_write_single_tiff = False
 
         # Initialize experiment execution modes
         self.performance_mode = ExperimentPerformanceMode(self)
@@ -262,7 +263,8 @@ class ExperimentController(ImConWidgetController):
         return {
             "write_tiff": getattr(self, '_ome_write_tiff', False),
             "write_zarr": getattr(self, '_ome_write_zarr', True),
-            "write_stitched_tiff": getattr(self, '_ome_write_stitched_tiff', False)
+            "write_stitched_tiff": getattr(self, '_ome_write_stitched_tiff', False),
+            "write_single_tiff": getattr(self, '_ome_write_single_tiff', False)
         }
 
 
@@ -474,6 +476,7 @@ class ExperimentController(ImConWidgetController):
         self._ome_write_tiff = p.ome_write_tiff
         self._ome_write_zarr = p.ome_write_zarr
         self._ome_write_stitched_tiff = p.ome_write_stitched_tiff
+        self._ome_write_single_tiff = getattr(p, 'ome_write_single_tiff', False)  # Default to False if not specified
 
         # determine if each sub scan in snake_tiles is a single tile or a multi-tile scan - if single image we should squah them in a single TIF (e.g. by appending )
         is_single_tile_scan = all(len(tile) == 1 for tile in snake_tiles)
@@ -798,12 +801,12 @@ class ExperimentController(ImConWidgetController):
         # Check if performance mode is running
         performance_status = self.performance_mode.get_scan_status()
         if performance_status["running"]:
-            raise HTTPException(status_code=400, detail="Cannot pause experiment in performance mode")
+            return {"status": "error", "message": "Cannot pause experiment in performance mode"}
 
         if workflow_status == "running":
             return self.workflow_manager.pause_workflow()
         else:
-            raise HTTPException(status_code=400, detail=f"Cannot pause in current state: {workflow_status}")
+            return {"status": "error", "message": f"Cannot pause in current state: {workflow_status}"}
 
     @APIExport()
     def resumeExperiment(self):
@@ -814,12 +817,12 @@ class ExperimentController(ImConWidgetController):
         # Check if performance mode is running
         performance_status = self.performance_mode.get_scan_status()
         if performance_status["running"]:
-            raise HTTPException(status_code=400, detail="Cannot resume experiment in performance mode")
+            return {"status": "error", "message": "Cannot resume experiment in performance mode"}
 
         if workflow_status == "paused":
             return self.workflow_manager.resume_workflow()
         else:
-            raise HTTPException(status_code=400, detail=f"Cannot resume in current state: {workflow_status}")
+            return {"status": "error", "message": f"Cannot resume in current state: {workflow_status}"}
 
     @APIExport()
     def stopExperiment(self):

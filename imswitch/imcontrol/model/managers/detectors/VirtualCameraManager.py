@@ -159,6 +159,31 @@ class VirtualCameraManager(DetectorManager):
     def _performSafeCameraAction(self, function):
         pass
 
+    def setTriggerSource(self, source):
+        """Set the trigger source for the virtual camera."""
+        valid_sources = ['Continous', 'Internal trigger', 'External trigger']
+        if source not in valid_sources:
+            self.__logger.warning(f"Invalid trigger source '{source}'. Valid options: {valid_sources}")
+            return
+            
+        # Update the parameter
+        self.setParameter('trigger_source', source)
+        
+        # Also update the underlying camera property if available
+        try:
+            if hasattr(self._camera, 'setPropertyValue'):
+                # Map source strings to values that the virtual camera expects
+                source_mapping = {
+                    'Continous': 0,
+                    'Internal trigger': 1, 
+                    'External trigger': 2
+                }
+                self._camera.setPropertyValue('trigger_source', source_mapping.get(source, 1))
+        except Exception as e:
+            self.__logger.debug(f"Could not set camera trigger source: {e}")
+        
+        self.__logger.info(f"Set trigger source to: {source}")
+
     def openPropertiesDialog(self):
         self._camera.openPropertiesGUI()
 

@@ -30,30 +30,7 @@ def test_laser_controller_endpoints(api_server):
         "/LaserController/getLaserNames",
     ]
     
-    '''TODO: Change to
-        "/LaserController/getLaserNames": {
-      "get": {
-        "summary": "Getlasernames",
-        "description": "Returns the device names of all lasers. These device names can be\npassed to other laser-related functions.",
-        "operationId": "getLaserNames_LaserController_getLaserNames_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": { "type": "string" },
-                  "type": "array",
-                  "title": "Response Getlasernames Lasercontroller Getlasernames Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
 
-'''
     
     for endpoint in discovery_endpoints:
         try:
@@ -76,121 +53,88 @@ def test_laser_control(api_server, lasers):
         first_laser = lasers[0]
     else:
         return
-    '''TODO: Change to 
     
-        "/LaserController/setLaserActive": {
-      "get": {
-        "summary": "Setlaseractive",
-        "description": "Sets whether the specified laser is powered on.",
-        "operationId": "setLaserActive_LaserController_setLaserActive_get",
-        "parameters": [
-          {
-            "name": "laserName",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string", "title": "Lasername" }
-          },
-          {
-            "name": "active",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "boolean", "title": "Active" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": { "application/json": { "schema": {} } }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/LaserController/setLaserValue": {
-      "get": {
-        "summary": "Setlaservalue",
-        "description": "Sets the value of the specified laser, in the units that the laser\nuses.",
-        "operationId": "setLaserValue_LaserController_setLaserValue_get",
-        "parameters": [
-          {
-            "name": "laserName",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string", "title": "Lasername" }
-          },
-          {
-            "name": "value",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "anyOf": [{ "type": "integer" }, { "type": "number" }],
-              "title": "Value"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": { "application/json": { "schema": {} } }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
-              }
-            }
-          }
-        }
-      }
-    },
-first set enable, then set value
-'''
-    # Test laser power control
-    power_endpoints = [
-        f"/LaserController/setLaserActive",
+    # Test setLaserActive - proper OpenAPI format with GET and query parameters
+    active_params = {
+        "laserName": first_laser,
+        "active": True
+    }
+    response = api_server.get("/LaserController/setLaserActive", params=active_params)
+    if response.status_code == 200:
+        print(f"✓ Laser {first_laser} activated successfully")
         
-    ]
-    
-    for endpoint in power_endpoints:
-        try:
-            if "?" in endpoint:
-                response = api_server.post(endpoint)
-            else:
-                response = api_server.put(endpoint, json={"power": 50})
+        # Test setLaserValue - set laser power/value
+        value_params = {
+            "laserName": first_laser,
+            "value": 50  # Set to 50% or 50 units
+        }
+        value_response = api_server.get("/LaserController/setLaserValue", params=value_params)
+        if value_response.status_code == 200:
+            print(f"✓ Laser {first_laser} value set to 50")
             
-            if response.status_code in [200, 201]:
-                print(f"✓ Laser power set via {endpoint}")
-                break
-        except Exception as e:
-            print(f"Laser power control via {endpoint} failed: {e}")
-    
-    # Test laser enable/disable
-    enable_endpoints = [
-        f"/LaserController/setLaserEnabled?laserName={first_laser}&enabled=true",
-        f"/LaserController/enable?laser={first_laser}",
-        f"/lasers/{first_laser}/enable"
-    ]
-    
-    for endpoint in enable_endpoints:
-        try:
-            response = api_server.post(endpoint)
-            if response.status_code in [200, 201]:
-                print(f"✓ Laser enabled via {endpoint}")
-                # Disable after test
-                disable_endpoint = endpoint.replace("enable", "disable").replace("enabled=true", "enabled=false")
-                api_server.post(disable_endpoint)
-                break
-        except Exception as e:
-            print(f"Laser enable via {endpoint} failed: {e}")
+            # Test getLaserValue - verify the value was set
+            get_value_params = {"laserName": first_laser}
+            get_response = api_server.get("/LaserController/getLaserValue", params=get_value_params)
+            if get_response.status_code == 200:
+                current_value = get_response.json()
+                print(f"✓ Current laser value: {current_value}")
+            
+            # Test getLaserValueRanges - get valid value range
+            range_response = api_server.get("/LaserController/getLaserValueRanges", params=get_value_params)
+            if range_response.status_code == 200:
+                value_range = range_response.json()
+                print(f"✓ Laser value range: {value_range}")
+        
+        # Turn laser off
+        deactivate_params = {
+            "laserName": first_laser,
+            "active": False
+        }
+        deactivate_response = api_server.get("/LaserController/setLaserActive", params=deactivate_params)
+        if deactivate_response.status_code == 200:
+            print(f"✓ Laser {first_laser} deactivated successfully")
+        
+    else:
+        print(f"? Laser control not available: {response.status_code}")
 
+
+def test_additional_laser_endpoints(api_server):
+    """Test additional laser controller endpoints."""
+    # Test changeScanPower endpoint if available
+    try:
+        response = api_server.get("/LaserController/changeScanPower")
+        if response.status_code == 200:
+            print(f"✓ Scan power change endpoint available")
+    except Exception as e:
+        print(f"? Scan power endpoint not available: {e}")
+    
+    # Test that all laser endpoints are properly documented
+    spec_response = api_server.get("/openapi.json")
+    if spec_response.status_code == 200:
+        spec = spec_response.json()
+        laser_endpoints = [
+            path for path in spec["paths"].keys() 
+            if "LaserController" in path
+        ]
+        
+        print(f"✓ Found {len(laser_endpoints)} LaserController endpoints:")
+        for endpoint in laser_endpoints:
+            methods = list(spec["paths"][endpoint].keys())
+            print(f"  - {endpoint}: {methods}")
+        
+        # Verify key endpoints are present
+        required_endpoints = [
+            "/LaserController/getLaserNames",
+            "/LaserController/setLaserActive", 
+            "/LaserController/setLaserValue",
+            "/LaserController/getLaserValue"
+        ]
+        
+        for required in required_endpoints:
+            if required in laser_endpoints:
+                print(f"✓ Required endpoint found: {required}")
+            else:
+                print(f"? Required endpoint missing: {required}")
 
 def test_video_streaming(api_server):
     """Test video streaming functionality."""

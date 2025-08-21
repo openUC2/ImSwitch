@@ -15,7 +15,8 @@ class VirtualCameraManager(DetectorManager):
         try:
             self.VirtualMicroscope = _lowLevelManagers["rs232sManager"]["VirtualMicroscope"]
         except:
-            return
+            self.__logger.error("VirtualMicroscope not found in lowLevelManagers, cannot initialize VirtualCameraManager")
+
 
         # assign the camera from the Virtual Microscope
         self._camera = self.VirtualMicroscope._camera

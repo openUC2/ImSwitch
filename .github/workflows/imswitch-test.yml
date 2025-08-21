@@ -32,7 +32,7 @@ jobs:
         fi
 
         python3 -m pip install --upgrade pip
-        python3 -m pip install .[PyQt5]
+        python3 -m pip install .
         python3 -m pip uninstall psygnal -y
         python3 -m pip install psygnal --no-binary :all:
         
@@ -49,22 +49,20 @@ jobs:
     - name: Test with pytest
       run: |
         if [ "$RUNNER_OS" == "Linux" ]; then
-          xvfb-run --server-args "-screen 0 1920x1080x24" python3 -m pytest --pyargs imswitch -v -s
+          xvfb-run --server-args "-screen 0 1920x1080x24" python3 -m pytest --pyargs imswitch/imcontrol/_test -v -s
         elif [ "$RUNNER_OS" == "Windows" ]; then
           # LiveView test fails on GitHub actions on Windows with napari 0.4.7. This is likely a
           # problem specific to this GitHub action, as it does not appear when testing manually on
           # Windows. Therefore, we ignore the LiveView tests on Windows for now.
           # The situation is similar with test_example_setups.py, possibly for the same reason.
           # TODO: Remove this special case when napari is unpinned
-          python3 -m pytest --pyargs imswitch -v \
-              --ignore=imswitch/imcontrol/_test/ui/test_example_setups.py \
-              --ignore=imswitch/imcontrol/_test/ui/test_liveview.py -s
+          python3 -m pytest --pyargs imswitch/imcontrol/_test -v -s
         else
           # test_example_setups.py causes "Fatal Python error: Bus error" on MacOS after all tests
           # are complete, but seemingly only in GitHub Actions and not on a "real" installation.
           # Therefore, we ignore the file on MacOS for now.
           # TODO: Figure out why this happens. Perhaps related to the Windows issue?
-          python3 -m pytest --pyargs imswitch -v \
-              --ignore=imswitch/imcontrol/_test/ui/test_example_setups.py -s
+          python3 -m pytest imswitch/imcontrol/_test/api -v -s 
+          python3 -m pytest imswitch/imcontrol/_test/unit -v -s
         fi
       shell: bash

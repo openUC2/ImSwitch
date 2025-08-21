@@ -1,42 +1,84 @@
 import pytest
-
+import time
+import threading
 import h5py
 
-from imswitch.imcontrol.model import DetectorsManager, RecordingManager, RecMode, SaveMode
+from imswitch.imcontrol.model import DetectorsManager, RecordingManager, RecMode, SaveMode, RS232sManager
 from . import detectorInfosBasic, detectorInfosMulti, detectorInfosNonSquare
+from imswitch.imcontrol.model.SetupInfo import RS232Info
 
 
-def record(qtbot, detectorInfos, *args, **kwargs):
-    detectorsManager = DetectorsManager(detectorInfos, updatePeriod=100)
+def record(detectorInfos, *args, **kwargs):
+    """Headless record helper that waits for memory recording signals without qtbot.
+    """
+    VirtualMicroscope = RS232sManager({
+        'VirtualMicroscope': RS232Info(
+            managerName='VirtualMicroscopeManager',
+            managerProperties={'imagePath_': 'simplant', 'imagePath__': 'smlm'}
+        )
+    })
+
+    lowLevelManagers = {
+        'rs232sManager': VirtualMicroscope
+    }
+    # Use the provided detectorInfos, not a fixed multi config
+    detectorsManager = DetectorsManager(detectorInfos, updatePeriod=100, **lowLevelManagers)
+
     recordingManager = RecordingManager(detectorsManager)
 
     filePerDetector = {}
     savedToDiskPerDetector = {}
+    received = set()
+    expected = set(detectorInfos.keys())
+    done = threading.Event()
 
-    def memoryRecordingAvailable(_, file, __, savedToDisk, detectorName):
-        # Update dictionaries directly
-        filePerDetector[detectorName] = file
-        savedToDiskPerDetector[detectorName] = savedToDisk
-        return True
+    def on_memory_recording_available(name, file, filePath, savedToDisk):
+        """Collect results and signal completion when all detectors are received.
+        Note: name is the basename; derive detectorName from it when needed.
+        """
+        # Infer detector name: original pattern is f'{savename}_{detectorName}'
+        # For tests we pass detectorNames explicitly and expect one emission per detector.
+        det_name = None
+        for d in expected:
+            if name.endswith(f"_{d}") or name == d:
+                det_name = d
+                break
+        # Fallback: if pattern not matched, try to split at last underscore
+        if det_name is None and "_" in name:
+            det_name = name.split("_")[-1]
 
+        # If still unknown, skip adding to avoid confusion
+        if det_name is None:
+            det_name = list(expected - received)[0] if (expected - received) else name
+
+        filePerDetector[det_name] = file
+        savedToDiskPerDetector[det_name] = savedToDisk
+        received.add(det_name)
+        if received >= expected:
+            done.set()
+
+    # Connect signal
+    recordingManager.sigMemoryRecordingAvailable.connect(on_memory_recording_available)
+
+    # Start recording
     recordingManager.startRecording(*args, **kwargs)
-    with qtbot.waitSignals(
-            [recordingManager.sigMemoryRecordingAvailable for _ in detectorInfos],
-            check_params_cbs=[(lambda *args, detectorName=detectorName, **kwargs:
-                               memoryRecordingAvailable(*args, detectorName=detectorName, **kwargs))
-                              for detectorName in detectorInfos],
-            timeout=30000
-    ):
-        pass
+
+    # Wait up to 30s for all detectors to emit their memory recording
+    timeout_s = 30
+    start = time.time()
+    while not done.is_set() and (time.time() - start) < timeout_s:
+        time.sleep(0.05)
+
+    if not done.is_set():
+        pytest.fail("Timed out waiting for memory recording signals")
 
     return filePerDetector, savedToDiskPerDetector
 
 
 @pytest.mark.parametrize('detectorInfos,numFrames',
                          [(detectorInfosBasic, 10), (detectorInfosNonSquare, 53)])
-def test_recording_spec_frames(qtbot, detectorInfos, numFrames):
+def test_recording_spec_frames(detectorInfos, numFrames):
     filePerDetector, savedToDiskPerDetector = record(
-        qtbot,
         detectorInfos,
         detectorNames=list(detectorInfos.keys()),
         recMode=RecMode.SpecFrames,
@@ -64,9 +106,8 @@ def test_recording_spec_frames(qtbot, detectorInfos, numFrames):
 
 @pytest.mark.parametrize('detectorInfos',
                          [detectorInfosBasic, detectorInfosMulti, detectorInfosNonSquare])
-def test_recording_spec_time(qtbot, detectorInfos):
+def test_recording_spec_time(detectorInfos):
     filePerDetector, savedToDiskPerDetector = record(
-        qtbot,
         detectorInfos,
         detectorNames=list(detectorInfos.keys()),
         recMode=RecMode.SpecTime,

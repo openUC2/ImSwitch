@@ -18,8 +18,8 @@ class ImSwitchAPITestServer:
     """Test server that starts ImSwitch in headless mode for API testing."""
     
     def __init__(self, config_file: str = None, 
-                 http_port: int = 8001, socket_port: int = 8002):
-        
+                 http_port: int = 8001, socket_port: int = 8002, ssl: bool = False):
+
         # have configfile from ./_data/user_defaults/imcontrol_setups/example_virtual_microscope.json
         # Automatically find config file if not provided
         if config_file is None or config_file == "example_virtual_microscope.json":
@@ -35,6 +35,7 @@ class ImSwitchAPITestServer:
         print(f"Using config file: {self.config_file}")
         self.http_port = http_port
         self.socket_port = socket_port
+        self.ssl = ssl
         self.server_thread: Optional[threading.Thread] = None
         self.base_url = f"http://localhost:{http_port}"
         self.is_running = False
@@ -45,11 +46,22 @@ class ImSwitchAPITestServer:
             print("[TEST SERVER] Server already running")
             return
             
+        # Check if ports are available before starting
+        import socket
+        for port_name, port in [("HTTP", self.http_port), ("Socket", self.socket_port)]:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                try:
+                    s.bind(('localhost', port))
+                except OSError as e:
+                    raise RuntimeError(f"{port_name} port {port} is already in use. "
+                                     f"Another ImSwitch instance may be running. Error: {e}")
+            
         print(f"[TEST SERVER] Starting ImSwitch API test server...")
         print(f"[TEST SERVER] Config file: {self.config_file}")
         print(f"[TEST SERVER] HTTP port: {self.http_port}")
         print(f"[TEST SERVER] Socket port: {self.socket_port}")
-        
+        print(f"[TEST SERVER] SSL: {self.ssl}")
+
         # Start server in background thread
         self.server_thread = threading.Thread(
             target=self._run_server,
@@ -138,15 +150,6 @@ class ImSwitchAPITestServer:
         # Configure logging to ensure thread output is visible
         thread_logger = logging.getLogger('imswitch_test_server')
         thread_logger.setLevel(logging.DEBUG)
-        
-        # Create handler that writes to stdout (captured by pytest)
-        if not thread_logger.handlers:
-            handler = logging.StreamHandler(sys.stdout)
-            handler.setLevel(logging.DEBUG)
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            thread_logger.addHandler(handler)
-        
         thread_logger.info(f"Starting ImSwitch server in thread...")
         thread_logger.info(f"Config file: {self.config_file}")
         thread_logger.info(f"HTTP port: {self.http_port}")
@@ -162,7 +165,7 @@ class ImSwitchAPITestServer:
                 is_headless=True,
                 http_port=self.http_port,
                 socket_port=self.socket_port, 
-                ssl=False,  # Disable SSL for testing
+                ssl=self.ssl,  # Fixed: was self.is_ssl
             )
         except Exception as e:
             error_msg = f"Server startup error: {e}"
@@ -202,17 +205,45 @@ def get_test_server(config_file: str = None) -> ImSwitchAPITestServer:
     """Get or create test server instance."""
     global _test_server
     if _test_server is None:
-        _test_server = ImSwitchAPITestServer(config_file=config_file)
+        # Use dynamic port allocation to avoid conflicts
+        import socket
+        def find_free_port():
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', 0))
+                s.listen(1)
+                port = s.getsockname()[1]
+            return port
+        
+        http_port = find_free_port()
+        socket_port = find_free_port()
+        
+        print(f"[TEST SERVER] Creating new test server instance on ports {http_port}/{socket_port}")
+        _test_server = ImSwitchAPITestServer(
+            config_file=config_file,
+            http_port=http_port,
+            socket_port=socket_port
+        )
     return _test_server
 
 
 @pytest.fixture(scope="session")
 def api_server():
-    """Pytest fixture that provides running ImSwitch API server."""
+    """Pytest fixture that provides running ImSwitch API server.
+    
+    Uses session scope to ensure only one server instance per pytest session.
+    The server runs in a daemon thread and will be cleaned up when pytest exits.
+    """
+    print(f"[PYTEST FIXTURE] Initializing session-scoped API server...")
     server = get_test_server()
-    server.start()
-    yield server
-    server.stop()
+    
+    try:
+        server.start()
+        print(f"[PYTEST FIXTURE] API server started successfully at {server.base_url}")
+        yield server
+    finally:
+        print(f"[PYTEST FIXTURE] Cleaning up API server...")
+        server.stop()
+        # Note: ImSwitch doesn't have graceful shutdown, daemon thread will be terminated by pytest
 
 
 @pytest.fixture(scope="session") 

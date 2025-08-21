@@ -8,6 +8,7 @@ from fastapi import FastAPI, Response, HTTPException
 import cv2
 from PIL import Image
 import io
+import queue  # thread-safe queue for streamer
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Timer
 from imswitch.imcommon.model import ostools, APIExport, initLogger, dirtools
@@ -433,46 +434,96 @@ class RecordingController(ImConWidgetController):
         detectorNum1 = detectorManager[detectorNum1Name]
         detectorNum1.startAcquisition()
 
+        # Wait for first valid frame (up to 2s); fall back to a black frame
+        # This avoids crashing on output_frame is None at startup.
+        deadline = time.time() + 2.0
+        output_frame = None
+        while self.streamRunning and output_frame is None and time.time() < deadline:
+            try:
+                output_frame = detectorNum1.getLatestFrame()
+            except Exception:
+                output_frame = None
+            if output_frame is None:
+                time.sleep(0.05)
+
+        if output_frame is None:
+            # Default black frame if nothing available (grayscale)
+            output_frame = np.zeros((480, 640), dtype=np.uint8)
+
         # adaptive resize: Keep them below 640x480
-        output_frame = detectorNum1.getLatestFrame()
-        if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
-            everyNthsPixel = np.min([output_frame.shape[0]//480, output_frame.shape[1]//640])
-        else:
+        try:
+            if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
+                everyNthsPixel = int(np.min([max(1, output_frame.shape[0] // 480),
+                                             max(1, output_frame.shape[1] // 640)]))
+            else:
+                everyNthsPixel = 1
+        except Exception:
             everyNthsPixel = 1
 
         try:
             while self.streamRunning:
                 output_frame = detectorNum1.getLatestFrame()
                 if output_frame is None:
+                    time.sleep(0.01)
                     continue
                 try:
                     output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
-                except:
-                    output_frame = np.zeros((640,460))
+                except Exception:
+                    output_frame = np.zeros((480, 640), dtype=np.uint8)
+
+                # Ensure uint8 image for JPEG; normalize if needed
+                if output_frame.dtype != np.uint8:
+                    try:
+                        vmin = float(np.min(output_frame))
+                        vmax = float(np.max(output_frame))
+                        if vmax > vmin:
+                            output_frame = ((output_frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
+                        else:
+                            output_frame = np.zeros_like(output_frame, dtype=np.uint8)
+                    except Exception:
+                        output_frame = np.zeros_like(output_frame, dtype=np.uint8)
                 # adjust the parameters of the jpeg compression
                 quality = 90  # Set the desired quality level (0-100)
                 encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
                 flag, encodedImage = cv2.imencode(".jpg", output_frame, encode_params)
                 if not flag:
                     continue
-                self.streamQueue.put(encodedImage)
+                # Put raw JPEG bytes into queue; avoid blocking forever if queue is full
+                try:
+                    self.streamQueue.put(encodedImage.tobytes(), timeout=0.5)
+                except Exception:
+                    # Drop frame if queue is full or unavailable
+                    pass
                 time.sleep(0.1) # 10 fps
-        except:
+        except Exception:
             self.streamRunning = False
 
 
     def streamer(self):
-        from multiprocessing import Queue
+        # Start the streaming worker thread once and create a thread-safe queue
         if not self.streamstarted:
             import threading
-            self.streamQueue = Queue(maxsize=10)
+            self.streamQueue = queue.Queue(maxsize=10)
             self.streamRunning = True
-            threading.Thread(target=self.startStream).start()
+            self.streamstarted = True
+            t = threading.Thread(target=self.startStream, daemon=True)
+            t.start()
 
         try:
             while self.streamRunning:
-                yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
-                    bytearray(self.streamQueue.get()) + b'\r\n')
+                try:
+                    # Use timeout to allow graceful shutdown
+                    jpeg_bytes = self.streamQueue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+
+                # Build a proper MJPEG part with Content-Length for better client compatibility
+                header = (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(jpeg_bytes)}\r\n\r\n".encode("ascii")
+                )
+                yield header + jpeg_bytes + b"\r\n"
         except GeneratorExit:
             self.__logger.debug("Stream connection closed by client.")
             self.stopStream()  # Ensure stream is stopped when client disconnects
@@ -487,7 +538,11 @@ class RecordingController(ImConWidgetController):
             # start the live video feed
             self._commChannel.sigStartLiveAcquistion.emit(True)
             headers = {
-                "Cache-Control": "no-cache",
+                # Disable buffering and caching to reduce latency in various proxies/servers
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Accel-Buffering": "no",
                 "Connection": "keep-alive"
                 }
             return StreamingResponse(self.streamer(), media_type="multipart/x-mixed-replace;boundary=frame", headers=headers)

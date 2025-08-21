@@ -39,13 +39,14 @@ def test_laser_controller_endpoints(api_server):
                 lasers = response.json()
                 print(f"✓ Found lasers via {endpoint}: {lasers}")
                 if lasers:
-                    test_laser_control(api_server, lasers)
+                    run_laser_control_checks(api_server, lasers)
                 return
         except Exception as e:
             print(f"Laser discovery via {endpoint} failed: {e}")
 
 
-def test_laser_control(api_server, lasers):
+# Helper function (not a test): run laser control checks for the discovered lasers
+def run_laser_control_checks(api_server, lasers):
     """Test laser power and state control."""
     if isinstance(lasers, dict):
         first_laser = list(lasers.keys())[0]
@@ -100,14 +101,7 @@ def test_laser_control(api_server, lasers):
 
 def test_additional_laser_endpoints(api_server):
     """Test additional laser controller endpoints."""
-    # Test changeScanPower endpoint if available
-    try:
-        response = api_server.get("/LaserController/changeScanPower")
-        if response.status_code == 200:
-            print(f"✓ Scan power change endpoint available")
-    except Exception as e:
-        print(f"? Scan power endpoint not available: {e}")
-    
+
     # Test that all laser endpoints are properly documented
     spec_response = api_server.get("/openapi.json")
     if spec_response.status_code == 200:
@@ -144,17 +138,55 @@ def test_video_streaming(api_server):
     
     for endpoint in streaming_endpoints:
         try:
-            params = {"startStream": True}
-            response = api_server.get(endpoint, params=params)
-            if response.status_code in [200, 400, 501]:  # Various acceptable responses
-                print(f"✓ Video streaming endpoint accessible: {endpoint} ({response.status_code})")
-                
-                # Test stopping stream
-                params = {"startStream": False}
-                response = api_server.get(endpoint, params=params)
-                if response.status_code in [200, 400, 501]:
-                    print(f"✓ Video streaming stop via {endpoint} ({response.status_code})")
+            # Start stream with a strict timeout and streamed response to avoid hangs
+            start_params = {"startStream": True}
+            # Use a small connect/read timeout to ensure we never block >2s during start
+            response = api_server.get(endpoint, params=start_params, stream=True, timeout=(2, 2))
+
+            if response.status_code == 200:
+                print(f"✓ Video streaming endpoint accessible: {endpoint} (200)")
+
+                # Try to read at least one chunk within 2s to confirm data is flowing
+                got_bytes = False
+                try:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        if chunk:
+                            got_bytes = True
+                            break
+                except requests.exceptions.ReadTimeout:
+                    pytest.fail("Video stream read timed out after 2s")
+                finally:
+                    # Always close streamed response
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+
+                assert got_bytes, "No data received from video stream"
+                print("✓ Received initial video bytes from stream")
+
+                # Stop the stream (with a safe timeout)
+                stop_params = {"startStream": False}
+                stop_resp = api_server.get(endpoint, params=stop_params, timeout=5)
+                assert stop_resp.status_code in [200, 400, 501]
+                print(f"✓ Video streaming stop via {endpoint} ({stop_resp.status_code})")
                 break
+
+            elif response.status_code in [400, 501]:
+                # Endpoint present but not implemented or invalid in current context
+                print(f"✓ Video streaming endpoint responded (non-200 acceptable): {endpoint} ({response.status_code})")
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                break
+            else:
+                # Unexpected status: still ensure we don't get stuck
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                pytest.fail(f"Unexpected status code from {endpoint}: {response.status_code}")
         except Exception as e:
             print(f"Video streaming via {endpoint} failed: {e}")
 

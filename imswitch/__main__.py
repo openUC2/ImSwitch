@@ -87,7 +87,16 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 parser.add_argument('--ext-drive-mount', dest='ext_drive_mount', type=str, default=None,
                                     help='specify the external drive mount point (e.g. /Volumes or /media)')
 
-                args = parser.parse_args()
+                # Add Jupyter/Colab specific arguments to prevent errors
+                parser.add_argument('-f', '--connection-file', dest='connection_file', type=str, default=None,
+                                    help='Jupyter connection file (ignored)')
+
+                # Parse known arguments only, ignore unknown ones (important for Jupyter environments)
+                args, unknown = parser.parse_known_args()
+
+                # Log unknown arguments for debugging
+                if unknown:
+                    print(f"Ignoring unknown arguments: {unknown}")
 
                 # Update configuration from parsed arguments
                 config.update_from_argparse(args)
@@ -121,6 +130,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         logger = initLogger('main')
         logger.info(f'Starting ImSwitch {config.version}')
         logger.info(f'Headless mode: {config.is_headless}')
+        logger.info(f'SSL: {config.ssl}')
         logger.info(f'Config file: {config.default_config}')
         logger.info(f'Config folder: {config.config_folder}')
         logger.info(f'Data folder: {config.data_folder}')

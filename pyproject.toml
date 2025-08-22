@@ -98,7 +98,6 @@ imjoy = [
 ]
 dev = [
     "pytest",
-    "pytest-qt",
 ]
 
 [project.urls]

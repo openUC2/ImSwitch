@@ -32,10 +32,9 @@ jobs:
         shell: bash
 
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-        shell: bash
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
 
       - name: Install test deps with uv
         run: |
@@ -45,13 +44,33 @@ jobs:
           else
             uv pip install --system pytest
           fi
+          # Install additional test dependencies that might be needed
+          uv pip install --system pytest-qt pytest-xvfb
         shell: bash
 
       - name: Install project with uv (editable)
         run: |
+          echo "Installing project with UV..."
           uv pip install --system -e .
-          pip uninstall psygnal -y
-          pip install psygnal --no-binary :all:
+          echo "Checking if psygnal is installed..."
+          uv pip list | grep psygnal || echo "psygnal not found"
+          echo "Uninstalling psygnal..."
+          uv pip uninstall psygnal || echo "psygnal uninstall failed (not installed)"
+          echo "Installing psygnal from source..."
+          uv pip install --system psygnal --no-binary :all:
+          echo "Verifying installation..."
+          python -c "import dataclasses_json; print('dataclasses_json imported successfully')" || echo "dataclasses_json import failed"
+          python -c "import psygnal; print('psygnal imported successfully')" || echo "psygnal import failed"
+        shell: bash
+
+      - name: Verify installation
+        run: |
+          echo "=== UV pip list ==="
+          uv pip list
+          echo "=== Python package verification ==="
+          python -c "import imswitch; print(f'ImSwitch version: {imswitch.__version__}')"
+          echo "=== Testing critical imports ==="
+          python -c "from imswitch.imcontrol.model import Options; print('Options import successful')" || echo "Options import failed"
         shell: bash
 
       - name: Run tests

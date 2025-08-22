@@ -1,7 +1,21 @@
 import os
 
-import qdarkstyle
-from qdarkstyle import DarkPalette
+try:
+    import qdarkstyle
+    from qdarkstyle import DarkPalette
+    _qdarkstyle_available = True
+except ImportError:
+    _qdarkstyle_available = False
+    # Create a mock module for fallback
+    class MockQDarkStyle:
+        def load_stylesheet(self, qt_api=None):
+            return ""
+    
+    qdarkstyle = MockQDarkStyle()
+    
+    class DarkPalette:
+        COLOR_BACKGROUND_1 = "#19232D"
+        COLOR_BACKGROUND_2 = "#1e1e1e"
 
 
 def getBaseStyleSheet():

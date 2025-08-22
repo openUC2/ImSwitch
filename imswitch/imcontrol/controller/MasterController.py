@@ -4,9 +4,9 @@ import pkg_resources
 
 from imswitch.imcontrol.model import (
     DetectorsManager, LasersManager, MultiManager, PositionersManager,
-    RecordingManager, RS232sManager, SLMManager, SIMManager, DPCManager, LEDMatrixsManager, MCTManager, ROIScanManager, MockXXManager, WebRTCManager, HyphaManager,
-    ISMManager, UC2ConfigManager, AutofocusManager, HistoScanManager, StresstestManager, PixelCalibrationManager, LightsheetManager, NidaqManager, FOVLockManager,
-    StandManager, RotatorsManager, JetsonNanoManager, LEDsManager, ScanManagerBase, ScanManagerPointScan, ScanManagerMoNaLISA, FlatfieldManager, 
+    RecordingManager, RS232sManager, SLMManager, SIMManager, DPCManager, LEDMatrixsManager, MCTManager, ROIScanManager, WebRTCManager, HyphaManager,
+    UC2ConfigManager, AutofocusManager, HistoScanManager, StresstestManager, PixelCalibrationManager, LightsheetManager, NidaqManager, FOVLockManager,
+    StandManager, RotatorsManager, LEDsManager, ScanManagerBase, ScanManagerPointScan, ScanManagerMoNaLISA, FlatfieldManager, 
     FlowStopManager, WorkflowManager, TimelapseManager, LepmonManager, ExperimentManager, ObjectiveManager
 )
 
@@ -55,10 +55,8 @@ class MasterController:
         if "Lightsheet" in self.__setupInfo.availableWidgets: self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
         if "WebRTC" in self.__setupInfo.availableWidgets: self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
         if "Timelapse" in self.__setupInfo.availableWidgets: self.timelapseManager = TimelapseManager()
-        self.MockXXManager = MockXXManager(self.__setupInfo.mockxx)
         if "Experiment" in self.__setupInfo.availableWidgets: self.experimentManager = ExperimentManager()
         if "Objective" in self.__setupInfo.availableWidgets: self.objectiveManager = ObjectiveManager(self.__setupInfo.objective)
-        if "JetsonNano" in self.__setupInfo.availableWidgets: self.jetsonnanoManager = JetsonNanoManager(self.__setupInfo.jetsonnano)
         if "HistoScan" in self.__setupInfo.availableWidgets: self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "Stresstest" in self.__setupInfo.availableWidgets: self.StresstestManager = StresstestManager(self.__setupInfo.Stresstest)
         if "FlowStop" in self.__setupInfo.availableWidgets: self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
@@ -67,7 +65,6 @@ class MasterController:
         if "PixelCalibration" in self.__setupInfo.availableWidgets: self.PixelCalibrationManager = PixelCalibrationManager(self.__setupInfo.PixelCalibration)
         if "AutoFocus" in self.__setupInfo.availableWidgets: self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)
         if "FOV" in self.__setupInfo.availableWidgets: self.FOVLockManager = FOVLockManager(self.__setupInfo.fovLock)
-        if "ISM" in self.__setupInfo.availableWidgets: self.ismManager = ISMManager(self.__setupInfo.ism)
         if "Workflow" in self.__setupInfo.availableWidgets: self.workflowManager = WorkflowManager()
         # load all implugin-related managers and add them to the class
         # try to get it from the plugins

@@ -279,6 +279,10 @@ class Thread(abstract.Thread):
         if self._thread and self._thread.is_alive():
             self._thread.join()
 
+    def isRunning(self):
+        """Check if the thread is currently running (for Qt compatibility)."""
+        return self._running.is_set() and self._thread is not None and self._thread.is_alive()
+
     @property
     def started(self) -> Signal:
         return self._started

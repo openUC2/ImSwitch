@@ -19,6 +19,8 @@ except ImportError:
     _HAS_IMSWITCH = False
     
     class APIExport:
+        def __init__(self, **kwargs):
+            pass  # Accept any arguments
         def __call__(self, func):
             return func
     

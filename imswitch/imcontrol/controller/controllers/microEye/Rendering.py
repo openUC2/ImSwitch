@@ -233,104 +233,6 @@ def render_compute(data, step, gauss_2d, out_img):
             Intensity * gauss_2d
 
 
-def FRC_resolution_binomial(data: np.ndarray, pixelSize=10):
-    '''Fourier Ring Correlation based on
-    https://www.frontiersin.org/articles/10.3389/fbinf.2021.817254/
-
-    Parameters
-    ----------
-    data : np.ndarray
-        data to be resolution estimated, columns (X, Y, intensity)
-    pixelSize : int, optional
-        super resolution image pixel size in nanometers, by default 10
-    '''
-    print('Initialization ... ')
-
-    n_points = data.shape[0]
-
-    coin = np.random.binomial(1, 0.5, (n_points, 1))
-    data = np.hstack((data, coin))
-
-    # Two separate datsets based on the value of the last column are generated.
-    data1, data2 = data[data[:, -1] == 0], data[data[:, -1] == 1]
-
-    gaussHist = hist2D_render(pixelSize)
-
-    image_1 = gaussHist.fromArray(data1)
-    image_2 = gaussHist.fromArray(data2)
-
-    image_1, image_2 = match_shape(image_1, image_2)
-
-    image_1 /= np.sum(image_1)
-    image_2 /= np.sum(image_2)
-
-    window = hamming_2Dwindow(image_1.shape[0])
-
-    image_1 *= window
-    image_2 *= window
-
-    start = QDateTime.currentDateTime()
-    print('FFT ... ')
-
-    fft_1 = cv2.dft(
-            np.float64(image_1), flags=cv2.DFT_COMPLEX_OUTPUT)
-    fft_1 = fft_1[..., 0] + 1j * fft_1[..., 1]
-    fft_2 = cv2.dft(
-            np.float64(image_2), flags=cv2.DFT_COMPLEX_OUTPUT)
-    fft_2 = fft_2[..., 0] + 1j * fft_2[..., 1]
-    # fft_1 = np.fft.fft2(image_1)
-    # fft_2 = np.fft.fft2(image_2)
-    fft_12 = np.fft.fftshift(
-        np.real(fft_1 * np.conj(fft_2)))
-
-    fft_11 = np.fft.fftshift(np.abs(fft_1)**2)
-    fft_22 = np.fft.fftshift(np.abs(fft_2)**2)
-
-    R, _ = radial_cordinate(image_1.shape)
-    R = np.round(R)
-
-    # Get the Nyquist frequency
-    # freq_nyq = int(np.floor(R.shape[0] / 2.0))
-    # R_max = int(np.max(R))
-
-    frequencies = np.fft.rfftfreq(R.shape[0], d=pixelSize)
-    freq_nyq = frequencies.max()
-    R_max = frequencies.shape[0]
-
-    FRC_res = np.zeros((R_max, 5))
-
-    print(
-        start.msecsTo(QDateTime.currentDateTime()) * 1e-3,
-        ' s')
-
-    start = QDateTime.currentDateTime()
-    print('FRC ... ')
-    FRC_compute(fft_12, fft_11, fft_22, FRC_res, R, R_max)
-
-    print(
-        start.msecsTo(QDateTime.currentDateTime()) * 1e-3,
-        ' s')
-
-    print('Interpolation ... ')
-    interpy = interp1d(
-            frequencies, FRC_res[:, 3],
-            kind='quadratic', fill_value='extrapolate')
-    FRC = interpy(frequencies)
-    interpy = UnivariateSpline(frequencies, FRC_res[:, 3], k=5)
-    smoothed = interpy(frequencies)
-
-    idx = np.where(smoothed <= (1/7))[0]
-    if idx is not None:
-        idx = idx.min()
-        FRC_res = 1 / frequencies[idx]
-    else:
-        FRC_res = np.nan
-
-    print(
-        'Done ...               ',
-        end="\r")
-
-    return frequencies, FRC, smoothed, FRC_res
 
 
 @numba.jit(nopython=True, parallel=True)
@@ -354,46 +256,6 @@ def masked_sum(array: np.ndarray, mask: np.ndarray):
     m = np.where(mask.flatten())[0]
     return np.sum(a[m])
 
-
-def plotFRC(frequencies, FRC, smoothed, FRC_res):
-
-    print(
-        'Plot ...               ',
-        end="\r")
-    # plot results
-    plt = pg.plot()
-
-    plt.showGrid(x=True, y=True)
-    legend = plt.addLegend()
-    legend.anchor(
-        itemPos=(1, 0), parentPos=(1, 0))
-
-    # set properties of the label for y axis
-    plt.setLabel('left', 'FRC', units='')
-
-    # set properties of the label for x axis
-    plt.setLabel('bottom', 'Spatial Frequency [1/nm]', units='')
-
-    plt.setWindowTitle(
-        "FRC resolution: {0} nm".format(
-            np.round(FRC_res, 1))
-        )
-
-    # setting horizontal range
-    plt.setXRange(0, frequencies[-1])
-
-    # setting vertical range
-    plt.setYRange(0, 1)
-
-    line1 = plt.plot(
-        frequencies, FRC,
-        pen=pg.mkPen('r', width=2), symbol=None, symbolPen='r',
-        symbolBrush=0, name='FRC')
-    line1 = plt.plot(
-        frequencies, smoothed,
-        pen=pg.mkPen('b', width=2), symbol=None, symbolPen='b',
-        symbolBrush=0, name='FRC cspline')
-    line2 = plt.plotItem.addLine(y=1/7, pen='y')
 
 
 def FRC_resolution_check_pattern(image, pixelSize=10):
@@ -523,43 +385,6 @@ def FRC_resolution_check_pattern(image, pixelSize=10):
     return frequencies, [FRC_1, FRC_2, FRC_avg], FRC_res, cut_off_corrections
 
 
-def plotFRC_(frequencies, FRC, FRC_res, cut_off_corrections):
-    # plot results
-    plt = pg.plot()
-
-    plt.showGrid(x=True, y=True)
-    plt.addLegend()
-
-    # set properties of the label for y axis
-    plt.setLabel('left', 'FRC', units='')
-
-    # set properties of the label for x axis
-    plt.setLabel('bottom', 'Spatial Frequency [1/nm]', units='')
-
-    plt.setWindowTitle(
-        "FRC resolution (1st, 2nd, avg): {0} | {1} | {2} nm".format(
-            *np.round(FRC_res, 1))
-        )
-
-    # setting horizontal range
-    plt.setXRange(0, frequencies[-1])
-
-    # setting vertical range
-    plt.setYRange(0, 1)
-
-    line1 = plt.plot(
-        frequencies * cut_off_corrections[0], FRC[0],
-        pen='g', symbol='x', symbolPen='g',
-        symbolBrush=0.2, name='1st Set')
-    line2 = plt.plot(
-        frequencies * cut_off_corrections[1], FRC[1],
-        pen='b', symbol='o', symbolPen='b',
-        symbolBrush=0.2, name='2nd Set')
-    line3 = plt.plot(
-        frequencies * cut_off_corrections[2], FRC[2],
-        pen='r', symbol='+', symbolPen='r',
-        symbolBrush=0.2, name='Average')
-    line4 = plt.plotItem.addLine(y=1/7, pen='y')
 
 
 def checker_pairs(image: np.ndarray):

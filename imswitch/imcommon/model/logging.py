@@ -2,16 +2,26 @@ import inspect
 import logging
 import weakref
 
-import coloredlogs
+try:
+    import coloredlogs
+    _coloredlogs_available = True
+except ImportError:
+    _coloredlogs_available = False
 
 
 baseLogger = logging.getLogger('imswitch')
-coloredlogs.install(level='DEBUG', logger=baseLogger,
-                    fmt='%(asctime)s %(levelname)s %(message)s',
-                    datefmt='%Y-%m-%d %H:%M:%S')
-coloredlogs.install(level='INFO', logger=baseLogger,
-                    fmt='%(asctime)s %(levelname)s %(message)s',
-                    datefmt='%Y-%m-%d %H:%M:%S')
+if _coloredlogs_available:
+    coloredlogs.install(level='DEBUG', logger=baseLogger,
+                        fmt='%(asctime)s %(levelname)s %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S')
+    coloredlogs.install(level='INFO', logger=baseLogger,
+                        fmt='%(asctime)s %(levelname)s %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S')
+else:
+    # Fallback to basic logging configuration
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(levelname)s %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S')
 objLoggers = {}
 
 

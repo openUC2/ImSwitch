@@ -73,7 +73,7 @@ class LumencorLaserManager(LaserManager):
 
         # Mirror standalone script state (optional)
         self._power_pct = 0.0
-        self._enabled = False
+        self.enabled = False
 
     # ---------------- ImSwitch public API ----------------
     def setEnabled(self, enabled: bool) -> None:
@@ -89,7 +89,7 @@ class LumencorLaserManager(LaserManager):
         cmd = b"\x4f" + bytes((self.__mask,)) + b"\x50"
         self._write(cmd)
         self._force_response()
-        self._enabled = bool(enabled)
+        self.enabled = bool(enabled)
 
     def setValue(self, value: float) -> None:
         """

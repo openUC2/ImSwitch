@@ -70,7 +70,7 @@ class DetectorManager(SignalInterface):
 
     sigImageUpdated = Signal(np.ndarray, bool, list)
     sigNewFrame = Signal()
-
+    
     @abstractmethod
     def __init__(self, detectorInfo, name: str, fullShape: Tuple[int, int],
                  supportedBinnings: List[int], model: str, *,
@@ -184,6 +184,19 @@ class DetectorManager(SignalInterface):
         This is a no-op for detectors that do not support software triggering.
         """
         pass
+
+    def setTriggerSource(self, source: str) -> None:
+        """Set the trigger source for the detector.
+        This is a base implementation that updates the trigger_source parameter if it exists.
+        Subclasses should override this method to implement hardware-specific trigger control.
+        
+        Args:
+            source: The trigger source ("Continous", "Internal trigger", "External trigger")
+        """
+        if 'trigger_source' in self.parameters:
+            self.setParameter('trigger_source', source)
+        else:
+            self.__logger.warning(f"Trigger source parameter not available for {self.__class__.__name__}")
 
     def getCurrentTriggerType(self) -> str:
         """availalbe trigger types from the camera"""

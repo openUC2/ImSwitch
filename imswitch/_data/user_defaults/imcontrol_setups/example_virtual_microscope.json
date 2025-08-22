@@ -1,149 +1,273 @@
 {
-  "positioners": {
-    "VirtualStage": {
-      "managerName": "VirtualStageManager",
-      "managerProperties": {
-        "rs232device": "VirtualMicroscope",
-        "isEnable": true,
-        "enableauto": false,
-        "isDualaxis": 0,
-        "stepsizeX": 1,
-        "stepsizeY": 1,
-        "stepsizeZ": 1,
-        "homeSpeedX": 15000,
-        "homeSpeedY": 15000,
-        "homeSpeedZ": 15000,
-        "homeDirectionX": 1,
-        "homeDirectionY": 1,
-        "homeDirectionZ": -1,
-        "initialSpeed": { "X": 15000, "Y": 15000, "Z": 15000}
-      },
-      "axes": ["X", "Y", "Z"],
-      "forScanning": true,
-      "forPositioning": true
-    }
-  },
-  "rs232devices": {
-    "VirtualMicroscope": {
-      "managerName": "VirtualMicroscopeManager",
-      "managerProperties": {
-        "imagePath_":"simplant"
-      }
-    }
-  },
-  "lasers": {
-    "LED": {
-      "analogChannel": null,
-      "digitalLine": null,
-      "managerName": "VirtualLaserManager",
-      "managerProperties": {
-        "rs232device": "VirtualMicroscope",
-        "channel_index": 1
-      },
-      "wavelength": 635,
-      "valueRangeMin": 0,
-      "valueRangeMax": 32000
-    },
-    "LASER": {
-      "analogChannel": null,
-      "digitalLine": null,
-      "managerName": "VirtualLaserManager",
-      "managerProperties": {
-        "rs232device": "VirtualMicroscope",
-        "channel_index": 2
-      },
-      "wavelength": 488,
-      "valueRangeMin": 0,
-      "valueRangeMax": 32000
-    }    
-  },
-  "detectors": {
-    "WidefieldCamera": {
-      "analogChannel": null,
-      "digitalLine": null,
-      "managerName": "VirtualCameraManager",
-      "managerProperties": {
-        "isRGB": 0,
-        "cameraListIndex": 0,
-        "cameraEffPixelsize": 1,
-        "virtcam": {
-          "exposure": 0,
-          "gain": 0,
-          "blacklevel": 100,
-          "image_width": 1000,
-          "image_height": 1000
+    "detectors": {
+        "WidefieldCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "VirtualCameraManager",
+            "managerProperties": {
+                "isRGB": 0,
+                "cameraListIndex": 0,
+                "cameraEffPixelsize": 1,
+                "virtcam": {
+                    "exposure": 0,
+                    "gain": 0,
+                    "blacklevel": 100,
+                    "image_width": 1000,
+                    "image_height": 1000
+                }
+            },
+            "forAcquisition": true,
+            "forFocusLock": false
+        },
+        "FocusLock": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "VirtualCameraManager",
+            "managerProperties": {
+                "isRGB": 0,
+                "cameraListIndex": 0,
+                "cameraEffPixelsize": 1,
+                "virtcam": {
+                    "exposure": 0,
+                    "gain": 0,
+                    "blacklevel": 100,
+                    "image_width": 1000,
+                    "image_height": 1000
+                }
+            },
+            "forAcquisition": false,
+            "forFocusLock": true
         }
-      },
-      "forAcquisition": true,
-      "forFocusLock": true
-    }
-  },
-  "rois": {
-    "Full chip": {
-      "x": 600,
-      "y": 600,
-      "w": 1200,
-      "h": 1200
-    }
-  },
-  "fovLock": {
-    "camera": "WidefieldCamera",
-    "positioner": "VirtualStage",
-    "updateFreq": 1,
-    "piKp": 1,
-    "piKi": 1
-  },
-  "objective": {
-    "pixelsizes": [0.2, 0.1], 
-    "NAs": [0.5, 0.8],
-    "magnifications": [10, 20],
-    "objectiveNames": ["10x", "20x"],
-    "objectivePositions": [0, 1], 
-    "homeDirection": -1,
-    "homePolarity": 1,
-    "homeSpeed": 20000,
-    "homeAcceleration": 20000,
-    "calibrateOnStart": true
-  },
-  "PixelCalibration": {},
-  "availableWidgets": [
-    "Settings",
-    "View",
-    "Recording",
-    "Image",
-    "Laser",
-    "Positioner",
-    "Autofocus",
-    "MCT",
-    "ROIScan",
-    "HistoScan",
-    "Hypha", 
-    "ImSwitchServer",
-    "Lightsheet",
-    "Workflow",
-    "Lepmon", 
-    "Experiment", 
-    "Timelapse", 
-    "UC2Config",
-    "Objective",
-    "imswitch_arkitekt_next"
-  ],
-  "nonAvailableWidgets": [
-    "Histogramm",  
-    "FocusLock",
-    "FlowStop",
-    "SIM",
+    },
+    "lasers": {
+        "LED": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "VirtualLaserManager",
+            "managerProperties": {
+                "rs232device": "VirtualMicroscope",
+                "channel_index": 1
+            },
+            "valueRangeMin": 0,
+            "valueRangeMax": 32000,
+            "wavelength": 635,
+            "freqRangeMin": 0,
+            "freqRangeMax": 0,
+            "freqRangeInit": 0,
+            "valueRangeStep": 1.0
+        },
+        "LASER": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "VirtualLaserManager",
+            "managerProperties": {
+                "rs232device": "VirtualMicroscope",
+                "channel_index": 2
+            },
+            "valueRangeMin": 0,
+            "valueRangeMax": 32000,
+            "wavelength": 488,
+            "freqRangeMin": 0,
+            "freqRangeMax": 0,
+            "freqRangeInit": 0,
+            "valueRangeStep": 1.0
+        }
+    },
+    "LEDs": {},
+    "LEDMatrixs": {},
+    "positioners": {
+        "VirtualStage": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "VirtualStageManager",
+            "managerProperties": {
+                "rs232device": "VirtualMicroscope",
+                "isEnable": true,
+                "enableauto": false,
+                "isDualaxis": 0,
+                "stepsizeX": 1,
+                "stepsizeY": 1,
+                "stepsizeZ": 1,
+                "homeSpeedX": 15000,
+                "homeSpeedY": 15000,
+                "homeSpeedZ": 15000,
+                "homeDirectionX": 1,
+                "homeDirectionY": 1,
+                "homeDirectionZ": -1,
+                "initialSpeed": {
+                    "X": 15000,
+                    "Y": 15000,
+                    "Z": 15000
+                }
+            },
+            "axes": [
+                "X",
+                "Y",
+                "Z"
+            ],
+            "isPositiveDirection": true,
+            "forPositioning": true,
+            "forScanning": true,
+            "resetOnClose": true,
+            "stageOffsets": {
+                "stageOffsetPositionX": 0.0,
+                "stageOffsetPositionY": 1000.0,
+                "stageOffsetPositionZ": 0.0,
+                "stageOffsetPositionA": 0.0
+            }
+        }
+    },
+    "rs232devices": {
+        "VirtualMicroscope": {
+            "managerName": "VirtualMicroscopeManager",
+            "managerProperties": {
+                "imagePath_": "simplant",
+                "imagePath__": "smlm"
+            }
+        }
+    },
+    "slm": null,
+    "sim": null,
+    "dpc": null,
+    "objective": {
+        "pixelsizes": [
+            5,
+            10
+        ],
+        "NAs": [
+            0.5,
+            0.8
+        ],
+        "magnifications": [
+            10,
+            20
+        ],
+        "objectiveNames": [
+            "10x",
+            "20x"
+        ],
+        "objectivePositions": [
+            0,
+            1
+        ],
+        "homeDirection": -1,
+        "homePolarity": 1,
+        "homeSpeed": 20000,
+        "homeAcceleration": 20000,
+        "calibrateOnStart": true,
+        "active": true
+    },
+    "mct": null,
+    "nidaq": {
+        "timerCounterChannel": null,
+        "startTrigger": false
+    },
+    "roiscan": null,
+    "lightsheet": null,
+    "webrtc": null,
+    "hypha": null,
+    "mockxx": null,
+    "jetsonnano": null,
+    "Stresstest": {},
+    "HistoScan": null,
+    "Workflow": null,
+    "FlowStop": null,
+    "Lepmon": null,
+    "Flatfield": null,
+    "PixelCalibration": {},
+    "uc2Config": null,
+    "ism": null,
+    "focusLock": {
+        "camera": "FocusLock",
+        "positioner": "VirtualStage",
+        "updateFreq": 4,
+        "swapImageAxes": null,
+        "piKp": 0.2,
+        "piKi": 0.2, 
+        "focusLockMetric": "astigmatism", 
+        "cropSize": 100,
+        "cropCenter": [50, 50]
+    },
+    "fovLock": {
+        "camera": "WidefieldCamera",
+        "positioner": "VirtualStage",
+        "updateFreq": 1,
+        "frameCropx": null,
+        "frameCropy": null,
+        "frameCropw": null,
+        "frameCroph": null,
+        "swapImageAxes": null,
+        "piKp": 1.0,
+        "piKi": 1.0
+    },
+    "autofocus": null,
+    "scan": null,
+    "etSTED": null,
+    "rotators": null,
+    "microscopeStand": null,
+    "pulseStreamer": {
+        "ipAddress": null
+    },
+    "pyroServerInfo": {
+        "name": "ImSwitchServer",
+        "host": "0.0.0.0",
+        "port": 54333,
+        "active": false
+    },
+    "rois": {
+        "Full chip": {
+            "x": 600,
+            "y": 600,
+            "w": 1200,
+            "h": 1200
+        }
+    },
+    "ledPresets": {},
+    "defaultLEDPresetForScan": null,
+    "laserPresets": {},
+    "stageOffsets": {},
+    "defaultLaserPresetForScan": null,
+    "availableWidgets": [
+        "Settings",
+        "View",
+        "Recording",
+        "Image",
+        "Laser",
+        "Positioner",
+        "Autofocus",
+        "MCT",
+        "ROIScan",
+        "HistoScan",
+        "ImSwitchServer",
+        "Lightsheet",
+        "Workflow",
+        "Experiment",
+        "Timelapse",
+        "UC2Config",
+        "Objective",
+        "Stresstest",
+        "FocusLock",
+        "StageCenterCalibration"
+    ],
+    "nonAvailableWidgets": [
+        "Hypha",
+        "STORMRecon",
+        "Histogramm",
+        "Lepmon",
+        "imswitch_lightsheet",
+        "imswitch_arkitekt_next",
+        "FocusLock",
+        "FlowStop",
+        "SIM",
         "imswitch_arkitekt",
-    "DPC",
-    "FOVLock",
-    "Temperature",
-    "HistoScan",
-    "PixelCalibration",
-    "WebRTC",
-    "Flatfield",
-    "STORMRecon",
-    "DPC",
-    "PixelCalibration",
-    "FocusLock"
-  ]
+        "DPC",
+        "FOVLock",
+        "Temperature",
+        "HistoScan",
+        "PixelCalibration",
+        "WebRTC",
+        "Flatfield",
+        "DPC",
+        "PixelCalibration"
+    ]
 }

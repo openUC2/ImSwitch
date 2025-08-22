@@ -6,6 +6,7 @@ from imswitch.imcommon.model import initLogger
 from . import widgets
 import pkg_resources
 import importlib
+import importlib.util
 
 if not IS_HEADLESS:
     from pyqtgraph.dockarea import Dock, DockArea
@@ -21,7 +22,7 @@ class ImConMainView(QMainWindow):
     sigLoadParamsFromHDF5 = Signal()
     sigPickSetup = Signal()
     sigClosing = Signal()
-
+    
     def __init__(self, options, viewSetupInfo, *args, **kwargs):
         self.__logger = initLogger(self)
         self.__logger.debug('Initializing ImConMainView')
@@ -257,6 +258,7 @@ class ImConMainViewNoQt(object):
         self.__logger.debug('Initializing')
 
         super().__init__(*args, **kwargs)
+        self.sigClosing = Signal()
         self.docks = {}
         self.widgets = {}
         self.shortcuts = {}
@@ -301,8 +303,6 @@ class ImConMainViewNoQt(object):
                     continue
                 except ImportError as e:
                     self.__logger.error(f"Could not load widget {widgetKey} from imswitch.imcontrol.view.widgets", e)
-                    # need a fallback to the normal plugin system
-                    # self.widgets[widgetKey] = (widgetKey, None, None)
                     continue
 
             # Case 2: Check if there is a plugin for the widget

@@ -20,6 +20,24 @@
             "args": [
               "${file}"
             ],
-        }        
+        },
+                {
+            "name": "Python: Pytest (aktuelle Datei)",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "${file}", // Runs the currently open test file
+                "-s", // Allows print statements to show in the terminal
+
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false, // Ensures you can debug library code as well
+            "env": {
+                // Add any environment variables needed for your tests
+                "IMSWITCH_HEADLESS": "1",
+                "IMSWITCH_CONFIG_FILE": "/Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json"
+            }
+        }   
     ], 
 }

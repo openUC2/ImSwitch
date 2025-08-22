@@ -1,0 +1,150 @@
+import pytest
+import time
+import threading
+import h5py
+
+from imswitch.imcontrol.model import DetectorsManager, RecordingManager, RecMode, SaveMode, RS232sManager
+from . import detectorInfosBasic, detectorInfosMulti, detectorInfosNonSquare
+from imswitch.imcontrol.model.SetupInfo import RS232Info
+
+
+def record(detectorInfos, *args, **kwargs):
+    """Headless record helper that waits for memory recording signals without qtbot.
+    """
+    VirtualMicroscope = RS232sManager({
+        'VirtualMicroscope': RS232Info(
+            managerName='VirtualMicroscopeManager',
+            managerProperties={'imagePath_': 'simplant', 'imagePath__': 'smlm'}
+        )
+    })
+
+    lowLevelManagers = {
+        'rs232sManager': VirtualMicroscope
+    }
+    # Use the provided detectorInfos, not a fixed multi config
+    detectorsManager = DetectorsManager(detectorInfos, updatePeriod=100, **lowLevelManagers)
+
+    recordingManager = RecordingManager(detectorsManager)
+
+    filePerDetector = {}
+    savedToDiskPerDetector = {}
+    received = set()
+    expected = set(detectorInfos.keys())
+    done = threading.Event()
+
+    def on_memory_recording_available(name, file, filePath, savedToDisk):
+        """Collect results and signal completion when all detectors are received.
+        Note: name is the basename; derive detectorName from it when needed.
+        """
+        # Infer detector name: original pattern is f'{savename}_{detectorName}'
+        # For tests we pass detectorNames explicitly and expect one emission per detector.
+        det_name = None
+        for d in expected:
+            if name.endswith(f"_{d}") or name == d:
+                det_name = d
+                break
+        # Fallback: if pattern not matched, try to split at last underscore
+        if det_name is None and "_" in name:
+            det_name = name.split("_")[-1]
+
+        # If still unknown, skip adding to avoid confusion
+        if det_name is None:
+            det_name = list(expected - received)[0] if (expected - received) else name
+
+        filePerDetector[det_name] = file
+        savedToDiskPerDetector[det_name] = savedToDisk
+        received.add(det_name)
+        if received >= expected:
+            done.set()
+
+    # Connect signal
+    recordingManager.sigMemoryRecordingAvailable.connect(on_memory_recording_available)
+
+    # Start recording
+    recordingManager.startRecording(*args, **kwargs)
+
+    # Wait up to 30s for all detectors to emit their memory recording
+    timeout_s = 30
+    start = time.time()
+    while not done.is_set() and (time.time() - start) < timeout_s:
+        time.sleep(0.05)
+
+    if not done.is_set():
+        pytest.fail("Timed out waiting for memory recording signals")
+
+    return filePerDetector, savedToDiskPerDetector
+
+
+@pytest.mark.parametrize('detectorInfos,numFrames',
+                         [(detectorInfosBasic, 10), (detectorInfosNonSquare, 53)])
+def test_recording_spec_frames(detectorInfos, numFrames):
+    filePerDetector, savedToDiskPerDetector = record(
+        detectorInfos,
+        detectorNames=list(detectorInfos.keys()),
+        recMode=RecMode.SpecFrames,
+        savename='test_spec_frames',
+        saveMode=SaveMode.RAM,
+        attrs={detectorName: {
+            'testAttr1': 2,
+            'testAttr2': 'value'
+        } for detectorName in detectorInfos.keys()},
+        recFrames=numFrames
+    )
+
+    assert filePerDetector.keys() == detectorInfos.keys()
+    assert savedToDiskPerDetector.keys() == detectorInfos.keys()
+
+    for detectorName, file in filePerDetector.items():
+        h5pyFile = h5py.File(file)
+        dataset = h5pyFile.get(detectorName)
+        assert dataset.shape[0] == numFrames
+        h5pyFile.close()  # Otherwise we can get segfaults
+        file.close()  # Otherwise we can get segfaults
+    for savedToDisk in savedToDiskPerDetector.values():
+        assert savedToDisk is False
+
+
+@pytest.mark.parametrize('detectorInfos',
+                         [detectorInfosBasic, detectorInfosMulti, detectorInfosNonSquare])
+def test_recording_spec_time(detectorInfos):
+    filePerDetector, savedToDiskPerDetector = record(
+        detectorInfos,
+        detectorNames=list(detectorInfos.keys()),
+        recMode=RecMode.SpecTime,
+        savename='test_spec_time',
+        saveMode=SaveMode.RAM,
+        attrs={detectorName: {
+            'testAttr1': 2,
+            'testAttr2': 'value'
+        } for detectorName in detectorInfos.keys()},
+        recTime=5
+    )
+
+    assert filePerDetector.keys() == detectorInfos.keys()
+    assert savedToDiskPerDetector.keys() == detectorInfos.keys()
+
+    for detectorName, file in filePerDetector.items():
+        h5pyFile = h5py.File(file)
+        dataset = h5pyFile.get(detectorName)
+        assert dataset.shape[0] > 0
+        h5pyFile.close()  # Otherwise we can get segfaults
+        file.close()  # Otherwise we can get segfaults
+    for savedToDisk in savedToDiskPerDetector.values():
+        assert savedToDisk is False
+
+
+# Copyright (C) 2020-2024 ImSwitch developers
+# This file is part of ImSwitch.
+#
+# ImSwitch is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# ImSwitch is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.

@@ -45,13 +45,13 @@ class CheckUpdatesController(WidgetController):
 
 
 class CheckUpdatesThread(Thread):
-    sigFailed = Signal()
-    sigNoUpdate = Signal()
-    sigNewVersionPyInstaller = Signal(str)  # (latestVersion)
-    sigNewVersionPyPI = Signal(str)  # (latestVersion)
-    sigNewVersionShowInfo = Signal(str) # (someText)
     def __init__(self):
         super().__init__()
+        self.sigFailed = Signal()
+        self.sigNoUpdate = Signal()
+        self.sigNewVersionPyInstaller = Signal(str)  # (latestVersion)
+        self.sigNewVersionPyPI = Signal(str)  # (latestVersion)
+        self.sigNewVersionShowInfo = Signal(str) # (someText)
         self.__logger = initLogger(self, tryInheritParent=True)
 
     def run(self):

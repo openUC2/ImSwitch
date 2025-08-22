@@ -14,6 +14,16 @@ then
     echo 'Listing Config Dir'
     ls /tmp/ImSwitchConfig/imcontrol_setups
     
+    # Start D-Bus service (required for NetworkManager)
+    echo 'Starting D-Bus service'
+    service dbus start
+    
+    # start network manager
+    echo 'Starting Network Manager'
+    service network-manager start
+    echo 'Checking Network Manager status'
+    nmcli general status
+
     PATCH_DIR=/tmp/ImSwitch-changes
     PATCH_FILE=$PATCH_DIR/diff.patch 
 

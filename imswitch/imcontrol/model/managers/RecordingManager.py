@@ -206,6 +206,7 @@ DEFAULT_STORER_MAP: Dict[str, Type[Storer]] = {
 class RecordingManager(SignalInterface):
     """ RecordingManager handles single frame captures as well as continuous
     recordings of detector data. """
+
     sigRecordingStarted = Signal()
     sigRecordingEnded = Signal()
     sigRecordingFrameNumUpdated = Signal(int)  # (frameNumber)
@@ -712,7 +713,7 @@ class RecordingWorker(Worker):
         return files, fileDests, filePaths
 
     def _getNewFrames(self, detectorName):
-        newFrames = self.__recordingManager.detectorsManager[detectorName].getChunk()
+        newFrames, frameIndices = self.__recordingManager.detectorsManager[detectorName].getChunk()
         newFrames = np.array(newFrames)
         return newFrames
 

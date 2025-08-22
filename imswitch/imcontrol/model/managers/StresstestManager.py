@@ -48,7 +48,7 @@ class StresstestManager(SignalInterface):
             with open(os.path.join(self.defaultConfigPath, self.stresstestConfigFilename)) as jf:
                 loaded_config = json.load(jf)
                 self.__logger.debug(f"Loaded stress test config from {self.defaultConfigPath}")
-                
+
                 # Update default params with loaded values
                 for key, value in loaded_config.items():
                     if key in self.defaultParams:
@@ -56,11 +56,11 @@ class StresstestManager(SignalInterface):
                         self.defaultParams[key] = value
                     else:
                         setattr(self, key, value)
-                        
+
         except Exception as e:
             self.__logger.debug(f"Could not load default config from {self.defaultConfigPath}: {e}")
             self.__logger.debug("Setting default values, need to save them later once they are set")
-            
+
             # Set attributes from default params
             for key, value in self.defaultParams.items():
                 setattr(self, key, value)

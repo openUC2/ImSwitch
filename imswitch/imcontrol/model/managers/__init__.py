@@ -10,7 +10,6 @@ from .MultiManager import MultiManager
 from .NidaqManager import NidaqManager
 from .PositionersManager import PositionersManager
 from .RS232sManager import RS232sManager
-from .OFMsManager import OFMsManager
 from .RecordingManager import RecordingManager, RecMode, SaveMode, SaveFormat
 from .SLMManager import SLMManager
 from .ScanManagerPointScan import ScanManagerPointScan
@@ -22,6 +21,8 @@ try:
     from .UC2ConfigManager import UC2ConfigManager
 except ModuleNotFoundError:
     warnings.warn("UC2ConfigManager not available; please install uc2rest module")
+    # Create a mock UC2ConfigManager class so imports work
+    UC2ConfigManager = type('UC2ConfigManager', (), {})
 from .SIMManager import SIMManager
 from .DPCManager import DPCManager
 from .MCTManager import MCTManager
@@ -31,8 +32,6 @@ from .ROIScanManager import ROIScanManager
 from .LightsheetManager import LightsheetManager
 from .WebRTCManager import WebRTCManager
 from .HyphaManager import HyphaManager
-from .MockXXManager import MockXXManager
-from .JetsonNanoManager import JetsonNanoManager
 from .HistoScanManager import HistoScanManager
 from .StresstestManager import StresstestManager
 from .ObjectiveManager import ObjectiveManager
@@ -41,4 +40,3 @@ from .FlowStopManager import FlowStopManager
 from .LepmonManager import LepmonManager
 from .FlatfieldManager import FlatfieldManager
 from .PixelCalibrationManager import PixelCalibrationManager
-from .ISMManager import ISMManager

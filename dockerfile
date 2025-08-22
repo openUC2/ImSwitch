@@ -39,14 +39,15 @@
 # -v ~/Documents/imswitch_docker/imswitch_git:/tmp/ImSwitch-changes \
 # -v ~/Documents/imswitch_docker/imswitch_pip:/persistent_pip_packages \
 # -v /media/uc2/SD2/:/dataset \
-# -v ~/Downloads:/config 
+# -v ~/Downloads:/config
 
 
 # Use an appropriate base image for multi-arch support
 FROM ubuntu:22.04
 
 ARG TARGETPLATFORM
-ENV TZ=America/Los_Angeles
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
 
 # Install necessary dependencies and prepare the environment as usual
 RUN apt-get update -o Acquire::AllowInsecureRepositories=true \
@@ -82,23 +83,22 @@ RUN /opt/conda/bin/conda create -y --name imswitch python=3.11 && \
 
 # Download and install the appropriate Hik driver based on architecture
 RUN cd /tmp && \
-    wget https://www.hikrobotics.com/cn2/source/support/software/MVS_STD_GML_V2.1.2_231116.zip && \
-    unzip MVS_STD_GML_V2.1.2_231116.zip && \
     if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
-        dpkg -i MVS-2.1.2_aarch64_20231116.deb && \
-        rm -f MVS-2.1.2_aarch64_20231116.deb; \
+        wget https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/MVS-3.0.1_aarch64_20241128.deb && \
+        dpkg -i MVS-3.0.1_aarch64_20241128.deb && \
+        rm -f MVS-3.0.1_aarch64_20241128.deb; \
     elif [ "${TARGETPLATFORM}" = "linux/amd64" ]; then \
-        dpkg -i MVS-2.1.2_x86_64_20231116.deb && \
-        rm -f MVS-2.1.2_x86_64_20231116.deb; \
-    fi && \
-    rm -rf /tmp/MVS_STD_GML_V2.1.2_231116.zip /tmp/MVS_STD_GML_V2.1.2_231116/
+        wget https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/MVS-3.0.1_x86_64_20241128.deb && \
+        dpkg -i MVS-3.0.1_x86_64_20241128.deb && \
+        rm -f MVS-3.0.1_x86_64_20241128.deb; \
+    fi
 
-## Install Daheng Camera 
+## Install Daheng Camera
 # Create the udev rules directory
 RUN mkdir -p /etc/udev/rules.d
 
 # Download and install the appropriate Daheng driver based on architecture
-RUN cd /tmp && \ 
+RUN cd /tmp && \
 wget https://dahengimaging.com/downloads/Galaxy_Linux_Python_2.0.2106.9041.tar_1.gz && \
 tar -zxvf Galaxy_Linux_Python_2.0.2106.9041.tar_1.gz && \
 if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
@@ -139,7 +139,13 @@ ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/li
 RUN /opt/conda/bin/conda install numcodecs=0.15.0 numpy=2.1.2
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && \
     conda install scikit-image=0.19.3 -c conda-forge"
-    
+
+
+# install nmcli
+RUN apt-get update && \
+    apt-get install -y --allow-unauthenticated network-manager && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install UC2-REST first - as it will be installed via ImSwitch again
 RUN /opt/conda/bin/conda run -n imswitch uv pip install UC2-REST
@@ -154,7 +160,7 @@ RUN git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch && \
 # Clone the config folder
 RUN git clone https://github.com/openUC2/ImSwitchConfig /tmp/ImSwitchConfig
 
-# we want psygnal to be installed without binaries - so first remove it 
+# we want psygnal to be installed without binaries - so first remove it
 RUN /opt/conda/bin/conda run -n imswitch uv pip uninstall psygnal -y
 RUN /opt/conda/bin/conda run -n imswitch uv pip install psygnal --no-binary :all:
 
@@ -169,13 +175,22 @@ RUN if [ "${TARGETPLATFORM}" = "linux/arm64" ]; then \
     cd /opt/VimbaX/cti && ./Install_GenTL_Path.sh ; \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl" ; \
     export GENICAM_GENTL64_PATH="/opt/VimbaX/cti" ; \
-    ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"; \
 fi
+
+# Set GENICAM_GENTL64_PATH globally for all containers
+ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
+
+# TODO: For now - move upwards later to the top
+# Install D-Bus and systemd for NetworkManager support
+RUN apt-get update -o Acquire::AllowInsecureRepositories=true \
+    && apt-get install -y --allow-unauthenticated dbus systemd \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
-RUN echo Building on 1 
+RUN echo Building on 1
 
 # Clone the config folder
 RUN cd /tmp/ImSwitchConfig && \
@@ -191,9 +206,9 @@ RUN cd /tmp/UC2-REST && \
     git pull && \
     /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install /tmp/UC2-REST"
 
-# install arkitekt 
-RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip" 
-    
+# install arkitekt
+RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && uv pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip"
+
 # Expose FTP port and HTTP port
 EXPOSE  8001 8002 8003 8888 8889
 

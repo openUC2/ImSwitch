@@ -1,5 +1,16 @@
+# Install test mocks for missing dependencies when running tests
+import sys
+if 'pytest' in sys.modules or any('pytest' in arg for arg in sys.argv):
+    try:
+        from . import _test_mocks
+    except ImportError:
+        pass
+
+# Import the new configuration system
+from .config import get_config
+
 # used to be, but actions will replace this with the current release TAG -> >2.1.0
-__version__ = "2.1.24"
+__version__ = "2.1.42"
 __httpport__ = 8001
 __socketport__ = 8002
 __ssl__ = True
@@ -8,9 +19,10 @@ jupyternotebookurl = ""
 __argparse__ = None
 
 '''
-These are flags to ensure headless operation and side-loading of the config file
+These are LEGACY flags for backward compatibility.
+New code should use the configuration system: from imswitch.config import get_config
 '''
-IS_HEADLESS = False
+IS_HEADLESS = True  # Default to GUI mode
 DEFAULT_SETUP_FILE = None
 DEFAULT_CONFIG_PATH = None
 DEFAULT_DATA_PATH = None

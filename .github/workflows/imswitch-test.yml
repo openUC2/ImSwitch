@@ -31,20 +31,12 @@ jobs:
               libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0
         fi
 
-
-        # Install UV
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        source $HOME/.local/bin/uv
-        export PATH="$HOME/.local/bin:$PATH"
-
-        # Install with UV
-        uv pip install --system flake8 pytest pytest-qt
-
         python3 -m pip install --upgrade pip
         python3 -m pip install .
         python3 -m pip uninstall psygnal -y
         python3 -m pip install psygnal --no-binary :all:
-
+        
+        python3 -m pip install flake8 pytest 
       shell: bash
     - name: Lint with flake8
       run: |
@@ -70,7 +62,7 @@ jobs:
           # are complete, but seemingly only in GitHub Actions and not on a "real" installation.
           # Therefore, we ignore the file on MacOS for now.
           # TODO: Figure out why this happens. Perhaps related to the Windows issue?
-          python3 -m pytest imswitch/imcontrol/_test/api -v -s
+          python3 -m pytest imswitch/imcontrol/_test/api -v -s 
           python3 -m pytest imswitch/imcontrol/_test/unit -v -s
         fi
       shell: bash

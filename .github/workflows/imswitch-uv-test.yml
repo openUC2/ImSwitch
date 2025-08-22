@@ -50,8 +50,8 @@ jobs:
       - name: Install project with uv (editable)
         run: |
           uv pip install --system -e .
-          uv pip uninstall psygnal -y
-          uv pip install psygnal --no-binary :all:
+          pip uninstall psygnal -y
+          pip install psygnal --no-binary :all:
         shell: bash
 
       - name: Run tests

@@ -50,7 +50,7 @@ jobs:
       - name: Install project with uv (editable)
         run: |
           uv pip install --system -e .
-          uv pip uninstall psygnal -y
+          uv pip uninstall psygnal
           uv pip install psygnal --no-binary :all:
         shell: bash
 

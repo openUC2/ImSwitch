@@ -535,6 +535,28 @@ class VirtualMicroscopeInfo:
     # Sampling and aliasing for education
     nyquist_sampling: bool = True
     aliasing_enabled: bool = False
+    
+    # SLM (Spatial Light Modulator) parameters
+    slm_enabled: bool = False
+    slm_pattern_type: str = "blank"
+    slm_pattern_params: dict = field(default_factory=lambda: {
+        "frequency": 10,
+        "phase": 0,
+        "amplitude": 255,
+        "angle": 0,
+        "center_x": 960,  # Half of typical SLM width
+        "center_y": 576   # Half of typical SLM height
+    })
+    slm_zernike_coeffs: dict = field(default_factory=lambda: {
+        "tip": 0.0,
+        "tilt": 0.0, 
+        "defocus": 0.0,
+        "astig_0": 0.0,
+        "astig_45": 0.0,
+        "coma_x": 0.0,
+        "coma_y": 0.0,
+        "spherical": 0.0
+    })
 
 
 @dataclass_json(undefined=Undefined.INCLUDE)

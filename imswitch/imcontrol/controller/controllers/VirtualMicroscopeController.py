@@ -273,9 +273,134 @@ class VirtualMicroscopeController(LiveUpdatedController):
                     "current_objective_slot": objective_state
                 })
                 
+                # Add SLM status if available
+                if hasattr(self._virtualMicroscopeManager._virtualMicroscope, 'slm'):
+                    slm_status = self._virtualMicroscopeManager._virtualMicroscope.slm.get_status()
+                    status["slm"] = slm_status
+                
             return status
         except Exception as e:
             self._logger.error(f"Failed to get status: {str(e)}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def setSLMPattern(self, pattern_type: str, **kwargs) -> Dict:
+        """Set SLM pattern for structured illumination and beam shaping"""
+        try:
+            if not self._virtualMicroscopeManager:
+                return {"status": "error", "message": "Virtual Microscope Manager not available"}
+                
+            if not hasattr(self._virtualMicroscopeManager._virtualMicroscope, 'slm'):
+                return {"status": "error", "message": "Virtual SLM not available"}
+            
+            slm = self._virtualMicroscopeManager._virtualMicroscope.slm
+            success = slm.set_pattern(pattern_type, **kwargs)
+            
+            if success:
+                slm.set_active(True)
+                return {
+                    "status": "success",
+                    "pattern_type": pattern_type,
+                    "parameters": kwargs,
+                    "slm_status": slm.get_status()
+                }
+            else:
+                return {"status": "error", "message": "Failed to set SLM pattern"}
+                
+        except Exception as e:
+            self._logger.error(f"Failed to set SLM pattern: {str(e)}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def applySLMAberrationCorrection(self, **zernike_coeffs) -> Dict:
+        """Apply aberration correction using Zernike polynomials on SLM"""
+        try:
+            if not self._virtualMicroscopeManager:
+                return {"status": "error", "message": "Virtual Microscope Manager not available"}
+                
+            if not hasattr(self._virtualMicroscopeManager._virtualMicroscope, 'slm'):
+                return {"status": "error", "message": "Virtual SLM not available"}
+            
+            slm = self._virtualMicroscopeManager._virtualMicroscope.slm
+            success = slm.apply_aberration_correction(**zernike_coeffs)
+            
+            if success:
+                return {
+                    "status": "success",
+                    "zernike_coefficients": zernike_coeffs,
+                    "slm_status": slm.get_status()
+                }
+            else:
+                return {"status": "error", "message": "Failed to apply aberration correction"}
+                
+        except Exception as e:
+            self._logger.error(f"Failed to apply SLM aberration correction: {str(e)}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def getSLMPattern(self) -> Dict:
+        """Get current SLM pattern as base64 encoded image"""
+        try:
+            if not self._virtualMicroscopeManager:
+                return {"status": "error", "message": "Virtual Microscope Manager not available"}
+                
+            if not hasattr(self._virtualMicroscopeManager._virtualMicroscope, 'slm'):
+                return {"status": "error", "message": "Virtual SLM not available"}
+            
+            slm = self._virtualMicroscopeManager._virtualMicroscope.slm
+            pattern = slm.get_pattern()
+            
+            # Convert to base64 for web transmission
+            import base64
+            from io import BytesIO
+            try:
+                from PIL import Image
+                img = Image.fromarray(pattern)
+                buffer = BytesIO()
+                img.save(buffer, format='PNG')
+                img_str = base64.b64encode(buffer.getvalue()).decode()
+                
+                return {
+                    "status": "success",
+                    "pattern_base64": img_str,
+                    "pattern_shape": pattern.shape,
+                    "slm_status": slm.get_status()
+                }
+            except ImportError:
+                # Fallback without PIL
+                return {
+                    "status": "success", 
+                    "pattern_shape": pattern.shape,
+                    "pattern_available": True,
+                    "slm_status": slm.get_status(),
+                    "note": "Pattern data available but PIL not installed for base64 encoding"
+                }
+                
+        except Exception as e:
+            self._logger.error(f"Failed to get SLM pattern: {str(e)}")
+            return {"status": "error", "message": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def resetSLM(self) -> Dict:
+        """Reset SLM to blank state"""
+        try:
+            if not self._virtualMicroscopeManager:
+                return {"status": "error", "message": "Virtual Microscope Manager not available"}
+                
+            if not hasattr(self._virtualMicroscopeManager._virtualMicroscope, 'slm'):
+                return {"status": "error", "message": "Virtual SLM not available"}
+            
+            slm = self._virtualMicroscopeManager._virtualMicroscope.slm
+            slm.reset()
+            
+            return {
+                "status": "success",
+                "message": "SLM reset to blank state",
+                "slm_status": slm.get_status()
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to reset SLM: {str(e)}")
             return {"status": "error", "message": str(e)}
 
     def _applyDrift(self):

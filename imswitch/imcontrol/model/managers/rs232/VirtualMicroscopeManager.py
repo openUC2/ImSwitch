@@ -10,6 +10,14 @@ from imswitch import IS_HEADLESS, __file__
 from imswitch.imcommon.model import initLogger
 
 try:
+    from .VirtualSLM import VirtualSLM
+except ImportError:
+    # Fallback if VirtualSLM is not available
+    class VirtualSLM:
+        def __init__(self, parent):
+            self.parent = parent
+
+try:
     import NanoImagingPack as nip
     IS_NIP = True
 except:
@@ -336,6 +344,7 @@ class VirtualMicroscopy:
         self.positioner = Positioner(self)
         self.illuminator = Illuminator(self)
         self.objective = Objective(self)
+        self.slm = VirtualSLM(self)
 
     def stop(self):
         pass

@@ -12,7 +12,7 @@ class DetectorsManager(MultiManager, SignalInterface):
     sigAcquisitionStarted = Signal()
     sigAcquisitionStopped = Signal()
     sigDetectorSwitched = Signal(str, str)  # (newDetectorName, oldDetectorName)
-    sigImageUpdated = Signal(str, np.ndarray, bool, list, bool)  # (detectorName, image, init, scale, isCurrentDetector)
+    sigImageUpdated = Signal(str, np.ndarray, bool, list, bool, dict)  # (detectorName, image, init, scale, isCurrentDetector, detectorParameters
     sigNewFrame = Signal()
 
     detectorParams = {}
@@ -35,7 +35,7 @@ class DetectorsManager(MultiManager, SignalInterface):
             # Connect signals
             self._subManagers[detectorName].sigImageUpdated.connect(
                 lambda image, init, scale, detectorName=detectorName: self.sigImageUpdated.emit(
-                    detectorName, image, init, scale, detectorName==self._currentDetectorName
+                    detectorName, image, init, scale, detectorName==self._currentDetectorName, self.detectorParams
                 )
             )
             # TODO: Use this instead?

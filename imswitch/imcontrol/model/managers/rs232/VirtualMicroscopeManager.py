@@ -65,6 +65,9 @@ class VirtualMicroscopeManager:
         # Initialize objective state: 1 (default) => no binning, 2 => binned image (2x magnification)
         self.currentObjective = 1
         self._camera.binning = False
+        
+        # Base illuminator intensity for exposure/gain calculations
+        self._base_intensity = 1000
 
     def toggleObjective(self):
         """
@@ -82,6 +85,31 @@ class VirtualMicroscopeManager:
             self.__logger.info("Switching to Objective 1: Removing binning")
             self.currentObjective = 1
             self._camera.binning = False
+            
+    def setObjective(self, objective_slot: int):
+        """Set objective based on slot number (1 or 2)"""
+        if objective_slot == 1:
+            self.__logger.info("Switching to Objective 1: Removing binning")
+            self.currentObjective = 1
+            self._camera.binning = False
+        elif objective_slot == 2:
+            self.__logger.info("Switching to Objective 2: Applying 2x binning")
+            self.currentObjective = 2
+            self._camera.binning = True
+        else:
+            self.__logger.warning(f"Invalid objective slot {objective_slot}, only 1 or 2 supported")
+            
+    def updateExposureGain(self, exposure_time: float = None, gain: float = None):
+        """Update illuminator intensity based on exposure and gain settings"""
+        if exposure_time is None:
+            exposure_time = 100.0  # Default exposure
+        if gain is None:
+            gain = 1.0  # Default gain
+            
+        # Scale illuminator intensity based on exposure and gain
+        scaled_intensity = self._base_intensity * (exposure_time / 100.0) * gain
+        self._illuminator.set_intensity(1, scaled_intensity)
+        self.__logger.info(f"Updated virtual microscope intensity to {scaled_intensity} (exposure: {exposure_time}, gain: {gain})")
 
     def finalize(self):
         self._virtualMicroscope.stop()

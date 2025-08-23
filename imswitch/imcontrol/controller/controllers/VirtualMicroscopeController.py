@@ -81,10 +81,12 @@ class VirtualMicroscopeController(LiveUpdatedController):
             return
             
         # Initialize simulation state
-        self._drift_start_time = None
-        self._initial_position = {"X": 0, "Y": 0, "Z": 0}
+        self._last_drift_time = None
         self._bleaching_factor = 1.0
         self._frame_count = 0
+        
+        # Connect to existing controllers for integration
+        self._connectToExistingControllers()
 
     @APIExport(runOnUIThread=True)
     def getConfig(self) -> Dict:
@@ -106,43 +108,13 @@ class VirtualMicroscopeController(LiveUpdatedController):
             self._logger.error(f"Failed to update config: {str(e)}")
             return {"status": "error", "message": str(e)}
 
-    @APIExport(runOnUIThread=True)
-    def switchObjective(self, objective_name: str) -> Dict:
-        """Switch to different virtual objective"""
-        try:
-            if objective_name not in self._config.objectives:
-                available = list(self._config.objectives.keys())
-                return {"status": "error", "message": f"Unknown objective. Available: {available}"}
-                
-            self._config.current_objective = objective_name
-            obj_params = self._config.objectives[objective_name]
-            
-            # Apply objective-specific settings to virtual microscope
-            if self._virtualMicroscopeManager:
-                # Simulate objective change via binning/scaling
-                camera = self._virtualMicroscopeManager._camera
-                if objective_name == "60x_1.42":
-                    camera.binning = True  # Higher magnification
-                else:
-                    camera.binning = False  # Lower magnification
-                    
-            self._logger.info(f"Switched to objective {objective_name}: {obj_params}")
-            return {
-                "status": "success", 
-                "objective": objective_name,
-                "parameters": obj_params
-            }
-        except Exception as e:
-            self._logger.error(f"Failed to switch objective: {str(e)}")
-            return {"status": "error", "message": str(e)}
+
 
     @APIExport(runOnUIThread=True)
     def enableStageDrift(self, enabled: bool, drift_rate_x: float = None, 
                         drift_rate_y: float = None, drift_rate_z: float = None) -> Dict:
-        """Enable/disable stage drift simulation"""
+        """Enable/disable stage drift simulation with relative increments"""
         try:
-            import time
-            
             self._config.drift_enabled = enabled
             if drift_rate_x is not None:
                 self._config.drift_rate_x = drift_rate_x
@@ -151,16 +123,14 @@ class VirtualMicroscopeController(LiveUpdatedController):
             if drift_rate_z is not None:
                 self._config.drift_rate_z = drift_rate_z
                 
-            if enabled and self._drift_start_time is None:
-                self._drift_start_time = time.time()
-                if self._virtualMicroscopeManager:
-                    pos = self._virtualMicroscopeManager._positioner.get_position()
-                    self._initial_position = pos.copy()
-                    
-            elif not enabled:
-                self._drift_start_time = None
+            if enabled:
+                # Reset drift timing for relative increments
+                import time
+                self._last_drift_time = time.time()
+            else:
+                self._last_drift_time = None
                 
-            self._logger.info(f"Stage drift {'enabled' if enabled else 'disabled'}")
+            self._logger.info(f"Stage drift {'enabled' if enabled else 'disabled'} with rates: X={self._config.drift_rate_x}, Y={self._config.drift_rate_y}, Z={self._config.drift_rate_z}")
             return {"status": "success", "drift_enabled": enabled}
         except Exception as e:
             self._logger.error(f"Failed to set stage drift: {str(e)}")
@@ -184,30 +154,7 @@ class VirtualMicroscopeController(LiveUpdatedController):
             self._logger.error(f"Failed to set photobleaching: {str(e)}")
             return {"status": "error", "message": str(e)}
 
-    @APIExport(runOnUIThread=True)
-    def setExposureAndGain(self, exposure_time: float = None, gain: float = None) -> Dict:
-        """Set virtual exposure time and gain"""
-        try:
-            if exposure_time is not None:
-                self._config.exposure_time = max(1.0, exposure_time)
-            if gain is not None:
-                self._config.gain = max(0.1, gain)
-                
-            # Apply to virtual illuminator
-            if self._virtualMicroscopeManager:
-                # Scale illuminator intensity based on exposure and gain
-                base_intensity = 1000
-                scaled_intensity = base_intensity * (self._config.exposure_time / 100.0) * self._config.gain
-                self._virtualMicroscopeManager._illuminator.set_intensity(1, scaled_intensity)
-                
-            return {
-                "status": "success", 
-                "exposure_time": self._config.exposure_time,
-                "gain": self._config.gain
-            }
-        except Exception as e:
-            self._logger.error(f"Failed to set exposure/gain: {str(e)}")
-            return {"status": "error", "message": str(e)}
+
 
     @APIExport(runOnUIThread=True)
     def setActiveChannels(self, channels: List[str]) -> Dict:
@@ -257,7 +204,7 @@ class VirtualMicroscopeController(LiveUpdatedController):
         try:
             status = {
                 "config": self._config.dict(),
-                "drift_active": self._drift_start_time is not None,
+                "drift_active": self._last_drift_time is not None,
                 "frame_count": self._frame_count,
                 "bleaching_factor": self._bleaching_factor
             }
@@ -404,8 +351,8 @@ class VirtualMicroscopeController(LiveUpdatedController):
             return {"status": "error", "message": str(e)}
 
     def _applyDrift(self):
-        """Internal method to apply stage drift if enabled"""
-        if not self._config.drift_enabled or self._drift_start_time is None:
+        """Internal method to apply stage drift if enabled using relative increments"""
+        if not self._config.drift_enabled or not hasattr(self, '_last_drift_time') or self._last_drift_time is None:
             return
             
         if not self._virtualMicroscopeManager:
@@ -413,21 +360,22 @@ class VirtualMicroscopeController(LiveUpdatedController):
             
         try:
             import time
-            elapsed = time.time() - self._drift_start_time
+            current_time = time.time()
+            time_interval = current_time - self._last_drift_time
             
-            # Calculate drift offsets
-            drift_x = self._config.drift_rate_x * elapsed
-            drift_y = self._config.drift_rate_y * elapsed
-            drift_z = self._config.drift_rate_z * elapsed
+            # Apply relative drift increments based on time interval
+            drift_x = self._config.drift_rate_x * time_interval
+            drift_y = self._config.drift_rate_y * time_interval  
+            drift_z = self._config.drift_rate_z * time_interval
             
-            # Apply drift to position
-            new_x = self._initial_position["X"] + drift_x
-            new_y = self._initial_position["Y"] + drift_y
-            new_z = self._initial_position["Z"] + drift_z
-            
+            # Apply relative position changes
             self._virtualMicroscopeManager._positioner.move(
-                x=new_x, y=new_y, z=new_z, is_absolute=True
+                x=drift_x, y=drift_y, z=drift_z, is_absolute=False
             )
+            
+            # Update timing for next interval
+            self._last_drift_time = current_time
+            
         except Exception as e:
             self._logger.error(f"Error applying drift: {str(e)}")
 
@@ -443,9 +391,11 @@ class VirtualMicroscopeController(LiveUpdatedController):
         
         # Update illuminator intensity to reflect bleaching
         if self._virtualMicroscopeManager:
-            base_intensity = 1000 * self._config.gain * (self._config.exposure_time / 100.0)
-            bleached_intensity = base_intensity * self._bleaching_factor
-            self._virtualMicroscopeManager._illuminator.set_intensity(1, bleached_intensity)
+            # Get current intensity and apply bleaching factor
+            current_intensity = self._virtualMicroscopeManager._illuminator.get_intensity(1)
+            if current_intensity > 0:
+                bleached_intensity = current_intensity * self._bleaching_factor
+                self._virtualMicroscopeManager._illuminator.set_intensity(1, bleached_intensity)
 
     def update(self):
         """Update method called periodically by the framework"""
@@ -454,6 +404,74 @@ class VirtualMicroscopeController(LiveUpdatedController):
         # Apply ongoing simulations
         self._applyDrift()
         self._applyPhotobleaching()
+        
+    def _connectToExistingControllers(self):
+        """Connect to existing controllers to listen for changes"""
+        try:
+            # Connect to SettingsController changes via shared attributes
+            if hasattr(self._commChannel, 'sharedAttrs'):
+                self._commChannel.sharedAttrs.sigAttributeSet.connect(self._onDetectorSettingChanged)
+                
+            # Connect to ObjectiveController if available
+            if hasattr(self._master, 'objectiveController'):
+                objective_controller = self._master.objectiveController
+                if hasattr(objective_controller, 'sigObjectiveChanged'):
+                    objective_controller.sigObjectiveChanged.connect(self._onObjectiveChanged)
+                    
+        except Exception as e:
+            self._logger.warning(f"Could not fully connect to existing controllers: {str(e)}")
+            
+    def _onDetectorSettingChanged(self, key, value):
+        """Handle detector setting changes from SettingsController"""
+        try:
+            if not isinstance(key, tuple) or len(key) < 3:
+                return
+                
+            category, detector_name, param_category = key[:3]
+            if category != 'Detector':
+                return
+                
+            # Handle exposure time changes
+            if len(key) == 4 and param_category == 'Param' and key[3] == 'exposure':
+                self._config.exposure_time = value
+                if self._virtualMicroscopeManager:
+                    self._virtualMicroscopeManager.updateExposureGain(
+                        exposure_time=value, 
+                        gain=self._config.gain
+                    )
+                self._logger.info(f"Virtual microscope updated exposure: {value}")
+                
+            # Handle gain changes  
+            elif len(key) == 4 and param_category == 'Param' and key[3] == 'gain':
+                self._config.gain = value
+                if self._virtualMicroscopeManager:
+                    self._virtualMicroscopeManager.updateExposureGain(
+                        exposure_time=self._config.exposure_time,
+                        gain=value
+                    )
+                self._logger.info(f"Virtual microscope updated gain: {value}")
+                
+        except Exception as e:
+            self._logger.error(f"Error handling detector setting change: {str(e)}")
+            
+    def _onObjectiveChanged(self, status_dict):
+        """Handle objective changes from ObjectiveController"""
+        try:
+            if 'state' in status_dict:
+                objective_slot = status_dict['state']
+                if self._virtualMicroscopeManager:
+                    self._virtualMicroscopeManager.setObjective(objective_slot)
+                    
+                # Update our config to reflect the change
+                if objective_slot == 1:
+                    self._config.current_objective = "20x_0.75"
+                elif objective_slot == 2:
+                    self._config.current_objective = "60x_1.42"
+                    
+                self._logger.info(f"Virtual microscope updated objective: slot {objective_slot}")
+                
+        except Exception as e:
+            self._logger.error(f"Error handling objective change: {str(e)}")
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

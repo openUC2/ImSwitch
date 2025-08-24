@@ -15,6 +15,11 @@ def get_version():
     raise RuntimeError('Unable to find version string.')
 
 
+# NOTE: This setup.py is maintained for backward compatibility.
+# The primary configuration is now in pyproject.toml for UV support.
+# When using UV, this file is not needed, but it's kept for pip compatibility.
+
+
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
@@ -69,7 +74,7 @@ setup(
         "python-multipart >= 0.0.5",
         "piexif >= 1.1.3",
         "NanoImagingPack==2.1.4",
-        "imswitchclient>=0.1.2",  
+        "imswitchclient>=0.1.2",
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "jupyterlab==4.2.5",
@@ -77,7 +82,7 @@ setup(
         "zarr>=3",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
-        "numba>=0.61.2", 
+        "numba>=0.61.2"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
@@ -95,7 +100,7 @@ setup(
         'Lepmon': [
             "RPi.GPIO",
             "luma.oled",
-            "smbus2", 
+            "smbus2",
             "smbus"
         ],
         'Ashlar': [
@@ -106,7 +111,7 @@ setup(
             "arkitekt==0.7.8",
             "arkitekt_next>=0.8.6"
         ],
-        'imjoy':[        
+        'imjoy':[
             "imjoy-rpc==0.5.59",
             "imjoy_rpc",
             "imjoy",
@@ -114,7 +119,7 @@ setup(
         # Test dependencies for API testing
         'testing': [
             "pytest>=6.0",
-            "pytest-asyncio", 
+            "pytest-asyncio",
             "requests>=2.25",
             "httpx>=0.24.0",  # Alternative HTTP client for async testing
         ],

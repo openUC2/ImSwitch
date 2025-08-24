@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+# make sure network services are started
+mkdir -p /run/dbus
+dbus-daemon --system --fork
+/usr/sbin/NetworkManager --no-daemon >/var/log/NetworkManager.log 2>&1 &
+sleep 1
+nmcli general status
+
 if [[ ! ("$MODE" == "terminal") ]];
 then
     echo 'Starting the container'
@@ -122,5 +129,8 @@ then
 else
     source /opt/conda/bin/activate imswitch
     echo 'Starting the container in terminal mode'
+    # Ensure nmcli works in terminal mode
+    service dbus start
+    service network-manager start    
     exec bash
 fi

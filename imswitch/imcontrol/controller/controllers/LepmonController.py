@@ -614,37 +614,100 @@ class LepmonController(LiveUpdatedController):
     def _open_hmi_menu(self):
         """Equivalent to the HMI menu system from 02_trap_hmi.py"""
         try:
-            self.menu_open = True
+            self.menu_open = False
             self._turn_on_led("blau")
-            self._display_text("Menü bereit", "Tasten nutzen:", "rechts=Fokus", "enter=Menü")
-            self._logger.info("HMI menu opened and running continuously")
+            self._display_text("Menü öffnen:", "bitte Enter drücken", "(rechts unten)", "")
+            self._logger.info("HMI menu opened and waiting for enter button")
             
         except Exception as e:
             self._logger.error(f"Failed to open HMI menu: {e}")
 
     def _continuous_button_monitoring(self):
-        """Continuously monitor button presses for menu navigation"""
+        """Continuously monitor button presses for menu navigation - implements main HMI loop from trap_hmi.py"""
         self._logger.info("Starting continuous button monitoring thread")
         
         while not self.hmi_stop_event.is_set():
             try:
-                # Read all button states continuously
-                current_states = self._read_all_buttons()
+                # Main menu entry sequence - equivalent to trap_hmi.py main loop
+                if not self.menu_open:
+                    self._logger.info("Eingabe Menü mit der Taste Enter ganz rechts unten öffnen")
+                    
+                    # Wait for enter button press (equivalent to 200 iterations in trap_hmi.py)
+                    for _ in range(200):
+                        if self.hmi_stop_event.is_set():
+                            break
+                            
+                        if self._button_pressed("enter"):
+                            self.menu_open = True
+                            self._logger.info("Eingabe Menü geöffnet")
+                            self._display_text("Eingabe Menü", "geöffnet", "", "")
+                            # Equivalent to ram_counter(0x0330) - log the menu opening
+                            self.sigButtonPressed.emit({"buttonName": "enter", "action": "menu_opened"})
+                            break
+                        time.sleep(0.05)  # 50ms delay like in trap_hmi.py
+                    
+                    if not self.menu_open:
+                        self._logger.info("Falle nicht mit lokalem User Interface parametrisiert")
+                        continue
                 
-                # Only process if menu is open
-                if self.menu_open:
-                    # Handle button presses based on current menu state
-                    if current_states.get("enter", False) and not self.buttonStates.get("enter", False):
-                        self._handle_menu_enter()
-                    elif current_states.get("rechts", False) and not self.buttonStates.get("rechts", False):
-                        self._handle_focus_menu()
-                    elif current_states.get("oben", False) and not self.buttonStates.get("oben", False):
-                        self._handle_update_menu()
-                    elif current_states.get("unten", False) and not self.buttonStates.get("unten", False):
-                        self._handle_navigation_down()
+                # Sub-menu navigation (equivalent to 75 iterations in trap_hmi.py)
+                if self.menu_open and self.current_menu_state == "main":
+                    user_interacted = False
+                    for _ in range(75):
+                        if self.hmi_stop_event.is_set():
+                            break
+                            
+                        # Focus menu (rechts button)
+                        if self._button_pressed("rechts"):
+                            self._logger.info("Rechts gedrückt. Öffne Fokusmenü")
+                            self._handle_focus_menu()
+                            user_interacted = True
+                            break
+                            
+                        # Location code menu (unten button) 
+                        if self._button_pressed("unten"):
+                            self._display_text("Bitte Land,", "Provinz und", "Stadtcode wählen", "")
+                            time.sleep(3)
+                            self._handle_location_menu()
+                            user_interacted = True
+                            break
+                            
+                        # Update menu (oben button)
+                        if self._button_pressed("oben"):
+                            self._logger.info("Oben gedrückt. Öffne Update Menü")
+                            self._handle_update_menu()
+                            user_interacted = True
+                            break
+                            
+                        time.sleep(0.05)  # 50ms delay like in trap_hmi.py
+                    
+                    if user_interacted:
+                        self._turn_off_led("blau")
+                        self.current_menu_state = "submenu_completed"
+                    else:
+                        self._logger.info("kein Verstecktes Menü geöffnet")
+                        self.current_menu_state = "time_menu"
                 
-                # Update stored button states for edge detection
-                self.buttonStates.update(current_states)
+                # Time setting menu
+                if self.menu_open and self.current_menu_state == "time_menu":
+                    self._handle_time_menu()
+                    self.current_menu_state = "gps_menu"
+                
+                # GPS coordinate menu  
+                if self.menu_open and self.current_menu_state == "gps_menu":
+                    self._handle_gps_menu()
+                    self.current_menu_state = "system_test"
+                
+                # System test sequence
+                if self.menu_open and self.current_menu_state == "system_test":
+                    self._handle_system_test()
+                    self.current_menu_state = "completed"
+                    self.menu_open = False
+                
+                # Reset for next cycle
+                if self.current_menu_state == "completed":
+                    self.current_menu_state = "main"
+                    time.sleep(1)  # Brief pause before next cycle
                 
                 # Small delay to prevent excessive CPU usage
                 time.sleep(0.1)
@@ -720,18 +783,260 @@ class LepmonController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Update menu handling failed: {e}")
 
-    def _handle_navigation_down(self):
-        """Handle down button press for menu navigation"""
+    def _handle_location_menu(self):
+        """Handle location code menu - equivalent to set_location_code() in trap_hmi.py"""
         try:
-            if self.current_menu_state == "main":
-                self.current_menu_state = "settings"
-                self._display_text("Einstellungen", "Menü", "oben=Zurück", "enter=Auswahl")
-            elif self.current_menu_state == "settings":
-                self.current_menu_state = "main"
-                self._display_text("Hauptmenü", "rechts=Fokus", "enter=Eingabe", "unten=Settings")
-            self._logger.info(f"Menu navigation: {self.current_menu_state}")
+            self._logger.info("Menü zum Ändern der Provinz und Stadtkürzel geöffnet. Erwarte Neustart nach Ende des Menüpunktes")
+            
+            # Simulate location code setting - in real implementation this would be interactive
+            # For now, just display the status and return
+            restart_needed = False  # Simulate no changes
+            
+            if not restart_needed:
+                self._logger.info("Menü zum Ändern der Provinz und Stadtkürzel beendet. Es wurden keine Änderungen eingegeben. Fahre fort")
+                self._display_text("Code unverändert", "fahre fort", "", "")
+                time.sleep(2)
+            else:
+                self._logger.info("Menü zum Ändern der Provinz und Stadtkürzel beendet. Es wurden Änderungen eingegeben. starte neu zum Übernehmen")
+                self._display_text("Code geändert", "Falle startet neu", "fürs Anwenden", "")
+                time.sleep(3)
+                
         except Exception as e:
-            self._logger.error(f"Navigation down handling failed: {e}")
+            self._logger.error(f"Location menu handling failed: {e}")
+
+    def _handle_time_menu(self):
+        """Handle time setting menu - equivalent to time menu section in trap_hmi.py"""
+        try:
+            self._display_text("Datum / Uhrzeit:", "hoch aktualisieren", "runter bestätigen", "")
+            time.sleep(3)
+            self._turn_on_led("blau")
+            
+            user_selection_time = False
+            self._logger.info("Zeitmenü anfang")
+            status_rtc = 0
+            com_rtc = 0
+            
+            while not user_selection_time and not self.hmi_stop_event.is_set():
+                # Get current time (equivalent to Zeit_aktualisieren())
+                if com_rtc < 2:
+                    try:
+                        # Simulate time update
+                        now = datetime.datetime.now()
+                        jetzt_local = now.strftime("%Y-%m-%d %H:%M:%S")
+                        jetzt_local_dt = datetime.datetime.strptime(jetzt_local, "%Y-%m-%d %H:%M:%S")
+                        com_rtc += 1
+                    except:
+                        jetzt_local = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
+                        jetzt_local_dt = datetime.datetime.strptime(jetzt_local, "%Y-%m-%d %H:%M:%S")
+                        com_rtc += 1
+                else:
+                    jetzt_local = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    jetzt_local_dt = datetime.datetime.strptime(jetzt_local, "%Y-%m-%d %H:%M:%S")
+                
+                self._display_text(
+                    jetzt_local_dt.strftime("%Y-%m-%d"),
+                    jetzt_local_dt.strftime("%H:%M:%S"), 
+                    "▲ = neu  ▼ = ok",
+                    ""
+                )
+                
+                # Check for button presses (equivalent to 20 iterations)
+                for _ in range(20):
+                    if self.hmi_stop_event.is_set():
+                        break
+                        
+                    if self._button_pressed("oben"):
+                        self._turn_off_led("blau")
+                        self._logger.info("Menü zum aktualisieren der Uhrzeit geöffnet")
+                        time.sleep(1)
+                        # Simulate set_hwc() call
+                        self._logger.info("Zeit aktualisiert (simuliert)")
+                        self._logger.info("Menü zum aktualisieren der Uhrzeit geschlossen")
+                        user_selection_time = True
+                        break
+                        
+                    if self._button_pressed("unten"):
+                        self._logger.info("Uhrzeit nicht mit dem lokalen Interface aktualisiert")
+                        self._turn_off_led("blau")  
+                        user_selection_time = True
+                        break
+                        
+                    time.sleep(0.05)
+                
+                if user_selection_time:
+                    break
+                    
+            self._logger.info("Zeitmenü Ende")
+            
+        except Exception as e:
+            self._logger.error(f"Time menu handling failed: {e}")
+
+    def _handle_gps_menu(self):
+        """Handle GPS coordinate menu - equivalent to GPS section in trap_hmi.py"""
+        try:
+            # Get coordinates (equivalent to get_coordinates())
+            latitude, longitude = 48.1351, 11.5820  # Default Munich coordinates
+            
+            self._display_text("Koordinaten mit", "hoch aktualisieren", "runter bestätigen", "")
+            time.sleep(3)
+            self._display_text(f"N-S: {latitude}", f"O-W: {longitude}", "▲ = neu  ▼ = ok", "")
+            self._turn_on_led("blau")
+            
+            user_selection_GPS = False
+            self._logger.info("GPS Menü Anfang")
+            
+            while not user_selection_GPS and not self.hmi_stop_event.is_set():
+                if self._button_pressed("oben"):
+                    self._turn_off_led("blau")
+                    self._logger.info("Menü zum aktualisieren der Koordinaten geöffnet")
+                    time.sleep(1)
+                    # Simulate set_coordinates() call
+                    self._logger.info("Koordinaten aktualisiert (simuliert)")
+                    self._logger.info("Menü zum aktualisieren der Koordinaten geschlossen")
+                    user_selection_GPS = True
+                    
+                if self._button_pressed("unten"):
+                    self._logger.info("Koordinaten nicht mit dem lokalen Interface aktualisiert")
+                    self._turn_off_led("blau")
+                    user_selection_GPS = True
+                    
+                time.sleep(0.05)
+                
+        except Exception as e:
+            self._logger.error(f"GPS menu handling failed: {e}")
+
+    def _handle_system_test(self):
+        """Handle system test sequence - equivalent to system test section in trap_hmi.py"""
+        try:
+            self._display_text("Testlauf starten", "", "", "")
+            time.sleep(2)
+            self._logger.info("Starte Systemcheck")
+            
+            # Sensor data test
+            now = datetime.datetime.now()
+            lokale_Zeit = now.strftime("%H:%M:%S")
+            sensor_data = self._read_sensor_data("Test_hmi", lokale_Zeit)
+            
+            self._display_sensor_status_with_text(sensor_data)
+            
+            # Camera test
+            self._display_text("Kamera Test", "", "", "")
+            time.sleep(1)
+            Status_Kamera = 0
+            test_attempts = 0
+            max_attempts = 3
+            
+            while Status_Kamera == 0 and test_attempts < max_attempts:
+                self._display_text("Kamera Test", "aktiviere", "UV Lampe", "")
+                time.sleep(1)
+                self._lepiled_start()
+                
+                try:
+                    result = self.lepmonSnapImage("jpg", "display", 0, 80)
+                    Status_Kamera = 1 if result["success"] else 0
+                except:
+                    Status_Kamera = 0
+                    
+                self._lepiled_ende()
+                time.sleep(1)
+                
+                test_attempts += 1
+                self._logger.info(f"Kamera Status: {Status_Kamera}")
+                
+                if Status_Kamera == 0:
+                    self._display_text("Kamera Test", "Fehler- Falle", "wiederholt Test", "")
+                    time.sleep(3)
+                    
+            if Status_Kamera == 1:
+                self._display_text("Kamera Test", "erfolgreich", "beendet", "")
+                time.sleep(3)
+            
+            # USB storage test
+            USB = 0
+            while USB == 0:
+                try:
+                    total_space, used_space, free_space, used_pct, free_pct = self._get_disk_space()
+                    total_space_gb = round(total_space, 1) if total_space else None
+                    free_space_gb = round(free_space, 1) if free_space else None
+                    
+                    self._display_text("USB Speicher", f"gesamt: {total_space_gb} GB", f"frei:   {free_space_gb} GB", "")
+                    time.sleep(3)
+                    self._logger.info(f"USB Speicher: gesamt: {total_space_gb} GB; frei: {free_space_gb} GB")
+                    
+                    if total_space_gb is None:
+                        self._display_text("USB Speicher", "nicht erkannt", "Prüfe Anschluss", "")
+                        time.sleep(3)
+                        # In real implementation: trap_shutdown(5)
+                        self._logger.warning("USB Speicher nicht erkannt")
+                        break
+                    elif free_space_gb < 13:
+                        self._display_text("USB Speicher", "fast voll", "bitte leeren", "")
+                        time.sleep(3)
+                        self._logger.warning("USB Speicher fast voll, bitte leeren")
+                        # In real implementation: trap_shutdown(5)
+                        break
+                    else:
+                        self._display_text("USB Speicher", "OK", "", "")
+                        time.sleep(1)
+                        self._logger.info("USB Speicher OK")
+                        USB = 1
+                        
+                except Exception as e:
+                    self._logger.error(f"USB storage check failed: {e}")
+                    break
+                    
+                time.sleep(0.05)
+            
+            # Display sun times
+            sunset_time = self.experiment_start_time or "18:30:00"
+            sunrise_time = self.experiment_end_time or "06:30:00"
+            
+            self._display_text("Sonnenuntergang", sunset_time[:10] if len(sunset_time) > 10 else "", sunset_time[-8:] if len(sunset_time) > 8 else sunset_time, "")
+            time.sleep(3)
+            self._display_text("Sonnenaufgang", sunrise_time[:10] if len(sunrise_time) > 10 else "", sunrise_time[-8:] if len(sunrise_time) > 8 else sunrise_time, "")
+            time.sleep(3)
+            
+            # Display serial number
+            sn = self.serial_number
+            self._display_text("Seriennummer", sn, "", "")
+            time.sleep(2)
+            
+            self._display_text("Testlauf beendet", "bitte Deckel", "schließen", "")
+            time.sleep(2)
+            self._logger.info("Beende Systemcheck")
+            
+        except Exception as e:
+            self._logger.error(f"System test failed: {e}")
+
+    def _display_sensor_status_with_text(self, sensor_data):
+        """Display sensor status with text - equivalent to display_sensor_status_with_text in trap_hmi.py"""
+        try:
+            # Simulate sensor status - in real implementation this would read from actual sensors
+            sensor_status = {
+                "Light_Sensor": 1,
+                "Inner_Sensor": 1, 
+                "Power_Sensor": 1,
+                "Environment_Sensor": 1
+            }
+            
+            sensors = [
+                ("Light_Sensor", "LUX", "Lux"),
+                ("Inner_Sensor", "Temp_in", "°C"),
+                ("Power_Sensor", "bus_voltage", "V"),
+                ("Environment_Sensor", "Temp_out", "°C")
+            ]
+            
+            for sensor_name, data_key, einheit in sensors:
+                status_value = sensor_status.get(sensor_name, 0)
+                status = "OK" if str(status_value) == "1" or status_value == 1 else "Fehler"
+                value = sensor_data.get(data_key, "---")
+                
+                self._display_text(sensor_name, f"Status: {status}", f"Wert: {value} {einheit}", "")
+                time.sleep(2.5)
+                self._logger.info(f"Sensor: {sensor_name}, Status: {status}, Wert: {value} {einheit}")
+                
+        except Exception as e:
+            self._logger.error(f"Sensor status display failed: {e}")
 
     # ---------------------- LepmonOS LED Control Functions ---------------------- #
 

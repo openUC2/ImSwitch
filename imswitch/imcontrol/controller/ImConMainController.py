@@ -84,9 +84,11 @@ class ImConMainController(MainController):
                 except Exception as e:
                     self.__logger.debug(e)
 
+
         # Add WiFiController in any way # TODO: Better would be to add this to the widget dict 
         try: 
             self.__logger.info(f'Creating controller for widget WiFi')
+            controller_name = "WiFiController"
             module = importlib.import_module(f'imswitch.imcontrol.controller.controllers.WiFiController')
             controller_class = getattr(module, controller_name)
             if controller_class is not None:

@@ -4,11 +4,9 @@ import threading
 import collections
 import logging
 
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
-from imswitch.imcontrol.view import guitools
-from imswitch.imcommon.model import initLogger
+from imswitch.imcommon.framework import Signal, Timer
 from ..basecontrollers import ImConWidgetController
-from imswitch import IS_HEADLESS
+from imswitch.imcommon.model import APIExport
 
 class ESP32InfoScreenController(ImConWidgetController):
     """ Controller for ESP32 InfoScreen display integration """
@@ -52,14 +50,26 @@ class ESP32InfoScreenController(ImConWidgetController):
         # get all Lasers
         self.lasers = self._master.lasersManager.getAllDeviceNames()
         self.laser = None
-        if len(self.lasers) > 0:
-            self.laser = self.lasers[0]
-            try:
-                self._master.lasersManager[self.laser].setGalvo(channel=1, frequency=10, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1)
-            except Exception as e:
-                self._logger.error(e)
-        else:
-            self._logger.warning("No lasers found")
+        
+        # Map lasers to ESP32 PWM channels (1-4 are typical ESP32 PWM channels)
+        # This creates a mapping from laser name to ESP32 channel number
+        self.laser_to_channel_map = {}
+        self.channel_to_laser_map = {}
+        
+        # Default channel mapping (can be overridden by setup configuration)
+        default_channels = [1, 2, 3, 4]  # ESP32 PWM channels 1-4
+        
+        # Create bidirectional mapping between lasers and channels
+        for i, laser_name in enumerate(self.lasers[:len(default_channels)]):
+            channel = default_channels[i]
+            self.laser_to_channel_map[laser_name] = channel
+            self.channel_to_laser_map[channel] = laser_name
+            self._logger.info(f"Mapped laser '{laser_name}' to ESP32 PWM channel {channel}")
+        
+        # Warn if we have more lasers than available channels
+        if len(self.lasers) > len(default_channels):
+            unmapped_lasers = self.lasers[len(default_channels):]
+            self._logger.warning(f"More lasers than ESP32 channels available. Unmapped lasers: {unmapped_lasers}")
             
         # get LEDMatrix
         allLEDMatrixNames = self._master.LEDMatrixsManager.getAllDeviceNames()
@@ -68,7 +78,7 @@ class ESP32InfoScreenController(ImConWidgetController):
         else:
             self.ledMatrix = None
             self._logger.warning("No LEDMatrix found")
-            return
+            
 
         # Initialize ESP32 connection
         self._initializeESP32Connection()
@@ -85,7 +95,7 @@ class ESP32InfoScreenController(ImConWidgetController):
             
             port = find_esp32_port()
             if not port:
-                self._logger.warning("No ESP32 device found for InfoScreen")
+                self._logger.error("No ESP32 device found for InfoScreen")
                 return
                 
             self.esp32_controller = UC2SerialController(port)
@@ -103,6 +113,21 @@ class ESP32InfoScreenController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error initializing ESP32 connection: {e}")
 
+    @APIExport()
+    def reconnectESP32(self):
+        """Reconnect to the ESP32 InfoScreen"""
+        if self.esp32_controller:
+            self.esp32_controller.disconnect()
+        self._initializeESP32Connection()
+        self._connectImSwitchSignals()
+
+    @APIExport()
+    def getESP32ConnectionStatus(self):
+        """Get the current connection status of the ESP32 InfoScreen"""
+        if self.esp32_controller:
+            return self.esp32_controller.is_connected()
+        return False
+
     def _setupESP32Callbacks(self):
         """Setup callbacks for ESP32 display interactions"""
         if not self.esp32_controller:
@@ -115,7 +140,8 @@ class ESP32InfoScreenController(ImConWidgetController):
         self.esp32_controller.on_led_command(self._handleLEDCommand)
         self.esp32_controller.on_pwm_command(self._handlePWMCommand)
         self.esp32_controller.on_snap_image_command(self._handleSnapImageCommand)
-        
+        self.esp32_controller.on_goto_position_command(self._handleGotoPositionCommand)
+
         # ESP32 -> ImSwitch status callbacks (for monitoring)
         self.esp32_controller.on_connection_changed(self._handleConnectionChanged)
         
@@ -143,31 +169,33 @@ class ESP32InfoScreenController(ImConWidgetController):
             motor = data.get('motor', 0)
             speed = data.get('speed', 0)
             position = data.get('position', None)
-            self._logger.info(f"ESP32: User set motor {motor} to speed {speed}, position {position}")
-            
+            steps = data.get('steps', None)
+            self._logger.info(f"ESP32: User set motor {motor} to speed {speed}, position {position}, steps {steps}")
+
             # Map motor ID to axis (assuming 0=X, 1=Y, 2=Z, 3=A)
-            axis_map = {0: 'X', 1: 'Y', 2: 'Z', 3: 'A'}
+            axis_map = {1: 'X', 2: 'Y', 3: 'Z', 0: 'A'}
             axis = axis_map.get(motor, 'X')
             
             if hasattr(self.positioner, 'move') and axis in self.positioner.axes:
-                # Zero speed means stop motor
-                if speed == 0:
-                    if hasattr(self.positioner, 'stop'):
-                        self.positioner.stop(axis)
-                    return
-                
+
                 # If we have position data, use it for relative moves 
                 if position is not None:
                     # Position-based movement in ImSwitch units
-                    self.positioner.move(position, axis, is_absolute=False, is_blocking=False)
+                    self.positioner.move(position, axis, is_absolute=True, is_blocking=False)
+                elif steps is not None:
+                    # Step-based movement
+                    self.positioner.move(steps, axis, is_absolute=False, is_blocking=False)
                 else:
                     # Speed-based movement - continuous motion
                     if hasattr(self.positioner, 'setSpeed'):
                         # Set continuous speed if supported
                         self.positioner.setSpeed(speed, axis)
                         if hasattr(self.positioner, 'moveForever'):
-                            direction = 1 if speed > 0 else -1
-                            self.positioner.moveForever(axis, direction)
+                            # map axis to speed (e.g. axis x => 1 => (0,speed,0,0)), etc
+                            # map axis to number A,X,Y,Z=>0,1,2,3 
+                            _speed = [0, 0, 0, 0]
+                            _speed[axis] = speed
+                            self.positioner.moveForever( speed=_speed, is_stop=(abs(speed)!=0))
                     else:
                         # Fallback: convert speed to small relative steps
                         step_size = speed / 1000.0  # Convert speed to step size
@@ -238,31 +266,47 @@ class ESP32InfoScreenController(ImConWidgetController):
             value = data.get('value', 0)
             self._logger.info(f"ESP32: User set PWM channel {channel} to {value}")
             
-            # Map PWM channel to laser (assuming channel 1-4 maps to laser indices)
-            if channel > 0 and channel <= len(self.lasers):
-                laser_name = self.lasers[channel - 1]
+            # Map ESP32 channel to laser using our channel mapping
+            if channel in self.channel_to_laser_map:
+                laser_name = self.channel_to_laser_map[channel]
                 laser_manager = self._master.lasersManager[laser_name]
                 
                 # Check if laser needs to be enabled first
                 if hasattr(laser_manager, 'enabled') and not laser_manager.enabled:
                     if value > 0:  # Only enable if we're setting a positive value
                         laser_manager.setEnabled(True)
-                        self._logger.info(f"Enabled laser {laser_name}")
+                        self._logger.info(f"Enabled laser {laser_name} (channel {channel})")
                 
                 if hasattr(laser_manager, 'setValue'):
                     # Convert 0-1024 range to laser's value range
                     max_value = getattr(laser_manager, 'valueRangeMax', 1024)
                     normalized_value = int((value / 1024.0) * max_value)
-                    laser_manager.setValue(normalized_value)
-                    
+                    self._logger.debug(f"Set laser {laser_name} (channel {channel}) to {normalized_value}/{max_value}")
+                    self._commChannel.sigUpdateLaserValue.emit(laser_name, normalized_value)
                     # If value is 0, we can optionally disable the laser
                     if value == 0 and hasattr(laser_manager, 'setEnabled'):
                         laser_manager.setEnabled(False)
-                        self._logger.info(f"Disabled laser {laser_name}")
+                        self._logger.info(f"Disabled laser {laser_name} (channel {channel})")
+            else:
+                self._logger.warning(f"ESP32 PWM channel {channel} not mapped to any laser. Available channels: {list(self.channel_to_laser_map.keys())}")
                     
         except Exception as e:
             self._logger.error(f"Error handling PWM command: {e}")
-            
+    
+    def _handleGotoPositionCommand(self, data):
+        """Handle go-to absolute positions for xyz coordinates"""
+        try:
+            x = data.get('x', None)
+            y = data.get('y', None)
+            z = data.get('z', None)
+            self._logger.info(f"ESP32: User requested goto position x={x}, y={y}, z={z}")
+            # Trigger the stage movement
+            if x is not None:  self.positioner.move(x, axis="X", is_absolute=True, is_blocking=False)
+            if y is not None:  self.positioner.move(y, axis="Y", is_absolute=True, is_blocking=False)
+            if z is not None:  self.positioner.move(z, axis="Z", is_absolute=True, is_blocking=False)
+        except Exception as e:
+            self._logger.error(f"Error handling goto position command: {e}")
+
     def _handleSnapImageCommand(self, data):
         """Handle image capture command from ESP32 display"""
         try:
@@ -357,12 +401,13 @@ class ESP32InfoScreenController(ImConWidgetController):
         """Actually send the motor position update"""
         try:
             # Update sample position based on X,Y coordinates (normalize to 0-1)
-            if len(positions) >= 2:
-                # Simple normalization - may need calibration for actual setup
-                x_norm = min(max((positions[0] + 50) / 100.0, 0), 1)  # Assuming ±50mm range
-                y_norm = min(max((positions[1] + 50) / 100.0, 0), 1)
-                self.esp32_controller.update_sample_position(x_norm, y_norm)
-                self._last_update_time = time.time()
+            # {"type":"position_update","data":{"x":1.2,"y":0,"z":0.1}}
+            xposition = positions.get(self.positioner.name)["X"]
+            yposition = positions.get(self.positioner.name)["Y"]
+            zposition = positions.get(self.positioner.name)["Z"]
+            # Simple normalization - may need calibration for actual setup
+            self.esp32_controller.update_sample_position(xposition, yposition, zposition)
+            self._last_update_time = time.time()
         except Exception as e:
             self._logger.error(f"Error sending position update to ESP32: {e}")
             
@@ -385,16 +430,17 @@ class ESP32InfoScreenController(ImConWidgetController):
         """Send laser value update to ESP32 display"""
         try:
             if self.esp32_controller and self._connected:
-                # Map laser name to channel (assuming order matches self.lasers)
-                try:
-                    channel = self.lasers.index(laser_name) + 1
+                # Map laser name to ESP32 channel using our mapping
+                if laser_name in self.laser_to_channel_map:
+                    channel = self.laser_to_channel_map[laser_name]
                     # Convert value to 0-1024 range expected by ESP32
                     laser_manager = self._master.lasersManager[laser_name]
                     max_value = getattr(laser_manager, 'valueRangeMax', 1024)
                     normalized_value = int((value / max_value) * 1024)
                     self.esp32_controller.set_pwm(channel, normalized_value)
-                except (ValueError, AttributeError) as e:
-                    self._logger.warning(f"Could not update laser {laser_name} on ESP32: {e}")
+                    self._logger.debug(f"Updated ESP32 channel {channel} for laser {laser_name}: {normalized_value}/1024")
+                else:
+                    self._logger.warning(f"Laser {laser_name} not mapped to any ESP32 channel. Available mappings: {self.laser_to_channel_map}")
         except Exception as e:
             self._logger.error(f"Error sending laser value update to ESP32: {e}")
             
@@ -402,13 +448,11 @@ class ESP32InfoScreenController(ImConWidgetController):
         """Send laser enabled state update to ESP32 display"""
         try:
             if self.esp32_controller and self._connected:
-                # If disabled, set PWM to 0
-                if not enabled:
-                    try:
-                        channel = self.lasers.index(laser_name) + 1
-                        self.esp32_controller.set_pwm(channel, 0)
-                    except ValueError:
-                        pass
+                # If disabled, set PWM to 0 using our channel mapping
+                if not enabled and laser_name in self.laser_to_channel_map:
+                    channel = self.laser_to_channel_map[laser_name]
+                    self.esp32_controller.set_pwm(channel, 0)
+                    self._logger.debug(f"Disabled laser {laser_name} on ESP32 channel {channel}")
         except Exception as e:
             self._logger.error(f"Error sending laser enabled update to ESP32: {e}")
             

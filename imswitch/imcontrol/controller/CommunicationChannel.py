@@ -117,6 +117,8 @@ class CommunicationChannel(SignalInterface):
 
     sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI
 
+    sigUpdateLaserValue = Signal(str, float)  # (laserName, power)
+
     sigSetSyncInMovementSettings = Signal(str, float)  # (rotatorName, position)
 
     sigNewFrame = Signal()

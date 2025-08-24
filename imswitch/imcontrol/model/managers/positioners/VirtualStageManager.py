@@ -61,6 +61,7 @@ class VirtualStageManager(PositionerManager):
             self._position[axes] = self._positioner.position[axes]
         #self._commChannel.sigUpdateMotorPosition.emit()
 
+
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
         pass
 

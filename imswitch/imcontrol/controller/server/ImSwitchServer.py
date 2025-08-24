@@ -1,6 +1,6 @@
 import threading
 from imswitch.imcommon.framework import Worker
-from imswitch.imcommon.model import dirtools, initLogger
+from imswitch.imcommon.model import dirtools, initLogger, get_plugin_manager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from pydantic import BaseModel
@@ -489,6 +489,36 @@ class ImSwitchServer(Worker):
                     StaticFiles(directory=os.path.join(meta["path"])),
                     name=meta["name"],
                 )
+
+        # Add plugin manifests from centralized plugin manager
+        plugin_manager = get_plugin_manager()
+        react_widget_plugins = plugin_manager.get_react_widget_plugins()
+        
+        for plugin_info in react_widget_plugins:
+            try:
+                manifest_data = plugin_manager.get_plugin_manifest_data(plugin_info.name)
+                if manifest_data:
+                    mount = f"/plugin/{manifest_data['name']}"
+                    _ui_manifests.append({
+                        "name": manifest_data["name"],
+                        "icon": manifest_data.get("icon", "default"),
+                        "path": manifest_data["path"],
+                        "exposed": "Widget",
+                        "scope": "plugin",
+                        "url": os.path.join(mount, "index.html"),
+                        "remote": os.path.join(mount, "remoteEntry.js")
+                    })
+                    
+                    # Mount plugin static files if they exist
+                    if os.path.exists(manifest_data["path"]):
+                        self.__logger.debug(f"Mounting plugin {mount} to {manifest_data['path']}")
+                        app.mount(
+                            mount,
+                            StaticFiles(directory=manifest_data["path"]),
+                            name=manifest_data["name"],
+                        )
+            except Exception as e:
+                self.__logger.error(f"Failed to process plugin manifest for {plugin_info.name}: {e}")
 
     # The reason why it's still called UC2ConfigController is because we don't want to change the API
     @app.get("/UC2ConfigController/returnAvailableSetups")

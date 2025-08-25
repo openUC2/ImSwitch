@@ -1,11 +1,53 @@
 #!/usr/bin/env bash
 
-# make sure network services are started
-mkdir -p /run/dbus
-dbus-daemon --system --fork
-/usr/sbin/NetworkManager --no-daemon >/var/log/NetworkManager.log 2>&1 &
-sleep 1
-nmcli general status
+set -euo pipefail
+
+log() { echo "[$(date +'%F %T')] $*"; }
+
+# ---- NetworkManager / D-Bus mode selection ----
+# WIFI_MODE=host      -> expect host NM; require /run/dbus and /etc/machine-id bind-mounts
+# WIFI_MODE=container -> run dbus-daemon + NetworkManager inside the container
+WIFI_MODE="${WIFI_MODE:-host}"
+
+
+start_container_nm() {
+  log "WIFI_MODE=container → starting dbus-daemon and NetworkManager in container"
+  mkdir -p /run/dbus
+  # Ensure machine-id exists (for dbus/NM)
+  [[ -s /etc/machine-id ]] || dbus-uuidgen --ensure=/etc/machine-id
+
+  dbus-daemon --system --fork || true
+  # Start NM (no systemd)
+  /usr/sbin/NetworkManager --no-daemon >/var/log/NetworkManager.log 2>&1 &
+  # Wait until NM is ready (max ~5s)
+  for i in {1..10}; do
+    if nmcli general status >/dev/null 2>&1; then
+      log "NetworkManager is up (container)"
+      return 0
+    fi
+    sleep 0.5
+  done
+  log "WARN: NetworkManager did not report ready; continuing"
+}
+
+setup_host_nm() {
+  log "WIFI_MODE=host → do not start NM in container"
+  if [[ ! -S /run/dbus/system_bus_socket ]]; then
+    log "WARN: /run/dbus/system_bus_socket not mounted; host nmcli calls will fail"
+  fi
+  if [[ ! -s /etc/machine-id ]]; then
+    log "WARN: /etc/machine-id not mounted; host nmcli may reject D-Bus"
+  fi
+}
+
+
+if [[ "$WIFI_MODE" == "container" ]]; then
+  start_container_nm
+else
+  setup_host_nm
+fi
+
+
 
 if [[ ! ("$MODE" == "terminal") ]];
 then

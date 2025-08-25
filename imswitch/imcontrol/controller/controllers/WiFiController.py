@@ -126,6 +126,7 @@ class WiFiController(ImConWidgetController):
 
     @APIExport(runOnUIThread=False)
     def scanNetworks(self, ifname: Optional[str] = None) -> Dict:
+        # nmcli device wifi list
         ifname = ifname or self._get_wifi_ifname()
         args = ["-t", "-f", "SSID,SIGNAL,SECURITY,CHAN,FREQ", "device", "wifi", "list"]
         if ifname:

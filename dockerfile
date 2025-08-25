@@ -210,9 +210,15 @@ RUN cd /tmp/UC2-REST && \
 # install arkitekt 
 RUN /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip" 
     
+ENV WIFI_MODE=host 
+
 # Expose FTP port and HTTP port
-EXPOSE  8001 8002 8003 8888 8889
+EXPOSE  8001 8002 8003 8888 8889 22 
 
 ADD docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
+
+# Optional: basic healthcheck for host-NM mode (noop if socket not mounted)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD [[ -S /run/dbus/system_bus_socket ]] && nmcli general status >/dev/null 2>&1 || exit 0

@@ -9,6 +9,9 @@ log() { echo "[$(date +'%F %T')] $*"; }
 # WIFI_MODE=container -> run dbus-daemon + NetworkManager inside the container
 WIFI_MODE="${WIFI_MODE:-host}"
 
+# Provide safe default for MODE to avoid unbound variable errors
+MODE="${MODE:-server}"
+
 
 start_container_nm() {
   log "WIFI_MODE=container → starting dbus-daemon and NetworkManager in container"
@@ -49,7 +52,7 @@ fi
 
 
 
-if [[ ! ("$MODE" == "terminal") ]];
+if [[ "${MODE}" != "terminal" ]];
 then
     echo 'Starting the container'
     echo 'Listing USB Bus'
@@ -63,15 +66,8 @@ then
     echo 'Listing Config Dir'
     ls /tmp/ImSwitchConfig/imcontrol_setups
     
-    # Start D-Bus service (required for NetworkManager)
-    echo 'Starting D-Bus service'
-    service dbus start
-    
-    # start network manager
-    echo 'Starting Network Manager'
-    service network-manager start
-    echo 'Checking Network Manager status'
-    nmcli general status
+    # D-Bus/NetworkManager handling is done above via WIFI_MODE
+    echo 'Networking initialized (WIFI_MODE handled)'
 
     PATCH_DIR=/tmp/ImSwitch-changes
     PATCH_FILE=$PATCH_DIR/diff.patch 
@@ -171,8 +167,6 @@ then
 else
     source /opt/conda/bin/activate imswitch
     echo 'Starting the container in terminal mode'
-    # Ensure nmcli works in terminal mode
-    service dbus start
-    service network-manager start    
+    # Networking is handled via WIFI_MODE at script start
     exec bash
 fi

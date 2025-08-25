@@ -9,9 +9,14 @@ log() { echo "[$(date +'%F %T')] $*"; }
 # WIFI_MODE=container -> run dbus-daemon + NetworkManager inside the container
 WIFI_MODE="${WIFI_MODE:-host}"
 
-# Provide safe default for MODE to avoid unbound variable errors
+# Provide safe default values for variables
 MODE="${MODE:-server}"
-
+PIP_PACKAGES="${PIP_PACKAGES:-}"
+PERSISTENT_PIP_DIR="${PERSISTENT_PIP_DIR:-/persistent_pip_packages}"
+UPDATE_GIT="${UPDATE_GIT:-false}"
+UPDATE_CONFIG="${UPDATE_CONFIG:-false}"
+CONFIG_PATH="${CONFIG_PATH:-}"
+UPDATE_INSTALL_GIT="${UPDATE_INSTALL_GIT:-false}"
 
 start_container_nm() {
   log "WIFI_MODE=container → starting dbus-daemon and NetworkManager in container"
@@ -91,7 +96,6 @@ then
         CONFIG_FILE=None
     fi
     
-    PERSISTENT_PIP_DIR="${PERSISTENT_PIP_DIR:-/persistent_pip_packages}"
     mkdir -p "$PERSISTENT_PIP_DIR"
     export PYTHONUSERBASE="$PERSISTENT_PIP_DIR"
     export PATH="$PERSISTENT_PIP_DIR/bin:$PATH"

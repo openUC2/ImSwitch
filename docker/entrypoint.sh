@@ -59,10 +59,6 @@ then
     lsusb
     echo 'Listing external storage devices'
     ls /media
-    echo 'Starting SSH Server'
-    /usr/sbin/sshd -D
-    echo 'Starting SFTP Server'
-    /usr/sbin/vsftpd /etc/vsftpd.conf
     echo 'Listing Config Dir'
     ls /tmp/ImSwitchConfig/imcontrol_setups
     

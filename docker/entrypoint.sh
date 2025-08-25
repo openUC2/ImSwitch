@@ -17,6 +17,7 @@ UPDATE_GIT="${UPDATE_GIT:-false}"
 UPDATE_CONFIG="${UPDATE_CONFIG:-false}"
 CONFIG_PATH="${CONFIG_PATH:-}"
 UPDATE_INSTALL_GIT="${UPDATE_INSTALL_GIT:-false}"
+ssl=${ssl:-false}
 
 start_container_nm() {
   log "WIFI_MODE=container → starting dbus-daemon and NetworkManager in container"

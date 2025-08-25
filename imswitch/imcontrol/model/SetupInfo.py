@@ -484,6 +484,81 @@ class PyroServerInfo:
     active: Optional[bool] = False
 
 
+@dataclass(frozen=False)
+class VirtualMicroscopeInfo:
+    """ Configuration for Virtual Microscope simulation parameters """
+    
+    # Stage drift simulation parameters
+    drift_enabled: bool = False
+    drift_rate_x: float = 0.1  # pixels per second
+    drift_rate_y: float = 0.1
+    drift_rate_z: float = 0.05
+    
+    # Objective parameters
+    objectives: dict = field(default_factory=lambda: {
+        "20x_0.75": {
+            "magnification": 20,
+            "NA": 0.75,
+            "pixel_scale": 0.325,  # um per pixel
+            "type": "air"
+        },
+        "60x_1.42": {
+            "magnification": 60,
+            "NA": 1.42,
+            "pixel_scale": 0.108,  # um per pixel  
+            "type": "oil"
+        }
+    })
+    current_objective: str = "20x_0.75"
+    
+    # Exposure and gain simulation
+    exposure_time: float = 100.0  # ms
+    gain: float = 1.0
+    
+    # Photobleaching simulation
+    bleaching_enabled: bool = False
+    bleaching_rate: float = 0.01  # fraction per exposure
+    
+    # Multi-channel simulation
+    channels: dict = field(default_factory=lambda: {
+        "488": {"wavelength": 488, "intensity": 1.0, "color": "cyan"},
+        "561": {"wavelength": 561, "intensity": 1.0, "color": "green"},  
+        "640": {"wavelength": 640, "intensity": 1.0, "color": "red"}
+    })
+    active_channels: list = field(default_factory=lambda: ["488"])
+    
+    # Noise parameters
+    readout_noise: float = 50.0
+    shot_noise_enabled: bool = True
+    dark_current: float = 0.1
+    
+    # Sampling and aliasing for education
+    nyquist_sampling: bool = True
+    aliasing_enabled: bool = False
+    
+    # SLM (Spatial Light Modulator) parameters
+    slm_enabled: bool = False
+    slm_pattern_type: str = "blank"
+    slm_pattern_params: dict = field(default_factory=lambda: {
+        "frequency": 10,
+        "phase": 0,
+        "amplitude": 255,
+        "angle": 0,
+        "center_x": 960,  # Half of typical SLM width
+        "center_y": 576   # Half of typical SLM height
+    })
+    slm_zernike_coeffs: dict = field(default_factory=lambda: {
+        "tip": 0.0,
+        "tilt": 0.0, 
+        "defocus": 0.0,
+        "astig_0": 0.0,
+        "astig_45": 0.0,
+        "coma_x": 0.0,
+        "coma_y": 0.0,
+        "spherical": 0.0
+    })
+
+
 @dataclass_json(undefined=Undefined.INCLUDE)
 @dataclass
 class SetupInfo:
@@ -581,6 +656,9 @@ class SetupInfo:
     focusLock: Optional[FocusLockInfo] = field(default_factory=lambda: None)
     """ Focus lock settings. Required to be defined to use focus lock
     functionality. """
+
+    virtualMicroscope: Optional[VirtualMicroscopeInfo] = field(default_factory=lambda: None)
+    """ Virtual Microscope settings. Required to be defined to use enhanced Virtual Microscope functionality. """
 
     fovLock: Optional[FOVLockInfo] = field(default_factory=lambda: None)
     """ Focus lock settings. Required to be defined to use fov lock

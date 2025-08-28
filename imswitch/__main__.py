@@ -25,7 +25,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
 
     To start imswitch in headless using the arguments, you can call the main file with the following arguments:
         python main.py --headless or
-        python -m imswitch --headless 1 --config-file example_virtual_microscope.json --config-folder /Users/bene/Downloads --scan-ext-drive-mount true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes
+        python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-drive-mount true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes
     '''
     try:
         # Get the global configuration instance

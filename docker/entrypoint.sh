@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+#set -euo pipefail
 
 log() { echo "[$(date +'%F %T')] $*"; }
 

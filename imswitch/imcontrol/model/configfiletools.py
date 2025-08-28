@@ -95,7 +95,7 @@ def loadOptions():
         try:
             with open(_optionsFilePath, 'r') as optionsFile:
                 _options = Options.from_json(optionsFile.read(), infer_missing=True)
-                if _options.setupFileName not in getSetupList():
+                if _options.setupFileName not in getSetupList() and os.path.basename(_options.setupFileName) not in getSetupList():
                     _options = dataclasses.replace(_options, setupFileName="example_virtual_microscope.json")
         except json.decoder.JSONDecodeError:
             # create a warning message as a popup

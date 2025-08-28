@@ -9,14 +9,15 @@ services:
       - "8888:8888"
       - "2222:22"
     volumes:
-      - /Users/bene/ImSwitchConfig/:/config
-      - /Users/bene/ImSwitchConfig/:/dataset
+      - /Users/bene:/config
+      - /Users/bene:/dataset
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
       - /etc/machine-id:/etc/machine-id:ro
     environment:
       - HEADLESS=1
       - HTTP_PORT=8001
-      - CONFIG_FILE=example_virtual_microscope.json
+      - HTTP_PORT=8005
+      #- CONFIG_FILE=example_virtual_microscope.json
       - UPDATE_GIT=0
       - UPDATE_CONFIG=0
       - DATA_PATH=/dataset

@@ -66,9 +66,7 @@ then
     lsusb
     echo 'Listing external storage devices'
     ls /media
-    echo 'Listing Config Dir'
-    ls /tmp/ImSwitchConfig/imcontrol_setups
-    
+
     # D-Bus/NetworkManager handling is done above via WIFI_MODE
     echo 'Networking initialized (WIFI_MODE handled)'
 
@@ -93,9 +91,17 @@ then
     fi
     if [[ -z "$CONFIG_PATH" ]]
     then
+        echo 'No CONFIG_PATH set, using default config path'
         CONFIG_FILE="${CONFIG_FILE:-/tmp/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json}"
     else
+        echo 'Using custom CONFIG_PATH:' "$CONFIG_PATH" ' which maps to the following files:'
         CONFIG_FILE=None
+        echo 'Listing Config Dir'
+        ls /config/ImSwitchConfig/imcontrol_setups
+
+        # printing the content of /config/ImSwitchConfig/config/imcontrol_options.json
+        cat /config/ImSwitchConfig/config/imcontrol_options.json
+
     fi
     
     mkdir -p "$PERSISTENT_PIP_DIR"
@@ -164,8 +170,8 @@ then
     fi;
     params+=" --ext-drive-mount ${EXT_DRIVE_MOUNT:-None}"
     echo 'Starting Imswitch with the following parameters:'
-    echo "${params[@]}"
-    python3 /tmp/ImSwitch/main.py $params
+    echo '/tmp/ImSwitch/main.py' "${params[@]}"
+    python3 -m imswitch $params
 else
     source /opt/conda/bin/activate imswitch
     echo 'Starting the container in terminal mode'

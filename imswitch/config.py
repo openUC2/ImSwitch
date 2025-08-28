@@ -67,6 +67,7 @@ class ImSwitchConfig:
                 if value is not None:
                     setattr(self, config_attr, value)
     
+        
     def to_legacy_globals(self, imswitch_module) -> None:
         """Update legacy global variables for backward compatibility."""
         imswitch_module.IS_HEADLESS = self.is_headless

@@ -19,7 +19,7 @@
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -e HEADLESS=1  -e HTTP_PORT=8001  -e UPDATE_GIT=1  -e UPDATE_CONFIG=0  --privileged -e DATA_PATH=/dataset  -v /media/uc2/SD2/:/dataset -e CONFIG_FILE=example_uc2_hik_flowstop.json ghcr.io/openuc2/imswitch-noqt-x64:latest
 # docker run -it -e MODE=terminal ghcr.io/openuc2/imswitch-noqt-arm64:latest
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22  -e UPDATE_INSTALL_GIT=1  -e PIP_PACKAGES="arkitekt UC2-REST"  -e CONFIG_PATH=/Users/bene/Downloads  -e DATA_PATH=/Users/bene/Downloads  -v ~/Documents/imswitch_docker/imswitch_git:/tmp/ImSwitch-changes  -v ~/Documents/imswitch_docker/imswitch_pip:/persistent_pip_packages  -v /media/uc2/SD2/:/dataset  -v ~/Downloads:/config  --privileged imswitch_hik
-# sudo docker pull docker pull ghcr.io/openuc2/imswitch-noqt-x64:latest
+# sudo docker pull docker pull ghcr.io/openuc2/imswitch-noqt-arm64:latest
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -e CONFIG_FILE=example_uc2_vimba.json -e UPDATE_GIT=0 -e UPDATE_CONFIG=0 --privileged imswitch_hik_arm64
 # docker build -t ghcr.io/openuc2/imswitch-noqt-arm64:latest .
 
@@ -197,10 +197,10 @@ RUN echo Building on 1
 RUN cd /tmp/ImSwitchConfig && \
     git pull
 
-# now update potential breaking changes
-RUN cd /tmp/ImSwitch && \
-    git pull && \
-    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
+# Copy current local ImSwitch code instead of pulling from git
+COPY . /tmp/ImSwitch-local
+RUN cd /tmp/ImSwitch-local && \
+    /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch-local"
 
 # Install UC2-REST
 RUN cd /tmp/UC2-REST && \

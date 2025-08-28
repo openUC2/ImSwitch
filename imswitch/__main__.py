@@ -7,6 +7,9 @@ import os
 import imswitch
 from imswitch.config import get_config, update_config
 
+# python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-drive-mount true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes
+# python -m imswitch --headless --http-port 8001 --socket-port 8002 --config-folder /Users/bene --config-file None 
+
 
 def main(is_headless:bool=None, default_config:str=None, http_port:int=None, socket_port:int=None, ssl:bool=None, config_folder:str=None,
          data_folder: str=None, scan_ext_data_folder:bool=None, ext_drive_mount:str=None):
@@ -105,7 +108,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 if hasattr(args, 'config_file') and args.config_file:
                     if isinstance(args.config_file, str) and args.config_file.find("json") >= 0:
                         config.default_config = args.config_file
-                
+                    else:
+                        config.default_config = None
+
                 # Validate directories exist before setting them
                 if hasattr(args, 'config_folder') and args.config_folder and os.path.isdir(args.config_folder):
                     config.config_folder = args.config_folder

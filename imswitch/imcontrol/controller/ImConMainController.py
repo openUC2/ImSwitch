@@ -74,7 +74,8 @@ class ImConMainController(MainController):
                 self.__logger.warning(f"Could not dynamically import {controller_name}: {e}")
                 continue
             if controller_class is not None:
-                self.controllers[widgetKey] = self.__factory.createController(controller_class, widget)
+                try:self.controllers[widgetKey] = self.__factory.createController(controller_class, widget)
+                except:continue
             else:
                 try:
                     mPlugin = self.loadPlugin(widgetKey)

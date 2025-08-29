@@ -278,8 +278,20 @@ class OMEROUploader:
         try:
             # Create or get dataset
             if self.connection_params.dataset_id > 0:
-                # Use existing dataset
-                self.dataset_id = self.connection_params.dataset_id
+                # Check if existing dataset exists
+                dataset_obj = self.connection.getObject("Dataset", self.connection_params.dataset_id)
+                if dataset_obj is not None:
+                    # Use existing dataset
+                    self.dataset_id = self.connection_params.dataset_id
+                    self.logger.info(f"Using existing dataset {self.dataset_id}: {dataset_obj.getName()}")
+                else:
+                    # Dataset doesn't exist, create new one
+                    self.logger.warning(f"Dataset {self.connection_params.dataset_id} not found, creating new dataset")
+                    ds = DatasetI()
+                    ds.setName(rstring(self.dataset_name))
+                    ds.setDescription(rstring("ImSwitch mosaic acquisition"))
+                    ds = self.connection.getUpdateService().saveAndReturnObject(ds, self.connection.SERVICE_OPTS)
+                    self.dataset_id = ds.getId().getValue()
             else:
                 # Create new dataset
                 ds = DatasetI()
@@ -307,154 +319,6 @@ class OMEROUploader:
             link.setParent(DatasetI(self.dataset_id, False))
             link.setChild(ImageI(self.image_id, False))
             self.connection.getUpdateService().saveAndReturnObject(link, self.connection.SERVICE_OPTS)
-            
-            '''TODO: The above line fails with : 
-            
-            WARNING:omero.gateway:ValidationException on <class 'omero.gateway.OmeroGatewaySafeCallWrapper'> to <eb90adcb-6699-42a3-bb22-39a3b744acf2omero.api.IUpdate> saveAndReturnObject((object #0 (::omero::model::DatasetImageLink)
-{
-    _id = <nil>
-    _details = object #1 (::omero::model::Details)
-    {
-        _owner = <nil>
-        _group = <nil>
-        _creationEvent = <nil>
-        _updateEvent = <nil>
-        _permissions = <nil>
-        _externalInfo = <nil>
-        _call = {}
-        _event = <nil>
-    }
-    _loaded = True
-    _version = <nil>
-    _parent = object #2 (::omero::model::Dataset)
-    {
-        _id = object #3 (::omero::RLong)
-        {
-            _val = 200
-        }
-        _details = <nil>
-        _loaded = False
-        _version = <nil>
-        _projectLinksSeq = {}
-        _projectLinksLoaded = False
-        _projectLinksCountPerOwner = {}
-        _imageLinksSeq = {}
-        _imageLinksLoaded = False
-        _imageLinksCountPerOwner = {}
-        _annotationLinksSeq = {}
-        _annotationLinksLoaded = False
-        _annotationLinksCountPerOwner = {}
-        _name = <nil>
-        _description = <nil>
-    }
-    _child = object #4 (::omero::model::Image)
-    {
-        _id = object #5 (::omero::RLong)
-        {
-            _val = 54
-        }
-        _details = <nil>
-        _loaded = False
-        _version = <nil>
-        _series = <nil>
-        _acquisitionDate = <nil>
-        _archived = <nil>
-        _partial = <nil>
-        _format = <nil>
-        _imagingEnvironment = <nil>
-        _objectiveSettings = <nil>
-        _instrument = <nil>
-        _stageLabel = <nil>
-        _experiment = <nil>
-        _pixelsSeq = {}
-        _pixelsLoaded = False
-        _wellSamplesSeq = {}
-        _wellSamplesLoaded = False
-        _roisSeq = {}
-        _roisLoaded = False
-        _datasetLinksSeq = {}
-        _datasetLinksLoaded = False
-        _datasetLinksCountPerOwner = {}
-        _folderLinksSeq = {}
-        _folderLinksLoaded = False
-        _folderLinksCountPerOwner = {}
-        _fileset = <nil>
-        _annotationLinksSeq = {}
-        _annotationLinksLoaded = False
-        _annotationLinksCountPerOwner = {}
-        _name = <nil>
-        _description = <nil>
-    }
-}, <ServiceOptsDict: {'omero.client.uuid': 'eb90adcb-6699-42a3-bb22-39a3b744acf2', 'omero.session.uuid': '9823d4ce-95e1-425d-9f77-65fb96ec9642'}>), {})
-Traceback (most recent call last):
-  File "/Users/bene/mambaforge/envs/microeye/lib/python3.10/site-packages/omero/gateway/__init__.py", line 4870, in __call__
-    return self.f(*args, **kwargs)
-  File "/Users/bene/mambaforge/envs/microeye/lib/python3.10/site-packages/omero_api_IUpdate_ice.py", line 163, in saveAndReturnObject
-    return _M_omero.api.IUpdate._op_saveAndReturnObject.invoke(self, ((obj, ), _ctx))
-omero.ValidationException: exception ::omero::ValidationException
-{
-    serverStackTrace = ome.conditions.ValidationException: No row with the given identifier exists: [ome.model.containers.Dataset#200]; nested exception is org.hibernate.ObjectNotFoundException: No row with the given identifier exists: [ome.model.containers.Dataset#200]
-        at org.springframework.orm.hibernate3.SessionFactoryUtils.convertHibernateAccessException(SessionFactoryUtils.java:693)
-        at org.springframework.orm.hibernate3.HibernateAccessor.convertHibernateAccessException(HibernateAccessor.java:416)
-        at org.springframework.orm.hibernate3.HibernateInterceptor.invoke(HibernateInterceptor.java:125)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-        at org.springframework.transaction.interceptor.TransactionInterceptor$1.proceedWithInvocation(TransactionInterceptor.java:99)
-        at org.springframework.transaction.interceptor.TransactionAspectSupport.invokeWithinTransaction(TransactionAspectSupport.java:283)
-        at org.springframework.transaction.interceptor.TransactionInterceptor.invoke(TransactionInterceptor.java:96)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-        at ome.tools.hibernate.ProxyCleanupFilter$Interceptor.invoke(ProxyCleanupFilter.java:249)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-        at ome.services.util.ServiceHandler.invoke(ServiceHandler.java:121)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-        at org.springframework.aop.framework.JdkDynamicAopProxy.invoke(JdkDynamicAopProxy.java:213)
-        at com.sun.proxy.$Proxy100.saveAndReturnObject(Unknown Source)
-        at jdk.internal.reflect.GeneratedMethodAccessor420.invoke(Unknown Source)
-        at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
-        at java.base/java.lang.reflect.Method.invoke(Method.java:566)
-        at org.springframework.aop.support.AopUtils.invokeJoinpointUsingReflection(AopUtils.java:333)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.invokeJoinpoint(ReflectiveMethodInvocation.java:190)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:157)
-        at ome.security.basic.BasicSecurityWiring.invoke(BasicSecurityWiring.java:93)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-        at ome.services.blitz.fire.AopContextInitializer.invoke(AopContextInitializer.java:43)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-        at org.springframework.aop.framework.JdkDynamicAopProxy.invoke(JdkDynamicAopProxy.java:213)
-        at com.sun.proxy.$Proxy100.saveAndReturnObject(Unknown Source)
-        at jdk.internal.reflect.GeneratedMethodAccessor444.invoke(Unknown Source)
-        at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
-        at java.base/java.lang.reflect.Method.invoke(Method.java:566)
-        at ome.services.blitz.util.IceMethodInvoker.invoke(IceMethodInvoker.java:172)
-        at ome.services.throttling.Callback.run(Callback.java:56)
-        at ome.services.throttling.InThreadThrottlingStrategy.callInvokerOnRawArgs(InThreadThrottlingStrategy.java:56)
-        at ome.services.blitz.impl.AbstractAmdServant.callInvokerOnRawArgs(AbstractAmdServant.java:140)
-        at ome.services.blitz.impl.UpdateI.saveAndReturnObject_async(UpdateI.java:62)
-        at jdk.internal.reflect.GeneratedMethodAccessor443.invoke(Unknown Source)
-        at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
-        at java.base/java.lang.reflect.Method.invoke(Method.java:566)
-        at org.springframework.aop.support.AopUtils.invokeJoinpointUsingReflection(AopUtils.java:333)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.invokeJoinpoint(ReflectiveMethodInvocation.java:190)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:157)
-        at omero.cmd.CallContext.invoke(CallContext.java:85)
-        at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-        at org.springframework.aop.framework.JdkDynamicAopProxy.invoke(JdkDynamicAopProxy.java:213)
-        at com.sun.proxy.$Proxy101.saveAndReturnObject_async(Unknown Source)
-        at omero.api._IUpdateTie.saveAndReturnObject_async(_IUpdateTie.java:92)
-        at omero.api._IUpdateDisp.___saveAndReturnObject(_IUpdateDisp.java:229)
-        at omero.api._IUpdateDisp.__dispatch(_IUpdateDisp.java:423)
-        at IceInternal.Incoming.invoke(Incoming.java:221)
-        at Ice.ConnectionI.invokeAll(ConnectionI.java:2536)
-        at Ice.ConnectionI.dispatch(ConnectionI.java:1145)
-        at Ice.ConnectionI.message(ConnectionI.java:1056)
-        at IceInternal.ThreadPool.run(ThreadPool.java:395)
-        at IceInternal.ThreadPool.access$300(ThreadPool.java:12)
-        at IceInternal.ThreadPool$EventHandlerThread.run(ThreadPool.java:832)
-        at java.base/java.lang.Thread.run(Thread.java:829)
-
-    serverExceptionClass = ome.conditions.ValidationException
-    message = No row with the given identifier exists: [ome.model.containers.Dataset#200]; nested exception is org.hibernate.ObjectNotFoundException: No row with the given identifier exists: [ome.model.containers.Dataset#200]
-}
-
-'''
             
             # Set pixel size
             img = self.connection.getObject("Image", self.image_id)

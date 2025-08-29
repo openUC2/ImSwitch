@@ -117,6 +117,9 @@ class ExperimentNormalMode(ExperimentModeBase):
         """
         file_writers = []
         
+        # Prepare OMERO connection parameters if enabled
+        omero_connection_params = self.prepare_omero_connection_params()
+        
         # Check if single TIFF writing is enabled (single tile scan mode)
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
         
@@ -141,6 +144,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 write_zarr=self.controller._ome_write_zarr,
                 write_stitched_tiff=False,  # Disable stitched TIFF
                 write_tiff_single=True,  # Enable single TIFF writing
+                write_omero=self.controller._ome_write_omero,  # Enable OMERO if configured
                 min_period=0.1,
                 n_time_points=1,
                 n_z_planes=len(z_positions),
@@ -154,7 +158,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 grid_shape=grid_shape,
                 grid_geometry=grid_geometry,
                 config=writer_config,
-                logger=self._logger
+                logger=self._logger,
+                omero_connection_params=omero_connection_params
             )
             file_writers.append(ome_writer)
             
@@ -182,6 +187,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     write_zarr=self.controller._ome_write_zarr,
                     write_stitched_tiff=self.controller._ome_write_stitched_tiff,
                     write_tiff_single=False,  # Disable single TIFF for multi-tile mode
+                    write_omero=self.controller._ome_write_omero,  # Enable OMERO if configured
                     min_period=0.1,  # Faster for normal mode
                     n_time_points=1,
                     n_z_planes=len(z_positions),
@@ -195,7 +201,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                     grid_shape=grid_shape,
                     grid_geometry=grid_geometry,
                     config=writer_config,
-                    logger=self._logger
+                    logger=self._logger,
+                    omero_connection_params=omero_connection_params
                 )
                 file_writers.append(ome_writer)
         

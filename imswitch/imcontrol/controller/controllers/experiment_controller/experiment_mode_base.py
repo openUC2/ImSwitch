@@ -81,6 +81,7 @@ class ExperimentModeBase(ABC):
                            write_zarr: bool = True, 
                            write_stitched_tiff: bool = True,
                            write_tiff_single: bool = False,
+                           write_omero: bool = False,
                            min_period: float = 0.2,
                            n_time_points: int = 1,
                            n_z_planes: int = 1,
@@ -93,6 +94,7 @@ class ExperimentModeBase(ABC):
             write_zarr: Whether to write OME-Zarr format
             write_stitched_tiff: Whether to write stitched TIFF
             write_tiff_single: Whether to append tiles to a single TIFF file
+            write_omero: Whether to enable OMERO upload
             min_period: Minimum period between writes
             n_time_points: Number of time points
             n_z_planes: Number of Z planes
@@ -108,12 +110,47 @@ class ExperimentModeBase(ABC):
             write_zarr=write_zarr,
             write_stitched_tiff=write_stitched_tiff,
             write_tiff_single=write_tiff_single,
+            write_omero=write_omero,
             min_period=min_period,
             pixel_size=pixel_size,
             n_time_points=n_time_points,
             n_z_planes=n_z_planes,
             n_channels=n_channels
         )
+    
+    def prepare_omero_connection_params(self):
+        """
+        Prepare OMERO connection parameters if OMERO upload is enabled.
+        
+        Returns:
+            OMEROConnectionParams instance or None if OMERO is not enabled
+        """
+        if not getattr(self.controller, '_ome_write_omero', False):
+            return None
+            
+        if not hasattr(self.controller._master, 'experimentManager'):
+            self._logger.warning("ExperimentManager not available for OMERO connection")
+            return None
+            
+        try:
+            from .omero_uploader import OMEROConnectionParams
+            experiment_manager = self.controller._master.experimentManager
+            
+            omero_connection_params = OMEROConnectionParams(
+                host=experiment_manager.omeroServerUrl,
+                port=experiment_manager.omeroPort,
+                username=experiment_manager.omeroUsername,
+                password=experiment_manager.omeroPassword,
+                group_id=experiment_manager.omeroGroupId,
+                project_id=experiment_manager.omeroProjectId,
+                dataset_id=experiment_manager.omeroDatasetId,
+                connection_timeout=experiment_manager.omeroConnectionTimeout,
+                upload_timeout=experiment_manager.omeroUploadTimeout
+            )
+            return omero_connection_params
+        except Exception as e:
+            self._logger.warning(f"Failed to setup OMERO connection parameters: {e}")
+            return None
     
     def prepare_illumination_parameters(self, illumination_intensities: List[float]) -> Dict[str, Optional[float]]:
         """

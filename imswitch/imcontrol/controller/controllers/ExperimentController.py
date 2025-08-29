@@ -95,6 +95,7 @@ class ParameterValue(BaseModel):
     ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
     ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
+    ome_write_omero: bool = Field(False, description="Whether to upload to OMERO")
 
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
@@ -569,6 +570,8 @@ class ExperimentController(ImConWidgetController):
         self._ome_write_zarr = p.ome_write_zarr
         self._ome_write_stitched_tiff = p.ome_write_stitched_tiff
         self._ome_write_single_tiff = getattr(p, 'ome_write_single_tiff', False)  # Default to False if not specified
+        # Add OMERO support for wellplate experiments
+        self._ome_write_omero = getattr(p, 'ome_write_omero', False)  # Default to False if not specified
 
         # determine if each sub scan in snake_tiles is a single tile or a multi-tile scan - if single image we should squah them in a single TIF (e.g. by appending )
         is_single_tile_scan = all(len(tile) == 1 for tile in snake_tiles)

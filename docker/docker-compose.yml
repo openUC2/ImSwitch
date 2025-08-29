@@ -24,7 +24,7 @@ services:
       - CONFIG_PATH=/config
       - SCAN_EXT_DATA_FOLDER=1
       - EXT_DRIVE_MOUNT=/media
-      - ssl=0
+      - SSL=1
       - scan-ext-drive-mount=false
       - WIFI_MODE=host
 

@@ -192,10 +192,26 @@ class OMEROUploader:
         if not OMERO_AVAILABLE:
             self.logger.warning("OMERO Python not available, uploader cannot start")
             return False
-            
+        
+
         if self.running:
             return True
             
+        # Initialize OMERO connection outside the thread to block the outer runtime
+        if not self._connect_to_omero():
+            self.logger.error("Failed to connect to OMERO, uploader stopping")
+            return
+                
+        if self.connection is None: 
+            self.logger.warning("OMERO Python not available, uploader cannot start")
+            return
+    
+        # Create dataset and image
+        if not self._setup_omero_objects():
+            self.logger.error("Failed to setup OMERO objects, uploader stopping") 
+            return
+                
+
         self.running = True
         self.uploader_thread = threading.Thread(target=self._uploader_worker, daemon=True)
         self.uploader_thread.start()
@@ -220,16 +236,7 @@ class OMEROUploader:
         self.logger.info("OMERO uploader thread started")
         
         try:
-            # Initialize OMERO connection
-            if not self._connect_to_omero():
-                self.logger.error("Failed to connect to OMERO, uploader stopping")
-                return
-                
-            # Create dataset and image
-            if not self._setup_omero_objects():
-                self.logger.error("Failed to setup OMERO objects, uploader stopping") 
-                return
-                
+
             # Process tiles from queue
             while self.running:
                 tile = self.tile_queue.get(timeout=1.0)
@@ -383,8 +390,8 @@ class OMEROUploader:
                 for off_x in range(0, self.tile_w, srv_tw):
                     sub_tile = tile.tile_data[off_y:off_y+srv_th, off_x:off_x+srv_tw]
                     h, w = sub_tile.shape[0], sub_tile.shape[1]
-                    
                     if h > 0 and w > 0:
+                        self.logger.debug(f"Uploading sub-tile {x0 + off_x},{y0 + off_y} ({w}x{h})")
                         buf = np.ascontiguousarray(sub_tile).tobytes()
                         self.store.setTile(buf, tile.z, tile.c, tile.t, 
                                          x0 + off_x, y0 + off_y, w, h)
@@ -407,6 +414,90 @@ class OMEROUploader:
                              x0, y0, self.tile_w, self.tile_h)
                              
         except Exception as e:
+            ''' TODO: 
+            I think we need to collect tiles first and merge them into a row before uploading them to a omero object we get the follwoing error:
+            tile.tile_data.shape
+(300, 400)
+but it should be a whole row instead 
+
+            excception ::omero::InternalException
+{
+    serverStackTrace = ome.conditions.InternalException:  Wrapped Exception: (java.lang.UnsupportedOperationException):
+ROMIO pixel buffer only supports full row writes.
+	at ome.io.nio.RomioPixelBuffer.setTile(RomioPixelBuffer.java:908)
+	at ome.services.RawPixelsBean.setTile(RawPixelsBean.java:982)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:566)
+	at org.springframework.aop.support.AopUtils.invokeJoinpointUsingReflection(AopUtils.java:333)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.invokeJoinpoint(ReflectiveMethodInvocation.java:190)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:157)
+	at ome.security.basic.EventHandler.invoke(EventHandler.java:154)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
+	at ome.tools.hibernate.SessionHandler.doStateful(SessionHandler.java:216)
+	at ome.tools.hibernate.SessionHandler.invoke(SessionHandler.java:200)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
+	at org.springframework.transaction.interceptor.TransactionInterceptor$1.proceedWithInvocation(TransactionInterceptor.java:99)
+	at org.springframework.transaction.interceptor.TransactionAspectSupport.invokeWithinTransaction(TransactionAspectSupport.java:283)
+	at org.springframework.transaction.interceptor.TransactionInterceptor.invoke(TransactionInterceptor.java:96)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
+	at ome.tools.hibernate.ProxyCleanupFilter$Interceptor.invoke(ProxyCleanupFilter.java:249)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
+	at ome.services.util.ServiceHandler.invoke(ServiceHandler.java:121)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
+	at org.springframework.aop.framework.JdkDynamicAopProxy.invoke(JdkDynamicAopProxy.java:213)
+	at com.sun.proxy.$Proxy113.setTile(Unknown Source)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:566)
+	at org.springframework.aop.support.AopUtils.invokeJoinpointUsingReflection(AopUtils.java:333)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.invokeJoinpoint(ReflectiveMethodInvocation.java:190)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:157)
+	at ome.security.basic.BasicSecurityWiring.invoke(BasicSecurityWiring.java:93)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
+	at ome.services.blitz.fire.AopContextInitializer.invoke(AopContextInitializer.java:43)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
+	at org.springframework.aop.framework.JdkDynamicAopProxy.invoke(JdkDynamicAopProxy.java:213)
+	at com.sun.proxy.$Proxy113.setTile(Unknown Source)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:566)
+	at ome.services.blitz.util.IceMethodInvoker.invoke(IceMethodInvoker.java:172)
+	at ome.services.throttling.Callback.run(Callback.java:56)
+	at ome.services.throttling.InThreadThrottlingStrategy.callInvokerOnRawArgs(InThreadThrottlingStrategy.java:56)
+	at ome.services.blitz.impl.AbstractAmdServant.callInvokerOnRawArgs(AbstractAmdServant.java:140)
+	at ome.services.blitz.impl.RawPixelsStoreI.setTile_async(RawPixelsStoreI.java:289)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:566)
+	at org.springframework.aop.support.AopUtils.invokeJoinpointUsingReflection(AopUtils.java:333)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.invokeJoinpoint(ReflectiveMethodInvocation.java:190)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:157)
+	at omero.cmd.CallContext.invoke(CallContext.java:85)
+	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
+	at org.springframework.aop.framework.JdkDynamicAopProxy.invoke(JdkDynamicAopProxy.java:213)
+	at com.sun.proxy.$Proxy114.setTile_async(Unknown Source)
+	at omero.api._RawPixelsStoreTie.setTile_async(_RawPixelsStoreTie.java:300)
+	at omero.api._RawPixelsStoreDisp.___setTile(_RawPixelsStoreDisp.java:1228)
+	at omero.api._RawPixelsStoreDisp.__dispatch(_RawPixelsStoreDisp.java:1788)
+	at IceInternal.Incoming.invoke(Incoming.java:221)
+	at Ice.ConnectionI.invokeAll(ConnectionI.java:2536)
+	at Ice.ConnectionI.dispatch(ConnectionI.java:1145)
+	at Ice.ConnectionI.message(ConnectionI.java:1056)
+	at IceInternal.ThreadPool.run(ThreadPool.java:395)
+	at IceInternal.ThreadPool.access$300(ThreadPool.java:12)
+	at IceInternal.ThreadPool$EventHandlerThread.run(ThreadPool.java:832)
+	at java.base/java.lang.Thread.run(Thread.java:829)
+
+    serverExceptionClass = ome.conditions.InternalException
+    message =  Wrapped Exception: (java.lang.UnsupportedOperationException):
+ROMIO pixel buffer only supports full row writes.
+}'''
+        	
             self.logger.error(f"Failed to upload tile {tile.ix},{tile.iy} using row writes: {e}")
             raise
     

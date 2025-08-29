@@ -125,7 +125,8 @@ class ExperimentModeBase(ABC):
         Returns:
             OMEROConnectionParams instance or None if OMERO is not enabled
         """
-        if 1 :#not getattr(self.controller, '_ome_write_omero', False):
+        self.controller._ome_write_omero = True
+        if not getattr(self.controller, '_ome_write_omero', False):
             return None
             
         if not hasattr(self.controller._master, 'experimentManager'):

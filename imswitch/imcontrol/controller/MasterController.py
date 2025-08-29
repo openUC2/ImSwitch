@@ -55,7 +55,7 @@ class MasterController:
         if "Lightsheet" in self.__setupInfo.availableWidgets: self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
         if "WebRTC" in self.__setupInfo.availableWidgets: self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
         if "Timelapse" in self.__setupInfo.availableWidgets: self.timelapseManager = TimelapseManager()
-        if "Experiment" in self.__setupInfo.availableWidgets: self.experimentManager = ExperimentManager()
+        if "Experiment" in self.__setupInfo.availableWidgets: self.experimentManager = ExperimentManager(self.__setupInfo.experiment)
         if "Objective" in self.__setupInfo.availableWidgets: self.objectiveManager = ObjectiveManager(self.__setupInfo.objective)
         if "HistoScan" in self.__setupInfo.availableWidgets: self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "Stresstest" in self.__setupInfo.availableWidgets: self.StresstestManager = StresstestManager(self.__setupInfo.Stresstest)

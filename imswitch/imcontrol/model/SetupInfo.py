@@ -301,6 +301,42 @@ class PixelCalibrationInfo:
 
 
 @dataclass(frozen=False)
+class ExperimentInfo:
+    """Configuration for experiment management, including OMERO integration."""
+    
+    # OMERO configuration
+    omeroServerUrl: Optional[str] = "localhost"
+    """ OMERO server URL. """
+    
+    omeroUsername: Optional[str] = ""
+    """ OMERO username for authentication. """
+    
+    omeroPassword: Optional[str] = ""
+    """ OMERO password for authentication. """
+    
+    omeroPort: Optional[int] = 4064
+    """ OMERO server port. """
+    
+    omeroGroupId: Optional[int] = -1
+    """ OMERO group ID for uploads. -1 for default group. """
+    
+    omeroProjectId: Optional[int] = -1
+    """ OMERO project ID for uploads. -1 for no specific project. """
+    
+    omeroDatasetId: Optional[int] = -1
+    """ OMERO dataset ID for uploads. -1 for no specific dataset. """
+    
+    omeroEnabled: bool = False
+    """ Whether OMERO integration is enabled. """
+    
+    omeroConnectionTimeout: int = 30
+    """ Connection timeout for OMERO in seconds. """
+    
+    omeroUploadTimeout: int = 300
+    """ Upload timeout for OMERO in seconds. """
+
+
+@dataclass(frozen=False)
 class ISMInfo:
     wavelength: int
     """ Wavelength of the laser line used with the SLM. """
@@ -571,6 +607,9 @@ class SetupInfo:
 
     PixelCalibration: Optional[PixelCalibrationInfo] = field(default_factory=lambda: None)
     """ PixelCalibration settings. Required to be defined to use PixelCalibration functionality. """
+
+    experiment: Optional[ExperimentInfo] = field(default_factory=lambda: None)
+    """ Experiment settings including OMERO configuration. Required to be defined for experiment functionality. """
 
     uc2Config: Optional[UC2ConfigInfo] = field(default_factory=lambda: None)
     """ UC2Config settings. Required to be defined to use UC2Config functionality. """

@@ -252,10 +252,72 @@ class ExperimentController(ImConWidgetController):
         # Initialize experiment execution modes
         self.performance_mode = ExperimentPerformanceMode(self)
         self.normal_mode = ExperimentNormalMode(self)
+        
+        # Initialize omero  parameters  # TODO: Maybe not needed!
+        self.omero_url = self._master.experimentManager.omeroServerUrl
+        self.omero_username = self._master.experimentManager.omeroUsername
+        self.omero_password = self._master.experimentManager.omeroPassword
+        self.omero_port = self._master.experimentManager.omeroPort
 
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
         return self.ExperimentParams
+
+    @APIExport(requestType="GET")
+    def getOMEROConfig(self):
+        """Get current OMERO configuration from the experiment manager."""
+        try:
+            if hasattr(self._master, 'experimentManager'):
+                return self._master.experimentManager.getOmeroConfig()
+            else:
+                return {"error": "ExperimentManager not available"}
+        except Exception as e:
+            self._logger.error(f"Failed to get OMERO config: {e}")
+            return {"error": str(e)}
+
+    @APIExport(requestType="POST")  
+    def setOMEROConfig(self, config: dict):
+        """Set OMERO configuration via the experiment manager."""
+        try:
+            if hasattr(self._master, 'experimentManager'):
+                self._master.experimentManager.setOmeroConfig(config)
+                return {"success": True, "message": "OMERO configuration updated"}
+            else:
+                return {"error": "ExperimentManager not available"}
+        except Exception as e:
+            self._logger.error(f"Failed to set OMERO config: {e}")
+            return {"error": str(e)}
+
+    @APIExport(requestType="GET")
+    def isOMEROEnabled(self):
+        """Check if OMERO integration is enabled."""
+        try:
+            if hasattr(self._master, 'experimentManager'):
+                return {"enabled": self._master.experimentManager.isOmeroEnabled()}
+            else:
+                return {"enabled": False, "error": "ExperimentManager not available"}
+        except Exception as e:
+            self._logger.error(f"Failed to check OMERO status: {e}")
+            return {"enabled": False, "error": str(e)}
+
+    @APIExport(requestType="GET")
+    def getOMEROConnectionParams(self):
+        """Get OMERO connection parameters (excluding password for security)."""
+        try:
+            if hasattr(self._master, 'experimentManager'):
+                params = self._master.experimentManager.getOmeroConnectionParams()
+                if params:
+                    # Remove password for security when returning via API
+                    safe_params = params.copy()
+                    safe_params["password"] = "***"
+                    return safe_params
+                else:
+                    return {"error": "OMERO not enabled"}
+            else:
+                return {"error": "ExperimentManager not available"}
+        except Exception as e:
+            self._logger.error(f"Failed to get OMERO connection params: {e}")
+            return {"error": str(e)}
 
     @APIExport(requestType="GET")
     def getOMEWriterConfig(self):

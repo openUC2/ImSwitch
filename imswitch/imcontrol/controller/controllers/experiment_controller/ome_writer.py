@@ -17,9 +17,11 @@ import numpy as np
 try:
     from .OmeTiffStitcher import OmeTiffStitcher
     from .SingleTiffWriter import SingleTiffWriter
+    from .omero_uploader import OMEROUploader, OMEROConnectionParams, TileMetadata
 except ImportError:
     from OmeTiffStitcher import OmeTiffStitcher
     from SingleTiffWriter import SingleTiffWriter
+    from omero_uploader import OMEROUploader, OMEROConnectionParams, TileMetadata
 
 
 @dataclass
@@ -29,6 +31,7 @@ class OMEWriterConfig:
     write_zarr: bool = True
     write_stitched_tiff: bool = False  # New option for stitched TIFF
     write_tiff_single: bool = False  # Append images in a single TIFF file
+    write_omero: bool = False  # New option for OMERO upload
     min_period: float = 0.2
     compression: str = "zlib"
     zarr_compressor = None
@@ -38,6 +41,8 @@ class OMEWriterConfig:
     n_time_points: int = 1  # Number of time points
     n_z_planes: int = 1     # Number of z planes
     n_channels: int = 1     # Number of channels
+    # OMERO-specific configuration
+    omero_queue_size: int = 100  # Size of OMERO upload queue
     
     
     def __post_init__(self):
@@ -66,7 +71,7 @@ class OMEWriter:
     both fast stage scan and normal stage scan writing operations.
     """
     
-    def __init__(self, file_paths, tile_shape, grid_shape, grid_geometry, config: OMEWriterConfig, logger=None):
+    def __init__(self, file_paths, tile_shape, grid_shape, grid_geometry, config: OMEWriterConfig, logger=None, omero_connection_params=None):
         """
         Initialize the OME writer.
         
@@ -77,6 +82,7 @@ class OMEWriter:
             grid_geometry: (x_start, y_start, x_step, y_step) for positioning
             config: OMEWriterConfig for writer behavior
             logger: Logger instance for debugging
+            omero_connection_params: OMEROConnectionParams for OMERO upload
         """
         self.file_paths = file_paths
         self.tile_h, self.tile_w = tile_shape
@@ -96,6 +102,9 @@ class OMEWriter:
         # Single TIFF writer for appending tiles
         self.single_tiff_writer = None
         
+        # OMERO uploader
+        self.omero_uploader = None
+        
         # Timing
         self.t_last = time.time()
         
@@ -108,6 +117,9 @@ class OMEWriter:
             
         if config.write_tiff_single:
             self._setup_single_tiff_writer()
+            
+        if config.write_omero and omero_connection_params:
+            self._setup_omero_uploader(omero_connection_params)
     
     def _setup_zarr_store(self):
         """Set up the OME-Zarr store and canvas."""
@@ -165,6 +177,44 @@ class OMEWriter:
         if self.logger:
             self.logger.debug(f"Single TIFF writer initialized: {single_tiff_path}")
     
+    def _setup_omero_uploader(self, omero_connection_params: OMEROConnectionParams):
+        """Set up the OMERO uploader for streaming tiles to OMERO."""
+        try:
+            # Create mosaic configuration for OMERO
+            mosaic_config = {
+                'nx': self.nx,
+                'ny': self.ny,
+                'tile_w': self.tile_w,
+                'tile_h': self.tile_h,
+                'size_z': self.config.n_z_planes,
+                'size_c': self.config.n_channels,
+                'size_t': self.config.n_time_points,
+                'pixel_type': 'uint16',  # TODO: Make configurable
+                'dataset_name': f'ImSwitch-StageScan-{int(time.time())}',
+                'image_name': f'mosaic_{self.nx * self.tile_w}x{self.ny * self.tile_h}',
+                'pixel_size_um': self.config.pixel_size
+            }
+            
+            self.omero_uploader = OMEROUploader(
+                omero_connection_params,
+                mosaic_config,
+                queue_size=self.config.omero_queue_size
+            )
+            
+            # Start the uploader thread
+            if self.omero_uploader.start():
+                if self.logger:
+                    self.logger.info("OMERO uploader initialized and started")
+            else:
+                self.omero_uploader = None
+                if self.logger:
+                    self.logger.warning("Failed to start OMERO uploader")
+                    
+        except Exception as e:
+            self.omero_uploader = None
+            if self.logger:
+                self.logger.error(f"Failed to setup OMERO uploader: {e}")
+    
     def write_frame(self, frame, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Write a single frame to both TIFF and/or Zarr formats.
@@ -194,6 +244,10 @@ class OMEWriter:
         # Write to single TIFF if requested
         if self.config.write_tiff_single and self.single_tiff_writer is not None:
             self._write_single_tiff_tile(frame, metadata)
+        
+        # Upload to OMERO if requested
+        if self.config.write_omero and self.omero_uploader is not None:
+            self._write_omero_tile(frame, metadata)
         
         # Throttle writes if needed
         self._throttle_writes()
@@ -414,6 +468,39 @@ class OMEWriter:
             ],
         }]
     
+    def _write_omero_tile(self, frame, metadata: Dict[str, Any]):
+        """Upload tile to OMERO."""
+        try:
+            # Calculate grid position
+            ix = int(round((metadata["x"] - self.x_start) / np.max((self.x_step, 1))))
+            iy = int(round((metadata["y"] - self.y_start) / np.max((self.y_step, 1))))
+            
+            # Get time, channel, and z indices from metadata
+            t_idx = metadata.get("time_index", 0)
+            c_idx = metadata.get("channel_index", 0)
+            z_idx = metadata.get("z_index", 0)
+            
+            # Create tile metadata for OMERO uploader
+            tile_metadata = TileMetadata(
+                ix=ix,
+                iy=iy,
+                z=z_idx,
+                c=c_idx,
+                t=t_idx,
+                tile_data=frame.copy(),  # Copy to avoid data corruption
+                experiment_id=metadata.get("experiment_id", ""),
+                pixel_size_um=self.config.pixel_size
+            )
+            
+            # Enqueue tile for upload
+            success = self.omero_uploader.enqueue_tile(tile_metadata)
+            if not success and self.logger:
+                self.logger.warning(f"Failed to enqueue tile ({ix}, {iy}) for OMERO upload")
+                
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error preparing tile for OMERO upload: {e}")
+    
     def finalize(self):
         """Finalize the writing process and optionally build pyramids."""
         if self.config.write_zarr and self.store is not None:
@@ -436,6 +523,21 @@ class OMEWriter:
             self.single_tiff_writer.close()
             if self.logger:
                 self.logger.info("Single TIFF file completed")
+        
+        # Finalize OMERO upload
+        if self.config.write_omero and self.omero_uploader is not None:
+            try:
+                # Allow time for remaining tiles to upload
+                import time
+                time.sleep(1.0)  # Brief wait for queue to drain
+                
+                self.omero_uploader.finalize()
+                self.omero_uploader.stop()
+                if self.logger:
+                    self.logger.info("OMERO upload completed and finalized")
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Error finalizing OMERO upload: {e}")
         
         if self.logger:
             self.logger.info(f"OME writer finalized for {self.file_paths.base_dir}")

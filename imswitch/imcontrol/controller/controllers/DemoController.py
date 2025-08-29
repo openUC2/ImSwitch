@@ -6,48 +6,63 @@ from datetime import datetime
 from typing import List, Dict, Any
 from pydantic import BaseModel
 
-try:
-    from imswitch.imcommon.model import initLogger, APIExport
-    from imswitch.imcommon.framework import Signal
-    from ..basecontrollers import ImConWidgetController
-    _HAS_IMSWITCH = True
-except ImportError:
-    # Fallback for testing without full ImSwitch environment
-    _HAS_IMSWITCH = False
-
-    class APIExport:
-        def __init__(self, **kwargs):
-            pass  # Accept any arguments
-
-        def __call__(self, func):
-            return func
-
-    class Signal:
-        def emit(self, *args):
-            pass
-
-    class ImConWidgetController:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    def initLogger(obj):
-        import logging
-        return logging.getLogger(__name__)
+from imswitch.imcommon.model import initLogger, APIExport
+from imswitch.imcommon.framework import Signal
+from ..basecontrollers import ImConWidgetController
 
 # Import scan coordinate functions
-try:
-    from .camera_stage_mapping.scan_coords_times import ordered_spiral, raster
-    _HAS_SCAN_COORDS = True
-except ImportError:
-    _HAS_SCAN_COORDS = False
+def ordered_spiral(starting_x, starting_y, number_of_shells, x_move, y_move):
 
-    def ordered_spiral(starting_x, starting_y, number_of_shells, x_move, y_move):
-        """Fallback spiral function"""
-        return [(starting_x, starting_y)]
+    # coords_list is the full list of sites to take an image
+    coords_list = [(starting_x, starting_y)]
 
-    def raster(starting_x, starting_y, x_move, y_move, rows, columns):
-        """Fallback raster function"""
-        return [(starting_x, starting_y)]
+    # current location is the working site, which is always appended to coords_list if it's unique
+    current_location = (starting_x, starting_y)
+
+    # a list of the directions the scan will move in
+    movements_list = [(x_move, 0), (0, -y_move), (-x_move, 0), (0, y_move)]
+
+    # iterates for each "shell"
+    for s in range(2, number_of_shells+1):
+        side_length = (2*s)-1
+        current_location = tuple(np.add(current_location, (0, y_move)))
+        coords_list.append(current_location)
+
+        for direction in movements_list:
+            for i in range(1, side_length):
+                if direction == tuple((x_move,0)) and i == side_length-1: break
+                current_location = tuple(np.add(current_location, direction))
+                if current_location not in coords_list: coords_list.append(current_location)
+    return(coords_list)
+
+def raster(starting_x,starting_y,x_move,y_move,rows,columns):
+    coords_list = []
+    current_location = (starting_x, starting_y)
+    for x in range(0,columns):
+        current_location = tuple((current_location[0], starting_y))
+        coords_list.append(current_location)
+        for y in range(1,rows):
+            current_location = tuple((current_location[0],current_location[1] - y_move))
+            coords_list.append(current_location)
+        current_location = tuple((current_location[0] + x_move,current_location[1]))
+    coords_list.append((starting_x,starting_y))
+    return(coords_list)
+
+def snake(starting_x,starting_y,x_move,y_move,rows,columns):
+    coords_list = []
+    current_location = (starting_x, starting_y)
+    for x in range(0,columns):
+        coords_list.append(current_location)
+        for y in range(1,rows):
+            if x % 2 != 0:
+                current_location = tuple((current_location[0],current_location[1] + y_move))
+            elif x % 2 == 0:
+                current_location = tuple((current_location[0],current_location[1] - y_move))
+            else: print("issue")
+            coords_list.append(current_location)
+        current_location = tuple((current_location[0] + x_move,current_location[1]))
+    coords_list.append((starting_x,starting_y))
+    return(coords_list)
 
 
 class DemoParams(BaseModel):
@@ -150,20 +165,11 @@ class DemoController(ImConWidgetController):
         # Initialize hardware
         self._initializeHardware()
 
-        if _HAS_IMSWITCH:
-            self._logger.info("DemoController initialized")
-        else:
-            print("DemoController initialized (testing mode)")
-
+        self._logger.info("DemoController initialized")
+        
     def _initializeHardware(self):
         """Initialize hardware managers"""
-        if not _HAS_IMSWITCH:
-            # Mock hardware for testing
-            self.stages = None
-            self.ledMatrix = None
-            self.lasers = None
-            return
-
+        
         try:
             # Get stage/positioner
             self._initializeStages()
@@ -237,77 +243,43 @@ class DemoController(ImConWidgetController):
 
     def _generateGridPositions(self) -> List[List[float]]:
         """Generate grid positions using raster function"""
-        if _HAS_SCAN_COORDS:
-            x_range = self.params.maxPosX - self.params.minPosX
-            y_range = self.params.maxPosY - self.params.minPosY
-            x_step = x_range / max(1, self.params.gridColumns - 1)
-            y_step = y_range / max(1, self.params.gridRows - 1)
+        x_range = self.params.maxPosX - self.params.minPosX
+        y_range = self.params.maxPosY - self.params.minPosY
+        x_step = x_range / max(1, self.params.gridColumns - 1)
+        y_step = y_range / max(1, self.params.gridRows - 1)
 
-            grid_coords = raster(
-                self.params.minPosX, self.params.minPosY,
-                x_step, y_step,
-                self.params.gridRows, self.params.gridColumns
-            )
-            return [[float(coord[0]), float(coord[1])] for coord in grid_coords]
-        else:
-            # Fallback grid generation
-            positions = []
-            for i in range(self.params.gridColumns):
-                for j in range(self.params.gridRows):
-                    x_range = self.params.maxPosX - self.params.minPosX
-                    y_range = self.params.maxPosY - self.params.minPosY
-                    x_denom = max(1, self.params.gridColumns - 1)
-                    y_denom = max(1, self.params.gridRows - 1)
-                    x = self.params.minPosX + i * x_range / x_denom
-                    y = self.params.minPosY + j * y_range / y_denom
-                    positions.append([x, y])
-            return positions
-
+        grid_coords = raster(
+            self.params.minPosX, self.params.minPosY,
+            x_step, y_step,
+            self.params.gridRows, self.params.gridColumns
+        )
+        
     def _generateSpiralPositions(self) -> List[List[float]]:
         """Generate spiral positions"""
-        if _HAS_SCAN_COORDS:
-            center_x = (self.params.minPosX + self.params.maxPosX) / 2
-            center_y = (self.params.minPosY + self.params.maxPosY) / 2
-            x_range = self.params.maxPosX - self.params.minPosX
-            y_range = self.params.maxPosY - self.params.minPosY
-            x_step = x_range / (2 * self.params.spiralShells)
-            y_step = y_range / (2 * self.params.spiralShells)
+        # Fallback spiral generation - simple circular pattern
+        positions = []
+        center_x = (self.params.minPosX + self.params.maxPosX) / 2
+        center_y = (self.params.minPosY + self.params.maxPosY) / 2
+        radius_x = (self.params.maxPosX - center_x) / 2
+        radius_y = (self.params.maxPosY - center_y) / 2
+        radius = min(radius_x, radius_y)
 
-            spiral_coords = ordered_spiral(
-                center_x, center_y,
-                self.params.spiralShells,
-                x_step, y_step
-            )
-            return [[float(coord[0]), float(coord[1])] for coord in spiral_coords]
-        else:
-            # Fallback spiral generation - simple circular pattern
-            positions = []
-            center_x = (self.params.minPosX + self.params.maxPosX) / 2
-            center_y = (self.params.minPosY + self.params.maxPosY) / 2
-            radius_x = (self.params.maxPosX - center_x) / 2
-            radius_y = (self.params.maxPosY - center_y) / 2
-            radius = min(radius_x, radius_y)
-
-            positions.append([center_x, center_y])  # Center point
-            for shell in range(1, self.params.spiralShells + 1):
-                shell_radius = shell * radius / self.params.spiralShells
-                points_in_shell = shell * 8  # More points in outer shells
-                for i in range(points_in_shell):
-                    angle = 2 * math.pi * i / points_in_shell
-                    x = center_x + shell_radius * math.cos(angle)
-                    y = center_y + shell_radius * math.sin(angle)
-                    # Ensure positions stay within bounds
-                    x = max(self.params.minPosX, min(self.params.maxPosX, x))
-                    y = max(self.params.minPosY, min(self.params.maxPosY, y))
-                    positions.append([x, y])
-            return positions
+        positions.append([center_x, center_y])  # Center point
+        for shell in range(1, self.params.spiralShells + 1):
+            shell_radius = shell * radius / self.params.spiralShells
+            points_in_shell = shell * 8  # More points in outer shells
+            for i in range(points_in_shell):
+                angle = 2 * math.pi * i / points_in_shell
+                x = center_x + shell_radius * math.cos(angle)
+                y = center_y + shell_radius * math.sin(angle)
+                # Ensure positions stay within bounds
+                x = max(self.params.minPosX, min(self.params.maxPosX, x))
+                y = max(self.params.minPosY, min(self.params.maxPosY, y))
+                positions.append([x, y])
+        return positions
 
     def _moveToPosition(self, position: List[float]):
         """Move stage to specified position"""
-        if not _HAS_IMSWITCH or self.stages is None:
-            # Mock movement for testing
-            time.sleep(0.1)
-            return
 
         try:
             # Move to position
@@ -332,12 +304,12 @@ class DemoController(ImConWidgetController):
         random_color = random.choice(colors)
 
         try:
-            if self.ledMatrix and _HAS_IMSWITCH:
+            if self.ledMatrix:
                 self.ledMatrix.setAll(random_color)
                 self._logger.debug(f"Set LED to color: {random_color}")
 
             # Turn on random laser
-            if self.lasers and _HAS_IMSWITCH:
+            if self.lasers:
                 laser_names = list(self.lasers.keys())
                 if laser_names:
                     random_laser = random.choice(laser_names)
@@ -353,7 +325,7 @@ class DemoController(ImConWidgetController):
             return
 
         try:
-            if self.ledMatrix and _HAS_IMSWITCH:
+            if self.ledMatrix:
                 if enable:
                     self.ledMatrix.setAll((255, 255, 255))  # White light
                 else:
@@ -367,11 +339,11 @@ class DemoController(ImConWidgetController):
         """Turn off all illumination"""
         try:
             # Turn off LED matrix
-            if self.ledMatrix and _HAS_IMSWITCH:
+            if self.ledMatrix:
                 self.ledMatrix.setAll((0, 0, 0))
 
             # Turn off all lasers
-            if self.lasers and _HAS_IMSWITCH:
+            if self.lasers:
                 for laser in self.lasers.values():
                     laser.setEnabled(False)
 
@@ -389,12 +361,8 @@ class DemoController(ImConWidgetController):
             # Generate positions
             self.demo_positions = self._generatePositions()
             self.results.totalPositions = len(self.demo_positions)
-
-            if _HAS_IMSWITCH:
-                message = f"Starting demo with {len(self.demo_positions)} positions"
-                self._logger.info(message)
-            else:
-                print(f"Starting demo with {len(self.demo_positions)} positions")
+            message = f"Starting demo with {len(self.demo_positions)} positions"
+            self._logger.info(message)
 
             # Set continuous illumination if needed
             if self.params.illuminationMode == "continuous":
@@ -432,10 +400,7 @@ class DemoController(ImConWidgetController):
                 self.sigDemoUpdate.emit()
 
         except Exception as e:
-            if _HAS_IMSWITCH:
-                self._logger.error(f"Error in demo execution: {e}")
-            else:
-                print(f"Error in demo execution: {e}")
+            self._logger.error(f"Error in demo execution: {e}")
         finally:
             # Clean up
             self._turnOffIllumination()
@@ -445,10 +410,7 @@ class DemoController(ImConWidgetController):
             self.results.elapsedTime = elapsed
             self.sigDemoComplete.emit()
 
-            if _HAS_IMSWITCH:
-                self._logger.info("Demo completed")
-            else:
-                print("Demo completed")
+            self._logger.info("Demo completed")
 
     @APIExport()
     def getDemoParams(self) -> DemoParams:
@@ -460,17 +422,10 @@ class DemoController(ImConWidgetController):
         """Set demo parameters"""
         try:
             self.params = params
-
-            if _HAS_IMSWITCH:
-                self._logger.info("Updated demo parameters")
-            else:
-                print("Updated demo parameters")
+            self._logger.info("Updated demo parameters")
             return True
         except Exception as e:
-            if _HAS_IMSWITCH:
-                self._logger.error(f"Error setting parameters: {e}")
-            else:
-                print(f"Error setting parameters: {e}")
+            self._logger.error(f"Error setting parameters: {e}")
             return False
 
     @APIExport()
@@ -482,10 +437,7 @@ class DemoController(ImConWidgetController):
     def startDemo(self) -> bool:
         """Start the demo"""
         if self.isRunning:
-            if _HAS_IMSWITCH:
-                self._logger.warning("Demo is already running")
-            else:
-                print("Demo is already running")
+            self._logger.warning("Demo is already running")
             return False
 
         try:
@@ -499,28 +451,19 @@ class DemoController(ImConWidgetController):
             self.demo_thread = threading.Thread(target=self._runDemo, daemon=True)
             self.demo_thread.start()
 
-            if _HAS_IMSWITCH:
-                self._logger.info("Demo started")
-            else:
-                print("Demo started")
+            self._logger.info("Demo started")
             return True
 
         except Exception as e:
             self.isRunning = False
-            if _HAS_IMSWITCH:
-                self._logger.error(f"Error starting demo: {e}")
-            else:
-                print(f"Error starting demo: {e}")
+            self._logger.error(f"Error starting demo: {e}")
             return False
 
     @APIExport()
     def stopDemo(self) -> bool:
         """Stop the demo"""
         if not self.isRunning:
-            if _HAS_IMSWITCH:
-                self._logger.warning("Demo is not running")
-            else:
-                print("Demo is not running")
+            self._logger.warning("Demo is not running")
             return False
 
         try:
@@ -535,15 +478,9 @@ class DemoController(ImConWidgetController):
 
             self.isRunning = False
 
-            if _HAS_IMSWITCH:
-                self._logger.info("Demo stopped")
-            else:
-                print("Demo stopped")
+            self._logger.info("Demo stopped")
             return True
 
         except Exception as e:
-            if _HAS_IMSWITCH:
-                self._logger.error(f"Error stopping demo: {e}")
-            else:
-                print(f"Error stopping demo: {e}")
+            self._logger.error(f"Error stopping demo: {e}")
             return False

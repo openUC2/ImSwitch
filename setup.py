@@ -74,12 +74,14 @@ setup(
         "python-socketio[asyncio]==5.11.4",
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
-        "zarr>=3",
+        "zarr>=3.0.0a0",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
         "numba>=0.61.2", 
         ],
-
+        
+        # TODO: For Psygnal: 
+        
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
         'PyQt5': [
             "qtpy >= 1.9",
@@ -91,6 +93,10 @@ setup(
             "napari[pyqt5] == 0.6.4",
             "lantzdev[qt] >= 0.5.2",
             "qtpy >= 1.9"
+        ],
+        'omero': [
+            # TODO: for omero: https://github.com/glencoesoftware/zeroc-ice-py-macos-universal2/releases/download/20240131/zeroc_ice-3.6.5-cp310-cp310-macosx_11_0_universal2.whl - this has to be adapted to arch and python
+            'omero-py'
         ],
         'Lepmon': [
             "RPi.GPIO",

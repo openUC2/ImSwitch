@@ -248,7 +248,7 @@ class ExperimentController(ImConWidgetController):
         self._ome_write_zarr = True
         self._ome_write_stitched_tiff = False
         self._ome_write_single_tiff = False
-        self._ome_write_omero = False
+        self._ome_write_omero = True
 
         # Initialize experiment execution modes
         self.performance_mode = ExperimentPerformanceMode(self)

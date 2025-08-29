@@ -2,6 +2,7 @@ import time
 import threading
 import random
 import math
+import numpy as np
 from datetime import datetime
 from typing import List, Dict, Any
 from pydantic import BaseModel
@@ -69,10 +70,9 @@ class DemoParams(BaseModel):
     """
     Pydantic model for demo parameters.
     """
-    minPosX: float = 0.0          # minimum X position in micrometers
-    maxPosX: float = 10000.0      # maximum X position in micrometers
-    minPosY: float = 0.0          # minimum Y position in micrometers
-    maxPosY: float = 10000.0      # maximum Y position in micrometers
+    maxRangeX: float = 1000.0     # maximum X range in micrometers (+/- from current position)
+    maxRangeY: float = 1000.0     # maximum Y range in micrometers (+/- from current position)
+    maxSpeed: float = 20000.0
     scanningScheme: str = "random"  # scanning scheme: "spiral", "random", "grid"
     illuminationMode: str = "random"  # illumination mode: "random", "continuous"
 
@@ -161,6 +161,7 @@ class DemoController(ImConWidgetController):
         self.demo_positions = []
         self.current_position_index = 0
         self.start_time = None
+        self.start_position = [0.0, 0.0]  # Store starting position
 
         # Initialize hardware
         self._initializeHardware()
@@ -222,70 +223,94 @@ class DemoController(ImConWidgetController):
         except Exception as e:
             self._logger.warning(f"Could not initialize lasers: {e}")
 
+    def _getCurrentPosition(self) -> List[float]:
+        """Get current stage position"""
+        try:
+            if self.stages:
+                pos_x = self.stages.position.get("X", 0.0)
+                pos_y = self.stages.position.get("Y", 0.0)
+                return [pos_x, pos_y]
+            else:
+                self._logger.warning("No stages available, using default position")
+                return [0.0, 0.0]
+        except Exception as e:
+            self._logger.error(f"Error getting current position: {e}")
+            return [0.0, 0.0]
+
     def _generatePositions(self) -> List[List[float]]:
-        """Generate positions based on scanning scheme"""
+        """Generate relative positions around current position"""
+        # Get current position as center point
+        center_pos = self._getCurrentPosition()
+        self.start_position = center_pos.copy()
+        self._logger.info(f"Using current position as center: {center_pos}")
+        
         positions = []
 
         if self.params.scanningScheme == "random":
-            # Generate random positions
-            for _ in range(self.params.numRandomPositions):
-                x = random.uniform(self.params.minPosX, self.params.maxPosX)
-                y = random.uniform(self.params.minPosY, self.params.maxPosY)
+            # Generate random positions around center
+            positions.append(center_pos)  # Start at center
+            for _ in range(self.params.numRandomPositions - 1):
+                dx = random.uniform(-self.params.maxRangeX, self.params.maxRangeX)
+                dy = random.uniform(-self.params.maxRangeY, self.params.maxRangeY)
+                x = center_pos[0] + dx
+                y = center_pos[1] + dy
                 positions.append([x, y])
-
-        elif self.params.scanningScheme == "grid":
-            positions = self._generateGridPositions()
-
         elif self.params.scanningScheme == "spiral":
-            positions = self._generateSpiralPositions()
-
+            positions = self._generateSpiralPositions(center_pos)
+        else: #self.params.scanningScheme == "grid":
+            positions = self._generateGridPositions(center_pos)
         return positions
 
-    def _generateGridPositions(self) -> List[List[float]]:
-        """Generate grid positions using raster function"""
-        x_range = self.params.maxPosX - self.params.minPosX
-        y_range = self.params.maxPosY - self.params.minPosY
-        x_step = x_range / max(1, self.params.gridColumns - 1)
-        y_step = y_range / max(1, self.params.gridRows - 1)
-
+    def _generateGridPositions(self, center_pos: List[float]) -> List[List[float]]:
+        """Generate grid positions around center position"""
+        positions = []
+        
+        # Calculate step sizes
+        x_step = (2 * self.params.maxRangeX) / max(1, self.params.gridColumns - 1)
+        y_step = (2 * self.params.maxRangeY) / max(1, self.params.gridRows - 1)
+        
+        # Generate grid centered around current position
+        start_x = center_pos[0] - self.params.maxRangeX
+        start_y = center_pos[1] - self.params.maxRangeY
+        
         grid_coords = raster(
-            self.params.minPosX, self.params.minPosY,
+            start_x, start_y,
             x_step, y_step,
             self.params.gridRows, self.params.gridColumns
         )
         
-    def _generateSpiralPositions(self) -> List[List[float]]:
-        """Generate spiral positions"""
-        # Fallback spiral generation - simple circular pattern
+        return grid_coords
+        
+    def _generateSpiralPositions(self, center_pos: List[float]) -> List[List[float]]:
+        """Generate spiral positions around center position"""
         positions = []
-        center_x = (self.params.minPosX + self.params.maxPosX) / 2
-        center_y = (self.params.minPosY + self.params.maxPosY) / 2
-        radius_x = (self.params.maxPosX - center_x) / 2
-        radius_y = (self.params.maxPosY - center_y) / 2
-        radius = min(radius_x, radius_y)
+        center_x, center_y = center_pos
+        max_radius = min(self.params.maxRangeX, self.params.maxRangeY)
 
-        positions.append([center_x, center_y])  # Center point
+        # Start at center
+        positions.append([center_x, center_y])
+        
+        # Generate spiral pattern
         for shell in range(1, self.params.spiralShells + 1):
-            shell_radius = shell * radius / self.params.spiralShells
+            shell_radius = shell * max_radius / self.params.spiralShells
             points_in_shell = shell * 8  # More points in outer shells
             for i in range(points_in_shell):
                 angle = 2 * math.pi * i / points_in_shell
                 x = center_x + shell_radius * math.cos(angle)
                 y = center_y + shell_radius * math.sin(angle)
-                # Ensure positions stay within bounds
-                x = max(self.params.minPosX, min(self.params.maxPosX, x))
-                y = max(self.params.minPosY, min(self.params.maxPosY, y))
                 positions.append([x, y])
         return positions
 
     def _moveToPosition(self, position: List[float]):
         """Move stage to specified position"""
-
         try:
-            # Move to position
-            self.stages.move(position[0], "X")
-            self.stages.move(position[1], "Y")
-            self._logger.debug(f"Moved to position: {position}")
+            if self.stages:
+                # Move to position
+                self.stages.move(position[0], "X", is_absolute=True, speed=self.params.maxSpeed)
+                self.stages.move(position[1], "Y", is_absolute=True, speed=self.params.maxSpeed)
+                self._logger.debug(f"Moved to position: {position}")
+            else:
+                self._logger.warning("No stages available for movement")
         except Exception as e:
             self._logger.error(f"Error moving to position {position}: {e}")
 
@@ -369,40 +394,49 @@ class DemoController(ImConWidgetController):
                 self._setContinuousIllumination(True)
 
             # Main demo loop
-            for i, position in enumerate(self.demo_positions):
-                if self.shouldStop:
-                    break
+            while not self.shouldStop:
+                for i, position in enumerate(self.demo_positions):
+                    if self.shouldStop:
+                        break
 
-                # Update status
-                self.results.currentPosition = i + 1
-                self.results.currentCoordinates = position
-                self.results.elapsedTime = time.time() - self.start_time
+                    # Update status
+                    self.results.currentPosition = i + 1
+                    self.results.currentCoordinates = position
+                    self.results.elapsedTime = time.time() - self.start_time
 
-                # Move to position
-                self._moveToPosition(position)
+                    # Move to position
+                    self._moveToPosition(position)
 
-                # Set illumination for this position
-                if self.params.illuminationMode == "random":
-                    self._setRandomIllumination()
+                    # Set illumination for this position
+                    if self.params.illuminationMode == "random":
+                        self._setRandomIllumination()
 
-                # Dwell at position
-                time.sleep(self.params.dwellTime)
+                    # Dwell at position
+                    time.sleep(self.params.dwellTime)
 
-                # Turn off illumination after dwell time in random mode
-                if self.params.illuminationMode == "random":
-                    self._turnOffIllumination()
+                    # Turn off illumination after dwell time in random mode
+                    if self.params.illuminationMode == "random":
+                        self._turnOffIllumination()
 
-                # Check if total run time exceeded
-                if time.time() - self.start_time >= self.params.totalRunTime:
-                    break
+                    # Check if total run time exceeded
+                    if time.time() - self.start_time >= self.params.totalRunTime:
+                        break
 
-                # Emit update signal
-                self.sigDemoUpdate.emit()
+                    # Emit update signal
+                    self.sigDemoUpdate.emit()
 
         except Exception as e:
             self._logger.error(f"Error in demo execution: {e}")
         finally:
-            # Clean up
+            # Clean up - return to start position
+            try:
+                if self.start_position:
+                    self._moveToPosition(self.start_position)
+                    self._logger.info(f"Returned to start position: {self.start_position}")
+            except Exception as e:
+                self._logger.error(f"Error returning to start position: {e}")
+                
+            # Turn off illumination
             self._turnOffIllumination()
             self.isRunning = False
             self.results.isRunning = False

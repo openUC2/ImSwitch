@@ -185,6 +185,10 @@ class OMEROUploader:
         self.pixels_id = None
         self.use_tile_writes = True  # Will be determined by backend detection
         
+        # Row buffering for ROMIO backend (requires full row writes)
+        self.row_buffers = {}  # Key: (iy, z, c, t), Value: dict of tiles indexed by ix
+        self.row_buffer_lock = threading.Lock()
+        
         self.logger = logging.getLogger(__name__)
         
     def start(self) -> bool:
@@ -223,6 +227,7 @@ class OMEROUploader:
         if self.uploader_thread:
             self.uploader_thread.join(timeout=10)
         self.tile_queue.close()
+        self._cleanup_row_buffers()
         self._cleanup_connection()
     
     def enqueue_tile(self, tile_metadata: TileMetadata) -> bool:
@@ -402,113 +407,95 @@ class OMEROUploader:
     
     def _upload_tile_row_stripe(self, tile: TileMetadata):
         """Upload tile using row-stripe writes (ROMIO backend)."""
-        # For row-stripe mode, we need to collect all tiles in a row before writing
-        # This is a simplified implementation - in practice, you'd want to buffer row data
+        # ROMIO backend requires full row writes, so we need to buffer tiles
+        # by row until we have a complete row, then merge and upload
         try:
-            x0 = tile.ix * self.tile_w
-            y0 = tile.iy * self.tile_h
+            row_key = (tile.iy, tile.z, tile.c, tile.t)
             
-            # Write as a single row stripe
-            buf = np.ascontiguousarray(tile.tile_data).tobytes()
-            self.store.setTile(buf, tile.z, tile.c, tile.t, 
-                             x0, y0, self.tile_w, self.tile_h)
-                             
+            with self.row_buffer_lock:
+                # Initialize row buffer if needed
+                if row_key not in self.row_buffers:
+                    self.row_buffers[row_key] = {}
+                
+                # Add tile to row buffer
+                self.row_buffers[row_key][tile.ix] = tile
+                
+                # Check if row is complete
+                if len(self.row_buffers[row_key]) == self.nx:
+                    # Row is complete, merge tiles and upload
+                    self._upload_complete_row(row_key, self.row_buffers[row_key])
+                    # Clean up completed row
+                    del self.row_buffers[row_key]
+                    
         except Exception as e:
-            ''' TODO: 
-            I think we need to collect tiles first and merge them into a row before uploading them to a omero object we get the follwoing error:
-            tile.tile_data.shape
-(300, 400)
-but it should be a whole row instead 
-
-            excception ::omero::InternalException
-{
-    serverStackTrace = ome.conditions.InternalException:  Wrapped Exception: (java.lang.UnsupportedOperationException):
-ROMIO pixel buffer only supports full row writes.
-	at ome.io.nio.RomioPixelBuffer.setTile(RomioPixelBuffer.java:908)
-	at ome.services.RawPixelsBean.setTile(RawPixelsBean.java:982)
-	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
-	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
-	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:566)
-	at org.springframework.aop.support.AopUtils.invokeJoinpointUsingReflection(AopUtils.java:333)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.invokeJoinpoint(ReflectiveMethodInvocation.java:190)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:157)
-	at ome.security.basic.EventHandler.invoke(EventHandler.java:154)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-	at ome.tools.hibernate.SessionHandler.doStateful(SessionHandler.java:216)
-	at ome.tools.hibernate.SessionHandler.invoke(SessionHandler.java:200)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-	at org.springframework.transaction.interceptor.TransactionInterceptor$1.proceedWithInvocation(TransactionInterceptor.java:99)
-	at org.springframework.transaction.interceptor.TransactionAspectSupport.invokeWithinTransaction(TransactionAspectSupport.java:283)
-	at org.springframework.transaction.interceptor.TransactionInterceptor.invoke(TransactionInterceptor.java:96)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-	at ome.tools.hibernate.ProxyCleanupFilter$Interceptor.invoke(ProxyCleanupFilter.java:249)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-	at ome.services.util.ServiceHandler.invoke(ServiceHandler.java:121)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-	at org.springframework.aop.framework.JdkDynamicAopProxy.invoke(JdkDynamicAopProxy.java:213)
-	at com.sun.proxy.$Proxy113.setTile(Unknown Source)
-	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
-	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
-	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:566)
-	at org.springframework.aop.support.AopUtils.invokeJoinpointUsingReflection(AopUtils.java:333)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.invokeJoinpoint(ReflectiveMethodInvocation.java:190)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:157)
-	at ome.security.basic.BasicSecurityWiring.invoke(BasicSecurityWiring.java:93)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-	at ome.services.blitz.fire.AopContextInitializer.invoke(AopContextInitializer.java:43)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-	at org.springframework.aop.framework.JdkDynamicAopProxy.invoke(JdkDynamicAopProxy.java:213)
-	at com.sun.proxy.$Proxy113.setTile(Unknown Source)
-	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
-	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
-	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:566)
-	at ome.services.blitz.util.IceMethodInvoker.invoke(IceMethodInvoker.java:172)
-	at ome.services.throttling.Callback.run(Callback.java:56)
-	at ome.services.throttling.InThreadThrottlingStrategy.callInvokerOnRawArgs(InThreadThrottlingStrategy.java:56)
-	at ome.services.blitz.impl.AbstractAmdServant.callInvokerOnRawArgs(AbstractAmdServant.java:140)
-	at ome.services.blitz.impl.RawPixelsStoreI.setTile_async(RawPixelsStoreI.java:289)
-	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
-	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:62)
-	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
-	at java.base/java.lang.reflect.Method.invoke(Method.java:566)
-	at org.springframework.aop.support.AopUtils.invokeJoinpointUsingReflection(AopUtils.java:333)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.invokeJoinpoint(ReflectiveMethodInvocation.java:190)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:157)
-	at omero.cmd.CallContext.invoke(CallContext.java:85)
-	at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:179)
-	at org.springframework.aop.framework.JdkDynamicAopProxy.invoke(JdkDynamicAopProxy.java:213)
-	at com.sun.proxy.$Proxy114.setTile_async(Unknown Source)
-	at omero.api._RawPixelsStoreTie.setTile_async(_RawPixelsStoreTie.java:300)
-	at omero.api._RawPixelsStoreDisp.___setTile(_RawPixelsStoreDisp.java:1228)
-	at omero.api._RawPixelsStoreDisp.__dispatch(_RawPixelsStoreDisp.java:1788)
-	at IceInternal.Incoming.invoke(Incoming.java:221)
-	at Ice.ConnectionI.invokeAll(ConnectionI.java:2536)
-	at Ice.ConnectionI.dispatch(ConnectionI.java:1145)
-	at Ice.ConnectionI.message(ConnectionI.java:1056)
-	at IceInternal.ThreadPool.run(ThreadPool.java:395)
-	at IceInternal.ThreadPool.access$300(ThreadPool.java:12)
-	at IceInternal.ThreadPool$EventHandlerThread.run(ThreadPool.java:832)
-	at java.base/java.lang.Thread.run(Thread.java:829)
-
-    serverExceptionClass = ome.conditions.InternalException
-    message =  Wrapped Exception: (java.lang.UnsupportedOperationException):
-ROMIO pixel buffer only supports full row writes.
-}'''
-        	
-            self.logger.error(f"Failed to upload tile {tile.ix},{tile.iy} using row writes: {e}")
+            self.logger.error(f"Failed to buffer tile {tile.ix},{tile.iy} for row upload: {e}")
             raise
+    
+    def _upload_complete_row(self, row_key: Tuple[int, int, int, int], row_tiles: Dict[int, TileMetadata]):
+        """Upload a complete row of tiles to OMERO."""
+        iy, z, c, t = row_key
+        
+        try:
+            # Sort tiles by ix to ensure proper order
+            sorted_tiles = [row_tiles[ix] for ix in sorted(row_tiles.keys())]
+            
+            # Merge tiles horizontally to create full row
+            row_data = np.concatenate([tile.tile_data for tile in sorted_tiles], axis=1)
+            
+            # Calculate row position
+            y_start = iy * self.tile_h
+            row_height = self.tile_h
+            row_width = self.nx * self.tile_w
+            
+            self.logger.debug(f"Uploading complete row {iy} at y={y_start}, size={row_width}x{row_height}")
+            
+            # Upload row stripe by stripe (each row of pixels in the tile height)
+            for row_idx in range(row_height):
+                if y_start + row_idx < self.ny * self.tile_h:  # Bounds check
+                    row_stripe = row_data[row_idx:row_idx+1, :]  # Single row of pixels
+                    buf = np.ascontiguousarray(row_stripe).tobytes()
+                    
+                    # Upload as full-width row stripe
+                    self.store.setTile(buf, z, c, t, 
+                                     0, y_start + row_idx, row_width, 1)
+                                     
+        except Exception as e:
+            self.logger.error(f"Failed to upload complete row {iy}: {e}")
+            raise
+    
+    def _cleanup_row_buffers(self):
+        """Clean up any remaining row buffers."""
+        with self.row_buffer_lock:
+            if self.row_buffers:
+                self.logger.warning(f"Cleaning up {len(self.row_buffers)} incomplete row buffers")
+                self.row_buffers.clear()
     
     def finalize(self):
         """Finalize the OMERO upload."""
+        # Upload any remaining incomplete rows before finalizing
+        self._upload_remaining_rows()
+        
         if self.store:
             try:
                 self.store.save()
                 self.logger.info("OMERO upload finalized successfully")
             except Exception as e:
                 self.logger.error(f"Failed to finalize OMERO upload: {e}")
+    
+    def _upload_remaining_rows(self):
+        """Upload any remaining incomplete rows (for edge cases where not all tiles arrive)."""
+        with self.row_buffer_lock:
+            if self.row_buffers:
+                self.logger.warning(f"Uploading {len(self.row_buffers)} incomplete rows during finalization")
+                
+                for row_key, row_tiles in list(self.row_buffers.items()):
+                    if row_tiles:  # Only upload if we have at least some tiles
+                        try:
+                            self._upload_complete_row(row_key, row_tiles)
+                        except Exception as e:
+                            self.logger.error(f"Failed to upload incomplete row {row_key}: {e}")
+                
+                self.row_buffers.clear()
     
     def _cleanup_connection(self):
         """Clean up OMERO connection."""

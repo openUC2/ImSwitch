@@ -31,7 +31,7 @@ class OMEWriterConfig:
     write_zarr: bool = True
     write_stitched_tiff: bool = False  # New option for stitched TIFF
     write_tiff_single: bool = False  # Append images in a single TIFF file
-    write_omero: bool = False  # New option for OMERO upload
+    write_omero: bool = True  # New option for OMERO upload
     min_period: float = 0.2
     compression: str = "zlib"
     zarr_compressor = None

@@ -73,14 +73,14 @@ class DiskSpilloverQueue:
         self.memory_queue = queue.Queue(maxsize=max_memory_items)
         self.spill_dir = spill_dir or tempfile.mkdtemp(prefix="imswitch_omero_")
         self.spill_counter = 0
-        self.spilled_files = queue.Queue()
+        self.spilled_files = queue.Queue(maxsize=max_memory_items)  # Limit number of spilled files tracked
         self._lock = threading.Lock()
         self._closed = False
         
         # Ensure spill directory exists
         os.makedirs(self.spill_dir, exist_ok=True)
         
-    def put(self, item: TileMetadata, timeout: Optional[float] = None) -> bool:
+    def put(self, item: TileMetadata) -> bool:
         """Put item in queue, spilling to disk if memory queue is full."""
         if self._closed:
             return False
@@ -106,7 +106,7 @@ class DiskSpilloverQueue:
                     logging.error(f"Failed to spill tile to disk: {e}")
                     return False
     
-    def get(self, timeout: Optional[float] = None) -> Optional[TileMetadata]:
+    def get(self) -> Optional[TileMetadata]:
         """Get item from queue, checking memory first then disk."""
         if self._closed and self.empty():
             return None
@@ -151,6 +151,9 @@ class DiskSpilloverQueue:
             except:
                 pass
 
+    def len(self) -> int:
+        """Get the current length of the queue."""
+        return self.memory_queue.qsize() + self.spilled_files.qsize()
 
 class OMEROUploader:
     """Thread-safe OMERO uploader for streaming tiles."""
@@ -166,6 +169,8 @@ class OMEROUploader:
         self.connection = None
         self.client = None
         self.store = None
+        self._connection_cleaned = False
+        self._finalized = False
         
         # Mosaic configuration
         self.nx = mosaic_config.get('nx', 1)
@@ -191,8 +196,14 @@ class OMEROUploader:
         
         self.logger = logging.getLogger(__name__)
         
+        # Log mosaic configuration for debugging
+        self.logger.info(f"OMERO uploader initialized with mosaic config: "
+                        f"{self.nx}x{self.ny} tiles, {self.tile_w}x{self.tile_h} pixels per tile, "
+                        f"Z={self.size_z}, C={self.size_c}, T={self.size_t}, dtype={self.pixel_type}")
+        
     def start(self) -> bool:
         """Start the uploader thread."""
+        self._finalized = False
         if not OMERO_AVAILABLE:
             self.logger.warning("OMERO Python not available, uploader cannot start")
             return False
@@ -226,15 +237,28 @@ class OMEROUploader:
         self.running = False
         if self.uploader_thread:
             self.uploader_thread.join(timeout=10)
-        self.tile_queue.close()
+        
+        # Finalize any remaining uploads before cleanup
+        try:
+            self.finalize()
+        except Exception as e:
+            self.logger.warning(f"Error during finalization: {e}")
+            
         self._cleanup_row_buffers()
         self._cleanup_connection()
+        self.tile_queue.close() # TODO: We should flush out all elements in the queue and upload them to the server 
     
     def enqueue_tile(self, tile_metadata: TileMetadata) -> bool:
         """Enqueue a tile for upload."""
         if not self.running:
+            self.logger.warning(f"Cannot enqueue tile ({tile_metadata.ix}, {tile_metadata.iy}) - uploader not running")
             return False
-        return self.tile_queue.put(tile_metadata)
+        
+        self.logger.debug(f"Enqueueing tile ({tile_metadata.ix}, {tile_metadata.iy}) for upload (mosaic size: {self.nx}x{self.ny})")
+        success = self.tile_queue.put(tile_metadata)
+        if not success:
+            self.logger.warning(f"Failed to enqueue tile ({tile_metadata.ix}, {tile_metadata.iy}) - queue full or closed")
+        return success
     
     def _uploader_worker(self):
         """Main uploader thread worker."""
@@ -244,7 +268,7 @@ class OMEROUploader:
 
             # Process tiles from queue
             while self.running:
-                tile = self.tile_queue.get(timeout=1.0)
+                tile = self.tile_queue.get()
                 if tile is None:
                     continue
                     
@@ -411,14 +435,18 @@ class OMEROUploader:
         # by row until we have a complete row, then merge and upload
         try:
             row_key = (tile.iy, tile.z, tile.c, tile.t)
+            self.logger.debug(f"Processing tile ({tile.ix}, {tile.iy}) for row buffer, key: {row_key}")
             
             with self.row_buffer_lock:
                 # Initialize row buffer if needed
                 if row_key not in self.row_buffers:
                     self.row_buffers[row_key] = {}
+                    self.logger.debug(f"Created new row buffer for row {tile.iy}")
                 
                 # Add tile to row buffer
                 self.row_buffers[row_key][tile.ix] = tile
+                current_tiles_in_row = len(self.row_buffers[row_key])
+                self.logger.debug(f"Added tile {tile.ix} to row {tile.iy}, now has {current_tiles_in_row}/{self.nx} tiles")
                 
                 # Check if row is complete
                 if len(self.row_buffers[row_key]) == self.nx:
@@ -426,6 +454,9 @@ class OMEROUploader:
                     self._upload_complete_row(row_key, self.row_buffers[row_key])
                     # Clean up completed row
                     del self.row_buffers[row_key]
+                    self.logger.debug(f"Cleaned up completed row buffer for row {tile.iy}")
+                else:
+                    self.logger.debug(f"Row {tile.iy} still incomplete ({current_tiles_in_row}/{self.nx} tiles), waiting for more tiles...")
                     
         except Exception as e:
             self.logger.error(f"Failed to buffer tile {tile.ix},{tile.iy} for row upload: {e}")
@@ -454,7 +485,7 @@ class OMEROUploader:
                 if y_start + row_idx < self.ny * self.tile_h:  # Bounds check
                     row_stripe = row_data[row_idx:row_idx+1, :]  # Single row of pixels
                     buf = np.ascontiguousarray(row_stripe).tobytes()
-                    
+                    self.logger.debug(f"Uploading row stripe {y_start + row_idx} ({row_width}x1)")
                     # Upload as full-width row stripe
                     self.store.setTile(buf, z, c, t, 
                                      0, y_start + row_idx, row_width, 1)
@@ -472,6 +503,12 @@ class OMEROUploader:
     
     def finalize(self):
         """Finalize the OMERO upload."""
+        # Check if already finalized
+        if hasattr(self, '_finalized') and self._finalized:
+            return
+            
+        self._finalized = True
+        
         # Upload any remaining incomplete rows before finalizing
         self._upload_remaining_rows()
         
@@ -489,33 +526,54 @@ class OMEROUploader:
                 self.logger.warning(f"Uploading {len(self.row_buffers)} incomplete rows during finalization")
                 
                 for row_key, row_tiles in list(self.row_buffers.items()):
+                    iy, z, c, t = row_key
+                    tiles_count = len(row_tiles) if row_tiles else 0
+                    self.logger.info(f"Processing incomplete row {iy} with {tiles_count}/{self.nx} tiles")
+                    
                     if row_tiles:  # Only upload if we have at least some tiles
                         try:
                             self._upload_complete_row(row_key, row_tiles)
+                            self.logger.info(f"Successfully uploaded incomplete row {iy}")
                         except Exception as e:
                             self.logger.error(f"Failed to upload incomplete row {row_key}: {e}")
+                    else:
+                        self.logger.warning(f"Skipping empty row buffer for row {iy}")
                 
                 self.row_buffers.clear()
+            else:
+                self.logger.info("No incomplete rows found during finalization")
     
     def _cleanup_connection(self):
         """Clean up OMERO connection."""
+        # Use a flag to ensure cleanup only happens once
+        if hasattr(self, '_connection_cleaned') and self._connection_cleaned:
+            return
+            
+        self._connection_cleaned = True
+        
+        # Close store first
         if self.store:
             try:
                 self.store.close()
-            except:
-                pass
+                self.logger.debug("OMERO store closed")
+            except Exception as e:
+                self.logger.warning(f"Error closing OMERO store: {e}")
             self.store = None
             
+        # Close connection 
         if self.connection:
             try:
                 self.connection.close()
-            except:
-                pass
+                self.logger.debug("OMERO connection closed")
+            except Exception as e:
+                self.logger.warning(f"Error closing OMERO connection: {e}")
             self.connection = None
             
+        # Close client session last
         if self.client:
             try:
                 self.client.closeSession()
-            except:
-                pass
+                self.logger.debug("OMERO client session closed")
+            except Exception as e:
+                self.logger.warning(f"Error closing OMERO client session: {e}")
             self.client = None

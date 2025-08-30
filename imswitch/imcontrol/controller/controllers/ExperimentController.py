@@ -95,6 +95,7 @@ class ParameterValue(BaseModel):
     ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
     ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
+    ome_write_omero: bool = Field(False, description="Whether to upload to OMERO")
 
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
@@ -248,6 +249,7 @@ class ExperimentController(ImConWidgetController):
         self._ome_write_zarr = True
         self._ome_write_stitched_tiff = False
         self._ome_write_single_tiff = False
+        self._ome_write_omero = True
 
         # Initialize experiment execution modes
         self.performance_mode = ExperimentPerformanceMode(self)
@@ -322,12 +324,41 @@ class ExperimentController(ImConWidgetController):
     @APIExport(requestType="GET")
     def getOMEWriterConfig(self):
         """Get current OME writer configuration."""
-        return {
+        config = {
             "write_tiff": getattr(self, '_ome_write_tiff', False),
             "write_zarr": getattr(self, '_ome_write_zarr', True),
             "write_stitched_tiff": getattr(self, '_ome_write_stitched_tiff', False),
-            "write_single_tiff": getattr(self, '_ome_write_single_tiff', False)
+            "write_single_tiff": getattr(self, '_ome_write_single_tiff', False),
+            "write_omero": getattr(self, '_ome_write_omero', False)
         }
+        
+        # Add OMERO availability status
+        try:
+            from .experiment_controller.omero_uploader import OMERO_AVAILABLE
+            config["omero_available"] = OMERO_AVAILABLE
+        except ImportError:
+            config["omero_available"] = False
+            
+        return config
+    
+    @APIExport(requestType="POST")
+    def setOMEWriterConfig(self, config):
+        """Set OME writer configuration."""
+        try:
+            if 'write_tiff' in config:
+                self._ome_write_tiff = bool(config['write_tiff'])
+            if 'write_zarr' in config:
+                self._ome_write_zarr = bool(config['write_zarr'])
+            if 'write_stitched_tiff' in config:
+                self._ome_write_stitched_tiff = bool(config['write_stitched_tiff'])
+            if 'write_single_tiff' in config:
+                self._ome_write_single_tiff = bool(config['write_single_tiff'])
+            if 'write_omero' in config:
+                self._ome_write_omero = bool(config['write_omero'])
+                
+            return {"status": "success", "message": "OME writer configuration updated"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
 
     def get_num_xy_steps(self, pointList):
@@ -539,6 +570,8 @@ class ExperimentController(ImConWidgetController):
         self._ome_write_zarr = p.ome_write_zarr
         self._ome_write_stitched_tiff = p.ome_write_stitched_tiff
         self._ome_write_single_tiff = getattr(p, 'ome_write_single_tiff', False)  # Default to False if not specified
+        # Add OMERO support for wellplate experiments
+        self._ome_write_omero = getattr(p, 'ome_write_omero', False)  # Default to False if not specified
 
         # determine if each sub scan in snake_tiles is a single tile or a multi-tile scan - if single image we should squah them in a single TIF (e.g. by appending )
         is_single_tile_scan = all(len(tile) == 1 for tile in snake_tiles)
@@ -1121,6 +1154,7 @@ class ExperimentController(ImConWidgetController):
             write_zarr=self._ome_write_zarr,
             write_stitched_tiff=write_stitched_tiff,
             write_tiff_single=self._ome_write_single_tiff,
+            write_omero=self._ome_write_omero,
             min_period=min_period,
             pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0,
             n_time_points=nTimePoints,
@@ -1128,13 +1162,35 @@ class ExperimentController(ImConWidgetController):
             n_channels = nIlluminations
         )
 
+        # Prepare OMERO connection parameters if OMERO upload is enabled
+        omero_connection_params = None
+        if self._ome_write_omero and hasattr(self._master, 'experimentManager'):
+            try:
+                from .experiment_controller.omero_uploader import OMEROConnectionParams
+                experiment_manager = self._master.experimentManager
+                omero_connection_params = OMEROConnectionParams(
+                    host=experiment_manager.omeroServerUrl,
+                    port=experiment_manager.omeroPort,
+                    username=experiment_manager.omeroUsername,
+                    password=experiment_manager.omeroPassword,
+                    group_id=experiment_manager.omeroGroupId,
+                    project_id=experiment_manager.omeroProjectId,
+                    dataset_id=experiment_manager.omeroDatasetId,
+                    connection_timeout=experiment_manager.omeroConnectionTimeout,
+                    upload_timeout=experiment_manager.omeroUploadTimeout
+                )
+            except Exception as e:
+                self._logger.warning(f"Failed to setup OMERO connection parameters: {e}")
+                omero_connection_params = None
+
         ome_writer = OMEWriter(
             file_paths=mFilePath,
             tile_shape=tile_shape,
             grid_shape=grid_shape,
             grid_geometry=grid_geometry,
             config=writer_config,
-            logger=self._logger
+            logger=self._logger,
+            omero_connection_params=omero_connection_params
         )
 
         # ------------------------------------------------------------- main loop

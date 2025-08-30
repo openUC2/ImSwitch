@@ -2,5 +2,6 @@
 requires = [
     "setuptools>=42",
     "wheel"
+    "psygnal --no-binary :all:"
 ]
 build-backend = "setuptools.build_meta"

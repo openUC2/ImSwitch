@@ -523,15 +523,11 @@ class OMEROUploader:
             self.logger.debug(f"Uploading complete row {iy} at y={y_start}, size={row_width}x{row_height}")
             
             # Upload row stripe by stripe (each row of pixels in the tile height)
-            for row_idx in range(row_height):
-                if y_start + row_idx < self.ny * self.tile_h:  # Bounds check
-                    row_stripe = row_data[row_idx:row_idx+1, :]  # Single row of pixels
-                    buf = np.ascontiguousarray(row_stripe).tobytes()
-                    self.logger.debug(f"Uploading row stripe {y_start + row_idx} ({row_width}x1)")
-                    # Upload as full-width row stripe
-                    self.store.setTile(buf, z, c, t, 
-                                     0, y_start + row_idx, row_width, 1)
-                                     
+            
+            buf = np.ascontiguousarray(row_data).tobytes()
+            self.store.setTile(buf, z, c, t, 
+                                     0, y_start, row_width, 1)
+
         except Exception as e:
             self.logger.error(f"Failed to upload complete row {iy}: {e}")
             raise

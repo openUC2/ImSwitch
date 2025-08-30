@@ -503,6 +503,17 @@ class OMEWriter:
     
     def finalize(self):
         """Finalize the writing process and optionally build pyramids."""
+        
+        # Signal completion to OMERO uploader before finalizing
+        if self.config.write_omero and self.omero_uploader is not None:
+            try:
+                self.omero_uploader.signal_completion()
+                if self.logger:
+                    self.logger.info("Signaled completion to OMERO uploader")
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Error signaling completion to OMERO uploader: {e}")
+        
         if self.config.write_zarr and self.store is not None:
             try:
                 self._build_vanilla_zarr_pyramids()

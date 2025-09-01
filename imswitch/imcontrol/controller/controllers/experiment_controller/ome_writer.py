@@ -71,7 +71,10 @@ class OMEWriter:
     both fast stage scan and normal stage scan writing operations.
     """
     
-    def __init__(self, file_paths, tile_shape, grid_shape, grid_geometry, config: OMEWriterConfig, logger=None, omero_connection_params=None):
+    # Class-level registry for shared OMERO uploaders (for timelapse/z-stack experiments)
+    _shared_omero_uploaders = {}
+    
+    def __init__(self, file_paths, tile_shape, grid_shape, grid_geometry, config: OMEWriterConfig, logger=None, omero_connection_params=None, shared_omero_key=None):
         """
         Initialize the OME writer.
         
@@ -83,6 +86,7 @@ class OMEWriter:
             config: OMEWriterConfig for writer behavior
             logger: Logger instance for debugging
             omero_connection_params: OMEROConnectionParams for OMERO upload
+            shared_omero_key: Optional key for shared OMERO uploader (timelapse/z-stack)
         """
         self.file_paths = file_paths
         self.tile_h, self.tile_w = tile_shape
@@ -90,6 +94,7 @@ class OMEWriter:
         self.x_start, self.y_start, self.x_step, self.y_step = grid_geometry # TODO: this should be set per each grid 
         self.config = config
         self.logger = logger
+        self.shared_omero_key = shared_omero_key
         
         # Zarr components
         self.store = None
@@ -180,6 +185,14 @@ class OMEWriter:
     def _setup_omero_uploader(self, omero_connection_params: OMEROConnectionParams):
         """Set up the OMERO uploader for streaming tiles to OMERO."""
         try:
+            # Check if we should use a shared uploader for timelapse/z-stack experiments
+            if self.shared_omero_key and self.shared_omero_key in self._shared_omero_uploaders:
+                # Reuse existing shared uploader
+                self.omero_uploader = self._shared_omero_uploaders[self.shared_omero_key]
+                if self.logger:
+                    self.logger.info(f"Reusing shared OMERO uploader for key: {self.shared_omero_key}")
+                return
+            
             # Create mosaic configuration for OMERO
             mosaic_config = {
                 'nx': self.nx,
@@ -195,6 +208,15 @@ class OMEWriter:
                 'pixel_size_um': self.config.pixel_size
             }
             
+            # For shared uploaders, check if we need to set reuse IDs
+            if self.shared_omero_key:
+                # Look for existing IDs from a previous uploader
+                existing_uploader = self._shared_omero_uploaders.get(self.shared_omero_key)
+                if existing_uploader:
+                    omero_ids = existing_uploader.get_omero_ids()
+                    omero_connection_params.reuse_dataset_id = omero_ids.get("dataset_id", -1)
+                    omero_connection_params.reuse_image_id = omero_ids.get("image_id", -1)
+            
             self.omero_uploader = OMEROUploader(
                 omero_connection_params,
                 mosaic_config,
@@ -205,6 +227,12 @@ class OMEWriter:
             if self.omero_uploader.start():
                 if self.logger:
                     self.logger.info("OMERO uploader initialized and started")
+                
+                # Register as shared uploader if key provided
+                if self.shared_omero_key:
+                    self._shared_omero_uploaders[self.shared_omero_key] = self.omero_uploader
+                    if self.logger:
+                        self.logger.info(f"Registered shared OMERO uploader with key: {self.shared_omero_key}")
             else:
                 self.omero_uploader = None
                 if self.logger:
@@ -214,6 +242,16 @@ class OMEWriter:
             self.omero_uploader = None
             if self.logger:
                 self.logger.error(f"Failed to setup OMERO uploader: {e}")
+    
+    @classmethod
+    def cleanup_shared_omero_uploaders(cls):
+        """Clean up all shared OMERO uploaders."""
+        for key, uploader in cls._shared_omero_uploaders.items():
+            try:
+                uploader.stop()
+            except Exception as e:
+                pass  # Ignore cleanup errors
+        cls._shared_omero_uploaders.clear()
     
     def write_frame(self, frame, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

@@ -6,6 +6,7 @@ of the scanning process using workflow steps for precise control.
 """
 
 import os
+import time
 from typing import List, Dict, Any, Optional
 import numpy as np
 
@@ -57,17 +58,23 @@ class ExperimentNormalMode(ExperimentModeBase):
         t_period = kwargs.get('t_period', 1)
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
+        shared_file_writers = kwargs.get('shared_file_writers', None)  # Pre-created shared writers
         
         # Initialize workflow components
         workflow_steps = []
-        file_writers = []
         step_id = 0
         
-        # Set up OME writers for each tile - create new writers for each timepoint
-        file_writers = self._setup_ome_writers(
-            snake_tiles, t, exp_name, dir_path, m_file_name, 
-            z_positions, illumination_intensities
-        )
+        # Set up OME writers for each tile
+        if shared_file_writers is not None:
+            # Use shared writers for timelapse/z-stack experiments
+            file_writers = shared_file_writers
+            self._logger.debug(f"Using shared file writers for timepoint {t}")
+        else:
+            # Create new writers for single timepoint experiments
+            file_writers = self._setup_ome_writers(
+                snake_tiles, t, exp_name, dir_path, m_file_name, 
+                z_positions, illumination_intensities, n_times
+            )
         
         # Create workflow steps for each tile
         for position_center_index, tiles in enumerate(snake_tiles):
@@ -92,6 +99,133 @@ class ExperimentNormalMode(ExperimentModeBase):
             "step_count": step_id
         }
     
+    def setup_shared_ome_writers(self,
+                               snake_tiles: List[List[Dict]],
+                               nTimes: int,
+                               z_positions: List[float],
+                               illumination_intensities: List[float],
+                               exp_name: str,
+                               dir_path: str,
+                               m_file_name: str) -> List[OMEWriter]:
+        """
+        Set up shared OME writers for timelapse/z-stack experiments.
+        
+        This method creates OME writers once for the entire experiment, properly
+        configured for multiple timepoints and z-planes, ensuring OMERO uploads
+        go to the same dataset with proper time and z indexing.
+        
+        Args:
+            snake_tiles: List of tiles containing scan points
+            nTimes: Total number of timepoints
+            z_positions: List of Z positions
+            illumination_intensities: List of illumination values
+            exp_name: Experiment name
+            dir_path: Directory path for saving
+            m_file_name: Base filename
+            
+        Returns:
+            List of OMEWriter instances configured for the full experiment
+        """
+        self._logger.info(f"Setting up shared OME writers for timelapse/z-stack experiment: {nTimes} timepoints, {len(z_positions)} z-planes")
+        
+        file_writers = []
+        
+        # Prepare OMERO connection parameters if enabled
+        omero_connection_params = self.prepare_omero_connection_params()
+        
+        # Check if single TIFF writing is enabled (single tile scan mode)
+        is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
+        
+        if is_single_tiff_mode:
+            # Create a single OME writer for all tiles in single TIFF mode
+            experiment_name = f"{exp_name}_timelapse"
+            m_file_path = os.path.join(dir_path, f"{m_file_name}_{experiment_name}.ome.tif")
+            self._logger.debug(f"Shared Single TIFF mode - OME-TIFF path: {m_file_path}")
+            
+            # Create file paths
+            file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""))
+            
+            # Calculate combined tile and grid parameters for all positions
+            all_tiles = [tile for tiles in snake_tiles for tile in tiles]  # Flatten all tiles
+            tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
+            grid_shape, grid_geometry = self.calculate_grid_parameters(all_tiles)
+            
+            # Create writer configuration for single TIFF mode with full time/z dimensions
+            n_channels = sum(np.array(illumination_intensities) > 0)
+            writer_config = self.create_writer_config(
+                write_tiff=False,  # Disable individual TIFF files
+                write_zarr=self.controller._ome_write_zarr,
+                write_stitched_tiff=False,  # Disable stitched TIFF
+                write_tiff_single=True,  # Enable single TIFF writing
+                write_omero=self.controller._ome_write_omero,  # Enable OMERO if configured
+                min_period=0.1,
+                n_time_points=nTimes,  # Full timepoint range
+                n_z_planes=len(z_positions),  # Full z-range
+                n_channels=n_channels
+            )
+            
+            # Create single OME writer for all positions and timepoints
+            ome_writer = OMEWriter(
+                file_paths=file_paths,
+                tile_shape=tile_shape,
+                grid_shape=grid_shape,
+                grid_geometry=grid_geometry,
+                config=writer_config,
+                logger=self._logger,
+                omero_connection_params=omero_connection_params
+            )
+            file_writers.append(ome_writer)
+            
+        else:
+            # Create shared OME writers for each tile position
+            # but configured for the full time/z dimensions
+            shared_omero_key = f"experiment_{exp_name}_{int(time.time())}" if nTimes > 1 or len(z_positions) > 1 else None
+            
+            for position_center_index, tiles in enumerate(snake_tiles):
+                experiment_name = f"{exp_name}_timelapse_{position_center_index}"
+                m_file_path = os.path.join(
+                    dir_path, 
+                    m_file_name + str(position_center_index) + "_" + experiment_name + "_" + ".ome.tif"
+                )
+                self._logger.debug(f"Shared OME-TIFF path: {m_file_path}")
+                
+                # Create file paths
+                file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""))
+                
+                # Calculate tile and grid parameters
+                tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
+                grid_shape, grid_geometry = self.calculate_grid_parameters(tiles)
+                
+                # Create writer configuration with full time/z dimensions
+                n_channels = sum(np.array(illumination_intensities) > 0)
+                writer_config = self.create_writer_config(
+                    write_tiff=self.controller._ome_write_tiff,
+                    write_zarr=self.controller._ome_write_zarr,
+                    write_stitched_tiff=self.controller._ome_write_stitched_tiff,
+                    write_tiff_single=False,  # Disable single TIFF for multi-tile mode
+                    write_omero=self.controller._ome_write_omero,  # Enable OMERO if configured
+                    min_period=0.1,  # Faster for normal mode
+                    n_time_points=nTimes,  # Full timepoint range
+                    n_z_planes=len(z_positions),  # Full z-range  
+                    n_channels=n_channels
+                )
+                
+                # Create OME writer with shared OMERO key
+                ome_writer = OMEWriter(
+                    file_paths=file_paths,
+                    tile_shape=tile_shape,
+                    grid_shape=grid_shape,
+                    grid_geometry=grid_geometry,
+                    config=writer_config,
+                    logger=self._logger,
+                    omero_connection_params=omero_connection_params,
+                    shared_omero_key=shared_omero_key
+                )
+                file_writers.append(ome_writer)
+        
+        self._logger.info(f"Created {len(file_writers)} shared OME writers for experiment")
+        return file_writers
+
     def _setup_ome_writers(self,
                           snake_tiles: List[List[Dict]],
                           t: int,
@@ -99,9 +233,10 @@ class ExperimentNormalMode(ExperimentModeBase):
                           dir_path: str,
                           m_file_name: str,
                           z_positions: List[float],
-                          illumination_intensities: List[float]) -> List[OMEWriter]:
+                          illumination_intensities: List[float],
+                          n_times: int = 1) -> List[OMEWriter]:
         """
-        Set up OME writers for each tile.
+        Set up OME writers for each tile (legacy method for single timepoint experiments).
         
         Args:
             snake_tiles: List of tiles containing scan points
@@ -111,6 +246,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             m_file_name: Base filename
             z_positions: List of Z positions
             illumination_intensities: List of illumination values
+            n_times: Total number of timepoints (for proper configuration)
             
         Returns:
             List of OMEWriter instances
@@ -146,7 +282,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 write_tiff_single=True,  # Enable single TIFF writing
                 write_omero=self.controller._ome_write_omero,  # Enable OMERO if configured
                 min_period=0.1,
-                n_time_points=1,
+                n_time_points=n_times,  # Use proper timepoint count
                 n_z_planes=len(z_positions),
                 n_channels=n_channels
             )
@@ -189,7 +325,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     write_tiff_single=False,  # Disable single TIFF for multi-tile mode
                     write_omero=self.controller._ome_write_omero,  # Enable OMERO if configured
                     min_period=0.1,  # Faster for normal mode
-                    n_time_points=1,
+                    n_time_points=n_times,  # Use proper timepoint count
                     n_z_planes=len(z_positions),
                     n_channels=n_channels
                 )

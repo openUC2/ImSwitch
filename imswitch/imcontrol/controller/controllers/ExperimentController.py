@@ -601,6 +601,18 @@ class ExperimentController(ImConWidgetController):
             all_workflow_steps = []
             all_file_writers = []
 
+            # Create shared OME writers for the entire experiment (not per timepoint)
+            # This ensures timelapse and z-stack data goes into the same OMERO dataset
+            shared_file_writers = self.normal_mode.setup_shared_ome_writers(
+                snake_tiles=snake_tiles,
+                nTimes=nTimes,
+                z_positions=z_positions,
+                illumination_intensities=illuminationIntensities,
+                exp_name=exp_name,
+                dir_path=dirPath,
+                m_file_name=mFileName
+            )
+
             for t in range(nTimes):
                 experiment_params = {
                     'mExperiment': mExperiment,
@@ -624,14 +636,17 @@ class ExperimentController(ImConWidgetController):
                     autofocus_min=autofocusMin,
                     autofocus_max=autofocusMax,
                     autofocus_step_size=autofocusStepSize,
-                    t_period=tPeriod
+                    t_period=tPeriod,
+                    shared_file_writers=shared_file_writers  # Pass shared writers
                 )
 
                 # Append workflow steps and file writers to the accumulated lists
                 all_workflow_steps.extend(result["workflow_steps"])
-                all_file_writers.extend(result["file_writers"])
+                # Don't accumulate file writers - use shared ones
+                if t == 0:  # Only add file writers once
+                    all_file_writers.extend(result["file_writers"])
 
-            # Use the accumulated workflow steps and file writers
+            # Use the accumulated workflow steps and shared file writers
             workflowSteps = all_workflow_steps
             file_writers = all_file_writers
             # Create workflow progress handler
@@ -941,6 +956,14 @@ class ExperimentController(ImConWidgetController):
         # If nothing was running, return appropriate message
         if not results:
             return "No experiments are currently running"
+
+        # Clean up shared OMERO uploaders after experiment stops
+        try:
+            from .experiment_controller.ome_writer import OMEWriter
+            OMEWriter.cleanup_shared_omero_uploaders()
+            self._logger.info("Cleaned up shared OMERO uploaders")
+        except Exception as e:
+            self._logger.warning(f"Error cleaning up shared OMERO uploaders: {e}")
 
         return results
 

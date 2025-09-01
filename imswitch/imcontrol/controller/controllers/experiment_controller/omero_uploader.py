@@ -50,6 +50,9 @@ class OMEROConnectionParams:
     dataset_id: int = -1
     connection_timeout: int = 30
     upload_timeout: int = 300
+    # Parameters for reusing existing OMERO objects (timelapse/z-stack support)
+    reuse_dataset_id: int = -1  # If > 0, reuse this dataset instead of creating new one
+    reuse_image_id: int = -1    # If > 0, reuse this image instead of creating new one
 
 
 @dataclass
@@ -279,6 +282,14 @@ class OMEROUploader:
         self._cleanup_connection()
         self.tile_queue.close() 
     
+    def get_omero_ids(self) -> Dict[str, int]:
+        """Get the OMERO dataset and image IDs for reuse in subsequent uploads."""
+        return {
+            "dataset_id": self.dataset_id if self.dataset_id else -1,
+            "image_id": self.image_id if self.image_id else -1,
+            "pixels_id": self.pixels_id if self.pixels_id else -1
+        }
+    
     def enqueue_tile(self, tile_metadata: TileMetadata) -> bool:
         """Enqueue a tile for upload."""
         if not self.running or self._stop_requested:
@@ -352,10 +363,19 @@ class OMEROUploader:
             return False
     
     def _setup_omero_objects(self) -> bool:
-        """Create dataset and image in OMERO."""
+        """Create or reuse dataset and image in OMERO."""
         try:
-            # Create or get dataset
-            if self.connection_params.dataset_id > 0:
+            # Handle dataset creation/reuse
+            if self.connection_params.reuse_dataset_id > 0:
+                # Reuse existing dataset for timelapse/z-stack experiments
+                dataset_obj = self.connection.getObject("Dataset", self.connection_params.reuse_dataset_id)
+                if dataset_obj is not None:
+                    self.dataset_id = self.connection_params.reuse_dataset_id
+                    self.logger.info(f"Reusing existing dataset {self.dataset_id}: {dataset_obj.getName()}")
+                else:
+                    self.logger.error(f"Cannot reuse dataset {self.connection_params.reuse_dataset_id} - not found")
+                    return False
+            elif self.connection_params.dataset_id > 0:
                 # Check if existing dataset exists
                 dataset_obj = self.connection.getObject("Dataset", self.connection_params.dataset_id)
                 if dataset_obj is not None:
@@ -378,40 +398,67 @@ class OMEROUploader:
                 ds = self.connection.getUpdateService().saveAndReturnObject(ds, self.connection.SERVICE_OPTS)
                 self.dataset_id = ds.getId().getValue()
             
-            # Create image
-            size_x = self.nx * self.tile_w
-            size_y = self.ny * self.tile_h
-            
-            pixels_service = self.connection.getPixelsService()
-            query_service = self.connection.getQueryService()
-            pixels_type = query_service.findByString("PixelsType", "value", self.pixel_type)
-            
-            self.image_id = pixels_service.createImage(
-                size_x, size_y, self.size_z, self.size_t, 
-                list(range(self.size_c)), pixels_type,
-                self.image_name, "ImSwitch streamed mosaic"
-            ).getValue()
-            
-            # Link image to dataset
-            link = DatasetImageLinkI()
-            link.setParent(DatasetI(self.dataset_id, False))
-            link.setChild(ImageI(self.image_id, False))
-            self.connection.getUpdateService().saveAndReturnObject(link, self.connection.SERVICE_OPTS)
-            
-            # Set pixel size
-            img = self.connection.getObject("Image", self.image_id)
-            pixels = query_service.get("Pixels", img.getPixelsId())
-            self.pixels_id = pixels.getId().getValue()
-            
-            pixel_size = self.mosaic_config.get('pixel_size_um', 1.0)
-            pixels.setPhysicalSizeX(LengthI(pixel_size, UnitsLength.MICROMETER))
-            pixels.setPhysicalSizeY(LengthI(pixel_size, UnitsLength.MICROMETER))
-            self.connection.getUpdateService().saveAndReturnObject(pixels, self.connection.SERVICE_OPTS)
+            # Handle image creation/reuse  
+            if self.connection_params.reuse_image_id > 0:
+                # Reuse existing image for timelapse/z-stack experiments
+                image_obj = self.connection.getObject("Image", self.connection_params.reuse_image_id)
+                if image_obj is not None:
+                    self.image_id = self.connection_params.reuse_image_id
+                    self.pixels_id = image_obj.getPixelsId()
+                    self.logger.info(f"Reusing existing image {self.image_id}: {image_obj.getName()}")
+                    
+                    # Verify image dimensions match expectations
+                    pixels = image_obj.getPrimaryPixels()
+                    expected_x = self.nx * self.tile_w
+                    expected_y = self.ny * self.tile_h
+                    if (pixels.getSizeX() != expected_x or 
+                        pixels.getSizeY() != expected_y or
+                        pixels.getSizeZ() != self.size_z or
+                        pixels.getSizeT() != self.size_t or
+                        pixels.getSizeC() != self.size_c):
+                        self.logger.warning(
+                            f"Image dimensions mismatch: expected {expected_x}x{expected_y}x{self.size_z}x{self.size_t}x{self.size_c}, "
+                            f"got {pixels.getSizeX()}x{pixels.getSizeY()}x{pixels.getSizeZ()}x{pixels.getSizeT()}x{pixels.getSizeC()}"
+                        )
+                else:
+                    self.logger.error(f"Cannot reuse image {self.connection_params.reuse_image_id} - not found")
+                    return False
+            else:
+                # Create new image
+                size_x = self.nx * self.tile_w
+                size_y = self.ny * self.tile_h
+                
+                pixels_service = self.connection.getPixelsService()
+                query_service = self.connection.getQueryService()
+                pixels_type = query_service.findByString("PixelsType", "value", self.pixel_type)
+                
+                self.image_id = pixels_service.createImage(
+                    size_x, size_y, self.size_z, self.size_t, 
+                    list(range(self.size_c)), pixels_type,
+                    self.image_name, "ImSwitch streamed mosaic"
+                ).getValue()
+                
+                # Link image to dataset
+                link = DatasetImageLinkI()
+                link.setParent(DatasetI(self.dataset_id, False))
+                link.setChild(ImageI(self.image_id, False))
+                self.connection.getUpdateService().saveAndReturnObject(link, self.connection.SERVICE_OPTS)
+                
+                # Set pixel size
+                img = self.connection.getObject("Image", self.image_id)
+                pixels = query_service.get("Pixels", img.getPixelsId())
+                self.pixels_id = pixels.getId().getValue()
+                
+                pixel_size = self.mosaic_config.get('pixel_size_um', 1.0)
+                pixels.setPhysicalSizeX(LengthI(pixel_size, UnitsLength.MICROMETER))
+                pixels.setPhysicalSizeY(LengthI(pixel_size, UnitsLength.MICROMETER))
+                self.connection.getUpdateService().saveAndReturnObject(pixels, self.connection.SERVICE_OPTS)
+                
+                self.logger.info(f"Created OMERO image {self.image_id} in dataset {self.dataset_id}")
             
             # Setup raw pixels store and detect backend
             self._setup_raw_pixels_store()
             
-            self.logger.info(f"Created OMERO image {self.image_id} in dataset {self.dataset_id}")
             return True
             
         except Exception as e:

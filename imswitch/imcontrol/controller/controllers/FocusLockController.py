@@ -1,5 +1,8 @@
 import io
 import time
+import os
+import csv
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -13,7 +16,7 @@ from scipy.ndimage import gaussian_filter
 from skimage.feature import peak_local_max
 import threading
 from imswitch.imcommon.framework import Thread, Signal
-from imswitch.imcommon.model import initLogger, APIExport
+from imswitch.imcommon.model import initLogger, APIExport, dirtools
 from ..basecontrollers import ImConWidgetController
 from imswitch import IS_HEADLESS
 
@@ -297,6 +300,9 @@ class FocusLockController(ImConWidgetController):
         self.__focusCalibThread = FocusCalibThread(self)
         self.__processDataThread.setFocusLockMetric(self._focus_params.focus_metric)
 
+        # CSV logging setup
+        self._setupCSVLogging()
+
         # PID instance (kept as self.pi for API stability)
         self.pi: Optional[_PID] = None
 
@@ -479,6 +485,69 @@ class FocusLockController(ImConWidgetController):
         self.sigFocusLockStateChanged.emit(self.getFocusLockState())
 
     # =========================
+    # CSV Logging functionality
+    # =========================
+    def _setupCSVLogging(self):
+        """Initialize CSV logging directory and current file path."""
+        try:
+            self.csvLogPath = os.path.join(dirtools.UserFileDirs.Root, "FocusLockController")
+            if not os.path.exists(self.csvLogPath):
+                os.makedirs(self.csvLogPath)
+            
+            self.currentCSVFile = None
+            self.csvLock = threading.Lock()
+            self._logger.info(f"CSV logging directory set up at: {self.csvLogPath}")
+        except Exception as e:
+            self._logger.error(f"Failed to setup CSV logging: {e}")
+            self.csvLogPath = None
+
+    def _getCurrentCSVFilename(self):
+        """Get current CSV filename based on today's date."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        return os.path.join(self.csvLogPath, f"focus_lock_measurements_{today}.csv")
+
+    def _logFocusMeasurement(self, focus_value: float, timestamp: float, is_locked: bool = False, 
+                           lock_position: Optional[float] = None, current_position: Optional[float] = None,
+                           pi_output: Optional[float] = None):
+        """Log focus measurement to CSV file."""
+        if self.csvLogPath is None:
+            return
+
+        try:
+            with self.csvLock:
+                csv_filename = self._getCurrentCSVFilename()
+                
+                # Check if file exists and if it's a new day
+                file_exists = os.path.exists(csv_filename)
+                
+                with open(csv_filename, 'a', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['timestamp', 'datetime', 'focus_value', 'focus_metric', 'is_locked', 
+                                'lock_position', 'current_position', 'pi_output', 'crop_size', 'crop_center']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    
+                    # Write header if new file
+                    if not file_exists:
+                        writer.writeheader()
+                        self._logger.info(f"Created new CSV log file: {csv_filename}")
+                    
+                    # Write measurement data
+                    writer.writerow({
+                        'timestamp': timestamp,
+                        'datetime': datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+                        'focus_value': focus_value,
+                        'focus_metric': self._focus_params.focus_metric,
+                        'is_locked': is_locked,
+                        'lock_position': lock_position,
+                        'current_position': current_position,
+                        'pi_output': pi_output,
+                        'crop_size': self._focus_params.crop_size,
+                        'crop_center': str(self._focus_params.crop_center) if self._focus_params.crop_center else None
+                    })
+                    
+        except Exception as e:
+            self._logger.error(f"Failed to log focus measurement to CSV: {e}")
+
+    # =========================
     # Legacy-compatible methods
     # =========================
     @APIExport(runOnUIThread=True)
@@ -595,16 +664,23 @@ class FocusLockController(ImConWidgetController):
 
             self.setPointSignal = self.__processDataThread.update(self.cropped_im, self.twoFociVar)
 
+            # Get current timestamp for logging
+            current_timestamp = time.time()
+
             # Emit enhanced focus value
             focus_data = {
                 "focus_value": self.setPointSignal,
-                "timestamp": time.time(),
+                "timestamp": current_timestamp,
                 "is_locked": self.locked,
                 "lock_position": self.lockPosition if self.locked else None,
                 "current_position": 0,
                 "focus_metric": self._focus_params.focus_metric,
             }
             self.sigUpdateFocusValue.emit(focus_data)
+
+            # Initialize variables for CSV logging
+            pi_output = None
+            current_position = None
 
             # === Control action (relative moves only) ===
             if self.locked and self.pi is not None:
@@ -617,6 +693,7 @@ class FocusLockController(ImConWidgetController):
                     meas_for_pid = meas
 
                 u = self.pi.update(meas_for_pid)                       # controller units
+                pi_output = u  # Store for logging
                 step_um = u * self._pi_params.scale_um_per_unit        # convert to µm
 
                 # deadband
@@ -639,6 +716,27 @@ class FocusLockController(ImConWidgetController):
                 if not hasattr(self, "aboutToLockDataPoints"):
                     self.aboutToLockDataPoints = np.zeros(5, dtype=float)
                 self.aboutToLockUpdate()
+
+            # Log focus measurement to CSV if measurement is active
+            if self._state.is_measuring or self.locked or self.aboutToLock:
+                try:
+                    # Get current Z position if available
+                    current_position = None
+                    try:
+                        current_position = self.stage.getPosition()["Z"]
+                    except Exception:
+                        pass
+                    
+                    self._logFocusMeasurement(
+                        focus_value=float(self.setPointSignal),
+                        timestamp=current_timestamp,
+                        is_locked=self.locked,
+                        lock_position=self.lockPosition if self.locked else None,
+                        current_position=current_position,
+                        pi_output=pi_output
+                    )
+                except Exception as e:
+                    self._logger.error(f"Failed to log focus measurement: {e}")
 
             # Update plotting buffers
             self.updateSetPointData()
@@ -874,6 +972,27 @@ class FocusLockController(ImConWidgetController):
             cropCenter = [cropSize // 2, cropSize // 2]
         self._focus_params.crop_center = cropCenter
         self._logger.info(f"Set crop parameters: size={self._focus_params.crop_size}, center={self._focus_params.crop_center}")
+        
+        # Save the crop parameters to config file
+        self.saveCropParameters()
+
+    def saveCropParameters(self):
+        """Save the current crop parameters to the config file."""
+        try:
+            # Save crop size and center to setup info
+            if hasattr(self, '_setupInfo') and hasattr(self._setupInfo, 'focusLock'):
+                # Set the crop parameters in the setup info
+                self._setupInfo.focusLock.cropSize = self._focus_params.crop_size
+                self._setupInfo.focusLock.cropCenter = self._focus_params.crop_center
+                
+                # Save the updated setup info to config file
+                from imswitch.imcontrol.model import configfiletools
+                configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
+                
+                self._logger.info(f"Saved crop parameters to config: size={self._focus_params.crop_size}, center={self._focus_params.crop_center}")
+        except Exception as e:
+            self._logger.error(f"Could not save crop parameters: {e}")
+            return
 
 
 # =========================

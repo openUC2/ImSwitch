@@ -3,12 +3,92 @@ from imswitch.imcommon.model import VFileItem, initLogger
 import pkg_resources
 
 from imswitch.imcontrol.model import (
-    DetectorsManager, LasersManager, MultiManager, PositionersManager,
-    RecordingManager, RS232sManager, SLMManager, SIMManager, DPCManager, LEDMatrixsManager, MCTManager, ROIScanManager, WebRTCManager, HyphaManager,
-    UC2ConfigManager, AutofocusManager, HistoScanManager, StresstestManager, PixelCalibrationManager, LightsheetManager, NidaqManager, FOVLockManager,
-    StandManager, RotatorsManager, LEDsManager, ScanManagerBase, ScanManagerPointScan, ScanManagerMoNaLISA, FlatfieldManager, 
-    FlowStopManager, WorkflowManager, TimelapseManager, LepmonManager, ExperimentManager, ObjectiveManager
+    DetectorsManager,
+    LasersManager,
+    MultiManager,
+    PositionersManager,
+    RecordingManager,
+    RS232sManager,
+    SLMManager,
+    SIMManager,
+    DPCManager,
+    LEDMatrixsManager,
+    MCTManager,
+    ROIScanManager,
+    WebRTCManager,
+    HyphaManager,
+    UC2ConfigManager,
+    AutofocusManager,
+    HistoScanManager,
+    StresstestManager,
+    PixelCalibrationManager,
+    LightsheetManager,
+    NidaqManager,
+    FOVLockManager,
+    StandManager,
+    RotatorsManager,
+    LEDsManager,
+    ScanManagerBase,
+    ScanManagerPointScan,
+    ScanManagerMoNaLISA,
+    FlatfieldManager,
+    FlowStopManager,
+    WorkflowManager,
+    TimelapseManager,
+    LepmonManager,
+    ExperimentManager,
+    ObjectiveManager,
 )
+from arkitekt_next import easy, interactive, find
+from mikro_next.api.schema import from_array_like
+from koil import Koil
+from contextvars import copy_context, Context
+
+
+def ensure_context_in_thread(context: Context):
+    for ctx, value in context.items():
+        ctx.set(value)
+
+
+class ArkitektControler:
+    def __init__(self, masterController: "MasterController"):
+        self.__logger = initLogger(self)
+        self.__masterController = masterController
+
+        # Should be loaded from the configuration i guess, if available?
+        self.__arkitekt = easy(
+            "imswitch", redeem_token="49622043-761b-451e-8ad8-1a0dac930b3d"
+        )
+        self.__arkitekt.__koil = Koil(
+            sync_in_async=True
+        )  # Make sure that kol when used in async context (that is the case when called through the fast api thread???)
+        self.__arkitekt.enter()  # spawn the background thread for the arkitekt client
+
+        self.context = copy_context()  # Copy all context variables from the main thread to be used in other threads (allows to access the corressponding graphql clients without passing them around)
+
+        print("Initialitzed Arkitekt")
+
+    def upload_and_deconvolve_image(self, image):
+        ensure_context_in_thread(
+            self.context
+        )  # Make sure that the context variables are set in this thread (so that the correct rath client is used)
+
+        action = find(
+            hash="c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"  # Corresponds to the actionhash of deconvolve
+        )
+
+        mikro_image = from_array_like(
+            image,
+            name="The image",
+        )
+
+        result = action(
+            image=mikro_image
+        )  # Call the action with the image (blocks until the result is available)
+
+        return (
+            result.data.compute()
+        )  # Download the image data and return it as numpy array
 
 
 class MasterController:
@@ -23,77 +103,106 @@ class MasterController:
         self.__commChannel = commChannel
         self.__moduleCommChannel = moduleCommChannel
 
+        self.arkitekt_controller = ArkitektControler(self)
+
         # Init managers
         self.rs232sManager = RS232sManager(self.__setupInfo.rs232devices)
 
-        lowLevelManagers = {
-            'rs232sManager': self.rs232sManager
-        }
+        lowLevelManagers = {"rs232sManager": self.rs232sManager}
 
-        self.detectorsManager = DetectorsManager(self.__setupInfo.detectors, updatePeriod=100,
-                                                 **lowLevelManagers)
-        self.lasersManager = LasersManager(self.__setupInfo.lasers,
-                                           **lowLevelManagers)
-        self.positionersManager = PositionersManager(self.__setupInfo.positioners,
-                                                     self.__commChannel,
-                                                     **lowLevelManagers)
-        self.LEDMatrixsManager = LEDMatrixsManager(self.__setupInfo.LEDMatrixs,
-                                           **lowLevelManagers)
-        self.rotatorsManager = RotatorsManager(self.__setupInfo.rotators,
-                                            **lowLevelManagers)
+        self.detectorsManager = DetectorsManager(
+            self.__setupInfo.detectors, updatePeriod=100, **lowLevelManagers
+        )
+        self.lasersManager = LasersManager(self.__setupInfo.lasers, **lowLevelManagers)
+        self.positionersManager = PositionersManager(
+            self.__setupInfo.positioners, self.__commChannel, **lowLevelManagers
+        )
+        self.LEDMatrixsManager = LEDMatrixsManager(
+            self.__setupInfo.LEDMatrixs, **lowLevelManagers
+        )
+        self.rotatorsManager = RotatorsManager(
+            self.__setupInfo.rotators, **lowLevelManagers
+        )
 
         self.LEDsManager = LEDsManager(self.__setupInfo.LEDs)
-        #self.scanManager = ScanManager(self.__setupInfo)
+        # self.scanManager = ScanManager(self.__setupInfo)
         self.recordingManager = RecordingManager(self.detectorsManager)
-        if "SLM" in self.__setupInfo.availableWidgets: self.slmManager = SLMManager(self.__setupInfo.slm)
-        self.UC2ConfigManager = UC2ConfigManager(self.__setupInfo.uc2Config, lowLevelManagers)
-        if "SIM" in self.__setupInfo.availableWidgets: self.simManager = SIMManager(self.__setupInfo.sim)
-        if "DPC" in self.__setupInfo.availableWidgets: self.dpcManager = DPCManager(self.__setupInfo.dpc)
-        if "MCT" in self.__setupInfo.availableWidgets: self.mctManager = MCTManager(self.__setupInfo.mct)
+        if "SLM" in self.__setupInfo.availableWidgets:
+            self.slmManager = SLMManager(self.__setupInfo.slm)
+        self.UC2ConfigManager = UC2ConfigManager(
+            self.__setupInfo.uc2Config, lowLevelManagers
+        )
+        if "SIM" in self.__setupInfo.availableWidgets:
+            self.simManager = SIMManager(self.__setupInfo.sim)
+        if "DPC" in self.__setupInfo.availableWidgets:
+            self.dpcManager = DPCManager(self.__setupInfo.dpc)
+        if "MCT" in self.__setupInfo.availableWidgets:
+            self.mctManager = MCTManager(self.__setupInfo.mct)
         self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
         self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
-        if "Lightsheet" in self.__setupInfo.availableWidgets: self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
-        if "WebRTC" in self.__setupInfo.availableWidgets: self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
-        if "Timelapse" in self.__setupInfo.availableWidgets: self.timelapseManager = TimelapseManager()
-        if "Experiment" in self.__setupInfo.availableWidgets: self.experimentManager = ExperimentManager(self.__setupInfo.experiment)
-        if "Objective" in self.__setupInfo.availableWidgets: self.objectiveManager = ObjectiveManager(self.__setupInfo.objective)
-        if "HistoScan" in self.__setupInfo.availableWidgets: self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
-        if "Stresstest" in self.__setupInfo.availableWidgets: self.StresstestManager = StresstestManager(self.__setupInfo.Stresstest)
-        if "FlowStop" in self.__setupInfo.availableWidgets: self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
-        if "Lepmon" in self.__setupInfo.availableWidgets: self.LepmonManager = LepmonManager(self.__setupInfo.Lepmon)
-        if "FlatField" in self.__setupInfo.availableWidgets: self.FlatfieldManager = FlatfieldManager(self.__setupInfo.Flatfield)
-        if "PixelCalibration" in self.__setupInfo.availableWidgets: self.PixelCalibrationManager = PixelCalibrationManager(self.__setupInfo.PixelCalibration)
-        if "AutoFocus" in self.__setupInfo.availableWidgets: self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)
-        if "FOV" in self.__setupInfo.availableWidgets: self.FOVLockManager = FOVLockManager(self.__setupInfo.fovLock)
-        if "Workflow" in self.__setupInfo.availableWidgets: self.workflowManager = WorkflowManager()
+        if "Lightsheet" in self.__setupInfo.availableWidgets:
+            self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
+        if "WebRTC" in self.__setupInfo.availableWidgets:
+            self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
+        if "Timelapse" in self.__setupInfo.availableWidgets:
+            self.timelapseManager = TimelapseManager()
+        if "Experiment" in self.__setupInfo.availableWidgets:
+            self.experimentManager = ExperimentManager(self.__setupInfo.experiment)
+        if "Objective" in self.__setupInfo.availableWidgets:
+            self.objectiveManager = ObjectiveManager(self.__setupInfo.objective)
+        if "HistoScan" in self.__setupInfo.availableWidgets:
+            self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
+        if "Stresstest" in self.__setupInfo.availableWidgets:
+            self.StresstestManager = StresstestManager(self.__setupInfo.Stresstest)
+        if "FlowStop" in self.__setupInfo.availableWidgets:
+            self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
+        if "Lepmon" in self.__setupInfo.availableWidgets:
+            self.LepmonManager = LepmonManager(self.__setupInfo.Lepmon)
+        if "FlatField" in self.__setupInfo.availableWidgets:
+            self.FlatfieldManager = FlatfieldManager(self.__setupInfo.Flatfield)
+        if "PixelCalibration" in self.__setupInfo.availableWidgets:
+            self.PixelCalibrationManager = PixelCalibrationManager(
+                self.__setupInfo.PixelCalibration
+            )
+        if "AutoFocus" in self.__setupInfo.availableWidgets:
+            self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)
+        if "FOV" in self.__setupInfo.availableWidgets:
+            self.FOVLockManager = FOVLockManager(self.__setupInfo.fovLock)
+        if "Workflow" in self.__setupInfo.availableWidgets:
+            self.workflowManager = WorkflowManager()
         # load all implugin-related managers and add them to the class
         # try to get it from the plugins
         # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the
         # MasterController Class
 
-        for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
+        for entry_point in pkg_resources.iter_entry_points(f"imswitch.implugins"):
             InfoClass = None
-            print (f"entry_point: {entry_point.name}")
+            print(f"entry_point: {entry_point.name}")
             try:
-                if entry_point.name.find("manager")>=0:
+                if entry_point.name.find("manager") >= 0:
                     # check if there is an info class, too
                     try:
                         InfoClassName = entry_point.name.split("_manager")[0] + "_info"
                         # load the info class from InfoClassName
-                        InfoClass = pkg_resources.load_entry_point("imswitch", "imswitch.implugins", InfoClassName)
+                        InfoClass = pkg_resources.load_entry_point(
+                            "imswitch", "imswitch.implugins", InfoClassName
+                        )
                     except Exception as e:
                         InfoClass = None
                     ManagerClass = entry_point.load(InfoClass)  # Load the manager class
                     # self.__setupInfo.add_attribute(attr_name=entry_point.name.split("_manager")[0], attr_value={})
-                    moduleInfo = None # TODO: This is not complete yet - the setupinfo would need to be added to the class in the very begnning prior to detecing external plugins/hooks
+                    moduleInfo = None  # TODO: This is not complete yet - the setupinfo would need to be added to the class in the very begnning prior to detecing external plugins/hooks
                     manager = ManagerClass(moduleInfo)  # Initialize the manager
-                    setattr(self, entry_point.name, manager)  # Add the manager to the class
+                    setattr(
+                        self, entry_point.name, manager
+                    )  # Add the manager to the class
             except Exception as e:
                 self.__logger.error(e)
 
         if self.__setupInfo.microscopeStand:
-            self.standManager = StandManager(self.__setupInfo.microscopeStand,
-                                             **lowLevelManagers)
+            self.standManager = StandManager(
+                self.__setupInfo.microscopeStand, **lowLevelManagers
+            )
 
         # Generate scanManager type according to setupInfo
         if self.__setupInfo.scan:
@@ -121,10 +230,14 @@ class MasterController:
 
         self.recordingManager.sigRecordingStarted.connect(cc.sigRecordingStarted)
         self.recordingManager.sigRecordingEnded.connect(cc.sigRecordingEnded)
-        self.recordingManager.sigRecordingFrameNumUpdated.connect(cc.sigUpdateRecFrameNum)
+        self.recordingManager.sigRecordingFrameNumUpdated.connect(
+            cc.sigUpdateRecFrameNum
+        )
         self.recordingManager.sigRecordingTimeUpdated.connect(cc.sigUpdateRecTime)
         self.recordingManager.sigMemorySnapAvailable.connect(cc.sigMemorySnapAvailable)
-        self.recordingManager.sigMemoryRecordingAvailable.connect(self.memoryRecordingAvailable)
+        self.recordingManager.sigMemoryRecordingAvailable.connect(
+            self.memoryRecordingAvailable
+        )
 
         if "SLM" in self.__setupInfo.availableWidgets:
             self.slmManager.sigSLMMaskUpdated.connect(cc.sigSLMMaskUpdated)

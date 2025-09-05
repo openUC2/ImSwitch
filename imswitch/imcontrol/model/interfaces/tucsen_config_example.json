@@ -1,0 +1,47 @@
+{
+  "setupInfo": {
+    "name": "Example setup with Tucsen camera",
+    "version": "1.0.0",
+    "description": "Example configuration for ImSwitch with Tucsen camera support"
+  },
+  "detectors": {
+    "TucsenCam": {
+      "managerName": "TucsenCamManager",
+      "managerProperties": {
+        "cameraListIndex": 0,
+        "cameraEffPixelsize": 3.45,
+        "isRGB": false,
+        "mockstackpath": null,
+        "mocktype": "normal",
+        "tucsencam": {
+          "exposure_time": 100,
+          "gain": 1,
+          "blacklevel": 100,
+          "binning": 1,
+          "frame_rate": -1
+        }
+      },
+      "forAcquisition": true,
+      "forFocusLock": true
+    }
+  },
+  "positioners": {},
+  "rs232sManager": {},
+  "lasers": {},
+  "LEDs": {},
+  "scan": {
+    "scanDesigner": "BetaScanDesigner",
+    "scanDesignerParams": {},
+    "TTLCycleDesigner": "BetaTTLCycleDesigner",
+    "TTLCycleDesignerParams": {}
+  },
+  "availableWidgets": [
+    "Settings",
+    "View",
+    "Recording",
+    "Image",
+    "Laser",
+    "Positioner",
+    "Scan"
+  ]
+}

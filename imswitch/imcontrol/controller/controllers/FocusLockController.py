@@ -1,5 +1,8 @@
 import io
 import time
+import os
+import csv
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -13,7 +16,7 @@ from scipy.ndimage import gaussian_filter
 from skimage.feature import peak_local_max
 import threading
 from imswitch.imcommon.framework import Thread, Signal
-from imswitch.imcommon.model import initLogger, APIExport
+from imswitch.imcommon.model import initLogger, APIExport, dirtools
 from ..basecontrollers import ImConWidgetController
 from imswitch import IS_HEADLESS
 
@@ -302,6 +305,9 @@ class FocusLockController(ImConWidgetController):
         self.__focusCalibThread = FocusCalibThread(self)
         self.__processDataThread.setFocusLockMetric(self._focus_params.focus_metric)
 
+        # CSV logging setup
+        self._setupCSVLogging()
+
         # PID instance (kept as self.pi for API stability)
         self.pi: Optional[_PID] = None
 
@@ -488,8 +494,6 @@ class FocusLockController(ImConWidgetController):
         self.sigFocusLockStateChanged.emit(self.getFocusLockState())
 
     # =========================
-<<<<<<< Updated upstream
-=======
     # CSV Logging functionality
     # =========================
     def _setupCSVLogging(self):
@@ -553,7 +557,6 @@ class FocusLockController(ImConWidgetController):
             self._logger.error(f"Failed to log focus measurement to CSV: {e}")
 
     # =========================
->>>>>>> Stashed changes
     # Legacy-compatible methods
     # =========================
     @APIExport(runOnUIThread=True)
@@ -674,16 +677,23 @@ class FocusLockController(ImConWidgetController):
 
             self.setPointSignal = self.__processDataThread.update(self.cropped_im, self.twoFociVar)
 
+            # Get current timestamp for logging
+            current_timestamp = time.time()
+
             # Emit enhanced focus value
             focus_data = {
                 "focus_value": self.setPointSignal,
-                "timestamp": time.time(),
+                "timestamp": current_timestamp,
                 "is_locked": self.locked,
                 "lock_position": self.lockPosition if self.locked else None,
                 "current_position": 0,
                 "focus_metric": self._focus_params.focus_metric,
             }
             self.sigUpdateFocusValue.emit(focus_data)
+
+            # Initialize variables for CSV logging
+            pi_output = None
+            current_position = None
 
             # === Control action (relative moves only) ===
             if self.locked and self.pi is not None:
@@ -696,6 +706,7 @@ class FocusLockController(ImConWidgetController):
                     meas_for_pid = meas
 
                 u = self.pi.update(meas_for_pid)                       # controller units
+                pi_output = u  # Store for logging
                 step_um = u * self._pi_params.scale_um_per_unit        # convert to µm
 
                 # deadband
@@ -734,8 +745,6 @@ class FocusLockController(ImConWidgetController):
                     self.aboutToLockDataPoints = np.zeros(5, dtype=float)
                 self.aboutToLockUpdate()
 
-<<<<<<< Updated upstream
-=======
             # Log focus measurement to CSV if measurement is active
             if self._state.is_measuring or self.locked or self.aboutToLock:
                 try:
@@ -757,7 +766,6 @@ class FocusLockController(ImConWidgetController):
                 except Exception as e:
                     self._logger.error(f"Failed to log focus measurement: {e}")
 
->>>>>>> Stashed changes
             # Update plotting buffers
             self.updateSetPointData()
             if not IS_HEADLESS:
@@ -998,6 +1006,27 @@ class FocusLockController(ImConWidgetController):
             cropCenter = [cropSize // 2, cropSize // 2]
         self._focus_params.crop_center = cropCenter
         self._logger.info(f"Set crop parameters: size={self._focus_params.crop_size}, center={self._focus_params.crop_center}")
+        
+        # Save the crop parameters to config file
+        self.saveCropParameters()
+
+    def saveCropParameters(self):
+        """Save the current crop parameters to the config file."""
+        try:
+            # Save crop size and center to setup info
+            if hasattr(self, '_setupInfo') and hasattr(self._setupInfo, 'focusLock'):
+                # Set the crop parameters in the setup info
+                self._setupInfo.focusLock.cropSize = self._focus_params.crop_size
+                self._setupInfo.focusLock.cropCenter = self._focus_params.crop_center
+                
+                # Save the updated setup info to config file
+                from imswitch.imcontrol.model import configfiletools
+                configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
+                
+                self._logger.info(f"Saved crop parameters to config: size={self._focus_params.crop_size}, center={self._focus_params.crop_center}")
+        except Exception as e:
+            self._logger.error(f"Could not save crop parameters: {e}")
+            return
 
 
 # =========================

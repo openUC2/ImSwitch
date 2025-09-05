@@ -204,6 +204,11 @@ class FocusLockController(ImConWidgetController):
             self._logger.error(f"Positioner '{self.positioner}' not found using first in list.")
             self.positioner = self._master.positionersManager.getAllDeviceNames()[0]
             self.stage = self._master.positionersManager[self.positioner]
+        # Internal Z position tracking
+        try:
+            self.currentZPosition = self.stage.getPosition()["Z"]
+        except Exception:
+            self.currentZPosition = None
 
         # Params
         self._focus_params = FocusLockParams(
@@ -460,7 +465,11 @@ class FocusLockController(ImConWidgetController):
             if enable and not self.locked:
                 if not self._state.is_measuring:
                     self.startFocusMeasurement()
-                zpos = self.stage.getPosition()["Z"]
+                # Use internal Z position or fallback to hardware query
+                zpos = self.currentZPosition
+                if zpos is None:
+                    zpos = self.stage.getPosition()["Z"]
+                    self.currentZPosition = zpos
                 self.lockFocus(zpos)
                 return True
             elif not enable and self.locked:
@@ -479,6 +488,72 @@ class FocusLockController(ImConWidgetController):
         self.sigFocusLockStateChanged.emit(self.getFocusLockState())
 
     # =========================
+<<<<<<< Updated upstream
+=======
+    # CSV Logging functionality
+    # =========================
+    def _setupCSVLogging(self):
+        """Initialize CSV logging directory and current file path."""
+        try:
+            self.csvLogPath = os.path.join(dirtools.UserFileDirs.Root, "FocusLockController")
+            if not os.path.exists(self.csvLogPath):
+                os.makedirs(self.csvLogPath)
+            
+            self.currentCSVFile = None
+            self.csvLock = threading.Lock()
+            self._logger.info(f"CSV logging directory set up at: {self.csvLogPath}")
+        except Exception as e:
+            self._logger.error(f"Failed to setup CSV logging: {e}")
+            self.csvLogPath = None
+
+    def _getCurrentCSVFilename(self):
+        """Get current CSV filename based on today's date."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        return os.path.join(self.csvLogPath, f"focus_lock_measurements_{today}.csv")
+
+    def _logFocusMeasurement(self, focus_value: float, timestamp: float, is_locked: bool = False, 
+                           lock_position: Optional[float] = None, current_position: Optional[float] = None,
+                           pi_output: Optional[float] = None):
+        """Log focus measurement to CSV file."""
+        if self.csvLogPath is None:
+            return
+
+        try:
+            with self.csvLock:
+                csv_filename = self._getCurrentCSVFilename()
+                
+                # Check if file exists and if it's a new day
+                file_exists = os.path.exists(csv_filename)
+                
+                with open(csv_filename, 'a', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['timestamp', 'datetime', 'focus_value', 'focus_metric', 'is_locked', 
+                                'lock_position', 'current_position', 'pi_output', 'crop_size', 'crop_center']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames, delimiter=";")
+                    
+                    # Write header if new file
+                    if not file_exists:
+                        writer.writeheader()
+                        self._logger.info(f"Created new CSV log file: {csv_filename}")
+                    
+                    # Write measurement data
+                    writer.writerow({
+                        'timestamp': timestamp,
+                        'datetime': datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+                        'focus_value': focus_value,
+                        'focus_metric': self._focus_params.focus_metric,
+                        'is_locked': is_locked,
+                        'lock_position': lock_position,
+                        'current_position': current_position,
+                        'pi_output': pi_output,
+                        'crop_size': self._focus_params.crop_size,
+                        'crop_center': str(self._focus_params.crop_center) if self._focus_params.crop_center else None
+                    })
+                    
+        except Exception as e:
+            self._logger.error(f"Failed to log focus measurement to CSV: {e}")
+
+    # =========================
+>>>>>>> Stashed changes
     # Legacy-compatible methods
     # =========================
     @APIExport(runOnUIThread=True)
@@ -498,7 +573,11 @@ class FocusLockController(ImConWidgetController):
     def toggleFocus(self, toLock: bool = None):
         self.aboutToLock = False
         if (not IS_HEADLESS and self._widget.lockButton.isChecked()) or (toLock is not None and toLock and not self.locked):
-            zpos = self.stage.getPosition()["Z"]
+            # Use internal Z position or fallback to hardware query
+            zpos = self.currentZPosition
+            if zpos is None:
+                zpos = self.stage.getPosition()["Z"]
+                self.currentZPosition = zpos
             self.lockFocus(zpos)
             if not IS_HEADLESS:
                 self._widget.lockButton.setText("Unlock")
@@ -628,7 +707,22 @@ class FocusLockController(ImConWidgetController):
                 step_um = max(min(step_um, limit), -limit)
 
                 if step_um != 0.0:
-                    self.stage.move(value=step_um, axis="Z", speed=1000, is_blocking=False, is_absolute=False)
+                    # Use absolute movement instead of relative
+                    if self.currentZPosition is not None:
+                        new_z_position = self.currentZPosition + step_um
+                        self.stage.move(value=new_z_position, axis="Z", speed=1000, is_blocking=False, is_absolute=True)
+                        self.currentZPosition = new_z_position
+                    else:
+                        # Fallback: get current position and then move absolutely
+                        try:
+                            current_z = self.stage.getPosition()["Z"]
+                            new_z_position = current_z + step_um
+                            self.stage.move(value=new_z_position, axis="Z", speed=1000, is_blocking=False, is_absolute=True)
+                            self.currentZPosition = new_z_position
+                        except Exception:
+                            # Last resort: use relative movement
+                            self.stage.move(value=step_um, axis="Z", speed=1000, is_blocking=False, is_absolute=False)
+                            self.currentZPosition = None
                     self._travel_used_um += abs(step_um)
                     # travel budget acts like safety_distance_limit
                     if self._pi_params.safety_motion_active and self._travel_used_um > self._pi_params.safety_distance_limit:
@@ -640,6 +734,30 @@ class FocusLockController(ImConWidgetController):
                     self.aboutToLockDataPoints = np.zeros(5, dtype=float)
                 self.aboutToLockUpdate()
 
+<<<<<<< Updated upstream
+=======
+            # Log focus measurement to CSV if measurement is active
+            if self._state.is_measuring or self.locked or self.aboutToLock:
+                try:
+                    # Use internal Z position if available
+                    current_position = self.currentZPosition
+                    if current_position is None:
+                        try:
+                            current_position = self.stage.getPosition()["Z"]
+                        except Exception:
+                            current_position = None
+                    self._logFocusMeasurement(
+                        focus_value=float(self.setPointSignal),
+                        timestamp=current_timestamp,
+                        is_locked=self.locked,
+                        lock_position=self.lockPosition if self.locked else None,
+                        current_position=current_position,
+                        pi_output=pi_output
+                    )
+                except Exception as e:
+                    self._logger.error(f"Failed to log focus measurement: {e}")
+
+>>>>>>> Stashed changes
             # Update plotting buffers
             self.updateSetPointData()
             if not IS_HEADLESS:
@@ -686,7 +804,11 @@ class FocusLockController(ImConWidgetController):
         self.aboutToLockDataPoints[0] = float(self.setPointSignal)
         averageDiff = float(np.std(self.aboutToLockDataPoints))
         if averageDiff < self.aboutToLockDiffMax:
-            zpos = self.stage.getPosition()["Z"]
+            # Use internal Z position or fallback to hardware query
+            zpos = self.currentZPosition
+            if zpos is None:
+                zpos = self.stage.getPosition()["Z"]
+                self.currentZPosition = zpos
             self.lockFocus(zpos)
             self.aboutToLock = False
 
@@ -770,6 +892,8 @@ class FocusLockController(ImConWidgetController):
         self.lockPosition = float(zpos)  # kept for legacy visualization only
         self.locked = True
         self._travel_used_um = 0.0
+        # Set internal Z position
+        self.currentZPosition = float(zpos)
 
         if not IS_HEADLESS:
             try:

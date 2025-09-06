@@ -208,20 +208,33 @@
     "pulseStreamer": {
         "ipAddress": null
     },
-    "pyroServerInfo": {
-        "name": "ImSwitchServer",
-        "host": "0.0.0.0",
-        "port": 54333,
-        "active": false
-    },
-    "rois": {
-        "Full chip": {
-            "x": 600,
-            "y": 600,
-            "w": 1200,
-            "h": 1200
-        }
-    },
+     "experiment": {
+    "omeroServerUrl": "100.111.214.77",
+    "omeroUsername": "root",
+    "omeroPassword": "omero",
+    "omeroPort": 4064,
+    "omeroGroupId": 1,
+    "omeroProjectId": 100,
+    "omeroDatasetId": 200,
+    "omeroEnabled": true,
+    "omeroConnectionTimeout": 30,
+    "omeroUploadTimeout": 600
+  },
+  "arkitekt":{
+    "app_name": "imswitch",
+    "redeem_token": "YOUR_ARKITEKT_TOKEN_HERE",
+    "url": "http://go.arkitekt.io",
+    "sync_in_async": true,
+    "deconvolve_action_hash": "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f",
+    "enabled": true,
+    "description": "Configuration file for Arkitekt integration in ImSwitch",
+    "notes": [
+        "Replace 'YOUR_ARKITEKT_TOKEN_HERE' with your actual Arkitekt redeem token",
+        "Set 'enabled' to false to disable Arkitekt integration",
+        "The 'deconvolve_action_hash' corresponds to the specific deconvolution action",
+        "Change 'url' if you're using a different Arkitekt server"
+    ]
+},
     "ledPresets": {},
     "defaultLEDPresetForScan": null,
     "laserPresets": {},
@@ -246,12 +259,15 @@
         "UC2Config",
         "Objective",
         "Stresstest",
-        "FocusLock",
-        "StageCenterCalibration"
+        "ESP32InfoScreen", 
+        "Demo", 
+        "Arkitekt"
     ],
     "nonAvailableWidgets": [
-        "Hypha",
         "STORMRecon",
+        "StageCenterCalibration", 
+        "Hypha",
+        "FocusLock",
         "Histogramm",
         "Lepmon",
         "imswitch_lightsheet",

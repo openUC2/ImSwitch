@@ -109,10 +109,10 @@ then
     export PATH="$PERSISTENT_PIP_DIR/bin:$PATH"
     if [[ -n "$PIP_PACKAGES" ]]
     then
-        echo "Installing additional pip packages: $PIP_PACKAGES"
+        echo "Installing additional packages with UV: $PIP_PACKAGES"
         for package in $PIP_PACKAGES
         do
-            /opt/conda/bin/conda run -n imswitch pip install --user $package
+            /opt/conda/bin/conda run -n imswitch uv pip install --user $package
         done
     fi
     if [[ "$UPDATE_GIT" == true || "$UPDATE_GIT" == "1" ]]
@@ -142,10 +142,10 @@ then
     fi
     if [[ "$UPDATE_INSTALL_GIT" == "true" || "$UPDATE_INSTALL_GIT" == "1" ]]
     then
-        echo 'Pulling the ImSwitch repository and installing'
+        echo 'Pulling the ImSwitch repository and installing with UV'
         cd /tmp/ImSwitch
         git pull
-        /bin/bash -c 'source /opt/conda/bin/activate imswitch && pip install --target /persistent_pip_packages /tmp/ImSwitch'
+        /bin/bash -c 'source /opt/conda/bin/activate imswitch && uv pip install --target /persistent_pip_packages /tmp/ImSwitch'
     fi
     source /opt/conda/bin/activate imswitch
     USB_DEVICE_PATH=${USB_DEVICE_PATH:-/dev/bus/usb}

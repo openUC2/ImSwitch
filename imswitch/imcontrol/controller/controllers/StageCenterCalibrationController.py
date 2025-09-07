@@ -230,11 +230,14 @@ class StageCenterCalibrationController(ImConWidgetController):
             # Turn on laser if specified
             if laser_name:
                 try:
-                    laser_controller = self._master.lasersManager.get(laser_name)
-                    if laser_controller:
-                        laser_controller.setLaserValue(laser_intensity)
-                        laser_controller.setLaserActive(True)
-                        self._logger.info(f"Laser {laser_name} activated at {laser_intensity}")
+                    if hasattr(self._master, 'lasersManager'):
+                        laser_controller = self._master.lasersManager.get(laser_name)
+                        if laser_controller:
+                            laser_controller.setLaserValue(laser_intensity)
+                            laser_controller.setLaserActive(True)
+                            self._logger.info(f"Laser {laser_name} activated at {laser_intensity}")
+                    else:
+                        self._logger.warning("Laser manager not available")
                 except Exception as e:
                     self._logger.warning(f"Could not activate laser {laser_name}: {e}")
             
@@ -256,9 +259,10 @@ class StageCenterCalibrationController(ImConWidgetController):
             # Turn off laser if it was turned on
             if laser_name:
                 try:
-                    laser_controller = self._master.lasersManager.get(laser_name)
-                    if laser_controller:
-                        laser_controller.setLaserActive(False)
+                    if hasattr(self._master, 'lasersManager'):
+                        laser_controller = self._master.lasersManager.get(laser_name)
+                        if laser_controller:
+                            laser_controller.setLaserActive(False)
                 except Exception:
                     pass
 

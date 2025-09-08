@@ -64,7 +64,7 @@ class PIControllerParams:
     safety_motion_active: bool = False
     # New (does not break API)
     kd: float = 0.0
-    scale_um_per_unit: float = 1.0         # focus-units -> µm
+    scale_um_per_unit: float = 1000.0         # focus-units -> µm
     sample_time: float = 0.1               # s, updated from update_freq
     output_lowpass_alpha: float = 0.0      # 0..1 smoothing of controller output
     integral_limit: float = 100.0          # anti-windup (controller units)
@@ -157,7 +157,8 @@ class _PID:
             elif k == "output_lowpass_alpha": self.alpha = float(v)
             elif k == "set_point": self.set_point = float(v)
 
-    def update(self, meas: float) -> float:
+    def compute(self, meas: float) -> float:
+        '''Compute new output value from measurement.'''
         e = self.set_point - float(meas)
 
         # integral w/ clamp (anti-windup)
@@ -286,6 +287,10 @@ class FocusLockController(ImConWidgetController):
         # Travel budget (use safety_distance_limit semantics)
         self._travel_used_um = 0.0
 
+        # Track current Z position internally to avoid hardware polling
+        self._cached_z_position = None
+        self._position_initialized = False
+
         # Measurement smoothing
         self._meas_filt = None
 
@@ -303,11 +308,33 @@ class FocusLockController(ImConWidgetController):
         # CSV logging setup
         self._setupCSVLogging()
 
-        # PID instance (kept as self.pi for API stability)
-        self.pi: Optional[_PID] = None
+        # PID instance (kept as self.PIDController for API stability)
+        self.PIDController: Optional[_PID] = None # TODO: rename variable 
 
         # Start polling
         self.updateThread()
+
+    def _initializePositionTracking(self):
+        """Initialize position tracking by reading current position once from hardware."""
+        if not self._position_initialized:
+            try:
+                self._cached_z_position = self.stage.getPosition()["Z"]
+                self._position_initialized = True
+                self._logger.debug(f"Initialized position tracking at Z={self._cached_z_position}")
+            except Exception as e:
+                self._logger.error(f"Failed to initialize position tracking: {e}")
+                self._cached_z_position = 0.0
+                self._position_initialized = True
+
+    def _updateCachedPosition(self, new_absolute_position: float):
+        """Update the cached position after a move."""
+        self._cached_z_position = new_absolute_position
+
+    def _getCachedPosition(self) -> float:
+        """Get the current cached Z position."""
+        if not self._position_initialized:
+            self._initializePositionTracking()
+        return self._cached_z_position
 
         # GUI bindings
         if not IS_HEADLESS:
@@ -379,8 +406,8 @@ class FocusLockController(ImConWidgetController):
                     self.pollingFrameUpdateRate = 1.0 / max(1e-3, float(value))
                     # keep PID dt in sync
                     self._pi_params.sample_time = self.pollingFrameUpdateRate
-                    if self.pi:
-                        self.pi.updateParameters(sample_time=self._pi_params.sample_time)
+                    if self.PIDController:
+                        self.PIDController.computeParameters(sample_time=self._pi_params.sample_time)
         return self._focus_params.to_dict()
 
     @APIExport(runOnUIThread=True)
@@ -392,9 +419,9 @@ class FocusLockController(ImConWidgetController):
         for key, value in kwargs.items():
             if hasattr(self._pi_params, key):
                 setattr(self._pi_params, key, value)
-        if hasattr(self, "pi") and self.pi:
-            self.pi.setParameters(self._pi_params.kp, self._pi_params.ki)
-            self.pi.updateParameters(
+        if hasattr(self, "pi") and self.PIDController:
+            self.PIDController.setParameters(self._pi_params.kp, self._pi_params.ki)
+            self.PIDController.computeParameters(
                 kd=self._pi_params.kd,
                 set_point=self._pi_params.set_point,
                 sample_time=self._pi_params.sample_time,
@@ -466,7 +493,11 @@ class FocusLockController(ImConWidgetController):
             if enable and not self.locked:
                 if not self._state.is_measuring:
                     self.startFocusMeasurement()
-                zpos = self.stage.getPosition()["Z"]
+                # Initialize position tracking if needed, otherwise use cached
+                if not self._position_initialized:
+                    zpos = self.stage.getPosition()["Z"]
+                else:
+                    zpos = self._getCachedPosition()
                 self.lockFocus(zpos)
                 return True
             elif not enable and self.locked:
@@ -481,8 +512,6 @@ class FocusLockController(ImConWidgetController):
     def isFocusLocked(self) -> bool:
         return self.locked
 
-    def _emitStateChangedSignal(self):
-        self.sigFocusLockStateChanged.emit(self.getFocusLockState())
 
     # =========================
     # CSV Logging functionality
@@ -554,8 +583,8 @@ class FocusLockController(ImConWidgetController):
     def unlockFocus(self):
         if self.locked:
             self.locked = False
-            if self.pi:
-                self.pi.restart()
+            if self.PIDController:
+                self.PIDController.restart()
             if not IS_HEADLESS:
                 self._widget.lockButton.setChecked(False)
                 try:
@@ -567,7 +596,11 @@ class FocusLockController(ImConWidgetController):
     def toggleFocus(self, toLock: bool = None):
         self.aboutToLock = False
         if (not IS_HEADLESS and self._widget.lockButton.isChecked()) or (toLock is not None and toLock and not self.locked):
-            zpos = self.stage.getPosition()["Z"]
+            # Initialize position tracking if needed, otherwise use cached
+            if not self._position_initialized:
+                zpos = self.stage.getPosition()["Z"]
+            else:
+                zpos = self._getCachedPosition()
             self.lockFocus(zpos)
             if not IS_HEADLESS:
                 self._widget.lockButton.setText("Unlock")
@@ -640,9 +673,15 @@ class FocusLockController(ImConWidgetController):
             self._logger.error(f"Failed to set gain: {e}")
 
     def _pollFrames(self):
+        cTime = time.time()
         while self.__isPollingFramesActive:
-            time.sleep(self.pollingFrameUpdateRate)
-
+            # implement non-blocking
+            if time.time() - cTime < self.pollingFrameUpdateRate:
+                time.sleep(0.001)
+                continue
+            # Poll the frame
+            cTime = time.time()
+                
             im = self._master.detectorsManager[self.camera].getLatestFrame()
 
             # Crop (prefer NiP if present)
@@ -667,51 +706,57 @@ class FocusLockController(ImConWidgetController):
             # Get current timestamp for logging
             current_timestamp = time.time()
 
-            # Emit enhanced focus value
-            focus_data = {
-                "focus_value": self.setPointSignal,
-                "timestamp": current_timestamp,
-                "is_locked": self.locked,
-                "lock_position": self.lockPosition if self.locked else None,
-                "current_position": 0,
-                "focus_metric": self._focus_params.focus_metric,
-            }
-            self.sigUpdateFocusValue.emit(focus_data)
-
             # Initialize variables for CSV logging
             pi_output = None
             current_position = None
 
             # === Control action (relative moves only) ===
-            if self.locked and self.pi is not None:
+            if self.locked and self.PIDController is not None:
                 meas = float(self.setPointSignal)
-                if self._pi_params.meas_lowpass_alpha > 0.0:
+                if self._pi_params.meas_lowpass_alpha > 0.0: # TODO: What is this doing?
                     a = self._pi_params.meas_lowpass_alpha
                     self._meas_filt = meas if self._meas_filt is None else a * self._meas_filt + (1 - a) * meas
                     meas_for_pid = self._meas_filt
                 else:
                     meas_for_pid = meas
 
-                u = self.pi.update(meas_for_pid)                       # controller units
-                pi_output = u  # Store for logging
-                step_um = u * self._pi_params.scale_um_per_unit        # convert to µm
+                pi_output = self.PIDController.compute(meas_for_pid)                       # controller units
+                step_um = pi_output * self._pi_params.scale_um_per_unit        # convert to µm # TODO: This has to be settable 
 
                 # deadband
                 if abs(step_um) < self._pi_params.min_step_threshold:
                     step_um = 0.0
-
+                else:
+                    pass
                 # per-update clamp & optional safety gating
                 limit = abs(self._pi_params.safety_move_limit) if self._pi_params.safety_motion_active else abs(self._pi_params.safety_move_limit)
-                step_um = max(min(step_um, limit), -limit)
+                step_um = max(min(step_um, limit), -limit) # TODO: This has to be settable / avoidable 
 
+                # Use absolute positioning with cached position tracking
+                current_pos = self._getCachedPosition() # TODO: This value is not correct if stage was moved externally, so rather poll hardware each time?
+                new_absolute_pos = current_pos + step_um
                 if step_um != 0.0:
-                    self.stage.move(value=step_um, axis="Z", speed=1000, is_blocking=False, is_absolute=False)
+                    self.stage.move(value=new_absolute_pos, axis="Z", speed=1000, is_blocking=False, is_absolute=True)
+                    self._updateCachedPosition(new_absolute_pos)
                     self._travel_used_um += abs(step_um)
                     # travel budget acts like safety_distance_limit
                     if self._pi_params.safety_motion_active and self._travel_used_um > self._pi_params.safety_distance_limit:
                         self._logger.warning("Travel budget exceeded; unlocking focus.")
                         self.unlockFocus()
 
+                # Emit enhanced focus value
+                focus_data = {
+                    "focus_value": self.setPointSignal,
+                    "timestamp": current_timestamp,
+                    "is_locked": self.locked,
+                    "lock_position": self.lockPosition if self.locked else None,
+                    "current_position": self._getCachedPosition() if self._position_initialized else 0,
+                    "focus_metric": self._focus_params.focus_metric,
+                    "new_absolute_position": new_absolute_pos,
+                    "pi_output": pi_output,
+                }
+                self.sigUpdateFocusValue.emit(focus_data)
+                
             elif self.aboutToLock:
                 if not hasattr(self, "aboutToLockDataPoints"):
                     self.aboutToLockDataPoints = np.zeros(5, dtype=float)
@@ -720,12 +765,8 @@ class FocusLockController(ImConWidgetController):
             # Log focus measurement to CSV if measurement is active
             if self._state.is_measuring or self.locked or self.aboutToLock:
                 try:
-                    # Get current Z position if available
-                    current_position = None
-                    try:
-                        current_position = self.stage.getPosition()["Z"]
-                    except Exception:
-                        pass
+                    # Use cached position instead of polling hardware
+                    current_position = self._getCachedPosition() if self._position_initialized else None
                     
                     self._logFocusMeasurement(
                         focus_value=float(self.setPointSignal),
@@ -751,9 +792,9 @@ class FocusLockController(ImConWidgetController):
                 except Exception:
                     pass
 
-        # (kept nested as in original)
-        @APIExport(runOnUIThread=True)
-        def setParamsAstigmatism(self, gaussianSigma: float, backgroundThreshold: float,
+    # (kept nested as in original)
+    @APIExport(runOnUIThread=True)
+    def setParamsAstigmatism(self, gaussianSigma: float, backgroundThreshold: float,
                                  cropSize: int, cropCenter: Optional[List[int]] = None):
             self._focus_params.gaussian_sigma = float(gaussianSigma)
             self._focus_params.background_threshold = float(backgroundThreshold)
@@ -784,7 +825,10 @@ class FocusLockController(ImConWidgetController):
         self.aboutToLockDataPoints[0] = float(self.setPointSignal)
         averageDiff = float(np.std(self.aboutToLockDataPoints))
         if averageDiff < self.aboutToLockDiffMax:
-            zpos = self.stage.getPosition()["Z"]
+            # Use cached position or initialize if needed
+            if not self._position_initialized:
+                self._initializePositionTracking()
+            zpos = self._getCachedPosition()
             self.lockFocus(zpos)
             self.aboutToLock = False
 
@@ -803,8 +847,8 @@ class FocusLockController(ImConWidgetController):
     def setPIParameters(self, kp: float, ki: float):
         self._pi_params.kp = float(kp)
         self._pi_params.ki = float(ki)
-        if not self.pi:
-            self.pi = _PID(
+        if not self.PIDController:
+            self.PIDController = _PID(
                 set_point=self._pi_params.set_point,
                 kp=self._pi_params.kp, ki=self._pi_params.ki, kd=self._pi_params.kd,
                 sample_time=self._pi_params.sample_time,
@@ -812,7 +856,7 @@ class FocusLockController(ImConWidgetController):
                 output_lowpass_alpha=self._pi_params.output_lowpass_alpha,
             )
         else:
-            self.pi.setParameters(kp, ki)
+            self.PIDController.setParameters(kp, ki)
         self.ki = ki
         self.kp = kp
         if not IS_HEADLESS:
@@ -825,7 +869,7 @@ class FocusLockController(ImConWidgetController):
 
     def updatePI(self) -> float:
         """Kept for compatibility; returns last computed move in µm (no position reads)."""
-        if not self.locked or not self.pi:
+        if not self.locked or not self.PIDController:
             return 0.0
         meas = float(self.setPointSignal)
         if self._pi_params.meas_lowpass_alpha > 0.0:
@@ -834,7 +878,7 @@ class FocusLockController(ImConWidgetController):
             meas_for_pid = self._meas_filt
         else:
             meas_for_pid = meas
-        u = self.pi.update(meas_for_pid)
+        u = self.PIDController.compute(meas_for_pid)
         step_um = u * self._pi_params.scale_um_per_unit
         # apply deadband + clamp, mirror of _pollFrames logic
         if abs(step_um) < self._pi_params.min_step_threshold:
@@ -854,9 +898,13 @@ class FocusLockController(ImConWidgetController):
             self._pi_params.kp = kp
             self._pi_params.ki = ki
 
+        # Initialize position tracking with the lock position
+        self._cached_z_position = float(zpos)
+        self._position_initialized = True
+        
         # Setpoint is current measured focus
         self._pi_params.set_point = float(self.setPointSignal)
-        self.pi = _PID(
+        self.PIDController = _PID(
             set_point=self._pi_params.set_point,
             kp=self._pi_params.kp,
             ki=self._pi_params.ki,

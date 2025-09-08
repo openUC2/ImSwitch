@@ -29,21 +29,19 @@ class VirtualStageManager(PositionerManager):
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=1):
         if axis == "X":
             self._positioner.move(x=value+self.offset_x, is_absolute=is_absolute)
-        if axis == "Y":
+        elif axis == "Y":
             self._positioner.move(y=value+self.offset_y, is_absolute=is_absolute)
-        if axis == "Z":
+        elif axis == "Z":
             self._positioner.move(z=value+self.offset_z, is_absolute=is_absolute)
-        if axis == "A":
+        elif axis == "A":
             self._positioner.move(a=value+self.offset_a, is_absolute=is_absolute)
-        if axis == "XYZ":
+        elif axis == "XYZ":
             self._positioner.move(x=value[0]+self.offset_x, y=value[1]+self.offset_y, z=value[2]+self.offset_z, is_absolute=is_absolute)
-        if axis == "XY":
+        elif axis == "XY":
             self._positioner.move(x=value[0]+self.offset_x, y=value[1]+self.offset_y, is_absolute=is_absolute)
         for axes in ["A","X","Y","Z"]:
-            self._position[axes] = self._positioner.position[axes]
-
-        self.getPosition() # update position in GUI
-
+            self.setPosition(axis=axes, value=self._positioner.position[axes])
+            
     def setPositionOnDevice(self, axis, value):
         if axis == "X":
             self._positioner.move(x=value, is_absolute=True)
@@ -58,7 +56,7 @@ class VirtualStageManager(PositionerManager):
         if axis == "XY":
             self._positioner.move(x=value[0], y=value[1], is_absolute=True)
         for axes in ["A","X","Y","Z"]:
-            self._position[axes] = self._positioner.position[axes]
+            self.setPosition(axis=axes, value=self._positioner.position[axes])
         #self._commChannel.sigUpdateMotorPosition.emit()
 
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
@@ -68,7 +66,9 @@ class VirtualStageManager(PositionerManager):
         pass
 
     def setPosition(self, value, axis):
-        pass
+        self._position[axis] = value
+        posDict = {"ESP32Stage": {axis: value}}
+        self._commChannel.sigUpdateMotorPosition.emit(posDict)
 
     def getPosition(self):
         # load position from device
@@ -116,21 +116,22 @@ class VirtualStageManager(PositionerManager):
         if axis == "Z": self.home_z(isBlocking)
 
 
-    def home_x(self, isBlocking):
+    def home_x(self, isBlocking=False):
         self.move(value=0, axis="X", is_absolute=True)
         self.setPosition(axis="X", value=0)
 
-    def home_y(self,isBlocking):
+    def home_y(self, isBlocking=False):
         self.move(value=0, axis="Y", is_absolute=True)
         self.setPosition(axis="Y", value=0)
 
-    def home_z(self,isBlocking):
+    def home_z(self, isBlocking=False):
         self.move(value=0, axis="Z", is_absolute=True)
         self.setPosition(axis="Z", value=0)
 
     def home_xyz(self):
         if self.homeXenabled and self.homeYenabled and self.homeZenabled:
             [self.setPosition(axis=axis, value=0) for axis in ["X","Y","Z"]]
+            
 
 
     def setStageOffset(self, axis, offset):

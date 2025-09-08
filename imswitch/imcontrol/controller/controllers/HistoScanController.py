@@ -494,7 +494,7 @@ class HistoScanController(LiveUpdatedController):
         return Response(im_bytes, headers=headers, media_type='image/png')
 
     @APIExport(runOnUIThread=False)
-    def getSampleLayoutFilePaths(self):
+    def getSampleLayoutFilePaths(self) -> list:
         # return the paths of the sample layouts
         # images are provided via imswitchserver
         _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)), '_data')

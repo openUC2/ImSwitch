@@ -114,8 +114,8 @@ class StageCenterCalibrationController(ImConWidgetController):
     # ──────────────────────────── worker ────────────────────────────────────
 
     def _worker(self, cx, cy, speed, step_um, max_r, bf):
-        self.getStage().move("X", cx, True, True)
-        self.getStage().move("Y", cy, True, True)
+        self.getStage().move(axis="X", value=cx, is_absolute=True, is_blocking=True)
+        self.getStage().move(axis="Y", value=cy, is_absolute=True, is_blocking=True)
 
         baseline = self._grabMeanFrame()
         if baseline is None:
@@ -210,6 +210,15 @@ class StageCenterCalibrationController(ImConWidgetController):
         Automatic calibration using line detection with Hough transform.
         Homes the stage, moves to 30mm offset, searches for white lines, then finds center ring.
         """
+        self.performAutomaticCalibrationInThread = threading.Thread(
+            target=self._performAutomaticCalibrationForThread,
+            args=(laser_name, laser_intensity),
+            daemon=True,
+        )
+        self.performAutomaticCalibrationInThread.start()
+        return {"status": "started"}
+
+    def _performAutomaticCalibrationForThread(self, laser_name: str = None, laser_intensity: float = 50.0) -> dict:
         if self._is_running:
             return {"status": "error", "message": "Calibration already running"}
         
@@ -217,15 +226,19 @@ class StageCenterCalibrationController(ImConWidgetController):
         try:
             stage = self.getStage()
             
+        
             # Home the stage in X and Y
+            self.getStage().resetStageOffsetAxis(axis="X")
+            self.getStage().resetStageOffsetAxis(axis="Y")
+
             self._logger.info("Homing stage...")
-            stage.home("X")
-            stage.home("Y")
+            stage.home_x()
+            stage.home_y()
             
             # Move to 30mm offset position
             self._logger.info("Moving to 30mm offset position...")
-            stage.move("X", 30000, True, True)  # 30mm in µm
-            stage.move("Y", 30000, True, True)
+            stage.move(axis="X", value=30000, is_absolute=True, is_blocking=True)  # 30mm in µm
+            stage.move(axis="Y", value=30000, is_absolute=True, is_blocking=True)
             
             # Turn on laser if specified
             if laser_name:
@@ -270,7 +283,12 @@ class StageCenterCalibrationController(ImConWidgetController):
     def getCalibrationTargetInfo(self) -> dict:
         """
         Returns information about the calibration target including SVG representation.
+        SVG files are served from disk via the ImSwitch server.
         """
+        # Get SVG files from disk
+        svg_files = self._getCalibrationSVGFiles()
+        
+        # Generate fallback SVG content if files are not found
         frontside_svg = f'''
         <svg width="{self.TARGET_WIDTH}" height="{self.TARGET_HEIGHT}" viewBox="0 0 {self.TARGET_WIDTH} {self.TARGET_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
             <!-- Calibration target frontside -->
@@ -311,13 +329,59 @@ class StageCenterCalibrationController(ImConWidgetController):
         return {
             "width_mm": self.TARGET_WIDTH,
             "height_mm": self.TARGET_HEIGHT,
-            "frontside_svg": frontside_svg,
-            "backside_svg": backside_svg,
+            "svg_file_paths": svg_files,  # Paths to SVG files served by ImSwitch server
+            #"frontside_svg": frontside_svg,  # Fallback SVG content
+            #"backside_svg": backside_svg,   # Fallback SVG content
             "calibration_center": {"x": self.CALIBRATION_CENTER_X, "y": self.CALIBRATION_CENTER_Y},
             "maze_start": {"x": self.MAZE_START_X, "y": self.MAZE_START_Y},
             "stepsize_grid": {"x": self.STEPSIZE_GRID_X, "y": self.STEPSIZE_GRID_Y},
             "wellplate_start": {"x": self.WELLPLATE_START_X, "y": self.WELLPLATE_START_Y, "spacing": self.WELLPLATE_SPACING}
         }
+
+    def _getCalibrationSVGFiles(self) -> dict:
+        """
+        Get paths to calibration SVG files from disk.
+        Returns dictionary with file paths that can be served via ImSwitch server.
+        """
+        try:
+            _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)), '_data')
+            images_dir = os.path.join(_baseDataFilesDir, 'images')
+            
+            svg_files = {
+                "frontside_svg_path": None,
+                "backside_svg_path": None,
+                "available_svg_files": []
+            }
+            
+            # Check if images directory exists
+            if not os.path.exists(images_dir):
+                self._logger.warning(f"Images directory not found: {images_dir}")
+                return svg_files
+            
+            # Find all SVG files in directory and subfolders
+            for root, dirs, files in os.walk(images_dir):
+                for file in files:
+                    if file.lower().endswith('.svg'):
+                        # Get relative path from _data directory for server serving
+                        relative_path = os.path.join(root.split("_data/")[-1], file)
+                        svg_files["available_svg_files"].append(relative_path)
+                        
+                        # Check for specific calibration files
+                        if 'calibration_front' in file.lower() or 'front' in file.lower():
+                            svg_files["frontside_svg_path"] = relative_path
+                        elif 'calibration_back' in file.lower() or 'back' in file.lower():
+                            svg_files["backside_svg_path"] = relative_path
+            
+            self._logger.info(f"Found {len(svg_files['available_svg_files'])} SVG files in {images_dir}")
+            return svg_files
+            
+        except Exception as e:
+            self._logger.error(f"Failed to get SVG files: {e}")
+            return {
+                "frontside_svg_path": None,
+                "backside_svg_path": None,
+                "available_svg_files": []
+            }
     
     @APIExport()
     def startMaze(self, custom_path: list = None) -> dict:
@@ -344,8 +408,8 @@ class StageCenterCalibrationController(ImConWidgetController):
             # Move to maze start position
             start_x_um = self.MAZE_START_X * 1000  # Convert mm to µm
             start_y_um = self.MAZE_START_Y * 1000
-            stage.move("X", start_x_um, True, True)
-            stage.move("Y", start_y_um, True, True)
+            stage.move(axis="X", value=start_x_um, is_absolute=True, is_blocking=True)
+            stage.move(axis="Y", value=start_y_um, is_absolute=True, is_blocking=True)
             
             # Start maze navigation in separate thread
             self._task = threading.Thread(target=self._navigateMaze, args=(custom_path,), daemon=True)
@@ -409,8 +473,8 @@ class StageCenterCalibrationController(ImConWidgetController):
                     y_pos = start_y_um + (j * 1000)
                     
                     # Move to position
-                    stage.move("X", x_pos, True, True)
-                    stage.move("Y", y_pos, True, True)
+                    stage.move(axis="X", value=x_pos, is_absolute=True, is_blocking=True)
+                    stage.move(axis="Y", value=y_pos, is_absolute=True, is_blocking=True)
                     
                     # Capture image
                     time.sleep(0.1)  # Allow settling
@@ -488,8 +552,8 @@ class StageCenterCalibrationController(ImConWidgetController):
                 y_pos = (self.WELLPLATE_START_Y + row * self.WELLPLATE_SPACING) * 1000
                 
                 # Move to position
-                stage.move("X", x_pos, True, True)
-                stage.move("Y", y_pos, True, True)
+                stage.move(axis="X", value=x_pos, is_absolute=True, is_blocking=True)
+                stage.move(axis="Y", value=y_pos, is_absolute=True, is_blocking=True)
                 
                 # Capture image
                 time.sleep(0.1)  # Allow settling
@@ -557,7 +621,7 @@ class StageCenterCalibrationController(ImConWidgetController):
             # Move 1000µm in X direction
             current_pos = stage.getPosition()
             new_x = current_pos["X"] + 1000
-            stage.move("X", new_x, True, True)
+            stage.move(axis = "X", value = new_x, is_absolute = True, is_blocking = True)
             
             # Take image and check for lines
             time.sleep(0.1)
@@ -582,7 +646,7 @@ class StageCenterCalibrationController(ImConWidgetController):
             # Move 1000µm in Y direction
             current_pos = stage.getPosition()
             new_y = current_pos["Y"] + 1000
-            stage.move("Y", new_y, True, True)
+            stage.move(axis="Y", value=new_y, is_absolute=True, is_blocking=True)
             
             # Take image and check for lines
             time.sleep(0.1)
@@ -606,7 +670,7 @@ class StageCenterCalibrationController(ImConWidgetController):
             
             # Move in X direction and check intensity
             current_pos = stage.getPosition()
-            stage.move("X", current_pos["X"] + 1000, True, True)
+            stage.move(axis="X", value=current_pos["X"] + 1000, is_absolute=True, is_blocking=True)
             time.sleep(0.1)
             
             intensity = self._grabMeanFrame()
@@ -620,7 +684,7 @@ class StageCenterCalibrationController(ImConWidgetController):
             
             # Move in Y direction and check intensity
             current_pos = stage.getPosition()
-            stage.move("Y", current_pos["Y"] + 1000, True, True)
+            stage.move(axis="Y", value=current_pos["Y"] + 1000, is_absolute=True, is_blocking=True)
             time.sleep(0.1)
             
             intensity = self._grabMeanFrame()
@@ -717,8 +781,8 @@ class StageCenterCalibrationController(ImConWidgetController):
                 target_x = current_pos["X"] - offset_x  # Negative because stage moves opposite to image
                 target_y = current_pos["Y"] - offset_y
                 
-                stage.move("X", target_x, True, True)
-                stage.move("Y", target_y, True, True)
+                stage.move(axis="X", value=target_x, is_absolute=True, is_blocking=True)
+                stage.move(axis="Y", value=target_y, is_absolute=True, is_blocking=True)
                 
                 final_pos = stage.getPosition()
                 return (final_pos["X"], final_pos["Y"])
@@ -751,8 +815,8 @@ class StageCenterCalibrationController(ImConWidgetController):
                 target_y = start_y + (dy * 1000)
                 
                 # Move to position
-                stage.move("X", target_x, True, True)
-                stage.move("Y", target_y, True, True)
+                stage.move(axis="X", value=target_x, is_absolute=True, is_blocking=True)
+                stage.move(axis="Y", value=target_y, is_absolute=True, is_blocking=True)
                 
                 # Capture image
                 time.sleep(0.1)  # Allow settling

@@ -51,7 +51,12 @@ class StageCenterCalibrationController(ImConWidgetController):
         self.WELLPLATE_START_X = 12.2
         self.WELLPLATE_START_Y = 9.0
         self.WELLPLATE_SPACING = 4.5  # mm
+        self.MAX_SPEED = 20000  # µm/s
         
+        # TODO: This is FRAME Specific - make this configurable through the configs
+        self.HOME_POS_X = 0*1000  # in µm in x we are roughly at the wellplatepos 0
+        self.HOME_POS_Y = 87*1000  # in µm in y we are roughly at the wellplatepos 87mm (opposite site )
+
         # Calibration target dimensions (in mm)
         self.TARGET_WIDTH = 127.76
         self.TARGET_HEIGHT = 85.48
@@ -70,119 +75,32 @@ class StageCenterCalibrationController(ImConWidgetController):
         return self._master.positionersManager[stageName]
 
     @APIExport()
-    def performCalibration(
-        self,
-        start_x: float,
-        start_y: float,
-        exposure_time_us: int = 3000,
-        speed: int = 5000,
-        step_um: float = 50.0,
-        max_radius_um: float = 2000.0,
-        brightness_factor: float = 1.4,
-    ) -> list[tuple[float, float]]:
-        if self._is_running:
-            return self._positions
-
-        self._is_running = True
-        self._positions.clear()
-
-        try:
-            self.getDetector().setExposure(exposure_time_us)
-        except AttributeError:
-            pass
-
-        self._task = threading.Thread(
-            target=self._worker,
-            args=(
-                start_x,
-                start_y,
-                speed,
-                step_um,
-                max_radius_um,
-                brightness_factor,
-            ),
-            daemon=True,
-        )
-        self._task.start()
-        self._task.join()
-        return self._positions.copy()
-
-    @APIExport()
     def getIsCalibrationRunning(self):
         return self._is_running
 
-    # ──────────────────────────── worker ────────────────────────────────────
-
-    def _worker(self, cx, cy, speed, step_um, max_r, bf):
-        self.getStage().move(axis="X", value=cx, is_absolute=True, is_blocking=True)
-        self.getStage().move(axis="Y", value=cy, is_absolute=True, is_blocking=True)
-
-        baseline = self._grabMeanFrame()
-        if baseline is None:
-            self._logger.error("No detector image – aborting")
-            self._is_running = False
-            return
-
-        directions = [(1, 0), (0, 1), (-1, 0), (0, -1)]  # E, N, W, S
-        dir_idx = 0
-        run_len = 1
-        legs_done = 0
-        off_x = off_y = 0.0
-
-        while self._is_running:
-            dx, dy = directions[dir_idx]
-            axis = "X" if dx else "Y"
-
-            for _ in range(run_len):
-                if not self._is_running:
-                    break
-                off_x += dx * step_um
-                off_y += dy * step_um
-
-                if max(abs(off_x), abs(off_y)) > max_r:
-                    self._logger.info("Max radius reached – stop")
-                    self._is_running = False
-                    break
-
-                target = (cx + off_x) if axis == "X" else (cy + off_y)
-                ctrl = MovementController(self.getStage())
-                ctrl.move_to_position(target, axis=axis, speed=speed, is_absolute=True)
-
-                # ───── grab frames while travelling ─────
-                while not ctrl.is_target_reached() and self._is_running:
-                    m = self._grabMeanFrame()
-                    p = self.getStage().getPosition()
-                    self._positions.append((p["X"], p["Y"]))
-                    if m is not None and m >= baseline * bf:
-                        self._logger.info("Brightness threshold hit – done")
-                        self._is_running = False
-                        break
-                    time.sleep(0.002)  # mild CPU relief
-
-                if not self._is_running:
-                    break
-
-            if not self._is_running:
-                break
-
-            dir_idx = (dir_idx + 1) % 4
-            legs_done += 1
-            if legs_done == 2:
-                legs_done = 0
-                run_len += 1  # enlarge spiral
-
-        self._savePositionsCsv()
-        self._is_running = False
+    @APIExport()
+    def getCalibrationStatus(self) -> dict:
+        """
+        Get the current status of any running calibration process.
+        """
+        return {
+            "is_running": self._is_running,
+            "positions_collected": len(self._positions),
+            "last_position": self._positions[-1] if self._positions else None
+        }
 
     @APIExport()
-    def stopCalibration(self):
-        """Stops the calibration process."""
+    def stopCalibration(self) -> dict:
+        """
+        Stop any running calibration process.
+        """
+        if not self._is_running:
+            return {"status": "info", "message": "No calibration is currently running"}
+        
         self._is_running = False
-        if self._task is not None:
-            self._task.join()
-            self._task = None
-        self._logger.info("Calibration stopped.")
-    
+        self._logger.info("Calibration process stopped by user request")
+        return {"status": "stopped", "message": "Calibration process has been stopped"}
+
     @APIExport()
     def setKnownPosition(self, x_mm: float = None, y_mm: float = None):
         """
@@ -197,87 +115,109 @@ class StageCenterCalibrationController(ImConWidgetController):
         stage = self.getStage()
         current_pos = stage.getPosition()
         
-        # Set stage offset for both axes
+        # Set stage offset for both axes # TODO: NOT CORRECT 
         stage.setStageOffsetAxis(knownPosition=x_mm * 1000, currentPosition=current_pos["X"], axis="X")  # Convert mm to µm
         stage.setStageOffsetAxis(knownPosition=y_mm * 1000, currentPosition=current_pos["Y"], axis="Y")  # Convert mm to µm
         
         self._logger.info(f"Stage offset set to known position: X={x_mm}mm, Y={y_mm}mm")
         return {"status": "success", "x_mm": x_mm, "y_mm": y_mm}
-    
+
     @APIExport()
-    def performAutomaticCalibration(self, laser_name: str = None, laser_intensity: float = 50.0) -> dict:
+    def findCalibrationCenter(
+        self,
+        unit_um: float = 1000.0,
+        increment_units: int = 1,
+        start_len_units: int = 1,
+        min_x: float = None,
+        max_x: float = None,
+        min_y: float = None,
+        max_y: float = None,
+        intensity_factor: float = 1.5,
+        settle_s: float = 0.1,
+        max_legs: int = 50, 
+        laser_name: str = None,
+        laser_intensity: float = None,
+        homing_procedure: bool = False
+    ) -> dict:
         """
-        Automatic calibration using line detection with Hough transform.
-        Homes the stage, moves to 30mm offset, searches for white lines, then finds center ring.
+        API export for spiral search calibration center finding.
+        Starts the search in a separate thread and returns immediately.
+        
+        Args:
+            unit_um: Base grid step in µm
+            increment_units: Increase after every two legs
+            start_len_units: Starting leg length in units
+            min_x, max_x, min_y, max_y: Absolute stage limits in µm
+            intensity_factor: Stop when mean >= factor * baseline
+            settle_s: Dwell after each move
+            max_legs: Safety cap on spiral legs
+            
+        Returns:
+            dict: Status information
         """
-        self.performAutomaticCalibrationInThread = threading.Thread(
-            target=self._performAutomaticCalibrationForThread,
-            args=(laser_name, laser_intensity),
+        if self._is_running:
+            return {"status": "error", "message": "Another calibration is already running"}
+        self.findCalibrationCenterThread = threading.Thread(
+            target=self._findCalibrationCenterForThread,
+            args=(unit_um, increment_units, start_len_units, min_x, max_x, min_y, max_y, intensity_factor, settle_s, max_legs, laser_name, laser_intensity, homing_procedure),
             daemon=True,
         )
-        self.performAutomaticCalibrationInThread.start()
-        return {"status": "started"}
+        self.findCalibrationCenterThread.start()
+        return {"status": "started", "message": "Calibration center search started"}
 
-    def _performAutomaticCalibrationForThread(self, laser_name: str = None, laser_intensity: float = 50.0) -> dict:
+    def _findCalibrationCenterForThread(
+        self,
+        unit_um: float = 1000.0,
+        increment_units: int = 1,
+        start_len_units: int = 1,
+        min_x: float = None,
+        max_x: float = None,
+        min_y: float = None,
+        max_y: float = None,
+        intensity_factor: float = 1.5,
+        settle_s: float = 0.1,
+        max_legs: int = 400,
+        laser_name: str = None,
+        laser_intensity: float = None, 
+        homing_procedure: bool = False
+    ) -> dict: # TODO: I think this interface can be neglected, we can direclty use this to start _findCalibrationCenter
+        """
+        Thread implementation for calibration center finding.
+        """
         if self._is_running:
-            return {"status": "error", "message": "Calibration already running"}
+            return {"status": "error", "message": "Another calibration is already running"}
         
         self._is_running = True
         try:
-            stage = self.getStage()
-            
-        
-            # Home the stage in X and Y
-            self.getStage().resetStageOffsetAxis(axis="X")
-            self.getStage().resetStageOffsetAxis(axis="Y")
-
-            self._logger.info("Homing stage...")
-            stage.home_x()
-            stage.home_y()
-            
-            # Move to 30mm offset position
-            self._logger.info("Moving to 30mm offset position...")
-            stage.move(axis="X", value=30000, is_absolute=True, is_blocking=True)  # 30mm in µm
-            stage.move(axis="Y", value=30000, is_absolute=True, is_blocking=True)
-            
-            # Turn on laser if specified
-            if laser_name:
-                try:
-                    if hasattr(self._master, 'lasersManager'):
-                        laser_controller = self._master.lasersManager.get(laser_name)
-                        if laser_controller:
-                            laser_controller.setLaserValue(laser_intensity)
-                            laser_controller.setLaserActive(True)
-                            self._logger.info(f"Laser {laser_name} activated at {laser_intensity}")
-                    else:
-                        self._logger.warning("Laser manager not available")
-                except Exception as e:
-                    self._logger.warning(f"Could not activate laser {laser_name}: {e}")
-            
-            # Search for white lines
-            center_position = self._findCalibrationCenter()
+            center_position = self._findCalibrationCenter(
+                unit_um=unit_um,
+                increment_units=increment_units,
+                start_len_units=start_len_units,
+                min_x=min_x,
+                max_x=max_x,
+                min_y=min_y,
+                max_y=max_y,
+                intensity_factor=intensity_factor,
+                settle_s=settle_s,
+                max_legs=max_legs, 
+                laser_name=laser_name,
+                laser_intensity=laser_intensity
+            )
             
             if center_position:
-                # Set the known position offset
-                self.setKnownPosition(self.CALIBRATION_CENTER_X, self.CALIBRATION_CENTER_Y)
-                return {"status": "success", "center": center_position}
+                self._logger.info(f"Calibration center found at: {center_position}")
+                # Save positions to CSV for record keeping
+                self._savePositionsCsv()
+                return {"status": "success", "center_position": center_position}
             else:
-                return {"status": "error", "message": "Could not find calibration center"}
+                self._logger.warning("Calibration center search completed but no center found")
+                return {"status": "completed", "message": "No center found within search parameters"}
                 
         except Exception as e:
-            self._logger.error(f"Automatic calibration failed: {e}")
+            self._logger.error(f"Calibration center search failed: {e}")
             return {"status": "error", "message": str(e)}
         finally:
             self._is_running = False
-            # Turn off laser if it was turned on
-            if laser_name:
-                try:
-                    if hasattr(self._master, 'lasersManager'):
-                        laser_controller = self._master.lasersManager.get(laser_name)
-                        if laser_controller:
-                            laser_controller.setLaserActive(False)
-                except Exception:
-                    pass
 
     @APIExport()
     def getCalibrationTargetInfo(self) -> dict:
@@ -338,6 +278,18 @@ class StageCenterCalibrationController(ImConWidgetController):
             "wellplate_start": {"x": self.WELLPLATE_START_X, "y": self.WELLPLATE_START_Y, "spacing": self.WELLPLATE_SPACING}
         }
 
+    @APIExport()
+    def stopFindCalibrationCenter(self) -> dict:
+        """
+        Stop the ongoing calibration center finding process.
+        """
+        if not self._is_running:
+            return {"status": "info", "message": "No calibration center search is currently running"}
+        
+        self._is_running = False
+        self._logger.info("Calibration center search stopped by user request")
+        return {"status": "stopped", "message": "Calibration center search has been stopped"}
+    
     def _getCalibrationSVGFiles(self) -> dict:
         """
         Get paths to calibration SVG files from disk.
@@ -447,6 +399,7 @@ class StageCenterCalibrationController(ImConWidgetController):
         Perform stepsize calibration using 7x7 hole lattice at (105, 16) with 1mm spacing.
         Captures images at each hole position and saves as TIFF stack.
         """
+        # TODO: This has to be moved to a thread as well and cancellable 
         if self._is_running:
             return {"status": "error", "message": "Another calibration is running"}
         
@@ -483,7 +436,8 @@ class StageCenterCalibrationController(ImConWidgetController):
                         images.append(frame)
                         positions.append((x_pos, y_pos))
                         self._logger.debug(f"Captured image at grid position ({i}, {j})")
-            
+                    if not self._is_running:
+                        return {"status": "stopped", "message": "Stepsize calibration stopped by user"}
             # Save TIFF stack
             if images:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -602,103 +556,140 @@ class StageCenterCalibrationController(ImConWidgetController):
     
     # ─────────────────────── new calibration helpers ───────────────────────
     
-    def _findCalibrationCenter(self) -> tuple:
+    def _findCalibrationCenter(
+        self,
+        unit_um: float = 1000.0,           # base grid step in µm
+        increment_units: int = 1,          # increase after every two legs (set to 2 for 1,1,3,3,...)
+        start_len_units: int = 1,          # starting leg length in units
+        min_x: float | None = None,        # absolute stage limits in µm
+        max_x: float | None = None,
+        min_y: float | None = None,
+        max_y: float | None = None,
+        intensity_factor: float = 1.5,     # stop when mean >= factor * baseline
+        settle_s: float = 0.1,             # dwell after each move
+        max_legs: int = 400,                # safety cap on spiral legs
+        laser_name: str = None,
+        laser_intensity: float = None,
+        homing_procedure = False
+    ) -> tuple[float, float] | None:
         """
-        Find calibration center using line detection and ring positioning.
-        Returns (x, y) coordinates in micrometers or None if not found.
+        Spiral search around current position. Moves in a square-spiral:
+        (+X), (+Y), (-X), (-Y), increasing leg length after every two legs.
+        Leg lengths (in 'units') follow: start_len_units, start_len_units,
+        start_len_units+increment_units, start_len_units+increment_units, ...
+        Each unit corresponds to 'unit_um' micrometers.
+
+        Stops when mean intensity rises by 'intensity_factor' over the initial baseline.
+        Returns (X, Y) in µm, or None if aborted.
         """
         stage = self.getStage()
+        if homing_procedure:
+            self._logger.info("Homing stage...")
+            stage.home_x(isBlocking=False)
+            stage.home_y(isBlocking=True)
+
+        # Home the stage in X and Y
+        stage.resetStageOffsetAxis(axis="X")
+        stage.resetStageOffsetAxis(axis="Y")
+
+        # Set position to reasonable value
+        stage.setStageOffsetAxis(knownPosition = self.HOME_POS_X, currentPosition = 0, axis="X")  # in µm
+        stage.setStageOffsetAxis(knownPosition = self.HOME_POS_Y, currentPosition = 0, axis="Y")  # in µm
+
+        # Move to calibration center position
+        self._logger.info("Moving to calibration center position...")
+        stage.move(axis="XY", value=(self.CALIBRATION_CENTER_X*1000,self.CALIBRATION_CENTER_Y*1000), is_absolute=True, is_blocking=True, speed=self.MAX_SPEED)  # in µm
+
+        # Turn on laser if specified
+        if laser_name is not None and laser_intensity is not None:
+            try:
+                if hasattr(self._master, 'lasersManager'):
+                    laser_controller = self._master.lasersManager.get(laser_name)
+                    if laser_controller:
+                        laser_controller.setLaserValue(laser_intensity)
+                        laser_controller.setLaserActive(True)
+                        self._logger.info(f"Laser {laser_name} activated at {laser_intensity}")
+                else:
+                    self._logger.warning("Laser manager not available")
+            except Exception as e:
+                self._logger.warning(f"Could not activate laser {laser_name}: {e}")
+    
+        if not self._is_running:
+            return None
+
+        # ensure camera is in livemode to grab frames continuously
         detector = self.getDetector()
-        
-        # Step 1: Search for white lines in X direction
-        self._logger.info("Searching for white lines in X direction...")
-        line_found_x = None
-        
-        for i in range(50):  # Max 50 steps of 1000µm = 50mm search
-            if not self._is_running:
-                return None
+        self._commChannel.sigStartLiveAcquistion.emit(True)
+
+        # Helpers
+        def clamp(val: float, lo: float | None, hi: float | None) -> float:
+            if lo is not None and val < lo:
+                return lo
+            if hi is not None and val > hi:
+                return hi
+            return val
+
+        def move_abs(axis: str, target: float) -> None:
+            stage.move(axis=axis, value=target, is_absolute=True, is_blocking=True, speed=self.MAX_SPEED)
+
+
+        threshold = 20 # We expect at least 20 pixels to be saturated
+
+        # Spiral state
+        dirs = [(+1, 0), (0, +1), (-1, 0), (0, -1)]  # +X, +Y, -X, -Y
+        dir_idx = 0
+        len_units = start_len_units
+        legs_done = 0
+
+        # Start from current absolute position
+        pos = stage.getPosition()
+        x = float(pos["X"])
+        y = float(pos["Y"])
+
+        # Main loop
+        while self._is_running and legs_done < max_legs:
+            dx_units, dy_units = dirs[dir_idx]
+            leg_len_um = len_units * unit_um
+            # TODO: Here we should move in background using MovementController/move_to_position -> then continously grab frames and analyse
+            # TOdO we should also add the speed as an argument via APIExport 
+            # Determine target on ONE axis per leg
+            if dx_units != 0:
+                target_x = clamp(x + dx_units * leg_len_um, min_x, max_x)
+                if target_x != x:
+                    move_abs("X", target_x)
+                    x = target_x
+            else:
+                target_y = clamp(y + dy_units * leg_len_um, min_y, max_y)
+                if target_y != y:
+                    move_abs("Y", target_y)
+                    y = target_y
+
+            # Measure
+            time.sleep(settle_s)
             
-            # Move 1000µm in X direction
-            current_pos = stage.getPosition()
-            new_x = current_pos["X"] + 1000
-            stage.move(axis = "X", value = new_x, is_absolute = True, is_blocking = True)
-            
-            # Take image and check for lines
-            time.sleep(0.1)
-            frame = detector.getLatestFrame()
-            if frame is not None and self._detectWhiteLine(frame):
-                line_found_x = new_x
-                self._logger.info(f"White line found in X at position {new_x}")
-                break
-        
-        if line_found_x is None:
-            self._logger.error("No white line found in X direction")
-            return None
-        
-        # Step 2: Search for white lines in Y direction
-        self._logger.info("Searching for white lines in Y direction...")
-        line_found_y = None
-        
-        for i in range(50):  # Max 50 steps
-            if not self._is_running:
-                return None
-            
-            # Move 1000µm in Y direction
-            current_pos = stage.getPosition()
-            new_y = current_pos["Y"] + 1000
-            stage.move(axis="Y", value=new_y, is_absolute=True, is_blocking=True)
-            
-            # Take image and check for lines
-            time.sleep(0.1)
-            frame = detector.getLatestFrame()
-            if frame is not None and self._detectWhiteLine(frame):
-                line_found_y = new_y
-                self._logger.info(f"White line found in Y at position {new_y}")
-                break
-        
-        if line_found_y is None:
-            self._logger.error("No white line found in Y direction")
-            return None
-        
-        # Step 3: Continue alternating until center is bright
-        self._logger.info("Searching for bright center...")
-        baseline_intensity = self._grabMeanFrame()
-        
-        for iteration in range(20):  # Max iterations to find center
-            if not self._is_running:
-                return None
-            
-            # Move in X direction and check intensity
-            current_pos = stage.getPosition()
-            stage.move(axis="X", value=current_pos["X"] + 1000, is_absolute=True, is_blocking=True)
-            time.sleep(0.1)
-            
-            intensity = self._grabMeanFrame()
-            if intensity and baseline_intensity and intensity > baseline_intensity * 2.0:
-                self._logger.info("High intensity detected - near center")
-                
-                # Step 4: Look for rings and center on them
-                center_pos = self._findRingCenter()
-                if center_pos:
-                    return center_pos
-            
-            # Move in Y direction and check intensity
-            current_pos = stage.getPosition()
-            stage.move(axis="Y", value=current_pos["Y"] + 1000, is_absolute=True, is_blocking=True)
-            time.sleep(0.1)
-            
-            intensity = self._grabMeanFrame()
-            if intensity and baseline_intensity and intensity > baseline_intensity * 2.0:
-                self._logger.info("High intensity detected - near center")
-                
-                # Look for rings and center on them
-                center_pos = self._findRingCenter()
-                if center_pos:
-                    return center_pos
-        
-        # If we reach here, return current position as best guess
-        final_pos = stage.getPosition()
-        return (final_pos["X"], final_pos["Y"])
+            # Baseline intensity (use a short average if available)
+            nSaturatedPixels = self._grabAndProcessFrame()
+            if nSaturatedPixels is not None and nSaturatedPixels >= threshold:
+                # Optional refinement if available
+                if hasattr(self, "_findRingCenter"):
+                    try:
+                        center = self._findRingCenter()
+                        if center:
+                            return center
+                    except Exception:
+                        pass
+                return (x, y)
+
+            # Next leg
+            dir_idx = (dir_idx + 1) % 4
+            legs_done += 1
+
+            # Increase leg length after every two legs
+            if legs_done % 2 == 0:
+                len_units += increment_units
+
+        # Safety exit: return last position
+        return (x, y)
     
     def _detectWhiteLine(self, image: np.ndarray) -> bool:
         """
@@ -740,54 +731,38 @@ class StageCenterCalibrationController(ImConWidgetController):
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             else:
                 gray = frame.astype(np.uint8)
+            import NanoImagingPack as nip
+            blurred = nip.gaussf(gray, 100)
+            maxY, maxY =  np.unravel_index(np.argmax(blurred, axis=None), blurred.shape)
+            # now let's move in the opposite direction of the maximum
+            mPixelSize = detector.pixelSizeUm[0]
+            center_y, center_x = maxY*mPixelSize, maxY*mPixelSize
+            stage = self.getStage()
             
-            # Apply Gaussian blur
-            blurred = cv2.GaussianBlur(gray, (9, 9), 2)
+            # Convert image coordinates to stage offset
+            # This is a simplified approach - in practice, you'd need proper calibration
+            current_pos = stage.getPosition()
+        
+            self._logger.info(f"Ring detected at image coords ({center_x}, {center_y})")
+
+            # Calculate offset needed to center the ring (simplified pixel-to-micron conversion)
+            image_center_x = gray.shape[1] // 2
+            image_center_y = gray.shape[0] // 2
             
-            # Detect circles using Hough transform
-            circles = cv2.HoughCircles(
-                blurred,
-                cv2.HOUGH_GRADIENT,
-                dp=1,
-                minDist=30,
-                param1=50,
-                param2=30,
-                minRadius=10,
-                maxRadius=100
-            )
+            # Assume 1 pixel = 1 micrometer (this should be calibrated properly)
+            offset_x = (center_x - image_center_x) * 1.0  # Adjust this scaling factor
+            offset_y = (center_y - image_center_y) * 1.0
             
-            if circles is not None and len(circles[0]) > 0:
-                # Find the largest circle (assuming it's the calibration ring)
-                circles = np.round(circles[0, :]).astype("int")
-                largest_circle = max(circles, key=lambda c: c[2])  # Max by radius
-                
-                center_x, center_y, radius = largest_circle
-                self._logger.info(f"Ring found at image coordinates ({center_x}, {center_y}) with radius {radius}")
-                
-                # Convert image coordinates to stage offset
-                # This is a simplified approach - in practice, you'd need proper calibration
-                stage = self.getStage()
-                current_pos = stage.getPosition()
-                
-                # Calculate offset needed to center the ring (simplified pixel-to-micron conversion)
-                image_center_x = gray.shape[1] // 2
-                image_center_y = gray.shape[0] // 2
-                
-                # Assume 1 pixel = 1 micrometer (this should be calibrated properly)
-                offset_x = (center_x - image_center_x) * 1.0  # Adjust this scaling factor
-                offset_y = (center_y - image_center_y) * 1.0
-                
-                # Move stage to center the ring
-                target_x = current_pos["X"] - offset_x  # Negative because stage moves opposite to image
-                target_y = current_pos["Y"] - offset_y
-                
-                stage.move(axis="X", value=target_x, is_absolute=True, is_blocking=True)
-                stage.move(axis="Y", value=target_y, is_absolute=True, is_blocking=True)
-                
-                final_pos = stage.getPosition()
-                return (final_pos["X"], final_pos["Y"])
+            # Move stage to center the ring
+            target_x = current_pos["X"] - offset_x  # Negative because stage moves opposite to image
+            target_y = current_pos["Y"] - offset_y
             
-            return None
+            stage.move(axis="X", value=target_x, is_absolute=True, is_blocking=True)
+            stage.move(axis="Y", value=target_y, is_absolute=True, is_blocking=True)
+            
+            final_pos = stage.getPosition()
+            return (final_pos["X"], final_pos["Y"])
+            
             
         except Exception as e:
             self._logger.error(f"Ring detection failed: {e}")
@@ -848,13 +823,14 @@ class StageCenterCalibrationController(ImConWidgetController):
 
     # ─────────────────────── helpers ────────────────────────────────────────
 
-    def _grabMeanFrame(self):
+    def _grabAndProcessFrame(self, threshold=250):
+        '''returns the number of saturated pixels in the latest frame'''
         frame = self.getDetector().getLatestFrame()
         if frame is None or frame.size == 0:
-            return None
-        meanValue = np.mean(frame[::20, ::20])  # subsample for speed
-        self._logger.debug(f"Mean value of frame: {meanValue}") 
-        return meanValue
+            return 0 #None
+        processedValue = np.sum(frame[::20, ::20]>threshold)
+        self._logger.debug(f"Processed value of frame: {processedValue}")
+        return processedValue
 
     def _savePositionsCsv(self):
         if not self._positions:

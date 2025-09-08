@@ -41,25 +41,28 @@ class StageCenterCalibrationController(ImConWidgetController):
         self._positions: list[tuple[float, float]] = []
         self._run_mutex = Mutex()
         
-        # Calibration target constants (in mm)
-        self.CALIBRATION_CENTER_X = 63.81
-        self.CALIBRATION_CENTER_Y = 42.06
-        self.MAZE_START_X = 9.5
-        self.MAZE_START_Y = 11.5
-        self.STEPSIZE_GRID_X = 105.0
-        self.STEPSIZE_GRID_Y = 16.0
-        self.WELLPLATE_START_X = 12.2
-        self.WELLPLATE_START_Y = 9.0
-        self.WELLPLATE_SPACING = 4.5  # mm
-        self.MAX_SPEED = 20000  # µm/s
+        # Load calibration settings from setup config
+        calibration_config = getattr(self._setupInfo, 'stageCalibration', {})
         
-        # TODO: This is FRAME Specific - make this configurable through the configs
-        self.HOME_POS_X = 0*1000  # in µm in x we are roughly at the wellplatepos 0
-        self.HOME_POS_Y = 87*1000  # in µm in y we are roughly at the wellplatepos 87mm (opposite site )
+        # Calibration target constants (in mm) - configurable with defaults
+        self.CALIBRATION_CENTER_X = calibration_config.get('calibrationCenterX', 63.81)
+        self.CALIBRATION_CENTER_Y = calibration_config.get('calibrationCenterY', 42.06)
+        self.MAZE_START_X = calibration_config.get('mazeStartX', 9.5)
+        self.MAZE_START_Y = calibration_config.get('mazeStartY', 11.5)
+        self.STEPSIZE_GRID_X = calibration_config.get('stepsizeGridX', 105.0)
+        self.STEPSIZE_GRID_Y = calibration_config.get('stepsizeGridY', 16.0)
+        self.WELLPLATE_START_X = calibration_config.get('wellplateStartX', 12.2)
+        self.WELLPLATE_START_Y = calibration_config.get('wellplateStartY', 9.0)
+        self.WELLPLATE_SPACING = calibration_config.get('wellplateSpacing', 4.5)  # mm
+        self.MAX_SPEED = calibration_config.get('maxSpeed', 20000)  # µm/s
+        
+        # Home position - now configurable instead of FRAME-specific
+        self.HOME_POS_X = calibration_config.get('homePosX', 0) * 1000  # convert mm to µm
+        self.HOME_POS_Y = calibration_config.get('homePosY', 87) * 1000  # convert mm to µm
 
-        # Calibration target dimensions (in mm)
-        self.TARGET_WIDTH = 127.76
-        self.TARGET_HEIGHT = 85.48
+        # Calibration target dimensions (in mm) - configurable with defaults
+        self.TARGET_WIDTH = calibration_config.get('targetWidth', 127.76)
+        self.TARGET_HEIGHT = calibration_config.get('targetHeight', 85.48)
         
         # Maze navigation state
         self._maze_running = False
@@ -115,9 +118,14 @@ class StageCenterCalibrationController(ImConWidgetController):
         stage = self.getStage()
         current_pos = stage.getPosition()
         
-        # Set stage offset for both axes # TODO: NOT CORRECT 
-        stage.setStageOffsetAxis(knownPosition=x_mm * 1000, currentPosition=current_pos["X"], axis="X")  # Convert mm to µm
-        stage.setStageOffsetAxis(knownPosition=y_mm * 1000, currentPosition=current_pos["Y"], axis="Y")  # Convert mm to µm
+        # Convert current position from steps to physical coordinates (µm)
+        # The PositionerManager expects both positions in physical coordinates
+        current_pos_x_um = current_pos["X"] / stage.stepSizes["X"] if hasattr(stage, 'stepSizes') else current_pos["X"]
+        current_pos_y_um = current_pos["Y"] / stage.stepSizes["Y"] if hasattr(stage, 'stepSizes') else current_pos["Y"]
+        
+        # Set stage offset for both axes (both in µm)
+        stage.setStageOffsetAxis(knownPosition=x_mm * 1000, currentPosition=current_pos_x_um, axis="X")  # Convert mm to µm
+        stage.setStageOffsetAxis(knownPosition=y_mm * 1000, currentPosition=current_pos_y_um, axis="Y")  # Convert mm to µm
         
         self._logger.info(f"Stage offset set to known position: X={x_mm}mm, Y={y_mm}mm")
         return {"status": "success", "x_mm": x_mm, "y_mm": y_mm}
@@ -137,7 +145,8 @@ class StageCenterCalibrationController(ImConWidgetController):
         max_legs: int = 50, 
         laser_name: str = None,
         laser_intensity: float = None,
-        homing_procedure: bool = False
+        homing_procedure: bool = False,
+        speed_um_s: float = None
     ) -> dict:
         """
         API export for spiral search calibration center finding.
@@ -151,73 +160,24 @@ class StageCenterCalibrationController(ImConWidgetController):
             intensity_factor: Stop when mean >= factor * baseline
             settle_s: Dwell after each move
             max_legs: Safety cap on spiral legs
+            speed_um_s: Movement speed in µm/s (defaults to MAX_SPEED)
             
         Returns:
             dict: Status information
         """
+        if speed_um_s is None:
+            speed_um_s = self.MAX_SPEED
+            
         if self._is_running:
             return {"status": "error", "message": "Another calibration is already running"}
         self.findCalibrationCenterThread = threading.Thread(
-            target=self._findCalibrationCenterForThread,
-            args=(unit_um, increment_units, start_len_units, min_x, max_x, min_y, max_y, intensity_factor, settle_s, max_legs, laser_name, laser_intensity, homing_procedure),
+            target=self._findCalibrationCenter,
+            args=(unit_um, increment_units, start_len_units, min_x, max_x, min_y, max_y, intensity_factor, settle_s, max_legs, laser_name, laser_intensity, homing_procedure, speed_um_s),
             daemon=True,
         )
         self.findCalibrationCenterThread.start()
         return {"status": "started", "message": "Calibration center search started"}
 
-    def _findCalibrationCenterForThread(
-        self,
-        unit_um: float = 1000.0,
-        increment_units: int = 1,
-        start_len_units: int = 1,
-        min_x: float = None,
-        max_x: float = None,
-        min_y: float = None,
-        max_y: float = None,
-        intensity_factor: float = 1.5,
-        settle_s: float = 0.1,
-        max_legs: int = 400,
-        laser_name: str = None,
-        laser_intensity: float = None, 
-        homing_procedure: bool = False
-    ) -> dict: # TODO: I think this interface can be neglected, we can direclty use this to start _findCalibrationCenter
-        """
-        Thread implementation for calibration center finding.
-        """
-        if self._is_running:
-            return {"status": "error", "message": "Another calibration is already running"}
-        
-        self._is_running = True
-        try:
-            center_position = self._findCalibrationCenter(
-                unit_um=unit_um,
-                increment_units=increment_units,
-                start_len_units=start_len_units,
-                min_x=min_x,
-                max_x=max_x,
-                min_y=min_y,
-                max_y=max_y,
-                intensity_factor=intensity_factor,
-                settle_s=settle_s,
-                max_legs=max_legs, 
-                laser_name=laser_name,
-                laser_intensity=laser_intensity
-            )
-            
-            if center_position:
-                self._logger.info(f"Calibration center found at: {center_position}")
-                # Save positions to CSV for record keeping
-                self._savePositionsCsv()
-                return {"status": "success", "center_position": center_position}
-            else:
-                self._logger.warning("Calibration center search completed but no center found")
-                return {"status": "completed", "message": "No center found within search parameters"}
-                
-        except Exception as e:
-            self._logger.error(f"Calibration center search failed: {e}")
-            return {"status": "error", "message": str(e)}
-        finally:
-            self._is_running = False
 
     @APIExport()
     def getCalibrationTargetInfo(self) -> dict:
@@ -399,72 +359,80 @@ class StageCenterCalibrationController(ImConWidgetController):
         Perform stepsize calibration using 7x7 hole lattice at (105, 16) with 1mm spacing.
         Captures images at each hole position and saves as TIFF stack.
         """
-        # TODO: This has to be moved to a thread as well and cancellable 
         if self._is_running:
             return {"status": "error", "message": "Another calibration is running"}
         
+        # Start calibration in separate thread
+        self._task = threading.Thread(target=self._performStepsizeCalibrationThread, daemon=True)
+        self._task.start()
+        return {"status": "started", "message": "Stepsize calibration started"}
+    
+    def _performStepsizeCalibrationThread(self):
+        """
+        Thread implementation for stepsize calibration.
+        """
         self._is_running = True
         try:
-            stage = self.getStage()
-            detector = self.getDetector()
-            
-            # Move to starting position
-            start_x_um = self.STEPSIZE_GRID_X * 1000  # Convert mm to µm
-            start_y_um = self.STEPSIZE_GRID_Y * 1000
-            
-            images = []
-            positions = []
-            
-            # Scan 7x7 grid
-            for i in range(7):
-                for j in range(7):
-                    if not self._is_running:
-                        break
-                    
-                    # Calculate position (1mm = 1000µm spacing)
-                    x_pos = start_x_um + (i * 1000)
-                    y_pos = start_y_um + (j * 1000)
-                    
-                    # Move to position
-                    stage.move(axis="X", value=x_pos, is_absolute=True, is_blocking=True)
-                    stage.move(axis="Y", value=y_pos, is_absolute=True, is_blocking=True)
-                    
-                    # Capture image
-                    time.sleep(0.1)  # Allow settling
-                    frame = detector.getLatestFrame()
-                    if frame is not None:
-                        images.append(frame)
-                        positions.append((x_pos, y_pos))
-                        self._logger.debug(f"Captured image at grid position ({i}, {j})")
-                    if not self._is_running:
-                        return {"status": "stopped", "message": "Stepsize calibration stopped by user"}
-            # Save TIFF stack
-            if images:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                dir_path = os.path.join(os.path.expanduser("~"), "imswitch_calibrations", timestamp)
-                os.makedirs(dir_path, exist_ok=True)
-                
-                stack_path = os.path.join(dir_path, "stepsize_calibration_stack.tiff")
-                tif.imwrite(stack_path, np.array(images))
-                
-                positions_path = os.path.join(dir_path, "stepsize_positions.csv")
-                np.savetxt(positions_path, np.array(positions), delimiter=",", header="X(µm),Y(µm)")
-                
-                self._logger.info(f"Stepsize calibration completed. {len(images)} images saved to {stack_path}")
-                return {
-                    "status": "success",
-                    "images_captured": len(images),
-                    "tiff_stack_path": stack_path,
-                    "positions_path": positions_path
-                }
-            else:
-                return {"status": "error", "message": "No images captured"}
-                
+            self._performStepsizeCalibrationLogic()
         except Exception as e:
             self._logger.error(f"Stepsize calibration failed: {e}")
-            return {"status": "error", "message": str(e)}
         finally:
             self._is_running = False
+    
+    def _performStepsizeCalibrationLogic(self):
+        """
+        Core logic for stepsize calibration.
+        """
+        stage = self.getStage()
+        detector = self.getDetector()
+        
+        # Move to starting position
+        start_x_um = self.STEPSIZE_GRID_X * 1000  # Convert mm to µm
+        start_y_um = self.STEPSIZE_GRID_Y * 1000
+        
+        images = []
+        positions = []
+        
+        # Scan 7x7 grid
+        for i in range(7):
+            for j in range(7):
+                if not self._is_running:
+                    break
+                
+                # Calculate position (1mm = 1000µm spacing)
+                x_pos = start_x_um + (i * 1000)
+                y_pos = start_y_um + (j * 1000)
+                
+                # Move to position
+                stage.move(axis="X", value=x_pos, is_absolute=True, is_blocking=True)
+                stage.move(axis="Y", value=y_pos, is_absolute=True, is_blocking=True)
+                
+                # Capture image
+                time.sleep(0.1)  # Allow settling
+                frame = detector.getLatestFrame()
+                if frame is not None:
+                    images.append(frame)
+                    positions.append((x_pos, y_pos))
+                    self._logger.debug(f"Captured image at grid position ({i}, {j})")
+            if not self._is_running:
+                self._logger.info("Stepsize calibration stopped by user")
+                return
+        
+        # Save TIFF stack
+        if images:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dir_path = os.path.join(os.path.expanduser("~"), "imswitch_calibrations", timestamp)
+            os.makedirs(dir_path, exist_ok=True)
+            
+            stack_path = os.path.join(dir_path, "stepsize_calibration_stack.tiff")
+            tif.imwrite(stack_path, np.array(images))
+            
+            positions_path = os.path.join(dir_path, "stepsize_positions.csv")
+            np.savetxt(positions_path, np.array(positions), delimiter=",", header="X(µm),Y(µm)")
+            
+            self._logger.info(f"Stepsize calibration completed. {len(images)} images saved to {stack_path}")
+        else:
+            self._logger.warning("No images captured during stepsize calibration")
     
     @APIExport()
     def perform384WellplateCalibration(self, sample_wells: list = None) -> dict:
@@ -570,7 +538,8 @@ class StageCenterCalibrationController(ImConWidgetController):
         max_legs: int = 400,                # safety cap on spiral legs
         laser_name: str = None,
         laser_intensity: float = None,
-        homing_procedure = False
+        homing_procedure = False,
+        speed_um_s: float = None           # movement speed in µm/s
     ) -> tuple[float, float] | None:
         """
         Spiral search around current position. Moves in a square-spiral:
@@ -581,6 +550,41 @@ class StageCenterCalibrationController(ImConWidgetController):
 
         Stops when mean intensity rises by 'intensity_factor' over the initial baseline.
         Returns (X, Y) in µm, or None if aborted.
+        """
+        # Set running state for threading
+        self._is_running = True
+        try:
+            return self._performCalibrationSearchLogic(
+                unit_um, increment_units, start_len_units, min_x, max_x, min_y, max_y,
+                intensity_factor, settle_s, max_legs, laser_name, laser_intensity, homing_procedure, speed_um_s
+            )
+        except Exception as e:
+            self._logger.error(f"Calibration center search failed: {e}")
+            return None
+        finally:
+            self._is_running = False
+            # Save positions to CSV for record keeping
+            self._savePositionsCsv()
+
+    def _performCalibrationSearchLogic(
+        self,
+        unit_um: float,
+        increment_units: int,
+        start_len_units: int,
+        min_x: float | None,
+        max_x: float | None,
+        min_y: float | None,
+        max_y: float | None,
+        intensity_factor: float,
+        settle_s: float,
+        max_legs: int,
+        laser_name: str,
+        laser_intensity: float,
+        homing_procedure: bool,
+        speed_um_s: float
+    ) -> tuple[float, float] | None:
+        """
+        Core logic for calibration search.
         """
         stage = self.getStage()
         if homing_procedure:
@@ -630,7 +634,14 @@ class StageCenterCalibrationController(ImConWidgetController):
             return val
 
         def move_abs(axis: str, target: float) -> None:
-            stage.move(axis=axis, value=target, is_absolute=True, is_blocking=True, speed=self.MAX_SPEED)
+            stage.move(axis=axis, value=target, is_absolute=True, is_blocking=True, speed=speed_um_s)
+        
+        def move_continuous(axis: str, target: float) -> None:
+            """
+            Move in continuous mode for better frame collection during movement.
+            This addresses the TODO about background movement during image analysis.
+            """
+            stage.move(axis=axis, value=target, is_absolute=True, is_blocking=False, speed=speed_um_s)
 
 
         threshold = 20 # We expect at least 20 pixels to be saturated
@@ -650,18 +661,39 @@ class StageCenterCalibrationController(ImConWidgetController):
         while self._is_running and legs_done < max_legs:
             dx_units, dy_units = dirs[dir_idx]
             leg_len_um = len_units * unit_um
-            # TODO: Here we should move in background using MovementController/move_to_position -> then continously grab frames and analyse
-            # TOdO we should also add the speed as an argument via APIExport 
-            # Determine target on ONE axis per leg
+            # Use continuous movement for better frame collection during movement
+            # This addresses the TODO about background movement and continuous frame analysis
             if dx_units != 0:
                 target_x = clamp(x + dx_units * leg_len_um, min_x, max_x)
                 if target_x != x:
-                    move_abs("X", target_x)
+                    # Start continuous movement
+                    move_continuous("X", target_x)
+                    
+                    # Collect frames during movement for analysis
+                    start_time = time.time()
+                    while abs(stage.getPosition()["X"] - target_x) > 10 and time.time() - start_time < 10:  # 10µm tolerance, 10s timeout
+                        if not self._is_running:
+                            return None
+                        # Grab frames during movement for analysis
+                        self._grabAndProcessFrame()
+                        time.sleep(0.05)  # Brief pause between frame grabs
+                    
                     x = target_x
             else:
                 target_y = clamp(y + dy_units * leg_len_um, min_y, max_y)
                 if target_y != y:
-                    move_abs("Y", target_y)
+                    # Start continuous movement
+                    move_continuous("Y", target_y)
+                    
+                    # Collect frames during movement for analysis
+                    start_time = time.time()
+                    while abs(stage.getPosition()["Y"] - target_y) > 10 and time.time() - start_time < 10:  # 10µm tolerance, 10s timeout
+                        if not self._is_running:
+                            return None
+                        # Grab frames during movement for analysis
+                        self._grabAndProcessFrame()
+                        time.sleep(0.05)  # Brief pause between frame grabs
+                    
                     y = target_y
 
             # Measure

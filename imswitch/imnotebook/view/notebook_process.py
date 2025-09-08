@@ -26,6 +26,55 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
     # check if the notebook executable is available
     if not testnotebook(notebook_executable):
         print("Notebook executable not found")
+    
+    # Check for embedded kernel and install kernel spec if available
+    embedded_kernel_info = None
+    try:
+        import sys
+        imswitch_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        if imswitch_path not in sys.path:
+            sys.path.insert(0, imswitch_path)
+        
+        from imswitch.imcommon.kernel_state import get_embedded_kernel_connection_file, is_embedded_kernel_running
+        from imswitch.imcommon.embedded_kernel_spec import ensure_kernel_spec_available
+        
+        if is_embedded_kernel_running():
+            connection_file = get_embedded_kernel_connection_file()
+            if connection_file and os.path.exists(connection_file):
+                embedded_kernel_info = {
+                    'connection_file': connection_file,
+                    'filename': os.path.basename(connection_file)
+                }
+                print("=" * 60)
+                print("EMBEDDED KERNEL DETECTED")
+                print("=" * 60)
+                print(f"ImSwitch embedded kernel is running")
+                print(f"Connection file: {connection_file}")
+                print("")
+                
+                # Try to install kernel spec for notebook interface
+                if ensure_kernel_spec_available():
+                    print("✅ ImSwitch kernel installed successfully!")
+                    print("   Look for 'ImSwitch (Live Connection)' in the notebook kernel list")
+                    print("")
+                
+                print("Alternative connection methods:")
+                print("1. From Jupyter console (terminal):")
+                print(f"   jupyter console --existing {embedded_kernel_info['filename']}")
+                print("")
+                print("2. From notebook cells:")
+                print("   Use the helper notebook: connect_to_imswitch_kernel.ipynb")
+                print("")
+                print("Available ImSwitch objects in embedded kernel:")
+                print("   - detectorsManager, lasersManager, stageManager, etc.")
+                print("   - master_controller, app, mainView, config")
+                print("=" * 60)
+                
+    except Exception as e:
+        print(f"Warning: Could not check for embedded kernel: {e}")
+        import traceback
+        traceback.print_exc()
+    
     # it is necessary to redirect all 3 outputs or .app does not open
     notebookp = subprocess.Popen([notebook_executable,
                             "--port=%s" % port,

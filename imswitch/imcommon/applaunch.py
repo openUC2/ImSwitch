@@ -13,6 +13,7 @@ from .model import dirtools, pythontools, initLogger
 from imswitch.imcommon.framework import Signal, Thread
 from imswitch import IS_HEADLESS
 from imswitch.config import get_config
+from .kernel_state import set_embedded_kernel_connection_file, find_latest_kernel_connection_file
 if not IS_HEADLESS:
     from qtpy import QtCore, QtGui, QtWidgets
     from .view.guitools import getBaseStyleSheet
@@ -56,6 +57,12 @@ def start_embedded_kernel(namespace):
             # Now embed_kernel should work without signal errors
             embed_kernel(local_ns=namespace)
             
+            # After kernel starts, try to find and store the connection file
+            connection_file = find_latest_kernel_connection_file()
+            if connection_file:
+                set_embedded_kernel_connection_file(connection_file)
+                logger.info(f"Embedded kernel connection file: {connection_file}")
+            
         except Exception as e:
             logger.error(f"Failed to start embedded kernel: {e}")
             logger.error(traceback.format_exc())
@@ -68,6 +75,13 @@ def start_embedded_kernel(namespace):
                 os.environ['JUPYTER_KERNEL_DISABLE_SIGNALS'] = '1'
                 embed_kernel(local_ns=namespace)
                 logger.info("Fallback kernel startup successful")
+                
+                # Try to find connection file for fallback too
+                connection_file = find_latest_kernel_connection_file()
+                if connection_file:
+                    set_embedded_kernel_connection_file(connection_file)
+                    logger.info(f"Embedded kernel connection file: {connection_file}")
+                
             except Exception as fallback_error:
                 logger.error(f"Fallback kernel startup also failed: {fallback_error}")
                 

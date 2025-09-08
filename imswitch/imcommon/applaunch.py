@@ -4,15 +4,15 @@ import sys
 import traceback
 import time
 import threading
-# somewhere after all your variables & functions exist
 try:
-    from ipykernel.embed import embed_kernel   # pip install ipykernel
+    from ipykernel.embed import embed_kernel
 except ImportError:
     embed_kernel = None
 
 from .model import dirtools, pythontools, initLogger
 from imswitch.imcommon.framework import Signal, Thread
 from imswitch import IS_HEADLESS
+from imswitch.config import get_config
 if not IS_HEADLESS:
     from qtpy import QtCore, QtGui, QtWidgets
     from .view.guitools import getBaseStyleSheet
@@ -20,6 +20,22 @@ if not IS_HEADLESS:
     from PyQt5.QtWidgets import QApplication
 else:
     from psygnal import emit_queued
+
+
+def start_embedded_kernel(namespace):
+    """Start an embedded Jupyter kernel in the current thread."""
+    if embed_kernel is not None:
+        logger = initLogger('embedded_kernel')
+        logger.info("Starting embedded Jupyter kernel...")
+        logger.info("Connect with: jupyter console --existing or select kernel in JupyterLab")
+        try:
+            embed_kernel(local_ns=namespace)
+        except Exception as e:
+            logger.error(f"Failed to start embedded kernel: {e}")
+            logger.error(traceback.format_exc())
+    else:
+        logger = initLogger('embedded_kernel')
+        logger.warning("ipykernel not available. Install with: pip install ipykernel")
 
 
 def prepareApp():
@@ -63,12 +79,52 @@ def prepareApp():
 def launchApp(app, mainView, moduleMainControllers):
     """ Launches the app. The program will exit when the app is exited. """
     logger = initLogger('launchApp')
-    #threading.Thread(target=embed_kernel, daemon=True).start()
+    config = get_config()
+    
+    # Start embedded Jupyter kernel if requested
+    if config.enable_kernel:
+        # Prepare namespace for kernel
+        kernel_namespace = globals().copy()
+        kernel_namespace.update({
+            "moduleMainControllers": moduleMainControllers,
+            "app": app,
+            "mainView": mainView,
+            "config": config,
+        })
+        
+        # Add individual managers for easy access
+        if isinstance(moduleMainControllers, dict):
+            for module_id, controller in moduleMainControllers.items():
+                kernel_namespace[f"{module_id}_controller"] = controller
+                # Try to extract managers from imcontrol module if available
+                if module_id == 'imcontrol' and hasattr(controller, '_ImConMainController__masterController'):
+                    master_controller = controller._ImConMainController__masterController
+                    kernel_namespace["master_controller"] = master_controller
+                    
+                    # Add individual managers for convenience
+                    for attr_name in dir(master_controller):
+                        if attr_name.endswith('Manager') and not attr_name.startswith('_'):
+                            manager = getattr(master_controller, attr_name, None)
+                            if manager is not None:
+                                kernel_namespace[attr_name] = manager
+        elif hasattr(moduleMainControllers, '__iter__'):
+            # Handle case where it's a list/values()
+            for i, controller in enumerate(moduleMainControllers):
+                kernel_namespace[f"controller_{i}"] = controller
+        
+        # Start kernel in daemon thread
+        kernel_thread = threading.Thread(
+            target=start_embedded_kernel, 
+            args=(kernel_namespace,), 
+            daemon=True,
+            name="EmbeddedJupyterKernel"
+        )
+        kernel_thread.start()
+        logger.info("Embedded Jupyter kernel thread started")
 
     if IS_HEADLESS:
         """We won't have any GUI, so we don't need to prepare the app."""
         # Keep python running
-        # embed_kernel() # TODO: This should be non-blocking!
         tDiskCheck = time.time()
         while True: # TODO: have webserver signal somehow?
             try:
@@ -76,7 +132,10 @@ def launchApp(app, mainView, moduleMainControllers):
                 time.sleep(1)
                 if time.time() - tDiskCheck > 60 and dirtools.getDiskusage() > 0.9:
                     # if the storage is full or the user presses Ctrl+C, we want to stop the experiment
-                    moduleMainControllers.mapping["imcontrol"]._ImConMainController__commChannel.sigExperimentStop.emit()
+                    if isinstance(moduleMainControllers, dict) and "imcontrol" in moduleMainControllers:
+                        controller = moduleMainControllers["imcontrol"]
+                        if hasattr(controller, '_ImConMainController__commChannel'):
+                            controller._ImConMainController__commChannel.sigExperimentStop.emit()
                     tDiskCheck = time.time()
 
             except KeyboardInterrupt:
@@ -91,7 +150,13 @@ def launchApp(app, mainView, moduleMainControllers):
         exitCode = app.exec_()
 
     # Clean up
-    for controller in moduleMainControllers:
+    controllers_to_close = []
+    if isinstance(moduleMainControllers, dict):
+        controllers_to_close = moduleMainControllers.values()
+    elif hasattr(moduleMainControllers, '__iter__'):
+        controllers_to_close = moduleMainControllers
+    
+    for controller in controllers_to_close:
         try:
             controller.closeEvent()
         except Exception:

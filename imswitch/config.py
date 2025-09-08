@@ -36,6 +36,7 @@ class ImSwitchConfig:
     # Jupyter settings
     jupyter_port: int = 8888
     jupyter_url: str = ""
+    enable_kernel: bool = False
     
     # Version info
     version: str = "2.1.41"
@@ -58,7 +59,8 @@ class ImSwitchConfig:
             'config_folder': 'config_folder',
             'data_folder': 'data_folder',
             'scan_ext_data_folder': 'scan_ext_data_folder',
-            'ext_drive_mount': 'ext_drive_mount'
+            'ext_drive_mount': 'ext_drive_mount',
+            'with_kernel': 'enable_kernel'
         }
         
         for arg_name, config_attr in arg_mapping.items():

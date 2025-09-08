@@ -27,6 +27,16 @@ python -m imswitch --with-kernel
 python -m imswitch --with-kernel --config-file myconfig.json --headless
 ```
 
+### Find folder of config file 
+
+```py
+In [1]: from IPython.lib.kernel import find_connection_file
+In [2]: find_connection_file()
+# in windows
+In [1]: from jupyter_client import find_connection_file
+In [2]: find_connection_file()
+````
+
 ### Connecting to the Kernel
 
 Once ImSwitch is running with `--with-kernel`, you can connect from another terminal:

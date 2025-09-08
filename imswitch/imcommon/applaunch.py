@@ -23,16 +23,58 @@ else:
 
 
 def start_embedded_kernel(namespace):
-    """Start an embedded Jupyter kernel in the current thread."""
+    """
+    Start an embedded Jupyter kernel in the current thread with thread-safe signal handling.
+    
+    This function works around the ValueError: signal only works in main thread 
+    by patching signal handling during kernel initialization.
+    """
     if embed_kernel is not None:
         logger = initLogger('embedded_kernel')
         logger.info("Starting embedded Jupyter kernel...")
         logger.info("Connect with: jupyter console --existing or select kernel in JupyterLab")
+        
+        # Import signal module for patching
+        import signal
+        
+        # Store original signal function
+        original_signal = signal.signal
+        
+        def thread_safe_signal(signum, handler):
+            """Thread-safe signal handler that only works in main thread"""
+            if threading.current_thread() is threading.main_thread():
+                return original_signal(signum, handler)
+            else:
+                # In non-main threads, just return the handler without registering
+                logger.debug(f"Skipping signal {signum} registration in thread {threading.current_thread().name}")
+                return handler
+        
         try:
+            # Patch signal.signal to be thread-safe
+            signal.signal = thread_safe_signal
+            
+            # Now embed_kernel should work without signal errors
             embed_kernel(local_ns=namespace)
+            
         except Exception as e:
             logger.error(f"Failed to start embedded kernel: {e}")
             logger.error(traceback.format_exc())
+            
+            # Try fallback approach
+            logger.info("Attempting fallback kernel startup method...")
+            try:
+                # Alternative: Start kernel without signal handling
+                import os
+                os.environ['JUPYTER_KERNEL_DISABLE_SIGNALS'] = '1'
+                embed_kernel(local_ns=namespace)
+                logger.info("Fallback kernel startup successful")
+            except Exception as fallback_error:
+                logger.error(f"Fallback kernel startup also failed: {fallback_error}")
+                
+        finally:
+            # Always restore original signal function
+            signal.signal = original_signal
+            
     else:
         logger = initLogger('embedded_kernel')
         logger.warning("ipykernel not available. Install with: pip install ipykernel")

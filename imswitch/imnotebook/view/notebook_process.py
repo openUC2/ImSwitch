@@ -30,16 +30,17 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
     # Check for embedded kernel and install kernel spec if available
     embedded_kernel_info = None
     try:
-        import sys
-        imswitch_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        if imswitch_path not in sys.path:
-            sys.path.insert(0, imswitch_path)
+        # Import kernel modules directly to avoid dependency issues
+        import importlib.util
         
-        from imswitch.imcommon.kernel_state import get_embedded_kernel_connection_file, is_embedded_kernel_running
-        from imswitch.imcommon.embedded_kernel_spec import ensure_kernel_spec_available
+        # Import embedded_kernel_spec module directly
+        spec_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'imcommon', 'embedded_kernel_spec.py')
+        spec = importlib.util.spec_from_file_location('embedded_kernel_spec', spec_path)
+        embedded_kernel_spec = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(embedded_kernel_spec)
         
-        if is_embedded_kernel_running():
-            connection_file = get_embedded_kernel_connection_file()
+        if embedded_kernel_spec.is_embedded_kernel_running():
+            connection_file = embedded_kernel_spec.get_embedded_kernel_connection_file()
             if connection_file and os.path.exists(connection_file):
                 embedded_kernel_info = {
                     'connection_file': connection_file,
@@ -53,10 +54,27 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
                 print("")
                 
                 # Try to install kernel spec for notebook interface
-                if ensure_kernel_spec_available():
+                success = embedded_kernel_spec.ensure_kernel_spec_available()
+                if success:
                     print("✅ ImSwitch kernel installed successfully!")
                     print("   Look for 'ImSwitch (Live Connection)' in the notebook kernel list")
                     print("")
+                    
+                    # Verify kernel spec was installed
+                    try:
+                        from jupyter_client.kernelspec import KernelSpecManager
+                        ksm = KernelSpecManager()
+                        specs = ksm.get_all_specs()
+                        if 'imswitch_embedded' in specs:
+                            print("✅ Kernel spec verification: FOUND in Jupyter")
+                        else:
+                            print("❌ Kernel spec verification: NOT FOUND in Jupyter")
+                            print("   Available kernels:", list(specs.keys()))
+                    except Exception as e:
+                        print(f"⚠️  Could not verify kernel spec: {e}")
+                else:
+                    print("❌ Failed to install ImSwitch kernel spec")
+                    print("   The embedded kernel is running but may not appear in notebook interface")
                 
                 print("Alternative connection methods:")
                 print("1. From Jupyter console (terminal):")

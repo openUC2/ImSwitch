@@ -23,7 +23,49 @@ import json
 import tempfile
 import sys
 import shutil
-from .kernel_state import get_embedded_kernel_connection_file
+
+# Import kernel_state functions directly to avoid dependency issues
+def get_embedded_kernel_connection_file():
+    """Find the most recently created kernel connection file."""
+    try:
+        import jupyter_core.paths
+        runtime_dir = jupyter_core.paths.jupyter_runtime_dir()
+    except ImportError:
+        # Fallback locations for different platforms
+        runtime_dirs = [
+            os.path.expanduser('~/.local/share/jupyter/runtime'),
+            os.path.expanduser('~/Library/Jupyter/runtime'),  # macOS
+            os.path.expanduser('~/.jupyter/runtime'),
+            '/tmp'
+        ]
+        runtime_dir = None
+        for d in runtime_dirs:
+            if os.path.exists(d):
+                runtime_dir = d
+                break
+    
+    if not runtime_dir or not os.path.exists(runtime_dir):
+        return None
+    
+    import glob
+    kernel_files = glob.glob(os.path.join(runtime_dir, 'kernel-*.json'))
+    
+    if not kernel_files:
+        return None
+    
+    # Return the most recently modified one
+    return max(kernel_files, key=os.path.getmtime)
+
+def is_embedded_kernel_running():
+    """Check if there's a recent kernel connection file (simple heuristic)."""
+    connection_file = get_embedded_kernel_connection_file()
+    if not connection_file:
+        return False
+    
+    # Check if file is recent (within last 30 minutes)
+    import time
+    file_age = time.time() - os.path.getmtime(connection_file)
+    return file_age < 1800  # 30 minutes
 
 def create_imswitch_kernel_spec():
     """
@@ -40,15 +82,20 @@ def create_imswitch_kernel_spec():
     imswitch_dir = os.path.dirname(os.path.dirname(__file__))
     proxy_script = os.path.join(imswitch_dir, "..", "imswitch_kernel_proxy.py")
     
+    # Make sure proxy script exists
+    if not os.path.exists(proxy_script):
+        print(f"Warning: Proxy script not found at {proxy_script}")
+        return None
+    
     # Create a temporary kernel spec directory
     kernel_spec_dir = tempfile.mkdtemp(prefix="imswitch_kernel_")
     
-    # Create kernel.json
+    # Create kernel.json with actual connection file path
     kernel_json = {
         "argv": [
             sys.executable,
             proxy_script,
-            "-f", "{connection_file}"
+            "--connection-file", connection_file
         ],
         "display_name": "ImSwitch (Live Connection)",
         "language": "python",
@@ -61,6 +108,9 @@ def create_imswitch_kernel_spec():
     kernel_json_path = os.path.join(kernel_spec_dir, "kernel.json")
     with open(kernel_json_path, 'w') as f:
         json.dump(kernel_json, f, indent=2)
+    
+    print(f"Created kernel spec at {kernel_spec_dir}")
+    print(f"Connection file: {connection_file}")
     
     return kernel_spec_dir
 

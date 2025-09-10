@@ -4,6 +4,8 @@ import sys
 import traceback
 import time
 import threading
+import IPython
+
 try:
     from ipykernel.embed import embed_kernel
 except ImportError:
@@ -136,7 +138,8 @@ def launchApp(app, mainView, moduleMainControllers):
     """ Launches the app. The program will exit when the app is exited. """
     logger = initLogger('launchApp')
     config = get_config()
-    
+    IPython.embed_kernel(local_ns={**locals(), **globals()})
+
     # Start embedded Jupyter kernel if requested
     if config.enable_kernel:
         # Prepare namespace for kernel
@@ -177,58 +180,13 @@ def launchApp(app, mainView, moduleMainControllers):
         )
         kernel_thread.start()
         logger.info("Embedded Jupyter kernel thread started")
-        
-        # Register embedded kernel spec for Jupyter Notebook/Lab after kernel starts
-        def register_embedded_kernel_spec():
-            """Register the embedded kernel as a selectable kernel in Jupyter"""
-            import json
-            import shutil
-            
-            # Wait for kernel to start and connection file to be created
-            time.sleep(3)
-            
-            try:
-                connection_file = find_latest_kernel_connection_file()
-                if not connection_file:
-                    logger.warning("No kernel connection file found - cannot register kernel spec")
-                    return
-                
-                # Create kernel spec directory
-                kernel_spec_dir = os.path.expanduser("~/.local/share/jupyter/kernels/imswitch-embedded/")
-                os.makedirs(kernel_spec_dir, exist_ok=True)
-                
-                # Copy connection file to kernel spec directory
-                connection_file_dest = os.path.join(kernel_spec_dir, "connection.json")
-                shutil.copy(connection_file, connection_file_dest)
-                
-                # Create kernel.json for the kernel spec
-                kernel_json = {
-                    "argv": [
-                        sys.executable,
-                        "-m", "ipykernel_launcher",
-                        "-f", connection_file_dest
-                    ],
-                    "display_name": "ImSwitch Embedded Kernel (new)",
-                    "language": "python",
-                    "metadata": {
-                        "debugger": True
-                    }
-                }
-                
-                # Write kernel spec
-                kernel_spec_file = os.path.join(kernel_spec_dir, "kernel.json")
-                with open(kernel_spec_file, "w") as f:
-                    json.dump(kernel_json, f, indent=2)
-                
-                logger.info(f"Registered ImSwitch kernel spec for Jupyter at: {kernel_spec_dir}")
-                logger.info("You can now select 'ImSwitch Embedded Kernel' in Jupyter Notebook/Lab")
-                
-            except Exception as e:
-                logger.error(f"Failed to register kernel spec: {e}")
-        
-        # Register kernel spec in separate thread to avoid blocking
-        spec_thread = threading.Thread(target=register_embedded_kernel_spec, daemon=True)
-        spec_thread.start()
+        logger.info("To connect from Jupyter Notebook:")
+        logger.info("1. Open the ImSwitch_Embedded_Kernel_Connection.ipynb notebook")
+        logger.info("2. Follow the manual connection instructions in the notebook")
+        logger.info("3. Or use: jupyter console --existing")
+        logger.info("1. Wait 3 seconds for kernel spec registration")
+        logger.info("2. Refresh browser and select 'ImSwitch Embedded' kernel")
+        logger.info("3. Or use manual connection: jupyter console --existing")
 
     if IS_HEADLESS:
         """We won't have any GUI, so we don't need to prepare the app."""

@@ -27,73 +27,12 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
     if not testnotebook(notebook_executable):
         print("Notebook executable not found")
     
-    # Check for embedded kernel and install kernel spec if available
-    embedded_kernel_info = None
-    try:
-        # Import kernel modules directly to avoid dependency issues
-        import importlib.util
-        
-        # Import embedded_kernel_spec module directly
-        spec_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'imcommon', 'embedded_kernel_spec.py')
-        spec = importlib.util.spec_from_file_location('embedded_kernel_spec', spec_path)
-        embedded_kernel_spec = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(embedded_kernel_spec)
-        
-        if embedded_kernel_spec.is_embedded_kernel_running():
-            connection_file = embedded_kernel_spec.get_embedded_kernel_connection_file()
-            if connection_file and os.path.exists(connection_file):
-                embedded_kernel_info = {
-                    'connection_file': connection_file,
-                    'filename': os.path.basename(connection_file)
-                }
-                print("=" * 60)
-                print("EMBEDDED KERNEL DETECTED")
-                print("=" * 60)
-                print(f"ImSwitch embedded kernel is running")
-                print(f"Connection file: {connection_file}")
-                print("")
-                
-                # Try to install kernel spec for notebook interface
-                success = embedded_kernel_spec.ensure_kernel_spec_available()
-                if success:
-                    print("✅ ImSwitch kernel installed successfully!")
-                    print("   Look for 'ImSwitch (Live Connection)' in the notebook kernel list")
-                    print("")
-                    
-                    # Verify kernel spec was installed
-                    try:
-                        from jupyter_client.kernelspec import KernelSpecManager
-                        ksm = KernelSpecManager()
-                        specs = ksm.get_all_specs()
-                        if 'imswitch_embedded' in specs:
-                            print("✅ Kernel spec verification: FOUND in Jupyter")
-                        else:
-                            print("❌ Kernel spec verification: NOT FOUND in Jupyter")
-                            print("   Available kernels:", list(specs.keys()))
-                    except Exception as e:
-                        print(f"⚠️  Could not verify kernel spec: {e}")
-                else:
-                    print("❌ Failed to install ImSwitch kernel spec")
-                    print("   The embedded kernel is running but may not appear in notebook interface")
-                
-                print("Alternative connection methods:")
-                print("1. From Jupyter console (terminal):")
-                print(f"   jupyter console --existing {embedded_kernel_info['filename']}")
-                print("")
-                print("2. From notebook cells:")
-                print("   Use the helper notebook: connect_to_imswitch_kernel.ipynb")
-                print("")
-                print("Available ImSwitch objects in embedded kernel:")
-                print("   - detectorsManager, lasersManager, stageManager, etc.")
-                print("   - master_controller, app, mainView, config")
-                print("=" * 60)
-                
-    except Exception as e:
-        print(f"Warning: Could not check for embedded kernel: {e}")
-        import traceback
-        traceback.print_exc()
-    
+
     # it is necessary to redirect all 3 outputs or .app does not open
+    # the following line executes: jupyter-notebook --port=8888 --no-browser --ip=0.0.0.0 --config=path/to/configfile --notebook-dir=directory
+    print("Launching jupyter notebook with the following command:")
+    print("jupyter-notebook --port=%s --no-browser --ip=0.0.0.0 --config=%s --notebook-dir=%s" % (port, configfile, directory))
+    return "https://localhost:%s/lab" % port
     notebookp = subprocess.Popen([notebook_executable,
                             "--port=%s" % port,
                             "--allow-root",
@@ -115,7 +54,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
             # needs a token which is at the end of the line
             # replace hostname.local with localhost
             webaddr = line[start:]
-            if ".local" in webaddr:
+            if False and ".local" in webaddr: # TODO: It sometimes binds to the .local address and then I cannot reach it from localhost
                 # replace hostname.local with localhost # TODO: Not good!
                 webaddr = "http://localhost"+webaddr.split(".local")[1]
                 break

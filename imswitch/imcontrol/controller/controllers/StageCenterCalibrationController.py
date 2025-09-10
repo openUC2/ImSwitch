@@ -133,7 +133,7 @@ class StageCenterCalibrationController(ImConWidgetController):
     @APIExport()
     def findCalibrationCenter(
         self,
-        unit_um: float = 1000.0,
+        unit_um: float = 500.0,
         increment_units: int = 1,
         start_len_units: int = 1,
         min_x: float = None,
@@ -143,8 +143,8 @@ class StageCenterCalibrationController(ImConWidgetController):
         intensity_factor: float = 1.5,
         settle_s: float = 0.1,
         max_legs: int = 50, 
-        laser_name: str = None,
-        laser_intensity: float = None,
+        laser_name: str = "LED",
+        laser_intensity: float = 1023,
         homing_procedure: bool = False,
         speed_um_s: float = None
     ) -> dict:
@@ -536,8 +536,8 @@ class StageCenterCalibrationController(ImConWidgetController):
         intensity_factor: float = 1.5,     # stop when mean >= factor * baseline
         settle_s: float = 0.1,             # dwell after each move
         max_legs: int = 400,                # safety cap on spiral legs
-        laser_name: str = None,
-        laser_intensity: float = None,
+        laser_name: str = "LED",
+        laser_intensity: float = 1023,
         homing_procedure = False,
         speed_um_s: float = None           # movement speed in µm/s
     ) -> tuple[float, float] | None:
@@ -591,12 +591,13 @@ class StageCenterCalibrationController(ImConWidgetController):
             self._logger.info("Homing stage...")
             stage.home_x(isBlocking=False)
             stage.home_y(isBlocking=True)
+            stage.home_x(isBlocking=True)
 
         # Home the stage in X and Y
         stage.resetStageOffsetAxis(axis="X")
         stage.resetStageOffsetAxis(axis="Y")
 
-        # Set position to reasonable value
+        # Set position to reasonable value # TODO: The interface is a bit misleading => it still computes the difference between the two positions as the offset 
         stage.setStageOffsetAxis(knownPosition = self.HOME_POS_X, currentPosition = 0, axis="X")  # in µm
         stage.setStageOffsetAxis(knownPosition = self.HOME_POS_Y, currentPosition = 0, axis="Y")  # in µm
 
@@ -608,10 +609,10 @@ class StageCenterCalibrationController(ImConWidgetController):
         if laser_name is not None and laser_intensity is not None:
             try:
                 if hasattr(self._master, 'lasersManager'):
-                    laser_controller = self._master.lasersManager.get(laser_name)
+                    laser_controller = self._master.lasersManager[laser_name]  
                     if laser_controller:
-                        laser_controller.setLaserValue(laser_intensity)
-                        laser_controller.setLaserActive(True)
+                        laser_controller.setValue(laser_intensity)
+                        laser_controller.setEnabled(True)
                         self._logger.info(f"Laser {laser_name} activated at {laser_intensity}")
                 else:
                     self._logger.warning("Laser manager not available")
@@ -622,7 +623,7 @@ class StageCenterCalibrationController(ImConWidgetController):
             return None
 
         # ensure camera is in livemode to grab frames continuously
-        detector = self.getDetector()
+        # detector = self.getDetector()
         self._commChannel.sigStartLiveAcquistion.emit(True)
 
         # Helpers
@@ -633,15 +634,11 @@ class StageCenterCalibrationController(ImConWidgetController):
                 return hi
             return val
 
-        def move_abs(axis: str, target: float) -> None:
-            stage.move(axis=axis, value=target, is_absolute=True, is_blocking=True, speed=speed_um_s)
+        #def move_abs(axis: str, target: float) -> None:
+        #    stage.move(axis=axis, value=target, is_absolute=True, is_blocking=True, speed=speed_um_s)
         
-        def move_continuous(axis: str, target: float) -> None:
-            """
-            Move in continuous mode for better frame collection during movement.
-            This addresses the TODO about background movement during image analysis.
-            """
-            stage.move(axis=axis, value=target, is_absolute=True, is_blocking=False, speed=speed_um_s)
+        # Initialize movement controller for asynchronous movement
+        movement_controller = MovementController(stage)
 
 
         threshold = 20 # We expect at least 20 pixels to be saturated
@@ -657,7 +654,7 @@ class StageCenterCalibrationController(ImConWidgetController):
         x = float(pos["X"])
         y = float(pos["Y"])
 
-        # Main loop
+        # Main loop to find the whole in a spiral motion
         while self._is_running and legs_done < max_legs:
             dx_units, dy_units = dirs[dir_idx]
             leg_len_um = len_units * unit_um
@@ -666,51 +663,46 @@ class StageCenterCalibrationController(ImConWidgetController):
             if dx_units != 0:
                 target_x = clamp(x + dx_units * leg_len_um, min_x, max_x)
                 if target_x != x:
-                    # Start continuous movement
-                    move_continuous("X", target_x)
+                    # Start asynchronous movement using MovementController
+                    movement_controller.move_to_position(target_x, "X", speed_um_s, True)
                     
                     # Collect frames during movement for analysis
-                    start_time = time.time()
-                    while abs(stage.getPosition()["X"] - target_x) > 10 and time.time() - start_time < 10:  # 10µm tolerance, 10s timeout
+                    while not movement_controller.is_target_reached():
                         if not self._is_running:
                             return None
                         # Grab frames during movement for analysis
                         self._grabAndProcessFrame()
+                        nSaturatedPixels = self._grabAndProcessFrame()
+                        self._logger.debug(f"Saturated pixels: {nSaturatedPixels} "f"at position X={x}, Y={y}")                        
+                        if nSaturatedPixels is not None and nSaturatedPixels >= threshold:
+                            movement_controller.stop_movement()
+                            self._is_running = False
+                            break
                         time.sleep(0.05)  # Brief pause between frame grabs
                     
                     x = target_x
             else:
                 target_y = clamp(y + dy_units * leg_len_um, min_y, max_y)
                 if target_y != y:
-                    # Start continuous movement
-                    move_continuous("Y", target_y)
+                    # Start asynchronous movement using MovementController
+                    movement_controller.move_to_position(target_y, "Y", speed_um_s, True)
                     
                     # Collect frames during movement for analysis
-                    start_time = time.time()
-                    while abs(stage.getPosition()["Y"] - target_y) > 10 and time.time() - start_time < 10:  # 10µm tolerance, 10s timeout
+                    while not movement_controller.is_target_reached():
                         if not self._is_running:
                             return None
                         # Grab frames during movement for analysis
+                        # Grab frames during movement for analysis
                         self._grabAndProcessFrame()
+                        nSaturatedPixels = self._grabAndProcessFrame()
+                        self._logger.debug(f"Saturated pixels: {nSaturatedPixels} "f"at position X={x}, Y={y}")
+                        if nSaturatedPixels is not None and nSaturatedPixels >= threshold:
+                            movement_controller.stop_movement() 
+                            self._is_running = False
+                            break
                         time.sleep(0.05)  # Brief pause between frame grabs
                     
                     y = target_y
-
-            # Measure
-            time.sleep(settle_s)
-            
-            # Baseline intensity (use a short average if available)
-            nSaturatedPixels = self._grabAndProcessFrame()
-            if nSaturatedPixels is not None and nSaturatedPixels >= threshold:
-                # Optional refinement if available
-                if hasattr(self, "_findRingCenter"):
-                    try:
-                        center = self._findRingCenter()
-                        if center:
-                            return center
-                    except Exception:
-                        pass
-                return (x, y)
 
             # Next leg
             dir_idx = (dir_idx + 1) % 4
@@ -720,9 +712,24 @@ class StageCenterCalibrationController(ImConWidgetController):
             if legs_done % 2 == 0:
                 len_units += increment_units
 
-        # Safety exit: return last position
+
+            # TODO: We should do another round of spiral motion with half the step size to refine the position for 3x3 arms
+            
+        # Measure
+        time.sleep(settle_s)
+            
+        # Optional refinement if available
+        if hasattr(self, "_findRingCenter"):
+            try:
+                center = self._findRingCenter()
+                x, y = center
+            except Exception:
+                pass
+        stage.setStageOffsetAxis(knownOffset = x, axis="X")  # in µm
+        stage.setStageOffsetAxis(knownOffset = y, axis="Y")  # in µm
         return (x, y)
-    
+
+
     def _detectWhiteLine(self, image: np.ndarray) -> bool:
         """
         Detect white lines in image using Hough transform.
@@ -765,10 +772,10 @@ class StageCenterCalibrationController(ImConWidgetController):
                 gray = frame.astype(np.uint8)
             import NanoImagingPack as nip
             blurred = nip.gaussf(gray, 100)
-            maxY, maxY =  np.unravel_index(np.argmax(blurred, axis=None), blurred.shape)
+            maxY, maxX =  np.unravel_index(np.argmax(blurred, axis=None), blurred.shape)
             # now let's move in the opposite direction of the maximum
             mPixelSize = detector.pixelSizeUm[0]
-            center_y, center_x = maxY*mPixelSize, maxY*mPixelSize
+            center_y, center_x = maxY*mPixelSize, maxX*mPixelSize
             stage = self.getStage()
             
             # Convert image coordinates to stage offset
@@ -905,6 +912,11 @@ class MovementController:
     def _move(self, value, axis, speed, is_absolute):
         self.stage.move(axis=axis, value=value, speed=speed, is_absolute=is_absolute, is_blocking=True)
         self._done = True
+        
+    def stop_movement(self):
+        # Implement stopping logic if supported by stage
+        self._done = True
+        self.stage.stopAll()
 
     def is_target_reached(self):
         return self._done

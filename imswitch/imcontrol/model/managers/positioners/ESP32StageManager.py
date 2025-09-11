@@ -4,6 +4,8 @@ import time
 import numpy as np
 import os
 import json
+from typing import Dict, List, Optional, Union
+
 
 MAX_ACCEL = 1000000
 PHYS_FACTOR = 1
@@ -495,12 +497,30 @@ class ESP32StageManager(PositionerManager):
         value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
 
-    def setStageOffsetAxis(self, knownOffset:float=None, axis="X"):
+    def setStageOffsetAxis(self, knownPosition:float=0, currentPosition:Optional[float]=None, knownOffset:Optional[float]=None,  axis:str="X"):
+        # differentiate between different cases 
+        if knownOffset is not None: 
+            # case 0: only knownOffset is given -> use it
+            knownOffset = knownOffset
+        elif currentPosition is not None and knownPosition is not None:
+            # case 1: knownPosition and currentPosition are given -> calculate offset
+            knownOffset =  currentPosition - knownPosition
+        elif currentPosition is None and knownOffset is not None:
+            # case 2: knownPosition and knownOffset are given -> calculate currentPosition
+            currentPosition = knownPosition - knownOffset
+        elif currentPosition is not None and knownOffset is not None:
+            # case 3: all three values are given -> check if they are consistent
+            if not np.isclose(knownPosition, currentPosition + knownOffset):
+                self.__logger.warning(f"Given values for knownPosition ({knownPosition}), currentPosition ({currentPosition}) and knownOffset ({knownOffset}) are not consistent!")
+        else:
+            self.__logger.error("Not enough information to set stage offset. Please provide either knownOffset or both knownPosition and currentPosition.")
+            return
         try:
             self.stageOffsetPositions[axis] = knownOffset
         except KeyError:
             self.__logger.error(f"Axis {axis} not found in stageOffsetPositions.")
-        self.__logger.info(f"Set offset for {axis} axis to {knownOffset} mum.")
+        self.__logger.info(f"Set offset for {axis} axis to {knownOffset} mum, your position is now: {self.getPosition()[axis]-knownOffset} mum")
+        # set the offset on the device
         self._motor.set_offset(axis=axis, offset=knownOffset)
 
     def getStageOffsetAxis(self, axis:str="X"):

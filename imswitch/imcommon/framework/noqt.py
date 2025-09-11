@@ -1,4 +1,6 @@
 from typing import TYPE_CHECKING, Any
+import psygnal.utils
+psygnal.utils.decompile() # https://github.com/pyapp-kit/psygnal/pull/331#issuecomment-2455192644
 from psygnal import emit_queued
 import psygnal
 import asyncio

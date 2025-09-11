@@ -131,7 +131,10 @@ setup(
         ],
         'imswitch.implugins.detectors': [],
         'imswitch.implugins.lasers': [],
-        'imswitch.implugins.positioner': []
+        'imswitch.implugins.positioner': [],
+        "jupyter.kernel_provisioners": [ # has to point to jupyter_connection.py -> ExistingProvisioner
+            "imswitch-provisioner = imswitch.imcontrol.model.jupyter_connection:ExistingProvisioner",
+        ]
     },
 )
 

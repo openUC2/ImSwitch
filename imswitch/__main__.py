@@ -12,7 +12,7 @@ from imswitch.config import get_config, update_config
 
 
 def main(is_headless:bool=None, default_config:str=None, http_port:int=None, socket_port:int=None, ssl:bool=None, config_folder:str=None,
-         data_folder: str=None, scan_ext_data_folder:bool=None, ext_drive_mount:str=None):
+         data_folder: str=None, scan_ext_data_folder:bool=None, ext_drive_mount:str=None, with_kernel:bool=None):
     '''
     is_headless: bool => start with or without qt
     default_config: str => path to the config file
@@ -23,12 +23,13 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
     data_folder: str => path to the data folder (default: None, pointing to Documents/ImSwitchConfig)
     scan_ext_data_folder: bool => if True, we will scan the ext_drive_mount for usb drives and use this for data storage
     ext_drive_mount: str => path to the external drive mount point (default: None, optionally pointing to e.g. /Volumes or /media)
+    with_kernel: bool => start with embedded Jupyter kernel for external notebook connections
 
 
 
     To start imswitch in headless using the arguments, you can call the main file with the following arguments:
         python main.py --headless or
-        python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-drive-mount true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes
+        python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-drive-mount true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes --with-kernel
     '''
     try:
         # Get the global configuration instance
@@ -44,7 +45,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
             config_folder=config_folder,
             data_folder=data_folder,
             scan_ext_data_folder=scan_ext_data_folder,
-            ext_drive_mount=ext_drive_mount
+            ext_drive_mount=ext_drive_mount,
+            with_kernel=with_kernel
         )
         
         # Update legacy globals immediately for backward compatibility
@@ -53,7 +55,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         # This prevents argparse conflicts when called from test threads
         if (is_headless is None and default_config is None and http_port is None and 
             socket_port is None and ssl is None and config_folder is None and 
-            data_folder is None and scan_ext_data_folder is None and ext_drive_mount is None):
+            data_folder is None and scan_ext_data_folder is None and ext_drive_mount is None and
+            with_kernel is None):
             
             try: # Google Colab does not support argparse
                 parser = argparse.ArgumentParser(description='Process some integers.')
@@ -89,6 +92,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
 
                 parser.add_argument('--ext-drive-mount', dest='ext_drive_mount', type=str, default=None,
                                     help='specify the external drive mount point (e.g. /Volumes or /media)')
+
+                parser.add_argument('--with-kernel', dest='with_kernel', default=False, action='store_true',
+                                    help='start with embedded Jupyter kernel for external notebook connections')
 
                 # Add Jupyter/Colab specific arguments to prevent errors
                 parser.add_argument('-f', '--connection-file', dest='connection_file', type=str, default=None,

@@ -4,15 +4,20 @@ import sys
 import traceback
 import time
 import threading
+
+
 # somewhere after all your variables & functions exist
 try:
-    from ipykernel.embed import embed_kernel   # pip install ipykernel
+    import IPython
+    #IPython.embed_kernel(local_ns={**locals(), **globals()})
+    #from ipykernel.embed import embed_kernel   # pip install ipykernel
 except ImportError:
     embed_kernel = None
 
 from .model import dirtools, pythontools, initLogger
 from imswitch.imcommon.framework import Signal, Thread
 from imswitch import IS_HEADLESS
+from imswitch.config import get_config
 if not IS_HEADLESS:
     from qtpy import QtCore, QtGui, QtWidgets
     from .view.guitools import getBaseStyleSheet
@@ -60,30 +65,139 @@ def prepareApp():
     return app
 
 
+def start_jupyter_kernel_in_main_thread(moduleMainControllers):
+    """Start Jupyter kernel with access to all managers in main thread."""
+    try:
+        logger = initLogger('JupyterKernel')
+        logger.info('Starting Jupyter kernel in main thread...')
+        
+        # Create namespace with access to all managers
+        kernel_ns = {
+            'moduleMainControllers': moduleMainControllers,
+        }
+        
+        # Add direct access to imcontrol master controller if available
+        if hasattr(moduleMainControllers, 'mapping') and 'imcontrol' in moduleMainControllers.mapping:
+            master_controller = moduleMainControllers.mapping['imcontrol']._ImConMainController__masterController
+            kernel_ns['master'] = master_controller
+            
+            # Add direct access to managers
+            if hasattr(master_controller, 'lasersManager'):
+                kernel_ns['lasersManager'] = master_controller.lasersManager
+            if hasattr(master_controller, 'detectorsManager'):
+                kernel_ns['detectorsManager'] = master_controller.detectorsManager
+            if hasattr(master_controller, 'positionersManager'):
+                kernel_ns['positionersManager'] = master_controller.positionersManager
+            if hasattr(master_controller, 'recordingManager'):
+                kernel_ns['recordingManager'] = master_controller.recordingManager
+                
+            logger.info('Managers added to kernel namespace')
+        
+        # Import commonly used packages in kernel namespace
+        import numpy as np
+        import matplotlib.pyplot as plt
+        import time
+        
+        kernel_ns.update({
+            'np': np,
+            'plt': plt,
+            'time': time
+        })
+        
+        # Start the kernel in main thread (will block)
+        IPython.embed_kernel(local_ns=kernel_ns)
+        
+    except Exception as e:
+        logger.error(f'Failed to start Jupyter kernel: {e}')
+
+
+def start_jupyter_kernel_timer(moduleMainControllers):
+    """Start Jupyter kernel with a small delay to let Qt initialize."""
+    def start_delayed():
+        time.sleep(2)  # Give Qt time to initialize
+        try:
+            logger = initLogger('JupyterKernel')
+            logger.info('Starting Jupyter kernel after Qt initialization...')
+            
+            # Create namespace with access to all managers
+            kernel_ns = {
+                'moduleMainControllers': moduleMainControllers,
+            }
+            
+            # Add direct access to imcontrol master controller if available
+            if hasattr(moduleMainControllers, 'mapping') and 'imcontrol' in moduleMainControllers.mapping:
+                master_controller = moduleMainControllers.mapping['imcontrol']._ImConMainController__masterController
+                kernel_ns['master'] = master_controller
+                
+                # Add direct access to managers
+                if hasattr(master_controller, 'lasersManager'):
+                    kernel_ns['lasersManager'] = master_controller.lasersManager
+                if hasattr(master_controller, 'detectorsManager'):
+                    kernel_ns['detectorsManager'] = master_controller.detectorsManager
+                if hasattr(master_controller, 'positionersManager'):
+                    kernel_ns['positionersManager'] = master_controller.positionersManager
+                if hasattr(master_controller, 'recordingManager'):
+                    kernel_ns['recordingManager'] = master_controller.recordingManager
+                    
+                logger.info('Managers added to kernel namespace')
+            
+            # Import commonly used packages in kernel namespace
+            import numpy as np
+            import matplotlib.pyplot as plt
+            import time
+            
+            kernel_ns.update({
+                'np': np,
+                'plt': plt,
+                'time': time
+            })
+            
+            # Start the kernel - this will block but in a separate thread
+            IPython.embed_kernel(local_ns=kernel_ns)
+            
+        except Exception as e:
+            logger.error(f'Failed to start Jupyter kernel: {e}')
+    
+    # Start in daemon thread for GUI mode
+    threading.Thread(target=start_delayed, daemon=True).start()
+
+
 def launchApp(app, mainView, moduleMainControllers):
     """ Launches the app. The program will exit when the app is exited. """
     logger = initLogger('launchApp')
-    #threading.Thread(target=embed_kernel, daemon=True).start()
+    
+    # Get kernel setting from configuration
+    config = get_config()
+    kernel_enabled = config.with_kernel
 
     if IS_HEADLESS:
         """We won't have any GUI, so we don't need to prepare the app."""
         # Keep python running
-        # embed_kernel() # TODO: This should be non-blocking!
-        tDiskCheck = time.time()
-        while True: # TODO: have webserver signal somehow?
-            try:
-                emit_queued()
-                time.sleep(1)
-                if time.time() - tDiskCheck > 60 and dirtools.getDiskusage() > 0.9:
-                    # if the storage is full or the user presses Ctrl+C, we want to stop the experiment
-                    moduleMainControllers.mapping["imcontrol"]._ImConMainController__commChannel.sigExperimentStop.emit()
-                    tDiskCheck = time.time()
+        if kernel_enabled:
+            # Start kernel in main thread (this will block, but that's what we want in headless mode)
+            start_jupyter_kernel_in_main_thread(moduleMainControllers)
+        else:
+            tDiskCheck = time.time()
+            while True: # TODO: have webserver signal somehow?
+                try:
+                    emit_queued()
+                    time.sleep(1)
+                    if time.time() - tDiskCheck > 60 and dirtools.getDiskusage() > 0.9:
+                        # if the storage is full or the user presses Ctrl+C, we want to stop the experiment
+                        moduleMainControllers.mapping["imcontrol"]._ImConMainController__commChannel.sigExperimentStop.emit()
+                        tDiskCheck = time.time()
 
-            except KeyboardInterrupt:
-                exitCode = 0
-                break
+                except KeyboardInterrupt:
+                    exitCode = 0
+                    break
 
     else:
+        # GUI mode
+        if kernel_enabled:
+            # Start kernel after Qt initializes properly
+            start_jupyter_kernel_timer(moduleMainControllers)
+            logger.info('Jupyter kernel will start after Qt initialization')
+        
         # Show app
         if mainView is not None:
             mainView.showMaximized()

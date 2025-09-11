@@ -121,3 +121,6 @@ include = ["imswitch*"]
 [project.entry-points."imswitch.implugins.lasers"]
 
 [project.entry-points."imswitch.implugins.positioner"]
+
+[project.entry-points."jupyter_client.kernel_provisioners"]
+imswitch-provisioner = "imswitch.imcontrol.model.jupyter_connection:ExistingProvisioner"

@@ -33,7 +33,8 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
                             "--no-browser",
                             "--ip=0.0.0.0",
                             "--config=%s" % configfile,
-                            "--notebook-dir=%s" % directory
+                            "--notebook-dir=%s" % directory,
+                            "--KernelProvisionerFactory.default_provisioner_name=imswitch-provisioner"
                             ], bufsize=1, stderr=subprocess.PIPE)
     print("STarting jupyter with: %s" % notebookp.args)
     print("Waiting for server to start...")

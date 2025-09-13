@@ -686,7 +686,7 @@ class FocusLockController(ImConWidgetController):
                 "timestamp": current_timestamp,
                 "is_locked": self.locked,
                 "lock_position": self.lockPosition if self.locked else None,
-                "current_position": 0,
+                "current_position": self.currentPosition,
                 "focus_metric": self._focus_params.focus_metric,
             }
             self.sigUpdateFocusValue.emit(focus_data)
@@ -1139,16 +1139,10 @@ class FocusCalibThread(Thread):
 
         calib_params = self._controller._calib_params
 
-        if not IS_HEADLESS and hasattr(self._controller, '_widget'):
-            try:
-                from_val = float(self._controller._widget.calibFromEdit.text())
-                to_val = float(self._controller._widget.calibToEdit.text())
-            except (ValueError, AttributeError):
-                from_val = calib_params.from_position
-                to_val = calib_params.to_position
-        else:
-            from_val = calib_params.from_position
-            to_val = calib_params.to_position
+        # TODO: We should probably scan around the current position instead of always from->to
+        # currentZ = self._controller.stage.getPosition()["Z"]
+        from_val = calib_params.from_position
+        to_val = calib_params.to_position
 
         scan_list = np.round(np.linspace(from_val, to_val, calib_params.num_steps), 2)
 
@@ -1159,24 +1153,26 @@ class FocusCalibThread(Thread):
             "to_position": to_val,
         })
 
-        for i, z in enumerate(scan_list):
-            self._controller._master.positionersManager[self._controller.positioner].setPosition(z, 0)
+        initialZPosition = self._controller._master.positionersManager[self._controller.positioner].getPosition()["Z"]
+        for i, zpos in enumerate(scan_list):
+            self._controller._master.positionersManager[self._controller.positioner].move(value=z, axis="Z", speed=1000, is_blocking=True, is_absolute=True)
             time.sleep(calib_params.settle_time)
+            # TODO: maybe explicitly grab a new frame here and compute the signal?
             focus_signal = float(self._controller.setPointSignal)
-            actual_position = float(self._controller._master.positionersManager[self._controller.positioner].get_abs())
+            # actual_position = float(self._controller._master.positionersManager[self._controller.positioner].getPosition()["Z"])
 
             self.signalData.append(focus_signal)
-            self.positionData.append(actual_position)
+            self.positionData.append(zpos)
 
             self._controller.sigCalibrationProgress.emit({
                 "event": "calibration_progress",
                 "step": i + 1,
                 "total_steps": len(scan_list),
-                "position": actual_position,
+                "position": zpos,
                 "focus_value": focus_signal,
                 "progress_percent": ((i + 1) / len(scan_list)) * 100,
             })
-
+        # TODO: We need to compute and store a look up table and also copute the slop for the linear part of the curve so that we can convert focus value changes to nm changes
         self.poly = np.polyfit(self.positionData, self.signalData, 1)
         self.calibrationResult = np.around(self.poly, 4)
 
@@ -1206,6 +1202,8 @@ class FocusCalibThread(Thread):
 
     def show(self):
         if IS_HEADLESS or not hasattr(self._controller, '_widget'):
+            # TODO: We should send a signal to the frontend to update the calibration display
+            # TODO: implement a signal for headless mode that holds all parameters and the scan/calibration curve
             return
         if self.poly is None or self.poly[0] == 0:
             cal_text = "Calibration invalid"
@@ -1218,6 +1216,7 @@ class FocusCalibThread(Thread):
             pass
 
     def getData(self) -> Dict[str, Any]:
+        # TODO: we need to use this calibration data in the upstream controller to convert focus value changes to nm changes
         return {
             "signalData": self.signalData,
             "positionData": self.positionData,

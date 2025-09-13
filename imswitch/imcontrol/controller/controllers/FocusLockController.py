@@ -95,6 +95,7 @@ class CalibrationParams:
     to_position: float = 51.0
     num_steps: int = 20
     settle_time: float = 0.5
+    scan_range_um: float = 2.0  # Range to scan around current position (±scan_range_um/2)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -102,6 +103,32 @@ class CalibrationParams:
             "to_position": self.to_position,
             "num_steps": self.num_steps,
             "settle_time": self.settle_time,
+            "scan_range_um": self.scan_range_um,
+        }
+
+
+@dataclass
+class CalibrationData:
+    """Enhanced calibration data structure with lookup table and metadata."""
+    position_data: List[float]
+    focus_data: List[float]
+    polynomial_coeffs: Optional[List[float]]
+    sensitivity_nm_per_unit: float
+    r_squared: float
+    linear_range: Tuple[float, float]  # valid focus range for linear approximation
+    timestamp: float
+    lookup_table: Optional[Dict[float, float]] = None  # focus_value -> z_position
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "position_data": self.position_data,
+            "focus_data": self.focus_data,
+            "polynomial_coeffs": self.polynomial_coeffs,
+            "sensitivity_nm_per_unit": self.sensitivity_nm_per_unit,
+            "r_squared": self.r_squared,
+            "linear_range": list(self.linear_range),
+            "timestamp": self.timestamp,
+            "lookup_table": self.lookup_table,
         }
 
 
@@ -260,6 +287,9 @@ class FocusLockController(ImConWidgetController):
 
         self._calib_params = CalibrationParams()
         self._state = FocusLockState()
+        
+        # Calibration data storage - this is the key integration point for PID controller
+        self._current_calibration: Optional[CalibrationData] = None
 
         # Legacy/GUI mirrors
         self.setPointSignal = 0.0
@@ -693,7 +723,9 @@ class FocusLockController(ImConWidgetController):
 
                 u = self.pi.update(meas_for_pid)                       # controller units
                 pi_output = u  # Store for logging
-                step_um = u * self._pi_params.scale_um_per_unit        # convert to µm
+                # Use calibration-based scale factor if available, otherwise fall back to configured scale
+                scale_factor = self._getCalibrationBasedScale()
+                step_um = u * scale_factor        # convert to µm
 
                 # deadband
                 if abs(step_um) < self._pi_params.min_step_threshold:
@@ -852,13 +884,24 @@ class FocusLockController(ImConWidgetController):
         else:
             meas_for_pid = meas
         u = self.pi.update(meas_for_pid)
-        step_um = u * self._pi_params.scale_um_per_unit
+        # Use calibration-based scale factor if available, otherwise fall back to configured scale
+        scale_factor = self._getCalibrationBasedScale()
+        step_um = u * scale_factor
         # apply deadband + clamp, mirror of _pollFrames logic
         if abs(step_um) < self._pi_params.min_step_threshold:
             step_um = 0.0
         limit = abs(self._pi_params.safety_move_limit)
         step_um = max(min(step_um, limit), -limit)
         return step_um
+
+    def _getCalibrationBasedScale(self) -> float:
+        """Get the scale factor from calibration data if available, otherwise use default."""
+        if self._current_calibration and self._current_calibration.sensitivity_nm_per_unit > 0:
+            # Convert nm per unit to µm per unit for consistency with existing code
+            return self._current_calibration.sensitivity_nm_per_unit / 1000.0
+        else:
+            # Fall back to configured scale factor if no calibration available
+            return self._pi_params.scale_um_per_unit
 
     def lockFocus(self, zpos):
         if self.locked:
@@ -1015,6 +1058,64 @@ class FocusLockController(ImConWidgetController):
             return
 
 
+    @APIExport(runOnUIThread=True, requestType="POST")
+    def setCalibrationParams(self, **kwargs) -> Dict[str, Any]:
+        """Update calibration parameters."""
+        for key, value in kwargs.items():
+            if hasattr(self._calib_params, key):
+                setattr(self._calib_params, key, value)
+        return self._calib_params.to_dict()
+
+    @APIExport(runOnUIThread=True)
+    def getCalibrationParams(self) -> Dict[str, Any]:
+        """Get current calibration parameters."""
+        return self._calib_params.to_dict()
+
+    @APIExport(runOnUIThread=True)
+    def getCalibrationStatus(self) -> Dict[str, Any]:
+        """Get calibration status and data."""
+        if self._current_calibration:
+            return {
+                "calibrated": True,
+                "calibration_active": True,
+                "sensitivity_nm_per_unit": self._current_calibration.sensitivity_nm_per_unit,
+                "r_squared": self._current_calibration.r_squared,
+                "timestamp": self._current_calibration.timestamp,
+                "pid_integration": True,
+            }
+        else:
+            return {
+                "calibrated": False,
+                "calibration_active": False,
+                "sensitivity_nm_per_unit": 0.0,
+                "r_squared": 0.0,
+                "timestamp": 0.0,
+                "pid_integration": False,
+            }
+
+    @APIExport(runOnUIThread=True, requestType="POST")
+    def runFocusCalibrationDynamic(self, scan_range_um: float = 2.0, num_steps: int = 20, settle_time: float = 0.5) -> Dict[str, Any]:
+        """Run focus calibration with dynamic range around current position."""
+        # Update calibration parameters for dynamic range
+        self._calib_params.scan_range_um = scan_range_um
+        self._calib_params.num_steps = num_steps
+        self._calib_params.settle_time = settle_time
+        
+        # Start calibration (uses dynamic range automatically now)
+        if hasattr(self, '_focusCalibThread') and self._focusCalibThread.isRunning():
+            return {"error": "Calibration already running"}
+        
+        self._focusCalibThread = FocusCalibThread(self)
+        self._focusCalibThread.start()
+        
+        return {
+            "message": "Dynamic calibration started",
+            "scan_range_um": scan_range_um,
+            "num_steps": num_steps,
+            "settle_time": settle_time,
+        }
+
+
 # =========================
 # Processing thread
 # =========================
@@ -1113,10 +1214,19 @@ class FocusCalibThread(Thread):
 
         calib_params = self._controller._calib_params
 
-        # TODO: We should probably scan around the current position instead of always from->to
-        # currentZ = self._controller.stage.getPosition()["Z"]
-        from_val = calib_params.from_position
-        to_val = calib_params.to_position
+        # IMPROVEMENT #1: Scan around the current position instead of always from->to
+        try:
+            current_z = self._controller._master.positionersManager[self._controller.positioner].getPosition()["Z"]
+            # Use scan_range_um parameter to define range around current position
+            half_range = calib_params.scan_range_um / 2.0
+            from_val = current_z - half_range
+            to_val = current_z + half_range
+            self._controller._logger.info(f"Dynamic calibration: scanning {calib_params.scan_range_um}µm around current Z={current_z:.3f}µm")
+        except Exception as e:
+            # Fall back to fixed positions if current position can't be determined
+            self._controller._logger.warning(f"Could not get current Z position, using fixed range: {e}")
+            from_val = calib_params.from_position
+            to_val = calib_params.to_position
 
         scan_list = np.round(np.linspace(from_val, to_val, calib_params.num_steps), 2)
 
@@ -1125,15 +1235,42 @@ class FocusCalibThread(Thread):
             "total_steps": len(scan_list),
             "from_position": from_val,
             "to_position": to_val,
+            "scan_range_um": calib_params.scan_range_um,
         })
 
         initialZPosition = self._controller._master.positionersManager[self._controller.positioner].getPosition()["Z"]
         for i, zpos in enumerate(scan_list):
-            self._controller._master.positionersManager[self._controller.positioner].move(value=z, axis="Z", speed=1000, is_blocking=True, is_absolute=True)
+            # Move to position (fix bug: was using 'z' instead of 'zpos')
+            self._controller._master.positionersManager[self._controller.positioner].move(value=zpos, axis="Z", speed=1000, is_blocking=True, is_absolute=True)
             time.sleep(calib_params.settle_time)
-            # TODO: maybe explicitly grab a new frame here and compute the signal?
-            focus_signal = float(self._controller.setPointSignal)
-            # actual_position = float(self._controller._master.positionersManager[self._controller.positioner].getPosition()["Z"])
+            
+            # IMPROVEMENT #2: Explicitly grab a new frame and compute the signal
+            try:
+                # Force fresh frame acquisition
+                frame = self._controller._master.detectorsManager[self._controller.camera].getLatestFrame()
+                if frame is not None:
+                    # Apply cropping and compute focus signal with fresh frame
+                    h, w = frame.shape[:2]
+                    if self._controller.cropCenter and self._controller.cropSize:
+                        cx, cy = self._controller.cropCenter
+                        cs = self._controller.cropSize
+                        x1, x2 = max(0, cx - cs//2), min(w, cx + cs//2)
+                        y1, y2 = max(0, cy - cs//2), min(h, cy + cs//2)
+                        cropped_frame = frame[y1:y2, x1:x2]
+                    else:
+                        cropped_frame = frame
+                    
+                    # Compute focus signal with fresh frame
+                    focus_signal = float(self._controller.__processDataThread.update(cropped_frame, self._controller.twoFociVar))
+                    self._controller._logger.debug(f"Fresh focus computation at Z={zpos:.3f}: {focus_signal:.4f}")
+                else:
+                    # Fall back to cached signal if frame acquisition fails
+                    focus_signal = float(self._controller.setPointSignal)
+                    self._controller._logger.warning(f"Frame acquisition failed at Z={zpos:.3f}, using cached signal")
+            except Exception as e:
+                # Fall back to cached signal if fresh computation fails
+                focus_signal = float(self._controller.setPointSignal)
+                self._controller._logger.warning(f"Fresh focus computation failed at Z={zpos:.3f}: {e}, using cached signal")
 
             self.signalData.append(focus_signal)
             self.positionData.append(zpos)
@@ -1146,15 +1283,47 @@ class FocusCalibThread(Thread):
                 "focus_value": focus_signal,
                 "progress_percent": ((i + 1) / len(scan_list)) * 100,
             })
-        # TODO: We need to compute and store a look up table and also copute the slop for the linear part of the curve so that we can convert focus value changes to nm changes
+        
+        # IMPROVEMENT #3: Enhanced calibration data structure and PID integration
         self.poly = np.polyfit(self.positionData, self.signalData, 1)
         self.calibrationResult = np.around(self.poly, 4)
+        
+        # Calculate enhanced calibration metrics
+        r_squared = self._calculate_r_squared()
+        sensitivity_nm_per_unit = self._get_sensitivity_nm_per_px()
+        
+        # Determine linear range (where polynomial fits well)
+        focus_min, focus_max = min(self.signalData), max(self.signalData)
+        linear_range = (focus_min, focus_max)
+        
+        # Create lookup table for focus value -> z position conversion
+        lookup_table = {}
+        if len(self.positionData) > 1:
+            for focus_val, z_pos in zip(self.signalData, self.positionData):
+                lookup_table[float(focus_val)] = float(z_pos)
+        
+        # CRITICAL: Create and store calibration data for PID controller integration
+        calibration_data = CalibrationData(
+            position_data=list(self.positionData),
+            focus_data=list(self.signalData),
+            polynomial_coeffs=self.poly.tolist() if self.poly is not None else None,
+            sensitivity_nm_per_unit=sensitivity_nm_per_unit,
+            r_squared=r_squared,
+            linear_range=linear_range,
+            timestamp=time.time(),
+            lookup_table=lookup_table,
+        )
+        
+        # Store calibration data in controller for PID integration
+        self._controller._current_calibration = calibration_data
+        self._controller._logger.info(f"Calibration completed: sensitivity={sensitivity_nm_per_unit:.1f} nm/unit, R²={r_squared:.4f}")
 
         self._controller.sigCalibrationProgress.emit({
             "event": "calibration_completed",
             "coefficients": self.poly.tolist(),
-            "r_squared": self._calculate_r_squared(),
-            "sensitivity_nm_per_px": self._get_sensitivity_nm_per_px(),
+            "r_squared": r_squared,
+            "sensitivity_nm_per_px": sensitivity_nm_per_unit,
+            "calibration_data": calibration_data.to_dict(),
         })
 
         self.show()
@@ -1176,9 +1345,31 @@ class FocusCalibThread(Thread):
 
     def show(self):
         if IS_HEADLESS or not hasattr(self._controller, '_widget'):
-            # TODO: We should send a signal to the frontend to update the calibration display
-            # TODO: implement a signal for headless mode that holds all parameters and the scan/calibration curve
+            # IMPROVEMENT #4: Enhanced headless mode signaling
+            if self._controller._current_calibration:
+                # Send comprehensive calibration signal for headless mode
+                headless_signal_data = {
+                    "event": "calibration_display_update",
+                    "calibration_text": f"1 unit → {self._controller._current_calibration.sensitivity_nm_per_unit:.1f} nm",
+                    "calibration_data": self._controller._current_calibration.to_dict(),
+                    "pid_integration_active": True,
+                    "timestamp": time.time(),
+                }
+                self._controller.sigCalibrationProgress.emit(headless_signal_data)
+                self._controller._logger.info(f"Headless calibration display: {headless_signal_data['calibration_text']}")
+            else:
+                # Send invalid calibration signal
+                headless_signal_data = {
+                    "event": "calibration_display_update", 
+                    "calibration_text": "Calibration invalid",
+                    "calibration_data": None,
+                    "pid_integration_active": False,
+                    "timestamp": time.time(),
+                }
+                self._controller.sigCalibrationProgress.emit(headless_signal_data)
             return
+            
+        # GUI mode - update widget display
         if self.poly is None or self.poly[0] == 0:
             cal_text = "Calibration invalid"
         else:
@@ -1190,8 +1381,9 @@ class FocusCalibThread(Thread):
             pass
 
     def getData(self) -> Dict[str, Any]:
-        # TODO: we need to use this calibration data in the upstream controller to convert focus value changes to nm changes
-        return {
+        """Return enhanced calibration data - now integrated with PID controller."""
+        # Return both legacy format and enhanced CalibrationData
+        enhanced_data = {
             "signalData": self.signalData,
             "positionData": self.positionData,
             "poly": self.poly.tolist() if self.poly is not None else None,
@@ -1199,6 +1391,15 @@ class FocusCalibThread(Thread):
             "r_squared": self._calculate_r_squared(),
             "sensitivity_nm_per_px": self._get_sensitivity_nm_per_px(),
         }
+        
+        # Add enhanced calibration data if available  
+        if hasattr(self._controller, '_current_calibration') and self._controller._current_calibration:
+            enhanced_data["calibration_data"] = self._controller._current_calibration.to_dict()
+            enhanced_data["pid_integration_active"] = True
+        else:
+            enhanced_data["pid_integration_active"] = False
+            
+        return enhanced_data
 
 
 # =========================

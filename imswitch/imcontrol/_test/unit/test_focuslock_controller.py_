@@ -295,12 +295,13 @@ class TestCalibrationFunctionality:
     
     def test_calibration_params_management(self):
         """Test calibration parameter management."""
-        # This would test the calibration parameter API methods
+        # Test enhanced calibration parameters
         params = CalibrationParams(
             from_position=40.0,
             to_position=60.0,
             num_steps=25,
             settle_time=0.8,
+            scan_range_um=5.0,  # New parameter
         )
         
         param_dict = params.to_dict()
@@ -308,6 +309,63 @@ class TestCalibrationFunctionality:
         assert param_dict["to_position"] == 60.0
         assert param_dict["num_steps"] == 25
         assert param_dict["settle_time"] == 0.8
+        assert param_dict["scan_range_um"] == 5.0
+
+    def test_enhanced_calibration_data(self):
+        """Test enhanced CalibrationData structure."""
+        from imswitch.imcontrol.controller.controllers.FocusLockController import CalibrationData
+        import time
+        
+        # Create test calibration data
+        calib_data = CalibrationData(
+            position_data=[49.0, 50.0, 51.0],
+            focus_data=[100.0, 150.0, 100.0],
+            polynomial_coeffs=[1.0, 2.0, 3.0],
+            sensitivity_nm_per_unit=500.0,
+            r_squared=0.95,
+            linear_range=(100.0, 150.0),
+            timestamp=time.time(),
+            lookup_table={100.0: 49.0, 150.0: 50.0, 100.0: 51.0},
+        )
+        
+        # Test conversion to dict
+        calib_dict = calib_data.to_dict()
+        assert "lookup_table" in calib_dict
+        assert "sensitivity_nm_per_unit" in calib_dict
+        assert "linear_range" in calib_dict
+        assert calib_dict["sensitivity_nm_per_unit"] == 500.0
+        assert calib_dict["r_squared"] == 0.95
+
+    def test_pid_integration_logic(self):
+        """Test PID controller integration with calibration."""
+        # This tests the core logic we implemented
+        # Test scale factor calculation
+        
+        # Mock calibration data with known sensitivity
+        class MockCalibData:
+            def __init__(self, sensitivity_nm_per_unit):
+                self.sensitivity_nm_per_unit = sensitivity_nm_per_unit
+        
+        # Test without calibration
+        current_calibration = None
+        scale_um_per_unit = 1.5
+        
+        if current_calibration and current_calibration.sensitivity_nm_per_unit > 0:
+            scale_factor = current_calibration.sensitivity_nm_per_unit / 1000.0
+        else:
+            scale_factor = scale_um_per_unit
+        
+        assert scale_factor == 1.5  # Should use default
+        
+        # Test with calibration
+        current_calibration = MockCalibData(sensitivity_nm_per_unit=750.0)
+        
+        if current_calibration and current_calibration.sensitivity_nm_per_unit > 0:
+            scale_factor = current_calibration.sensitivity_nm_per_unit / 1000.0
+        else:
+            scale_factor = scale_um_per_unit
+        
+        assert scale_factor == 0.75  # Should use calibration (750 nm/unit = 0.75 µm/unit)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ class PIDController:
     def __init__(
         self,
         set_point: float,
-        kp: float = 0.0,
+        kp: float = 1.,
         ki: float = 0.0,
         kd: float = 0.0,
         sample_time: float = 0.1,

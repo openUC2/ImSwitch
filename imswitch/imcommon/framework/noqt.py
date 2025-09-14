@@ -125,13 +125,14 @@ class SignalInstance(psygnal.SignalInstance):
                     else:
                         everyNthsPixel = 1
 
-                    # convert 16 bit to 8 bit for visualization
-                    if output_frame.dtype == np.uint16:
-                        output_frame = np.uint8(output_frame//64) 
                     try:
                         output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
                     except:
                         output_frame = np.zeros((640,460))
+                    # convert 16 bit to 8 bit for visualization
+                    if output_frame.dtype == np.uint16:
+                        output_frame = np.uint8(output_frame//128) 
+
                     # adjust the parameters of the jpeg compression
                     try:
                         jpegQuality = args[5]["compressionlevel"]

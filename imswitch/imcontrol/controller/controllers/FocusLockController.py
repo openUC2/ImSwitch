@@ -28,7 +28,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 # =========================
 @dataclass
 class FocusLockParams:
-    focus_metric: str = "JPG" # "JPG", "astigmatism", "gaussian", "gradient"
+    focus_metric: str = "astigmatism" # "astigmatism", "gaussian", "gradient"
     crop_center: Optional[List[int]] = None
     crop_size: Optional[int] = None
     gaussian_sigma: float = 11.0
@@ -126,7 +126,7 @@ class FocusLockState:
             "measurement_active": self.measurement_active,
         }
 
-
+# TODO: The PID class can probably be moved to a separate file if needed
 class _PID:
     """Discrete 2-DOF style (β on SP via caller if needed), derivative on measurement, anti-windup."""
 
@@ -215,7 +215,7 @@ class FocusLockController(ImConWidgetController):
 
         # Params
         self._focus_params = FocusLockParams(
-            focus_metric=getattr(self._setupInfo.focusLock, "focusLockMetric", "JPG"),
+            focus_metric=getattr(self._setupInfo.focusLock, "focusLockMetric", "astigmatism"),
             crop_center=getattr(self._setupInfo.focusLock, "cropCenter", None),
             crop_size=getattr(self._setupInfo.focusLock, "cropSize", None),
             update_freq=self._setupInfo.focusLock.updateFreq or 10,
@@ -313,21 +313,6 @@ class FocusLockController(ImConWidgetController):
 
         # Start polling
         self.updateThread()
-
-        # GUI bindings
-        if not IS_HEADLESS:
-            self._widget.setKp(self._pi_params.kp)
-            self._widget.setKi(self._pi_params.ki)
-            self._widget.kpEdit.textChanged.connect(self.unlockFocus)
-            self._widget.kiEdit.textChanged.connect(self.unlockFocus)
-            self._widget.lockButton.clicked.connect(self.toggleFocus)
-            self._widget.camDialogButton.clicked.connect(self.cameraDialog)
-            self._widget.focusCalibButton.clicked.connect(self.focusCalibrationStart)
-            self._widget.calibCurveButton.clicked.connect(self.showCalibrationCurve)
-            self._widget.zStackBox.stateChanged.connect(self.zStackVarChange)
-            self._widget.twoFociBox.stateChanged.connect(self.twoFociVarChange)
-            self._widget.sigSliderExpTValueChanged.connect(self.setExposureTime)
-            self._widget.sigSliderGainValueChanged.connect(self.setGain)
 
     def __del__(self):
         try:
@@ -675,6 +660,7 @@ class FocusLockController(ImConWidgetController):
             if not self._state.is_measuring and not self.locked and not self.aboutToLock:
                 continue
 
+            
             self.setPointSignal = self.__processDataThread.update(self.cropped_im, self.twoFociVar)
 
             # Get current timestamp for logging
@@ -686,7 +672,7 @@ class FocusLockController(ImConWidgetController):
                 "timestamp": current_timestamp,
                 "is_locked": self.locked,
                 "lock_position": self.lockPosition if self.locked else None,
-                "current_position": 0,
+                "current_position": self.currentPosition,
                 "focus_metric": self._focus_params.focus_metric,
             }
             self.sigUpdateFocusValue.emit(focus_data)
@@ -779,24 +765,23 @@ class FocusLockController(ImConWidgetController):
                 except Exception:
                     pass
 
-        # (kept nested as in original)
-        @APIExport(runOnUIThread=True)
-        def setParamsAstigmatism(self, gaussianSigma: float, backgroundThreshold: float,
-                                 cropSize: int, cropCenter: Optional[List[int]] = None):
-            self._focus_params.gaussian_sigma = float(gaussianSigma)
-            self._focus_params.background_threshold = float(backgroundThreshold)
-            self._focus_params.crop_size = int(cropSize)
-            if cropCenter is None:
-                cropCenter = [cropSize // 2, cropSize // 2]
-            self._focus_params.crop_center = cropCenter
+    @APIExport(runOnUIThread=True)
+    def setParamsAstigmatism(self, gaussianSigma: float, backgroundThreshold: float,
+                        cropSize: int, cropCenter: Optional[List[int]] = None):
+        self._focus_params.gaussian_sigma = float(gaussianSigma)
+        self._focus_params.background_threshold = float(backgroundThreshold)
+        self._focus_params.crop_size = int(cropSize)
+        if cropCenter is None:
+            cropCenter = [cropSize // 2, cropSize // 2]
+        self._focus_params.crop_center = cropCenter
 
-            self.gaussianSigma = float(gaussianSigma)
-            self.backgroundThreshold = float(backgroundThreshold)
-            self.cropSize = int(cropSize)
-            if cropCenter is None:
-                cropCenter = [self.cropSize // 2, self.cropSize // 2]
-            self.cropCenter = np.asarray(cropCenter, dtype=int)
-            # TODO: self.cropCenter / self.cropSize are not used 
+        self.gaussianSigma = float(gaussianSigma)
+        self.backgroundThreshold = float(backgroundThreshold)
+        self.cropSize = int(cropSize)
+        if cropCenter is None:
+            cropCenter = [self.cropSize // 2, self.cropSize // 2]
+        self.cropCenter = np.asarray(cropCenter, dtype=int)
+        # TODO: self.cropCenter / self.cropSize are not used 
 
     @APIExport(runOnUIThread=True)
     def getParamsAstigmatism(self):
@@ -859,7 +844,7 @@ class FocusLockController(ImConWidgetController):
         """Kept for compatibility; returns last computed move in µm (no position reads)."""
         if not self.locked or not self.pi:
             return 0.0
-        meas = float(self.setPointSignal)
+        meas = float(self.setPointSignal) # we should have a setSetPoint/getSetPoint Interface
         if self._pi_params.meas_lowpass_alpha > 0.0:
             a = self._pi_params.meas_lowpass_alpha
             self._meas_filt = meas if self._meas_filt is None else a * self._meas_filt + (1 - a) * meas
@@ -878,7 +863,7 @@ class FocusLockController(ImConWidgetController):
     def lockFocus(self, zpos):
         if self.locked:
             return
-        if IS_HEADLESS:
+        if IS_HEADLESS: # TODO: we rely on IS_HEADLESS only
             kp, ki = self._pi_params.kp, self._pi_params.ki
         else:
             kp = float(self._widget.kpEdit.text())
@@ -905,6 +890,7 @@ class FocusLockController(ImConWidgetController):
 
         if not IS_HEADLESS:
             try:
+                # TODO: All the _widget stuff should be removed in favor of API calls
                 self._widget.focusLockGraph.lineLock = self._widget.focusPlot.addLine(y=self.setPointSignal, pen="r")
                 self._widget.lockButton.setChecked(True)
             except Exception:
@@ -1046,22 +1032,10 @@ class ProcessDataThread(Thread):
             return self.imagearraygf
         raise RuntimeError("No image processed yet. Please run update() first.")
 
-    def _jpeg_size_metric(self, img: np.ndarray) -> int:
-        if img.dtype != np.uint8:
-            img_u8 = np.clip(img, 0, 255).astype(np.uint8)
-        else:
-            img_u8 = img
-        success, buffer = cv2.imencode(".jpg", img_u8, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        if not success:
-            self._controller._logger.warning("Failed to encode image to JPEG.")
-            return 0
-        return int(len(buffer))
 
     def update(self, cropped_img: np.ndarray, twoFociVar: bool) -> float:
         self.imagearraygf = cropped_img
-        if self.focusLockMetric == "JPG":
-            focusMetricGlobal = float(self._jpeg_size_metric(self.imagearraygf))
-        elif self.focusLockMetric == "astigmatism":
+        if self.focusLockMetric == "astigmatism":
             config = FocusConfig(
                 gaussian_sigma=float(self._controller._focus_params.gaussian_sigma),
                 background_threshold=int(self._controller._focus_params.background_threshold),
@@ -1139,16 +1113,10 @@ class FocusCalibThread(Thread):
 
         calib_params = self._controller._calib_params
 
-        if not IS_HEADLESS and hasattr(self._controller, '_widget'):
-            try:
-                from_val = float(self._controller._widget.calibFromEdit.text())
-                to_val = float(self._controller._widget.calibToEdit.text())
-            except (ValueError, AttributeError):
-                from_val = calib_params.from_position
-                to_val = calib_params.to_position
-        else:
-            from_val = calib_params.from_position
-            to_val = calib_params.to_position
+        # TODO: We should probably scan around the current position instead of always from->to
+        # currentZ = self._controller.stage.getPosition()["Z"]
+        from_val = calib_params.from_position
+        to_val = calib_params.to_position
 
         scan_list = np.round(np.linspace(from_val, to_val, calib_params.num_steps), 2)
 
@@ -1159,24 +1127,26 @@ class FocusCalibThread(Thread):
             "to_position": to_val,
         })
 
-        for i, z in enumerate(scan_list):
-            self._controller._master.positionersManager[self._controller.positioner].setPosition(z, 0)
+        initialZPosition = self._controller._master.positionersManager[self._controller.positioner].getPosition()["Z"]
+        for i, zpos in enumerate(scan_list):
+            self._controller._master.positionersManager[self._controller.positioner].move(value=z, axis="Z", speed=1000, is_blocking=True, is_absolute=True)
             time.sleep(calib_params.settle_time)
+            # TODO: maybe explicitly grab a new frame here and compute the signal?
             focus_signal = float(self._controller.setPointSignal)
-            actual_position = float(self._controller._master.positionersManager[self._controller.positioner].get_abs())
+            # actual_position = float(self._controller._master.positionersManager[self._controller.positioner].getPosition()["Z"])
 
             self.signalData.append(focus_signal)
-            self.positionData.append(actual_position)
+            self.positionData.append(zpos)
 
             self._controller.sigCalibrationProgress.emit({
                 "event": "calibration_progress",
                 "step": i + 1,
                 "total_steps": len(scan_list),
-                "position": actual_position,
+                "position": zpos,
                 "focus_value": focus_signal,
                 "progress_percent": ((i + 1) / len(scan_list)) * 100,
             })
-
+        # TODO: We need to compute and store a look up table and also copute the slop for the linear part of the curve so that we can convert focus value changes to nm changes
         self.poly = np.polyfit(self.positionData, self.signalData, 1)
         self.calibrationResult = np.around(self.poly, 4)
 
@@ -1206,6 +1176,8 @@ class FocusCalibThread(Thread):
 
     def show(self):
         if IS_HEADLESS or not hasattr(self._controller, '_widget'):
+            # TODO: We should send a signal to the frontend to update the calibration display
+            # TODO: implement a signal for headless mode that holds all parameters and the scan/calibration curve
             return
         if self.poly is None or self.poly[0] == 0:
             cal_text = "Calibration invalid"
@@ -1218,6 +1190,7 @@ class FocusCalibThread(Thread):
             pass
 
     def getData(self) -> Dict[str, Any]:
+        # TODO: we need to use this calibration data in the upstream controller to convert focus value changes to nm changes
         return {
             "signalData": self.signalData,
             "positionData": self.positionData,

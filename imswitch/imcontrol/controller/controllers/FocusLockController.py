@@ -138,7 +138,7 @@ class FocusLockState:
     is_locked: bool = False
     about_to_lock: bool = False
     current_focus_value: float = 0.0
-    lock_position: float = 0.0
+    lock_position: float = 0.0 # TODO: This is unused an can be removed?
     current_position: float = 0.0
     measurement_active: bool = False
 
@@ -234,11 +234,11 @@ class FocusLockController(ImConWidgetController):
             self._logger.error(f"Positioner '{self.positioner}' not found using first in list.")
             self.positioner = self._master.positionersManager.getAllDeviceNames()[0]
             self.stage = self._master.positionersManager[self.positioner]
+        
+        
         # Internal Z position tracking
-        try:
-            self.currentZPosition = self.stage.getPosition()["Z"]
-        except Exception:
-            self.currentZPosition = None
+        self.currentZPosition = self.stage.getPosition()["Z"]
+        self._commChannel.sigUpdateMotorPosition.connect(self._onMotorPositionUpdate)
 
         # Params
         self._focus_params = FocusLockParams(
@@ -303,7 +303,6 @@ class FocusLockController(ImConWidgetController):
         self.zStepLimLo = 0.0
         self.aboutToLockDiffMax = 0.4
         self.lockPosition = 0.0
-        self.currentPosition = 0.0  # kept for API/state, not used in loop
         self.lastPosition = 0.0
         self.buffer = 40
         self.currPoint = 0
@@ -332,7 +331,7 @@ class FocusLockController(ImConWidgetController):
 
         # Threads
         self.__processDataThread = ProcessDataThread(self)
-        self.__focusCalibThread = FocusCalibThread(self)
+        self._focusCalibThread = FocusCalibThread(self) # this has to be globally accessible (e.g. self._focusCalibThread)
         self.__processDataThread.setFocusLockMetric(self._focus_params.focus_metric)
 
         # CSV logging setup
@@ -349,11 +348,6 @@ class FocusLockController(ImConWidgetController):
             self.__isPollingFramesActive = False
             self.__processDataThread.quit()
             self.__processDataThread.wait()
-        except Exception:
-            pass
-        try:
-            self.__focusCalibThread.quit()
-            self.__focusCalibThread.wait()
         except Exception:
             pass
         try:
@@ -377,6 +371,10 @@ class FocusLockController(ImConWidgetController):
         self._pollFramesThread.daemon = True
         self._pollFramesThread.start()
 
+    def _onMotorPositionUpdate(self, pos: Dict[str, float]):
+        if "Z" in pos[self.positioner]:
+            self.currentZPosition = pos[self.positioner]["Z"]
+            
     # =========================
     # API: Params/state
     # =========================
@@ -442,8 +440,8 @@ class FocusLockController(ImConWidgetController):
         self._state.is_locked = self.locked
         self._state.about_to_lock = self.aboutToLock
         self._state.current_focus_value = self.setPointSignal
-        self._state.lock_position = self.lockPosition
-        self._state.current_position = self.currentPosition
+        self._state.lock_position = self.lockPosition # TODO: This is unused an can be removed?
+        self._state.current_position = self.currentZPosition
         self._state.measurement_active = hasattr(self, '__processDataThread') and self.__processDataThread.isRunning()
         return self._state.to_dict()
 
@@ -487,11 +485,7 @@ class FocusLockController(ImConWidgetController):
                 if not self._state.is_measuring:
                     self.startFocusMeasurement()
                 # Use internal Z position or fallback to hardware query
-                zpos = self.currentZPosition
-                if zpos is None:
-                    zpos = self.stage.getPosition()["Z"]
-                    self.currentZPosition = zpos
-                self.lockFocus(zpos)
+                self.lockFocus(self.currentZPosition)
                 return True
             elif not enable and self.locked:
                 self.unlockFocus()
@@ -591,12 +585,7 @@ class FocusLockController(ImConWidgetController):
     def toggleFocus(self, toLock: bool = None):
         self.aboutToLock = False
         if (not IS_HEADLESS and self._widget.lockButton.isChecked()) or (toLock is not None and toLock and not self.locked):
-            # Use internal Z position or fallback to hardware query
-            zpos = self.currentZPosition
-            if zpos is None:
-                zpos = self.stage.getPosition()["Z"]
-                self.currentZPosition = zpos
-            self.lockFocus(zpos)
+            self.lockFocus(self.stage.getPosition()["Z"])
             if not IS_HEADLESS:
                 self._widget.lockButton.setText("Unlock")
         else:
@@ -611,37 +600,18 @@ class FocusLockController(ImConWidgetController):
             self._logger.error(f"Failed to open camera dialog: {e}")
 
     @APIExport(runOnUIThread=True)
-    def focusCalibrationStart(self):
-        self.__focusCalibThread.start()
-
-    @APIExport(runOnUIThread=True)
-    def runFocusCalibration(self, from_position: Optional[float] = None,
-                            to_position: Optional[float] = None,
-                            num_steps: Optional[int] = None,
-                            settle_time: Optional[float] = None) -> Dict[str, Any]:
-        if from_position is not None:
-            self._calib_params.from_position = from_position
-        if to_position is not None:
-            self._calib_params.to_position = to_position
-        if num_steps is not None:
-            self._calib_params.num_steps = num_steps
-        if settle_time is not None:
-            self._calib_params.settle_time = settle_time
-        self.__focusCalibThread.start()
-        self.__focusCalibThread.wait()
-        return self.__focusCalibThread.getData()
-
-    @APIExport(runOnUIThread=True)
     def getCalibrationResults(self) -> Dict[str, Any]:
-        return self.__focusCalibThread.getData()
+        # TODO: This interface has changed ? 
+        self._focusCalibThread.getData()
 
     @APIExport(runOnUIThread=True)
     def isCalibrationRunning(self) -> bool:
-        return self.__focusCalibThread.isRunning()
+        # TODO: This interface has changed ?
+        self._focusCalibThread.isRunning()
 
     def showCalibrationCurve(self):
-        if not IS_HEADLESS:
-            self._widget.showCalibrationCurve(self.__focusCalibThread.getData())
+        # TODO: This interface has changed ?
+        self._focusCalibThread.showCalibrationCurve()
 
     def twoFociVarChange(self):
         self.twoFociVar = not self.twoFociVar
@@ -702,7 +672,7 @@ class FocusLockController(ImConWidgetController):
                 "timestamp": current_timestamp,
                 "is_locked": self.locked,
                 "lock_position": self.lockPosition if self.locked else None,
-                "current_position": self.currentPosition,
+                "new_absolute_position": self.currentZPosition,
                 "focus_metric": self._focus_params.focus_metric,
             }
             self.sigUpdateFocusValue.emit(focus_data)
@@ -737,22 +707,9 @@ class FocusLockController(ImConWidgetController):
 
                 if step_um != 0.0:
                     # Use absolute movement instead of relative
-                    if self.currentZPosition is not None:
-                        new_z_position = self.currentZPosition + step_um
-                        self.stage.move(value=new_z_position, axis="Z", speed=1000, is_blocking=False, is_absolute=True)
-                        self.currentZPosition = new_z_position
-                    else:
-                        # Fallback: get current position and then move absolutely
-                        try:
-                            current_z = self.stage.getPosition()["Z"]
-                            new_z_position = current_z + step_um
-                            self.stage.move(value=new_z_position, axis="Z", speed=1000, is_blocking=False, is_absolute=True)
-                            self.currentZPosition = new_z_position
-                        except Exception:
-                            # Last resort: use relative movement
-                            self.stage.move(value=step_um, axis="Z", speed=1000, is_blocking=False, is_absolute=False)
-                            self.currentZPosition = None
-                    self._travel_used_um += abs(step_um)
+                    new_z_position = self.currentZPosition + step_um
+                    self.stage.move(value=new_z_position, axis="Z", speed=1000, is_blocking=False, is_absolute=True)
+                    self._travel_used_um += abs(step_um) # TODO: Not sure if this is correct and usefule
                     # travel budget acts like safety_distance_limit
                     if self._pi_params.safety_motion_active and self._travel_used_um > self._pi_params.safety_distance_limit:
                         self._logger.warning("Travel budget exceeded; unlocking focus.")
@@ -767,18 +724,12 @@ class FocusLockController(ImConWidgetController):
             if self._state.is_measuring or self.locked or self.aboutToLock:
                 try:
                     # Use internal Z position if available
-                    current_position = self.currentZPosition
-                    if current_position is None:
-                        try:
-                            current_position = self.stage.getPosition()["Z"]
-                        except Exception:
-                            current_position = None
                     self._logFocusMeasurement(
                         focus_value=float(self.setPointSignal),
                         timestamp=current_timestamp,
                         is_locked=self.locked,
                         lock_position=self.lockPosition if self.locked else None,
-                        current_position=current_position,
+                        current_position=self.currentZPosition,
                         pi_output=pi_output
                     )
                 except Exception as e:
@@ -830,11 +781,7 @@ class FocusLockController(ImConWidgetController):
         averageDiff = float(np.std(self.aboutToLockDataPoints))
         if averageDiff < self.aboutToLockDiffMax:
             # Use internal Z position or fallback to hardware query
-            zpos = self.currentZPosition
-            if zpos is None:
-                zpos = self.stage.getPosition()["Z"]
-                self.currentZPosition = zpos
-            self.lockFocus(zpos)
+            self.lockFocus(self.currentZPosition)
             self.aboutToLock = False
 
     def updateSetPointData(self):
@@ -873,7 +820,7 @@ class FocusLockController(ImConWidgetController):
         return self._pi_params.kp, self._pi_params.ki
 
     def updatePI(self) -> float:
-        """Kept for compatibility; returns last computed move in µm (no position reads)."""
+        """Kept for compatibility; returns last computed move in µm (no position reads).""" # TODO: Unused variables can be removed!
         if not self.locked or not self.pi:
             return 0.0
         meas = float(self.setPointSignal) # we should have a setSetPoint/getSetPoint Interface
@@ -929,7 +876,6 @@ class FocusLockController(ImConWidgetController):
         self.locked = True
         self._travel_used_um = 0.0
         # Set internal Z position
-        self.currentZPosition = float(zpos)
 
         if not IS_HEADLESS:
             try:
@@ -1094,7 +1040,7 @@ class FocusLockController(ImConWidgetController):
             }
 
     @APIExport(runOnUIThread=True, requestType="POST")
-    def runFocusCalibrationDynamic(self, scan_range_um: float = 2.0, num_steps: int = 20, settle_time: float = 0.5) -> Dict[str, Any]:
+    def runFocusCalibrationDynamic(self, scan_range_um: float = 2.0, num_steps: int = 20, settle_time: float = 0.5, initial_z_position: float = None) -> Dict[str, Any]:
         """Run focus calibration with dynamic range around current position."""
         # Update calibration parameters for dynamic range
         self._calib_params.scan_range_um = scan_range_um
@@ -1104,9 +1050,9 @@ class FocusLockController(ImConWidgetController):
         # Start calibration (uses dynamic range automatically now)
         if hasattr(self, '_focusCalibThread') and self._focusCalibThread.isRunning():
             return {"error": "Calibration already running"}
-        
-        self._focusCalibThread = FocusCalibThread(self)
-        self._focusCalibThread.start()
+
+        self._focusCalibThread = FocusCalibThread(self, initial_z_position=initial_z_position)  # Pass initial_z_position to thread
+        self._focusCalibThread.runThread()
         
         return {
             "message": "Dynamic calibration started",
@@ -1121,7 +1067,7 @@ class FocusLockController(ImConWidgetController):
 # =========================
 class ProcessDataThread(Thread):
     def __init__(self, controller, *args, **kwargs):
-        self._controller = controller
+        self._focusValueComputeController = controller
         super().__init__(*args, **kwargs)
         self.focusLockMetric: Optional[str] = None
 
@@ -1138,15 +1084,15 @@ class ProcessDataThread(Thread):
         self.imagearraygf = cropped_img
         if self.focusLockMetric == "astigmatism":
             config = FocusConfig(
-                gaussian_sigma=float(self._controller._focus_params.gaussian_sigma),
-                background_threshold=int(self._controller._focus_params.background_threshold),
-                crop_radius=int(self._controller._focus_params.crop_size or 300),
+                gaussian_sigma=float(self._focusValueComputeController._focus_params.gaussian_sigma),
+                background_threshold=int(self._focusValueComputeController._focus_params.background_threshold),
+                crop_radius=int(self._focusValueComputeController._focus_params.crop_size or 300),
                 enable_gaussian_blur=True,
             )
             focus_metric = FocusMetric(config)
             result = focus_metric.compute(self.imagearraygf)
             focusMetricGlobal = float(result["focus"])
-            self._controller._logger.debug(
+            self._focusValueComputeController._logger.debug(
                 f"Focus computation result: {result}, Focus value: {result['focus']:.4f}, Timestamp: {result['t']}"
             )
         else:
@@ -1199,38 +1145,63 @@ class ProcessDataThread(Thread):
 # =========================
 # Calibration thread
 # =========================
-class FocusCalibThread(Thread):
-    def __init__(self, controller, *args, **kwargs):
+class FocusCalibThread(object):
+    def __init__(self, controller, initial_z_position=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._controller = controller
+        self._focusValueComputeController = controller # TODO: I think this is not ideal - rather work with the signal that pushes the new focus value - we should also rename this as setPointSignal is misleading. rather focusValueSignal or similar
+        # hence instead of suppliyng hte full controller, we should only supply the positioner function and the signal for the focus value (via. connect())
         self.signalData: List[float] = []
         self.positionData: List[float] = []
         self.poly = None
         self.calibrationResult = None
+        self._isRunning = False
+        self.initial_z_position = initial_z_position
+        
+    def isRunning(self) -> bool:
+        return self._isRunning
 
+    def stopThread(self):
+        self._isRunning = False
+        if hasattr(self, '_thread') and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+
+    def runThread(self):
+        thread = threading.Thread(target=self.run, daemon=True)
+        thread.start()
+        self._thread = thread
+        
     def run(self):
         self.signalData = []
         self.positionData = []
+        self._isRunning = True
 
-        calib_params = self._controller._calib_params
+        if self.initial_z_position is not None:
+            try:
+                self._focusValueComputeController._master.positionersManager[self._focusValueComputeController.positioner].move(value=self.initial_z_position, axis="Z", speed=5000, is_blocking=True, is_absolute=True)
+                time.sleep(1.0)  # wait for move to complete and settle
+                self._focusValueComputeController._logger.info(f"Moved to initial Z position: {self.initial_z_position}µm")
+            except Exception as e:
+                self._focusValueComputeController._logger.error(f"Failed to move to initial Z position {self.initial_z_position}µm: {e}")
+        
+        calib_params = self._focusValueComputeController._calib_params
 
         # IMPROVEMENT #1: Scan around the current position instead of always from->to
+        initialZPosition = self._focusValueComputeController._master.positionersManager[self._focusValueComputeController.positioner].getPosition()["Z"]
         try:
-            current_z = self._controller._master.positionersManager[self._controller.positioner].getPosition()["Z"]
             # Use scan_range_um parameter to define range around current position
             half_range = calib_params.scan_range_um / 2.0
-            from_val = current_z - half_range
-            to_val = current_z + half_range
-            self._controller._logger.info(f"Dynamic calibration: scanning {calib_params.scan_range_um}µm around current Z={current_z:.3f}µm")
+            from_val = initialZPosition - half_range
+            to_val = initialZPosition + half_range
+            self._focusValueComputeController._logger.info(f"Dynamic calibration: scanning {calib_params.scan_range_um}µm around current Z={initialZPosition:.3f}µm")
         except Exception as e:
             # Fall back to fixed positions if current position can't be determined
-            self._controller._logger.warning(f"Could not get current Z position, using fixed range: {e}")
+            self._focusValueComputeController._logger.warning(f"Could not get current Z position, using fixed range: {e}")
             from_val = calib_params.from_position
             to_val = calib_params.to_position
 
         scan_list = np.round(np.linspace(from_val, to_val, calib_params.num_steps), 2)
 
-        self._controller.sigCalibrationProgress.emit({
+        self._focusValueComputeController.sigCalibrationProgress.emit({
             "event": "calibration_started",
             "total_steps": len(scan_list),
             "from_position": from_val,
@@ -1238,44 +1209,24 @@ class FocusCalibThread(Thread):
             "scan_range_um": calib_params.scan_range_um,
         })
 
-        initialZPosition = self._controller._master.positionersManager[self._controller.positioner].getPosition()["Z"]
-        for i, zpos in enumerate(scan_list):
-            # Move to position (fix bug: was using 'z' instead of 'zpos')
-            self._controller._master.positionersManager[self._controller.positioner].move(value=zpos, axis="Z", speed=1000, is_blocking=True, is_absolute=True)
-            time.sleep(calib_params.settle_time)
-            
-            # IMPROVEMENT #2: Explicitly grab a new frame and compute the signal
-            try:
-                # Force fresh frame acquisition
-                frame = self._controller._master.detectorsManager[self._controller.camera].getLatestFrame()
-                if frame is not None:
-                    # Apply cropping and compute focus signal with fresh frame
-                    h, w = frame.shape[:2]
-                    if self._controller.cropCenter and self._controller.cropSize:
-                        cx, cy = self._controller.cropCenter
-                        cs = self._controller.cropSize
-                        x1, x2 = max(0, cx - cs//2), min(w, cx + cs//2)
-                        y1, y2 = max(0, cy - cs//2), min(h, cy + cs//2)
-                        cropped_frame = frame[y1:y2, x1:x2]
-                    else:
-                        cropped_frame = frame
-                    
-                    # Compute focus signal with fresh frame
-                    focus_signal = float(self._controller.__processDataThread.update(cropped_frame, self._controller.twoFociVar))
-                    self._controller._logger.debug(f"Fresh focus computation at Z={zpos:.3f}: {focus_signal:.4f}")
-                else:
-                    # Fall back to cached signal if frame acquisition fails
-                    focus_signal = float(self._controller.setPointSignal)
-                    self._controller._logger.warning(f"Frame acquisition failed at Z={zpos:.3f}, using cached signal")
-            except Exception as e:
-                # Fall back to cached signal if fresh computation fails
-                focus_signal = float(self._controller.setPointSignal)
-                self._controller._logger.warning(f"Fresh focus computation failed at Z={zpos:.3f}: {e}, using cached signal")
 
+        for i, zpos in enumerate(scan_list):
+            # stop thread if requested
+            if not self._isRunning:
+                self._focusValueComputeController._logger.info("Calibration thread stopped.")
+                break
+            
+            # Move to position (fix bug: was using 'z' instead of 'zpos')
+            self._focusValueComputeController._master.positionersManager[self._focusValueComputeController.positioner].move(value=zpos, axis="Z", speed=5000, is_blocking=True, is_absolute=True)
+            time.sleep(calib_params.settle_time)
+            # TODO: If the computing thread is not running, we have to start it 
+            # TODO: We should implement a callback on the signal update instead of polling twice here - connect() to the focus value update signal # 
+            focus_signal = float(self._focusValueComputeController.setPointSignal) # TODO: This interface seems odd, we have to improve this I guess since we cannot guarantee that setPointSignal is updated after we move the step - but when we explicitly grab a frame, we can guarantee that but compute twice - so rather wait for the next updated value or poll actively from the _controller ? 
+            self._focusValueComputeController._logger.warning(f"Frame acquisition failed at Z={zpos:.3f}, using cached signal")
             self.signalData.append(focus_signal)
             self.positionData.append(zpos)
 
-            self._controller.sigCalibrationProgress.emit({
+            self._focusValueComputeController.sigCalibrationProgress.emit({
                 "event": "calibration_progress",
                 "step": i + 1,
                 "total_steps": len(scan_list),
@@ -1283,7 +1234,7 @@ class FocusCalibThread(Thread):
                 "focus_value": focus_signal,
                 "progress_percent": ((i + 1) / len(scan_list)) * 100,
             })
-        
+            self._focusValueComputeController._logger.info(f"Calibration step {i+1}/{len(scan_list)}: Z={zpos:.3f}, Focus value={focus_signal:.4f}")
         # IMPROVEMENT #3: Enhanced calibration data structure and PID integration
         self.poly = np.polyfit(self.positionData, self.signalData, 1)
         self.calibrationResult = np.around(self.poly, 4)
@@ -1315,10 +1266,10 @@ class FocusCalibThread(Thread):
         )
         
         # Store calibration data in controller for PID integration
-        self._controller._current_calibration = calibration_data
-        self._controller._logger.info(f"Calibration completed: sensitivity={sensitivity_nm_per_unit:.1f} nm/unit, R²={r_squared:.4f}")
+        self._focusValueComputeController._current_calibration = calibration_data
+        self._focusValueComputeController._logger.info(f"Calibration completed: sensitivity={sensitivity_nm_per_unit:.1f} nm/unit, R²={r_squared:.4f}")
 
-        self._controller.sigCalibrationProgress.emit({
+        self._focusValueComputeController.sigCalibrationProgress.emit({
             "event": "calibration_completed",
             "coefficients": self.poly.tolist(),
             "r_squared": r_squared,
@@ -1327,6 +1278,9 @@ class FocusCalibThread(Thread):
         })
 
         self.show()
+        # move back to initial position 
+        self._focusValueComputeController._master.positionersManager[self._focusValueComputeController.positioner].move(value=initialZPosition, axis="Z", speed=5000, is_blocking=True, is_absolute=True)
+        self._isRunning = False
 
     def _calculate_r_squared(self) -> float:
         if self.poly is None or len(self.signalData) == 0:
@@ -1344,19 +1298,19 @@ class FocusCalibThread(Thread):
         return float(1000 / self.poly[0])
 
     def show(self):
-        if IS_HEADLESS or not hasattr(self._controller, '_widget'):
+        if IS_HEADLESS or not hasattr(self._focusValueComputeController, '_widget'):
             # IMPROVEMENT #4: Enhanced headless mode signaling
-            if self._controller._current_calibration:
+            if self._focusValueComputeController._current_calibration:
                 # Send comprehensive calibration signal for headless mode
                 headless_signal_data = {
                     "event": "calibration_display_update",
-                    "calibration_text": f"1 unit → {self._controller._current_calibration.sensitivity_nm_per_unit:.1f} nm",
-                    "calibration_data": self._controller._current_calibration.to_dict(),
+                    "calibration_text": f"1 unit → {self._focusValueComputeController._current_calibration.sensitivity_nm_per_unit:.1f} nm",
+                    "calibration_data": self._focusValueComputeController._current_calibration.to_dict(),
                     "pid_integration_active": True,
                     "timestamp": time.time(),
                 }
-                self._controller.sigCalibrationProgress.emit(headless_signal_data)
-                self._controller._logger.info(f"Headless calibration display: {headless_signal_data['calibration_text']}")
+                self._focusValueComputeController.sigCalibrationProgress.emit(headless_signal_data)
+                self._focusValueComputeController._logger.info(f"Headless calibration display: {headless_signal_data['calibration_text']}")
             else:
                 # Send invalid calibration signal
                 headless_signal_data = {
@@ -1366,7 +1320,7 @@ class FocusCalibThread(Thread):
                     "pid_integration_active": False,
                     "timestamp": time.time(),
                 }
-                self._controller.sigCalibrationProgress.emit(headless_signal_data)
+                self._focusValueComputeController.sigCalibrationProgress.emit(headless_signal_data)
             return
             
         # GUI mode - update widget display
@@ -1376,7 +1330,7 @@ class FocusCalibThread(Thread):
             cal_nm = self._get_sensitivity_nm_per_px()
             cal_text = f"1 px --> {cal_nm:.1f} nm"
         try:
-            self._controller._widget.calibrationDisplay.setText(cal_text)
+            self._focusValueComputeController._widget.calibrationDisplay.setText(cal_text)
         except AttributeError:
             pass
 
@@ -1393,8 +1347,8 @@ class FocusCalibThread(Thread):
         }
         
         # Add enhanced calibration data if available  
-        if hasattr(self._controller, '_current_calibration') and self._controller._current_calibration:
-            enhanced_data["calibration_data"] = self._controller._current_calibration.to_dict()
+        if hasattr(self._focusValueComputeController, '_current_calibration') and self._focusValueComputeController._current_calibration:
+            enhanced_data["calibration_data"] = self._focusValueComputeController._current_calibration.to_dict()
             enhanced_data["pid_integration_active"] = True
         else:
             enhanced_data["pid_integration_active"] = False

@@ -219,7 +219,7 @@ class FocusLockController(ImConWidgetController):
         piKd = getattr(self._setupInfo.focusLock, "piKd", 0.0)
         setPoint = getattr(self._setupInfo.focusLock, "setPoint", 0.0)
         safety_distance_limit = getattr(self._setupInfo.focusLock, "safetyDistanceLimit", 500.0)
-        safetyMoveLimit = getattr(self._setupInfo.focusLock, "safetyMoveLimit", 3.0)
+        safetyMoveLimit = getattr(self._setupInfo.focusLock, "safetyMoveLimit", 20.0)
         minStepThreshold = getattr(self._setupInfo.focusLock, "minStepThreshold", 0.002)
         safety_motion_active = getattr(self._setupInfo.focusLock, "safetyMotionActive", False)
         scale_um_per_unit = getattr(self._setupInfo.focusLock, "scaleUmPerUnit", 100.0) # scale that translates focus units to microns 

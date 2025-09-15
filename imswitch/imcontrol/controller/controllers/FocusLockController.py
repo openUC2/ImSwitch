@@ -62,7 +62,7 @@ class PIControllerParams:
     set_point: float = 0.0
     safety_distance_limit: float = 500.0   # treated as travel budget (µm)
     safety_move_limit: float = 50         # per-update clamp (µm)
-    min_step_threshold: float = 0.002      # deadband (µm)
+    min_step_threshold: float = 2      # deadband (µm)
     safety_motion_active: bool = False
     # New (does not break API)
     kd: float = 0.0
@@ -260,7 +260,7 @@ class FocusLockController(ImConWidgetController):
         
         # Thread control
         self.__isPollingFramesActive = True
-        self.pollingFrameUpdateRate = 1.0 / self._focus_params.update_freq
+        self.pollingFrameUpdatePeriode = 1.0 / self._focus_params.update_freq
         
         # About-to-lock logic
         self.aboutToLockDiffMax = 0.4
@@ -357,9 +357,9 @@ class FocusLockController(ImConWidgetController):
                 elif key == "z_stack_enabled":
                     self.zStackVar = value
                 elif key == "update_freq":
-                    self.pollingFrameUpdateRate = 1.0 / max(1e-3, float(value))
+                    self.pollingFrameUpdatePeriode = 1.0 / max(1e-3, float(value))
                     # keep PID dt in sync
-                    self._pi_params.sample_time = self.pollingFrameUpdateRate
+                    self._pi_params.sample_time = self.pollingFrameUpdatePeriode
                     if self.pi:
                         self.pi.update_parameters(sample_time=self._pi_params.sample_time)
                 elif key in ["gaussian_sigma", "background_threshold", "crop_size"]:
@@ -540,8 +540,13 @@ class FocusLockController(ImConWidgetController):
             self._logger.error(f"Failed to set gain: {e}")
 
     def _pollFrames(self):
+        tLast = 0
         while self.__isPollingFramesActive:
-            time.sleep(self.pollingFrameUpdateRate)
+            
+            if (time.time() - tLast) < self.pollingFrameUpdatePeriode:
+                time.sleep(0.001)
+                continue
+            tLast = time.time()
             if not self._state.is_measuring and not self.locked and not self.aboutToLock:
                 continue
 
@@ -604,6 +609,7 @@ class FocusLockController(ImConWidgetController):
                 scale_factor = self._getCalibrationBasedScale()
                 step_um = u * scale_factor        # convert to µm
 
+                # clamping if below threshold
                 # deadband
                 if abs(step_um) < self._pi_params.min_step_threshold:
                     step_um = 0.0

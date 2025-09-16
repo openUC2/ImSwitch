@@ -144,7 +144,7 @@ def launchApp(app, mainView, moduleMainControllers):
         
         # Start keep-alive loop to keep the process running
         keep_alive_loop(moduleMainControllers)
-            
+        exitCode = 0
 
     else:
         

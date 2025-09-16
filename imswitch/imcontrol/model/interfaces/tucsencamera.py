@@ -44,12 +44,41 @@ class CameraTucsen:
 
     @staticmethod
     def force_cleanup():
+        """Emergency cleanup that can be called even without a proper instance"""
+        print("Performing emergency cleanup...")
         try:
-            if TUCSEN_PLATFORM == "windows":
-                TUCAM_Api_Uninit()
-                time.sleep(0.2)
-        except Exception as e:
-            print(f"Force cleanup warning: {e}")
+            # Try to uninit any existing API session
+            TUCAM_Api_Uninit()
+            time.sleep(0.5)
+        except Exception:
+            pass
+        
+        try:
+            # Try to init and immediately uninit to reset state
+            dummy_init = TUCAM_INIT(0, b'./')
+            TUCAM_Api_Init(pointer(dummy_init), 1000)
+            time.sleep(0.1)
+            TUCAM_Api_Uninit()
+            time.sleep(0.5)
+        except Exception:
+            pass
+        
+        print("Emergency cleanup completed")
+
+    def _shutdown_capture(self):
+        """Abort wait -> stop capture -> release buffer (safe no-op if not started)."""
+        try:
+            TUCAM_Buf_AbortWait(self.camera_handle)  # 1) abort wait
+        except Exception:
+            pass
+        try:
+            TUCAM_Cap_Stop(self.camera_handle)       # 2) stop capture
+        except Exception:
+            pass
+        try:
+            TUCAM_Buf_Release(self.camera_handle)    # 3) release buffer
+        except Exception:
+            pass
 
     @staticmethod
     def _rc(ret) -> int:
@@ -70,6 +99,7 @@ class CameraTucsen:
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
+        
         self.model = "CameraTucsen"
         self.shape = (0, 0)
         self.is_connected = False
@@ -108,10 +138,16 @@ class CameraTucsen:
             raise Exception("Tucsen SDK not available")
 
         if TUCSEN_PLATFORM == "windows":
-            self.Path = './'
+            # Use the tucam_win directory as config path to avoid conflicts with other camera SDKs
+            import os
+            tucam_dir = os.path.dirname(os.path.abspath(__file__))
+            tucam_win_dir = os.path.join(tucam_dir, 'tucam_win')
+            self.Path = tucam_win_dir
             self.TUCAMINIT = None
             self.TUCAMOPEN = None
 
+        self.force_cleanup()
+       
         self._open_camera(self.cameraNo)
         self.trigger_source = "Continuous"
         self.isFlatfielding = False
@@ -145,46 +181,143 @@ class CameraTucsen:
         self.__logger.info(f"Opened Tucsen camera {camera_index} (Linux)")
 
     def _open_camera_windows(self, camera_index: int):
+        """Windows-specific camera initialization following working pattern exactly."""
+        # Cleanup any existing session before opening (like working code)
+        self.__logger.info("Cleaning up any existing camera session...")
         try:
-            TUCAM_Api_Uninit()
-            time.sleep(0.1)
-        except Exception:
-            pass
+            self._shutdown_capture()
+        except:
+            pass  # May not have camera_handle yet
+            
+        # Try to close any existing handle  
+        if hasattr(self, 'TUCAMOPEN') and getattr(self.TUCAMOPEN, 'hIdxTUCam', 0) != 0:
+            try:
+                TUCAM_Dev_Close(self.TUCAMOPEN.hIdxTUCam)
+                self.__logger.info("Closed existing camera handle")
+            except Exception as e:
+                self.__logger.info(f"Error closing existing handle: {e}")
+                
+        # Initialize exactly like working code
         self.TUCAMINIT = TUCAM_INIT(0, self.Path.encode('utf-8'))
         self.TUCAMOPEN = TUCAM_OPEN(0, 0)
-        ret = TUCAM_Api_Init(pointer(self.TUCAMINIT), 5000)
+        ret = TUCAM_Api_Init(pointer(self.TUCAMINIT), 2000)  # Match working code timeout
         self.__logger.info(f"API Init result: {ret}")
+        self.__logger.info(f"Camera count: {self.TUCAMINIT.uiCamCount}")
+        
         if self.TUCAMINIT.uiCamCount == 0:
             raise Exception("No Tucsen cameras found")
         if camera_index >= self.TUCAMINIT.uiCamCount:
             raise Exception(f"Camera index {camera_index} not available. Found {self.TUCAMINIT.uiCamCount} cameras")
+        
+        # Open camera exactly like working code
         self.TUCAMOPEN = TUCAM_OPEN(camera_index, 0)
+        self.__logger.info(f"Opening camera index {camera_index}")
         TUCAM_Dev_Open(pointer(self.TUCAMOPEN))
+        
         if self.TUCAMOPEN.hIdxTUCam == 0:
             raise Exception(f"Failed to open Tucsen camera {camera_index}")
+        else:
+            self.__logger.info("Open the camera success!")
+            
         self.camera_handle = self.TUCAMOPEN.hIdxTUCam
+        self.__logger.info(f"Camera handle set to: {self.camera_handle}")
+        
+        # Skip immediate test - it interferes with threaded capture
+        # The camera is working (was verified), go straight to normal operation
+        
         self._get_sensor_info()
         self.is_connected = True
         self.__logger.info(f"Opened Tucsen camera {camera_index} (Windows)")
 
-    def _get_sensor_info(self):
+    def _test_immediate_capture(self):
+        """Test capture immediately after camera opens to verify handle works."""
+        self.__logger.info("Testing immediate capture to verify camera handle...")
+        
         try:
-            temp = TUCAM_FRAME()
-            temp.pBuffer = 0
-            temp.ucFormatGet = TUFRM_FORMATS.TUFRM_FMT_USUAl.value
-            temp.uiRsdSize = 1
-            ret = TUCAM_Buf_Alloc(self.camera_handle, pointer(temp))
-            if self._ok(ret):
-                self.SensorWidth = int(temp.usWidth)
-                self.SensorHeight = int(temp.usHeight)
+            # Check current trigger mode first
+            m_tgr = TUCAM_TRIGGER_ATTR()
+            try:
+                ret = TUCAM_Cap_GetTrigger(self.camera_handle, pointer(m_tgr))
+                self.__logger.info(f"Current trigger mode: {m_tgr.nTgrMode}")
+                self.__logger.info(f"Trigger buffer frames: {m_tgr.nBufFrames}")
+            except Exception as e:
+                self.__logger.error(f"Failed to get trigger mode: {e}")
+            
+            # Force set to continuous sequence mode like working example
+            m_tgr.nTgrMode = TUCAM_CAPTURE_MODES.TUCCM_SEQUENCE.value
+            m_tgr.nBufFrames = 10  # Like working examples
+            try:
+                ret = TUCAM_Cap_SetTrigger(self.camera_handle, m_tgr)
+                self.__logger.info(f"Set trigger mode result: {ret}")
+            except Exception as e:
+                self.__logger.error(f"Failed to set trigger mode: {e}")
+            
+            # Follow exact working pattern from the standalone code
+            m_frame = TUCAM_FRAME()
+            m_frformat = TUFRM_FORMATS
+            m_capmode = TUCAM_CAPTURE_MODES
+
+            m_frame.pBuffer = 0
+            m_frame.ucFormatGet = m_frformat.TUFRM_FMT_USUAl.value
+            m_frame.uiRsdSize = 1
+
+            # Allocate buffer using the handle we just got
+            self.__logger.info(f"Allocating buffer with handle: {self.camera_handle}")
+            ret = TUCAM_Buf_Alloc(self.camera_handle, pointer(m_frame))
+            self.__logger.info(f"Immediate test - Buffer allocation result: {ret}")
+            
+            # Start capture
+            self.__logger.info("Starting capture for immediate test...")
+            ret = TUCAM_Cap_Start(self.camera_handle, m_tgr.nTgrMode)
+            self.__logger.info(f"Immediate test - Capture start result: {ret}")
+
+            # Try to get one frame
+            self.__logger.info("Waiting for one frame in immediate test...")
+            try:
+                result = TUCAM_Buf_WaitForFrame(self.camera_handle, pointer(m_frame), 2000)
+                self.__logger.info(f"IMMEDIATE TEST SUCCESS! Frame captured: {result}")
+                self.__logger.info(
+                    f"Frame: width:{m_frame.usWidth}, height:{m_frame.usHeight}, "
+                    f"channels:{m_frame.ucChannels}, elembytes:{m_frame.ucElemBytes}, "
+                    f"image size:{m_frame.uiImgSize}"
+                )
+            except Exception as frame_error:
+                self.__logger.error(f"IMMEDIATE TEST FAILED - Frame wait error: {frame_error}")
+
+            # Cleanup immediately
+            self.__logger.info("Cleaning up immediate test...")
+            try:
+                TUCAM_Buf_AbortWait(self.camera_handle)
+            except:
+                pass
+            try:
+                TUCAM_Cap_Stop(self.camera_handle)
+            except:
+                pass
+            try:
                 TUCAM_Buf_Release(self.camera_handle)
-            else:
-                self.SensorWidth = 2048
-                self.SensorHeight = 2048
+            except:
+                pass
+            
+            self.__logger.info("Immediate test completed")
+            
+        except Exception as e:
+            self.__logger.error(f"Immediate test failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _get_sensor_info(self):
+        """Get sensor info without allocating buffers (follow working code pattern)."""
+        try:
+            # Don't allocate buffers during initialization like the working code
+            # Just use default values that will be updated when frames are captured
+            self.SensorWidth = 3000  # From working code output
+            self.SensorHeight = 3000  # From working code output
+            self.__logger.info(f"Using default sensor dimensions: {self.SensorWidth} x {self.SensorHeight}")
         except Exception as e:
             self.__logger.warning(f"Sensor info fallback: {e}")
-            self.SensorWidth = 2048
-            self.SensorHeight = 2048
+            self.SensorWidth = 3000
+            self.SensorHeight = 3000
         self.shape = (self.SensorHeight, self.SensorWidth)
 
     def openPropertiesGUI(self): 
@@ -265,63 +398,156 @@ class CameraTucsen:
 
     # -------- Live control (threaded) ---------------------------------------
     def start_live(self):
+        """Start live acquisition using threaded approach like working code."""
         if self._is_streaming.is_set():
             self.__logger.warning("Camera is already streaming")
             return
-        # Clear buffers
-        self.flushBuffer()
-        # Allocate frame
-        self._allocate_buffer()
-        # Set properties
-        self.set_exposure_time(self.exposure_time)
-        self.set_gain(self.gain)
-        self.set_blacklevel(self.blacklevel)
-        # Start capture
-        ret = TUCAM_Cap_Start(self.camera_handle, TUCAM_CAPTURE_MODES.TUCCM_SEQUENCE.value)
-        if not self._ok(ret):
+            
+        try:
+            # Clear buffers
+            self.flushBuffer()
+            
+            # Start the thread that will handle buffer allocation, capture start, and frame waiting
+            with self._read_thread_lock:
+                self._keep_running.set()
+                self._is_streaming.set()
+                self._read_thread = threading.Thread(target=self._thread_loop, name="TucsenRead", daemon=True)
+                self._read_thread.start()
+                
+            self.__logger.info("Tucsen streaming started")
+            
+        except Exception as e:
+            self.__logger.error(f"Failed to start live: {e}")
+            self._is_streaming.clear()
+            self._keep_running.clear()
+            raise
+
+    def _thread_loop(self):
+        """Thread loop that follows the exact working pattern."""
+        self.__logger.info("Entered Tucsen thread loop")
+        
+        # Follow the exact working pattern: allocate buffer and start capture in thread
+        m_frame = TUCAM_FRAME()
+        m_frformat = TUFRM_FORMATS
+        m_capmode = TUCAM_CAPTURE_MODES
+
+        m_frame.pBuffer = 0
+        m_frame.ucFormatGet = m_frformat.TUFRM_FMT_USUAl.value
+        m_frame.uiRsdSize = 1
+
+        try:
+            # Allocate buffer in thread
+            self.__logger.info("Allocating buffer in thread...")
+            ret = TUCAM_Buf_Alloc(self.camera_handle, pointer(m_frame))
+            self.__logger.info(f"Buffer allocation result: {ret}")
+            
+            # Ensure trigger mode is set to continuous sequence (like working examples)
+            m_tgr = TUCAM_TRIGGER_ATTR()
             try:
-                if self._m_frame is not None:
-                    TUCAM_Buf_Release(self.camera_handle)
-                    self._m_frame = None
-            finally:
-                raise Exception(f"Failed to start capture: {ret}")
-        # Thread
-        with self._read_thread_lock:
-            self._keep_running.set()
-            self._is_streaming.set()
-            self._read_thread = threading.Thread(target=self._wait_for_frame, name="TucsenRead", daemon=True)
-            self._read_thread.start()
-        self.__logger.info("Tucsen streaming started")
+                # Get current trigger mode
+                TUCAM_Cap_GetTrigger(self.camera_handle, pointer(m_tgr))
+                self.__logger.info(f"Current trigger mode: {m_tgr.nTgrMode}")
+                
+                # Force to continuous sequence mode
+                m_tgr.nTgrMode = m_capmode.TUCCM_SEQUENCE.value
+                m_tgr.nBufFrames = 10  # Like working examples
+                ret = TUCAM_Cap_SetTrigger(self.camera_handle, m_tgr)
+                self.__logger.info(f"Set trigger mode to continuous: {ret}")
+            except Exception as trig_error:
+                self.__logger.warning(f"Could not set trigger mode: {trig_error}")
+            
+            # Start capture in thread
+            self.__logger.info("Starting capture in thread...")
+            ret = TUCAM_Cap_Start(self.camera_handle, m_capmode.TUCCM_SEQUENCE.value)
+            self.__logger.info(f"Capture start result: {ret}")
+
+            frame_count = 0
+            while self._keep_running.is_set():
+                try:
+                    # Use same timeout as working code
+                    result = TUCAM_Buf_WaitForFrame(self.camera_handle, pointer(m_frame), 1000)
+                    
+                    self.__logger.debug(
+                        f"Frame {frame_count}: width:{m_frame.usWidth}, height:{m_frame.usHeight}, "
+                        f"channels:{m_frame.ucChannels}, elembytes:{m_frame.ucElemBytes}, "
+                        f"image size:{m_frame.uiImgSize}"
+                    )
+                    
+                    # Convert to numpy array
+                    frame_np = self._convert_frame_to_numpy(m_frame)
+                    
+                    if frame_np is not None:
+                        # Store frame in buffer
+                        with self._frame_lock:
+                            self.frame_buffer.append(frame_np)
+                            self.frameid_buffer.append(frame_count)
+                            self._current_frame = frame_np
+                        
+                        frame_count += 1
+                        if frame_count % 10 == 0:  # Log every 10th frame to avoid spam
+                            self.__logger.info(f"Captured frame {frame_count}, shape: {frame_np.shape}")
+                        
+                except Exception as e:
+                    # Follow working code pattern: simple exception handling
+                    # Check if we should stop before continuing
+                    if not self._keep_running.is_set():
+                        break
+                    self.__logger.debug(f'Frame wait failed, frame number {frame_count}: {e}')
+                    continue
+
+        except Exception as e:
+            self.__logger.error(f"Error in thread loop: {e}")
+        finally:
+            # Cleanup exactly like working code
+            self.__logger.info("Cleaning up thread...")
+            try:
+                TUCAM_Buf_AbortWait(self.camera_handle)
+            except:
+                pass
+            try:
+                TUCAM_Cap_Stop(self.camera_handle)
+            except:
+                pass
+            try:
+                TUCAM_Buf_Release(self.camera_handle)
+            except:
+                pass
+            self.__logger.info("Thread loop cleanup completed")
 
     def stop_live(self):
+        """Stop live acquisition and clean up thread."""
         if not self._is_streaming.is_set():
             self.__logger.warning("Camera is not streaming")
             return
-        # Unblock WaitForFrame BEFORE join
+            
+        self.__logger.info("Stopping Tucsen streaming...")
+        
+        # Signal thread to stop FIRST
+        self._keep_running.clear()
+        self._is_streaming.clear()
+        
+        # Abort any waiting operations to unblock the thread immediately
         try:
             TUCAM_Buf_AbortWait(self.camera_handle)
         except Exception:
             pass
+        
+        # Give a small delay for the abort to take effect
+        time.sleep(0.05)
+        
+        # Get thread reference safely
         with self._read_thread_lock:
-            self._keep_running.clear()
             thread = self._read_thread
+        
+        # Wait for thread to finish with shorter timeout
         if thread is not None and thread.is_alive():
-            thread.join(timeout=3.0)
-        # Stop & release
-        try:
-            ret = TUCAM_Cap_Stop(self.camera_handle)
-            if not self._ok(ret):
-                self.__logger.warning(f"Cap_Stop returned {ret}")
-        except Exception as e:
-            self.__logger.warning(f"Cap_Stop error: {e}")
-        try:
-            if self._m_frame is not None:
-                TUCAM_Buf_Release(self.camera_handle)
-        except Exception as e:
-            self.__logger.warning(f"Buf_Release error: {e}")
-        self._m_frame = None
+            self.__logger.debug("Waiting for thread to finish...")
+            thread.join(timeout=1.0)  # Shorter timeout
+            if thread.is_alive():
+                self.__logger.warning("Thread did not finish in time, but continuing cleanup")
+                # Don't block forever - the thread is daemon anyway
+        
         self._read_thread = None
-        self._is_streaming.clear()
         self.__logger.info("Tucsen streaming stopped")
 
     suspend_live = stop_live

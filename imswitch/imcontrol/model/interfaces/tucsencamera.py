@@ -465,13 +465,15 @@ class CameraTucsen:
             while self._keep_running.is_set():
                 try:
                     # Use same timeout as working code
-                    result = TUCAM_Buf_WaitForFrame(self.camera_handle, pointer(m_frame), 1000)
+                    result = TUCAM_Buf_WaitForFrame(self.camera_handle, pointer(m_frame), 5000)
                     
-                    self.__logger.debug(
-                        f"Frame {frame_count}: width:{m_frame.usWidth}, height:{m_frame.usHeight}, "
-                        f"channels:{m_frame.ucChannels}, elembytes:{m_frame.ucElemBytes}, "
-                        f"image size:{m_frame.uiImgSize}"
-                    )
+                    # Reduce logging frequency to improve performance
+                    if frame_count % 10 == 0:
+                        self.__logger.debug(
+                            f"Frame {frame_count}: width:{m_frame.usWidth}, height:{m_frame.usHeight}, "
+                            f"channels:{m_frame.ucChannels}, elembytes:{m_frame.ucElemBytes}, "
+                            f"image size:{m_frame.uiImgSize}"
+                        )
                     
                     # Convert to numpy array
                     frame_np = self._convert_frame_to_numpy(m_frame)
@@ -492,7 +494,9 @@ class CameraTucsen:
                     # Check if we should stop before continuing
                     if not self._keep_running.is_set():
                         break
-                    self.__logger.debug(f'Frame wait failed, frame number {frame_count}: {e}')
+                    # Reduce error logging frequency to improve performance  
+                    if frame_count % 50 == 0:  # Only log every 50th error
+                        self.__logger.debug(f'Frame wait failed, frame number {frame_count}: {e}')
                     continue
 
         except Exception as e:
@@ -569,7 +573,7 @@ class CameraTucsen:
         while self._keep_running.is_set():
             try:
                 # Wait up to 1000 ms; Tucsen Python wrapper often raises on timeout
-                TUCAM_Buf_WaitForFrame(self.camera_handle, pointer(self._m_frame), 1000)
+                TUCAM_Buf_WaitForFrame(self.camera_handle, pointer(self._m_frame), 5000)
                 consecutive_timeouts = 0
                 frame_np = self._convert_frame_to_numpy(self._m_frame)
                 if frame_np is not None:

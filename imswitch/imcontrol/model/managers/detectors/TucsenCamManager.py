@@ -97,7 +97,7 @@ class TucsenCamManager(DetectorManager):
         }
 
         # Start the frame grabbing thread
-        self.startAcquisition()
+        # self.startAcquisition()
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=True)
 

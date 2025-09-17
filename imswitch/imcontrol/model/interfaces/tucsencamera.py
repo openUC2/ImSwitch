@@ -88,7 +88,7 @@ class CameraTucsen:
             success = 0
         return CameraTucsen._rc(ret) == success
 
-    def __init__(self, cameraNo=None, exposure_time=10000, gain=0, frame_rate=-1, blacklevel=100, isRGB=False, binning=1):
+    def __init__(self, cameraNo=None, exposure_time=10, gain=0, frame_rate=-1, blacklevel=100, isRGB=False, binning=1):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -221,10 +221,7 @@ class CameraTucsen:
             self.frameNumber = frame_id
             self._current_frame = frame
             
-            # Log occasionally
-            if frame_id % 100 == 0:
-                self.__logger.info(f"Captured frame {frame_id}, shape: {frame.shape}")
-                
+
         except Exception as e:
             self.__logger.error(f"Frame handling error: {e}")
 
@@ -622,8 +619,8 @@ class CameraTucsen:
     def set_exposure_time(self, exposure_time):
         try:
             self.exposure_time = exposure_time
-            exposure_us = float(exposure_time) * 1000.0
-            ret = TUCAM_Prop_SetValue(self.camera_handle, TUCAM_IDPROP.TUIDP_EXPOSURETM.value, c_double(exposure_us), 0)
+            exposure_ms = float(exposure_time) 
+            ret = TUCAM_Prop_SetValue(self.camera_handle, TUCAM_IDPROP.TUIDP_EXPOSURETM.value, c_double(exposure_ms), 0)
             if not self._ok(ret):
                 self.__logger.warning(f"Set exposure returned {ret}")
         except Exception as e:
@@ -631,6 +628,7 @@ class CameraTucsen:
 
     def set_gain(self, gain):
         try:
+            #
             self.gain = gain
             ret = TUCAM_Prop_SetValue(self.camera_handle, TUCAM_IDPROP.TUIDP_GLOBALGAIN.value, c_double(float(gain)), 0)
             if not self._ok(ret):

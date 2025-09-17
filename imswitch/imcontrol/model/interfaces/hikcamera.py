@@ -143,7 +143,8 @@ class CameraHIK:
             if psize > 0:
                 self.camera.MV_CC_SetIntValue("GevSCPSPacketSize", psize)
                 self.__logger.debug(f"Set packet size to {psize} for GigE camera")
-
+        # print unique ID: # TODO: We should make the cameraNo persistent based on this ID
+        self.__logger.info(f"Unique Serial Number of HIK Camera: {infos[number].SpecialInfo.stUsb3VInfo.nDeviceNumber}")
         # get available parameters
         self.mParameters = self.get_camera_parameters()
         self.__logger.info(f"Camera parameters: model={self.mParameters.get('model_name', 'Unknown')}, isRGB={self.mParameters.get('isRGB', False)}")

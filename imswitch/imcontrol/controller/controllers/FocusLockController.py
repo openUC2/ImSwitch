@@ -329,7 +329,7 @@ class FocusLockController(ImConWidgetController):
         self._pollFramesThread.start()
 
     def _onMotorPositionUpdate(self, pos: Dict[str, float]):
-        if "Z" in pos[self.positioner]:
+        if type(pos) != list and "Z" in pos[self.positioner]: # TODO: Seems like the signal is not unified
             self.currentZPosition = pos[self.positioner]["Z"]
             
     # =========================

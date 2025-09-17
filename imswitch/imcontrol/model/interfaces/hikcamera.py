@@ -90,9 +90,15 @@ class CameraHIK:
         # user chooses colour mode; fall back to auto‑detect
         isRGB = self.mParameters["isRGB"]
         self.isRGB = bool(isRGB) if isRGB is not None else self._detect_rgb()
+        self.__logger.info(f"Camera RGB mode: {self.isRGB}")
+        
         # Use YUV format if isRGB is True (instead of Bayer)
         if self.isRGB:
-            self.camera.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_YUV422_YUYV_Packed)
+            ret = self.camera.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_YUV422_YUYV_Packed)
+            if ret != 0:
+                self.__logger.warning(f"Failed to set YUV pixel format, ret=0x{ret:x}")
+            else:
+                self.__logger.info("Set pixel format to YUV422_YUYV_Packed for RGB camera")
 
         # register callback -----------------------------------------------
         self._sdk_cb = self._wrap_cb(self._on_frame)   # keep ref
@@ -106,7 +112,7 @@ class CameraHIK:
     # ---------------------------------------------------------------------
     def _open_camera(self, number: int):
         # gather all devices (GigE then USB)
-        infos: list[MV_CC_DEVICE_INFO] = []
+        infos = []  # List[MV_CC_DEVICE_INFO]
         for layer in (MV_GIGE_DEVICE, MV_USB_DEVICE):
             lst = MV_CC_DEVICE_INFO_LIST()
             # print available cameras 
@@ -114,11 +120,15 @@ class CameraHIK:
             memset(byref(lst), 0, sizeof(lst))
             if MvCamera.MV_CC_EnumDevices(layer, lst) == 0:
                 for i in range(lst.nDeviceNum):
-                    infos.append(cast(lst.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents)
+                    device_info = cast(lst.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents
+                    infos.append(device_info)
+                    self.__logger.debug(f"Found camera {i}: Layer {layer}")
 
+        self.__logger.info(f"Total cameras found: {len(infos)}")
         if not infos or number >= len(infos):
-            raise RuntimeError("No suitable Hik camera found")
+            raise RuntimeError(f"No suitable Hik camera found. Requested camera {number}, but only {len(infos)} cameras available.")
 
+        self.__logger.info(f"Opening camera {number} out of {len(infos)} available cameras")
         self.camera = MvCamera()
         ret = self.camera.MV_CC_CreateHandle(infos[number])
         if ret != 0:
@@ -132,9 +142,12 @@ class CameraHIK:
             psize = self.camera.MV_CC_GetOptimalPacketSize()
             if psize > 0:
                 self.camera.MV_CC_SetIntValue("GevSCPSPacketSize", psize)
-
+                self.__logger.debug(f"Set packet size to {psize} for GigE camera")
+        # print unique ID: # TODO: We should make the cameraNo persistent based on this ID
+        self.__logger.info(f"Unique Serial Number of HIK Camera: {infos[number].SpecialInfo.stUsb3VInfo.nDeviceNumber}")
         # get available parameters
         self.mParameters = self.get_camera_parameters()
+        self.__logger.info(f"Camera parameters: model={self.mParameters.get('model_name', 'Unknown')}, isRGB={self.mParameters.get('isRGB', False)}")
 
         # set parameters
         self.setBinning(binning=self.binning)
@@ -272,6 +285,30 @@ class CameraHIK:
                         return
                     buf   = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
                 frame = buf.reshape(h, w, 3)
+            elif pix in (PixelType_Gvsp_YUV422_YUYV_Packed,
+                        PixelType_Gvsp_YUV422_Packed,
+                        PixelType_Gvsp_YUV444_Packed,
+                        PixelType_Gvsp_YUV411_Packed):
+                # convert YUV to RGB
+                nRGB = w * h * 3
+                dst  = (c_ubyte * nRGB)()
+                conv = MV_CC_PIXEL_CONVERT_PARAM()
+                memset(byref(conv), 0, sizeof(conv))
+                conv.nWidth         = w
+                conv.nHeight        = h
+                conv.enSrcPixelType = pix
+                conv.enDstPixelType = PixelType_Gvsp_RGB8_Packed
+                conv.pSrcData       = pData
+                conv.nSrcDataLen    = nSize
+                conv.pDstBuffer     = dst
+                conv.nDstBufferSize = nRGB
+                ret = self.camera.MV_CC_ConvertPixelType(conv)
+                if ret != 0:
+                    self.__logger.error(f"YUV pixel convert failed 0x{ret:x}")
+                    return
+                buf = np.frombuffer(dst, dtype=np.uint8, count=nRGB)
+                frame = buf.reshape(h, w, 3)
+                self.__logger.debug(f"Converted YUV format 0x{pix:x} to RGB")
             else:
                 self.__logger.error(f"Unsupported pixel type 0x{pix:x}")
                 return

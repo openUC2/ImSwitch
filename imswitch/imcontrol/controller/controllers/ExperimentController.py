@@ -258,6 +258,185 @@ class ExperimentController(ImConWidgetController):
         self.omero_username = self._master.experimentManager.omeroUsername
         self.omero_password = self._master.experimentManager.omeroPassword
         self.omero_port = self._master.experimentManager.omeroPort
+        
+        # Focus map integration - NEW
+        self._focus_lock_controller = None
+        self._focus_map_enabled = False
+        self._focus_lock_live_enabled = False
+        self._channel_z_offsets = {}
+        self._settle_timeout_ms = 1500
+        self._settle_band_um = 1.0
+        self._initializeFocusMapIntegration()
+
+    def _initializeFocusMapIntegration(self):
+        """Initialize focus map integration with FocusLockController."""
+        try:
+            # Try to get FocusLockController
+            if hasattr(self._master, '_controllersManager'):
+                # Look for focus lock controller in the controllers
+                controller_names = self._master._controllersManager._controllers.keys()
+                for name in controller_names:
+                    controller = self._master._controllersManager._controllers[name]
+                    if hasattr(controller, '_focus_lock_manager'):
+                        self._focus_lock_controller = controller
+                        self._logger.info("Found FocusLockController for focus map integration")
+                        break
+            
+            if self._focus_lock_controller is None:
+                # Try alternative approach - import and check
+                try:
+                    from .FocusLockController import FocusLockController
+                    # Check if we have a FocusLockController instance
+                    for attr_name in dir(self._master):
+                        attr = getattr(self._master, attr_name)
+                        if isinstance(attr, FocusLockController):
+                            self._focus_lock_controller = attr
+                            break
+                except:
+                    pass
+            
+            # Set default configuration
+            self._loadFocusMapConfig()
+            
+        except Exception as e:
+            self._logger.warning(f"Focus map integration not available: {e}")
+            self._focus_lock_controller = None
+
+    def _loadFocusMapConfig(self):
+        """Load focus map configuration from setup or defaults."""
+        try:
+            # Try to load from setup info if available
+            if hasattr(self._setupInfo, 'experiment'):
+                exp_config = self._setupInfo.experiment
+                self._focus_map_enabled = getattr(exp_config, 'use_focus_map', False)
+                self._focus_lock_live_enabled = getattr(exp_config, 'use_focus_lock_live', False)
+                self._settle_timeout_ms = getattr(exp_config, 'focus_settle_timeout_ms', 1500)
+                self._settle_band_um = getattr(exp_config, 'focus_settle_band_um', 1.0)
+                self._channel_z_offsets = getattr(exp_config, 'channel_z_offsets', {})
+            else:
+                # Use defaults
+                self._focus_map_enabled = False
+                self._focus_lock_live_enabled = False
+                self._channel_z_offsets = {"DAPI": 0.0, "FITC": 0.8, "TRITC": 1.2}
+                
+            self._logger.info(f"Focus map config: enabled={self._focus_map_enabled}, "
+                             f"live_lock={self._focus_lock_live_enabled}")
+                             
+        except Exception as e:
+            self._logger.error(f"Failed to load focus map config: {e}")
+            # Safe defaults
+            self._focus_map_enabled = False
+            self._focus_lock_live_enabled = False
+            self._channel_z_offsets = {}
+
+    def _applyFocusMapCorrection(self, x_um: float, y_um: float, channel_name: str = None):
+        """
+        Apply focus map Z correction before moving to XY position.
+        
+        Args:
+            x_um: X coordinate in micrometers
+            y_um: Y coordinate in micrometers  
+            channel_name: Optional channel name for channel-specific offset
+        """
+        if not self._focus_map_enabled or not self._focus_lock_controller:
+            return
+        
+        try:
+            focus_manager = self._focus_lock_controller._focus_lock_manager
+            if not focus_manager or not focus_manager.is_map_active():
+                return
+            
+            # Get Z offset from focus map
+            z_offset = focus_manager.get_z_offset(x_um, y_um)
+            
+            # Add channel-specific offset if provided
+            if channel_name:
+                channel_offset = self._channel_z_offsets.get(channel_name, 0.0)
+                z_offset += channel_offset
+            
+            if abs(z_offset) > 0.01:  # Only move if offset is significant
+                # Get current Z position
+                current_pos = self.mStage.getPosition()
+                z_ref = current_pos.get("Z", 0.0)
+                
+                # Calculate new Z position
+                new_z = z_ref + z_offset
+                
+                # Move Z first (before XY move)
+                self._logger.debug(f"Applying focus map correction: Z offset={z_offset:.2f}um "
+                                  f"({z_ref:.2f} -> {new_z:.2f}) for XY=({x_um:.1f}, {y_um:.1f})")
+                
+                self.mStage.move(value=new_z, speed=self.SPEED_Z_default, axis="Z", 
+                               is_absolute=True, is_blocking=True)
+                
+        except Exception as e:
+            self._logger.error(f"Failed to apply focus map correction: {e}")
+
+    def _waitForFocusSettle(self, timeout_ms: Optional[int] = None) -> bool:
+        """
+        Wait for focus lock to settle.
+        
+        Args:
+            timeout_ms: Timeout in milliseconds
+            
+        Returns:
+            True if settled within timeout, False otherwise
+        """
+        if not self._focus_lock_live_enabled or not self._focus_lock_controller:
+            return True  # No focus lock, consider settled
+        
+        if timeout_ms is None:
+            timeout_ms = self._settle_timeout_ms
+        
+        try:
+            # Check if focus lock is enabled
+            if not self._focus_lock_controller.isFocusLocked():
+                # Enable focus lock
+                self._focus_lock_controller.enableFocusLock(True)
+            
+            # Wait for settle with timeout
+            start_time = time.time()
+            timeout_s = timeout_ms / 1000.0
+            
+            while (time.time() - start_time) < timeout_s:
+                status = self._focus_lock_controller.status()
+                if status.get("settled", False):
+                    return True
+                time.sleep(0.05)  # Check every 50ms
+            
+            self._logger.warning(f"Focus did not settle within {timeout_ms}ms")
+            return False
+            
+        except Exception as e:
+            self._logger.error(f"Failed to wait for focus settle: {e}")
+            return False
+
+    def _checkFocusWatchdog(self) -> bool:
+        """
+        Check focus lock watchdog status.
+        
+        Returns:
+            True if focus is healthy, False if should abort
+        """
+        if not self._focus_lock_controller:
+            return True  # No focus lock, consider healthy
+        
+        try:
+            # This would require the controller to track watchdog state
+            # For now, just check if locked and settled
+            status = self._focus_lock_controller.status()
+            
+            # Check for excessive error
+            max_error = 5.0  # um, should come from config
+            if status.get("abs_error_um", 0.0) > max_error:
+                self._logger.error(f"Focus error {status.get('abs_error_um'):.2f}um exceeds limit {max_error}um")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self._logger.error(f"Failed to check focus watchdog: {e}")
+            return True  # Default to healthy on error
 
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
@@ -840,6 +1019,11 @@ class ExperimentController(ImConWidgetController):
     def move_stage_xy(self, posX: float = None, posY: float = None, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
         self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
+        
+        # Focus map integration - NEW
+        if posX is not None and posY is not None and not relative:
+            self._applyFocusMapCorrection(posX, posY)
+        
         #if posY and posX is None:
         self.mStage.move(value=(posX, posY), speed=(self.SPEED_X_default, self.SPEED_Y_default), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()

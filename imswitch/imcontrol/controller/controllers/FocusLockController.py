@@ -299,6 +299,34 @@ class FocusLockController(ImConWidgetController):
         # PID instance using extracted module (kept as self.pi for API stability)
         self.pi: Optional[PIDController] = None
 
+        # Focus Map functionality - NEW 
+        from imswitch.imcontrol.model.managers.FocusLockManager import FocusLockManager
+        try:
+            profile_name = getattr(self._setupInfo, 'profile_name', 'default')
+            self._focus_lock_manager = FocusLockManager(profile_name)
+            self._logger.info("FocusLockManager initialized successfully")
+        except Exception as e:
+            self._logger.error(f"Failed to initialize FocusLockManager: {e}")
+            self._focus_lock_manager = None
+
+        # Focus map signals for commchannel - NEW
+        self.sigFocusLockState = Signal(dict)       # focuslock/state
+        self.sigFocusLockSetpoint = Signal(dict)    # focuslock/setpoint  
+        self.sigFocusLockError = Signal(dict)       # focuslock/error
+        self.sigFocusLockSettled = Signal(dict)     # focuslock/settled
+        self.sigFocusMapUpdated = Signal(dict)      # focusmap/updated
+        self.sigFocusLockWatchdog = Signal(dict)    # focuslock/watchdog
+
+        # Focus settled state tracking - NEW
+        self._settled = False
+        self._settle_history = []  # Track error over time
+        self._settle_window_samples = max(1, int(self._focus_params.update_freq * 0.2))  # 200ms worth of samples
+        self._last_settle_check = time.time()
+        self._last_watchdog_check = time.time()
+        
+        # Connect signals to commchannel - NEW
+        self._setupFocusMapSignals()
+
         # Start polling
         self.updateThread() # TODO: Shall we do that from the beginning? 
 
@@ -653,6 +681,10 @@ class FocusLockController(ImConWidgetController):
 
             # Update plotting buffers
             self.updateSetPointData()
+            
+            # Update settled state and watchdog - NEW
+            self._updateSettledState()
+            self._checkWatchdog()
 
     @APIExport(runOnUIThread=True)
     def setParamsAstigmatism(self, gaussianSigma: float, backgroundThreshold: float,
@@ -950,6 +982,474 @@ class FocusLockController(ImConWidgetController):
             "num_steps": num_steps,
             "settle_time": settle_time,
         }
+
+    # =========================
+    # Focus Map API - NEW
+    # =========================
+    def _setupFocusMapSignals(self):
+        """Setup signals for focus map communication via commchannel."""
+        try:
+            # Connect our signals to commchannel topics
+            self.sigFocusLockState.connect(
+                lambda data: self._commChannel.sigGenericUpdate.emit("focuslock/state", data))
+            self.sigFocusLockSetpoint.connect(
+                lambda data: self._commChannel.sigGenericUpdate.emit("focuslock/setpoint", data))
+            self.sigFocusLockError.connect(
+                lambda data: self._commChannel.sigGenericUpdate.emit("focuslock/error", data))
+            self.sigFocusLockSettled.connect(
+                lambda data: self._commChannel.sigGenericUpdate.emit("focuslock/settled", data))
+            self.sigFocusMapUpdated.connect(
+                lambda data: self._commChannel.sigGenericUpdate.emit("focusmap/updated", data))
+            self.sigFocusLockWatchdog.connect(
+                lambda data: self._commChannel.sigGenericUpdate.emit("focuslock/watchdog", data))
+            
+            self._logger.info("Focus map signals connected to commchannel")
+        except Exception as e:
+            self._logger.error(f"Failed to setup focus map signals: {e}")
+
+    def _updateSettledState(self):
+        """Update settled state based on recent error history."""
+        if not self.locked or not self._focus_lock_manager:
+            self._settled = False
+            return
+
+        current_time = time.time()
+        params = self._focus_lock_manager.get_params()
+        settle_band = params.get("settle_band_um", 1.0)
+        settle_window_ms = params.get("settle_window_ms", 200)
+        
+        # Calculate current error
+        if hasattr(self, 'pi') and self.pi:
+            error_um = abs(self.pi.get_error()) * self._pi_params.scale_um_per_unit
+        else:
+            error_um = 0.0
+        
+        # Update error history
+        self._settle_history.append({
+            'time': current_time,
+            'error_um': error_um
+        })
+        
+        # Clean old history (keep only settle_window_ms worth)
+        window_seconds = settle_window_ms / 1000.0
+        cutoff_time = current_time - window_seconds
+        self._settle_history = [h for h in self._settle_history if h['time'] >= cutoff_time]
+        
+        # Check if settled (all recent errors within band)
+        if len(self._settle_history) >= self._settle_window_samples:
+            recent_errors = [h['error_um'] for h in self._settle_history]
+            self._settled = all(err <= settle_band for err in recent_errors)
+        else:
+            self._settled = False
+        
+        # Emit settled signal if state changed or periodically
+        if current_time - self._last_settle_check > 0.1:  # 100ms
+            self.sigFocusLockSettled.emit({
+                "settled": self._settled,
+                "band_um": settle_band,
+                "timeout_ms": params.get("settle_timeout_ms", 1500)
+            })
+            self._last_settle_check = current_time
+
+    def _checkWatchdog(self):
+        """Check watchdog conditions and emit alerts."""
+        if not self._focus_lock_manager:
+            return
+            
+        current_time = time.time()
+        params = self._focus_lock_manager.get_params()
+        watchdog_config = params.get("watchdog", {})
+        
+        max_error = watchdog_config.get("max_abs_error_um", 5.0)
+        max_time_unsettled = watchdog_config.get("max_time_without_settle_ms", 5000) / 1000.0
+        
+        # Calculate current error
+        if hasattr(self, 'pi') and self.pi:
+            error_um = abs(self.pi.get_error()) * self._pi_params.scale_um_per_unit
+        else:
+            error_um = 0.0
+        
+        status = "ok"
+        reason = ""
+        
+        # Check for excessive error
+        if error_um > max_error:
+            status = "abort"
+            reason = f"Focus error {error_um:.1f}um exceeds limit {max_error}um"
+        elif not self._settled and (current_time - self._last_settle_check) > max_time_unsettled:
+            status = "abort"
+            reason = f"Focus not settled for {max_time_unsettled:.1f}s"
+        elif error_um > max_error * 0.7:  # Warning threshold
+            status = "warn"
+            reason = f"Focus error {error_um:.1f}um approaching limit {max_error}um"
+        
+        # Emit watchdog signal periodically or on status change
+        if (current_time - self._last_watchdog_check > 1.0 or  # 1s periodic
+            hasattr(self, '_last_watchdog_status') and self._last_watchdog_status != status):
+            
+            self.sigFocusLockWatchdog.emit({
+                "status": status,
+                "reason": reason
+            })
+            self._last_watchdog_check = current_time
+            self._last_watchdog_status = status
+
+    @APIExport(runOnUIThread=True)
+    def start_focus_map_acquisition(self, grid_rows: int, grid_cols: int, 
+                                   margin: float = 0.0) -> Dict[str, Any]:
+        """
+        Start focus map acquisition over a grid.
+        
+        Args:
+            grid_rows: Number of rows in the grid
+            grid_cols: Number of columns in the grid  
+            margin: Margin around stage limits as fraction (0.0-1.0)
+            
+        Returns:
+            Dictionary with acquisition plan details
+        """
+        if not self._focus_lock_manager:
+            raise RuntimeError("FocusLockManager not available")
+        
+        # Get stage limits
+        try:
+            stage_limits = self.stage.getLimit()
+            x_min, x_max = stage_limits.get("X", (0, 1000))
+            y_min, y_max = stage_limits.get("Y", (0, 1000))
+        except:
+            # Fallback defaults
+            x_min, x_max = 0, 1000
+            y_min, y_max = 0, 1000
+        
+        # Apply margin
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        x_margin = x_range * margin
+        y_margin = y_range * margin
+        
+        x_start = x_min + x_margin
+        x_end = x_max - x_margin
+        y_start = y_min + y_margin
+        y_end = y_max - y_margin
+        
+        # Generate grid points
+        x_points = np.linspace(x_start, x_end, grid_cols)
+        y_points = np.linspace(y_start, y_end, grid_rows)
+        
+        grid_points = []
+        for y in y_points:
+            for x in x_points:
+                grid_points.append({"x_um": float(x), "y_um": float(y)})
+        
+        self._logger.info(f"Focus map acquisition planned: {len(grid_points)} points "
+                         f"({grid_rows}x{grid_cols}) with {margin*100:.1f}% margin")
+        
+        return {
+            "success": True,
+            "grid_points": grid_points,
+            "grid_rows": grid_rows,
+            "grid_cols": grid_cols,
+            "margin": margin,
+            "total_points": len(grid_points)
+        }
+
+    @APIExport(runOnUIThread=True)
+    def add_focus_point(self, x_um: float, y_um: float, z_um: Optional[float] = None, 
+                       autofocus: bool = True) -> Dict[str, Any]:
+        """
+        Add a focus point to the focus map.
+        
+        Args:
+            x_um: X coordinate in micrometers
+            y_um: Y coordinate in micrometers
+            z_um: Z coordinate in micrometers (if None, current position used)
+            autofocus: Whether to perform autofocus before adding point
+            
+        Returns:
+            Dictionary with operation result
+        """
+        if not self._focus_lock_manager:
+            raise RuntimeError("FocusLockManager not available")
+        
+        try:
+            # Move to XY position
+            self.stage.move({"X": x_um, "Y": y_um}, isAbsolute=True)
+            time.sleep(0.1)  # Brief settle time
+            
+            # Perform autofocus if requested
+            if autofocus:
+                # Use existing autofocus capability
+                autofocus_result = self.performAutofocus()
+                if not autofocus_result.get("success", False):
+                    return {
+                        "success": False,
+                        "error": "Autofocus failed",
+                        "position": {"x_um": x_um, "y_um": y_um}
+                    }
+                z_um = autofocus_result.get("z_position", self.currentZPosition)
+            elif z_um is None:
+                z_um = self.currentZPosition
+            
+            # Add point to focus map
+            self._focus_lock_manager.add_point(x_um, y_um, z_um)
+            
+            self._logger.info(f"Added focus point: ({x_um:.1f}, {y_um:.1f}, {z_um:.1f})")
+            
+            return {
+                "success": True,
+                "point": {"x_um": x_um, "y_um": y_um, "z_um": z_um},
+                "autofocus_used": autofocus,
+                "total_points": len(self._focus_lock_manager.get_map_data().get("points", []))
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to add focus point: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "position": {"x_um": x_um, "y_um": y_um}
+            }
+
+    @APIExport(runOnUIThread=True)
+    def fit_focus_map(self, method: str = "plane") -> Dict[str, Any]:
+        """
+        Fit a surface to the focus map points.
+        
+        Args:
+            method: Fitting method ("plane" currently supported)
+            
+        Returns:
+            Dictionary with fit results
+        """
+        if not self._focus_lock_manager:
+            raise RuntimeError("FocusLockManager not available")
+        
+        try:
+            fit_result = self._focus_lock_manager.fit(method)
+            self._focus_lock_manager.save_map()
+            
+            # Emit map updated signal
+            map_data = self._focus_lock_manager.get_map_data()
+            self.sigFocusMapUpdated.emit({
+                "n_points": len(map_data.get("points", [])),
+                "method": method,
+                "ts": datetime.now().isoformat()
+            })
+            
+            self._logger.info(f"Focus map fitted with method {method}")
+            return {
+                "success": True,
+                "method": method,
+                "fit_result": fit_result,
+                "map_active": self._focus_lock_manager.is_map_active()
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to fit focus map: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    @APIExport(runOnUIThread=True)
+    def clear_focus_map(self) -> Dict[str, Any]:
+        """Clear the current focus map."""
+        if not self._focus_lock_manager:
+            raise RuntimeError("FocusLockManager not available")
+        
+        try:
+            self._focus_lock_manager.clear_map()
+            self._logger.info("Focus map cleared")
+            return {"success": True}
+        except Exception as e:
+            self._logger.error(f"Failed to clear focus map: {e}")
+            return {"success": False, "error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def get_focus_map(self) -> Dict[str, Any]:
+        """Get current focus map data."""
+        if not self._focus_lock_manager:
+            return {"active": False, "error": "FocusLockManager not available"}
+        
+        map_data = self._focus_lock_manager.get_map_data()
+        map_stats = self._focus_lock_manager.get_map_stats()
+        
+        return {
+            "active": map_stats["active"],
+            "data": map_data,
+            "stats": map_stats
+        }
+
+    @APIExport(runOnUIThread=True)
+    def set_focus_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Set focus lock parameters."""
+        if not self._focus_lock_manager:
+            raise RuntimeError("FocusLockManager not available")
+        
+        try:
+            self._focus_lock_manager.set_params(params)
+            self._logger.info(f"Focus params updated: {params}")
+            return {"success": True, "params": self._focus_lock_manager.get_params()}
+        except Exception as e:
+            self._logger.error(f"Failed to set focus params: {e}")
+            return {"success": False, "error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def get_focus_params(self) -> Dict[str, Any]:
+        """Get focus lock parameters."""
+        if not self._focus_lock_manager:
+            return {"error": "FocusLockManager not available"}
+        
+        return self._focus_lock_manager.get_params()
+
+    @APIExport(runOnUIThread=True)
+    def lock(self, enable: bool) -> Dict[str, Any]:
+        """
+        Explicit lock/unlock focus.
+        
+        Args:
+            enable: True to lock, False to unlock
+            
+        Returns:
+            Dictionary with operation result
+        """
+        try:
+            if enable:
+                result = self.enableFocusLock(True)
+                action = "locked"
+            else:
+                result = self.enableFocusLock(False)
+                action = "unlocked"
+            
+            # Emit state signal
+            self.sigFocusLockState.emit({
+                "locked": self.locked,
+                "enabled": enable
+            })
+            
+            return {
+                "success": result,
+                "action": action,
+                "locked": self.locked
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to {action} focus: {e}")
+            return {"success": False, "error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def status(self) -> Dict[str, Any]:
+        """Get comprehensive focus lock status."""
+        try:
+            # Calculate current error
+            if hasattr(self, 'pi') and self.pi:
+                error_um = self.pi.get_error() * self._pi_params.scale_um_per_unit
+                abs_error_um = abs(error_um)
+                if self._pi_params.set_point != 0:
+                    error_pct = abs_error_um / abs(self._pi_params.set_point) * 100
+                else:
+                    error_pct = 0.0
+            else:
+                error_um = 0.0
+                abs_error_um = 0.0
+                error_pct = 0.0
+            
+            status_data = {
+                "locked": self.locked,
+                "measuring": self._state.is_measuring,
+                "settled": self._settled,
+                "error_um": float(error_um),
+                "abs_error_um": float(abs_error_um),
+                "error_pct": float(error_pct),
+                "setpoint": float(self._pi_params.set_point),
+                "z_ref_um": float(self.currentZPosition),
+                "focus_value": float(self.current_focus_value)
+            }
+            
+            # Emit status signals
+            self.sigFocusLockError.emit({
+                "error_um": status_data["error_um"],
+                "abs_error_um": status_data["abs_error_um"], 
+                "pct": status_data["error_pct"]
+            })
+            
+            self.sigFocusLockSetpoint.emit({
+                "z_ref_um": status_data["z_ref_um"]
+            })
+            
+            return status_data
+            
+        except Exception as e:
+            self._logger.error(f"Failed to get focus status: {e}")
+            return {"error": str(e)}
+
+    def performAutofocus(self, z_min: Optional[float] = None, 
+                        z_max: Optional[float] = None,
+                        z_step: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Perform autofocus operation.
+        
+        Args:
+            z_min: Minimum Z position for autofocus range
+            z_max: Maximum Z position for autofocus range
+            z_step: Step size for autofocus scan
+            
+        Returns:
+            Dictionary with autofocus results
+        """
+        try:
+            # Use default scan range if not specified
+            if z_min is None or z_max is None:
+                current_z = self.currentZPosition
+                scan_range = self._calib_params.scan_range_um
+                z_min = current_z - scan_range / 2
+                z_max = current_z + scan_range / 2
+            
+            if z_step is None:
+                z_step = (z_max - z_min) / 20  # Default 20 steps
+            
+            # Start autofocus measurement
+            if not self._state.is_measuring:
+                self.startFocusMeasurement()
+            
+            # Perform Z scan to find optimal focus
+            best_z = z_min
+            best_focus = 0.0
+            z_positions = np.arange(z_min, z_max + z_step, z_step)
+            
+            for z_pos in z_positions:
+                # Move to Z position
+                self.stage.move({"Z": z_pos}, isAbsolute=True)
+                time.sleep(0.1)  # Settle time
+                
+                # Measure focus value
+                focus_value = self.getCurrentFocusValue()
+                if focus_value > best_focus:
+                    best_focus = focus_value
+                    best_z = z_pos
+            
+            # Move to best position
+            self.stage.move({"Z": best_z}, isAbsolute=True)
+            time.sleep(0.1)
+            
+            result = {
+                "success": True,
+                "z_position": float(best_z),
+                "focus_value": float(best_focus),
+                "scan_range": {"min": float(z_min), "max": float(z_max)},
+                "iterations": len(z_positions),
+                "time_ms": len(z_positions) * 100  # Approximate
+            }
+            
+            self._logger.info(f"Autofocus completed: Z={best_z:.2f}um, focus={best_focus:.2f}")
+            return result
+            
+        except Exception as e:
+            self._logger.error(f"Autofocus failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "z_position": self.currentZPosition
+            }
 
 
 # =========================

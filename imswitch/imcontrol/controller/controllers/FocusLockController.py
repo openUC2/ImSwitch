@@ -1079,6 +1079,17 @@ class FocusCalibThread(object):
         self._focusValueComputeController._current_calibration = calibration_data
         self._focusValueComputeController._logger.info(f"Calibration completed: sensitivity={sensitivity_nm_per_unit:.1f} nm/unit, R²={r_squared:.4f}")
 
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            plt.plot(self.positionData, self.signalData,"o")
+            plt.plot(self.positionData, self.signalFit,"x")
+            plt.savefig("calibration_plot.png")
+            plt.close()
+        except Exception as e:
+            pass
+        
         self._focusValueComputeController.sigCalibrationProgress.emit({
             "event": "calibration_completed",
             "coefficients": self.poly.tolist(),

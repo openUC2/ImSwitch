@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 
 from imswitch.imcommon.model import initLogger, dirtools
+from .FocusLockConfig import FocusLockConfig
 
 
 class FocusLockManager:
@@ -25,6 +26,9 @@ class FocusLockManager:
         self._logger = initLogger(self)
         self._profile_name = profile_name
         
+        # Initialize configuration
+        self._config = FocusLockConfig(profile_name)
+        
         # Initialize storage paths
         self._config_dir = Path(dirtools.UserFileDirs.Root) / "focus"
         self._config_dir.mkdir(parents=True, exist_ok=True)
@@ -33,26 +37,25 @@ class FocusLockManager:
         
         # Initialize data structures
         self._focus_map = None
-        self._focus_params = self._load_default_params()
+        self._focus_params = self._load_focus_params()
         
         # Load existing data
         self.load_map()
-        self.load_params()
         
-    def _load_default_params(self) -> Dict[str, Any]:
-        """Load default focus lock parameters."""
-        return {
-            "lock_enabled": False,
-            "z_ref_um": 0.0,
-            "settle_band_um": 1.0,
-            "settle_timeout_ms": 1500,
-            "settle_window_ms": 200,
-            "watchdog": {
-                "max_abs_error_um": 5.0,
-                "max_time_without_settle_ms": 5000,
-                "action": "abort"
-            }
-        }
+    def _load_focus_params(self) -> Dict[str, Any]:
+        """Load focus lock parameters from config system."""
+        # Try to load from legacy params file first
+        if self._params_file.exists():
+            try:
+                with open(self._params_file, 'r') as f:
+                    legacy_params = json.load(f)
+                self._logger.info("Loaded legacy focus lock parameters")
+                return legacy_params
+            except Exception as e:
+                self._logger.error(f"Failed to load legacy params: {e}")
+        
+        # Use configuration system
+        return self._config.get_focuslock_params()
     
     def load_map(self) -> None:
         """Load focus map from disk."""
@@ -81,25 +84,28 @@ class FocusLockManager:
             self._logger.error(f"Failed to save focus map: {e}")
     
     def load_params(self) -> None:
-        """Load focus lock parameters from disk."""
-        if not self._params_file.exists():
-            self._logger.info(f"No focus params found at {self._params_file}, using defaults")
-            return
-            
-        try:
-            with open(self._params_file, 'r') as f:
-                loaded_params = json.load(f)
-                self._focus_params.update(loaded_params)
-            self._logger.info(f"Loaded focus lock parameters from {self._params_file}")
-        except Exception as e:
-            self._logger.error(f"Failed to load focus lock parameters: {e}")
+        """Load focus lock parameters - now uses config system."""
+        # Parameters are loaded in __init__ from config system
+        pass
     
     def save_params(self) -> None:
-        """Save focus lock parameters to disk."""
+        """Save focus lock parameters via config system."""
         try:
+            # Update configuration
+            self._config.update_section("focuslock", {
+                "enabled": self._focus_params.get("lock_enabled", False),
+                "settle_band_um": self._focus_params.get("settle_band_um", 1.0),
+                "settle_timeout_ms": self._focus_params.get("settle_timeout_ms", 1500),
+                "settle_window_ms": self._focus_params.get("settle_window_ms", 200),
+                "watchdog": self._focus_params.get("watchdog", {})
+            })
+            self._config.save_config()
+            
+            # Also save to legacy file for backward compatibility
             with open(self._params_file, 'w') as f:
                 json.dump(self._focus_params, f, indent=2)
-            self._logger.info(f"Saved focus lock parameters to {self._params_file}")
+            
+            self._logger.info("Saved focus lock parameters")
         except Exception as e:
             self._logger.error(f"Failed to save focus lock parameters: {e}")
     
@@ -305,3 +311,38 @@ class FocusLockManager:
             "created_at": self._focus_map.get("created_at"),
             "updated_at": self._focus_map.get("updated_at")
         }
+    
+    def get_config(self) -> 'FocusLockConfig':
+        """Get the configuration object for advanced usage."""
+        return self._config
+    
+    def is_focus_map_enabled_in_config(self) -> bool:
+        """Check if focus map is enabled in configuration."""
+        return self._config.is_focus_map_enabled()
+    
+    def is_focus_lock_live_enabled_in_config(self) -> bool:
+        """Check if live focus lock is enabled in configuration."""
+        return self._config.is_focus_lock_live_enabled()
+    
+    def update_config(self, section: str, updates: Dict[str, Any]) -> None:
+        """
+        Update configuration section.
+        
+        Args:
+            section: Configuration section to update
+            updates: Dictionary of updates to apply
+        """
+        self._config.update_section(section, updates)
+        self._config.save_config()
+        
+        # Reload parameters if focuslock section was updated
+        if section == "focuslock":
+            self._focus_params = self._config.get_focuslock_params()
+    
+    def get_experiment_config(self) -> Dict[str, Any]:
+        """Get experiment-related configuration."""
+        return self._config.get_experiment_params()
+    
+    def get_z_move_order(self) -> str:
+        """Get Z move order preference from config."""
+        return self._config.get_z_move_order()

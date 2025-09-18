@@ -341,6 +341,14 @@ class PositionerController(ImConWidgetController):
         self.__logger.debug(f"Stopping stage scan for positioner {positionerName}")
         self._master.positionersManager[positionerName].stop_stage_scanning()
 
+    @APIExport(runOnUIThread=True)
+    def moveToSampleLoadingPosition(self, positionerName=None, speed=10000, is_blocking=True):
+        """ Move to sample loading position. """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self.__logger.debug(f"Moving to sample loading position for positioner {positionerName}")
+        self._master.positionersManager[positionerName].moveToSampleLoadingPosition(speed=speed, is_blocking=is_blocking)
+
 _attrCategory = 'Positioner'
 _positionAttr = 'Position'
 _speedAttr = "Speed"

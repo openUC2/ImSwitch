@@ -43,8 +43,19 @@ class ArkitektController(ImConWidgetController):
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._logger.debug(f"Starting tile scan for positioner {positionerName}")
-        self._master.positionersManager[positionerName].start_tile_scanning(xRange=xRange, yRange=yRange, xStep=xStep, yStep=yStep, speed=speed)
-        
+        # have a tile scan function in the positioner manager inside a for loop
+        mFrameList = []
+        mPositioner = self._master.positionersManager[positionerName]
+        for y in range(0, yRange, yStep):
+            for x in range(0, xRange, xStep):
+                mPositioner.move(value=(x,y), axis="XY", is_absolute=True)
+                mFrameList.append(self.mDetector.getLatestFrame())
+            # move back in x
+            mPositioner.moveTo(0, y, speed=speed, is_blocking=True)
+
+        mPositioner.moveTo(0, 0, speed=speed, is_blocking=True)
+        return mFrameList
+    
     @APIExport(runOnUIThread=False)
     def deconvolve(self) -> int:
         """Trigger deconvolution via Arkitekt."""

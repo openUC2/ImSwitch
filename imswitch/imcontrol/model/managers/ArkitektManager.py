@@ -98,9 +98,9 @@ class ArkitektManager:
             self.__arkitekt = easy(
                 identifier=self._config.get("app_name", "imswitch"),
                 redeem_token=redeem_token,
-                url=self._config.get("url", "go.arkitekt.io")
+                url=self._config.get("url", "go.arkitekt.live")
             )
-            self.__logger.info("Starting Arkitekt on url: " + self._config.get("url", "go.arkitekt.io"))
+            self.__logger.info("Starting Arkitekt on url: " + self._config.get("url", "go.arkitekt.live"))
             # Set up Koil for async context handling
             self.__arkitekt.__koil = Koil(
                 sync_in_async=self._config.get("sync_in_async", True)

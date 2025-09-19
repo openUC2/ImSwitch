@@ -1,5 +1,8 @@
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
+
+from arkitekt_next import register, easy, progress
+
 # =========================
 # Controller
 # =========================
@@ -19,6 +22,28 @@ class ArkitektController(ImConWidgetController):
         self.mDetector = self._master.detectorsManager[self._master.detectorsManager.getAllDeviceNames()[0]]
 
 
+        self.arkitekt_app = self._master.arkitektManager.get_arkitekt_app()
+        self.arkitekt_app.register(self.moveToSampleLoadingPosition)
+        self.arkitekt_app.register(self.runTileScan)
+        self.arkitekt_app.run_detached()
+
+    def moveToSampleLoadingPosition(self, speed:float=10000, is_blocking:bool=True):
+        """ Move to sample loading position. """
+        positionerNames = self._master.positionersManager.getAllDeviceNames()
+        if len(positionerNames) == 0:
+            self._logger.warning("No positioners available to move to sample loading position.")
+            return
+        positionerName = positionerNames[0]
+        self._logger.debug(f"Moving to sample loading position for positioner {positionerName}")
+        self._master.positionersManager[positionerName].moveToSampleLoadingPosition(speed=speed, is_blocking=is_blocking)
+
+    def runTileScan(self, positionerName:str=None, xRange:float=100, yRange:float=100, xStep:int=10, yStep:int=10, speed:float=10000):
+        """ Run a tile scan. """
+        # TODO: Implement a check if the positioner supports tile scanning
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self._logger.debug(f"Starting tile scan for positioner {positionerName}")
+        self._master.positionersManager[positionerName].start_tile_scanning(xRange=xRange, yRange=yRange, xStep=xStep, yStep=yStep, speed=speed)
         
     @APIExport(runOnUIThread=False)
     def deconvolve(self) -> int:

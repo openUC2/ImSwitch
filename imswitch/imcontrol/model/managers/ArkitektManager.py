@@ -90,14 +90,17 @@ class ArkitektManager:
             # Import here to avoid issues if arkitekt_next is not installed
             from arkitekt_next import easy
             from koil import Koil
-            
+            if self._config.get("redeem_token", None) == "":
+                redeem_token = None
+            else:
+                redeem_token = self._config.get("redeem_token", None)
             # Create Arkitekt client with configuration
             self.__arkitekt = easy(
                 identifier=self._config.get("app_name", "imswitch"),
-                redeem_token=self._config.get("redeem_token"),
-                url=self._config.get("url", "http://go.arkitekt.io")
+                redeem_token=redeem_token,
+                url=self._config.get("url", "go.arkitekt.io")
             )
-            
+            self.__logger.info("Starting Arkitekt on url: " + self._config.get("url", "go.arkitekt.io"))
             # Set up Koil for async context handling
             self.__arkitekt.__koil = Koil(
                 sync_in_async=self._config.get("sync_in_async", True)
@@ -118,6 +121,10 @@ class ArkitektManager:
             self.__logger.error(f"Failed to initialize Arkitekt: {e}")
             self._config["enabled"] = False
 
+    def get_arkitekt_app(self) -> Optional[Any]:
+        """Get the Arkitekt application instance."""
+        return self.__arkitekt
+    
     def is_enabled(self) -> bool:
         """Check if Arkitekt integration is enabled and available."""
         return self._config.get("enabled", False) and self.__arkitekt is not None

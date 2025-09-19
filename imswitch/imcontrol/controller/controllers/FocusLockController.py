@@ -541,6 +541,9 @@ class FocusLockController(ImConWidgetController):
 
     def _pollFrames(self):
         tLast = 0
+
+        # store a history of the last 5 values and filter out outliers
+        last_values = []
         while self.__isPollingFramesActive:
             
             if (time.time() - tLast) < self.pollingFrameUpdatePeriode:
@@ -549,8 +552,9 @@ class FocusLockController(ImConWidgetController):
             tLast = time.time()
             if not self._state.is_measuring and not self.locked and not self.aboutToLock:
                 continue
-
-            im = self._master.detectorsManager[self.camera].getLatestFrame()
+            
+            for i in range(3): # Kinda clear buffer and wait a bit? 
+                im = self._master.detectorsManager[self.camera].getLatestFrame()
 
             # Crop (prefer NiP if present)
             try:
@@ -570,6 +574,18 @@ class FocusLockController(ImConWidgetController):
             # Compute focus value using extracted focus metrics module
             focus_result = self._focus_metric.compute(self.cropped_im)
             self.current_focus_value = focus_result.get("focus", 0.0)
+            
+            # TODO: Remove outliers in PID loop
+            if len(last_values) >= 5:
+                last_values.pop(0)
+            last_values.append(self.current_focus_value)
+            if len(last_values) == 5:
+                median = np.median(last_values)
+                diffs = [abs(v - median) for v in last_values]
+                max_diff = max(diffs)
+                if max_diff > self.aboutToLockDiffMax:
+                    last_values.pop(diffs.index(max_diff))
+                    self.current_focus_value = np.mean(last_values)
             
             # Legacy compatibility # TODO: remove all legacy vars
             self.setPointSignal = self._pi_params.set_point if self.pi else 0 # TODO: This should be the user-set set point, not current focus value 
@@ -621,7 +637,7 @@ class FocusLockController(ImConWidgetController):
                 if step_um != 0.0:
                     # Use absolute movement instead of relative
                     new_z_position = self.currentZPosition + step_um
-                    self.stage.move(value=new_z_position, axis="Z", speed=MAX_SPEED, is_blocking=False, is_absolute=True)
+                    self.stage.move(value=new_z_position, axis="Z", speed=MAX_SPEED, is_blocking=True, is_absolute=True)
                     self._travel_used_um += abs(step_um) # TODO: Still not sure if we need to use this! 
                     # travel budget acts like safety_distance_limit
                     if self._pi_params.safety_motion_active and self._travel_used_um > self._pi_params.safety_distance_limit:
@@ -750,7 +766,7 @@ class FocusLockController(ImConWidgetController):
 
     def _getCalibrationBasedScale(self) -> float:
         """Get the scale factor from calibration data if available, otherwise use default."""
-        if self._current_calibration and self._current_calibration.sensitivity_nm_per_unit > 0:
+        if self._current_calibration: # and self._current_calibration.sensitivity_nm_per_unit > 0: # TODO: I think it's fine if the factor is negative!
             # Convert nm per unit to µm per unit for consistency with existing code
             return self._current_calibration.sensitivity_nm_per_unit / 1000.0
         else:

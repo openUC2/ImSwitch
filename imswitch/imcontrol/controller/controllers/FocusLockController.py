@@ -270,7 +270,7 @@ class FocusLockController(ImConWidgetController):
         self.currPoint = 0
         self.setPointData = np.zeros(self.buffer, dtype=float)
         self.timeData = np.zeros(self.buffer, dtype=float)
-        self.reduceImageScaleFactor = 1
+        self.reduceImageScaleFactor = 8
 
         # Travel budget tracking
         self._travel_used_um = 0.0
@@ -837,6 +837,7 @@ class FocusLockController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def returnLastImage(self) -> Response:
         lastFrame = self._master.detectorsManager[self.camera].getLatestFrame()
+        lastFrame = lastFrame/np.max(lastFrame)*512.0
         lastFrame = lastFrame[::self.reduceImageScaleFactor, ::self.reduceImageScaleFactor]
         if lastFrame is None:
             raise RuntimeError("No image available. Please run update() first.")
@@ -862,13 +863,13 @@ class FocusLockController(ImConWidgetController):
             cropCenter = [detectorSize[1] // 2, detectorSize[0] // 2]
         else:
             cropCenter = [int(cropCenter[1] * mRatio), int(cropCenter[0] * mRatio)]
-        if cropSize < 100:
-            cropSize = 100
+        if self._focus_params.crop_size < 100:
+            self._focus_params.crop_size = 100
         detectorSize = self._master.detectorsManager[self.camera].shape
-        if cropSize > detectorSize[0] or cropSize > detectorSize[1]:
-            raise ValueError(f"Crop size {cropSize} exceeds detector size {detectorSize}.")
+        if self._focus_params.crop_size > detectorSize[0] or self._focus_params.crop_size > detectorSize[1]:
+            raise ValueError(f"Crop size {self._focus_params.crop_size} exceeds detector size {detectorSize}.")
         if cropCenter is None:
-            cropCenter = [cropSize // 2, cropSize // 2]
+            cropCenter = [self._focus_params.crop_size // 2, self._focus_params.crop_size // 2]
         self._focus_params.crop_center = cropCenter
         self._logger.info(f"Set crop parameters: size={self._focus_params.crop_size}, center={self._focus_params.crop_center}")
         

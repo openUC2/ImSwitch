@@ -48,14 +48,14 @@ class FocusMetricBase:
         """
         # Convert to grayscale if needed
         if frame.ndim == 3:
-            im = np.mean(frame, axis=-1).astype(np.uint8)
+            im = np.mean(frame, axis=-1).astype(np.uint16)
         else:
-            im = frame.astype(np.uint8)
+            im = frame.astype(np.uint16)
 
         im = im.astype(float)
 
         # Crop around brightest region if crop_radius > 0
-        if self.config.crop_radius > 0:
+        if 0 and self.config.crop_radius > 0:
             im_gauss = gaussian_filter(im, sigma=111)
             max_coord = np.unravel_index(np.argmax(im_gauss), im_gauss.shape)
             h, w = im.shape
@@ -130,7 +130,8 @@ class AstigmatismFocusMetric(FocusMetricBase):
         return projX, projY
 
     def fit_projections(self, projX: np.ndarray, projY: np.ndarray, 
-                       isDoubleGaussX: bool = False) -> Tuple[float, float]:
+                       isDoubleGaussX: bool = False,
+                       isDoubleGaussY: bool = False) -> Tuple[float, float]:
         """
         Fit Gaussian profiles to projections.
         
@@ -173,9 +174,14 @@ class AstigmatismFocusMetric(FocusMetricBase):
                 sigma_x = abs(float(popt_x[2]))
 
             # Fit Y projection
-            popt_y, _ = curve_fit(self.gaussian_1d, y, projY, 
+            if isDoubleGaussY:
+                popt_y, _ = curve_fit(self.double_gaussian_1d, y, projY, 
                                 p0=init_guess_y, maxfev=50000)
-            sigma_y = abs(float(popt_y[2]))
+                sigma_y = abs(float(popt_y[2]))
+            else:
+                popt_y, _ = curve_fit(self.gaussian_1d, y, projY, 
+                                    p0=init_guess_y, maxfev=50000)
+                sigma_y = abs(float(popt_y[2]))
             
         except Exception as e:
             logger.warning(f"Gaussian fitting failed, using std: {e}")
@@ -198,7 +204,7 @@ class AstigmatismFocusMetric(FocusMetricBase):
         
         try:
             # Preprocess frame
-            im = self.preprocess_frame(frame)
+            im = self.preprocess_frame(np.array(frame))
             
             # Check for minimum signal
             if np.max(im) < self.config.min_signal_threshold:

@@ -121,7 +121,7 @@ class SignalInstance(psygnal.SignalInstance):
                 if isinstance(arg, np.ndarray):
                     output_frame = np.ascontiguousarray(arg)  # Avoid memory fragmentation
                     if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
-                        everyNthsPixel = np.min([output_frame.shape[0]//480, output_frame.shape[1]//640])
+                        everyNthsPixel = np.min([output_frame.shape[0]//240, output_frame.shape[1]//320])
                     else:
                         everyNthsPixel = 1
 

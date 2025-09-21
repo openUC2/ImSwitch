@@ -125,9 +125,9 @@ class ObjectiveController(LiveUpdatedController):
 
         if self.calibrateOnStart:
             self.calibrateObjective()
-        # After calibration, move to the first objective position (X1)
-        self._objective.move(slot=1, isBlocking=True)
-        self.currentObjective = 1
+            # After calibration, move to the first objective position (X1)
+            self._objective.move(slot=1, isBlocking=True)
+            self.currentObjective = 1
         self._updatePixelSize()
 
 

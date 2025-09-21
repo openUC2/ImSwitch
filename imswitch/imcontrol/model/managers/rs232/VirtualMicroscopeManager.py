@@ -30,6 +30,86 @@ except ModuleNotFoundError:
 
         return wrapper
 
+"""
+End-to-end astigmatism autofocus simulation:
+- Simulated microscope with Z-scan, rotated astigmatism, and XY drift
+- Rotation-invariant second-moment focus metric (fast, no fits)
+- Plots + saves stack (NPZ) and metrics (CSV)
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from math import cos, sin
+
+# ----------------------- Simulation -----------------------
+
+class AstigmaticMicroscopeSimulator:
+    def __init__(
+        self,
+        H=128,
+        W=128,
+        roi_half=28,
+        phi_deg=33.0,      # astig axis rotation w.r.t. camera x
+        s0=1.7,            # base sigma at nominal focus (px)
+        astig_slope=0.33,  # sigma_x = s0 + a*z, sigma_y = s0 - a*z
+        amp=2400.0,
+        bg=35.0,
+        read_noise=0*2.2,
+        poisson=0*True,
+        seed=7,
+    ):
+        self.H, self.W = H, W
+        self.roi_half = roi_half
+        self.phi = np.deg2rad(phi_deg)
+        self.s0 = float(s0)
+        self.a = float(astig_slope)
+        self.amp = float(amp)
+        self.bg = float(bg)
+        self.read_noise = float(read_noise)
+        self.poisson = bool(poisson)
+        self.rng = np.random.default_rng(seed)
+
+        y, x = np.mgrid[0:H, 0:W].astype(np.float32)
+        self.xgrid = x
+        self.ygrid = y
+
+        # ROI indices (fixed crop around center; centroiding handles drift)
+        cx = W // 2
+        cy = H // 2
+        r = roi_half
+        self.roi_slice = np.s_[cy - r : cy + r, cx - r : cx + r]
+
+    def xy_drift(self, z):
+        # linear + sinusoidal drift to stress-test the metric
+        dx = 0.25 * z + 1.2 * np.sin(0.8 * z)
+        dy = -0.18 * z + 1.0 * np.cos(0.6 * z)
+        return dx, dy
+
+    def render_frame(self, z):
+        x, y = self.xgrid, self.ygrid
+        dx, dy = self.xy_drift(z)
+        cx = self.W / 2 + dx
+        cy = self.H / 2 + dy
+
+        sx = max(self.s0 + self.a * z, 0.5)
+        sy = max(self.s0 - self.a * z, 0.5)
+
+        # rotate coords by phi (principal axes of astigmatism)
+        xp = (x - cx) * cos(self.phi) + (y - cy) * sin(self.phi)
+        yp = -(x - cx) * sin(self.phi) + (y - cy) * cos(self.phi)
+
+        g = np.exp(-0.5 * ((xp / sx) ** 2 + (yp / sy) ** 2))
+        I = self.amp * g + self.bg
+
+        if self.poisson:
+            I = self.rng.poisson(I).astype(np.float32)
+        else:
+            I = I.astype(np.float32)
+
+        I += self.rng.normal(0, self.read_noise, I.shape).astype(np.float32)
+        return np.clip(I, 0, None)
+
 
 
 class VirtualMicroscopeManager:
@@ -46,7 +126,7 @@ class VirtualMicroscopeManager:
 
         try:
             self._imagePath = rs232Info.managerProperties["imagePath"]
-            if self._imagePath not in ["simplant", "smlm"]:
+            if self._imagePath not in ["simplant", "smlm", "astigmatism"]:
                 raise NameError
         except:
             package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -54,7 +134,7 @@ class VirtualMicroscopeManager:
                 package_dir, "_data/images/histoASHLARStitch.jpg"
             )
             self.__logger.info(
-                "If you want to use the plant, use 'imagePath': 'simplant' in your setup.json"
+                "If you want to use the plant, use 'imagePath': 'simplant', 'astigmatism' in your setup.json"
             )
 
         self._virtualMicroscope = VirtualMicroscopy(self._imagePath)
@@ -273,7 +353,19 @@ class Camera:
         if self.filePath == "simplant":
             self.image = createBranchingTree(width=5000, height=5000)
             self.image /= np.max(self.image)
+            self.SensorHeight = 300  # self.image.shape[1]
+            self.SensorWidth = 400  # self.image.shape[0]
+        
+        elif self.filePath == "astigmatism":
+            self.SensorHeight = 512  # self.image.shape[1]
+            self.SensorWidth = 512  # self.image.shape[0]
+
+            self.astimulator = AstigmaticMicroscopeSimulator(W=self.SensorHeight, H=self.SensorWidth, roi_half=256)
+
         elif self.filePath == "smlm":
+            self.SensorHeight = 300  # self.image.shape[1]
+            self.SensorWidth = 400  # self.image.shape[0]
+            
             tmp = createBranchingTree(width=5000, height=5000)
             tmp_min = np.min(tmp)
             tmp_max = np.max(tmp)
@@ -285,8 +377,6 @@ class Camera:
             self.image /= np.max(self.image)
 
         self.lock = threading.Lock()
-        self.SensorHeight = 300  # self.image.shape[1]
-        self.SensorWidth = 400  # self.image.shape[0]
         self.model = "VirtualCamera"
         self.PixelSize = 1.0
         self.isRGB = False
@@ -297,11 +387,13 @@ class Camera:
         )
 
     def produce_frame(
-        self, x_offset=0, y_offset=0, light_intensity=1.0, defocusPSF=None
+        self, x_offset=0, y_offset=0, z_offset=0, light_intensity=1.0, defocusPSF=None
     ):
         """Generate a frame based on the current settings."""
         if self.filePath == "smlm": # There is likely a better way of handling this
             return self.produce_smlm_frame(x_offset, y_offset, light_intensity)
+        elif self.filePath == "astigmatism":
+            return self.produce_astigmatism_frame(z_offset)
         else:
             with self.lock:
                 # add moise
@@ -324,6 +416,10 @@ class Camera:
                 image = image.astype(np.uint16)
                 time.sleep(0.1)
                 return np.array(image)
+
+    def produce_astigmatism_frame(self, z_offset=0):
+        #!/usr/bin/env python3
+        return self.astimulator.render_frame(z=z_offset)
 
     def produce_smlm_frame(self, x_offset=0, y_offset=0, light_intensity=5000):
         """Generate a SMLM frame based on the current settings."""
@@ -382,6 +478,7 @@ class Camera:
                 self.produce_frame(
                     x_offset=position["X"],
                     y_offset=position["Y"],
+                    z_offset=position["Z"],
                     light_intensity=intensity,
                     defocusPSF=defocusPSF,
                 ),
@@ -391,6 +488,7 @@ class Camera:
             return self.produce_frame(
                 x_offset=position["X"],
                 y_offset=position["Y"],
+                z_offset=position["Z"],
                 light_intensity=intensity,
                 defocusPSF=defocusPSF,
             )

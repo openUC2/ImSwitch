@@ -35,7 +35,7 @@ class FocusLockParams:
     crop_size: Optional[int] = None
     gaussian_sigma: float = 11.0
     background_threshold: float = 40.0
-    update_freq: float = 10.0
+    update_freq: float = 1.0
     two_foci_enabled: bool = False
     z_stack_enabled: bool = False
     z_step_limit_nm: float = 40.0
@@ -541,19 +541,20 @@ class FocusLockController(ImConWidgetController):
 
     def _pollFrames(self):
         tLast = 0
-
         # store a history of the last 5 values and filter out outliers
         last_values = []
+        nFreeBufferFrames = 3
         while self.__isPollingFramesActive:
             
             if (time.time() - tLast) < self.pollingFrameUpdatePeriode:
                 time.sleep(0.001)
                 continue
+            self._logger.debug("Current frame polling frequency: %.2f Hz", 1.0 / (time.time() - tLast))
             tLast = time.time()
             if not self._state.is_measuring and not self.locked and not self.aboutToLock:
                 continue
             
-            for i in range(3): # Kinda clear buffer and wait a bit? 
+            for i in range(nFreeBufferFrames): # Kinda clear buffer and wait a bit? 
                 im = self._master.detectorsManager[self.camera].getLatestFrame()
 
             # Crop (prefer NiP if present)
@@ -576,6 +577,7 @@ class FocusLockController(ImConWidgetController):
             self.current_focus_value = focus_result.get("focus", 0.0)
             
             # TODO: Remove outliers in PID loop
+            '''
             if len(last_values) >= 5:
                 last_values.pop(0)
             last_values.append(self.current_focus_value)
@@ -586,7 +588,7 @@ class FocusLockController(ImConWidgetController):
                 if max_diff > self.aboutToLockDiffMax:
                     last_values.pop(diffs.index(max_diff))
                     self.current_focus_value = np.mean(last_values)
-            
+            '''
             # Legacy compatibility # TODO: remove all legacy vars
             self.setPointSignal = self._pi_params.set_point if self.pi else 0 # TODO: This should be the user-set set point, not current focus value 
 

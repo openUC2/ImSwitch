@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class FocusConfig:
     """Configuration for focus metric computation."""
     gaussian_sigma: float = 11.0
-    background_threshold: int = 40
+    background_threshold: int = 20
     crop_radius: int = 300
     enable_gaussian_blur: bool = True
     min_signal_threshold: float = 10.0  # Minimum signal for valid measurement
@@ -70,6 +70,8 @@ class FocusMetricBase:
             im = gaussian_filter(im, sigma=self.config.gaussian_sigma)
 
         # Background subtraction and thresholding
+        # TODO: normalize intensity to compensate laser fluctuations? 
+        im = im / np.max((np.max(im), 0.1)) * 255
         im = im - np.mean(im) / 2.0
         im[im < self.config.background_threshold] = 0
         

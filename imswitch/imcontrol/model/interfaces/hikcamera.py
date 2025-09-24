@@ -163,24 +163,14 @@ class CameraHIK:
             self.__logger.debug("Set trigger mode fail! ret[0x%x]" % ret)
             sys.exit()
 
-
-
         # setup sensor size
-        stIntValue_height = MVCC_INTVALUE()
-        memset(byref(stIntValue_height), 0, sizeof(MVCC_INTVALUE))
-        stIntValue_width = MVCC_INTVALUE()
-        memset(byref(stIntValue_width), 0, sizeof(MVCC_INTVALUE))
+        mWidth = MVCC_INTVALUE()
+        mHeight = MVCC_INTVALUE()
+        self.camera.MV_CC_GetIntValue("WidthMax", mWidth)
+        self.camera.MV_CC_GetIntValue("HeightMax", mHeight)
+        self.SensorWidth = mWidth.nCurValue 
+        self.SensorHeight = mHeight.nCurValue
 
-        ret = self.camera.MV_CC_GetIntValue("Height", stIntValue_height)
-        if ret != 0:
-            raise Exception("Get height fail! ret[0x%x]" % ret)
-        self.SensorHeight = stIntValue_height.nCurValue
-
-        ret = self.camera.MV_CC_GetIntValue("Width", stIntValue_width)
-        if ret != 0:
-            raise Exception("Get width fail! ret[0x%x]" % ret)
-        self.SensorWidth = stIntValue_width.nCurValue
-        self.is_connected = True
         print(f"Current number of pixels: Width = {self.SensorWidth}, Height = {self.SensorHeight}")
 
     def reconnectCamera(self):
@@ -525,44 +515,43 @@ class CameraHIK:
         return np.array(frames), np.array(ids)
 
     def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
-        # Not updated. Provided as example
-        hpos = self.camera.OffsetX.get_range()["inc"]*((hpos)//self.camera.OffsetX.get_range()["inc"])
-        vpos = self.camera.OffsetY.get_range()["inc"]*((vpos)//self.camera.OffsetY.get_range()["inc"])
-        hsize = int(np.min((self.camera.Width.get_range()["inc"]*((hsize*self.binning)//self.camera.Width.get_range()["inc"]),self.camera.WidthMax.get())))
-        vsize = int(np.min((self.camera.Height.get_range()["inc"]*((vsize*self.binning)//self.camera.Height.get_range()["inc"]),self.camera.HeightMax.get())))
 
         if vsize is not None:
-            self.ROI_width = hsize
-            if self.camera.Width.is_implemented() and self.camera.Width.is_writable():
-                message = self.camera.Width.set(self.ROI_width)
-                self.__logger.debug(message)
-            else:
-                self.__logger.debug("OffsetX is not implemented or not writable")
+            try:
+                c_width = self.camera.MV_CC_SetIntValue("Width",int(vsize))
+                self.ROI_width = vsize
+                self.__logger.debug(f"Width set to {self.ROI_width}")
+            except Exception as e:
+                self.__logger.error(e)
+                self.__logger.debug("Width is not implemented or not writable")
 
         if hsize is not None:
-            self.ROI_height = vsize
-            if self.camera.Height.is_implemented() and self.camera.Height.is_writable():
-                message = self.camera.Height.set(self.ROI_height)
-                self.__logger.debug(message)
-            else:
+            try:
+                c_height = self.camera.MV_CC_SetIntValue("Height",int(hsize))
+                self.ROI_height = hsize
+                self.__logger.debug(f"Height set to {self.ROI_height}")
+            except Exception as e:
+                self.__logger.error(e)
                 self.__logger.debug("Height is not implemented or not writable")
-
+                
         if hpos is not None:
-            self.ROI_hpos = hpos
-            if self.camera.OffsetX.is_implemented() and self.camera.OffsetX.is_writable():
-                message = self.camera.OffsetX.set(self.ROI_hpos)
-                self.__logger.debug(message)
-            else:
+            try:
+                c_offsetx = self.camera.MV_CC_SetIntValue("OffsetX",int(hpos))
+                self.ROI_hpos = hpos
+                self.__logger.debug(f"OffsetX set to {self.ROI_hpos}")
+            except Exception as e:
+                self.__logger.error(e)
                 self.__logger.debug("OffsetX is not implemented or not writable")
-
+                
         if vpos is not None:
-            self.ROI_vpos = vpos
-            if self.camera.OffsetY.is_implemented() and self.camera.OffsetY.is_writable():
-                message = self.camera.OffsetY.set(self.ROI_vpos)
-                self.__logger.debug(message)
-            else:
+            try:
+                c_offsety = self.camera.MV_CC_SetIntValue("OffsetY",int(vpos))
+                self.ROI_vpos = vpos
+                self.__logger.debug(f"OffsetY set to {self.ROI_vpos}")
+            except Exception as e:
+                self.__logger.error(e)
                 self.__logger.debug("OffsetY is not implemented or not writable")
-
+                
         return hpos,vpos,hsize,vsize
 
     def setPropertyValue(self, property_name, property_value):
@@ -590,20 +579,21 @@ class CameraHIK:
         return property_value
 
     def getPropertyValue(self, property_name):
+        stValue = MVCC_ENUMVALUE()
         if property_name == "gain":
-            property_value = self.camera.Gain.get()
+            self.camera.MV_CC_GetEnumValue("Gain", stValue)
         elif property_name == "exposure":
-            property_value = self.camera.ExposureTime.get()
+            self.camera.MV_CC_GetEnumValue("ExposureTime", stValue)
         elif property_name == "frame_number":
-            property_value = self.getFrameNumber()
+            self.camera.MV_CC_GetEnumValue("FrameNum", stValue)
         elif property_name == "exposure_mode":
-            property_value = self.camera.ExposureAuto.get()
+            self.camera.MV_CC_GetEnumValue("ExposureAuto", stValue)
         elif property_name == "blacklevel":
-            property_value = self.camera.BlackLevel.get()
+            self.camera.MV_CC_GetEnumValue("BlackLevel", stValue)
         elif property_name == "image_width":
-            property_value = self.camera.Width.get()//self.binning
+            self.camera.MV_CC_GetEnumValue("Width", stValue)
         elif property_name == "image_height":
-            property_value = self.camera.Height.get()//self.binning
+            self.camera.MV_CC_GetEnumValue("Height", stValue)
         elif property_name == "roi_size":
             property_value = self.roi_size
         elif property_name == "frame_Rate":
@@ -613,6 +603,7 @@ class CameraHIK:
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
             return False
+        property_value = stValue.nCurValue
         return property_value
 
     def setTriggerSource(self, trigger_source):
@@ -724,7 +715,7 @@ class CameraHIK:
                             dtype=np.uint8
                         )
                         self.frame = data.reshape((stOutFrame.stFrameInfo.nHeight, stOutFrame.stFrameInfo.nWidth))
-                        self.SensorHeight, self.SensorWidth = self.frame.shape[0], self.frame.shape[1]
+                        #self.SensorHeight, self.SensorWidth = self.frame.shape[0], self.frame.shape[1]
                         self.frameNumber = stOutFrame.stFrameInfo.nFrameNum
                         self.timestamp = time.time()
                         self.frame_buffer.append(self.frame)
@@ -786,7 +777,7 @@ class CameraHIK:
                             self.frame = data.reshape((stDeviceList.nHeight, stDeviceList.nWidth, -1))
                             self.lastFrameId = stDeviceList.nFrameNum
 
-                            self.SensorHeight, self.SensorWidth = stDeviceList.nWidth, stDeviceList.nHeight
+                            #self.SensorHeight, self.SensorWidth = stDeviceList.nWidth, stDeviceList.nHeight
                             self.frameNumber = stDeviceList.nFrameNum
                             self.timestamp = time.time()
                             self.frame_buffer.append(self.frame)
@@ -805,7 +796,7 @@ class CameraHIK:
                             data_buf, count=int(stDeviceList.nWidth * stDeviceList.nHeight), dtype=np.uint8
                         )
                         self.frame = data.reshape((stDeviceList.nHeight, stDeviceList.nWidth))
-                        self.SensorHeight, self.SensorWidth = stDeviceList.nWidth, stDeviceList.nHeight
+                        # self.SensorHeight, self.SensorWidth = stDeviceList.nWidth, stDeviceList.nHeight
                         self.frameNumber = stDeviceList.nFrameNum
                         self.timestamp = time.time()
                         self.frame_buffer.append(self.frame)

@@ -34,7 +34,7 @@ class FocusLockParams:
     crop_center: Optional[List[int]] = None
     crop_size: Optional[int] = None
     gaussian_sigma: float = 11.0
-    background_threshold: float = 40.0
+    background_threshold: float = 20.0
     update_freq: float = 1.0
     two_foci_enabled: bool = False
     z_stack_enabled: bool = False
@@ -203,6 +203,27 @@ class FocusLockController(ImConWidgetController):
         )
         self._focus_metric = FocusMetricFactory.create(self._focus_params.focus_metric, focus_config)
 
+        # Camera ROI settings
+        fovWidth = getattr(self._setupInfo.focusLock, "fovWidth", 1024)
+        fovCenter = getattr(self._setupInfo.focusLock, "fovCenter", [None, None])
+        if fovCenter[0] is None or fovCenter[1] is None:
+            # Default to image center
+            cam = self._master.detectorsManager[self.camera]
+            imageWidth, imageHeight = cam.fullShape[0], cam.fullShape[1]
+            fovCenter = [imageWidth // 2, imageHeight // 2]
+                
+        # set up the FOV on the camera side 
+        try:
+            cam = self._master.detectorsManager[self.camera]
+            # def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
+            # computing coordinates for cropping the image
+            imageWidth, imageHeight = cam.fullShape[0], cam.fullShape[1]
+            hpos = imageWidth//2 - fovWidth//2
+            vpos = imageHeight//2 - fovWidth//2
+            cam.crop(hpos = hpos, vpos = vpos, hsize = fovWidth, vsize = fovWidth)
+        except Exception as e:
+            self._logger.error(f"Failed to set camera ROI: {e}")
+
         # Laser (optional)
         laserName = getattr(self._setupInfo.focusLock, "laserName", None)
         laserValue = getattr(self._setupInfo.focusLock, "laserValue", None)
@@ -270,7 +291,7 @@ class FocusLockController(ImConWidgetController):
         self.currPoint = 0
         self.setPointData = np.zeros(self.buffer, dtype=float)
         self.timeData = np.zeros(self.buffer, dtype=float)
-        self.reduceImageScaleFactor = 1
+        self.reduceImageScaleFactor = 4
 
         # Travel budget tracking
         self._travel_used_um = 0.0
@@ -542,7 +563,7 @@ class FocusLockController(ImConWidgetController):
     def _pollFrames(self):
         tLast = 0
         # store a history of the last 5 values and filter out outliers
-        last_values = []
+        lastPosition = self.currentZPosition
         nFreeBufferFrames = 3
         while self.__isPollingFramesActive:
             
@@ -572,23 +593,13 @@ class FocusLockController(ImConWidgetController):
                                                crop_center=self._focus_params.crop_center)
 
 
+            
             # Compute focus value using extracted focus metrics module
             focus_result = self._focus_metric.compute(self.cropped_im)
             self.current_focus_value = focus_result.get("focus", 0.0)
             
             # TODO: Remove outliers in PID loop
-            '''
-            if len(last_values) >= 5:
-                last_values.pop(0)
-            last_values.append(self.current_focus_value)
-            if len(last_values) == 5:
-                median = np.median(last_values)
-                diffs = [abs(v - median) for v in last_values]
-                max_diff = max(diffs)
-                if max_diff > self.aboutToLockDiffMax:
-                    last_values.pop(diffs.index(max_diff))
-                    self.current_focus_value = np.mean(last_values)
-            '''
+
             # Legacy compatibility # TODO: remove all legacy vars
             self.setPointSignal = self._pi_params.set_point if self.pi else 0 # TODO: This should be the user-set set point, not current focus value 
 
@@ -605,12 +616,13 @@ class FocusLockController(ImConWidgetController):
                 "focus_result": focus_result,  # Include full result for debugging
                 "focus_setpoint": self._pi_params.set_point if self.pi else 0,
             }
+            if np.isnan(focus_result['focus']): 
+                continue
             self.sigFocusValueUpdate.emit(focus_data)
 
             # Initialize variables for CSV logging
             pi_output = None
-
-
+            
             # === Control action (relative moves only) ===
             if self.locked and self.pi is not None:
                 meas = float(self.current_focus_value)
@@ -639,7 +651,12 @@ class FocusLockController(ImConWidgetController):
                 if step_um != 0.0:
                     # Use absolute movement instead of relative
                     new_z_position = self.currentZPosition + step_um
-                    self.stage.move(value=new_z_position, axis="Z", speed=MAX_SPEED, is_blocking=True, is_absolute=True)
+                    if abs(lastPosition-new_z_position) >  abs(limit*2):
+                        self._logger.warning("Travel budget exceeded; unlocking focus.")
+                        self.unlockFocus()
+                    else:
+                        lastPosition = new_z_position
+                    self.stage.move(value=new_z_position, axis="Z", speed=MAX_SPEED, is_blocking=False, is_absolute=True)
                     self._travel_used_um += abs(step_um) # TODO: Still not sure if we need to use this! 
                     # travel budget acts like safety_distance_limit
                     if self._pi_params.safety_motion_active and self._travel_used_um > self._pi_params.safety_distance_limit:
@@ -650,6 +667,8 @@ class FocusLockController(ImConWidgetController):
                 if not hasattr(self, "aboutToLockDataPoints"):
                     self.aboutToLockDataPoints = np.zeros(5, dtype=float)
                 self.aboutToLockUpdate()
+            else:
+                lastPosition = self.currentZPosition
 
             # Log focus measurement to CSV using extracted logging module
             if (self._state.is_measuring or self.locked or self.aboutToLock) and self._csv_logger:
@@ -871,15 +890,12 @@ class FocusLockController(ImConWidgetController):
     @APIExport(runOnUIThread=True, requestType="POST")
     def setCropFrameParameters(self, cropSize: int, cropCenter: List[int] = None, frameSize: List[int] = None):
         detectorSize = self._master.detectorsManager[self.camera].shape
-        if frameSize is None:
-            mRatio = 1 / self.reduceImageScaleFactor
-        else:
-            mRatio = detectorSize[0] / frameSize[0]
-        self._focus_params.crop_size = int(cropSize * mRatio)
+        
+        self._focus_params.crop_size = int(cropSize * self.reduceImageScaleFactor)
         if cropCenter is None:
             cropCenter = [detectorSize[1] // 2, detectorSize[0] // 2]
         else:
-            cropCenter = [int(cropCenter[1] * mRatio), int(cropCenter[0] * mRatio)]
+            cropCenter = [int(cropCenter[1] * self.reduceImageScaleFactor), int(cropCenter[0] * self.reduceImageScaleFactor)]
         if cropSize < 100:
             cropSize = 100
         detectorSize = self._master.detectorsManager[self.camera].shape

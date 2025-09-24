@@ -375,7 +375,9 @@ class Camera:
         else:
             self.image = np.mean(cv2.imread(filePath), axis=2)
             self.image /= np.max(self.image)
-
+            self.SensorHeight = 300  # self.image.shape[1]
+            self.SensorWidth = 400  # self.image.shape[0]
+            
         self.lock = threading.Lock()
         self.model = "VirtualCamera"
         self.PixelSize = 1.0

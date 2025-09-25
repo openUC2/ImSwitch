@@ -9,7 +9,7 @@ permissions:
   packages: write
 
 env:
-  REGISTRY: ghcr.io/${{ github.repository_owner }}
+  IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
   IMAGE_NAME: imswitch-noqt
   CACHE_NAME: imswitch-noqt-cache
   PUSH_IMAGE: ${{ (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork) || github.event_name == 'push' || github.event_name == 'push tag' }}
@@ -24,9 +24,9 @@ jobs:
       matrix:
         include:
           - docker-platform: linux/amd64
-            gha-runner: ubuntu-latest
+            gha-runner: ubuntu-24.04
           - docker-platform: linux/arm64
-            gha-runner: ubuntu-latest-arm
+            gha-runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.gha-runner }}
     steps:
       - uses: actions/checkout@v4

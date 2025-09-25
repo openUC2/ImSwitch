@@ -133,7 +133,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         env:
-          DOCKERMETADATA_PR_HEAD_SHA: true
+          DOCKER_METADATA_PR_HEAD_SHA: true
           IS_MAIN_BRANCH: ${{ github.ref == format('refs/heads/{0}', env.MAIN_BRANCH) }}
           IS_BETA_BRANCH: ${{ github.ref == format('refs/heads/{0}', env.BETA_BRANCH) }}
           IS_STABLE_BRANCH: ${{ github.ref == format('refs/heads/{0}', env.STABLE_BRANCH) }}

@@ -15,9 +15,9 @@ case "$TARGETPLATFORM" in
   ;;
 esac
 cd /tmp
-wget "https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/MVS-3.0.1_$cpu_20241128.deb"
-dpkg -i "MVS-3.0.1_$cpu_20241128.deb"
-rm -f "MVS-3.0.1_$cpu_20241128.deb"
+wget "https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitch-master/MVS-3.0.1_${cpu}_20241128.deb"
+dpkg -i "MVS-3.0.1_${cpu}_20241128.deb"
+rm -f "MVS-3.0.1_${cpu}_20241128.deb"
 mkdir -p /opt/MVS/bin/fonts
 
 # Install the Daheng camera driver

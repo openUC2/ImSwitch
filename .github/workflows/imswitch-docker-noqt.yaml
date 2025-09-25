@@ -2,7 +2,13 @@ name: imswitch-docker-noqt
 
 on:
   push:
+  pull_request:
+  merge_group:
   workflow_dispatch:
+    inputs:
+      git-ref:
+        description: 'Git ref (optional)'
+        required: false
 
 permissions:
   contents: read

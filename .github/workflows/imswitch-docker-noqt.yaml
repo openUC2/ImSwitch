@@ -12,6 +12,7 @@ env:
   IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
   IMAGE_NAME: imswitch-noqt
   MAIN_BRANCH: 'master' # pushing to this branch will update the "edge" tag on the image
+  TAG_PREFIX: 'v' # pushing tags with this prefix will add a version tag to the image and update the "latest" tag on the image
   # Because openUC2/ImSwitch is a fork of an upstream repo, we can't suppress attempts to push
   # container images for forks of the openUC2/ImSwitch repo. That's is probably acceptable for how
   # we develop this project (i.e. with PRs from branches on the openUC2/ImSwitch repo, rather than
@@ -126,21 +127,12 @@ jobs:
         with:
           string: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}
 
-      - name: Get actual commit SHA
-        # Get the SHA of the actual commit (not the fake merge commit) on PR-triggered runs
-        # (refer to https://stackoverflow.com/a/68068674/23202949):
-        run: |
-          if [[ -n "${{ github.event.pull_request.head.sha }}" ]]; then
-            printf "ACTUAL_SHA=%.7s" "${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
-          elif [[ ${{ env.PUSH_IMAGE }} = "true" ]]; then
-            printf "ACTUAL_SHA=%.7s" "${{ github.sha }}" >> $GITHUB_ENV
-          fi
-
       # Build and publish Docker container image
       - name: Get Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         env:
+          DOCKERMETADATA_PR_HEAD_SHA: true
           IS_MAIN_BRANCH: ${{ github.ref == format('refs/heads/{0}', env.MAIN_BRANCH) }}
           IS_BETA_BRANCH: ${{ github.ref == format('refs/heads/{0}', env.BETA_BRANCH) }}
           IS_STABLE_BRANCH: ${{ github.ref == format('refs/heads/{0}', env.STABLE_BRANCH) }}
@@ -152,7 +144,7 @@ jobs:
             type=raw,value=beta,enable=${{ env.IS_BETA_BRANCH }},priority=701
             type=edge,branch=${{ env.MAIN_BRANCH }}
             type=ref,event=pr
-            type=raw,value=sha-${{ env.ACTUAL_SHA }},enable=${{ env.ACTUAL_SHA != '' }},priority=100
+            type=sha,priority=100
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

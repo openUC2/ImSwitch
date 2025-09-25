@@ -30,6 +30,9 @@ class ImSwitchConfig:
     scan_ext_data_folder: bool = False
     ext_drive_mount: Optional[str] = None
     
+    # Kernel settings
+    with_kernel: bool = False
+    
     # Streaming settings
     socket_stream: bool = True
     
@@ -58,7 +61,8 @@ class ImSwitchConfig:
             'config_folder': 'config_folder',
             'data_folder': 'data_folder',
             'scan_ext_data_folder': 'scan_ext_data_folder',
-            'ext_drive_mount': 'ext_drive_mount'
+            'ext_drive_mount': 'ext_drive_mount',
+            'with_kernel': 'with_kernel'
         }
         
         for arg_name, config_attr in arg_mapping.items():
@@ -79,6 +83,7 @@ class ImSwitchConfig:
         imswitch_module.DEFAULT_DATA_PATH = self.data_folder
         imswitch_module.SCAN_EXT_DATA_FOLDER = self.scan_ext_data_folder
         imswitch_module.EXT_DRIVE_MOUNT = self.ext_drive_mount
+        imswitch_module.WITH_KERNEL = self.with_kernel
         imswitch_module.SOCKET_STREAM = self.socket_stream
         imswitch_module.jupyternotebookurl = self.jupyter_url
 

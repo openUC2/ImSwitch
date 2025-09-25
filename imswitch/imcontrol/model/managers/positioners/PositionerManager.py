@@ -197,6 +197,10 @@ class PositionerManager(ABC):
                 self._logger.error(f"Could not save stage offset: {e}")
             return
 
+    def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):
+        """ Move to sample loading position. """
+        pass
+   
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

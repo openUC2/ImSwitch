@@ -1,5 +1,5 @@
 import warnings
-
+# TODO: Import managers dynamically - similar to the controllers - to save time 
 from .AutofocusManager import AutofocusManager
 from .FOVLockManager import FOVLockManager
 from .DetectorsManager import DetectorsManager, NoDetectorsError
@@ -17,12 +17,7 @@ from .ScanManagerBase import ScanManagerBase
 from .ScanManagerMoNaLISA import ScanManagerMoNaLISA
 from .StandManager import StandManager
 from .RotatorsManager import RotatorsManager
-try:
-    from .UC2ConfigManager import UC2ConfigManager
-except ModuleNotFoundError:
-    warnings.warn("UC2ConfigManager not available; please install uc2rest module")
-    # Create a mock UC2ConfigManager class so imports work
-    UC2ConfigManager = type('UC2ConfigManager', (), {})
+from .UC2ConfigManager import UC2ConfigManager
 from .SIMManager import SIMManager
 from .DPCManager import DPCManager
 from .MCTManager import MCTManager
@@ -40,3 +35,4 @@ from .FlowStopManager import FlowStopManager
 from .LepmonManager import LepmonManager
 from .FlatfieldManager import FlatfieldManager
 from .PixelCalibrationManager import PixelCalibrationManager
+from .ArkitektManager import ArkitektManager

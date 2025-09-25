@@ -66,7 +66,7 @@ class PositionerController(ImConWidgetController):
 
     def move(self, positionerName, axis, dist, isAbsolute=None, isBlocking=False, speed=None):
         """ Moves positioner by dist micrometers in the specified axis. """
-        if positionerName is None:
+        if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
 
         # get all speed values from the GUI
@@ -116,7 +116,7 @@ class PositionerController(ImConWidgetController):
                   isBlocking=False)
 
     def setSpeed(self, positionerName, axis, speed=(1000, 1000, 1000)):
-        if positionerName is None or positionerName == "":
+        if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].setSpeed(speed, axis)
         self.setSharedAttr(positionerName, axis, _speedAttr, speed)
@@ -340,6 +340,14 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self.__logger.debug(f"Stopping stage scan for positioner {positionerName}")
         self._master.positionersManager[positionerName].stop_stage_scanning()
+
+    @APIExport(runOnUIThread=True)
+    def moveToSampleLoadingPosition(self, positionerName=None, speed=10000, is_blocking=True):
+        """ Move to sample loading position. """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self.__logger.debug(f"Moving to sample loading position for positioner {positionerName}")
+        self._master.positionersManager[positionerName].moveToSampleLoadingPosition(speed=speed, is_blocking=is_blocking)
 
 _attrCategory = 'Positioner'
 _positionAttr = 'Position'

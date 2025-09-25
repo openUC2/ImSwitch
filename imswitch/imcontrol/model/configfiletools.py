@@ -26,6 +26,32 @@ def loadSetupInfo(options, setupInfoType):
     else:
         mPath = os.path.join(_setupFilesDir, options.setupFileName)
     print("Loading setup info from: " + mPath)
+    '''
+    TODO: This is very hacky!! We should implement a proper interface for the different cases
+    e.g.:
+    - user file does not exist => create new file with default values ? 
+    - absolute path to user file that does not exist => error but check if the filename exists in the setup folder
+    - file exists but is corrupted => error and create backup of the corrupted file and create new
+    - file exists and is valid => load it
+    maybe there are more cases - this has to be tested more thoroughly thought through! @GokuGiant
+    '''
+    
+    # check the file exists
+    if not os.path.isfile(mPath):
+        # test if we can load the file from the setup folder
+        if os.path.isfile(os.path.join(_setupFilesDir, os.path.basename(options.setupFileName))):
+            mPath = os.path.join(_setupFilesDir, os.path.basename(options.setupFileName))
+        else:
+            # create a new file with default values
+            print("Warning: The setup file does not exist. Creating a new file with default values from virtual microscope from the user defaults .")
+            # copy from ./_data/user_defaults/imcontrol_setups/example_virtual_microscope.json 
+            defaultSetupFile = os.path.join(dirtools.DataFileDirs.UserDefaults, 'imcontrol_setups', 'example_virtual_microscope.json')
+            if os.path.isfile(defaultSetupFile):
+                with open(defaultSetupFile, 'r') as src, open(mPath, 'w') as dst:
+                    dst.write(src.read())
+            else:
+                raise FileNotFoundError(f"Default setup file not found: {defaultSetupFile}") 
+    
     with open(mPath) as setupFile:
         try:
             mSetupDescription = setupInfoType.from_json(setupFile.read(), infer_missing=True)

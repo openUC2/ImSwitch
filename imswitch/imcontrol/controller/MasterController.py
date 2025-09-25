@@ -2,6 +2,7 @@ from imswitch.imcommon.model import VFileItem, initLogger
 
 import pkg_resources
 
+# TODO: Import managers dynamically - similar to the controllers - to save time
 from imswitch.imcontrol.model import (
     DetectorsManager,
     LasersManager,
@@ -38,6 +39,7 @@ from imswitch.imcontrol.model import (
     LepmonManager,
     ExperimentManager,
     ObjectiveManager,
+    ArkitektManager,
 )
 from arkitekt_next import easy, interactive, find
 from mikro_next.api.schema import from_array_like
@@ -170,6 +172,8 @@ class MasterController:
             self.FOVLockManager = FOVLockManager(self.__setupInfo.fovLock)
         if "Workflow" in self.__setupInfo.availableWidgets:
             self.workflowManager = WorkflowManager()
+        if "Arkitekt" in self.__setupInfo.availableWidgets:
+            self.arkitektManager = ArkitektManager(self.__setupInfo.arkitekt)
         # load all implugin-related managers and add them to the class
         # try to get it from the plugins
         # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the

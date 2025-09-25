@@ -1,7 +1,7 @@
 {
   "files": {
-    "main.css": "/imswitch/static/css/main.02689232.css",
-    "main.js": "/imswitch/static/js/main.165a585a.js",
+    "main.css": "/imswitch/static/css/main.bbd08973.css",
+    "main.js": "/imswitch/static/js/main.3dea4c29.js",
     "static/js/426.3ae12d72.chunk.js": "/imswitch/static/js/426.3ae12d72.chunk.js",
     "static/js/899.a1b76daf.chunk.js": "/imswitch/static/js/899.a1b76daf.chunk.js",
     "static/js/760.4a3738d8.chunk.js": "/imswitch/static/js/760.4a3738d8.chunk.js",
@@ -14,10 +14,10 @@
     "static/media/illumination_ring.png": "/imswitch/static/media/illumination_ring.54bd2afbc0dad2fd423a.png",
     "static/media/illumination_circle.png": "/imswitch/static/media/illumination_circle.60984d7405fab18873e8.png",
     "static/media/illumination_halves.png": "/imswitch/static/media/illumination_halves.27b029147851ccf5b1b4.png",
-    "static/media/ouc2_logo_qaudratic.png": "/imswitch/static/media/ouc2_logo_qaudratic.88c949fc97cf84facafc.png",
+    "static/media/ouc2_logo_quadratic.png": "/imswitch/static/media/ouc2_logo_quadratic.88c949fc97cf84facafc.png",
     "index.html": "/imswitch/index.html",
-    "main.02689232.css.map": "/imswitch/static/css/main.02689232.css.map",
-    "main.165a585a.js.map": "/imswitch/static/js/main.165a585a.js.map",
+    "main.bbd08973.css.map": "/imswitch/static/css/main.bbd08973.css.map",
+    "main.3dea4c29.js.map": "/imswitch/static/js/main.3dea4c29.js.map",
     "426.3ae12d72.chunk.js.map": "/imswitch/static/js/426.3ae12d72.chunk.js.map",
     "899.a1b76daf.chunk.js.map": "/imswitch/static/js/899.a1b76daf.chunk.js.map",
     "760.4a3738d8.chunk.js.map": "/imswitch/static/js/760.4a3738d8.chunk.js.map",
@@ -29,7 +29,7 @@
     "932.54bb91ec.chunk.js.map": "/imswitch/static/js/932.54bb91ec.chunk.js.map"
   },
   "entrypoints": [
-    "static/css/main.02689232.css",
-    "static/js/main.165a585a.js"
+    "static/css/main.bbd08973.css",
+    "static/js/main.3dea4c29.js"
   ]
 }

@@ -1,4 +1,6 @@
 from typing import TYPE_CHECKING, Any
+import psygnal.utils
+psygnal.utils.decompile() # https://github.com/pyapp-kit/psygnal/pull/331#issuecomment-2455192644
 from psygnal import emit_queued
 import psygnal
 import asyncio
@@ -119,17 +121,18 @@ class SignalInstance(psygnal.SignalInstance):
                 if isinstance(arg, np.ndarray):
                     output_frame = np.ascontiguousarray(arg)  # Avoid memory fragmentation
                     if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
-                        everyNthsPixel = np.min([output_frame.shape[0]//480, output_frame.shape[1]//640])
+                        everyNthsPixel = np.min([output_frame.shape[0]//240, output_frame.shape[1]//320])
                     else:
                         everyNthsPixel = 1
 
-                    # convert 16 bit to 8 bit for visualization
-                    if output_frame.dtype == np.uint16:
-                        output_frame = np.uint8(output_frame//64) 
                     try:
                         output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
                     except:
                         output_frame = np.zeros((640,460))
+                    # convert 16 bit to 8 bit for visualization
+                    if output_frame.dtype == np.uint16:
+                        output_frame = np.uint8(output_frame//128) 
+
                     # adjust the parameters of the jpeg compression
                     try:
                         jpegQuality = args[5]["compressionlevel"]

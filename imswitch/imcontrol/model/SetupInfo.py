@@ -384,6 +384,33 @@ class FocusLockInfo:
     laserValue: int
     """ Value of the laser to use for focus lock. This is usually a wavelength in nm. """
 
+    fovWidth: int = 512
+    """ Width of the field of view for focus lock, in pixels. """
+    
+    fovCenter: list = field(default_factory=lambda: [None, None])
+    """ Center of the field of view for focus lock, in pixels. [x, y] """
+    
+@dataclass(frozen=False)
+class ArkitektInfo:
+    enabled: bool = True
+    """ Whether Arkitekt integration is enabled. """
+
+    appName: str = "imswitch"
+    """ Application name for Arkitekt registration. """
+
+    redeemToken: str = ""
+    """ Redeem token for Arkitekt authentication. """
+
+    url: str = "http://go.arkitekt.io"
+    """ Arkitekt server URL. """
+
+    syncInAsync: bool = True
+    """ Enable sync-in-async mode for Koil. """
+
+    deconvolveActionHash: str = "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
+    """ Hash of the deconvolution action in Arkitekt. """
+
+
 @dataclass(frozen=False)
 class FOVLockInfo:
     camera: str
@@ -619,6 +646,10 @@ class SetupInfo:
 
     focusLock: Optional[FocusLockInfo] = field(default_factory=lambda: None)
     """ Focus lock settings. Required to be defined to use focus lock
+    functionality. """
+
+    arkitekt: Optional[ArkitektInfo] = field(default_factory=lambda: None)
+    """ Arkitekt integration settings. Required to be defined to use Arkitekt
     functionality. """
 
     fovLock: Optional[FOVLockInfo] = field(default_factory=lambda: None)

@@ -124,6 +124,11 @@ class ESP32StageManager(PositionerManager):
         self.limitYenabled = positionerInfo.managerProperties.get('limitYenabled', False)
         self.limitZenabled = positionerInfo.managerProperties.get('limitZenabled', False)
 
+        # retreive position coordinates for sample loading 
+        self.sampleLoadingPositions["X"] = positionerInfo.managerProperties.get('sampleLoadingPositionX', 0)
+        self.sampleLoadingPositions["Y"] = positionerInfo.managerProperties.get('sampleLoadingPositionY', 0)
+        self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
+
         # Axis order
         self.axisOrder = positionerInfo.managerProperties.get('axisOrder', [0, 1, 2, 3])
 
@@ -543,6 +548,10 @@ class ESP32StageManager(PositionerManager):
         self._motor.stop_stage_scanning()
         self.__logger.info("Stage scanning stopped.")
 
+    def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):
+        value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
+        self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
+        
 
 # Copyright (C) 2020, 2021 The imswitch developers
 # This file is part of ImSwitch.

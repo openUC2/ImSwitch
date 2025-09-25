@@ -306,8 +306,7 @@ class DemoController(ImConWidgetController):
         try:
             if self.stages:
                 # Move to position
-                self.stages.move(position[0], "X", is_absolute=True, speed=self.params.maxSpeed)
-                self.stages.move(position[1], "Y", is_absolute=True, speed=self.params.maxSpeed)
+                self.stages.move(position, "XY", is_absolute=True, speed=(self.params.maxSpeed,self.params.maxSpeed), is_blocking=True)
                 self._logger.debug(f"Moved to position: {position}")
             else:
                 self._logger.warning("No stages available for movement")

@@ -27,7 +27,7 @@ env:
   # we develop this project (i.e. with PRs from branches on the openUC2/ImSwitch repo, rather than
   # PRs from user-created forks of openUC2/ImSwitch).
   # PUSH_IMAGE: ${{ (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork) || github.event_name == 'push' || github.event_name == 'push tag' }}
-  PUSH_IMAGE: ${{ (github.event_name == 'pull_request') || github.event_name == 'push' || github.event_name == 'push tag' }}
+  PUSH_IMAGE: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'push tag' }}
 
 jobs:
   build-container-image:

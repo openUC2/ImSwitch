@@ -77,7 +77,7 @@ class CameraHIK:
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.flatfieldImage = None
         self.camera = None
-
+        self.DEBUG = False
         # Binning
         if platform in ("darwin", "linux2", "linux"):
             binning = 2
@@ -170,8 +170,37 @@ class CameraHIK:
                     self.__logger.debug(f"Found camera {i}: Layer {layer}")
 
         self.__logger.info(f"Total cameras found: {len(infos)}")
-        if not infos or number >= len(infos):
-            raise RuntimeError(f"No suitable Hik camera found. Requested camera {number}, but only {len(infos)} cameras available.")
+        if not infos:
+            raise RuntimeError(f"No suitable Hik cameras found.")
+
+        # If camera number > 9, treat it as a unique identifier (serial number checksum)
+        if number > 9:
+            self.__logger.info(f"Camera number {number} > 9, treating as unique identifier (serial checksum)")
+            camera_index = None
+            
+            # Search for camera with matching serial number checksum
+            for i, info in enumerate(infos):
+                serial_checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
+                self.__logger.debug(f"Camera {i} serial checksum: {serial_checksum}")
+                if serial_checksum == number:
+                    camera_index = i
+                    self.__logger.info(f"Found camera with matching serial checksum {number} at index {i}")
+                    break
+            
+            if camera_index is None:
+                # List all available checksums for debugging
+                available_checksums = []
+                for i, info in enumerate(infos):
+                    checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
+                    available_checksums.append(f"Index {i}: checksum {checksum}")
+                
+                raise RuntimeError(f"No camera found with serial checksum {number}. Available cameras: {'; '.join(available_checksums)}")
+            
+            number = camera_index  # Use the found index for the rest of the function
+        else:
+            # Traditional index-based selection
+            if number >= len(infos):
+                raise RuntimeError(f"No suitable Hik camera found. Requested camera {number}, but only {len(infos)} cameras available.")
 
         self.__logger.info(f"Opening camera {number} out of {len(infos)} available cameras")
         self.camera = MvCamera()
@@ -189,7 +218,7 @@ class CameraHIK:
                 self.camera.MV_CC_SetIntValue("GevSCPSPacketSize", psize)
                 self.__logger.debug(f"Set packet size to {psize} for GigE camera")
         # print unique ID: # TODO: We should make the cameraNo persistent based on this ID
-        self.__logger.info(f"Unique Serial Number of HIK Camera: {infos[number].SpecialInfo.stUsb3VInfo.nDeviceNumber}")
+        self.__logger.info(f"Unique Serial Number of HIK Camera: {np.sum(infos[number].SpecialInfo.stUsb3VInfo.chSerialNumber)}")
         # get available parameters
         self.mParameters = self.get_camera_parameters()
         self.__logger.info(f"Camera parameters: model={self.mParameters.get('model_name', 'Unknown')}, isRGB={self.mParameters.get('isRGB', False)}")
@@ -275,7 +304,8 @@ class CameraHIK:
         self.frameid_buffer.append(fid)
         self.frameNumber = fid
         self.timestamp   = ts
-        # print("frame received:", fid, "timestamp:", ts, "mean:", np.mean(frame))
+        if self.DEBUG:
+            print("frame received:", fid, "timestamp:", ts, "mean:", np.mean(frame), "from camera name: ", self.mParameters.get("model_name", "Unknown"))
 
     def _wrap_cb(self, user_cb):
         '''

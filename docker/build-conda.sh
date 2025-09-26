@@ -27,8 +27,6 @@ rm /tmp/miniforge.sh
 
 # Create conda environment and install packages
 /opt/conda/bin/conda create -y --name imswitch python=3.11
-# Don't include Python 3.12 in the image, since we rely on Python 3.11:
-/opt/conda/bin/conda remove python3.12
 
 # Clean up build-only tools
 

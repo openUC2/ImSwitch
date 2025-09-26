@@ -1,6 +1,7 @@
 #!/usr/bin/env -S bash -eux
 
 # TODO(ethanjli): find a way to not rely on git inside a container image
+apt-get update
 apt-get install -y \
   git \
   build-essential \
@@ -18,7 +19,6 @@ apt-get install -y \
 # Install nmcli
 # TODO(ethanjli): can we interact with the host's NetworkManager API without installing and running
 # nmcli in the container?
-apt-get update
 apt-get install -y \
   network-manager \
   dbus \

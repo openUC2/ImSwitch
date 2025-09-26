@@ -1,6 +1,6 @@
 services:
-  imswitch-docker-arm64-noqt:
-    image: ghcr.io/openuc2/imswitch-noqt-arm64:latest
+  imswitch-docker-noqt:
+    image: ghcr.io/openuc2/imswitch-noqt:latest
     privileged: true
     ports:
       - "3000:3000"

@@ -23,7 +23,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dynamic = ["version"]
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "pydantic==2.11.4",
     "coloredlogs >= 15",
@@ -88,8 +88,7 @@ Ashlar = [
     "ashlarUC2",
 ]
 arkitekt = [
-    "arkitekt==0.7.8",
-    "arkitekt_next>=0.8.6",
+    "arkitekt-next>=0.26.0",
 ]
 imjoy = [
     "imjoy-rpc==0.5.59",
@@ -115,6 +114,11 @@ include = ["imswitch*"]
 
 [tool.setuptools.package-data]
 "*" = ["*"]
+
+[dependency-groups]
+dev = [
+    "arkitekt-next[all]>=0.26",
+]
 
 [project.entry-points."imswitch.implugins.detectors"]
 

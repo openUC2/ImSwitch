@@ -54,4 +54,4 @@ rm -rf /var/lib/apt/lists/*
 /opt/conda/bin/conda clean --all -f -y
 rm -rf /opt/conda/pkgs/*
 pip3 cache purge || true
-rm -rf "$HOME"/.cache/pip
+rm -rf /root/.cache/pip

@@ -2,6 +2,13 @@
 
 # Install the Hik driver
 
+apt-get update
+apt-get install -y \
+  wget \
+  unzip \
+  python3 \
+  python3-pip
+
 case "$TARGETPLATFORM" in
 "linux/arm64")
   cpu=aarch64
@@ -45,6 +52,8 @@ cd "/tmp/$archive"
 chmod +x Galaxy_camera.run
 cd /tmp/Galaxy_Linux_Python_2.0.2106.9041/api
 /bin/bash -c "source /opt/conda/bin/activate imswitch && python3 setup.py build"
+# TODO(ethanjli): can we use conda's python to do this installation? Then we might not need to
+# install python3 & python3-pip using apt-get...
 python3 setup.py install
 
 # Create the udev rules directory
@@ -70,6 +79,13 @@ if [ "$TARGETPLATFORM" = "linux/arm64" ]; then
   /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl"
   export GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 fi
+
+# Clean up build-only tools
+
+apt-get remove -y \
+  wget \
+  unzip \
+  python3-pip
 
 # Clean up all the package managers at the end
 

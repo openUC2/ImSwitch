@@ -2,23 +2,9 @@
 
 # Install necessary dependencies and prepare the environment
 
-apt-get update \
-  -o Acquire::AllowInsecureRepositories=true \
-  -o Acquire::AllowDowngradeToInsecureRepositories=true \
-  -o Acquire::AllowUnsignedRepositories=true
-apt-get install -y --allow-unauthenticated \
-  wget \
-  unzip \
-  python3 \
-  python3-pip \
-  build-essential \
-  git \
-  mesa-utils \
-  libhdf5-dev \
-  nano \
-  usbutils \
-  sudo \
-  libglib2.0-0
+apt-get update
+apt-get install -y \
+  wget
 
 # Install Miniforge based on architecture
 case "$TARGETPLATFORM" in
@@ -41,11 +27,13 @@ rm /tmp/miniforge.sh
 
 # Create conda environment and install packages
 /opt/conda/bin/conda create -y --name imswitch python=3.11
-/opt/conda/bin/conda install -n imswitch -y -c \
-  conda-forge \
-  h5py \
-  numcodecs
-export PATH=/opt/conda/bin:$PATH # note: this is only temporary; the container must update PATH, too
+# Don't include Python 3.12 in the image, since we rely on Python 3.11:
+/opt/conda/bin/conda remove python3.12
+
+# Clean up build-only tools
+
+apt-get remove -y \
+  wget
 
 # Clean up all the package managers at the end
 

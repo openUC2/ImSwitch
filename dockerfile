@@ -54,8 +54,8 @@ ENV TZ=Etc/UTC
 # We split up the work into different scripts run at different stages to facilitate correct
 # container image caching.
 
-COPY docker/build-base.sh /tmp/
-RUN /tmp/build-base.sh
+COPY docker/build-conda.sh /tmp/
+RUN /tmp/build-conda.sh
 ENV PATH=/opt/conda/bin:$PATH
 
 COPY docker/build-drivers.sh /tmp/

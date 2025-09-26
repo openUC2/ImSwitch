@@ -1,5 +1,9 @@
 #!/usr/bin/env -S bash -eux
 
+# TODO(ethanjli): find a way to not rely on git inside a container image
+apt-get install -y \
+  git
+
 # Clone the config folder
 cd /tmp/ImSwitchConfig
 # Note(ethanjli): I feel like we should use the local files without of running `git pull` inside the
@@ -17,6 +21,11 @@ git pull
 
 # install arkitekt
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip"
+
+# Clean up build-only tools
+
+apt-get remove -y \
+  git
 
 # Clean up all the package managers at the end
 

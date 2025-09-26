@@ -1,6 +1,7 @@
 #!/usr/bin/env -S bash -eux
 
 # TODO(ethanjli): find a way to not rely on git inside a container image
+apt-get update
 apt-get install -y \
   git
 

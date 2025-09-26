@@ -6,6 +6,7 @@
     conda install scikit-image=0.19.3 -c conda-forge"
 
 # Install nmcli
+apt-get update
 apt-get install -y --allow-unauthenticated \
     network-manager \
     dbus \

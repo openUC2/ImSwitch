@@ -195,7 +195,7 @@ class HikCamManager(DetectorManager):
             )
             self._camera.setROI(hpos, vpos, hsize, vsize)
             # TODO: THis has to be reviewed as it seems to not be correct !
-            self._shape = (self._camera.camera.Width.get()//self._camera.binning, self._camera.camera.Height.get()//self._camera.binning)
+            self._shape = (hsize, vsize)
             self._frameStart = (hpos, vpos)
             pass
         try:

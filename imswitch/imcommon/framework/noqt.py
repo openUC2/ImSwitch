@@ -21,6 +21,33 @@ if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
 import imswitch
 from imswitch import __ssl__, __socketport__
+import logging
+
+# Try to import config and binary streaming - handle gracefully if not available
+try:
+    from imswitch.config import get_config
+    HAS_CONFIG_MODULE = True
+except ImportError:
+    HAS_CONFIG_MODULE = False
+    def get_config():
+        # Fallback config object
+        class FallbackConfig:
+            stream_binary_enabled = True
+            stream_binary_compression_algorithm = "lz4"
+            stream_binary_compression_level = 0
+            stream_binary_subsampling_factor = 1
+            stream_binary_subsampling_auto_max_dim = 0
+            stream_binary_bitdepth_in = 12
+            stream_binary_pixfmt = "GRAY16"
+            stream_binary_throttle_ms = 50
+            stream_jpeg_enabled = False
+        return FallbackConfig()
+
+try:
+    from imswitch.imcommon.framework.binary_streaming import BinaryFrameEncoder
+    HAS_BINARY_STREAMING = True
+except ImportError:
+    HAS_BINARY_STREAMING = False
 class Mutex(abstract.Mutex):
     """Wrapper around the `threading.Lock` class."""
     def __init__(self) -> None:
@@ -83,6 +110,25 @@ class SignalInstance(psygnal.SignalInstance):
     last_image_emit_time = 0
     image_emit_interval = .2  # Emit at most every 200ms
     IMG_QUALITY = 80  # Set the desired quality level (0-100)
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Initialize binary encoder with default config
+        config = get_config()
+        if HAS_BINARY_STREAMING:
+            self._binary_encoder = BinaryFrameEncoder(
+                compression_algorithm=config.stream_binary_compression_algorithm,
+                compression_level=config.stream_binary_compression_level,
+                subsampling_factor=config.stream_binary_subsampling_factor,
+                subsampling_auto_max_dim=config.stream_binary_subsampling_auto_max_dim,
+                bitdepth=config.stream_binary_bitdepth_in,
+                pixfmt=config.stream_binary_pixfmt
+            )
+        else:
+            self._binary_encoder = None
+        self._binary_throttle_ms = config.stream_binary_throttle_ms / 1000.0
+        self._last_binary_emit_time = 0
+        self._logger = logging.getLogger(__name__)
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
     ) -> None:
@@ -116,46 +162,121 @@ class SignalInstance(psygnal.SignalInstance):
         detectorName = args[0]
         try:pixelSize = np.min(args[3])
         except:pixelSize = 1
+        
+        config = get_config()
+        
         try:
             for arg in args:
                 if isinstance(arg, np.ndarray):
                     output_frame = np.ascontiguousarray(arg)  # Avoid memory fragmentation
-                    if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
-                        everyNthsPixel = np.min((np.min([output_frame.shape[0]//240, output_frame.shape[1]//320]), 3))
-                    else:
-                        everyNthsPixel = 1
-
-                    try:
-                        output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
-                    except:
-                        output_frame = np.zeros((640,460))
-                    # convert 16 bit to 8 bit for visualization
-                    if output_frame.dtype == np.uint16:
-                        output_frame = np.uint8(output_frame//128) 
-
-                    # adjust the parameters of the jpeg compression
-                    try:
-                        jpegQuality = args[5]["compressionlevel"]
-                    except:
-                        jpegQuality = self.IMG_QUALITY
-                    encode_params = [cv2.IMWRITE_JPEG_QUALITY, jpegQuality]
-
-                    # Compress image using JPEG format
-                    flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
-                    encoded_image = base64.b64encode(compressed).decode('utf-8')
-
-                    # Create a minimal message
-                    message = {
-                        "name": self.name,
-                        "detectorname": detectorName,
-                        "pixelsize": int(pixelSize), # must not be int64
-                        "format": "jpeg",
-                        "image": encoded_image,
-                    }
-                    self._safe_broadcast_message(message)
-                    del message
+                    
+                    # Check if binary streaming is enabled
+                    if config.stream_binary_enabled:
+                        self._emit_binary_frame(output_frame, detectorName, pixelSize, args)
+                    
+                    # Also emit JPEG if enabled (for fallback/compatibility)
+                    if config.stream_jpeg_enabled:
+                        self._emit_jpeg_frame(output_frame, detectorName, pixelSize, args)
+                        
         except Exception as e:
-            print(f"Error processing image signal: {e}")
+            self._logger.error(f"Error processing image signal: {e}")
+    
+    def _emit_binary_frame(self, img: np.ndarray, detector_name: str, pixel_size: float, args):
+        """Emit binary frame via Socket.IO."""
+        if not HAS_BINARY_STREAMING or self._binary_encoder is None:
+            self._logger.warning("Binary streaming not available, skipping binary frame emission")
+            return
+            
+        now = time.time()
+        if now - self._last_binary_emit_time < self._binary_throttle_ms:
+            return  # Throttle binary emissions
+        
+        try:
+            # Encode frame
+            packet, metadata = self._binary_encoder.encode_frame(img)
+            
+            # Log metrics at debug level
+            self._logger.debug(
+                f"Binary frame: {metadata['width']}x{metadata['height']} "
+                f"factor={metadata['subsampling_factor']} "
+                f"algo={metadata['compression_algorithm']}/{metadata['compression_level']} "
+                f"raw={metadata['raw_bytes']}B compressed={metadata['compressed_bytes']}B "
+                f"ratio={metadata['compression_ratio']:.2f} encode={metadata['encode_time_ms']:.1f}ms"
+            )
+            
+            # Emit binary frame
+            sio.start_background_task(sio.emit, "frame", packet)
+            
+            # Emit metadata as JSON signal
+            meta_message = {
+                "name": "frame_meta",
+                "detectorname": detector_name,
+                "pixelsize": int(pixel_size),
+                "format": "binary",
+                "metadata": metadata
+            }
+            sio.start_background_task(sio.emit, "signal", json.dumps(meta_message))
+            
+            self._last_binary_emit_time = now
+            
+        except Exception as e:
+            self._logger.error(f"Error emitting binary frame: {e}")
+            # Fallback to JPEG if binary fails
+            config = get_config()
+            if not config.stream_jpeg_enabled:
+                # Temporarily enable JPEG as fallback
+                self._emit_jpeg_frame(img, detector_name, pixel_size, args)
+    
+    def _emit_jpeg_frame(self, output_frame: np.ndarray, detector_name: str, pixel_size: float, args):
+        """Emit JPEG frame (legacy path)."""
+        try:
+            # Apply legacy subsampling logic
+            if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
+                everyNthsPixel = np.min((np.min([output_frame.shape[0]//240, output_frame.shape[1]//320]), 3))
+            else:
+                everyNthsPixel = 1
+
+            try:
+                output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
+            except:
+                output_frame = np.zeros((640,460))
+                
+            # convert 16 bit to 8 bit for visualization
+            if output_frame.dtype == np.uint16:
+                output_frame = np.uint8(output_frame//128) 
+
+            # adjust the parameters of the jpeg compression
+            try:
+                jpegQuality = args[5]["compressionlevel"]
+            except:
+                jpegQuality = self.IMG_QUALITY
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, jpegQuality]
+
+            # Compress image using JPEG format
+            flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
+            encoded_image = base64.b64encode(compressed).decode('utf-8')
+
+            # Create a minimal message
+            message = {
+                "name": self.name,
+                "detectorname": detector_name,
+                "pixelsize": int(pixel_size), # must not be int64
+                "format": "jpeg",
+                "image": encoded_image,
+            }
+            self._safe_broadcast_message(message)
+            del message
+        except Exception as e:
+            self._logger.error(f"Error emitting JPEG frame: {e}")
+    
+    def update_binary_config(self, **kwargs):
+        """Update binary streaming configuration at runtime."""
+        if self._binary_encoder is not None:
+            self._binary_encoder.update_config(**kwargs)
+        
+        # Update throttle if provided
+        if 'throttle_ms' in kwargs:
+            self._binary_throttle_ms = kwargs['throttle_ms'] / 1000.0
 
     def _generate_json_message(self, args):  # Consider using msgpspec for efficiency
         param_names = list(self.signature.parameters.keys())

@@ -1,0 +1,62 @@
+# Example ImSwitch configuration with binary streaming enabled
+
+# Binary streaming configuration
+stream:
+  binary:
+    enabled: true
+    websocket_path: "/ws/frames"   # Socket.IO endpoint for binary frames
+    bitdepth_in: 12               # Input bit depth (12-bit camera data)
+    pixfmt: "GRAY16"              # Pixel format: GRAY16 | BAYER_RG16 | RGB48
+    
+    # Compression settings
+    compression:
+      algorithm: "lz4"            # Compression: none | lz4 | zstd
+      level: 0                    # LZ4: 0-16 (0=fastest), Zstd: 1-22 (3=balanced)
+    
+    # Subsampling settings
+    subsampling:
+      factor: 1                   # Downscale factor: 1=no downscale, 2/3/4=reduce resolution
+      auto_max_dim: 0             # Auto downscale to max dimension (0=disabled, e.g. 2048)
+    
+    # Throttling
+    throttle_ms: 50               # Minimum time between frame emissions (milliseconds)
+  
+  # Legacy JPEG streaming (for fallback/debugging)
+  jpeg:
+    enabled: false                # Keep disabled to use binary streaming
+
+# Example detector configuration that works with binary streaming
+detectors:
+  MainCamera:
+    analogChannel: null
+    digitalLine: null
+    managerName: "VirtualCameraManager"  # Or your actual camera manager
+    managerProperties:
+      isRGB: 0
+      cameraListIndex: 0
+      cameraEffPixelsize: 1
+      virtcam:
+        exposure: 10
+        gain: 1
+        blacklevel: 100
+        image_width: 1000
+        image_height: 1000
+    forAcquisition: true
+    forFocusLock: false
+
+# Example REST API usage:
+# 
+# Set streaming parameters at runtime:
+# POST /api/settings/setStreamParams
+# {
+#   "compression": {"algorithm": "zstd", "level": 3},
+#   "subsampling": {"factor": 2, "auto_max_dim": 1024}
+# }
+#
+# Get current streaming parameters:
+# GET /api/settings/getStreamParams
+#
+# Capture a single frame:
+# GET /api/image/snapFrame?detector_name=MainCamera&format=binary
+# GET /api/image/snapFrame?format=png16
+# GET /api/image/snapFrame?format=tiff

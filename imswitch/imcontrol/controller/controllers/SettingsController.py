@@ -496,6 +496,60 @@ class SettingsController(ImConWidgetController):
     @APIExport()
     def getDetectorGlobalParameters(self):
         return self._master.detectorsManager.getGlobalDetectorParams()
+    
+    @APIExport(requestType="POST")
+    def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None):
+        """Set streaming parameters for binary frame streaming.
+        
+        Args:
+            compression: Dict with 'algorithm' and 'level' keys
+            subsampling: Dict with 'factor' and 'auto_max_dim' keys  
+            throttle_ms: Throttling interval in milliseconds
+        """
+        
+        update_params = {}
+        
+        if compression:
+            if 'algorithm' in compression:
+                update_params['stream_compression_algorithm'] = compression['algorithm']
+            if 'level' in compression:
+                update_params['stream_compression_level'] = compression['level']
+        
+        if subsampling:
+            if 'factor' in subsampling:
+                update_params['stream_subsampling_factor'] = subsampling['factor']
+            if 'auto_max_dim' in subsampling:
+                update_params['stream_subsampling_auto_max_dim'] = subsampling['auto_max_dim']
+        
+        if throttle_ms is not None:
+            update_params['stream_throttle_ms'] = throttle_ms
+            
+        # Update using the same mechanism as compressionlevel
+        self._master.detectorsManager.updateGlobalDetectorParams(update_params)
+        
+        return {"status": "success", "updated": update_params}
+    
+    @APIExport()
+    def getStreamParams(self):
+        """Get current streaming parameters."""
+        global_params = self._master.detectorsManager.getGlobalDetectorParams()
+        
+        return {
+            "binary": {
+                "compression": {
+                    "algorithm": global_params.get('stream_compression_algorithm', 'lz4'),
+                    "level": global_params.get('stream_compression_level', 0)
+                },
+                "subsampling": {
+                    "factor": global_params.get('stream_subsampling_factor', 1),
+                    "auto_max_dim": global_params.get('stream_subsampling_auto_max_dim', 0)
+                },
+                "throttle_ms": global_params.get('stream_throttle_ms', 200)
+            },
+            "jpeg": {
+                "compression_level": global_params.get('compressionlevel', 80)
+            }
+        }
 
     @APIExport()
     def getDetectorParameters(self) -> dict:

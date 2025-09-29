@@ -393,9 +393,9 @@ class Camera:
     ):
         """Generate a frame based on the current settings."""
         if self.filePath == "smlm": # There is likely a better way of handling this
-            return self.produce_smlm_frame(x_offset, y_offset, light_intensity)
+            return self.produce_smlm_frame(x_offset, y_offset, light_intensity).astype(np.uint16)
         elif self.filePath == "astigmatism":
-            return self.produce_astigmatism_frame(z_offset)
+            return self.produce_astigmatism_frame(z_offset).astype(np.uint16)
         else:
             with self.lock:
                 # add moise
@@ -417,7 +417,7 @@ class Camera:
                 # Adjust illumination
                 image = image.astype(np.uint16)
                 time.sleep(0.1)
-                return np.array(image)
+                return np.array(image).astype(np.uint16)
 
     def produce_astigmatism_frame(self, z_offset=0):
         #!/usr/bin/env python3

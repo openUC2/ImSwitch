@@ -46,6 +46,7 @@ cd /tmp/ImSwitch-local
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch-local"
 
 # Install UC2-REST
+git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST
 cd /tmp/UC2-REST
 git pull
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"

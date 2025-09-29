@@ -46,7 +46,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          # The entire repo gets copied into the Docker container, so we try to only fetch files we
+          # actually need:
+          fetch-depth: 0
+          filter: 'blob:none'
 
       # Work around a bug where capital letters in the GitHub username (e.g. "PlanktoScope") make it
       # impossible to push to GHCR. See https://github.com/macbre/push-to-ghcr/issues/12

@@ -1,3 +1,7 @@
+# syntax=docker/dockerfile:1
+# Note: the above syntax parser directive is only needed so that we can use the COPY directive with
+# the `--exclude` option.
+
 # Use an appropriate base image for Jetson Nano
 # sudo docker build -t imswitch_hik .
 # sudo docker run -it --privileged  imswitch_hik

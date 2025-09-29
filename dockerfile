@@ -64,9 +64,6 @@ ENV LD_LIBRARY_PATH="/usr/lib:/tmp/Galaxy_Linux-armhf_Gige-U3_32bits-64bits_1.5.
 ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32:"$LD_LIBRARY_PATH"
 ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
-COPY docker/build-imswitch-deps.sh /tmp/
-RUN /tmp/build-imswitch-deps.sh
-
 COPY docker/build-imswitch.sh /tmp/
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Question(ethanjli): if we're copying the ImSwitch & UC2-REST repositories from local files using

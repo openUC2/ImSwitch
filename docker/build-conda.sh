@@ -41,3 +41,4 @@ rm -rf /var/lib/apt/lists/*
 rm -rf /opt/conda/pkgs/*
 pip3 cache purge || true
 rm -rf /root/.cache/pip
+rm -rf /tmp/*

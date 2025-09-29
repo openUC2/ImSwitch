@@ -248,51 +248,146 @@ class BinaryFrameEncoder:
         return packet, metadata
 
 
-def decode_frame_header(data: bytes) -> dict:
-    """
-    Decode a binary frame header.
-    
-    Args:
-        data: Binary data starting with frame header
+    def decode_frame_header(self, data: bytes) -> dict:
+        """
+        Decode a binary frame header.
         
-    Returns:
-        Dictionary with header fields
+        Args:
+            data: Binary data starting with frame header
+            
+        Returns:
+            Dictionary with header fields
+            
+        Raises:
+            ValueError: If header is invalid
+        """
+        if len(data) < struct.calcsize(HDR_FMT):
+            raise ValueError("Data too short for header")
         
-    Raises:
-        ValueError: If header is invalid
-    """
-    if len(data) < struct.calcsize(HDR_FMT):
-        raise ValueError("Data too short for header")
-    
-    header_size = struct.calcsize(HDR_FMT)
-    header_data = data[:header_size]
-    
-    fields = struct.unpack(HDR_FMT, header_data)
-    magic, ver, w, h, stride, bitdepth, channels, pixfmt, timestamp_ns = fields
-    
-    if magic != UC2_MAGIC:
-        raise ValueError(f"Invalid magic bytes: {magic}")
-    
-    if ver != 1:
-        raise ValueError(f"Unsupported version: {ver}")
-    
-    # Extract compressed size
-    if len(data) < header_size + 4:
-        raise ValueError("Data too short for compressed size")
-    
-    compressed_size = struct.unpack("<I", data[header_size:header_size + 4])[0]
-    
-    return {
-        "magic": magic,
-        "version": ver,
-        "width": w,
-        "height": h,
-        "stride": stride,
-        "bitdepth": bitdepth,
-        "channels": channels,
-        "pixfmt": pixfmt,
-        "timestamp_ns": timestamp_ns,
-        "header_size": header_size,
-        "compressed_size": compressed_size,
-        "total_expected_size": header_size + 4 + compressed_size
-    }
+        header_size = struct.calcsize(HDR_FMT)
+        header_data = data[:header_size]
+        
+        fields = struct.unpack(HDR_FMT, header_data)
+        magic, ver, w, h, stride, bitdepth, channels, pixfmt, timestamp_ns = fields
+        
+        if magic != UC2_MAGIC:
+            raise ValueError(f"Invalid magic bytes: {magic}")
+        
+        if ver != 1:
+            raise ValueError(f"Unsupported version: {ver}")
+        
+        # Extract compressed size
+        if len(data) < header_size + 4:
+            raise ValueError("Data too short for compressed size")
+        
+        compressed_size = struct.unpack("<I", data[header_size:header_size + 4])[0]
+        
+        return {
+            "magic": magic,
+            "version": ver,
+            "width": w,
+            "height": h,
+            "stride": stride,
+            "bitdepth": bitdepth,
+            "channels": channels,
+            "pixfmt": pixfmt,
+            "timestamp_ns": timestamp_ns,
+            "header_size": header_size,
+            "compressed_size": compressed_size,
+            "total_expected_size": header_size + 4 + compressed_size
+        }
+
+    def decode_frame(self, data: bytes) -> Tuple[np.ndarray, dict]:
+        """
+        Decode a complete binary frame into image and metadata.
+        
+        Args:
+            data: Complete binary packet from encode_frame()
+            
+        Returns:
+            Tuple of (decoded_image_array, metadata_dict)
+            
+        Raises:
+            ValueError: If frame is invalid
+            CompressionError: If decompression fails
+        """
+        # First decode the header
+        header = self.decode_frame_header(data)
+        
+        # Validate we have enough data
+        if len(data) < header["total_expected_size"]:
+            raise ValueError(f"Incomplete frame: got {len(data)} bytes, expected {header['total_expected_size']}")
+        
+        # Extract compressed data
+        header_size = header["header_size"]
+        compressed_size = header["compressed_size"]
+        compressed_data = data[header_size + 4:header_size + 4 + compressed_size]
+        
+        # Decompress the data
+        try:
+            decompressed = self._decompress_block(compressed_data)
+        except Exception as e:
+            raise CompressionError(f"Decompression failed: {e}")
+        
+        # Reconstruct the numpy array
+        width = header["width"]
+        height = header["height"]
+        channels = header["channels"]
+        
+        # Calculate expected array size
+        expected_bytes = width * height * channels * 2  # 2 bytes per uint16 pixel
+        if len(decompressed) != expected_bytes:
+            raise ValueError(f"Decompressed size mismatch: got {len(decompressed)}, expected {expected_bytes}")
+        
+        # Reshape into numpy array
+        if channels == 1:
+            shape = (height, width)
+        else:
+            shape = (height, width, channels)
+            
+        image = np.frombuffer(decompressed, dtype=np.uint16).reshape(shape)
+        
+        # Build metadata
+        metadata = {
+            "width": width,
+            "height": height,
+            "channels": channels,
+            "bitdepth": header["bitdepth"],
+            "pixfmt": header["pixfmt"],
+            "timestamp_ns": header["timestamp_ns"],
+            "compressed_bytes": compressed_size,
+            "raw_bytes": len(decompressed),
+            "compression_ratio": len(decompressed) / compressed_size if compressed_size > 0 else 1.0
+        }
+        
+        return image, metadata
+
+    def _decompress_block(self, compressed_data: bytes) -> bytes:
+        """
+        Decompress a compressed data block.
+        
+        Args:
+            compressed_data: Compressed bytes
+            
+        Returns:
+            Decompressed bytes
+            
+        Raises:
+            CompressionError: If decompression fails
+        """
+        try:
+            if self.compression_algorithm == COMPRESSION_NONE:
+                return compressed_data
+            elif self.compression_algorithm == COMPRESSION_LZ4:
+                if not HAS_LZ4:
+                    raise CompressionError("LZ4 not available for decompression")
+                return lz4.decompress(compressed_data)
+            elif self.compression_algorithm == COMPRESSION_ZSTD:
+                if not HAS_ZSTD:
+                    raise CompressionError("Zstandard not available for decompression")
+                dctx = zstd.ZstdDecompressor()
+                return dctx.decompress(compressed_data)
+            else:
+                raise CompressionError(f"Unsupported compression algorithm: {self.compression_algorithm}")
+        except Exception as e:
+            raise CompressionError(f"Decompression failed: {e}")

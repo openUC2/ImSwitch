@@ -42,7 +42,7 @@ stream:
 ### Runtime Configuration
 ```bash
 # Set streaming parameters
-POST /api/settings/setStreamParams
+GET /api/settings/setStreamParams
 {
   "compression": {"algorithm": "zstd", "level": 3},
   "subsampling": {"factor": 2, "auto_max_dim": 1024}

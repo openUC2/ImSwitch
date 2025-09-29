@@ -36,3 +36,4 @@ from .FlowStopManager import FlowStopManager
 from .FlatfieldManager import FlatfieldManager
 from .PixelCalibrationManager import PixelCalibrationManager
 from .ISMManager import ISMManager
+from .OSSIMManager import OSSIMManager

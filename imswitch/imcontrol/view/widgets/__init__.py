@@ -63,3 +63,4 @@ if not IS_HEADLESS:
         from .HyphaWidget import HyphaWidget
     except ModuleNotFoundError:
         warnings.warn("HyphaWidget not available; please install imjoy-rpc module")
+    from .OSSIMWidget import OSSIMWidget

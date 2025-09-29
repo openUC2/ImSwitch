@@ -58,16 +58,16 @@ ENV TZ=Etc/UTC
 # We split up the work into different scripts run at different stages to facilitate correct
 # container image caching.
 
-RUN --mount=type=bind,source=docker/build-conda.sh,target=/mnt/build/build-conda.sh /mnt/build/build-conda.sh
+RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-conda.sh
 ENV PATH=/opt/conda/bin:$PATH
 
-RUN --mount=type=bind,source=docker/build-drivers.sh,target=/mnt/build/build-drivers.sh /mnt/build/build-drivers.sh
+RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-drivers.sh
 ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32:"$LD_LIBRARY_PATH"
 ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
 # Larger slowly-changing dependencies are installed in a separate container image layer before the
 # rapidly-changing ImSwitch repository:
-RUN --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/mnt/build/build-imswitch-deps.sh /mnt/build/build-imswitch-deps.sh
+RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-imswitch-deps.sh
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Question(ethanjli): if we're copying the ImSwitch & UC2-REST repositories from local files using
@@ -75,7 +75,7 @@ RUN --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/mnt/build/bui
 # this BUILD_DATE hack?
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
-RUN --mount=type=bind,source=docker/build-imswitch.sh,target=/mnt/build/build-imswitch.sh --mount=type=bind,source=.,target=/mnt/build/ImSwitch-local,rw /mnt/build/build-imswitch.sh
+RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=.,target=/mnt/build/ImSwitch-local,rw /mnt/build/build-imswitch.sh
 ENV WIFI_MODE=host
 # Expose FTP port and HTTP port
 EXPOSE 8001 8002 8003 8888 8889 22

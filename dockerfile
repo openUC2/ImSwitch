@@ -62,7 +62,6 @@ RUN --mount=type=bind,source=docker/build-conda.sh,target=/mnt/build/build-conda
 ENV PATH=/opt/conda/bin:$PATH
 
 RUN --mount=type=bind,source=docker/build-drivers.sh,target=/mnt/build/build-drivers.sh /mnt/build/build-drivers.sh
-ENV LD_LIBRARY_PATH="/usr/lib:/tmp/Galaxy_Linux-armhf_Gige-U3_32bits-64bits_1.5.2303.9202:$LD_LIBRARY_PATH"
 ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32:"$LD_LIBRARY_PATH"
 ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 

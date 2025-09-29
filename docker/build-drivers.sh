@@ -5,9 +5,7 @@
 apt-get update
 apt-get install -y \
   wget \
-  unzip \
-  python3 \
-  python3-pip
+  unzip
 
 case "$TARGETPLATFORM" in
 "linux/arm64")
@@ -85,7 +83,6 @@ rm -rf /opt/VimbaX/doc
 apt-get remove -y \
   wget \
   unzip \
-  python3-pip \
   g++ \
   g++-11 \
   gcc \

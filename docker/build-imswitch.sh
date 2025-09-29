@@ -9,10 +9,9 @@ apt-get install -y \
 cp -r /mnt/ImSwitch /tmp/ImSwitch
 cd /tmp/ImSwitch
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
-
-# Delete DLL files
-# Note(ethanjli): we do this because they take up a significant amount of space, and they should be
-# useless in Linux anyways (as they're Windows-specific)
+# Note(ethanjli): we do delete DLL files because they take up a significant amount of space, and
+# they should be useless in Linux anyways (as they're Windows-specific)
+shopt -s globstar
 ls /opt/conda/envs/imswitch/lib/*/*/imswitch/**/*.dll
 rm -rf /opt/conda/envs/imswitch/lib/*/*/imswitch/**/*.dll
 

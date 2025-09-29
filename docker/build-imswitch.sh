@@ -7,7 +7,7 @@ apt-get install -y \
 
 # Install ImSwitch from our local copy of the repo
 cd /mnt/build/ImSwitch-local
-rm ./**/*.dll # Don't install large DLL files which are only useful on Windows
+rm **/*.dll # Don't install large DLL files which are only useful on Windows
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /mnt/build/ImSwitch-local"
 
 # Install UC2-REST

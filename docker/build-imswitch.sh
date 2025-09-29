@@ -6,10 +6,10 @@ apt-get install -y \
   git
 
 # Install ImSwitch from our local copy of the repo
-cp -r /mnt/build/ImSwitch-local /tmp/ImSwitch-local
-cd /tmp/ImSwitch-local
+cp -r /mnt/ImSwitch /tmp/ImSwitch
+cd /tmp/ImSwitch
 rm -rf **/*.dll
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch-local"
+/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
 
 # Install UC2-REST
 git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST

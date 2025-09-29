@@ -75,7 +75,7 @@ RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-imswitch-
 # this BUILD_DATE hack?
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
-RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=.,target=/mnt/build/ImSwitch-local,rw /mnt/build/build-imswitch.sh
+RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=.,target=/mnt/ImSwitch /mnt/build/build-imswitch.sh
 ENV WIFI_MODE=host
 # Expose FTP port and HTTP port
 EXPOSE 8001 8002 8003 8888 8889 22

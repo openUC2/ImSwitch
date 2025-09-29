@@ -27,12 +27,6 @@ apt-get install -y \
   systemd \
   sudo
 
-# TODO(ethanjli): can we delete this since we're repeating it later?
-# Install UC2-REST first - as it will be installed via ImSwitch again
-git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST
-cd /tmp/UC2-REST
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
-
 # Question(ethanjli): what does the following note mean? It sounds suspicious...
 # first install all the dependencies not not to install them again in a potential "breaking update"
 # Clone the repository and install dependencies
@@ -40,21 +34,12 @@ git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch
 cd /tmp/ImSwitch
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
 
-# Clone the config folder
-git clone https://github.com/openUC2/ImSwitchConfig /tmp/ImSwitchConfig
-
 # we want psygnal to be installed without binaries - so first remove it
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"
 
 # fix the version of OME-ZARR
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install zarr==2.11.3"
-
-# Clone the config folder
-cd /tmp/ImSwitchConfig
-# Note(ethanjli): I feel like we should use the local files without of running `git pull` inside the
-# Dockerfile, as that will desynchronize the container images from the state of the repository...
-git pull
 
 # Copy current local ImSwitch code instead of pulling from git
 cd /tmp/ImSwitch-local

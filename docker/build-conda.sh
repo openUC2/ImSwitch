@@ -23,9 +23,6 @@ wget --quiet \
   "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-$cpu.sh" \
   -O /tmp/miniforge.sh
 /bin/bash /tmp/miniforge.sh -b -p /opt/conda
-# Note(ethanjli): we remove base packages to save space, since we're anyways only installing things
-# into a virtualenv:
-/opt/conda/bin/conda remove --all
 
 # Create conda environment and install packages
 /opt/conda/bin/conda create -y --name imswitch python=3.11

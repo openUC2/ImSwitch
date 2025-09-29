@@ -13,7 +13,8 @@ cd /tmp/ImSwitch
 # Delete DLL files
 # Note(ethanjli): we do this because they take up a significant amount of space, and they should be
 # useless in Linux anyways (as they're Windows-specific)
-rm -rf /opt/conda/envs/imswitch/lib/**/*.dll
+ls /opt/conda/envs/imswitch/lib/*/*/imswitch/**/*.dll
+rm -rf /opt/conda/envs/imswitch/lib/*/*/imswitch/**/*.dll
 
 # Install UC2-REST
 git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST

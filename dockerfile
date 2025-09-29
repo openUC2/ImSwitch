@@ -71,7 +71,7 @@ COPY docker/build-imswitch.sh /tmp/
 # this BUILD_DATE hack?
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
-COPY . /tmp/ImSwitch-local
+COPY --exclude=.git --exclude=*.dll . /tmp/ImSwitch-local
 RUN /tmp/build-imswitch.sh
 ENV WIFI_MODE=host
 # Expose FTP port and HTTP port

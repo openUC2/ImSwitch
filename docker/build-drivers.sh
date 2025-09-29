@@ -26,6 +26,7 @@ wget "https://github.com/openUC2/ImSwitchDockerInstall/releases/download/imswitc
 dpkg -i "MVS-3.0.1_${cpu}_20241128.deb"
 rm -f "MVS-3.0.1_${cpu}_20241128.deb"
 mkdir -p /opt/MVS/bin/fonts
+rm -rf /opt/MVS/doc
 
 # Install the Daheng camera driver
 
@@ -79,13 +80,15 @@ if [ "$TARGETPLATFORM" = "linux/arm64" ]; then
   /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/alliedvision/VmbPy/releases/download/1.1.0/vmbpy-1.1.0-py3-none-linux_aarch64.whl"
   export GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 fi
+rm -rf /opt/VimbaX/doc
 
 # Clean up build-only tools
 
 apt-get remove -y \
   wget \
   unzip \
-  python3-pip
+  python3-pip \
+  gcc-11
 
 # Clean up all the package managers at the end
 

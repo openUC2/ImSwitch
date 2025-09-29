@@ -58,26 +58,26 @@ ENV TZ=Etc/UTC
 # We split up the work into different scripts run at different stages to facilitate correct
 # container image caching.
 
-RUN --mount=type=bind,source=docker/build-conda.sh,target=/tmp/build-conda.sh /tmp/build-conda.sh
+RUN --mount=type=bind,source=docker/build-conda.sh,target=/mnt/build/build-conda.sh /mnt/build/build-conda.sh
 ENV PATH=/opt/conda/bin:$PATH
 
-RUN --mount=type=bind,source=docker/build-drivers.sh,target=/tmp/build-drivers.sh /tmp/build-drivers.sh
+RUN --mount=type=bind,source=docker/build-drivers.sh,target=/mnt/build/build-drivers.sh /mnt/build/build-drivers.sh
 ENV LD_LIBRARY_PATH="/usr/lib:/tmp/Galaxy_Linux-armhf_Gige-U3_32bits-64bits_1.5.2303.9202:$LD_LIBRARY_PATH"
 ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32:"$LD_LIBRARY_PATH"
 ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
 # Larger slowly-changing dependencies are installed in a separate container image layer before the
 # rapidly-changing ImSwitch repository:
-RUN --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/tmp/build-imswitch-deps.sh /tmp/build-imswitch-deps.sh
+RUN --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/mnt/build/build-imswitch-deps.sh /mnt/build/build-imswitch-deps.sh
 
-COPY docker/build-imswitch.sh /tmp/
+COPY docker/build-imswitch.sh /mnt/build/
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Question(ethanjli): if we're copying the ImSwitch & UC2-REST repositories from local files using
 # the COPY directive, shouldn't that ignore the cache anyways? Is there any way we can get rid of
 # this BUILD_DATE hack?
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
-RUN --mount=type=bind,source=docker/build-imswitch.sh,target=/tmp/build-imswitch.sh --mount=type=bind,source=.,target=/tmp/ImSwitch-local,rw /tmp/build-imswitch.sh
+RUN --mount=type=bind,source=docker/build-imswitch.sh,target=/mnt/build/build-imswitch.sh --mount=type=bind,source=.,target=/mnt/build/ImSwitch-local,rw /mnt/build/build-imswitch.sh
 ENV WIFI_MODE=host
 # Expose FTP port and HTTP port
 EXPOSE 8001 8002 8003 8888 8889 22

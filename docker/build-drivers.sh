@@ -53,9 +53,7 @@ cd "/tmp/$archive"
 chmod +x Galaxy_camera.run
 cd /tmp/Galaxy_Linux_Python_2.0.2106.9041/api
 /bin/bash -c "source /opt/conda/bin/activate imswitch && python3 setup.py build"
-# TODO(ethanjli): can we use conda's python to do this installation? Then we might not need to
-# install python3 & python3-pip using apt-get...
-python3 setup.py install
+/bin/bash -c "source /opt/conda/bin/activate imswitch && python3 setup.py install"
 
 # Create the udev rules directory
 mkdir -p /etc/udev/rules.d

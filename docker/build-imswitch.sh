@@ -8,8 +8,12 @@ apt-get install -y \
 # Install ImSwitch from our local copy of the repo
 cp -r /mnt/ImSwitch /tmp/ImSwitch
 cd /tmp/ImSwitch
-rm -rf **/*.dll
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
+
+# Delete DLL files
+# Note(ethanjli): we do this because they take up a significant amount of space, and they should be
+# useless in Linux anyways (as they're Windows-specific)
+rm -rf /opt/conda/envs/imswitch/lib/**/*.dll
 
 # Install UC2-REST
 git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST
@@ -26,6 +30,7 @@ apt-get remove -y \
 
 # Clean up all the package managers at the end
 
+apt autoremove
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 /opt/conda/bin/conda clean --all -f -y

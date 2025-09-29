@@ -95,6 +95,7 @@ apt-get remove -y \
 
 # Clean up all the package managers at the end
 
+apt autoremove
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 /opt/conda/bin/conda clean --all -f -y

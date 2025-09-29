@@ -27,13 +27,6 @@ apt-get install -y \
   systemd \
   sudo
 
-# Question(ethanjli): what does the following note mean? It sounds suspicious...
-# first install all the dependencies not not to install them again in a potential "breaking update"
-# Clone the repository and install dependencies
-git clone https://github.com/openUC2/imSwitch /tmp/ImSwitch
-cd /tmp/ImSwitch
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
-
 # we want psygnal to be installed without binaries - so first remove it
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"
@@ -41,14 +34,13 @@ cd /tmp/ImSwitch
 # fix the version of OME-ZARR
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install zarr==2.11.3"
 
-# Copy current local ImSwitch code instead of pulling from git
+# Install ImSwitch from our local copy of the repo
 cd /tmp/ImSwitch-local
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch-local"
 
 # Install UC2-REST
 git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST
 cd /tmp/UC2-REST
-git pull
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
 
 # install arkitekt

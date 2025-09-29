@@ -69,7 +69,6 @@ ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 # rapidly-changing ImSwitch repository:
 RUN --mount=type=bind,source=docker/build-imswitch-deps.sh,target=/mnt/build/build-imswitch-deps.sh /mnt/build/build-imswitch-deps.sh
 
-COPY docker/build-imswitch.sh /mnt/build/
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Question(ethanjli): if we're copying the ImSwitch & UC2-REST repositories from local files using
 # the COPY directive, shouldn't that ignore the cache anyways? Is there any way we can get rid of

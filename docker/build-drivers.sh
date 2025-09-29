@@ -88,6 +88,9 @@ apt-get remove -y \
   wget \
   unzip \
   python3-pip \
+  g++ \
+  g++-11 \
+  gcc \
   gcc-11
 
 # Clean up all the package managers at the end

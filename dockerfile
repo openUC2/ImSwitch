@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.7-labs
 # Note: the above syntax parser directive is only needed so that we can use the COPY directive with
 # the `--exclude` option.
 

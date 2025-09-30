@@ -35,5 +35,14 @@ from .FlowStopManager import FlowStopManager
 from .LepmonManager import LepmonManager
 from .FlatfieldManager import FlatfieldManager
 from .PixelCalibrationManager import PixelCalibrationManager
-from .ISMManager import ISMManager
+# from .ISMManager import ISMManager
 from .OSSIMManager import OSSIMManager
+
+# Optional: Arkitekt integration. Import guarded so missing optional deps don't break app startup.
+try:
+	from .ArkitektManager import ArkitektManager
+except Exception as _arkitekt_err:  # pragma: no cover - optional dependency
+	warnings.warn(
+		f"ArkitektManager unavailable: {type(_arkitekt_err).__name__}: {_arkitekt_err}. "
+		"Arkitekt features will be disabled unless dependencies are installed.")
+	ArkitektManager = None  # type: ignore

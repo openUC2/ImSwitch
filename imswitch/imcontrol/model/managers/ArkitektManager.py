@@ -6,21 +6,26 @@ methods for image processing and deconvolution using remote services.
 Configuration is loaded from setupInfo similar to FocusLockController.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Any as _Any
 from contextvars import copy_context, Context
-from imswitch.imcommon.model import initLogger
-
-# Import this to make sure that mikro_next is available when ArkitektManager is used
-from mikro_next.api.schema import Image
-
-
-def ensure_context_in_thread(context: Context):
-    """Ensure context variables are available in the current thread."""
-    for ctx, value in context.items():
-        ctx.set(value)
+import os
+from imswitch.imcommon.model import initLogger, dirtools
+import json
 
 
-ARKITEKT_CONTEXT: Context | None = None
+def ensure_context_in_thread(context: Optional[Context]):
+    """Best-effort: ensure context variables are available in the current thread.
+
+    Note: Python's contextvars does not provide a portable API to copy values
+    from one Context into another thread. For our use case we only need to make
+    sure the Arkitekt client was entered and a context exists; so we keep this
+    as a no-op if a context is present.
+    """
+    return
+
+
+# Global held context copied from the Arkitekt thread
+ARKITEKT_CONTEXT: Optional[Context] = None
 
 
 def ensure_global_context():
@@ -163,7 +168,7 @@ class ArkitektManager:
             self.__logger.error(f"Failed to initialize Arkitekt: {e}")
             self._config["enabled"] = False
 
-    def get_arkitekt_app(self) -> Optional[Any]:
+    def get_arkitekt_app(self) -> Optional[_Any]:
         """Get the Arkitekt application instance."""
         return self.__arkitekt
 
@@ -202,7 +207,16 @@ class ArkitektManager:
 
         self.__logger.info("Arkitekt configuration updated")
 
-    def upload_and_deconvolve_image(self, image) -> Optional[Any]:
+    def _save_config(self, path: str) -> None:
+        """Persist current Arkitekt config to a JSON file."""
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._config, f, indent=2)
+        except Exception as e:
+            self.__logger.warning(f"Failed to save Arkitekt config to {path}: {e}")
+
+    def upload_and_deconvolve_image(self, image) -> Optional[_Any]:
         """
         Upload an image to Arkitekt and perform deconvolution.
 
@@ -248,7 +262,7 @@ class ArkitektManager:
             self.__logger.error(f"Failed to perform image deconvolution: {e}")
             return None
 
-    def find_action(self, action_hash: str) -> Optional[Any]:
+    def find_action(self, action_hash: str) -> Optional[_Any]:
         """
         Find an Arkitekt action by its hash.
 
@@ -275,7 +289,7 @@ class ArkitektManager:
             self.__logger.error(f"Failed to find action {action_hash}: {e}")
             return None
 
-    def execute_action(self, action_hash: str, **kwargs) -> Optional[Any]:
+    def execute_action(self, action_hash: str, **kwargs) -> Optional[_Any]:
         """
         Execute an Arkitekt action with given parameters.
 

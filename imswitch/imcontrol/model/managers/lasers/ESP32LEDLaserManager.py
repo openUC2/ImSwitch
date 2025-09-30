@@ -51,11 +51,13 @@ class ESP32LEDLaserManager(LaserManager):
     def setEnabled(self, enabled,  getReturn=False):
         """Turn on (N) or off (F) laser emission"""
         self.enabled = enabled
+        self.__logger.debug(f"setEnabled(enabled={enabled}, getReturn={getReturn}) channel_index={self.channel_index} power={self.power}")
         if self.channel_index == "LED":
             #self._led.send_LEDMatrix_full(intensity = (self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
             #self._led.setIntensity(intensity=(self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
             self._led.setAll(state=self.enabled, intensity=(self.power, self.power, self.power), getReturn=getReturn)
         else:
+            self.__logger.debug("Sending _laser.set_laser for enable/disable")
             self._laser.set_laser(self.channel_index,
                                                 int(self.power*self.enabled),
                                                 despeckleAmplitude = self.laser_despeckle_amplitude,
@@ -67,17 +69,20 @@ class ESP32LEDLaserManager(LaserManager):
         Sends a RS232 command to the laser specifying the new intensity.
         """
         self.power = power
+        self.__logger.debug(f"setValue(power={power}, getReturn={getReturn}) enabled={self.enabled} channel_index={self.channel_index}")
         if self.enabled:
 
             if self.channel_index == "LED":
                 # ensure that in case it's not initialized yet, we display an all-on pattern
                 if self._led.ledpattern[0,0]==-1:
                     self._led.ledpattern[:]=1
+                self.__logger.debug("Sending _led.setAll for power change")
                 self._led.setAll(state=1, intensity=(self.power, self.power, self.power), getReturn=getReturn)
                 #self._led.setAll(intensity=(self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
                 self.ledIntesity=self.power
                 #self._led.send_LEDMatrix_full(intensity = (self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
             else:
+                self.__logger.debug("Sending _laser.set_laser for power change")
                 self._laser.set_laser(self.channel_index,
                                     int(self.power),
                                     despeckleAmplitude = self.laser_despeckle_amplitude,

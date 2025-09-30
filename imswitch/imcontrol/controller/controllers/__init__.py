@@ -1,63 +1,17 @@
-from .AlignAverageController import AlignAverageController
-from .AlignmentLineController import AlignmentLineController
-from .AlignXYController import AlignXYController
-from .AufofocusController import AutofocusController
-from .BeadRecController import BeadRecController
-from .ConsoleController import ConsoleController
-from .EtSTEDController import EtSTEDController
-from .FFTController import FFTController
-from .HoloController import HoloController
-from .JoystickController import JoystickController
-from .HistogrammController import HistogrammController
-from .STORMReconController import STORMReconController
-from .HoliSheetController import HoliSheetController
-from .FlowStopController import FlowStopController
-from .ObjectiveRevolverController import ObjectiveRevolverController
-from .TemperatureController import TemperatureController
-from .SquidStageScanController import SquidStageScanController
-from .FocusLockController import FocusLockController
-from .FOVLockController import FOVLockController
-from .ImageController import ImageController
-from .LaserController import LaserController
-from .MotCorrController import MotCorrController
-from .LEDController import LEDController
-from .PositionerController import PositionerController
-from .StandaPositionerController import StandaPositionerController
-from .StandaStageController import StandaStageController
-from .RecordingController import RecordingController
-from .WellPlateController import WellPlateController
-from .LEDMatrixController import LEDMatrixController
-from .SLMController import SLMController
-from .ScanControllerBase import ScanControllerBase
-from .ScanControllerMoNaLISA import ScanControllerMoNaLISA
-from .ScanControllerPointScan import ScanControllerPointScan
-from .RotationScanController import RotationScanController
-from .RotatorController import RotatorController
-from .UC2ConfigController import UC2ConfigController
-from .SIMController import SIMController
-from .DPCController import DPCController
-from .MCTController import MCTController
-from .ROIScanController import ROIScanController
-from .RotationScanController import RotationScanController
-from .LightsheetController import LightsheetController
-from .WebRTCController import WebRTCController
-from .HyphaController import HyphaController
-from .JetsonNanoController import JetsonNanoController
-from .HistoScanController import HistoScanController
-from .FlatfieldController import FlatfieldController
-from .PixelCalibrationController import PixelCalibrationController
-from .ISMController import ISMController
-from .SettingsController import SettingsController
-from .SLMController import SLMController
-from .TilingController import TilingController
-from .ULensesController import ULensesController
-from .ViewController import ViewController
-from .TilingController import TilingController
-from .WatcherController import WatcherController
-from .hypha import hypha_storage
-from .hypha import hypha_executor
-from .camera_stage_mapping import camera_stage_calibration_1d
-from .camera_stage_mapping import camera_stage_calibration_2d
-from .camera_stage_mapping import camera_stage_tracker
-from .camera_stage_mapping import correlation_image_tracking
-from .OSSIMController import OSSIMController
+"""
+Lightweight controller package exports.
+
+Avoid eager-importing every controller so optional/missing controllers do not
+break startup. Controllers are loaded dynamically by name elsewhere.
+Only export minimal symbols needed by relative imports between controllers.
+"""
+
+# Minimal exports referenced by other controllers through relative imports
+from .PositionerController import PositionerController  # used by Standa* controllers
+
+# Keep these optional helpers local to avoid import-time hard failures; users
+# that require these controllers should import them directly by name.
+# Example dynamic import path used elsewhere:
+#   imswitch.imcontrol.controller.controllers.<Name>Controller
+
+# Optional controllers can be imported lazily in their usage sites.

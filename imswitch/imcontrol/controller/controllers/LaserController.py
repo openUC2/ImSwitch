@@ -1,7 +1,7 @@
 from typing import List, Union
 from imswitch.imcommon.framework import Signal
 from imswitch import IS_HEADLESS
-from imswitch.imcommon.model import APIExport
+from imswitch.imcommon.model import APIExport, initLogger
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view import guitools
 from ..basecontrollers import ImConWidgetController
@@ -12,6 +12,7 @@ class LaserController(ImConWidgetController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._logger = initLogger(self)
 
         self.settingAttr = False
         self.presetBeforeScan = None
@@ -72,28 +73,33 @@ class LaserController(ImConWidgetController):
 
     def toggleLaser(self, laserName, enabled):
         """ Enable or disable laser (on/off)."""
+        self._logger.debug(f"toggleLaser: {laserName} -> enabled={enabled}")
         self._master.lasersManager[laserName].setEnabled(enabled)
         self.setSharedAttr(laserName, _enabledAttr, enabled)
 
     def valueChanged(self, laserName, magnitude):
         """ Change magnitude. """
+        self._logger.debug(f"valueChanged: {laserName} -> value={magnitude}")
         self._master.lasersManager[laserName].setValue(magnitude)
         self.setSharedAttr(laserName, _valueAttr, magnitude)
         if not IS_HEADLESS: self._widget.setValue(laserName, magnitude)
 
     def toggleModulation(self, laserName, enabled):
         """ Enable or disable laser modulation (on/off). """
+        self._logger.debug(f"toggleModulation: {laserName} -> enabled={enabled}")
         self._master.lasersManager[laserName].setModulationEnabled(enabled)
         self.setSharedAttr(laserName, _freqEnAttr, enabled)
 
     def frequencyChanged(self, laserName, frequency):
         """ Change modulation frequency. """
+        self._logger.debug(f"frequencyChanged: {laserName} -> frequency={frequency}")
         self._master.lasersManager[laserName].setModulationFrequency(frequency)
         self.setSharedAttr(laserName, _freqAttr, frequency)
         if not IS_HEADLESS: self._widget.setModulationFrequency(laserName, frequency)
 
     def dutyCycleChanged(self, laserName, dutyCycle):
         """ Change modulation duty cycle. """
+        self._logger.debug(f"dutyCycleChanged: {laserName} -> dutyCycle={dutyCycle}")
         self._master.lasersManager[laserName].setModulationDutyCycle(dutyCycle)
         self.setSharedAttr(laserName, _dcAttr, dutyCycle)
         if not IS_HEADLESS: self._widget.setModulationDutyCycle(laserName, dutyCycle)

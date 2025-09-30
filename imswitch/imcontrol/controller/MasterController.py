@@ -121,7 +121,12 @@ class MasterController:
         if "Workflow" in self.__setupInfo.availableWidgets:
             self.workflowManager = WorkflowManager()
         if "Arkitekt" in self.__setupInfo.availableWidgets:
-            self.arkitektManager = ArkitektManager(self.__setupInfo.arkitekt)
+            if ArkitektManager is not None:
+                self.arkitektManager = ArkitektManager(self.__setupInfo.arkitekt)
+            else:
+                self.__logger.warning(
+                    "Arkitekt widget requested but ArkitektManager is unavailable. "
+                    "Install optional dependencies to enable it.")
         # load all implugin-related managers and add them to the class
         # try to get it from the plugins
         # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the

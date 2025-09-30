@@ -27,18 +27,18 @@ DEBUG = True
 
 class ImScrMainView(QtWidgets.QMainWindow):
     """ Main self.view of ImNotebook. """
-    
+
     sigClosing = QtCore.Signal()
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setWindowTitle('Notebook')
-        
+
         # Actions in menubar
         if IS_HEADLESS:
-            return 
-        
-        # test and launch notebook server        
+            return
+
+        # test and launch notebook server
         self.notebookServer = LaunchNotebookServer()
         webaddr = self.notebookServer.startServer()
 
@@ -80,7 +80,7 @@ class ImScrMainView(QtWidgets.QMainWindow):
 
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

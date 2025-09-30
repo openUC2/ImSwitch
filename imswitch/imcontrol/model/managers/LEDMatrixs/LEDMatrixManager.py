@@ -11,26 +11,24 @@ class LEDMatrixManager(ABC):
                  valueDecimals: int, isModulated: bool = False) -> None:
         """
         Args:
-            LEDMatrixInfo: 
+            LEDMatrixInfo:
         """
-        
+
         self._LEDMatrixInfo = LEDMatrixInfo
         self.__name = name
-        self.__pattern = None   
+        self.__pattern = None
         self.valueUnits = valueUnits
         self.valueDecimals = valueDecimals
         self.isModulated = isModulated
-        self.isBinary = False 
+        self.isBinary = False
         self.wavelength = 0
         self.valueRangeMin = 0
         self.valueRangeMax = 255
         self.valueRangeStep = 1
         self.valueUnits = ""
-        
-        self.__freqRangeMin = None
-        self.__freqRangeMax = None
-        self.__freqRangeInit = None
-      
+        self.__currentState = None
+
+
     def name(self) -> str:
         """ Unique LEDMatrix name, defined in the LEDMatrix's setup info. """
         return self.__name
@@ -38,7 +36,7 @@ class LEDMatrixManager(ABC):
     def setEnabled(self, enabled: bool) -> None:
         """ Sets whether the LEDMatrix is enabled. """
         pass
-    
+
     def setAll(self, intensity=0, getReturn=True) -> None:
         """ Sets the value of the LEDMatrix. """
         pass
@@ -46,28 +44,52 @@ class LEDMatrixManager(ABC):
     def setPattern(self, pattern) -> None:
         """ Sets the value of the LEDMatrix. """
         pass
-    
+
     def setEnabled(self, enabled) -> None:
         """ Sets the value of the LEDMatrix. """
         pass
-    
+
     def setLEDSingle(self, index=0, intensity=0) -> None:
         """ Sets the value of the LEDMatrix. """
         pass
-    
+
     def setIndividualPattern(self, pattern, getReturn=False) -> None:
         """ Sets the value of the LEDMatrix. """
         pass
-    
+
     def setEnabled(self, enabled) -> None:
         """ Sets the value of the LEDMatrix. """
         pass
-    
+
     def setValue(self, value) -> None:
         """ Sets the value of the LEDMatrix. """
         pass
-    
-# Copyright (C) 2020-2023 ImSwitch developers
+
+    def getState(self) -> Union[None, str]:
+        """ Returns the state of the LEDMatrix. """
+        return self.__currentState
+
+    def setState(self, state) -> None:
+        """ Sets the state of the LEDMatrix. """
+
+    def setRing(self, radius: int, intensity: int) -> None:
+        """ Sets the value of the LEDMatrix. """
+        pass
+
+    def setCircle(self, radius: int, intensity: int) -> None:
+        """ Sets the value of the LEDMatrix. """
+        pass
+
+    def setHalves(self, intensity: int, region: str) -> None:
+        """ Sets the value of the LEDMatrix. """
+        pass
+
+    def setStatus(self, status:str="idle") -> None:
+        """ Sets the value of the LEDMatrix (e.g. for error indication). """
+        pass
+
+
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

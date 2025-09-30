@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Union
 from imswitch.imcontrol.model import SetupInfo
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class ROIInfo:
     x: int
     """ Starting X position of ROI, in pixels. """
@@ -19,12 +19,12 @@ class ROIInfo:
     """ Height of ROI, in pixels. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LaserPresetInfo:
     value: float
     """ Laser value. """
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LEDPresetInfo:
     value: float
     """ LED value. """
@@ -39,7 +39,7 @@ class ViewSetupInfo(SetupInfo):
 
     rois: Dict[str, 'ROIInfo'] = field(default_factory=dict)
     """ Additional ROIs available to select in detector settings. """
-    
+
     ledPresets: Dict[str, Dict[str, 'LEDPresetInfo']] = field(default_factory=dict)
     """ LED presets available to select (map preset name -> LED name ->
     LEDPresetInfo). """
@@ -50,6 +50,10 @@ class ViewSetupInfo(SetupInfo):
     laserPresets: Dict[str, Dict[str, 'LaserPresetInfo']] = field(default_factory=dict)
     """ Laser presets available to select (map preset name -> laser name ->
     LaserPresetInfo). """
+
+    stageOffsets: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    """ Stage offsets available to select (map preset name -> stage name ->
+    stage offset). """
 
     defaultLaserPresetForScan: Optional[str] = field(default_factory=lambda: None)
     """ Default laser preset for scanning. """
@@ -65,9 +69,9 @@ class ViewSetupInfo(SetupInfo):
     - ``FocusLock`` (focus lock widget; requires ``focusLock`` field to be
       defined)
     - ``Autofocus`` (autofocus widget; requires ``focusLock`` field to be
-      defined)      
+      defined)
     - ``SLM`` (SLM widget; requires ``slm`` field to be defined)
-    - ``SIM`` (SIM widget; requires ``sim`` field to be defined)    
+    - ``SIM`` (SIM widget; requires ``sim`` field to be defined)
     - ``Laser`` (laser control widget)
     - ``LED`` (LED control widget)
     - ``Deck`` (Deck control widget)
@@ -125,6 +129,10 @@ class ViewSetupInfo(SetupInfo):
         """ :meta private: """
         self.laserPresets[name] = laserPresetInfos
 
+    def setStageOffset(self, name, stageOffsets):
+        """ :meta private: """
+        self.positioners[name].stageOffsets=stageOffsets
+
     def removeLaserPreset(self, name):
         """ :meta private: """
         try:
@@ -145,7 +153,7 @@ class ViewSetupInfo(SetupInfo):
         )
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

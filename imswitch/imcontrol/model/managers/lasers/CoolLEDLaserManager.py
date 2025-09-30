@@ -22,9 +22,9 @@ class CoolLEDLaserManager(LaserManager):
         self.__channel_index = laserInfo.managerProperties['channel_index']
         self.__digital_mod = False
 
-        isModulated = (True if laserInfo.freqRangeMin != None and 
+        isModulated = (True if laserInfo.freqRangeMin != None and
                                 laserInfo.freqRangeMax != None and
-                                laserInfo.freqRangeInit != None 
+                                laserInfo.freqRangeInit != None
                             else False)
 
         super().__init__(laserInfo, name, isBinary=False, valueUnits='mW', valueDecimals=0, isModulated=isModulated)
@@ -47,7 +47,7 @@ class CoolLEDLaserManager(LaserManager):
         self._rs232manager.query(cmd)
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

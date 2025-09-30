@@ -56,7 +56,7 @@ class EmbeddedNapari(napari.Viewer):
                     self.window.file_menu.removeAction(menuChild)
             except Exception:
                 pass
-        
+
         self.scale_bar.visible = True
 
     def add_image(self, *args, protected=False, **kwargs):
@@ -108,8 +108,8 @@ class NapariBaseWidget(QtWidgets.QWidget):
     def addItemToViewer(self, item):
         item.attach(self.viewer,
                     canvas=self.viewer.window.qt_viewer.canvas,
-                    view=self.viewer.window.qt_viewer.view,
-                    parent=self.viewer.window.qt_viewer.view.scene,
+                    view=self.napariViewer.window.qt_viewer.canvas.view,
+                    parent=self.napariViewer.window.qt_viewer.canvas.view.scene,
                     order=1e6 + 8000)
 
 

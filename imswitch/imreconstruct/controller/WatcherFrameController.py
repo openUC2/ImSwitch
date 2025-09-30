@@ -5,6 +5,8 @@ from .basecontrollers import ImRecWidgetController
 from imswitch.imcommon.model.logging import initLogger
 import zarr
 import numpy as np
+
+# Fallback to ome-zarr if vanilla implementation is not available
 from ome_zarr.io import parse_url
 from ome_zarr.writer import write_image
 from time import perf_counter
@@ -113,7 +115,7 @@ class WatcherFrameController(ImRecWidgetController):
                 tiff.imwrite(self.recPath.split('.')[0] + ".tiff", image)
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

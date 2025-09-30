@@ -6,7 +6,6 @@ import threading
 
 import numpy as np
 from PIL import Image
-from scipy import signal as sg
 import uc2rest as uc2
 import json
 
@@ -38,19 +37,8 @@ class UC2ConfigManager(SignalInterface):
     def setGeneral(self, general_info):
         pass
 
-    def loadPinDefDevice(self):
-        return self.ESP32.config.loadConfigDevice()
-
     def loadDefaultConfig(self):
         return self.ESP32.config.loadDefaultConfig()
-
-    def setpinDef(self, pinDef_info):
-        self.ESP32.config.setConfigDevice(pinDef_info)
-        # check if setting pins was successfull
-        pinDef_infoDevice = self.loadPinDefDevice()
-        shared_items = {k: pinDef_info[k] for k in pinDef_info if
-                        k in pinDef_infoDevice and pinDef_info[k] == pinDef_infoDevice[k]}
-        return shared_items
 
     def update(self, maskChange=False, tiltChange=False, aberChange=False):
         pass
@@ -59,24 +47,44 @@ class UC2ConfigManager(SignalInterface):
         return self.ESP32.closeSerial()
 
     def isConnected(self):
-        return self.ESP32.serial.is_connected
+        try:
+            return self.ESP32.serial.is_connected
+        except:
+            return False
 
     def interruptSerialCommunication(self):
         self.ESP32.serial.interruptCurrentSerialCommunication()
-        
+
     def initSerial(self, baudrate=None):
         try:
             self.ESP32.serial.reconnect(baudrate=baudrate)
         except:
             self.ESP32.serial.reconnect() # fall back to old version of UC2-REST
-            
+
     def pairBT(self):
         self.ESP32.state.pairBT()
 
     def setDebug(self, debug):
         self.ESP32.serial.DEBUG = debug
 
-# Copyright (C) 2020-2023 ImSwitch developers
+    def restartESP(self):
+        self.ESP32.state.espRestart()
+
+    def restartCANDevice(self, device_id):
+        """
+        Restart a CAN device by sending a reboot command to the ESP32.
+
+        0 - Master
+        10-19 - Motor
+        20-29 - Laser
+        30-39 - LED
+        Args:
+            device_id (_type_): _description_
+        """
+        self.ESP32.can.reboot_remote(can_address=device_id, isBlocking=True, timeout=1)
+
+
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

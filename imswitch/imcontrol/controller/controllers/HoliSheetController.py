@@ -90,11 +90,11 @@ class HoliSheetController(LiveUpdatedController):
         # get all Lasers
         self.lasers = self._master.lasersManager.getAllDeviceNames()
         self.laser = self.lasers[0]
-        try: 
+        try:
             self._master.lasersManager[self.laser].setGalvo(channel=1, frequency=10, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1)
         except  Exception as e:
             self._logger.error(e)
-        
+
         # connect camera and stage
         #self.camera = self._setupInfo.autofocus.camera
         #self._master.detectorsManager[self.camera].startAcquisition()
@@ -127,8 +127,8 @@ class HoliSheetController(LiveUpdatedController):
             self._master.lasersManager[self.laser].setGalvo(channel=1, frequency=10, offset=0, amplitude=1, clk_div=2, phase=0, invert=1, timeout=1)
         else:
             self._master.lasersManager[self.laser].setGalvo(channel=1, frequency=0, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1)
-        
-        
+
+
     def valueFocusChanged(self, magnitude):
         """ Change magnitude. """
         self.dz = magnitude*1e-3
@@ -301,7 +301,7 @@ class HoliSheetController(LiveUpdatedController):
 
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

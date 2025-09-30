@@ -33,15 +33,12 @@ class LaserController(ImConWidgetController):
                     (lManager.valueRangeMin, lManager.valueRangeMax) if not lManager.isBinary else None,
                     lManager.valueRangeStep if lManager.valueRangeStep is not None else None,
                     (lManager.freqRangeMin, lManager.freqRangeMax, lManager.freqRangeInit) if lManager.isModulated else (0, 0, 0))
-            
+
             if not lManager.isBinary:
                 self.valueChanged(lName, lManager.valueRangeMin)
 
         # Connect CommunicationChannel signals
-        if 0: #IS_HEADLESS:
-            self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged, check_nargs=False) # TODO: !!!!!!
-        else:
-            self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged) 
+        self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
         self._commChannel.sigScanStarting.connect(lambda: self.scanChanged(True))
         self._commChannel.sigScanBuilt.connect(self.scanBuilt)
         self._commChannel.sigScanEnded.connect(lambda: self.scanChanged(False))
@@ -83,7 +80,7 @@ class LaserController(ImConWidgetController):
         self._master.lasersManager[laserName].setValue(magnitude)
         self.setSharedAttr(laserName, _valueAttr, magnitude)
         if not IS_HEADLESS: self._widget.setValue(laserName, magnitude)
-    
+
     def toggleModulation(self, laserName, enabled):
         """ Enable or disable laser modulation (on/off). """
         self._master.lasersManager[laserName].setModulationEnabled(enabled)
@@ -94,7 +91,7 @@ class LaserController(ImConWidgetController):
         self._master.lasersManager[laserName].setModulationFrequency(frequency)
         self.setSharedAttr(laserName, _freqAttr, frequency)
         if not IS_HEADLESS: self._widget.setModulationFrequency(laserName, frequency)
-    
+
     def dutyCycleChanged(self, laserName, dutyCycle):
         """ Change modulation duty cycle. """
         self._master.lasersManager[laserName].setModulationDutyCycle(dutyCycle)
@@ -262,6 +259,30 @@ class LaserController(ImConWidgetController):
         passed to other laser-related functions. """
         return self._master.lasersManager.getAllDeviceNames()
 
+    @APIExport()
+    def getLaserValueRanges(self, laserName: str) -> List[Union[int, float, None]]:
+        """ Returns the value range of the specified laser as a tuple
+        (min, max). If the laser can only be turned on/off, returns None. """
+        try:
+            lManager = self._master.lasersManager[laserName]
+            if lManager.isBinary:
+                return None
+            else:
+                return (lManager.valueRangeMin, lManager.valueRangeMax)
+        except KeyError:
+            return None
+
+    @APIExport()
+    def getLaserValue(self, laserName: str) -> Union[int, float]:
+        """ Returns the value of the specified laser, in the units that the
+        laser uses. """
+        if not IS_HEADLESS: return self._widget.getValue(laserName)
+        else:
+            try:
+                return self._master.lasersManager[laserName].power
+            except Exception as e:
+                return 0
+
     @APIExport(runOnUIThread=True)
     def setLaserActive(self, laserName: str, active: bool) -> None:
         """ Sets whether the specified laser is powered on. """
@@ -273,7 +294,7 @@ class LaserController(ImConWidgetController):
         """ Sets the value of the specified laser, in the units that the laser
         uses. """
         if not IS_HEADLESS: self._widget.setValue(laserName, value)
-        else: self.valueChanged(laserName, value) #TODO: !!! 
+        else: self.valueChanged(laserName, value) #TODO: !!!
 
     @APIExport()
     def changeScanPower(self, laserName, laserValue):
@@ -286,14 +307,14 @@ class LaserController(ImConWidgetController):
         (min, max), or None (if the laser can only be turned on/off).
         frequencyRange is either a tuple (min, max, initVal)
         or (0, 0, 0) (if the laser is not modulated in frequency)"""
-        
+
         control = LaserModule(
             valueUnits=valueUnits, valueDecimals=valueDecimals, valueRange=valueRange,
             tickInterval=5, singleStep=valueRangeStep,
             initialPower=valueRange[0] if valueRange is not None else 0,
             frequencyRange=frequencyRange
         )
-        
+
         control.sigEnableChanged = Signal(str, bool)
         control.sigValueChanged = Signal(str, float)
 
@@ -334,7 +355,7 @@ _freqAttr = "Frequency"
 _dcAttr = "DutyCycle"
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

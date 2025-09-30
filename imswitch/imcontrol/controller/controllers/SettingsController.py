@@ -40,19 +40,28 @@ class SettingsController(ImConWidgetController):
         if not self._master.detectorsManager.hasDevices():
             return
 
-        if IS_HEADLESS: return
-        # Set up detectors
-        for dName, dManager in self._master.detectorsManager:
-            if not dManager.forAcquisition:
-                continue
-            
-            self._widget.addDetector(
-                dName, dManager.model, dManager.parameters, dManager.actions,
-                dManager.supportedBinnings, self._setupInfo.rois
-            )
+
+        # Connect CommunicationChannel signals
+        self._commChannel.sigDetectorSwitched.connect(self.detectorSwitched)
 
         self.roiAdded = False
-        self.initParameters()
+
+        if not IS_HEADLESS:
+            # Set up detectors
+            for dName, dManager in self._master.detectorsManager:
+                if not dManager.forAcquisition:
+                    continue
+
+                self._widget.addDetector(
+                    dName, dManager.model, dManager.parameters, dManager.actions,
+                    dManager.supportedBinnings, self._setupInfo.rois
+                )
+            self.initParameters()
+        self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
+        self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
+        self.updateSharedAttrs()
+        if IS_HEADLESS: return
+
 
         execOnAll = self._master.detectorsManager.execOnAll
         execOnAll(lambda c: (self.updateParamsFromDetector(detector=c)),
@@ -64,12 +73,6 @@ class SettingsController(ImConWidgetController):
         execOnAll(lambda c: (self.updateFrameActionButtons(detector=c)),
                   condition=lambda c: c.forAcquisition)
 
-        self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
-        self.updateSharedAttrs()
-
-        # Connect CommunicationChannel signals
-        self._commChannel.sigDetectorSwitched.connect(self.detectorSwitched)
-        self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
 
         # Connect SettingsWidget signals
         self._widget.sigROIChanged.connect(self.ROIchanged)
@@ -317,12 +320,12 @@ class SettingsController(ImConWidgetController):
             else:
                 c.setBinning(int(self.allParams[c.name].binning.value()))
 
-        self.getDetectorManagerFrameExecFunc()(set_binning)        
+        self.getDetectorManagerFrameExecFunc()(set_binning)
         self.updateSharedAttrs()
 
     def updateParamsFromDetector(self, *, detector):
         """ Update the parameter values from the detector. """
-
+        if IS_HEADLESS: return
         params = self.allParams[detector.name]
 
         # Detector parameters
@@ -336,7 +339,7 @@ class SettingsController(ImConWidgetController):
         params.binning.setValue(detector.binning)
         frameStart = detector.frameStart
         shape = detector.shape
-        fullShape = detector.fullShape
+        fullShape = detector.fullShape # width, height of the full chip
         params.x0.setValue(frameStart[0])
         params.y0.setValue(frameStart[1])
         params.width.setValue(shape[0])
@@ -401,10 +404,11 @@ class SettingsController(ImConWidgetController):
 
     def detectorSwitched(self, newDetectorName, _=None):
         """ Called when the user switches to another detector. """
-        self._widget.setDisplayedDetector(newDetectorName)
-        self._widget.setImageFrameVisible(self._master.detectorsManager[newDetectorName].croppable)
         newDetectorShape = self._master.detectorsManager[newDetectorName].shape
         self._commChannel.sigAdjustFrame.emit(newDetectorShape)
+        if IS_HEADLESS: return
+        self._widget.setDisplayedDetector(newDetectorName)
+        self._widget.setImageFrameVisible(self._master.detectorsManager[newDetectorName].croppable)
 
     def detectorSwitchClicked(self, detectorName):
         """ Changes the current detector to the selected detector. """
@@ -449,6 +453,8 @@ class SettingsController(ImConWidgetController):
             return
 
         detectorName = key[1]
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
         if len(key) == 3:
             if key[2] == _binningAttr:
                 self.setDetectorBinning(detectorName, value)
@@ -478,6 +484,107 @@ class SettingsController(ImConWidgetController):
 
             for parameterName, parameter in dManager.parameters.items():
                 self.setSharedAttr(dName, parameterName, parameter.value, isDetectorParameter=True)
+    @APIExport()
+    def sendSoftwareTrigger(self):
+        """ Sends a software trigger to the current detector. """
+        self._master.detectorsManager.execOnCurrent(lambda c: c.sendSoftwareTrigger())
+
+    @APIExport()
+    def setDetectorCompressionrate(self, compressionrate:int=80):
+        self._master.detectorsManager.updateGlobalDetectorParams({"compressionlevel":compressionrate})
+
+    @APIExport()
+    def getDetectorGlobalParameters(self):
+        return self._master.detectorsManager.getGlobalDetectorParams()
+    
+    @APIExport(requestType="POST")
+    def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None):
+        """Set streaming parameters for binary frame streaming.
+        
+        Args:
+            compression: Dict with 'algorithm' and 'level' keys
+            subsampling: Dict with 'factor' and 'auto_max_dim' keys  
+            throttle_ms: Throttling interval in milliseconds
+        """
+        
+        update_params = {}
+        
+        if compression:
+            if 'algorithm' in compression:
+                update_params['stream_compression_algorithm'] = compression['algorithm']
+            if 'level' in compression:
+                update_params['stream_compression_level'] = compression['level']
+        
+        if subsampling:
+            if 'factor' in subsampling:
+                update_params['stream_subsampling_factor'] = subsampling['factor']
+            if 'auto_max_dim' in subsampling:
+                update_params['stream_subsampling_auto_max_dim'] = subsampling['auto_max_dim']
+        
+        if throttle_ms is not None:
+            update_params['stream_throttle_ms'] = throttle_ms
+            
+        # Update using the same mechanism as compressionlevel
+        self._master.detectorsManager.updateGlobalDetectorParams(update_params)
+        
+        return {"status": "success", "updated": update_params}
+    
+    @APIExport()
+    def getStreamParams(self):
+        """Get current streaming parameters."""
+        global_params = self._master.detectorsManager.getGlobalDetectorParams()
+        
+        return {
+            "binary": {
+                "compression": {
+                    "algorithm": global_params.get('stream_compression_algorithm', 'lz4'),
+                    "level": global_params.get('stream_compression_level', 0)
+                },
+                "subsampling": {
+                    "factor": global_params.get('stream_subsampling_factor', 1),
+                    "auto_max_dim": global_params.get('stream_subsampling_auto_max_dim', 0)
+                },
+                "throttle_ms": global_params.get('stream_throttle_ms', 200)
+            },
+            "jpeg": {
+                "compression_level": global_params.get('compressionlevel', 80)
+            }
+        }
+
+    @APIExport()
+    def getDetectorParameters(self) -> dict:
+        """ Returns the current parameters of the current detector. """
+        # collect exposure time
+        try: mExposureTime = self._master.detectorsManager.getCurrentDetector().parameters['exposure'].value
+        except: mExposureTime = 1
+        # collect gain
+        try: mGain = self._master.detectorsManager.getCurrentDetector().parameters['gain'].value
+        except: mGain = 0
+        # collect pixelSize
+        try: mPixelSize = self._master.detectorsManager.getCurrentDetector().pixelSizeUm[-1]
+        except: mPixelSize = 1
+        # collect binning
+        try: mBinning = self._master.detectorsManager.getCurrentDetector().binning
+        except: mBinning = 1
+        # get Black Level
+        try: mBlacklevel = self._master.detectorsManager.getCurrentDetector().parameters['blacklevel'].value
+        except: mBlacklevel = 0
+        # get rgb
+        try: mRGB = self._master.detectorsManager.getCurrentDetector()._isRGB
+        except: mRGB = 0
+        # collect mode (auto/manual)
+        try: camMode = self._master.detectorsManager.getCurrentDetector().parameters['exposure_mode'].value
+        except: camMode = 'manual'
+        mParameterDict = {
+            'exposure': mExposureTime,
+            'gain': mGain,
+            'pixelSize': mPixelSize,
+            'binning': mBinning,
+            'blacklevel': mBlacklevel,
+            'isRGB': mRGB,
+            'mode': camMode
+        }
+        return mParameterDict
 
     @APIExport()
     def getDetectorNames(self) -> List[str]:
@@ -518,7 +625,8 @@ class SettingsController(ImConWidgetController):
             # Special case for certain parameters that will follow the "update all detectors" option
             execFunc = self._master.detectorsManager.execOnAll
         else:
-            def execFunc(f): self._master.detectorsManager.execOn(detectorName, f)
+            def execFunc(f):
+                self._master.detectorsManager.execOn(detectorName, f)
 
         execFunc(
             lambda c: (c.setParameter(parameterName, value) and
@@ -535,20 +643,71 @@ class SettingsController(ImConWidgetController):
             self.setDetectorParameter(detectorName, 'mode', 'Auto' if isAuto else 'Manual')
         except Exception as e:
             pass
-        
+
     @APIExport(runOnUIThread=True)
     def setDetectorExposureTime(self, detectorName: str=None, exposureTime: float=1) -> None:
         """ Sets the exposure time for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'exposure', exposureTime)
-        
+
+    @APIExport(runOnUIThread=True)
+    def setDetectorBlackLevel(self, detectorName: str=None, blackLevel: float=0) -> None:
+        """ Sets the blacklevel for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        self.setDetectorParameter(detectorName, 'blacklevel', blackLevel)
+
+    @APIExport(runOnUIThread=True)
+    def setDetectorTriggerType(self, detectorName: str=None, triggerType: str='Software') -> None:
+        """ Sets the trigger type for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        self.setDetectorParameter(detectorName, 'trigger_source', triggerType)
+
+    @APIExport(runOnUIThread=True)
+    def getDetectorTriggerTypes(self, detectorName: str=None) -> List[str]:
+        """ Returns the available trigger types for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        return self._master.detectorsManager[detectorName].getTriggerTypes()
+
+    @APIExport(runOnUIThread=True)
+    def getDetectorCurrentTriggerType(self, detectorName: str=None) -> str:
+        """ Returns the current trigger type for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        return self._master.detectorsManager[detectorName].getCurrentTriggerType()
+
+    @APIExport(runOnUIThread=True)
+    def setDetectorPreviewMinMaxValue(self, detectorName: str=None, minValue: int=0, maxValue: int = 1024) -> None:
+        """ Sets the preview minimum value for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        self.setDetectorParameter(detectorName, 'previewMinValue', minValue)
+        self.setDetectorParameter(detectorName, 'previewMaxValue', maxValue)
+
+
     @APIExport(runOnUIThread=True)
     def setDetectorGain(self, detectorName: str=None, gain: float=0) -> None:
         """ Sets the gain for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'gain', gain)
+
+    @APIExport(runOnUIThread=True)
+    def setDetectorPreviewMinValue(self, detectorName: str=None, minValue: int=0) -> None:
+        """ Sets the preview minimum value for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        self.setDetectorParameter(detectorName, 'previewMinValue', minValue)
+
+    @APIExport(runOnUIThread=True)
+    def setDetectorPreviewMaxValue(self, detectorName: str=None, maxValue: int=4095) -> None:
+        """ Sets the preview maximum value for the specified detector. """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        self.setDetectorParameter(detectorName, 'previewMaxValue', maxValue)
 
 _attrCategory = 'Detector'
 _modelAttr = 'Model'
@@ -558,7 +717,7 @@ _ROIAttr = 'ROI'
 _detectorParameterSubCategory = 'Param'
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

@@ -13,7 +13,7 @@ class AVManager(DetectorManager):
     - ``cameraListIndex`` -- the camera's index in the Allied Vision camera list (list
       indexing starts at 0); set this string to an invalid value, e.g. the
       string "mock" to load a mocker
-    - ``av`` -- dictionary of Allied Vision camera properties
+    - ``avcam`` -- dictionary of Allied Vision camera properties
     """
 
     def __init__(self, detectorInfo, name, **_lowLevelManagers):
@@ -23,25 +23,24 @@ class AVManager(DetectorManager):
             self._mocktype = detectorInfo.managerProperties['mocktype']
         except:
             self._mocktype = "normal"
-            
+
         try:
             self._mockstackpath = detectorInfo.managerProperties['mockstackpath']
         except:
             self._mockstackpath = None
-            
+
         self._camera = self._getAVObj(detectorInfo.managerProperties['cameraListIndex'])
 
         model = self._camera.model
         self._running = False
-        
+
 
         for propertyName, propertyValue in detectorInfo.managerProperties['avcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
 
         fullShape = (self._camera.getPropertyValue('image_width'),
                      self._camera.getPropertyValue('image_height'))
-        
-        
+
 
         self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
         self.pixel_format = self._camera.getPropertyValue("pixel_format")
@@ -56,9 +55,8 @@ class AVManager(DetectorManager):
             'image_width': DetectorNumberParameter(group='Misc', value=fullShape[0], valueUnits='arb.u.',
                         editable=False),
             'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
-                        editable=False),
-            'pixel_format': DetectorListParameter(group='Misc', value='Mono12', options=['Mono8','Mono12'], editable=True)
-            }            
+                        editable=False)
+                                                }
 
         # Prepare actions
         actions = {
@@ -69,14 +67,10 @@ class AVManager(DetectorManager):
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=True)
 
-    def getLatestFrame(self, is_save=False):
-        if is_save:
-            return self._camera.getLast(is_resize=False)
-        else:
-            # for preview purpose (speed up GUI?)
-            return self._camera.getLast(is_resize=True)
-            #return self._camera.getLastChunk()
-            
+    def getLatestFrame(self):
+        return self._camera.getLast()
+        
+
 
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
@@ -105,9 +99,9 @@ class AVManager(DetectorManager):
         return value
 
     def setBinning(self, binning):
-        super().setBinning(binning) 
-        
-    def getChunk(self):        
+        super().setBinning(binning)
+
+    def getChunk(self):
         return self._camera.getLastChunk()
 
     def flushBuffers(self):
@@ -153,7 +147,7 @@ class AVManager(DetectorManager):
             self.__logger.error(e)
             # TODO: unsure if frameStart is needed? Try without.
         # This should be the only place where self.frameStart is changed
-        
+
         vsize = self._camera.getPropertyValue('image_height')
         hsize = self._camera.getPropertyValue('image_width')
         '''
@@ -161,7 +155,7 @@ class AVManager(DetectorManager):
         self._shape = (hsize, vsize)
         self._frameStart = (hpos, vpos)
         pass
-    
+
     def _performSafeCameraAction(self, function):
         """ This method is used to change those camera properties that need
         the camera to be idle to be able to be adjusted.
@@ -186,17 +180,17 @@ class AVManager(DetectorManager):
             self.__logger.error(e)
             self.__logger.warning(f'Failed to initialize AV camera {cameraId}, loading TIS mocker')
             from imswitch.imcontrol.model.interfaces.tiscamera_mock import MockCameraTIS
-            
+
             camera = MockCameraTIS(mocktype=self._mocktype, mockstackpath=self._mockstackpath)
-        
+
         self.__logger.info(f'Initialized camera, model: {camera.model}')
         return camera
 
     def flushBuffer(self):
         self.__logger.info('Flush buffer!')
         self._camera.flushBuffer()
-        
-    
+
+
     def closeEvent(self):
         self._camera.close()
 

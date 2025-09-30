@@ -7,10 +7,11 @@ class ImScrMainController(MainController):
     """ Main controller of imscripting. """
 
     def __init__(self, mainView, moduleCommChannel, multiModuleWindowController,
-                 moduleMainControllers):
+                 moduleMainControllers,
+                 webaddr=None):
         self.__mainView = mainView
         self.__moduleCommChannel = moduleCommChannel
-
+        self.webaddr = webaddr
         # List of Controllers for the GUI Widgets
         self.__factory = ImScrWidgetControllerFactory(
             None, None, self.__moduleCommChannel
@@ -28,7 +29,7 @@ class ImScrMainController(MainController):
         self.__factory.closeAllCreatedControllers()
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

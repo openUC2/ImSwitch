@@ -88,7 +88,7 @@ class GalvoScanDesigner(ScanDesigner):
                    for positionerProps in positionersProps]
 
         # get conversion factors for scanning axes
-        convFactors = [positionerProps['conversionFactor'] 
+        convFactors = [positionerProps['conversionFactor']
                        if 'conversionFactor' in positionerProps else 1
                        for positionerProps in positionersProps]
 
@@ -558,7 +558,7 @@ class GalvoScanDesigner(ScanDesigner):
                 self._logger.debug(f'Signal length {target}: {len(signal)}')
             plt.show()
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

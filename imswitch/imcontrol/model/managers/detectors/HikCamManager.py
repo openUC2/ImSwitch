@@ -25,22 +25,22 @@ class HikCamManager(DetectorManager):
             pixelSize = detectorInfo.managerProperties['cameraEffPixelsize'] # mum
         except:
             pixelSize = 1
-            
+
         try:
             self._mockstackpath = detectorInfo.managerProperties['mockstackpath']
         except:
             self._mockstackpath = None
-            
+
         try: # FIXME: get that form the real camera
-            isRGB = detectorInfo.managerProperties['isRGB']  
+            isRGB = detectorInfo.managerProperties['isRGB']
         except:
             isRGB = False
-            
+
         try:
             self._mocktype = detectorInfo.managerProperties['mocktype']
         except:
             self._mocktype = "normal"
-            
+
 
         self._camera = self._getHikObj(cameraId, isRGB, binning)
 
@@ -53,7 +53,7 @@ class HikCamManager(DetectorManager):
         model = self._camera.model
         self._running = False
         self._adjustingParameters = False
-        
+
         # TODO: Not implemented yet
         self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
 
@@ -71,10 +71,16 @@ class HikCamManager(DetectorManager):
                         editable=False),
             'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
                                     editable=True),
-            'exposure_mode': DetectorListParameter(group='Misc', value='manual', 
+            'frame_number': DetectorNumberParameter(group='Misc', value=1, valueUnits='frames',
+                                    editable=False),
+            'exposure_mode': DetectorListParameter(group='Misc', value='manual',
                             options=['manual', 'auto', 'single'], editable=True),
             'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),
-            'mode': DetectorBooleanParameter(group='Misc', value=name, editable=False), # auto or manual exposure settings            
+            'mode': DetectorBooleanParameter(group='Misc', value=name, editable=False), # auto or manual exposure settings
+            'previewMinValue': DetectorNumberParameter(group='Misc', value=0, valueUnits='arb.u.',
+                                    editable=True),
+            'previewMaxValue': DetectorNumberParameter(group='Misc', value=255, valueUnits='arb.u.',
+                                    editable=True),
             'trigger_source': DetectorListParameter(group='Acquisition mode',
                             value='Continous',
                             options=['Continous',
@@ -100,7 +106,7 @@ class HikCamManager(DetectorManager):
 
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
-        
+
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
         If the parameter doesn't exist, i.e. the parameters field doesn't
@@ -129,7 +135,9 @@ class HikCamManager(DetectorManager):
 
 
     def setTriggerSource(self, source):
-        pass
+        # update camera safely and mirror value in GUI parameter list
+        self._performSafeCameraAction(lambda: self._camera.setTriggerSource(source))
+        self.parameters['trigger_source'].value = source
 
     def getChunk(self):
         try:
@@ -175,6 +183,29 @@ class HikCamManager(DetectorManager):
         self.parameters['Camera pixel size'].value = pixelSizeUm
 
     def crop(self, hpos, vpos, hsize, vsize):
+        '''
+        hpos - horizontal start position of crop window
+        vpos - vertical start position of crop window
+        hsize - horizontal size of crop window
+        vsize - vertical size of crop window
+        '''
+        def cropAction():
+            self.__logger.debug(
+                f'{self._camera.model}: crop frame to {hsize}x{vsize} at {hpos},{vpos}.'
+            )
+            self._camera.setROI(hpos, vpos, hsize, vsize)
+            # TODO: THis has to be reviewed as it seems to not be correct !
+            self._shape = (hsize, vsize)
+            self._frameStart = (hpos, vpos)
+            pass
+        try:
+            self._performSafeCameraAction(cropAction)
+        except Exception as e:
+            self.__logger.error(e)
+            # TODO: unsure if frameStart is needed? Try without.
+            # This should be the only place where self.frameStart is changed
+            # Only place self.shapes is changed
+
         pass
 
     def _performSafeCameraAction(self, function):
@@ -192,6 +223,21 @@ class HikCamManager(DetectorManager):
     def openPropertiesDialog(self):
         self._camera.openPropertiesGUI()
 
+    def sendSoftwareTrigger(self):
+        """Send a software trigger to the camera."""
+        if self._camera.send_trigger():
+            self.__logger.debug('Software trigger sent successfully.')
+        else:
+            self.__logger.warning('Failed to send software trigger.')
+
+    def getCurrentTriggerType(self):
+        """Get the current trigger type of the camera."""
+        return self._camera.getTriggerSource()
+
+    def getTriggerTypes(self):
+        """Get the available trigger types for the camera."""
+        return self._camera.getTriggerTypes()
+
     def _getHikObj(self, cameraId, isRGB = False, binning=1):
         try:
             from imswitch.imcontrol.model.interfaces.hikcamera import CameraHIK
@@ -202,16 +248,16 @@ class HikCamManager(DetectorManager):
             self.__logger.warning(f'Failed to initialize CameraHik {cameraId}, loading TIS mocker')
             from imswitch.imcontrol.model.interfaces.tiscamera_mock import MockCameraTIS
             camera = MockCameraTIS(mocktype=self._mocktype, mockstackpath=self._mockstackpath,  isRGB=isRGB)
-            
+
 
         self.__logger.info(f'Initialized camera, model: {camera.model}')
         return camera
 
     def closeEvent(self):
         self._camera.close()
-        
+
     def recordFlatfieldImage(self):
-        ''' 
+        '''
         record n images and average them before subtracting from the latest frame
         '''
         self._camera.recordFlatfieldImage()

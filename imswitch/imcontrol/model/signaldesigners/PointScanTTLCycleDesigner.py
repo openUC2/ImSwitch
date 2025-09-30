@@ -44,7 +44,7 @@ class PointScanTTLCycleDesigner(TTLCycleDesigner):
             onepad_extraon = 10 #int(np.round(scanInfoDict['extra_laser_on']))
 
             clock_len = 10  # length of line/frame clock pulses at the start of line/frame, in samples
-  
+
             #zeropad_phasedelay = int(np.round(scanInfoDict['phase_delay']))
             zeropad_d2flyback = np.max([0,(scanInfoDict['scan_samples_d2_period'] -
                                    n_scan_samples_dx[1] -
@@ -78,7 +78,7 @@ class PointScanTTLCycleDesigner(TTLCycleDesigner):
                     signal_d2 = np.append(signal_d2, signal_d2_step)
                     # pad extra bits of smooth d2 curve: first step acc, start settling, and initial positioning
                     signal_d2 = np.append(np.zeros(zeropad_startacc+zeropad_settling+zeropad_initpos, dtype='bool'), signal_d2)
-                    # adjust to frame len 
+                    # adjust to frame len
                     zeropad_toframelen = n_scan_samples_dx[2] - len(signal_d2)
                     if zeropad_toframelen > 0:
                         signal_d2 = np.append(signal_d2, np.zeros(zeropad_toframelen, dtype='bool'))
@@ -103,7 +103,7 @@ class PointScanTTLCycleDesigner(TTLCycleDesigner):
                     signal_d2 = np.append(signal_d2, signal_d2_step)
                     # pad extra bits of smooth d2 curve: first step acc, start settling, and initial positioning
                     signal_d2 = np.append(np.zeros(zeropad_startacc+zeropad_settling+zeropad_initpos, dtype='bool'), signal_d2)
-                    # adjust to d3 step len 
+                    # adjust to d3 step len
                     zeropad_toframelen = n_scan_samples_dx[2] - len(signal_d2)
                     if zeropad_toframelen > 0:
                         signal_d2 = np.append(signal_d2, np.zeros(zeropad_toframelen, dtype='bool'))
@@ -126,7 +126,7 @@ class PointScanTTLCycleDesigner(TTLCycleDesigner):
                     signal_d3 = np.append(signal_d3, on_d2_step) if seq[-1] else np.append(signal_d3, off_d2_step)
                     # pad extra bits of smooth d2 curve: first step acc, start settling, and initial positioning
                     signal_d3 = np.append(np.zeros(zeropad_startacc+zeropad_settling+zeropad_initpos, dtype='bool'), signal_d3)
-                    # adjust to d3 step len 
+                    # adjust to d3 step len
                     zeropad_toframelen = n_scan_samples_dx[2] - len(signal_d3)
                     if zeropad_toframelen > 0:
                         signal_d3 = np.append(signal_d3, np.zeros(zeropad_toframelen, dtype='bool'))
@@ -148,7 +148,7 @@ class PointScanTTLCycleDesigner(TTLCycleDesigner):
                     signal_d4 = np.array([])
                     for step in seq:
                         signal_d4 = np.append(signal_d4, on_d3_step) if step else np.append(signal_d4, off_d3_step)
-                    # adjust to d4 step len 
+                    # adjust to d4 step len
                     zeropad_toframelen = n_scan_samples_dx[3] - len(signal_d4)
                     if zeropad_toframelen > 0:
                         signal_d4 = np.append(signal_d4, np.zeros(zeropad_toframelen, dtype='bool'))
@@ -173,7 +173,7 @@ class PointScanTTLCycleDesigner(TTLCycleDesigner):
                     signal_d5 = np.array([])
                     for step in seq:
                         signal_d5 = np.append(signal_d5, on_d4_step) if step else np.append(signal_d5, off_d4_step)
-                    # adjust to d5 step len 
+                    # adjust to d5 step len
                     zeropad_toframelen = n_scan_samples_dx[4] - len(signal_d5)
                     if zeropad_toframelen > 0:
                         signal_d5 = np.append(signal_d5, np.zeros(zeropad_toframelen, dtype='bool'))
@@ -181,7 +181,7 @@ class PointScanTTLCycleDesigner(TTLCycleDesigner):
                         signal_d5 = signal_d5[-zeropad_toframelen:]
                     # repeat signal for all additional scan axes, if applicable
                     signal = self.__repeat_remaining_axes(signal=signal_d5, n_steps_dx=n_steps_dx, axis_start=4, axis_end=axis_count)
-                
+
                 # pad start zeros
                 signal = np.append(np.zeros(zeropad_start, dtype='bool'), signal)
                 # pad scanner phase delay to beginning to sync actual position with TTL
@@ -226,7 +226,7 @@ class PointScanTTLCycleDesigner(TTLCycleDesigner):
             signal_d2[:clock_len] = 1
         # pad extra bits of smooth d2 curve: first step acc, start settling, and initial positioning
         signal_d2 = np.append(np.zeros(zeropad_startacc+zeropad_settling+zeropad_initpos, dtype='bool'), signal_d2)
-        # adjust to frame len 
+        # adjust to frame len
         zeropad_toframelen = n_scan_samples_dx[2] - len(signal_d2)
         if zeropad_toframelen > 0:
             signal_d2 = np.append(signal_d2, np.zeros(zeropad_toframelen, dtype='bool'))
@@ -248,7 +248,7 @@ class PointScanTTLCycleDesigner(TTLCycleDesigner):
         """ Create a full d2 step period of boolean state (on or off during d2 step, without flyback). """
         d2_step = np.ones(n_samples_d1 + samples_extra, dtype='bool') if state else np.zeros(n_samples_d1 + samples_extra, dtype='bool')
         return np.append(d2_step, np.zeros(samples_flyback, dtype='bool')), d2_step
-    
+
     def __create_d3_step(self, d2_period, d2_step, n_steps_d2, n_samples_d3, samples_zeropad_step):
         """ Create a full d3 step signal. """
         d3_step = np.tile(d2_period, n_steps_d2 - 1)
@@ -283,13 +283,13 @@ class PointScanTTLCycleDesigner(TTLCycleDesigner):
         return signalDict
 
     def __decode_sequence(self, sequence_txt):
-        """ Decode user-inputted string of TTL sequence into boolean list. 
+        """ Decode user-inputted string of TTL sequence into boolean list.
         Input string should consist of comma-separated commands on the form
         "h#" or "l#", where h means high=on, l means low=off, and # is the
         number of axis steps. Example:
         "h1,l2,h3,l1"
         means on for 1 step, off for 2 steps, on for 3 steps, and off for 1 step.
-        This will be repeated until reaching the axis length over the axis the 
+        This will be repeated until reaching the axis length over the axis the
         sequence is valid for."""
         seq_list = []  # list of inputted sequence - minimal length
         seq = sequence_txt.split(',')

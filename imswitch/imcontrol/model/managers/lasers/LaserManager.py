@@ -81,7 +81,7 @@ class LaserManager(ABC):
     def valueDecimals(self):
         """ How many decimals are accepted in the laser value. """
         return self.__valueDecimals
-    
+
     @property
     def isModulated(self) -> bool:
         """ Whether the laser supports frequency modulation."""
@@ -91,12 +91,12 @@ class LaserManager(ABC):
     def freqRangeMin(self) -> int:
         """ The minimum frequency of the laser modulation. """
         return self.__freqRangeMin
-    
+
     @property
     def freqRangeMax(self) -> int:
         """ The minimum frequency of the laser modulation. """
         return self.__freqRangeMax
-    
+
     @property
     def freqRangeInit(self) -> int:
         """ The initial frequency of the laser modulation. """
@@ -119,7 +119,7 @@ class LaserManager(ABC):
     def setModulationFrequency(self, frequency: int) -> None:
         """ Sets the laser modulation frequency. """
         pass
-    
+
     def setModulationDutyCycle(self, dutyCycle: int) -> None:
         """ Sets the laser modulation duty cycle. """
 
@@ -133,7 +133,7 @@ class LaserManager(ABC):
         pass
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

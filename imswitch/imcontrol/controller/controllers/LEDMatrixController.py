@@ -35,47 +35,17 @@ class LEDMatrixController(ImConWidgetController):
         self._widget.ButtonAllOn.clicked.connect(self.setAllLEDOn)
         self._widget.ButtonAllOff.clicked.connect(self.setAllLEDOff)
         self._widget.slider.sliderReleased.connect(self.setIntensity)
-        self._widget.ButtonSpecial1.clicked.connect(self.setSpecial1)
-        self._widget.ButtonSpecial2.clicked.connect(self.setSpecial2)
-        
-        # set up GUI and "wire" buttons
 
     @APIExport()
     def setAllLEDOn(self, getReturn=True):
         self.setAllLED(state=(1,1,1), getReturn=getReturn)
 
-    def setSpecial1(self):
-        SpecialPattern1 = self._master.LEDMatrixsManager._subManagers['ESP32 LEDMatrix'].SpecialPattern1.copy()
-        if not IS_HEADLESS: intensity = self._widget.slider.value()
-        self.setSpecial(SpecialPattern1, intensity = intensity)
-        
-    def setSpecial2(self):
-        SpecialPattern2 = self._master.LEDMatrixsManager._subManagers['ESP32 LEDMatrix'].SpecialPattern2.copy()
-        if not IS_HEADLESS: intensity = self._widget.slider.value()
-        self.setSpecial(SpecialPattern2, intensity = intensity)
-                
-    @APIExport()
-    def setSpecial(self, pattern, intensity = 255, getReturn=False):
-        #self.setAllLEDOff()
-        
-        # set intensity in case it was changed
-        for idLED in range(len(pattern)):
-            pattern[idLED]['r'] = int(pattern[idLED]['r'] > 0) * intensity
-            pattern[idLED]['g'] = int(pattern[idLED]['g'] > 0) * intensity
-            pattern[idLED]['b'] = int(pattern[idLED]['b'] > 0) * intensity
-        
-        # send pattern
-        r = self.ledMatrix.setIndividualPattern(pattern, getReturn = getReturn)
-        return r
-        
-
-        
     @APIExport()
     def setAllLEDOff(self, getReturn=True):
         self.setAllLED(state=(0,0,0),getReturn=getReturn)
 
     @APIExport()
-    def setAllLED(self, state=None, intensity=None, getReturn=True):
+    def setAllLED(self, state:int=None, intensity:int=None, getReturn:bool=True):
         if intensity is not None:
             self.setIntensity(intensity=intensity)
         self.ledMatrix.setAll(state=state,getReturn=getReturn)
@@ -85,7 +55,7 @@ class LEDMatrixController(ImConWidgetController):
                 btn.setChecked(np.sum(state)>0)
 
     @APIExport()
-    def setIntensity(self, intensity=None):
+    def setIntensity(self, intensity:int=None):
         if intensity is None:
             if not IS_HEADLESS: intensity = int(self._widget.slider.value()//1)
         else:
@@ -95,12 +65,13 @@ class LEDMatrixController(ImConWidgetController):
         self.ledMatrix.setLEDIntensity(intensity=(intensity,intensity,intensity))
 
     @APIExport()
-    def setLED(self, LEDid, state=None):
+    def setLED(self, LEDid:int, state:int=None):
         self._ledmatrixMode = "single"
         self.ledMatrix.setLEDSingle(indexled=int(LEDid), state=state)
         pattern = self.ledMatrix.getPattern()
         if not IS_HEADLESS: self._widget.leds[str(LEDid)].setChecked(state)
 
+    # GUI functions
     def connect_leds(self):
         """Connect leds (Buttons) to the Sample Pop-Up Method"""
         # Connect signals for all buttons
@@ -110,17 +81,45 @@ class LEDMatrixController(ImConWidgetController):
             if isinstance(btn, guitools.BetterPushButton):
                 btn.clicked.connect(partial(self.setLED, coords))
 
-    def setEnabled(self, enabled) -> None:
+    @APIExport()
+    def setEnabled(self, enabled:bool) -> None:
         """ Sets the value of the LEDMatrix. """
         self.setAllLED(state=enabled, intensity=None)
-    
-    def setValue(self, value) -> None:
+
+    @APIExport()
+    def setValue(self, value:int) -> None:
         """ Sets the value of the LEDMatrix. """
         self.setIntensity(intensity=value)
         self.setAllLED(state=(1,1,1), intensity=value)
-    
 
-# Copyright (C) 2020-2023 ImSwitch developers
+    @APIExport()
+    def setRing(self, ringRadius: int, intensity: int) -> None:
+        """ Sets the value of the LEDMatrix. """
+        #self.setIntensity(intensity=intensity)
+        self.ledMatrix.setRing(radius=ringRadius, intensity=intensity)
+        if not IS_HEADLESS: self._widget.leds[str(ringRadius)].setChecked(True)
+
+    @APIExport()
+    def setCircle(self, circleRadius: int, intensity: int) -> None:
+        """ Sets the value of the LEDMatrix. """
+        #self.setIntensity(intensity=intensity)
+        self.ledMatrix.setCircle(radius=circleRadius, intensity=intensity)
+        if not IS_HEADLESS: self._widget.leds[str(circleRadius)].setChecked(True)
+
+    @APIExport()
+    def setHalves(self, intensity: int, direction: str) -> None:
+        """ Sets the value of the LEDMatrix. """
+        #self.setIntensity(intensity=intensity)
+        self.ledMatrix.setHalves(intensity=intensity, region=direction)
+        if not IS_HEADLESS: self._widget.leds[str(intensity)].setChecked(True)
+
+    @APIExport()
+    def setStatus(self, status:str="idle") -> None:
+        """ Sets the value of the LEDMatrix. """
+        self.ledMatrix.setStatus(status=status)
+        if not IS_HEADLESS: self._widget.leds[str(status)].setChecked(True)
+
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

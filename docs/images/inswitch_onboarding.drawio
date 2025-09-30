@@ -1,0 +1,90 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" version="28.2.3">
+  <diagram id="inswitch_onboarding" name="ImSwitch Onboarding">
+    <mxGraphModel dx="2015" dy="1148" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1920" pageHeight="1080" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="start" value="Unpack Microscope &amp; Power On" style="rounded=1;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="420" y="40" width="220" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="lan" value="LAN Path" style="swimlane;rounded=1;" parent="1" vertex="1">
+          <mxGeometry x="190" y="100" width="180" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="wifi" value="Wi‑Fi Path" style="swimlane;rounded=1;" parent="1" vertex="1">
+          <mxGeometry x="680" y="100" width="180" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="lan_scan" value="Scan ports &amp; find device" style="rounded=1;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="320" y="180" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="wifi_scan" value="Scan SSIDs → connect with PW" style="rounded=1;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="520" y="180" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="lan_ip" value="Enter IP in browser" style="rounded=1;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="320" y="270" width="180" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="wifi_captive" value="Captive portal or open device IP in browser" style="rounded=1;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+          <mxGeometry x="520" y="270" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="landing" value="Landing Page (ImSwitch‑OS)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+          <mxGeometry x="390" y="440" width="220" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="tailscale" value="&lt;b&gt;Tailscale:&amp;nbsp;&lt;/b&gt;&lt;div&gt;- setup token&amp;nbsp;&lt;/div&gt;&lt;div&gt;- watch status&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;" parent="1" vertex="1">
+          <mxGeometry x="50" y="470" width="180" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="openswitch" value="&lt;b&gt;Open ImSwitch&amp;nbsp;&lt;/b&gt;&lt;div&gt;• Config Wizard&amp;nbsp;&lt;/div&gt;&lt;div&gt;• Connect Wi‑Fi&amp;nbsp;&lt;/div&gt;&lt;div&gt;• Restore config&amp;nbsp;&lt;/div&gt;&lt;div&gt;• API/backend settings&amp;nbsp;&lt;/div&gt;&lt;div&gt;• Wrong config rollback/checker/resolver&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;" parent="1" vertex="1">
+          <mxGeometry x="50" y="560" width="260" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="network" value="&lt;b&gt;Network&amp;nbsp;&lt;/b&gt;&lt;div&gt;• Connect to Wi‑Fi/LAN&amp;nbsp;&lt;/div&gt;&lt;div&gt;• Setup Tethering? (i.e&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;&amp;nbsp;LAN↔Wi‑Fi bridge)&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;• Setup Access Point (PW, SSID)&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;• USB↔Ethernet&lt;/span&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;" parent="1" vertex="1">
+          <mxGeometry x="560" y="550" width="220" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="computer" value="&lt;b&gt;Conifugration&amp;nbsp;&lt;/b&gt;&lt;div&gt;• Single source of truth?&amp;nbsp;&lt;/div&gt;&lt;div&gt;• Modify hostname?&amp;nbsp;&lt;/div&gt;&lt;div&gt;• How is it loaded inside ImSwitch? (CLI vs python main.py)&lt;/div&gt;&lt;div&gt;• Loaded via Docker vs. CLI/python main.py&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;" parent="1" vertex="1">
+          <mxGeometry x="840" y="500" width="240" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="updates" value="&lt;b&gt;Updates&amp;nbsp;&lt;/b&gt;&lt;div style=&quot;&quot;&gt;• OS/Apps (docker)&amp;nbsp;&lt;/div&gt;&lt;div style=&quot;&quot;&gt;• UI&amp;nbsp;&lt;/div&gt;&lt;div style=&quot;&quot;&gt;• Firmware&lt;/div&gt;&lt;div style=&quot;&quot;&gt;• Forklift&lt;/div&gt;&lt;div style=&quot;&quot;&gt;• Via USB? (e.g. fully offline)&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;" parent="1" vertex="1">
+          <mxGeometry x="130" y="730" width="220" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="files" value="&lt;b&gt;Files Menu&lt;/b&gt;&lt;div&gt;• Access images/videos&lt;/div&gt;&lt;div&gt;• Filesystem Access&lt;/div&gt;&lt;div&gt;• Presets&amp;nbsp;&lt;/div&gt;&lt;div&gt;• Config backup/edit (override imswitch menu)&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;" parent="1" vertex="1">
+          <mxGeometry x="420" y="720" width="220" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" parent="1" source="start" target="lan_scan" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" parent="1" source="start" target="wifi_scan" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" parent="1" source="lan_scan" target="lan_ip" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" parent="1" source="wifi_scan" target="wifi_captive" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" style="exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.468;entryY=0.05;entryDx=0;entryDy=0;entryPerimeter=0;" parent="1" source="lan_ip" target="landing" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" parent="1" source="wifi_captive" target="landing" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" parent="1" source="landing" target="openswitch" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" parent="1" source="landing" target="network" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" parent="1" source="landing" target="computer" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" parent="1" source="landing" target="updates" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" parent="1" source="landing" target="files" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" parent="1" source="landing" target="tailscale" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

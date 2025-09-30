@@ -10,20 +10,22 @@ from .view import LaunchNotebookServer
 
 def getMainViewAndController(moduleCommChannel, multiModuleWindowController, moduleMainControllers,
                              *_args, **_kwargs):
-    if IS_HEADLESS: 
+    webaddr = None  # Ensure webaddr is always defined
+    if IS_HEADLESS:
         view = None
         notebookServer = LaunchNotebookServer()
         webaddr = notebookServer.startServer()
         print(webaddr)
     else:
         view = ImScrMainView()
-    
+
     try:
         controller = ImScrMainController(
             view,
             moduleCommChannel=moduleCommChannel,
             multiModuleWindowController=multiModuleWindowController,
-            moduleMainControllers=moduleMainControllers
+            moduleMainControllers=moduleMainControllers,
+            webaddr=webaddr
         )
     except Exception as e:
         if not IS_HEADLESS: view.close()
@@ -32,7 +34,7 @@ def getMainViewAndController(moduleCommChannel, multiModuleWindowController, mod
     return view, controller
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

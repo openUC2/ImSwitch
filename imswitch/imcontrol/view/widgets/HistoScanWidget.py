@@ -1,7 +1,4 @@
 import numpy as np
-import pyqtgraph as pg
-import cv2
-import copy
 from qtpy import QtCore, QtWidgets, QtGui, QtWidgets
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout
@@ -16,15 +13,6 @@ from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
 import os
 
-class ScanParameters(object):
-    def __init__(self, name="Wellplate", physDimX=164, physDimY=109, physOffsetX=0, physOffsetY=0, imagePath="imswitch/_data/images/WellplateAdapter3Slides.png"):
-        self.name = name
-        self.physDimX = physDimX*1e3 # mm
-        self.physDimY = physDimY*1e3 # mm
-        self.physOffsetX = physOffsetX
-        self.physOffsetY =  physOffsetY
-        self.imagePath = imagePath
-
 
 
 class HistoScanWidget(NapariHybridWidget):
@@ -37,7 +25,7 @@ class HistoScanWidget(NapariHybridWidget):
     def __post_init__(self):
         #super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
-        
+
         self.tabWidget = QtWidgets.QTabWidget(self)
         mainWidget = QtWidgets.QWidget()  # Create a widget for the first tab
         self.grid = QtWidgets.QGridLayout(mainWidget)  # Use this widget in your grid
@@ -65,7 +53,7 @@ class HistoScanWidget(NapariHybridWidget):
         self.stageAxisComboBox.addItems(["X", "Y", "Z", "A"])
         self.stitchAshlarCheckBox = QtWidgets.QCheckBox("Stitch Ashlar")
         self.stitchAshlarFlipXCheckBox = QtWidgets.QCheckBox("Flip X")
-        self.stitchAshlarFlipYCheckBox = QtWidgets.QCheckBox("Flip Y")        
+        self.stitchAshlarFlipYCheckBox = QtWidgets.QCheckBox("Flip Y")
         self.grid.addWidget(self.illuminationSourceComboBox, 3, 0, 1, 1)
         self.grid.addWidget(self.illuminationSlider, 3, 1, 1, 1)
         self.grid.addWidget(self.stitchAshlarCheckBox, 1, 0)
@@ -85,7 +73,7 @@ class HistoScanWidget(NapariHybridWidget):
         # Text fields for minimum and maximum position for X
         self.minPositionXLineEdit = QtWidgets.QLineEdit("-1000")
         self.maxPositionXLineEdit = QtWidgets.QLineEdit("1000")
-        
+
         self.grid.addWidget(QtWidgets.QLabel("Min Position (X):"), 5, 0, 1, 1)
         self.grid.addWidget(self.minPositionXLineEdit, 5, 1, 1, 1)
         self.grid.addWidget(QtWidgets.QLabel("Max Position (X):"), 6, 0, 1, 1)
@@ -102,7 +90,7 @@ class HistoScanWidget(NapariHybridWidget):
         '''
         1st Widget: Layout-based tiling
         '''
-        
+
         # Start and Stop buttons
         self.startButton = QtWidgets.QPushButton('Start')
         self.stopButton = QtWidgets.QPushButton('Stop')
@@ -110,7 +98,7 @@ class HistoScanWidget(NapariHybridWidget):
         self.calibrationButton =  QtWidgets.QPushButton('Calibrate Position')
         self.calibrationButton.setCheckable(True)
         self.speedTextedit = QtWidgets.QLineEdit("1000")
-        
+
         #self.grid.addWidget(self.speedLabel, 10, 0, 1, 1)
         #self.grid.addWidget(self.speedTextedit, 10, 1, 1, 1)
 
@@ -123,34 +111,23 @@ class HistoScanWidget(NapariHybridWidget):
         self.grid.addWidget(self.startButton, 14, 0, 1, 1)
         self.grid.addWidget(self.stopButton, 14, 1, 1, 1)
 
-        # define scan parameter per sample
-        self.allScanParameters = []
-        mFWD = os.path.dirname(os.path.realpath(__file__)).split("imswitch")[0]
-        self.allScanParameters.append(ScanParameters("6 Wellplate", 126, 86, 0, 0, mFWD+"imswitch/_data/images/Wellplate6.png"))
-        self.allScanParameters.append(ScanParameters("24 Wellplate", 126, 86, 0, 0, mFWD+"imswitch/_data/images/Wellplate24.png"))
-        self.allScanParameters.append(ScanParameters("3-Slide Wellplateadapter", 164, 109, 0, 0, mFWD+"imswitch/_data/images/WellplateAdapter3Slides.png"))
 
         # load sample layout
-        self.ScanSelectViewWidget = None
-        self.loadSampleLayout(0)
+        self.ScanSelectViewWidget = ScanSelectView(self)
         self.grid.addWidget(self.ScanSelectViewWidget, 12, 0, 2, 2)
-
-        # set combobox with all samples
-        self.setSampleLayouts(self.allScanParameters)
-        self.samplePicker.currentIndexChanged.connect(self.loadSampleLayout)
 
         # Create a scroll area and set the second tab widget as its content
         firstTabscrollArea = QtWidgets.QScrollArea()
         firstTabscrollArea.setWidget(mainWidget)
         firstTabscrollArea.setWidgetResizable(True)
-        
+
         # Add the first tab
         self.tabWidget.addTab(firstTabscrollArea, "Figure-based Scan")
 
         '''
         2nd Widget: Manual tiling
         '''
-        
+
         # Create a new widget for the second tab
         secondTabWidget = QtWidgets.QWidget()
         secondTabLayout = QtWidgets.QGridLayout(secondTabWidget)
@@ -181,7 +158,7 @@ class HistoScanWidget(NapariHybridWidget):
         self.loadingBar.setValue(0)
         self.stitchAshlarCheckBoxTileBased = QtWidgets.QCheckBox("Stitch Ashlar")
         self.stitchAshlarFlipXCheckBoxTileBased = QtWidgets.QCheckBox("Flip X")
-        self.stitchAshlarFlipYCheckBoxTileBased = QtWidgets.QCheckBox("Flip Y")  
+        self.stitchAshlarFlipYCheckBoxTileBased = QtWidgets.QCheckBox("Flip Y")
         secondTabLayout.addWidget(self.stitchAshlarCheckBoxTileBased, 5, 0)
         secondTabLayout.addWidget(self.stitchAshlarFlipXCheckBoxTileBased, 5, 1)
         secondTabLayout.addWidget(self.stitchAshlarFlipYCheckBoxTileBased, 5, 2)
@@ -189,9 +166,9 @@ class HistoScanWidget(NapariHybridWidget):
         secondTabLayout.addWidget(self.stopButton2, 6, 1)
         secondTabLayout.addWidget(self.loadingBarText, 7, 0)
         secondTabLayout.addWidget(self.loadingBar, 7, 1, 1, 2)
-        
-        
-        
+
+
+
         # Create a scroll area and set the second tab widget as its content
         secondTabscrollArea = QtWidgets.QScrollArea()
         secondTabscrollArea.setWidget(secondTabWidget)
@@ -203,7 +180,7 @@ class HistoScanWidget(NapariHybridWidget):
         '''
         3rd Widget: Camera-based tile-scanning
         '''
-        
+
         # Create a new widget for the thirdtab
         thirdTabWidget = QtWidgets.QWidget()
         thirdTabLayout = QtWidgets.QGridLayout(thirdTabWidget)
@@ -222,7 +199,7 @@ class HistoScanWidget(NapariHybridWidget):
 
         # illu settings
         self.buttonTurnOnLED = QtWidgets.QPushButton("LED On")
-        self.buttonTurnOffLED = QtWidgets.QPushButton("LED OFF")    
+        self.buttonTurnOffLED = QtWidgets.QPushButton("LED OFF")
         self.buttonTurnOnLEDArray = QtWidgets.QPushButton("Array On")
         self.buttonTurnOffLEDArray = QtWidgets.QPushButton("Array Off")
 
@@ -243,7 +220,7 @@ class HistoScanWidget(NapariHybridWidget):
         thirdTabLayout.addWidget(self.posYmaxLabel, 3, 1)
         thirdTabLayout.addWidget(self.startButton3, 4, 0)
         thirdTabLayout.addWidget(self.stopButton3, 4, 1)
-        
+
         thirdTabLayout.addWidget(self.buttonTurnOnLED, 5, 0)
         thirdTabLayout.addWidget(self.buttonTurnOffLED, 5, 1)
         thirdTabLayout.addWidget(self.buttonTurnOnLEDArray, 5, 2)
@@ -263,30 +240,30 @@ class HistoScanWidget(NapariHybridWidget):
         self.stageCalibrationWidget = QtWidgets.QWidget()
         self.tabWidget.addTab(self.stageCalibrationWidget, "Stage Calibration")
         self.buttonStartCalibration = QtWidgets.QPushButton("Start Calibration")
-        self.buttonStopCalibration = QtWidgets.QPushButton("Stop Calibration")   
-        fourthTabLayout = QtWidgets.QGridLayout(self.stageCalibrationWidget)     
+        self.buttonStopCalibration = QtWidgets.QPushButton("Stop Calibration")
+        fourthTabLayout = QtWidgets.QGridLayout(self.stageCalibrationWidget)
         fourthTabLayout.addWidget(self.buttonStartCalibration, 0, 0)
         fourthTabLayout.addWidget(self.buttonStopCalibration, 0, 1)
         self.tabWidget.addTab(self.stageCalibrationWidget, "Stage Calibration")
-        
-        
+
+
         # 4th Calibration:
         fourthTabWidget = QtWidgets.QWidget()
         fourthLayout = QtWidgets.QGridLayout(fourthTabWidget)
 
         self.startCalibrationButton = QtWidgets.QPushButton("Start Calibration")
         self.stopCalibrationButton = QtWidgets.QPushButton("Stop Calibration")
-        calibrationLabel = QtWidgets.QLabel("""This uses the output from :func:.calibrate_backlash_1d, run at least 
-                                    twice with orthogonal (or at least different) `direction` parameters. 
-                                    The resulting 2x2 transformation matrix should map from image 
-                                    to stage coordinates.  Currently, the backlash estimate given 
-                                    by this function is only really trustworthy if you've supplied 
+        calibrationLabel = QtWidgets.QLabel("""This uses the output from :func:.calibrate_backlash_1d, run at least
+                                    twice with orthogonal (or at least different) `direction` parameters.
+                                    The resulting 2x2 transformation matrix should map from image
+                                    to stage coordinates.  Currently, the backlash estimate given
+                                    by this function is only really trustworthy if you've supplied
                                     two orthogonal calibrations - that will usually be the case.""")
 
         calibrationLabelScroll = QtWidgets.QScrollArea()  # Scrollbereich erstellen
         calibrationLabelScroll.setWidget(calibrationLabel)  # QLabel zum Scrollbereich hinzufügen
         calibrationLabelScroll.setWidgetResizable(True)  # Erlaubt das QLabel, sich auf die Größe des Scrollbereichs auszudehnen
-                                                    
+
         self.calibrationLabelResult = QtWidgets.QLabel("Result:")
         self.calibrationLabelResultTable = QtWidgets.QTableWidget()
         fourthLayout.addWidget(self.startCalibrationButton, 0, 0)
@@ -294,16 +271,16 @@ class HistoScanWidget(NapariHybridWidget):
         fourthLayout.addWidget(calibrationLabelScroll, 1, 0, 1, 2)
         fourthLayout.addWidget(self.calibrationLabelResult, 2, 1)
         fourthLayout.addWidget(self.calibrationLabelResultTable, 3, 0, 1, 2)
-    
+
         fourthLayout.setRowStretch(4, 1)  # Add stretch above the image container
         fourthLayout.setRowStretch(9, 1)  # Add stretch below the image container
         fourthLayout.setColumnStretch(0, 1)  # Add stretch to the sides of the image container
         fourthLayout.setColumnStretch(1, 1)
-        
+
         self.sigStageMappingComplete.connect(self.setStageMappingInfo)
         # Add the fourth tab
         self.tabWidget.addTab(fourthTabWidget, "Stage Mapping")
-    
+
         # Add the self.tabWidget to the main layout of the widget
         mainLayout = QtWidgets.QVBoxLayout(self)
         mainLayout.addWidget(self.tabWidget)
@@ -312,11 +289,11 @@ class HistoScanWidget(NapariHybridWidget):
         # Initialize Layers
         self.imageLayer = None
         self.shapeLayer = None
-        
-    def setLoadingBarAndText(self, current, total): 
+
+    def setLoadingBarAndText(self, current, total):
         self.loadingBar.setValue(int((current+1)/total*100))
         self.loadingBarText.setText("Images: "+str(current)+"/"+str(total))
-        
+
     def setCameraScanParameters(self, nTilesX, nTilesY, minPosX, maxPosX, minPosY, maxPosY):
         self.nTilesXLabel.setText("Number of Tiles X: " + str(nTilesX))
         self.nTilesYLabel.setText("Number of Tiles Y: " + str(nTilesY))
@@ -324,7 +301,7 @@ class HistoScanWidget(NapariHybridWidget):
         self.posXmaxLabel.setText("Max Position X: " + str(maxPosX))
         self.posYminLabel.setText("Min Position Y: " + str(minPosY))
         self.posYmaxLabel.setText("Max Position Y: " + str(maxPosY))
-        
+
     def setStageMappingInfo(self, xy_mapping_matrix, backlash, isCalibrated):
         if isCalibrated:
             self.calibrationLabelResult.setText("Result: Stage Mapping complete")
@@ -342,20 +319,20 @@ class HistoScanWidget(NapariHybridWidget):
             self.calibrationLabelResult.setText("Result: Stage Mapping failed")
             # reset table
             self.calibrationLabelResultTable.setRowCount(0)
-            
+
     def getNumberTiles(self):
         return int(self.numTilesXLineEdit.text()), int(self.numTilesYLineEdit.text())
-    
+
     def getResizeFactor(self):
         return float(self.resizeFactorLineEdit.text())
-    
+
     def getStepSize(self):
         return float(self.stepSizeXLineEdit.text()), float(self.stepSizeYLineEdit.text())
-    
+
     def setTilebasedScanParameters(self, scanParameters):
         self.stepSizeXLineEdit.setText(str(scanParameters[0]))
         self.stepSizeYLineEdit.setText(str(scanParameters[1]))
-        
+
     def getTilebasedScanParameters(self):
         return float(self.stepSizeXLineEdit.text()), float(self.stepSizeYLineEdit.text())
 
@@ -386,11 +363,10 @@ class HistoScanWidget(NapariHybridWidget):
             self.setDefaultSavePath(os.path.join(path, "histoScan"))
             os.makedirs(os.path.join(path, "histoScan"), exist_ok=True)
 
-    def loadSampleLayout(self, index):
-        if self.ScanSelectViewWidget is None:
-            self.ScanSelectViewWidget = ScanSelectView(self, self.allScanParameters[index])
-        else:
-            self.ScanSelectViewWidget.updateParams(self.allScanParameters[index])
+    def loadSampleLayout(self, index=0, allScanParameters=None):
+        if allScanParameters is not None:
+            self.allScanParameters = allScanParameters # save all scan parameters
+        self.ScanSelectViewWidget.updateParams(self.allScanParameters[index])
         self.ScanSelectViewWidget.setPixmap(QtGui.QPixmap(self.allScanParameters[index].imagePath))
 
 
@@ -440,21 +416,21 @@ class HistoScanWidget(NapariHybridWidget):
         self.shapeLayer = self.viewer.add_shapes(shape_type='rectangle', edge_width=2,
                                                edge_color='red', face_color='transparent',
                                                name="ROI", blending='additive')
-    
+
     def getCoordinatesShapeLayerNapari(self):
         return self.shapeLayer.data
-    
+
     def setShapeLayerNapari(self, shape, name=""):
         if self.shapeLayer is None or name not in self.viewer.layers:
             self.shapeLayer = self.viewer.add_shapes(shape, shape_type='rectangle', edge_width=2,
                                                edge_color='red', face_color='transparent',
                                                name=name, blending='additive')
         self.shapeLayer.data = shape
-        
+
     def resetShapeLayerNapari(self):
         self.shapeLayer.data = []
         self.shapeLayer.refresh()
-        
+
 
     def setImageNapari(self, im, colormap="gray", isRGB = False, name="", pixelsize=(1,1), translation=(0,0)):
         if len(im.shape) == 2:
@@ -470,7 +446,7 @@ class HistoScanWidget(NapariHybridWidget):
         if self.imageLayer is None or name not in self.viewer.layers:
             return
         self.viewer.layers.remove(self.imageLayer)
-        
+
     def updatePartialImageNapari(self, im, coords, name=""):
         ''' update a sub roi of the already existing napari layer '''
         if self.imageLayer is None or name not in self.viewer.layers:
@@ -564,8 +540,9 @@ COLORS = ['#000000', '#ffffff']
 
 
 class ScanSelectView(QtWidgets.QGraphicsView):
-    def __init__(self, parent, scanParameters):
+    def __init__(self, parent):
         super().__init__(parent)
+        self.name = "ScanSelectView"
         scene = QtWidgets.QGraphicsScene(self)
         self._logger = initLogger(self)
         self.setScene(scene)
@@ -578,13 +555,13 @@ class ScanSelectView(QtWidgets.QGraphicsView):
         self.parent = parent
 
         # real-world coordinates for the scan region that is represented by the image
-        self.physDimX = scanParameters.physDimX
-        self.physDimY = scanParameters.physDimY
-        self.physOffsetX = scanParameters.physOffsetX
-        self.physOffsetY = scanParameters.physOffsetY
+        self.physDimX = 0
+        self.physDimY = 0
+        self.physOffsetX = 0
+        self.physOffsetY = 0
         self.clickedCoordinates = (0,0)
         self._logger = initLogger(self)
-        
+
     def updateParams(self, scanParameters):
         # real-world coordinates for the scan region that is represented by the image
         self.physDimX = scanParameters.physDimX
@@ -712,7 +689,7 @@ class ImageLabel(QLabel):
         self.currentRect = None
         self.doubleClickPos = event.pos()
         self.doubleClicked.emit()
-        
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.dragStartPos = event.pos()
@@ -746,7 +723,7 @@ class ImageLabel(QLabel):
         return None
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

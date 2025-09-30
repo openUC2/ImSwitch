@@ -1,5 +1,7 @@
-import colour
-
+try:
+    import colour
+except:
+    pass
 
 def wavelengthToHex(wavelength: float, gamma: float = 2.4):
     """
@@ -19,7 +21,7 @@ def wavelengthToHex(wavelength: float, gamma: float = 2.4):
         return 255, 255, 255
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

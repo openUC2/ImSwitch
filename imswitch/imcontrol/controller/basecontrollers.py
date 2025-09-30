@@ -118,7 +118,7 @@ class SuperScanController(ImConWidgetController):
         self.runScanAdvanced(recalculateSignals=recalculateSignals,
                              isNonFinalPartOfSequence=isNonFinalPartOfSequence,
                              sigScanStartingEmitted=True)
-    
+
     @abstractmethod
     def setParameters(self):
         """ Set scan parameters from analog and digital parameter dictionaries. """
@@ -215,7 +215,7 @@ class SuperScanController(ImConWidgetController):
         elif key[0] == _attrCategoryTTL:
             self._digitalParameterDict[key[1]] = value
             self.setParameters()
-            
+
     def toggleBlockWidget(self, block):
         """ Blocks/unblocks scan widget if scans are run from elsewhere. """
         self._widget.setEnabled(block)
@@ -252,7 +252,7 @@ class SuperScanController(ImConWidgetController):
     def runScan(self) -> None:
         """ Runs a scan with the set scanning parameters. """
         self.runScanAdvanced(sigScanStartingEmitted=False)
-        
+
     def sendScanParameters(self):
         self.getParameters()
         self._commChannel.sigSendScanParameters.emit(self._analogParameterDict, self._digitalParameterDict, self._positionersScan)
@@ -261,7 +261,7 @@ _attrCategoryStage = 'ScanStage'
 _attrCategoryTTL = 'ScanTTL'
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

@@ -10,7 +10,7 @@ from imswitch.imcommon.model import dirtools
 import imswitch
 
 @dataclass_json
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class _Modules:
     enabled: List[str]
 
@@ -82,7 +82,7 @@ with open(_modulesFilePath, 'w') as modulesFile:
     modulesFile.write(_modules.to_json(indent=4))
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

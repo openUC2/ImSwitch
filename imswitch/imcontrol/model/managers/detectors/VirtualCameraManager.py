@@ -15,17 +15,20 @@ class VirtualCameraManager(DetectorManager):
         try:
             self.VirtualMicroscope = _lowLevelManagers["rs232sManager"]["VirtualMicroscope"]
         except:
-            return
-        
+            self.__logger.error("VirtualMicroscope not found in lowLevelManagers, cannot initialize VirtualCameraManager")
+
+
         # assign the camera from the Virtual Microscope
         self._camera = self.VirtualMicroscope._camera
-        
+
         # get the pixel size from the camera
         fullShape = (self._camera.SensorWidth,
                 self._camera.SensorHeight)
         pixelSize = self._camera.PixelSize
         model = self._camera.model
         self._running = True
+        self.ExposureTime  = 0
+        self.Gain = 0
 
         # Prepare parameters
         parameters = {
@@ -46,7 +49,7 @@ class VirtualCameraManager(DetectorManager):
             'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
                                     editable=True),
             'mode': DetectorBooleanParameter(group='Misc', value=True, editable=True),
-            'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),            
+            'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),
             'binning': DetectorNumberParameter(group="Misc", value=1, valueUnits="arb.u.", editable=True),
             'trigger_source': DetectorListParameter(group='Acquisition mode',
                             value='Continous',
@@ -101,7 +104,7 @@ class VirtualCameraManager(DetectorManager):
         else:
             frame = self._camera.getLast(returnFrameNumber=returnFrameNumber)
             return frame
-        
+
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
         If the parameter doesn't exist, i.e. the parameters field doesn't
@@ -111,7 +114,7 @@ class VirtualCameraManager(DetectorManager):
         super().setParameter(name, value)
 
         if name not in self._DetectorManager__parameters:
-            raise AttributeError(f'Non-existent parameter "{name}" specified')
+            self.__logger.error(f'Non-existent parameter "{name}" specified')
 
         value = self._camera.setPropertyValue(name, value)
         return value
@@ -136,11 +139,11 @@ class VirtualCameraManager(DetectorManager):
             return None
 
     def startAcquisition(self, liveView=False):
-        pass 
-    
+        pass
+
     def stopAcquisition(self):
         pass
-    
+
     def stopAcquisitionForROIChange(self):
         pass
     def finalize(self) -> None:
@@ -156,17 +159,42 @@ class VirtualCameraManager(DetectorManager):
         self.parameters['Camera pixel size'].value = pixelSizeUm
 
     def _performSafeCameraAction(self, function):
-        pass 
-    
+        pass
+
+    def setTriggerSource(self, source):
+        """Set the trigger source for the virtual camera."""
+        valid_sources = ['Continous', 'Internal trigger', 'External trigger']
+        if source not in valid_sources:
+            self.__logger.warning(f"Invalid trigger source '{source}'. Valid options: {valid_sources}")
+            return
+            
+        # Update the parameter
+        self.setParameter('trigger_source', source)
+        
+        # Also update the underlying camera property if available
+        try:
+            if hasattr(self._camera, 'setPropertyValue'):
+                # Map source strings to values that the virtual camera expects
+                source_mapping = {
+                    'Continous': 0,
+                    'Internal trigger': 1, 
+                    'External trigger': 2
+                }
+                self._camera.setPropertyValue('trigger_source', source_mapping.get(source, 1))
+        except Exception as e:
+            self.__logger.debug(f"Could not set camera trigger source: {e}")
+        
+        self.__logger.info(f"Set trigger source to: {source}")
+
     def openPropertiesDialog(self):
         self._camera.openPropertiesGUI()
 
     def closeEvent(self):
         pass
-        
+
     def flushBuffers(self):
         pass
-    
+
     def crop(self, hpos, vpos, hsize, vsize):
         pass
 

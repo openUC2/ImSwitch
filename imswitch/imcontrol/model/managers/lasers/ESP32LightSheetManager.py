@@ -6,7 +6,7 @@ from .LaserManager import LaserManager
 class ESP32LightsheetManager(LaserManager):
 
     def __init__(self, LighsheetInfo, name, **lowLevelManagers):
-        super().__init__(LighsheetInfo, name, isBinary=False, 
+        super().__init__(LighsheetInfo, name, isBinary=False,
             valueUnits='mW', valueDecimals=0)
         self._rs232manager = lowLevelManagers['rs232sManager'][
             LighsheetInfo.managerProperties['rs232device']
@@ -31,10 +31,10 @@ class ESP32LightsheetManager(LaserManager):
         elif self.__axis == "amp_y":
             self._rs232manager._esp32.set_galvo_amp(axis=0, value=value)
 
-            
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

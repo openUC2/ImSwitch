@@ -1,6 +1,7 @@
 import imswitch
 import dataclasses
 import sys
+import os
 from imswitch import IS_HEADLESS, DEFAULT_DATA_PATH
 
 __imswitch_module__ = True
@@ -18,7 +19,7 @@ def getMainViewAndController(moduleCommChannel, *_args,
     def pickSetup(options):
         from qtpy import QtWidgets
         from imswitch.imcontrol.view import PickSetupDialog
-        
+
         # Let user pick the setup to use
         pickSetupDialog = PickSetupDialog()
         pickSetupDialog.setSetups(configfiletools.getSetupList())
@@ -35,8 +36,8 @@ def getMainViewAndController(moduleCommChannel, *_args,
     '''
     if overrideOptions is None:
         options, optionsDidNotExist = configfiletools.loadOptions()
-        if optionsDidNotExist:
-            if not IS_HEADLESS: options = pickSetup(options)  # Setup to use not set, let user pick            
+        if not optionsDidNotExist:
+            if not IS_HEADLESS: options = pickSetup(options)  # Setup to use not set, let user pick
         configfiletools.saveOptions(options)
     else:
         # force the options to use a specific configuration
@@ -45,24 +46,42 @@ def getMainViewAndController(moduleCommChannel, *_args,
     '''
     load the setup configuration including detectors, stages, etc.
     '''
-    if overrideSetupInfo is None:
-        if imswitch.DEFAULT_SETUP_FILE is not None:
+    if overrideSetupInfo is None: # TODO: This needs a rework!!
+        print("imswitch.DEFAULT_SETUP_FILE: ", imswitch.DEFAULT_SETUP_FILE)
+        print("imswitch.DEFAULT_SETUP_FILE type: ", type(imswitch.DEFAULT_SETUP_FILE))
+        if imswitch.DEFAULT_SETUP_FILE is not None and imswitch.DEFAULT_SETUP_FILE.find("None") == -1:
             try:
-                # we provide it via command line arguments
+                # Attempt to use the file provided via command line arguments
+                print(f"Trying to use the file: {imswitch.DEFAULT_SETUP_FILE}")
                 setupFileName = imswitch.DEFAULT_SETUP_FILE
+
+                # Check if the file exists before proceeding
+                if not os.path.exists(setupFileName):
+                    raise FileNotFoundError(f"Setup file not found: {setupFileName}")
+
                 options = dataclasses.replace(options, setupFileName=setupFileName)
+                print(f"Loading setup info from: {setupFileName}")
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
-            except Exception as e: 
-                print("Error setting default setup file from commandline..:" + e)
+            except FileNotFoundError as fnf_error:
+                print(f"FileNotFoundError: {fnf_error}")
+                raise
+            except Exception as e:
+                print(f"Error setting default setup file from commandline: {str(e)}")
+                print(f"Options: {options}")
                 raise KeyError
-                # we will try to load it via the gui
         else:
             try:
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
-            except FileNotFoundError:
+            except Exception as e:
                 # Have user pick setup anyway
-                options = pickSetup(options)
-                configfiletools.saveOptions(options)
+                logger.debug('Setup file not found, let user pick setup')
+                logger.debug('Error loading setup file: %s', e)
+                if IS_HEADLESS:
+                    # load from default _data
+                    setupFileName = imswitch.DEFAULT_SETUP_FILE
+                else:
+                    options = pickSetup(options)
+                    configfiletools.saveOptions(options)
                 setupInfo = configfiletools.loadSetupInfo(options, ViewSetupInfo)
     # this case is used for pytesting
     elif overrideSetupInfo is not None:
@@ -73,7 +92,7 @@ def getMainViewAndController(moduleCommChannel, *_args,
 
     # Override Data PAth
     if DEFAULT_DATA_PATH is not None:
-        logger.debug("Overriding data save path with: "+DEFAULT_DATA_PATH) 
+        logger.debug("Overriding data save path with: "+DEFAULT_DATA_PATH)
         options_rec = dataclasses.replace(options.recording, outputFolder=DEFAULT_DATA_PATH)
         options = dataclasses.replace(options, recording=options_rec)
     if not IS_HEADLESS:
@@ -91,7 +110,7 @@ def getMainViewAndController(moduleCommChannel, *_args,
     return view, controller
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

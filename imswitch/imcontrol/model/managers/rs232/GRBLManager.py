@@ -32,9 +32,9 @@ class GRBLManager:
         try:
             self.is_home = rs232Info.managerProperties['is_home']
         except:
-            self.is_home = False 
-             
-        
+            self.is_home = False
+
+
         self._board = grbldriver.GrblDriver(self._port)
 
         # init the stage
@@ -57,7 +57,7 @@ class GRBLManager:
 
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

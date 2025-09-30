@@ -31,6 +31,18 @@ class WidgetFactory:
         self._createdWidgets.append(weakref.ref(widget))
         return widget
 
+    def createWidgetReact(self, widgetClass, *args, **extraKwargs):
+        kwargs = self._baseKwargs.copy()
+        kwargs.update(extraKwargs)
+
+        if issubclass(widgetClass, Widget):
+            widget = widgetClass(self._options, *args, **kwargs)
+        else:
+            widget = widgetClass(*args, **kwargs)
+
+        self._createdWidgets.append(weakref.ref(widget))
+        return widget
+
     def setArgument(self, name, value):
         self._baseKwargs[name] = value
 
@@ -51,7 +63,6 @@ class Widget(QtWidgets.QWidget, metaclass=_QObjectABCMeta):
             QtWidgets.QWidget().setLayout(self.layout())  # unset layout
         self.setLayout(grid)
         grid.addWidget(errorLabel)
-
 
 class NapariHybridWidget(Widget, naparitools.NapariBaseWidget, metaclass=_QObjectABCMeta):
     """ Superclass for widgets that can use the functionality of
@@ -80,7 +91,7 @@ class NapariHybridWidget(Widget, naparitools.NapariBaseWidget, metaclass=_QObjec
         pass
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

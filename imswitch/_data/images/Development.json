@@ -1,0 +1,50 @@
+{
+    "name": "Development",
+    "unit": "um",
+    "width": 1000000,
+    "height": 600000,
+    "wells": [{
+            "x": 200000,
+            "y": 200000,
+            "shape": "circle",
+            "radius": 50000
+        }, {
+            "x": 400000,
+            "y": 200000,
+            "shape": "circle",
+            "radius": 90000
+        }, {
+            "x": 600000,
+            "y": 200000,
+            "shape": "circle",
+            "radius": 90000
+        }, {
+            "x": 800000,
+            "y": 200000,
+            "shape": "circle",
+            "radius": 90000
+        }, {
+            "x": 200000,
+            "y": 400000,
+            "shape": "circle",
+            "radius": 90000
+        }, {
+            "x": 400000,
+            "y": 400000,
+            "shape": "circle",
+            "radius": 90000
+        }, {
+            "x": 600000,
+            "y": 400000,
+            "shape": "rectangle",
+            "width": 90000,
+            "height": 180000
+        }, {
+            "x": 800000,
+            "y": 400000,
+            "shape": "rectangle",
+            "width": 180000,
+            "height": 180000
+        }
+    ]
+}

@@ -19,7 +19,7 @@ class PositionerWidget(Widget):
         self.pars = {}
         self.grid = QtWidgets.QGridLayout()
         #self.setLayout(self.grid)
-    
+
         # Schritt 1: Container-Widget erstellen
         containerWidget = QtWidgets.QWidget()
 
@@ -100,8 +100,8 @@ class PositionerWidget(Widget):
             )
 
             self.numPositioners += 1
-            
-    
+
+
 
     def getAbsPosition(self, positionerName, axis):
         """ Returns the absolute position of the  specified positioner axis in
@@ -147,7 +147,7 @@ class PositionerWidget(Widget):
     def _getParNameSuffix(self, positionerName, axis):
         return f'{positionerName[0]}--{axis}'
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

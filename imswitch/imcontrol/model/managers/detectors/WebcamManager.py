@@ -3,7 +3,7 @@ from platform import system
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import (
     DetectorManager,
-    DetectorNumberParameter, 
+    DetectorNumberParameter,
     DetectorListParameter
 )
 
@@ -38,7 +38,7 @@ class WebcamManager(DetectorManager):
         self.__logger = initLogger(self, instanceName=name)
         self.detectorInfo = detectorInfo
         cameraId = detectorInfo.managerProperties['cameraListIndex']
-        
+
         # initialize the camera
         self._camera = cv2.VideoCapture(cameraId)
         fullShape = (self._camera.get(cv2.CAP_PROP_FRAME_WIDTH),
@@ -52,16 +52,16 @@ class WebcamManager(DetectorManager):
         if system() == 'Windows':
             # Exposure time
             parameters['Exposure'] = DetectorListParameter(
-                group='Misc', 
-                value='15.6 ms', 
+                group='Misc',
+                value='15.6 ms',
                 editable=True,
                 options=list(self.msExposure.keys())
             )
             self._camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, self.msExposure['15.6 ms'])
         else:
             parameters['Exposure'] = DetectorNumberParameter(
-                group='Misc', 
-                value=15.6*1e-3, 
+                group='Misc',
+                value=15.6*1e-3,
                 valueUnits='s',
                 editable=True
             )
@@ -83,9 +83,9 @@ class WebcamManager(DetectorManager):
         try:
             umxpx =  self.parameters['Camera pixel size'].value
         except:
-            umxpx = 1   
+            umxpx = 1
         return [1, umxpx, umxpx]
-        
+
     def getLatestFrame(self, is_save=False):
         frame = self._camera.read()[1][self._frameStart[1]:, self._frameStart[0]:]
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -97,7 +97,7 @@ class WebcamManager(DetectorManager):
             else:
                 self._camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, float(value))
         super().setParameter(name, value)
-        
+
     def getChunk(self):
         try:
             return self.getLatestFrame()
@@ -128,7 +128,7 @@ class WebcamManager(DetectorManager):
         except:
             raise ValueError(f"Camera does not support {hsize}x{vsize} resolution")
 
-# Copyright (C) ImSwitch developers 2023
+# Copyright (C) ImSwitch developers 2024
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

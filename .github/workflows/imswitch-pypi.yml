@@ -7,35 +7,25 @@ on:
       - '*'
 
 jobs:
-  build-n-publish:
+  build-and-publish:
     runs-on: ubuntu-latest
+
     steps:
-    - uses: actions/checkout@v2
-      with:
-        ref: ${{ github.ref }}
-    - name: Set up Python 3.9
-      uses: actions/setup-python@v2
-      with:
-        python-version: 3.9
-    - name: Find latest tag of dependency
-      id: remote_chart
-      uses: oprypin/find-latest-tag@v1
-      with:
-        repository: openUC2/UC2-REST
-        releases-only: true
-    - name: bump version
-      uses: jacobtomlinson/gha-find-replace@v2
-      with:
-        find: '__version__ = "'
-        replace: '__version__ = "${{ steps.remote_chart.outputs.tag }}" #'
-        regex: false
-    - name: Install pypa/build
-      run: |
-        python3 -m pip install build --user
-    - name: Build a binary wheel and a source tarball
-      run: |
-        python3 -m build --sdist --wheel --outdir dist/ .
-    - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@master
-      with:
-        password: ${{ secrets.PYPI_API_TOKEN }}
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install build backend
+        run: |
+          python -m pip install --upgrade pip build
+
+      - name: Build sdist and wheel
+        run: |
+          python -m build --sdist --wheel --outdir dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

@@ -17,31 +17,31 @@ class JoystickWidget(NapariHybridWidget):
         # Add elements to GridLayout
         self.grid = QtWidgets.QGridLayout()
         self.setLayout(self.grid)
-        
+
         # initialize the joystick
         self.textEditJoystickZA = QtWidgets.QLabel("Joystick Z/A")
         self.joystickZA = joystick.Joystick(callbackFct=self.getValueJoyStickXY)
-        
+
         self.textEditJoystickXY = QtWidgets.QLabel("Joystick X/Y")
-        self.joystickXY = joystick.Joystick(callbackFct=self.getValueJoyStickAZ)        
-        
+        self.joystickXY = joystick.Joystick(callbackFct=self.getValueJoyStickAZ)
+
         self.grid.addWidget(self.textEditJoystickZA, 0, 1)
         self.grid.addWidget(self.joystickZA, 1, 0)
         self.grid.addWidget(self.textEditJoystickXY, 0, 0)
         self.grid.addWidget(self.joystickXY, 1, 1)
-        
+
     def getValueJoyStickXY(self, x, y):
         self.sigJoystickXY.emit(x, y)
         return x, y
-    
+
     def getValueJoyStickAZ(self, a, z):
         self.sigJoystickZA.emit(a, z)
         return a, z
-        
-        
-       
 
-# Copyright (C) 2020-2023 ImSwitch developers
+
+
+
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

@@ -1,0 +1,39 @@
+<?TUXML version="1.0" encoding="UTF-8"?>
+<Cam_FL9BW Using="DftParameter">
+    <ParameterSets Name="DftParameter">
+        <Resolution>0</Resolution>
+        <PixelClock>0</PixelClock>
+        <BitOfDepth>16</BitOfDepth>
+        <GlobalGain>2</GlobalGain>
+        <ATExposure>0</ATExposure>
+        <FMExposure>0</FMExposure>
+        <LNExposure>830</LNExposure>
+        <BlackLevel>2</BlackLevel>
+        <FlatFieldCorrection>0</FlatFieldCorrection>
+        <Temperature>250</Temperature>
+        <FanMode>0</FanMode>
+        <TriggerOutput>0</TriggerOutput>
+        <ImageModeSelect>2</ImageModeSelect>
+        <DefectCorrectionValue>1</DefectCorrectionValue>
+        <MultipleCameras>1</MultipleCameras>
+        <Gamma>100</Gamma>
+        <Contrast>128</Contrast>
+        <LeftLevels>0</LeftLevels>
+        <RightLevels>65535</RightLevels>
+        <HistogramStatistic>0</HistogramStatistic>
+        <AutoLevels>0</AutoLevels>
+        <Horizontal>0</Horizontal>
+        <Vertical>0</Vertical>
+        <VerticalCorrection>1</VerticalCorrection>
+        <RotateR90>0</RotateR90>
+        <RotateL90>0</RotateL90>
+        <USBLed>1</USBLed>
+        <DigitalGain>172</DigitalGain>
+        <SumBin>0</SumBin>
+        <FrameRate>0</FrameRate>
+        <PGAHigh>100</PGAHigh>
+        <PGALow>100</PGALow>
+        <ExposureMax>500</ExposureMax>
+        <IgnorePercentage>10</IgnorePercentage>
+    </ParameterSets>
+</Cam_FL9BW>

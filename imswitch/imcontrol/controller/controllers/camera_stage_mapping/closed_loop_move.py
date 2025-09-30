@@ -1,7 +1,7 @@
 """
 Closed loop move
 
-This module defines some functions that allow you to make closed-loop moves.  
+This module defines some functions that allow you to make closed-loop moves.
 This is done using the ``Tracker`` object defined in ``camera_stage_tracker``
 to keep track of where we are.  The idea is that we make a move, then check
 where we *actually* moved to, then make another move to correct the first
@@ -22,17 +22,17 @@ from .camera_stage_tracker import TrackingError
 
 def closed_loop_move(tracker, move_in_pixels, pos, tolerance=5, max_iterations=3):
     """Move by a specified distance in pixels
-    
+
     This will make a move, then refine with subsequent moves
     based on the position reported by the ``Tracker`` object.
-    
+
     Arguments:
         tracker: ``Tracker``
             A ``Tracker`` object, already initialised, used to measure
             the move we have actually made.  Our goal is to have the
             tracker report that we have moved to ``pos``.
         move_in_pixels: function
-            A function that accepts a 2-element numpy array as input, 
+            A function that accepts a 2-element numpy array as input,
             and makes a relative move by that many pixels.
         pos: np.array
             A 2-element array with the desired position in pixels
@@ -43,14 +43,14 @@ def closed_loop_move(tracker, move_in_pixels, pos, tolerance=5, max_iterations=3
             This is the maximum number of refinement steps that will
             be made, i.e. after the initial move, we will be allowed
             this many extra moves to get closer to ``pos``
-    
+
         Returns:
             image_pos: 2-element numpy array, with the actual position in pixels
     """
     pos = np.array(pos)
     if not tracker.point_in_safe_range(pos):
         raise ValueError("closed_loop_move can only move by the maximum distance we can track.")
-                  
+
     move_in_pixels(pos - tracker.image_positions[-1]) # Initial (open loop) move
     iterations = 0
     _, image_pos = tracker.append_point()
@@ -78,7 +78,7 @@ def closed_loop_scan(tracker, move_in_pixels, move, relative_image_positions, **
             the move we have actually made.  Our goal is to have the
             tracker report that we have moved to ``pos``.
         move_in_pixels: function
-            A function that accepts a 2-element numpy array as input, 
+            A function that accepts a 2-element numpy array as input,
             and makes a relative move by that many pixels.
         move: function
             Takes a 3-element numpy array and moves to that absolute position

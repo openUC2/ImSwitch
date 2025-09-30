@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Union
 from dataclasses_json import dataclass_json, Undefined, CatchAll
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class DeviceInfo:
     analogChannel: Optional[Union[str, int]]
     """ Channel for analog communication. ``null`` if the device is digital or
@@ -37,7 +37,7 @@ class DeviceInfo:
             return self.digitalLine
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class DetectorInfo(DeviceInfo):
     forAcquisition: bool = False
     """ Whether the detector is used for acquisition. """
@@ -46,7 +46,7 @@ class DetectorInfo(DeviceInfo):
     """ Whether the detector is used for focus lock. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LaserInfo(DeviceInfo):
     valueRangeMin: Optional[Union[int, float]]
     """ Minimum value of the laser. ``null`` if laser doesn't setting a value.
@@ -73,7 +73,7 @@ class LaserInfo(DeviceInfo):
     """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LEDInfo(DeviceInfo):
     valueRangeMin: Optional[Union[int, float]]
     """ Minimum value of the laser. ``null`` if laser doesn't setting a value.
@@ -88,12 +88,12 @@ class LEDInfo(DeviceInfo):
     """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LEDMatrixInfo(DeviceInfo):
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class PositionerInfo(DeviceInfo):
     axes: List[str]
     """ A list of axes (names) that the positioner controls. """
@@ -110,8 +110,10 @@ class PositionerInfo(DeviceInfo):
     resetOnClose: bool = True
     """ Whether the positioner should be reset to 0-position upon closing ImSwitch. """
 
+    stageOffsets: Dict[str, float] = field(default_factory=dict)
+    """ Stage offsets available to select (map preset name -> stage name -> """
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class RS232Info:
     managerName: str
     """ RS232 manager class name. """
@@ -120,7 +122,7 @@ class RS232Info:
     """ Properties to be read by the RS232 manager. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class SLMInfo:
     monitorIdx: int
     """ Index of the monitor in the system list of monitors (indexing starts at
@@ -149,12 +151,12 @@ class SLMInfo:
     wavelength. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class UC2ConfigInfo:
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class SIMInfo:
     monitorIdx: int
     """ Index of the monitor in the system list of monitors (indexing starts at
@@ -194,7 +196,7 @@ class SIMInfo:
     nPhases: int = 3
 
     simMagnefication: float = 1.0
-    
+
     isFastAPISIM: bool = False
 
     simPixelsize: float = 1.0
@@ -204,11 +206,11 @@ class SIMInfo:
     simETA: float = 1.0
 
     simN: float = 1.0
-    
+
     tWaitSequence: float = 0.0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class DPCInfo:
     wavelength: int
     """ Wavelength of the laser line used with the SLM. """
@@ -225,53 +227,116 @@ class DPCInfo:
     n: float
 
     rotations: List[int]
-@dataclass(frozen=True)
+
+@dataclass(frozen=False)
+class ObjectiveInfo:
+    pixelsizes: List
+    NAs: List
+    magnifications: List
+    objectiveNames: List
+    objectivePositions: List
+    homeDirection: int = -1
+    homePolarity: int = 1
+    homeSpeed: int = 20000
+    homeAcceleration: int = 20000
+    calibrateOnStart: bool = True
+    active: bool = True
+
+@dataclass(frozen=False)
 class MCTInfo:
     tWait: int
 
 class ROIScanInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class LightsheetInfo:
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class WebRTCInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class HyphaInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class MockXXInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class JetsonNanoInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class HistoScanInfo:
     PreviewCamera: str = None
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
+class StresstestInfo:
+    pass
+
+@dataclass(frozen=False)
+class WorkflowInfo:
+    pass
+
+@dataclass(frozen=False)
 class FlowStopInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
+class LepmonInfo:
+    pass
+
+@dataclass(frozen=False)
 class FlatfieldInfo:
     pass
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class PixelCalibrationInfo:
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
+class ExperimentInfo:
+    """Configuration for experiment management, including OMERO integration."""
+    
+    # OMERO configuration
+    omeroServerUrl: Optional[str] = "localhost"
+    """ OMERO server URL. """
+    
+    omeroUsername: Optional[str] = ""
+    """ OMERO username for authentication. """
+    
+    omeroPassword: Optional[str] = ""
+    """ OMERO password for authentication. """
+    
+    omeroPort: Optional[int] = 4064
+    """ OMERO server port. """
+    
+    omeroGroupId: Optional[int] = -1
+    """ OMERO group ID for uploads. -1 for default group. """
+    
+    omeroProjectId: Optional[int] = -1
+    """ OMERO project ID for uploads. -1 for no specific project. """
+    
+    omeroDatasetId: Optional[int] = -1
+    """ OMERO dataset ID for uploads. -1 for no specific dataset. """
+    
+    omeroEnabled: bool = False
+    """ Whether OMERO integration is enabled. """
+    
+    omeroConnectionTimeout: int = 30
+    """ Connection timeout for OMERO in seconds. """
+    
+    omeroUploadTimeout: int = 300
+    """ Upload timeout for OMERO in seconds. """
+
+
+@dataclass(frozen=False)
 class ISMInfo:
     wavelength: int
     """ Wavelength of the laser line used with the SLM. """
@@ -287,7 +352,7 @@ class ISMInfo:
     wavelength. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class FocusLockInfo:
     camera: str
     """ Detector name. """
@@ -298,28 +363,55 @@ class FocusLockInfo:
     updateFreq: int
     """ Update frequency, in milliseconds. """
 
-    frameCropx: int
-    """ Starting X position of camera frame crop. """
+    cropCenter: list 
+    """ Center point for cropping the camera image. """
 
-    frameCropy: int
-    """ Starting Y position of camera frame crop. """
-
-    frameCropw: int
-    """ Width of camera frame crop. """
-
-    frameCroph: int
-    """ Height of camera frame crop. """
-
-    swapImageAxes: bool
-    """ Swap camera image axes when grabbing camera frame. """
+    cropSize: int 
+    """ Size of the cropped camera image. """
 
     piKp: float
     """ Default kp value of feedback loop. """
 
     piKi: float
     """ Default ki value of feedback loop. """
+    
+    focusLockMetric: str
+    """ Method to use for focus lock. Options: 'astigmatism', 'phase', 'defocus'. """
+    
+    laserName: str
+    """ Name of the laser to use for focus lock. """
+    
+    laserValue: int
+    """ Value of the laser to use for focus lock. This is usually a wavelength in nm. """
 
-@dataclass(frozen=True)
+    fovWidth: int = 512
+    """ Width of the field of view for focus lock, in pixels. """
+    
+    fovCenter: list = field(default_factory=lambda: [None, None])
+    """ Center of the field of view for focus lock, in pixels. [x, y] """
+    
+@dataclass(frozen=False)
+class ArkitektInfo:
+    enabled: bool = True
+    """ Whether Arkitekt integration is enabled. """
+
+    appName: str = "imswitch"
+    """ Application name for Arkitekt registration. """
+
+    redeemToken: str = ""
+    """ Redeem token for Arkitekt authentication. """
+
+    url: str = "http://go.arkitekt.io"
+    """ Arkitekt server URL. """
+
+    syncInAsync: bool = True
+    """ Enable sync-in-async mode for Koil. """
+
+    deconvolveActionHash: str = "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
+    """ Hash of the deconvolution action in Arkitekt. """
+
+
+@dataclass(frozen=False)
 class FOVLockInfo:
     camera: str
     """ Detector name. """
@@ -342,8 +434,6 @@ class FOVLockInfo:
     frameCroph: int
     """ Height of camera frame crop. """
 
-    swapImageAxes: bool
-    """ Swap camera image axes when grabbing camera frame. """
 
     piKp: float
     """ Default kp value of feedback loop. """
@@ -352,7 +442,7 @@ class FOVLockInfo:
     """ Default ki value of feedback loop. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class AutofocusInfo:
     camera: str
     """ Detector name. """
@@ -376,7 +466,7 @@ class AutofocusInfo:
     """ Height of frame crop. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class ScanInfo:
     scanWidgetType: str
     """ Type of scan widget to generate: PointScan/MoNaLISA/Base/etc."""
@@ -406,7 +496,7 @@ class ScanInfo:
     If integer, it will be translated to "Dev1/port0/line{frameClockLine}".
     """
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class EtSTEDInfo:
     detectorFast: str
     """ Name of the STED detector to use. """
@@ -418,7 +508,7 @@ class EtSTEDInfo:
     """ Name of the widefield laser to use. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class MicroscopeStandInfo:
     managerName: str
     """ Name of the manager to use. """
@@ -427,7 +517,7 @@ class MicroscopeStandInfo:
     """ Name of the rs232 device to use. """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class NidaqInfo:
     timerCounterChannel: Optional[Union[str, int]] = None
     """ Output for Counter for timing purposes. If an integer is specified, it
@@ -442,13 +532,13 @@ class NidaqInfo:
             return f'Dev1/ctr{self.timerCounterChannel}'  # for backwards compatibility
         else:
             return self.timerCounterChannel
-        
-@dataclass(frozen=True)
+
+@dataclass(frozen=False)
 class PulseStreamerInfo:
     ipAddress: Optional[str] = None
     """ IP address of Pulse Streamer hardware. """
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class PyroServerInfo:
     name: Optional[str] = 'ImSwitchServer'
     host: Optional[
@@ -497,15 +587,18 @@ class SetupInfo:
     dpc: Optional[DPCInfo] = field(default_factory=lambda: None)
     """ DPC settings. Required to be defined to use DPC functionality. """
 
+    objective: Optional[ObjectiveInfo] = field(default_factory=lambda: None)
+    """ Objective settings. Required to be defined to use Objective functionality. """
+
     mct: Optional[MCTInfo] = field(default_factory=lambda: None)
     """ MCT settings. Required to be defined to use MCT functionality. """
 
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """
-        
+
     roiscan: Optional[ROIScanInfo] = field(default_factory=lambda: None)
     """ ROIScan settings. Required to be defined to use ROIScan functionality. """
-    
+
     lightsheet: Optional[LightsheetInfo] = field(default_factory=lambda: None)
     """ MCT settings. Required to be defined to use Lightsheet functionality. """
 
@@ -521,17 +614,29 @@ class SetupInfo:
     jetsonnano: Optional[JetsonNanoInfo] = field(default_factory=lambda: None)
     """ Jetson Nano settings for jetson nano. Required to be defined to use jetson nano functionality. """
 
+    Stresstest: Optional[StresstestInfo] = field(default_factory=lambda: None)
+    """ Stresstest settings. Required to be defined to use Stresstest functionality. """
+    
     HistoScan: Optional[HistoScanInfo] = field(default_factory=lambda: None)
     """ HistoScan settings. Required to be defined to use HistoScan functionality. """
+
+    Workflow: Optional[WorkflowInfo] = field(default_factory=lambda: None)
+    """ Workflow settings. Required to be defined to use Workflow functionality. """
 
     FlowStop:  Optional[FlowStopInfo] = field(default_factory=lambda: None)
     """ FlowStop settings. Required to be defined to use FlowStop functionality. """
 
+    Lepmon: Optional[LepmonInfo] = field(default_factory=lambda: None)
+    """ Lepmon settings. Required to be defined to use Lepmon functionality. """
+
     Flatfield: Optional[FlatfieldInfo] = field(default_factory=lambda: None)
     """ Flatfield settings. Required to be defined to use Flatfield functionality. """
-    
+
     PixelCalibration: Optional[PixelCalibrationInfo] = field(default_factory=lambda: None)
     """ PixelCalibration settings. Required to be defined to use PixelCalibration functionality. """
+
+    experiment: Optional[ExperimentInfo] = field(default_factory=lambda: None)
+    """ Experiment settings including OMERO configuration. Required to be defined for experiment functionality. """
 
     uc2Config: Optional[UC2ConfigInfo] = field(default_factory=lambda: None)
     """ UC2Config settings. Required to be defined to use UC2Config functionality. """
@@ -543,9 +648,13 @@ class SetupInfo:
     """ Focus lock settings. Required to be defined to use focus lock
     functionality. """
 
+    arkitekt: Optional[ArkitektInfo] = field(default_factory=lambda: None)
+    """ Arkitekt integration settings. Required to be defined to use Arkitekt
+    functionality. """
+
     fovLock: Optional[FOVLockInfo] = field(default_factory=lambda: None)
     """ Focus lock settings. Required to be defined to use fov lock
-    functionality. """    
+    functionality. """
 
     autofocus: Optional[AutofocusInfo] = field(default_factory=lambda: None)
     """ Autofocus settings. Required to be defined to use autofocus
@@ -577,7 +686,7 @@ class SetupInfo:
     def add_attribute(self, attr_name, attr_value):
         # load all implugin-related setup infos and add them to the class
         # try to get it from the plugins
-        # If there is a imswitch_sim_info, we want to add this as self.imswitch_sim_info to the 
+        # If there is a imswitch_sim_info, we want to add this as self.imswitch_sim_info to the
         # SetupInfo Class
 
         import pkg_resources
@@ -586,7 +695,7 @@ class SetupInfo:
                 ManagerClass = entry_point.load()
                 ManagerDataClass = make_dataclass(entry_point.name.split("_info")[0], [(entry_point.name, ManagerClass)])
                 setattr(self, entry_point.name.split("_info")[0], field(default_factory=ManagerDataClass))
-        
+
     def getDevice(self, deviceName):
         """ Returns the DeviceInfo for a specific device.
 
@@ -627,7 +736,7 @@ class SetupInfo:
 
         return devices
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

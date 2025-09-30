@@ -11,7 +11,7 @@ class FOVLockWidget(Widget):
     """ Widget containing fov lock interface. """
     sigSliderExpTValueChanged = QtCore.Signal(float)  # (value)
     sigSliderGainValueChanged = QtCore.Signal(float)  # (value)
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -69,7 +69,7 @@ class FOVLockWidget(Widget):
         valueRangeGain = (0,30)
         tickInterval = 5
         singleStep = 1
-        
+
         # exposure slider
         self.sliderExpT = guitools.FloatSlider(QtCore.Qt.Horizontal, self, allowScrollChanges=False,
                                            decimals=valueDecimals)
@@ -171,7 +171,7 @@ class FOVCalibrationGraph(pg.GraphicsLayoutWidget):
                        np.polyval(self.poly, self.positionData), pen='r')
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

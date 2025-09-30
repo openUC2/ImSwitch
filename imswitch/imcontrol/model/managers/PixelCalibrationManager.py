@@ -5,28 +5,27 @@ import os
 
 import numpy as np
 from PIL import Image
-from scipy import signal as sg
 
 from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import initLogger
 
 
 class PixelCalibrationManager(SignalInterface):
-    sigPixelCalibrationMaskUpdated = Signal(object)  # (maskCombined)
 
     def __init__(self, PixelCalibrationInfo, *args, **kwargs):
+        self.sigPixelCalibrationMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
         if PixelCalibrationInfo is None:
             return
-        
+
         self.update()
 
     def update(self):
         return None #returnmask.image()
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

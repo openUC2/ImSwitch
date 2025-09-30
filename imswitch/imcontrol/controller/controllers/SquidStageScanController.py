@@ -7,7 +7,7 @@ try:
     isNIP = True
 except:
     isNIP = False
-    
+
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from imswitch.imcontrol.view import guitools
 from imswitch.imcommon.model import initLogger
@@ -22,13 +22,13 @@ class SquidStageScanController(LiveUpdatedController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self, tryInheritParent=False)
-        
+
         # Prepare image computation worker
         self.imageComputationWorker = self.SquidStageScanImageComputationWorker()
         self.imageComputationWorker.setCoordinates((1,2,3,4))
         self.imageComputationWorker.setPixelsize(1.)
         self.imageComputationWorker.sigSquidStageScanImageComputed.connect(self.displayImage)
-   
+
         self.imageComputationThread = Thread()
         self.imageComputationWorker.moveToThread(self.imageComputationThread)
         self.sigImageReceived.connect(self.imageComputationWorker.computeSquidStageScanImage)
@@ -38,12 +38,12 @@ class SquidStageScanController(LiveUpdatedController):
         self._commChannel.sigUpdateImage.connect(self.update)
 
         # Connect SquidStageScanWidget signals
-        
-        
+
+
         # connect camera and stage
         self.cameraName = self._master.detectorsManager.getAllDeviceNames()[0]
         self.camera = self._master.detectorsManager[self.cameraName]
-        
+
         self.positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self.positioner = self._master.positionersManager[self.positionerName]
 
@@ -53,21 +53,21 @@ class SquidStageScanController(LiveUpdatedController):
         self.isHomed = False
         self._widget.btnStart.clicked.connect(self.startScan)
         self._widget.btnHome.clicked.connect(self.startHoming)
-        
+
         self.stageCoordinates(self._widget.getCoordinates())
         self.pixelSize(self._widget.getPixelsize())
         self.coordinates = (0,0,0,0)
-        
+
     def __del__(self):
         self.imageComputationThread.quit()
-        self.imageComputationThread.wait()        
+        self.imageComputationThread.wait()
         if hasattr(super(), '__del__'):
             super().__del__()
-            
+
     def startHoming(self):
         self._logger.debug("Start Homing")
         self.imageComputationWorker.startHoming(self.positioner)
-        
+
     def startScan(self):
         # Update values
         self.stageCoordinates(self._widget.getCoordinates())
@@ -82,11 +82,11 @@ class SquidStageScanController(LiveUpdatedController):
             self._logger.debug("Stop Scanning")
             self.imageComputationWorker.stopScan(self.positioner)
             self.isScanRunning = False
-    
+
     def stageCoordinates(self, coordinates):
         self._logger.debug("Coordinates: "+str(coordinates))
         self.coordinates = np.float32(coordinates)
-        
+
     def pixelSize(self, pixelsize):
         self._logger.debug("pixelsize: "+str(pixelsize))
         self.pixelsize = pixelsize
@@ -94,7 +94,7 @@ class SquidStageScanController(LiveUpdatedController):
     def displayImage(self, im):
         """ Displays the image in the view. """
         self._widget.setImage(im)
-        
+
     '''
     def update(self, detectorName, im, init, isCurrentDetector):
         """ Update with new detector frame. """
@@ -119,7 +119,7 @@ class SquidStageScanController(LiveUpdatedController):
 
         def __init__(self):
             super().__init__()
-            
+
             self._logger = initLogger(self, tryInheritParent=False)
             self._numQueuedImages = 0
             self._numQueuedImagesMutex = Mutex()
@@ -130,7 +130,7 @@ class SquidStageScanController(LiveUpdatedController):
         def computeSquidStageScanImage(self):
             """ Compute SquidStageScan of an image. """
             pass
-        
+
         def imageComputationThread(self):
             pass
 
@@ -148,7 +148,7 @@ class SquidStageScanController(LiveUpdatedController):
             self.stopScan = False
             xmin,xmax,ymin,ymax = coordinates[0],coordinates[1],coordinates[2],coordinates[3] # * not working?
             self.currentPosition = positioner.getPosition() # xyz
-            # detector determine 
+            # detector determine
             # detector.width
             detector.startAcquisition()
             NPixelY = detector.shape[-1]
@@ -156,11 +156,11 @@ class SquidStageScanController(LiveUpdatedController):
             NPixelY = 1000
             NScansY = int((ymax-ymin)//int(fovY))+1
 
-            mCoordY = 0            
+            mCoordY = 0
             for iScan in range(NScansY):
-                # we want to scan the entire FOV spanned by min/max x/y 
+                # we want to scan the entire FOV spanned by min/max x/y
                 # snake scan
-                
+
                 # move as fast as you can
                 positioner.move(mCoordY,"Y")
                 if iScan%2:
@@ -169,7 +169,7 @@ class SquidStageScanController(LiveUpdatedController):
                     mCoordX = xmax
                 positioner.move(mCoordX,"X")
                 self._logger.debug("X/Y: "+str((mCoordX,mCoordY)))
-                
+
                 while positioner.is_busy():
                     # capture images and assign them to xy locations
                     # while the stage is scanning at fullspeed
@@ -180,27 +180,27 @@ class SquidStageScanController(LiveUpdatedController):
                     self.intensityMap.append((mMeanImage, mPos))
 
                 mCoordY += (fovY)
-                
+
             positioner.homing()
 
         def stopScan(self):
             self.stopScan = True
 
-            
-            
-            
+
+
+
         '''
             try:
                 if self._numQueuedImages > 1:
                     return  # Skip this frame in order to catch up
                 SquidStageScanrecon = np.flip(np.abs(self.reconSquidStageScan(self._image, PSFpara=self.PSFpara, N_subroi=1024, pixelsize=self.pixelsize, dz=self.dz)),1)
-                
+
                 self.sigSquidStageScanImageComputed.emit(np.array(SquidStageScanrecon))
             finally:
                 self._numQueuedImagesMutex.lock()
                 self._numQueuedImages -= 1
                 self._numQueuedImagesMutex.unlock()
-        
+
 
         def prepareForNewImage(self, image):
             """ Must always be called before the worker receives a new image. """
@@ -212,12 +212,12 @@ class SquidStageScanController(LiveUpdatedController):
 
         def setPixelsize(self, dz):
             self.dz = dz
-        
+
         def setCoordinates(self, pixelsize):
             self.pixelsize = pixelsize
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

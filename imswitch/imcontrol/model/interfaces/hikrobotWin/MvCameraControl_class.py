@@ -11,15 +11,21 @@ from imswitch.imcontrol.model.interfaces.hikrobotWin.CameraParams_const import *
 from imswitch.imcontrol.model.interfaces.hikrobotWin.CameraParams_header import *
 from imswitch.imcontrol.model.interfaces.hikrobotWin.MvErrorDefine_const import *
 from sys import platform
-import os 
+import os
 
 if platform == "linux" or platform == "linux2":
-    MvCamCtrldll = ctypes.cdll.LoadLibrary("/opt/MVS/lib/aarch64/libMvCameraControl.so")
+    try:
+        MvCamCtrldll = ctypes.cdll.LoadLibrary("/opt/MVS/lib/aarch64/libMvCameraControl.so")
+    except Exception as e:
+        try:
+            MvCamCtrldll = ctypes.cdll.LoadLibrary("/opt/MVS/lib/64/libMvCameraControl.so")
+        except Exception as e:
+            print(e)
 elif platform == "darwin":
     MvCamCtrldll = ctypes.cdll.LoadLibrary("/usr/local/lib/libMvCameraControl.dylib")
 elif platform == "win32":
     # Windows...
-    pass 
+    pass
 
 
     mFWD = os.path.dirname(os.path.realpath(__file__))
@@ -51,14 +57,14 @@ class MvCamera():
         MvCamCtrldll.MV_CC_GetSDKVersion.restype = c_uint
         # C原型：unsigned int __stdcall MV_CC_GetSDKVersion();
         return MvCamCtrldll.MV_CC_GetSDKVersion()
-    
+
     # ch:获取支持的传输层 | en:Get supported Transport Layer
     @staticmethod
     def MV_CC_EnumerateTls():
         MvCamCtrldll.MV_CC_EnumerateTls.restype = c_uint
         # C原型：int __stdcall MV_CC_EnumerateTls();
         return MvCamCtrldll.MV_CC_EnumerateTls()
-		
+
     # ch:枚举设备 | en:Enumerate Device
     @staticmethod
     def MV_CC_EnumDevices(nTLayerType, stDevList):
@@ -66,7 +72,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_EnumDevices.restype = c_uint
         # C原型:int __stdcall MV_CC_EnumDevices(unsigned int nTLayerType, MV_CC_DEVICE_INFO_LIST* pstDevList)
         return MvCamCtrldll.MV_CC_EnumDevices(c_uint(nTLayerType), byref(stDevList))
-		
+
 	# ch:根据厂商名字枚举设备 | en:Enumerate device according to manufacture name
     @staticmethod
     def MV_CC_EnumDevicesEx(nTLayerType, stDevList, strManufacturerName):
@@ -138,7 +144,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_CloseDevice.argtype = c_void_p
         MvCamCtrldll.MV_CC_CloseDevice.restype = c_uint
         return MvCamCtrldll.MV_CC_CloseDevice(self.handle)
-		
+
 	# ch:判断设备是否处于连接状态 | en: Is The Device Connected
     def MV_CC_IsDeviceConnected(self):
         MvCamCtrldll.MV_CC_IsDeviceConnected.argtype = (c_void_p)
@@ -152,7 +158,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_RegisterImageCallBackEx.restype = c_uint
         # C原型:int MV_CC_RegisterImageCallBackEx(void* handle, void(* cbOutput)(unsigned char * pData, MV_FRAME_OUT_INFO_EX* pFrameInfo, void* pUser),void* pUser);
         return MvCamCtrldll.MV_CC_RegisterImageCallBackEx(self.handle, CallBackFun, pUser)
-		
+
 	# ch:注册取流回调 | en:Register the image callback function
     def MV_CC_RegisterImageCallBackForRGB(self, CallBackFun, pUser):
         MvCamCtrldll.MV_CC_RegisterImageCallBackForRGB.argtype = (c_void_p, c_void_p, c_void_p)
@@ -178,14 +184,14 @@ class MvCamera():
         MvCamCtrldll.MV_CC_StopGrabbing.argtype = c_void_p
         MvCamCtrldll.MV_CC_StopGrabbing.restype = c_uint
         return MvCamCtrldll.MV_CC_StopGrabbing(self.handle)
-		
+
 	# ch:获取一帧RGB数据，此函数为查询式获取，每次调用查询内部缓存有无数据，有数据则获取数据，无数据返回错误码 | en:Get one frame of RGB data, this function is using query to get data query whether the internal cache has data, get data if there has, return error code if no data
     def MV_CC_GetImageForRGB(self, pData, nDataSize, stFrameInfo, nMsec):
         MvCamCtrldll.MV_CC_GetImageForRGB.argtype = (c_void_p, c_void_p, c_uint, c_void_p, c_uint)
         MvCamCtrldll.MV_CC_GetImageForRGB.restype = c_uint
         # C原型:int MV_CC_GetImageForRGB(IN void* handle, IN OUT unsigned char * pData , IN unsigned int nDataSize, IN OUT MV_FRAME_OUT_INFO_EX* pstFrameInfo, int nMsec);
         return MvCamCtrldll.MV_CC_GetImageForRGB(self.handle, pData, nDataSize, byref(stFrameInfo), nMsec)
-    
+
     # ch:获取一帧BGR数据，此函数为查询式获取，每次调用查询内部缓存有无数据，有数据则获取数据，无数据返回错误码 | en:Get one frame of BGR data, this function is using query to get data query whether the internal cache has data, get data if there has, return error code if no data
     def MV_CC_GetImageForBGR(self, pData, nDataSize, stFrameInfo, nMsec):
         MvCamCtrldll.MV_CC_GetImageForBGR.argtype = (c_void_p, c_void_p, c_uint, c_void_p, c_uint)
@@ -206,14 +212,14 @@ class MvCamera():
         MvCamCtrldll.MV_CC_FreeImageBuffer.restype = c_uint
         # C原型:int MV_CC_FreeImageBuffer(IN void* handle, IN MV_FRAME_OUT* pstFrame);
         return MvCamCtrldll.MV_CC_FreeImageBuffer(self.handle, byref(stFrame))
-		
+
 	# ch:采用超时机制获取一帧图片，SDK内部等待直到有数据时返回 | en:Timeout mechanism is used to get image, and the SDK waits inside until the data is returned
     def MV_CC_GetOneFrameTimeout(self, pData, nDataSize, stFrameInfo, nMsec=1000):
         MvCamCtrldll.MV_CC_GetOneFrameTimeout.argtype = (c_void_p, c_void_p, c_uint, c_void_p, c_uint)
         MvCamCtrldll.MV_CC_GetOneFrameTimeout.restype = c_uint
         # C原型:int MV_CC_GetOneFrameTimeout(void* handle, unsigned char * pData , unsigned int nDataSize, MV_FRAME_OUT_INFO_EX* pFrameInfo, unsigned int nMsec)
         return MvCamCtrldll.MV_CC_GetOneFrameTimeout(self.handle, pData, nDataSize, byref(stFrameInfo), nMsec)
-    
+
     # ch:清除取流数据缓存 | en:if Image buffers has retrieved the data，Clear them
     def MV_CC_ClearImageBuffer(self):
         MvCamCtrldll.MV_CC_ClearImageBuffer.argtype = (c_void_p)
@@ -276,7 +282,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_GetAllMatchInfo.restype = c_uint
         # C原型:int MV_CC_GetAllMatchInfo(IN void* handle, IN OUT MV_ALL_MATCH_INFO* pstInfo);
         return MvCamCtrldll.MV_CC_GetAllMatchInfo(self.handle, byref(stInfo))
-	
+
 	#####设置和获取设备参数的万能接口#####
     # ch:获取Integer属性值 | en:Get Integer value
     def MV_CC_GetIntValueEx(self, strKey, stIntValue):
@@ -284,35 +290,35 @@ class MvCamera():
         MvCamCtrldll.MV_CC_GetIntValueEx.restype = c_uint
         # C原型:int MV_CC_GetIntValueEx(IN void* handle,IN const char* strKey,OUT MVCC_INTVALUE_EX *pstIntValue);
         return MvCamCtrldll.MV_CC_GetIntValueEx(self.handle, strKey.encode('ascii'), byref(stIntValue))
-    
+
     # ch:设置Integer型属性值 | en:Set Integer value
     def MV_CC_SetIntValueEx(self, strKey, nValue):
         MvCamCtrldll.MV_CC_SetIntValueEx.argtype = (c_void_p, c_void_p, c_uint)
         MvCamCtrldll.MV_CC_SetIntValueEx.restype = c_uint
         # C原型:int MV_CC_SetIntValueEx(IN void* handle,IN const char* strKey,IN int64_t nValue);
         return MvCamCtrldll.MV_CC_SetIntValueEx(self.handle, strKey.encode('ascii'), c_uint(nValue))
-		
+
 	# ch:获取Integer型属性值 | en:Get Integer value
     def MV_CC_GetIntValue(self, strKey, stIntValue):
         MvCamCtrldll.MV_CC_GetIntValue.argtype = (c_void_p, c_void_p, c_void_p)
         MvCamCtrldll.MV_CC_GetIntValue.restype = c_uint
         # C原型:int MV_CC_GetIntValue(void* handle,char* strKey,MVCC_INTVALUE *pIntValue)
         return MvCamCtrldll.MV_CC_GetIntValue(self.handle, strKey.encode('ascii'), byref(stIntValue))
-    
+
     # ch:设置Integer型属性值 | en:Set Integer value
     def MV_CC_SetIntValue(self, strKey, nValue):
         MvCamCtrldll.MV_CC_SetIntValue.argtype = (c_void_p, c_void_p, c_uint32)
         MvCamCtrldll.MV_CC_SetIntValue.restype = c_uint
         # C原型:int MV_CC_SetIntValue(void* handle, char* strKey, unsigned int nValue)
         return MvCamCtrldll.MV_CC_SetIntValue(self.handle, strKey.encode('ascii'), c_uint32(nValue))
-    
+
     # ch:获取Enum属性值 | en:Get Enum value
     def MV_CC_GetEnumValue(self, strKey, stEnumValue):
         MvCamCtrldll.MV_CC_GetEnumValue.argtype = (c_void_p, c_void_p, c_void_p)
         MvCamCtrldll.MV_CC_GetEnumValue.restype = c_uint
         # C原型:int MV_CC_GetEnumValue(void* handle,char* strKey,MVCC_ENUMVALUE *pEnumValue)
         return MvCamCtrldll.MV_CC_GetEnumValue(self.handle, strKey.encode('ascii'), byref(stEnumValue))
-		
+
 	# ch:设置Enum型属性值 | en:Set Enum value
     def MV_CC_SetEnumValue(self, strKey, nValue):
         MvCamCtrldll.MV_CC_SetEnumValue.argtype = (c_void_p, c_void_p, c_uint32)
@@ -368,21 +374,21 @@ class MvCamera():
         MvCamCtrldll.MV_CC_GetStringValue.restype = c_uint
         # C原型:int MV_CC_GetStringValue(void* handle,char* strKey,MVCC_STRINGVALUE *pStringValue)
         return MvCamCtrldll.MV_CC_GetStringValue(self.handle, strKey.encode('ascii'), byref(StringValue))
-    
+
     # ch:设置String型属性值 | en:Set String value
     def MV_CC_SetStringValue(self, strKey, sValue):
         MvCamCtrldll.MV_CC_SetStringValue.argtype = (c_void_p, c_void_p, c_void_p)
         MvCamCtrldll.MV_CC_SetStringValue.restype = c_uint
         # C原型:int MV_CC_SetStringValue(void* handle,char* strKey,char * sValue)
         return MvCamCtrldll.MV_CC_SetStringValue(self.handle, strKey.encode('ascii'), sValue.encode('ascii'))
-    
+
     # ch:设置Command型属性值 | en:Send Command
     def MV_CC_SetCommandValue(self, strKey):
         MvCamCtrldll.MV_CC_SetCommandValue.argtype = (c_void_p, c_void_p)
         MvCamCtrldll.MV_CC_SetCommandValue.restype = c_uint
         # C原型:int MV_CC_SetCommandValue(void* handle,char* strKey)
         return MvCamCtrldll.MV_CC_SetCommandValue(self.handle, strKey.encode('ascii'))
-		
+
     # ch:清除GenICam节点缓存 | en:Invalidate GenICam Nodes
     def MV_CC_InvalidateNodes(self):
         MvCamCtrldll.MV_CC_InvalidateNodes.argtype = (c_void_p)
@@ -403,7 +409,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_GetUpgradeProcess.restype = c_uint
         # C原型:int MV_CC_GetUpgradeProcess(IN void* handle, unsigned int* pnProcess);
         return MvCamCtrldll.MV_CC_GetUpgradeProcess(self.handle, byref(nProcess))
-		
+
 	#####寄存器读写 和异常、事件回调#####
 	# ch:读内存 | en:Read Memory
     def MV_CC_ReadMemory(self, pBuffer, nAddress, nLength):
@@ -418,7 +424,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_WriteMemory.restype = c_uint
         # C原型:int MV_CC_WriteMemory(IN void* handle, const void *pBuffer, int64_t nAddress, int64_t nLength);
         return MvCamCtrldll.MV_CC_WriteMemory(self.handle, pBuffer, c_uint(nAddress), nLength)
-	
+
     # ch:注册异常消息回调 | en:Register Exception Message CallBack, call after open device
     def MV_CC_RegisterExceptionCallBack(self, ExceptionCallBackFun, pUser):
         MvCamCtrldll.MV_CC_RegisterExceptionCallBack.argtype = (c_void_p, c_void_p, c_void_p)
@@ -456,14 +462,14 @@ class MvCamera():
         MvCamCtrldll.MV_GIGE_ForceIpEx.restype = c_uint
         # C原型:int MV_GIGE_ForceIpEx(void* handle, unsigned int nIP, unsigned int nSubNetMask, unsigned int nDefaultGateWay)
         return MvCamCtrldll.MV_GIGE_ForceIpEx(self.handle, c_uint(nIP), c_uint(nSubNetMask), c_uint(nDefaultGateWay))
-    
+
     # ch:配置IP方式 | en: IP configuration method
     def MV_GIGE_SetIpConfig(self, nType):
         MvCamCtrldll.MV_GIGE_SetIpConfig.argtype = (c_void_p, c_uint)
         MvCamCtrldll.MV_GIGE_SetIpConfig.restype = c_uint
         # C原型:int MV_GIGE_SetIpConfig(void* handle, unsigned int nType)
         return MvCamCtrldll.MV_GIGE_SetIpConfig(self.handle, c_uint(nType))
-		
+
 	# ch:设置仅使用某种模式,type: MV_NET_TRANS_x，不设置时，默认优先使用driver | en: Set to use only one mode,type: MV_NET_TRANS_x. When do not set, priority is to use driver by default
     def MV_GIGE_SetNetTransMode(self, nType):
         MvCamCtrldll.MV_GIGE_SetNetTransMode.argtype = (c_void_p, c_uint)
@@ -526,7 +532,7 @@ class MvCamera():
         MvCamCtrldll.MV_GIGE_GetRetryGvcpTimes.restype = c_uint
         # C原型:int MV_GIGE_GetRetryGvcpTimes(IN void* handle, unsigned int* pnRetryGvcpTimes);
         return MvCamCtrldll.MV_GIGE_GetRetryGvcpTimes(self.handle, byref(pnRetryGvcpTimes))
-		
+
 	# ch:获取网络最佳包大小 | en:Get the optimal Packet Size, Only support GigE Camera
     def MV_CC_GetOptimalPacketSize(self):
         MvCamCtrldll.MV_CC_GetOptimalPacketSize.argtype = (c_void_p)
@@ -589,7 +595,7 @@ class MvCamera():
         MvCamCtrldll.MV_GIGE_GetMulticastStatus.restype = c_uint
         # C原型:int MV_GIGE_GetMulticastStatus(IN MV_CC_DEVICE_INFO* pstDevInfo, OUT bool* pbStatus);
         return MvCamCtrldll.MV_GIGE_GetMulticastStatus(byref(pstDevInfo), byref(pbStatus))
-    
+
 	#####CameraLink 设备独有的接口#####
     # ch:设置设备波特率| en: Set device bauderate using one of the CL_BAUDRATE_XXXX value
     def MV_CAML_SetDeviceBauderate(self, nBaudrate):
@@ -611,7 +617,7 @@ class MvCamera():
         MvCamCtrldll.MV_CAML_GetSupportBauderates.restype = c_uint
         # C原型:int MV_CAML_GetSupportBauderates(IN void* handle,unsigned int* pnBaudrateAblity);
         return MvCamCtrldll.MV_CAML_GetSupportBauderates(self.handle, byref(pnBaudrateAblity))
-    
+
     # ch:设置串口操作等待时长 | en: Sets the timeout for operations on the serial port
     def MV_CAML_SetGenCPTimeOut(self, nMillisec):
         MvCamCtrldll.MV_CAML_SetGenCPTimeOut.argtype = (c_void_p, c_uint)
@@ -683,7 +689,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_EnumInterfacesByGenTL.restype = c_uint
         # C原型:int MV_CC_EnumInterfacesByGenTL(IN OUT MV_GENTL_IF_INFO_LIST* pstIFList, IN const char * strGenTLPath);
         return MvCamCtrldll.MV_CC_EnumInterfacesByGenTL(byref(stIFList), strGenTLPath.encode('ascii'))
-    
+
     # ch:通过GenTL Interface枚举设备 | en:Enumerate Devices with GenTL interface
     def MV_CC_EnumDevicesByGenTL(stIFInfo, stDevList):
         MvCamCtrldll.MV_CC_EnumDevicesByGenTL.argtype = (c_void_p, c_void_p)
@@ -697,7 +703,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_UnloadGenTLLibrary.restype = c_uint
         # C原型:int MV_CC_UnloadGenTLLibrary(IN const char * pGenTLPath);
         return MvCamCtrldll.MV_CC_UnloadGenTLLibrary(byref(GenTLPath))
-    
+
     # ch:通过GenTL设备信息创建设备句柄 | en:Create Device Handle with GenTL Device Info
     def MV_CC_CreateHandleByGenTL(self, stDevInfo):
         MvCamCtrldll.MV_CC_DestroyHandle.argtype = c_void_p
@@ -746,7 +752,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_SaveImageEx3.restype = c_uint
         # C原型:int MV_CC_SaveImageEx3(IN void* handle, MV_SAVE_IMAGE_PARAM_EX3* pstSaveParam)
         return MvCamCtrldll.MV_CC_SaveImageEx3(self.handle, byref(stSaveParam))
-		
+
     # ch:保存图像到文件 | en:Save the image file
     def MV_CC_SaveImageToFile(self, stSaveFileParam):
         MvCamCtrldll.MV_CC_SaveImageToFile.argtype = (c_void_p, c_void_p)
@@ -797,7 +803,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_ConvertPixelTypeEx.restype = c_uint
         # C原型:int MV_CC_ConvertPixelTypeEx(IN void* handle, IN OUT MV_CC_PIXEL_CONVERT_PARAM_EX* pstCvtParam);
         return MvCamCtrldll.MV_CC_ConvertPixelTypeEx(self.handle, byref(stConvertParam))
-    
+
     # ch:插值算法类型设置 | en:Interpolation algorithm type setting
     def MV_CC_SetBayerCvtQuality(self, nBayerCvtQuality):
         MvCamCtrldll.MV_CC_SetBayerCvtQuality.argtype = (c_void_p, c_uint)
@@ -888,7 +894,7 @@ class MvCamera():
         MvCamCtrldll.MV_CC_FeatureSave.restype = c_uint
         # C原型:int MV_CC_FeatureSave(void* handle, char* pFileName)
         return MvCamCtrldll.MV_CC_FeatureSave(self.handle, strFileName.encode('ascii'))
-    
+
     # ch:导入设备属性 | en:Load camera feature
     def MV_CC_FeatureLoad(self, strFileName):
         MvCamCtrldll.MV_CC_FeatureLoad.argtype = (c_void_p, c_void_p)

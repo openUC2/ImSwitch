@@ -2,22 +2,80 @@ import inspect
 import asyncio
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Mutex, Signal, SignalInterface
+from importlib.resources import files
+from fastapi.staticfiles import StaticFiles
 
 
 class APIExport:
     """ Decorator for methods that should be exported to API. """
 
-    def __init__(self, *, runOnUIThread=False, asyncExecution=False):
+    def __init__(self, *, runOnUIThread=False, asyncExecution=False, requestType="GET"):
         self._APIExport = True
         self._APIRunOnUIThread = runOnUIThread
         self._APIAsyncExecution = asyncExecution
+        self._APIRequestType = requestType
 
     def __call__(self, func):
         func._APIExport = self._APIExport
         func._APIRunOnUIThread = self._APIRunOnUIThread
         func._APIAsyncExecution = self._APIAsyncExecution
+        func._APIRequestType = self._APIRequestType
         return func
 
+
+class UIExport:
+    """
+    Attach a small manifest to a controller class
+    and remember where its built widget‑bundle lives.
+    """
+    def __init__(self, *,
+                 path:str,                 # directory that contains remoteEntry.js
+                 name:str,
+                 icon:str,
+    ):
+        self._UIExport = True
+        self._UIPath   = path
+        self._UIName   = name
+        self._UIIcon   = icon
+
+
+    def __call__(self, cls):
+        cls._UIExport = self._UIExport
+        cls._ui_meta  = {
+            "path"   : self._UIPath,
+            "name"   : self._UIName,
+            "icon"   : self._UIIcon,
+        }
+        return cls
+
+def generateUI(widgetClassList, *, missingAttributeErrorMsg=None):
+    """ Generates a UI from UIExport-decorated classes in the object. Must be
+    called from the main thread. """
+
+    from imswitch.imcommon.model import pythontools
+
+    exportedFuncs = {}
+    for widgetClass in widgetClassList.values():
+        # list comes from the UIExport decorator and contains
+        # the path to the widget, the name of the widget and
+        # the class itself
+        widgetClassName = widgetClass[0]
+        widgetModule = widgetClass[1]
+        widgetClassObj = widgetClass[2]
+        if widgetClassObj is None:
+            continue
+        for subObjName in dir(widgetClassObj):
+            subObj = getattr(widgetClassObj, subObjName)
+            if not callable(subObj):
+                continue
+            if not hasattr(subObj, '_UIExport') or not subObj._UIExport:
+                continue
+            if subObjName in exportedFuncs:
+                raise NameError(f'UI method name "{widgetClassName}" is already in use')
+            exportedFuncs[subObjName] = subObj
+
+    return pythontools.dictToROClass(exportedFuncs,
+                                     missingAttributeErrorMsg=missingAttributeErrorMsg)
 
 def generateAPI(objs, *, missingAttributeErrorMsg=None):
     """ Generates an API from APIExport-decorated methods in the objects in the
@@ -84,9 +142,9 @@ class _UIThreadExecWrapper(SignalInterface):
 
     async def _execAsync(self):
         await self._apiFunc(*self._args, **self._kwargs)
-        
 
-# Copyright (C) 2020-2023 ImSwitch developers
+
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

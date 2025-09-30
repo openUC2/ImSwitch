@@ -5,17 +5,17 @@ import os
 
 import numpy as np
 from PIL import Image
-from scipy import signal as sg
+
 
 from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import initLogger
 
 
 class SLMManager(SignalInterface):
-    sigSLMMaskUpdated = Signal(object)  # (maskCombined)
 
     def __init__(self, slmInfo, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.sigSLMMaskUpdated = Signal(object)  # (maskCombined)
         self.__logger = initLogger(self)
 
         if slmInfo is None:
@@ -308,6 +308,7 @@ class Mask:
             self.__logger.debug(f"Spatial frequency: {f_spat} pixels")
         period = 2 * math.pi / f_spat  # period
         mask *= period  # getting a mask that is time along x-axis with a certain period
+        from scipy import signal as sg
         tilt = sg.sawtooth(mask) + 1  # creating the blazed grating
         tilt *= self.value_max / 2  # normalizing it to range of [0 value_max]
         tilt = np.round(tilt).astype(np.uint8)  # getting it in np.uint8 type
@@ -534,7 +535,7 @@ class MaskChoice(enum.Enum):
     Right = 1
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

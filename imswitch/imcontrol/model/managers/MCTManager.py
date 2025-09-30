@@ -5,19 +5,18 @@ import os
 
 import numpy as np
 from PIL import Image
-from scipy import signal as sg
 
 from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import initLogger
 
 
 class MCTManager(SignalInterface):
-    sigMCTMaskUpdated = Signal(object)  # (maskCombined)
 
     def __init__(self, mctInfo, *args, **kwargs):
+        self.sigMCTMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
-        
+
         if mctInfo is not None and mctInfo.tWait is not None:
             self.tWait = mctInfo.tWait
         else:
@@ -35,7 +34,7 @@ class MCTManager(SignalInterface):
         # returnmask = self.maskDouble
         return None  # returnmask.image()
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

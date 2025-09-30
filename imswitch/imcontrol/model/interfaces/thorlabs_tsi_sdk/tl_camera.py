@@ -177,7 +177,7 @@ class TLCameraSDK(object):
         try:
             if platform.system() == 'Windows':
                 mFWD = os.path.dirname(os.path.realpath(__file__))
-                self._sdk = cdll.LoadLibrary(mFWD+'\\dll\\thorlabs_tsi_camera_sdk.dll') 
+                self._sdk = cdll.LoadLibrary(mFWD+'\\dll\\thorlabs_tsi_camera_sdk.dll')
             elif platform.system() == 'Linux':
                 try:
                     self._sdk = cdll.LoadLibrary(r"./libthorlabs_tsi_camera_sdk.so")

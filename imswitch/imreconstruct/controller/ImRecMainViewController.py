@@ -20,7 +20,7 @@ class ImRecMainViewController(ImRecWidgetController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._commChannel.extension = self._widget.extension
-        
+
         if not IS_HEADLESS:
             self.dataFrameController = self._factory.createController(
                 DataFrameController, self._widget.dataFrame
@@ -410,7 +410,7 @@ class ImRecMainViewController(ImRecWidgetController):
                      metadata={'spacing': 1, 'unit': 'px', 'axes': 'TZCYX'})
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

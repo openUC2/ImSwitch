@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from typing import Dict, List
+from typing import Dict, List, Optional, Union
 
 
 class PositionerManager(ABC):
@@ -8,7 +8,7 @@ class PositionerManager(ABC):
     positioner corresponds to a manager derived from this class. """
 
     @abstractmethod
-    def __init__(self, positionerInfo, name: str, initialPosition: Dict[str, float]):
+    def __init__(self, positionerInfo, name: str, initialPosition: Dict[str, float], initialSpeed: Optional[Dict[str, float]]=None):
         """
         Args:
             positionerInfo: See setup file documentation.
@@ -17,32 +17,28 @@ class PositionerManager(ABC):
             initialPosition: The initial position for each axis. This is a dict
               in the format ``{ axis: position }``.
         """
-        
+
         self._positionerInfo = positionerInfo
         self._position = initialPosition
         self.__axes = positionerInfo.axes
         # SPEED
-        if positionerInfo.managerProperties.get("initialSpeed") is not None:
-            self._speed = positionerInfo.managerProperties["initialSpeed"]
-        else:
-            self._speed = {axis: 0 for axis in self.__axes } # TODO: Hardcoded - hsould be updated according to JSon?
-        self.setSpeed(positionerInfo.managerProperties.get("initialSpeed")) # force to display the correct values
-        
+        if initialSpeed is None:
+            # assign default speeds
+            initialSpeed = {axis: 0 for axis in positionerInfo.axes} # TODO: Hardcoded - should be updated according to JSon?
+        self._speed = initialSpeed
+        try: self.setSpeed(positionerInfo.managerProperties.get("initialSpeed")) # force to display the correct values
+        except: pass
+
         # HOME
-        if positionerInfo.managerProperties.get("initialIsHomed") is not None:
-            self._home = positionerInfo.managerProperties["initialIsHomed"]
-        else:
-            self._home = {axis: False for axis in self.__axes } 
-        # seetings for homign the axis
         initialHome={
             axis: False for axis in positionerInfo.axes # TODO: Hardcoded - hsould be updated according to JSon?
-        }   
+        }
         self._home = initialHome # is homed?
 
         # settings for stopping the axis
         initialStop={
             axis: False for axis in positionerInfo.axes # TODO: Hardcoded - hsould be updated according to JSon?
-        }   
+        }
         self._stop = initialStop # is stopped?
 
         self.__name = name
@@ -109,8 +105,8 @@ class PositionerManager(ABC):
         position. Derived classes will update the position field manually. If
         the positioner controls multiple axes, the axis must be specified. """
         pass
-    
-    @abstractmethod 
+
+    @abstractmethod
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
         ''' Moves the positioner infinitely at a given speed'''
         pass
@@ -133,13 +129,79 @@ class PositionerManager(ABC):
     def finalize(self) -> None:
         """ Close/cleanup positioner. """
         pass
-    
+
     def enableMotors(self, enable: bool=None, autoenable:bool=None) -> None:
         """ Enable/disable motors. """
         pass
 
+    def moveToSampleMountingPosition(self) -> None:
+        """ Move to sample mounting position. """
+        pass
 
-# Copyright (C) 2020-2023 ImSwitch developers
+    def resetStageOffsetAxis(self, axis="X"):
+        """
+        Resets the stage offset for the given axis to 0.
+        """
+        if hasattr(self, '_logger'):
+            self._logger.debug(f'Resetting stage offset for {axis} axis.')
+        self.setStageOffsetAxis(knownOffset=0, axis=axis)
+        self.saveStageOffset(offsetValue=0, axis=axis)
+
+    def setStageOffsetAxis(self, knownPosition=0, currentPosition=None, knownOffset=None, axis="X"):
+        """
+        Sets the stage to a known offset aside from the home position.
+        knownPosition and currentPosition have to be in physical coordinates (i.e. prior to applying the stepsize)
+        """
+        if hasattr(self, '_logger'):
+            self._logger.debug(f'Setting stage offset for {axis} axis.')
+        if currentPosition is None:
+            currentPosition = self.position[axis]
+        if knownOffset is None:
+            offset = currentPosition - knownPosition
+        else:
+            offset = knownOffset
+        # Store the offset in the manager (implement this in your concrete manager)
+        if hasattr(self, 'stageOffsetPositions'):
+            self.stageOffsetPositions[axis] = offset
+        self.saveStageOffset(offsetValue=offset, axis=axis)
+
+    def getStageOffsetAxis(self, axis="X"):
+        """
+        Returns the stage offset for the given axis.
+        """
+        if hasattr(self, '_logger'):
+            self._logger.debug(f'Getting stage offset for {axis} axis.')
+        if hasattr(self, 'stageOffsetPositions'):
+            return self.stageOffsetPositions.get(axis, 0)
+        return 0
+
+    def saveStageOffset(self, offsetValue=None, axis="X"):
+        """ Save the current stage offset to the config file. """
+        try:
+            positionerName = getattr(self, 'name', None)
+            if not positionerName:
+                return
+            # Build stageOffsets dict
+            stageOffsets = {ax: 0 for ax in ["X", "Y", "Z", "A"]}
+            if hasattr(self, 'stageOffsetPositions'):
+                for ax in stageOffsets:
+                    stageOffsets["stageOffsetPosition"+ax] = self.stageOffsetPositions.get(ax, 0)
+            stageOffsets["stageOffsetPosition"+axis] = offsetValue
+            # Set in setup info (assume self._setupInfo exists or pass as arg)
+            if hasattr(self, '_setupInfo'):
+                self._setupInfo.setStageOffset(positionerName, stageOffsets)
+                import configfiletools
+                configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
+        except Exception as e:
+            if hasattr(self, '_logger'):
+                self._logger.error(f"Could not save stage offset: {e}")
+            return
+
+    def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):
+        """ Move to sample loading position. """
+        pass
+   
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

@@ -22,6 +22,7 @@ class RS232Driver(MessageBasedDriver):
                              'parity': set_par,
                              'stop_bits': set_stopb,
                              'encoding': settings["encoding"],
+                             'interface_type': settings["interface_type"],
                              }}
         return defaults
 
@@ -57,7 +58,7 @@ def generateDriverClass(settings):
 # rs232port.initialize()
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

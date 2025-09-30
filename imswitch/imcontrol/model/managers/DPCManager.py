@@ -5,16 +5,15 @@ import os
 import re
 import numpy as np
 from PIL import Image
-from scipy import signal as sg
 
 from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import initLogger
 
 
 class DPCManager(SignalInterface):
-    sigDPCMaskUpdated = Signal(object)  # (maskCombined)
 
     def __init__(self, dpcInfo, *args, **kwargs):
+        self.sigDPCMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
@@ -31,9 +30,9 @@ class DPCManager(SignalInterface):
 
 
     def update(self):
-        return None 
+        return None
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

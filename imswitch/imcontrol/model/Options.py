@@ -6,7 +6,7 @@ from dataclasses_json import dataclass_json, Undefined, CatchAll
 from imswitch.imcommon.model import dirtools
 from imswitch import DEFAULT_DATA_PATH
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class RecordingOptions:
     if DEFAULT_DATA_PATH is None:
         outputFolder: str = os.path.join(dirtools.UserFileDirs.Root, 'recordings')
@@ -15,13 +15,13 @@ class RecordingOptions:
     includeDateInOutputFolder: bool = True
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class WatcherOptions:
     outputFolder: str = os.path.join(dirtools.UserFileDirs.Root, 'scripts')
 
 
 @dataclass_json(undefined=Undefined.INCLUDE)
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class Options:
     setupFileName: str  # JSON file that contains setup info
     recording: RecordingOptions = field(default_factory=RecordingOptions)
@@ -30,7 +30,7 @@ class Options:
 
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

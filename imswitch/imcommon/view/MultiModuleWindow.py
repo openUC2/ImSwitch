@@ -1,4 +1,12 @@
-from qdarkstyle import DarkPalette
+try:
+    from qdarkstyle import DarkPalette
+    _qdarkstyle_available = True
+except ImportError:
+    _qdarkstyle_available = False
+    # Create a mock DarkPalette class for fallback
+    class DarkPalette:
+        COLOR_BACKGROUND_1 = "#19232D"
+        COLOR_BACKGROUND_2 = "#1e1e1e"
 from qtpy import QtCore, QtWidgets
 
 from .AboutDialog import AboutDialog
@@ -163,7 +171,7 @@ class MultiModuleWindow(QtWidgets.QMainWindow):
         event.accept()
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

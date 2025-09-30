@@ -19,8 +19,8 @@ class MCTWidget(NapariHybridWidget):
 
     sigShowToggled = QtCore.Signal(bool)  # (enabled)
     sigUpdateRateChanged = QtCore.Signal(float)  # (rate)
-    
-    
+
+
     sigSliderIllu1ValueChanged = QtCore.Signal(float)  # (value)
     sigSliderIllu2ValueChanged = QtCore.Signal(float)  # (value)
     sigSliderIllu3ValueChanged = QtCore.Signal(float)  # (value)
@@ -177,13 +177,13 @@ class MCTWidget(NapariHybridWidget):
 
         # Set the main layout to the main widget
         self.setLayout(mainLayout)
-        
+
     def isAutofocus(self):
         if self.autofocusLED1Checkbox.isChecked() or self.autofocusLaser1Checkbox.isChecked() or self.autofocusLaser2Checkbox.isChecked():
             return True
         else:
             return False
-        
+
     def getAutofocusValues(self):
         autofocusParams = {}
         autofocusParams["valueRange"] = self.autofocusRange.text()
@@ -197,12 +197,12 @@ class MCTWidget(NapariHybridWidget):
             autofocusParams["illuMethod"] = 'Laser2'
         else:
             autofocusParams["illuMethod"] = False
-        
+
         return autofocusParams
- 
- 
+
+
     def setupSliderGui(self, label, valueDecimals, valueRange, tickInterval, singleStep):
-        mctLabel  = QtWidgets.QLabel(label)     
+        mctLabel  = QtWidgets.QLabel(label)
         valueRangeMin, valueRangeMax = valueRange
         slider = guitools.FloatSlider(QtCore.Qt.Horizontal, self, allowScrollChanges=False,
                                         decimals=valueDecimals)
@@ -213,64 +213,64 @@ class MCTWidget(NapariHybridWidget):
         slider.setSingleStep(singleStep)
         slider.setValue(0)
         return slider, mctLabel
-        
+
     def getImage(self):
         if self.layer is not None:
             return self.img.image
-        
+
     def setImage(self, im, colormap="gray", name="", pixelsize=(1,1,1), translation=(0,0,0)):
         if len(im.shape) == 2:
             translation = (translation[0], translation[1])
         if self.layer is None or name not in self.viewer.layers:
-            self.layer = self.viewer.add_image(im, rgb=False, colormap=colormap, 
+            self.layer = self.viewer.add_image(im, rgb=False, colormap=colormap,
                                                scale=pixelsize,translate=translation,
                                                name=name, blending='additive')
         self.layer.data = im
-        
-        
+
+
     def getZStackValues(self):
         valueZmin = -abs(float(self.mctValueZmin.text()))
         valueZmax = float(self.mctValueZmax.text())
         valueZsteps = float(self.mctValueZsteps.text())
         valueZenabled = bool(self.mctDoZStack.isChecked())
-        
+
         return valueZmin, valueZmax, valueZsteps, valueZenabled
- 
- 
+
+
     def getXYScanValues(self):
         valueXmin = -abs(float(self.mctValueXmin.text()))
         valueXmax = float(self.mctValueXmax.text())
         valueXsteps = float(self.mctValueXsteps.text())
-        
+
         valueYmin = -abs(float(self.mctValueYmin.text()))
         valueYmax = float(self.mctValueYmax.text())
         valueYsteps = float(self.mctValueYsteps.text())
-        
+
         valueXYenabled = bool(self.mctDoXYScan.isChecked())
-        
+
         return valueXmin, valueXmax, valueXsteps, valueYmin, valueYmax, valueYsteps, valueXYenabled
- 
- 
+
+
     def getTimelapseValues(self):
         mctValueTimePeriod = float(self.mctValueTimePeriod.text())
         mctValueTimeDuration = int(self.mctValueTimeDuration.text())
         return mctValueTimePeriod, mctValueTimeDuration
-    
+
     def getFilename(self):
         mctEditFileName = self.mctEditFileName.text()
         return mctEditFileName
-    
+
     def setMessageGUI(self, message):
         nImages2Do = self.getTimelapseValues()[-1]
         if type(message) == str:
             self.mctNImages.setText(message)
         else:
             self.mctNImages.setText('Number of images: '+str(message+1) + " / " + str(nImages2Do))
-    
-    
-    
-        
-# Copyright (C) 2020-2023 ImSwitch developers
+
+
+
+
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

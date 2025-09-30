@@ -37,18 +37,18 @@ class GXPIPYManager(DetectorManager):
             # returning back to default pixelsize
             pixelSize = 1
 
-        try: 
+        try:
             self.flipX = detectorInfo.managerProperties['gxipycam']['flipX']
         except:
             self.flipX = False
 
-        try: 
+        try:
             self.flipY = detectorInfo.managerProperties['gxipycam']['flipY']
         except:
             self.flipY = False
 
 
-        try: 
+        try:
             isRGB = detectorInfo.managerProperties['isRGB']
         except:
             isRGB = False
@@ -68,6 +68,11 @@ class GXPIPYManager(DetectorManager):
         parameters = {
             'exposure': DetectorNumberParameter(group='Misc', value=1, valueUnits='ms',
                                                 editable=True),
+            'exposure_mode': DetectorListParameter(group='Misc',
+                            value='manual',
+                            options=['manual', 'auto', 'once'],
+                            editable=True),
+            'mode': DetectorBooleanParameter(group='Misc', value=name, editable=False), # auto or manual exposure settings
             'gain': DetectorNumberParameter(group='Misc', value=5, valueUnits='arb.u.',
                                             editable=True),
             'blacklevel': DetectorNumberParameter(group='Misc', value=0, valueUnits='arb.u.',
@@ -80,19 +85,19 @@ class GXPIPYManager(DetectorManager):
                         editable=False),
             'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
                                     editable=True),
-            'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),            
+            'flat_fielding': DetectorBooleanParameter(group='Misc', value=True, editable=True),
             'binning': DetectorNumberParameter(group="Misc", value=1, valueUnits="arb.u.", editable=True),
             'flipX': DetectorBooleanParameter(group="Misc", value=self.flipX, editable=True),
             'flipY': DetectorBooleanParameter(group="Misc", value=self.flipY, editable=True),
             'trigger_source': DetectorListParameter(group='Acquisition mode',
-                            value='Continous',
-                            options=['Continous',
+                            value='Continuous',
+                            options=['Continuous',
                                         'Internal trigger',
                                         'External trigger'],
                             editable=True),
             'Camera pixel size': DetectorNumberParameter(group='Miscellaneous', value=pixelSize,
                                                 valueUnits='µm', editable=True)
-                                    
+
             }
 
         # reading parameters from disk and write them to camrea
@@ -170,20 +175,24 @@ class GXPIPYManager(DetectorManager):
 
 
     def setTriggerSource(self, source):
-        if source == 'Continous':
-            self._performSafeCameraAction(
-                lambda: self._camera.setPropertyValue('trigger_source', 0)
-            )
-        elif source == 'Internal trigger':
-            self._performSafeCameraAction(
-                lambda: self._camera.setPropertyValue('trigger_source', 1)
-            )
-        elif source == 'External trigger':
-            self._performSafeCameraAction(
-                lambda: self._camera.setPropertyValue('trigger_source', 2)
-            )
-        else:
-            raise ValueError(f'Invalid trigger source "{source}"')
+        """Set trigger source using the improved camera interface.""" 
+        try:
+            if source in ['Continuous', 'Continous']:  # Handle both old and new spellings
+                self._performSafeCameraAction(
+                    lambda: self._camera.setTriggerSource('Continuous')
+                )
+            elif source == 'Internal trigger':
+                self._performSafeCameraAction(
+                    lambda: self._camera.setTriggerSource('Internal trigger')
+                )
+            elif source == 'External trigger':
+                self._performSafeCameraAction(
+                    lambda: self._camera.setTriggerSource('External trigger')
+                )
+            else:
+                raise ValueError(f'Invalid trigger source "{source}"')
+        except Exception as e:
+            self.__logger.error(f'Failed to set trigger source to {source}: {e}')
 
 
     def getChunk(self):
@@ -191,6 +200,14 @@ class GXPIPYManager(DetectorManager):
             return self._camera.getLastChunk()
         except:
             return None
+
+    def sendSoftwareTrigger(self):
+        """Send software trigger pulse."""
+        try:
+            return self._camera.sendSoftwareTrigger()
+        except Exception as e:
+            self.__logger.error(f'Failed to send software trigger: {e}')
+            return False
 
     def flushBuffers(self):
         self._camera.flushBuffer()
@@ -214,40 +231,6 @@ class GXPIPYManager(DetectorManager):
 
             # TODO: Not implemented yet
             self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
-
-
-            # Prepare parameters
-            parameters = {
-                'exposure': DetectorNumberParameter(group='Misc', value=100, valueUnits='ms',
-                                                    editable=True),
-                'gain': DetectorNumberParameter(group='Misc', value=1, valueUnits='arb.u.',
-                                                editable=True),
-                'blacklevel': DetectorNumberParameter(group='Misc', value=100, valueUnits='arb.u.',
-                                                editable=True),
-                'image_width': DetectorNumberParameter(group='Misc', value=fullShape[0], valueUnits='arb.u.',
-                            editable=False),
-                'image_height': DetectorNumberParameter(group='Misc', value=fullShape[1], valueUnits='arb.u.',
-                            editable=False),
-                'frame_rate': DetectorNumberParameter(group='Misc', value=-1, valueUnits='fps',
-                                        editable=True),
-                'trigger_source': DetectorListParameter(group='Acquisition mode',
-                                value='Continous',
-                                options=['Continous',
-                                            'Internal trigger',
-                                            'External trigger'],
-                                editable=True),
-                'pixelSize': DetectorNumberParameter(group='Miscellaneous', value=1,
-                                                    valueUnits='µm', editable=True)
-                }
-
-            # Prepare actions
-            actions = {
-                'More properties': DetectorAction(group='Misc',
-                                                func=self._camera.openPropertiesGUI)
-            }
-
-            #super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
-            #               model=model, parameters=parameters, actions=actions, croppable=True)
 
         if not self._running:
             self._camera.start_live()
@@ -344,9 +327,9 @@ class GXPIPYManager(DetectorManager):
 
     def closeEvent(self):
         self._camera.close()
-        
+
     def recordFlatfieldImage(self):
-        ''' 
+        '''
         record n images and average them before subtracting from the latest frame
         '''
         self._camera.recordFlatfieldImage()

@@ -82,8 +82,34 @@ class ESP32LEDMatrixManager(LEDMatrixManager):
         """
         self.mLEDmatrix.setAll(1, (intensity, intensity, intensity))
 
+    # ----------------------------------------------------------------
+    # Additional convenience methods you can add:
+    # ----------------------------------------------------------------
+    def setHalves(self, region="left", intensity=(255,255,255)):
+        """
+        Light up only left/right/top/bottom in 'color'.
+        """
+        self.mLEDmatrix.send_LEDMatrix_halves(region=region, intensity=intensity)
 
-# Copyright (C) 2020-2023 ImSwitch developers
+    def setRing(self, radius=4, intensity=(255,255,255), getReturn=True, timeout=1):
+        """
+        Draw ring of radius on the matrix.
+        """
+        self.mLEDmatrix.send_LEDMatrix_rings(radius=radius, intensity=intensity, getReturn=getReturn, timeout=timeout)
+
+    def setCircle(self, radius=4, intensity=(255,255,255)):
+        """
+        Draw filled circle of radius.
+        """
+        self.mLEDmatrix.send_LEDMatrix_circles(radius=radius, intensity=intensity)
+
+    def setStatus(self, status:str="idle") -> None:
+        """ Sets the value of the LEDMatrix. """
+        self.mLEDmatrix.send_LEDMatrix_status(status=status)
+
+
+
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

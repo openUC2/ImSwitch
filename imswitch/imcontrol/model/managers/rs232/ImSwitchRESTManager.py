@@ -1,11 +1,11 @@
 import uc2rest as uc2  # pip install UC2-REST
 from imswitch.imcommon.model import initLogger
 from imswitch.imcommon.model import APIExport
-import imswitchclient.ImSwitchClient as imc 
+import imswitchclient.ImSwitchClient as imc
 from imswitch import IS_HEADLESS
 
 class ImSwitchRESTManager:
-    """ 
+    """
     A low-level wrapper for TCP-IP communication (ESP32 REST API)
     """
 
@@ -33,7 +33,7 @@ class ImSwitchRESTManager:
         pass
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

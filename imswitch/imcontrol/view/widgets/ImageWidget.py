@@ -78,7 +78,7 @@ class ImageWidget(QtWidgets.QWidget):
         return self.imgLayers[name].data
 
     def setImage(self, name, im, scale):
-        self.imgLayers[name].data = np.squeeze(im)        
+        self.imgLayers[name].data = np.squeeze(im)
         self.imgLayers[name].scale = tuple(scale)
 
     def clearImage(self, name):
@@ -112,8 +112,8 @@ class ImageWidget(QtWidgets.QWidget):
     def addItem(self, item):
         item.attach(self.napariViewer,
                     canvas=self.napariViewer.window.qt_viewer.canvas,
-                    view=self.napariViewer.window.qt_viewer.view,
-                    parent=self.napariViewer.window.qt_viewer.view.scene,
+                    view=self.napariViewer.window.qt_viewer.canvas.view,
+                    parent=self.napariViewer.window.qt_viewer.canvas.view.scene,
                     order=1e6 + 8000)
 
     def removeItem(self, item):
@@ -124,7 +124,7 @@ class ImageWidget(QtWidgets.QWidget):
         self.updateLevelsWidget.updateLevelsButton.click()
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

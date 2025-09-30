@@ -20,7 +20,7 @@ class CustomWebView(QWebView):
 
     def __init__(self, mainwindow, log=None, main=False):
         super(CustomWebView, self).__init__(None)
-        self.log = log          
+        self.log = log
         self.parent = mainwindow
         self.tabIndex = -1
         self.main = main
@@ -47,7 +47,7 @@ class CustomWebView(QWebView):
             self.parent.tabs.setTabText(self.tabIndex, self.title())
         if not ok:
             QMessageBox.information(self, "Error", "Error loading page!", QMessageBox.Ok)
-            
+
     @pyqtSlot(QUrl)
     def handlelink(self, url):
         urlstr = url.toString()
@@ -97,7 +97,7 @@ class CustomWebView(QWebView):
                 self.parent.windows.remove(self)
             self.log("Window count: %s" % (len(self.parent.windows)+1))
         event.accept()
-        
+
 class MyUrlRequestInterceptor(QWebEngineUrlRequestInterceptor):
     def interceptRequest(self, info):
         url = info.requestUrl()

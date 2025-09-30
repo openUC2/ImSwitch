@@ -18,7 +18,7 @@ if not IS_HEADLESS:
     from .HoliSheetWidget import HoliSheetWidget
     from .FlowStopWidget import FlowStopWidget
 
-    from .ObjectiveRevolverWidget import ObjectiveRevolverWidget
+    from .ObjectiveWidget import ObjectiveWidget
     from .TemperatureWidget import TemperatureWidget
     from .LEDMatrixWidget import LEDMatrixWidget
     from .WellPlateWidget import WellPlateWidget
@@ -42,12 +42,16 @@ if not IS_HEADLESS:
     from .SIMWidget import SIMWidget
     from .DPCWidget import DPCWidget
     from .MCTWidget import MCTWidget
+    from .LepmonWidget import LepmonWidget
+    from .ExperimentWidget import ExperimentWidget
+    from .TimelapseWidget import TimelapseWidget
     from .ROIScanWidget import ROIScanWidget
     from .LightsheetWidget import LightsheetWidget
     from .WebRTCWidget import WebRTCWidget
     from .MockXXWidget import MockXXWidget
     from .JetsonNanoWidget import JetsonNanoWidget
     from .HistoScanWidget import HistoScanWidget
+    from .WorkflowWidget import WorkflowWidget
     from .FlatfieldWidget import FlatfieldWidget
     from .PixelCalibrationWidget import PixelCalibrationWidget
     from .SquidStageScanWidget import SquidStageScanWidget

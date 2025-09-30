@@ -30,11 +30,11 @@ class CameraOFMCam:
         self.SensorWidth = 640
         self.SensorHeight = 480
         #%% starting the camera thread
-        
+
         self.camera = ofmCamera(self.host, self.port, is_debug=False)
-        
+
         self.frame = np.zeros((self.SensorHeight,self.SensorWidth))
-        
+
     def put_frame(self, frame):
         self.frame = frame
         return frame
@@ -42,19 +42,19 @@ class CameraOFMCam:
     def start_live(self):
         # most likely the camera already runs
         self.camera.start_stream(self.put_frame)
-        
+
     def stop_live(self):
         self.camera.stop_stream()
 
     def suspend_live(self):
         self.camera.stop_stream()
-        
+
     def prepare_live(self):
         pass
 
     def close(self):
         pass #TODO: self.camera.close()
-        
+
     def set_exposure_time(self,exposure_time):
         self.exposure_time=exposure_time
         self.camera.setExposureTime(self.exposure_time)
@@ -62,25 +62,25 @@ class CameraOFMCam:
     def set_analog_gain(self,analog_gain):
         self.analog_gain=analog_gain
         self.camera.setGain(self.analog_gain)
-        
+
     def set_framesize(self,framesize):
         self.framesize=framesize
         self.camera.setFrameSize(self.framesize)
-        
+
     def set_ledIntensity(self,ledIntensity):
         self.ledIntensity=ledIntensity
         self.camera.setLed(self.ledIntensity)
-        
+
     def set_pixel_format(self,format):
         pass
-        
+
     def getLast(self):
         # get frame and save
         return self.frame
 
     def getLastChunk(self):
         return self.camera.getframe()
-       
+
     def setROI(self, hpos, vpos, hsize, vsize):
         hsize = max(hsize, 256)  # minimum ROI size
         vsize = max(vsize, 24)  # minimum ROI size
@@ -113,7 +113,7 @@ class CameraOFMCam:
         elif property_name == "exposure":
             property_value = self.camera.exposuretime
         elif property_name == "led":
-            property_value = self.camera.exposuretime            
+            property_value = self.camera.exposuretime
         elif property_name == "framesize":
             property_value = self.camera.framesize
         elif property_name == "image_width":
@@ -127,7 +127,7 @@ class CameraOFMCam:
 
     def openPropertiesGUI(self):
         pass
-    
+
 
 class ofmCamera(object):
     # headers = {'ofm-version': '*'}
@@ -141,19 +141,19 @@ class ofmCamera(object):
         self.is_stream = False
         self.latest_frame = None
         self.is_debug = is_debug
-        
-        
+
+
         self.SensorWidth = 640
         self.SensorHeight = 460
         self.exposuretime = 0
         self.gain = 0
         self.framesize = 0
-        
+
         self.frame = np.zeros((self.SensorHeight,self.SensorWidth))
-        
+
         self.__logger = initLogger(self, tryInheritParent=True)
 
-        
+
     @property
     def base_uri(self):
         return f"http://{self.host}:{self.port}"
@@ -172,7 +172,7 @@ class ofmCamera(object):
             path = self.base_uri + path
         if headers is None:
             headers = self.headers
-            
+
         r = requests.post(path, json=payload, headers=headers,timeout=timeout)
         r.raise_for_status()
         r = r.json()
@@ -184,8 +184,8 @@ class ofmCamera(object):
             path = self.base_uri + path
         if headers is None:
             headers = self.headers
-        
-        try:    
+
+        try:
             r = requests.post(path, json=payload, headers=headers,timeout=timeout)
             r.raise_for_status()
         except Exception as e:
@@ -200,7 +200,7 @@ class ofmCamera(object):
         path = '/postjson'
         r = self.post(path, payload)
         return r
-    
+
     def setExposureTime(self, exposureTime=0):
         payload = {
             "exposuretime": exposureTime
@@ -208,7 +208,7 @@ class ofmCamera(object):
         path = '/postjson'
         r = self.post(path, payload)
         return r
-    
+
     def setFrameSize(self, framesize=0):
         payload = {
             "framesize": framesize
@@ -216,18 +216,18 @@ class ofmCamera(object):
         path = '/postjson'
         r = self.post(path, payload)
         return r
-   
+
     def start_stream(self, callback_fct = None):
-        # Create and launch a thread    
+        # Create and launch a thread
         self.stream_url = "http://"+self.host+":"+str(self.port)+"/api/v2/streams/mjpeg"
-        
+
         self.is_stream = True
         self.frame_receiver_thread = Thread(target = self.getframes, args=(self.stream_url,), daemon=True)
-        self.frame_receiver_thread.start() 
+        self.frame_receiver_thread.start()
         self.callback_fct = callback_fct
 
     def stop_stream(self):
-        # Create and launch a thread    
+        # Create and launch a thread
         self.is_stream = False
         self.frame_receiver_thread.join()
 
@@ -237,8 +237,8 @@ class ofmCamera(object):
         bytes_im = io.BytesIO(response.content)
         frame = np.uint8(np.array(Image.open(bytes_im)))
         return frame
-        
-    def getframes(self, url):           
+
+    def getframes(self, url):
         bytesJPEG = bytes()
         try:
             stream = urllib.request.urlopen(url, timeout=2)
@@ -261,29 +261,29 @@ class ofmCamera(object):
                         frame = np.mean(frame,-1)
                         # flush stream and reset bytearray
                         stream.flush()
-                        bytesJPEG = bytes() 
-                        if self.is_debug:  
+                        bytesJPEG = bytes()
+                        if self.is_debug:
                             self.__logger.debug("Frame#"+str(frameId))
                             self.__logger.debug("Error#"+str(errorCounter))
                         frameId += 1
-                        
+
                         if self.callback_fct is not None:
                             self.callback_fct(frame)
-                        
+
                     except Exception as e:
                         errorCounter+=1
-                    
+
                     # limit thread workload
                     time.sleep(.1)
 
-                    
+
             except Exception as e:
                 # reopen stream?
                 self.__logger.error(e)
                 stream = urllib.request.urlopen(url, timeout=2)
 
 
-    
+
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.
 #

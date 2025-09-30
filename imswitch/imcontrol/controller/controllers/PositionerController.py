@@ -4,7 +4,8 @@ from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import initLogger
-from typing import Optional
+from typing import Optional, Union
+from imswitch.imcontrol.model import configfiletools
 
 
 class PositionerController(ImConWidgetController):
@@ -36,11 +37,11 @@ class PositionerController(ImConWidgetController):
                     self.setSharedAttr(pName, axis, _stopAttr, pManager.stop[axis])
 
         # Connect CommunicationChannel signals
-        if 0: #IS_HEADLESS:IS_HEADLESS: 
+        if 0: #IS_HEADLESS:IS_HEADLESS:
             self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged, check_nargs=False)
         else:
             self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
-        
+
 
         # Connect PositionerWidget signals
         if not IS_HEADLESS:
@@ -65,7 +66,7 @@ class PositionerController(ImConWidgetController):
 
     def move(self, positionerName, axis, dist, isAbsolute=None, isBlocking=False, speed=None):
         """ Moves positioner by dist micrometers in the specified axis. """
-        if positionerName is None:
+        if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
 
         # get all speed values from the GUI
@@ -89,7 +90,8 @@ class PositionerController(ImConWidgetController):
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)
             self._master.positionersManager[positionerName].move(dist, axis)
-        self._commChannel.sigUpdateMotorPosition.emit()
+        if isBlocking: # push signal immediately
+            self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
         #self.updatePosition(positionerName, axis)
 
     def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
@@ -114,6 +116,8 @@ class PositionerController(ImConWidgetController):
                   isBlocking=False)
 
     def setSpeed(self, positionerName, axis, speed=(1000, 1000, 1000)):
+        if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].setSpeed(speed, axis)
         self.setSharedAttr(positionerName, axis, _speedAttr, speed)
         if not IS_HEADLESS: self._widget.setSpeedSize(positionerName, axis, speed)
@@ -142,19 +146,19 @@ class PositionerController(ImConWidgetController):
         if not IS_HEADLESS: self._widget.updateSpeed(positionerName, axis, newSpeed)
 
     @APIExport(runOnUIThread=True)
-    def homeAxis(self, positionerName=None, axis="X", isBlocking=False):
+    def homeAxis(self, positionerName:str=None, axis:str="X", isBlocking:bool=False):
         self.__logger.debug(f"Homing axis {axis}")
         if positionerName is None:
-            positionerName = self._master.positionersManager.getAllDeviceNames()[0] 
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].doHome(axis, isBlocking=isBlocking)
         self.updatePosition(positionerName, axis)
-        self._commChannel.sigUpdateMotorPosition.emit()
+        self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
 
     @APIExport()
     def stopAxis(self, positionerName=None, axis="X"):
         self.__logger.debug(f"Stopping axis {axis}")
         if positionerName is None:
-            positionerName = self._master.positionersManager.getAllDeviceNames()[0] 
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].forceStop(axis)
 
     def attrChanged(self, key, value):
@@ -261,6 +265,89 @@ class PositionerController(ImConWidgetController):
         set step size. """
         self.stepDown(positionerName, axis)
 
+    @APIExport(runOnUIThread=True)
+    def resetStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
+        """
+        Resets the stage offset for the given axis to 0.
+        """
+        self._logger.debug(f'Resetting stage offset for {axis} axis.')
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self._master.positionersManager[positionerName].resetStageOffsetAxis(axis=axis)
+
+    @APIExport(runOnUIThread=True)
+    def setStageOffsetAxis(self, positionerName: Optional[str]=None, knownPosition:float=0, currentPosition:Optional[float]=None, knownOffset:Optional[float]=None,  axis:str="X"):
+        """
+        Sets the stage to a known offset aside from the home position.
+        knownPosition and currentPosition have to be in physical coordinates (i.e. prior to applying the stepsize)
+        """
+        self._logger.debug(f'Setting stage offset for {axis} axis.')
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self._master.positionersManager[positionerName].setStageOffsetAxis(knownPosition=knownPosition, currentPosition=currentPosition, knownOffset=knownOffset, axis=axis)
+
+    @APIExport(runOnUIThread=True)
+    def getStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
+        """
+        Returns the stage offset for the given axis.
+        """
+        self._logger.debug(f'Getting stage offset for {axis} axis.')
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        return self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)
+
+    def saveStageOffset(self, positionerName=None, offsetValue=None, axis="X"):
+        """ Save the current stage offset to the config file. """
+        # This logic is now handled in the manager.
+        if positionerName is None:
+            positionerName = self._positionerInfo.name if hasattr(self, '_positionerInfo') else None
+        if positionerName:
+            self._master.positionersManager[positionerName].saveStageOffset(offsetValue=offsetValue, axis=axis)
+
+    @APIExport(runOnUIThread=True, requestType="POST")
+    def startStageScan(self, positionerName=None, xstart:float=0, xstep:float=1000, nx:int=20, ystart:float=0,
+                       ystep:float=1000, ny:int=10, tsettle:int=5, tExposure:int=50, illumination0: int=0,
+                       illumination1: int=0, illumination2: int=0, illumination3: int=0, led:int=0):
+        """ Starts a stage scan with the specified parameters.
+        Parameters:
+            xstart (int): Starting position in X direction.
+            xstep (int): Step size in X direction.
+            nx (int): Number of steps in X direction.
+            ystart (int): Starting position in Y direction.
+            ystep (int): Step size in Y direction.
+            ny (int): Number of steps in Y direction.
+            settle (int): Settle time after each move in seconds.
+            illumination (tuple): Illumination settings for the scan.
+            led (int): LED index to use for the scan.
+        """
+        illumination = (illumination0, illumination1, illumination2, illumination3)
+        if isinstance(illumination, str):
+            # parse from CSV string to float list
+            illumination = [float(x) for x in illumination.split(',')]
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self.__logger.debug(f"Starting stage scan with parameters: xstart={xstart}, xstep={xstep}, nx={nx}, "
+                            f"ystart={ystart}, ystep={ystep}, ny={ny}, settle={tsettle}, illumination={illumination}, led={led}")
+
+        self._master.positionersManager[positionerName].start_stage_scanning(xstart=xstart, xstep=xstep, nx=nx,
+                                                                              ystart=ystart, ystep=ystep, ny=ny,
+                                                                              tsettle=tsettle, tExposure=tExposure, illumination=illumination,
+                                                                              led=led)
+    @APIExport(runOnUIThread=True)
+    def stopStageScan(self, positionerName=None):
+        """ Stops the current stage scan if one is running. """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self.__logger.debug(f"Stopping stage scan for positioner {positionerName}")
+        self._master.positionersManager[positionerName].stop_stage_scanning()
+
+    @APIExport(runOnUIThread=True)
+    def moveToSampleLoadingPosition(self, positionerName=None, speed=10000, is_blocking=True):
+        """ Move to sample loading position. """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self.__logger.debug(f"Moving to sample loading position for positioner {positionerName}")
+        self._master.positionersManager[positionerName].moveToSampleLoadingPosition(speed=speed, is_blocking=is_blocking)
 
 _attrCategory = 'Positioner'
 _positionAttr = 'Position'
@@ -268,7 +355,7 @@ _speedAttr = "Speed"
 _homeAttr = "Home"
 _stopAttr = "Stop"
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

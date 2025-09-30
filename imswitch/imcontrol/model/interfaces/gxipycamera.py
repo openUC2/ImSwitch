@@ -4,6 +4,7 @@ import time
 import cv2
 from imswitch.imcommon.model import initLogger
 from PIL import Image
+from typing import List
 
 from skimage.filters import gaussian, median
 import imswitch.imcontrol.model.interfaces.gxipy as gx
@@ -12,7 +13,7 @@ import collections
 class TriggerMode:
     SOFTWARE = 'Software Trigger'
     HARDWARE = 'Hardware Trigger'
-    CONTINUOUS = 'Continuous Acqusition'
+    CONTINUOUS = 'Continuous Acquisition'
 
 class CameraGXIPY:
     def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=-1, blacklevel=100, binning=1, flipImage=(False, False), isRGB=False):
@@ -48,11 +49,14 @@ class CameraGXIPY:
         self.lastFrameId = -1
         self.frameNumber = -1
         self.frame = None
-        
+
         # For RGB
-        self.contrast_lut = None        
+        self.contrast_lut = None
         self.gamma_lut = None
         self.color_correction_param = 0
+
+        # Initialize trigger source
+        self.trigger_source = 'Continuous'
 
 
         #%% starting the camera thread
@@ -98,28 +102,30 @@ class CameraGXIPY:
 
         # set camera to mono12 mode
         availablePixelFormats = self.camera.PixelFormat.get_range()
-        if self.camera.PixelColorFilter.is_implemented() is True: 
-            self.isRGB = True
-        else: 
-            self.isRGB = False # TODO: Need to have an effect of the super class
-        try: 
+        
+        # Improve RGB detection logic
+        self.isRGB = self._detect_rgb_camera()
+        
+        try:
             self.set_pixel_format(list(availablePixelFormats)[-1]) # last one is at highest bitrate
-        except Exception as e: 
+        except Exception as e:
             self.__logger.error(e)
 
         # get framesize
         self.SensorHeight = self.camera.HeightMax.get()//self.binning
         self.SensorWidth = self.camera.WidthMax.get()//self.binning
 
-        # set the acq buffer count
-        #data_stream = self.camera.data_stream[0]
-        #data_stream.set_acquisition_buffer_number(1)
-        #data_stream.register_capture_callback(callback_fct)
+        # set the acq buffer count and register callback for improved frame handling
         user_param = None
-        # set the acq buffer count
-        self.camera.data_stream[0].set_acquisition_buffer_number(1)
+        # Increase buffer count to avoid frame loss
+        self.camera.data_stream[0].set_acquisition_buffer_number(self.NBuffer)
 
-        self.camera.register_capture_callback(user_param, callback_fct)
+        # Register callback for frame capture
+        try:
+            self.camera.register_capture_callback(user_param, callback_fct)
+        except Exception as e:
+            self.__logger.warning(f"Failed to register capture callback: {e}")
+            # Fall back to polling mode if callback fails
 
         # set things if RGB camera is used
         # get param of improving image quality
@@ -167,11 +173,36 @@ class CameraGXIPY:
         self.isFlatfielding = is_flatfielding
         # record the flatfield image if needed
         if self.isFlatfielding:
-            self.recordFlatfieldImage() 
+            self.recordFlatfieldImage()
 
     def set_exposure_time(self,exposure_time):
         self.exposure_time = exposure_time
         self.camera.ExposureTime.set(self.exposure_time*1000)
+
+    def set_exposure_mode(self, exposure_mode="manual"):
+        """Set exposure mode to match HIK camera interface."""
+        try:
+            if exposure_mode == "manual":
+                self.camera.ExposureAuto.set(gx.GxAutoEntry.OFF)
+                self.__logger.debug("Exposure mode set to manual")
+            elif exposure_mode == "auto":
+                self.camera.ExposureAuto.set(gx.GxAutoEntry.CONTINUOUS)
+                self.__logger.debug("Exposure mode set to auto continuous")
+            elif exposure_mode == "once":
+                self.camera.ExposureAuto.set(gx.GxAutoEntry.ONCE)
+                self.__logger.debug("Exposure mode set to auto once")
+            else:
+                self.__logger.warning(f"Exposure mode '{exposure_mode}' not recognized. Valid modes: manual, auto, once")
+                return False
+            return True
+        except Exception as e:
+            self.__logger.error(f"Failed to set exposure mode '{exposure_mode}': {e}")
+            return False
+
+    def set_camera_mode(self, isAutomatic):
+        """Set camera mode (automatic/manual) for compatibility with HIK interface."""
+        exposure_mode = "auto" if str(isAutomatic).lower() in ('true', '1', 'automatic', 'auto') else "manual"
+        return self.set_exposure_mode(exposure_mode)
 
     def set_gain(self,gain):
         self.gain = gain
@@ -189,7 +220,7 @@ class CameraGXIPY:
     def set_blacklevel(self,blacklevel):
         self.blacklevel = blacklevel
         self.camera.BlackLevel.set(self.blacklevel)
-    
+
     def set_pixel_format(self,format):
         format = format.upper()
         if self.camera.PixelFormat.is_implemented() and self.camera.PixelFormat.is_writable():
@@ -237,9 +268,17 @@ class CameraGXIPY:
             return self.frame, self.frameNumber
         return self.frame
 
+    def getLatestFrame(self, returnFrameNumber=False):
+        """Alias for getLast to match detector interface."""
+        return self.getLast(returnFrameNumber=returnFrameNumber)
+
     def flushBuffer(self):
         self.frameid_buffer.clear()
         self.frame_buffer.clear()
+
+    def flushBuffers(self):
+        """Alias for flushBuffer to match detector interface."""
+        self.flushBuffer()
 
     def getLastChunk(self):
         chunk = np.array(self.frame_buffer)
@@ -247,6 +286,10 @@ class CameraGXIPY:
         self.flushBuffer()
         self.__logger.debug("Buffer: "+str(chunk.shape)+" IDs: " + str(frameids))
         return chunk
+
+    def getChunk(self):
+        """Alias for getLastChunk to match detector interface."""
+        return self.getLastChunk()
 
     def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
         #hsize = max(hsize, 25)*10  # minimum ROI size
@@ -301,6 +344,8 @@ class CameraGXIPY:
             self.set_gain(property_value)
         elif property_name == "exposure":
             self.set_exposure_time(property_value)
+        elif property_name == "exposure_mode":
+            self.set_exposure_mode(property_value)
         elif property_name == "blacklevel":
             self.set_blacklevel(property_value)
         elif property_name == "flat_fielding":
@@ -311,97 +356,207 @@ class CameraGXIPY:
             self.set_frame_rate(property_value)
         elif property_name == "trigger_source":
             self.setTriggerSource(property_value)
+        elif property_name == 'mode':
+            self.set_camera_mode(property_value)
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
             return False
         return property_value
 
     def getPropertyValue(self, property_name):
-        # Check if the property exists.
-        if property_name == "gain":
-            property_value = self.camera.Gain.get()
-        elif property_name == "exposure":
-            property_value = self.camera.ExposureTime.get()
-        elif property_name == "blacklevel":
-            property_value = self.camera.BlackLevel.get()
-        elif property_name == "image_width":
-            property_value = self.camera.Width.get()//self.binning
-        elif property_name == "image_height":
-            property_value = self.camera.Height.get()//self.binning
-        elif property_name == "roi_size":
-            property_value = self.roi_size
-        elif property_name == "frame_Rate":
-            property_value = self.frame_rate
-        elif property_name == "trigger_source":
-            property_value = self.trigger_source
-        else:
-            self.__logger.warning(f'Property {property_name} does not exist')
+        """Get camera property values with improved error handling.""" 
+        try:
+            # Check if the property exists.
+            if property_name == "gain":
+                property_value = self.camera.Gain.get()
+            elif property_name == "exposure":
+                property_value = self.camera.ExposureTime.get()
+            elif property_name == "exposure_mode":
+                # Get current exposure auto mode and convert to string
+                exposure_auto_value = self.camera.ExposureAuto.get()
+                if exposure_auto_value == gx.GxAutoEntry.OFF:
+                    property_value = "manual"
+                elif exposure_auto_value == gx.GxAutoEntry.CONTINUOUS:
+                    property_value = "auto"
+                elif exposure_auto_value == gx.GxAutoEntry.ONCE:
+                    property_value = "once"
+                else:
+                    property_value = "unknown"
+            elif property_name == "blacklevel":
+                property_value = self.camera.BlackLevel.get()
+            elif property_name == "image_width":
+                property_value = self.camera.Width.get()//self.binning
+            elif property_name == "image_height":
+                property_value = self.camera.Height.get()//self.binning
+            elif property_name == "roi_size":
+                property_value = getattr(self, 'roi_size', None)
+            elif property_name == "frame_rate":
+                property_value = self.frame_rate
+            elif property_name == "trigger_source":
+                property_value = getattr(self, 'trigger_source', 'Continuous')
+            elif property_name == "frame_number":
+                property_value = self.getFrameNumber()
+            else:
+                self.__logger.warning(f'Property {property_name} does not exist')
+                return False
+            return property_value
+        except Exception as e:
+            self.__logger.error(f'Error getting property {property_name}: {e}')
             return False
-        return property_value
 
     def setTriggerSource(self, trigger_source):
-        if trigger_source =='Continous':
-            self.set_continuous_acquisition()
-        elif trigger_source =='Internal trigger':
-            self.set_software_triggered_acquisition()
-        elif trigger_source =='External trigger':
-            self.set_hardware_triggered_acquisition()
+        """Set trigger source with standardized interface matching HIK camera."""
+        was_streaming = self.is_streaming
+        if was_streaming:
+            self.suspend_live()
+            
+        tlow = str(trigger_source).lower()
+        try:
+            if tlow.find("cont") >= 0 or trigger_source == 'Continuous':
+                self.set_continuous_acquisition()
+                self.trigger_source = 'Continuous'
+            elif tlow.find("int") >= 0 or tlow.find("soft") >= 0 or trigger_source == 'Internal trigger':
+                self.set_software_triggered_acquisition()
+                self.trigger_source = 'Internal trigger'
+            elif tlow.find("ext") >= 0 or trigger_source == 'External trigger':
+                self.set_hardware_triggered_acquisition()
+                self.trigger_source = 'External trigger'
+            else:
+                self.__logger.warning(f"Unknown trigger source: {trigger_source}")
+                return False
+            return True
+        finally:
+            if was_streaming:
+                self.start_live()
 
     def set_continuous_acquisition(self):
-        self.camera.TriggerMode.set(gx.GxSwitchEntry.OFF)
-        self.trigger_mode = TriggerMode.CONTINUOUS
+        """Configure camera for continuous (free-run) acquisition."""
+        try:
+            self.camera.TriggerMode.set(gx.GxSwitchEntry.OFF)
+            self.trigger_mode = TriggerMode.CONTINUOUS
+            self.__logger.debug("Continuous acquisition configured successfully")
+        except Exception as e:
+            self.__logger.error(f"Failed to configure continuous acquisition: {e}")
 
     def set_software_triggered_acquisition(self):
-        self.camera.TriggerMode.set(gx.GxSwitchEntry.ON)
-        self.camera.TriggerSource.set(gx.GxTriggerSourceEntry.SOFTWARE)
-        self.trigger_mode = TriggerMode.SOFTWARE
+        """Configure camera for software trigger acquisition."""
+        try:
+            self.camera.TriggerMode.set(gx.GxSwitchEntry.ON)
+            self.camera.TriggerSource.set(gx.GxTriggerSourceEntry.SOFTWARE)
+            self.trigger_mode = TriggerMode.SOFTWARE
+            self.__logger.debug("Software trigger acquisition configured successfully")
+        except Exception as e:
+            self.__logger.error(f"Failed to configure software trigger: {e}")
 
     def set_hardware_triggered_acquisition(self):
-                # set continuous acquisition
-        self.camera.TriggerMode.set(gx.GxSwitchEntry.ON)
+        """Configure camera for external hardware trigger with improved error handling."""
+        try:
+            # Enable trigger mode
+            self.camera.TriggerMode.set(gx.GxSwitchEntry.ON)
 
-        # set trigger source with line2
-        self.camera.TriggerSource.set(3)
+            # Set trigger source to LINE2 (external trigger)
+            self.camera.TriggerSource.set(gx.GxTriggerSourceEntry.LINE2)
+            
+            # Configure trigger line settings
+            if self.camera.LineSelector.is_implemented():
+                self.camera.LineSelector.set(2)  # Select LINE2
+                
+            if self.camera.LineMode.is_implemented():
+                self.camera.LineMode.set(0)  # Set as input
+                
+            # Set trigger activation to rising edge (default)
+            if self.camera.TriggerActivation.is_implemented():
+                self.camera.TriggerActivation.set(gx.GxTriggerActivationEntry.RISING_EDGE)
 
-        # set line selector with linw
-        self.camera.LineSelector.set(2)
+            # Save settings to user set if available
+            try:
+                if self.camera.UserSetSelector.is_implemented():
+                    self.camera.UserSetSelector.set(1)
+                if self.camera.UserSetSave.is_implemented():
+                    self.camera.UserSetSave.send_command()
+            except Exception as e:
+                self.__logger.debug(f"Could not save user settings: {e}")
 
-        # set line mode input
-        self.camera.LineMode.set(0)
-
-        # set line source
-        #cam.LineSource.set(2)
-
-        status = False
-        status = self.camera.LineStatus.get()
-
-        # User Set Selector
-        self.camera.UserSetSelector.set(1)
-        # User Set Save
-        self.camera.UserSetSave.send_command()
-
-        '''
-        self.camera.TriggerMode.set(gx.GxSwitchEntry.ON)
-        self.camera.TriggerSource.set(gx.GxTriggerSourceEntry.LINE2)
-        #self.camera.TriggerSource.set(gx.GxTriggerActivationEntry.RISING_EDGE)
-        '''
-        self.trigger_mode = TriggerMode.HARDWARE
-
-        self.flushBuffer()
+            self.trigger_mode = TriggerMode.HARDWARE
+            self.flushBuffer()
+            self.__logger.debug("Hardware trigger acquisition configured successfully")
+            
+        except Exception as e:
+            self.__logger.error(f"Failed to configure hardware trigger: {e}")
+            # Fall back to software trigger
+            self.set_software_triggered_acquisition()
 
     def getFrameNumber(self):
         return self.frameNumber
 
+    def _detect_rgb_camera(self) -> bool:
+        """Improved RGB camera detection logic."""
+        try:
+            # First check if PixelColorFilter is implemented (indicates Bayer pattern sensor)
+            if self.camera.PixelColorFilter.is_implemented():
+                return True
+                
+            # Check available pixel formats for color formats
+            available_formats = self.camera.PixelFormat.get_range()
+            rgb_keywords = ['RGB', 'BGR', 'BAYER', 'COLOR']
+            for fmt in available_formats:
+                fmt_str = str(fmt).upper()
+                if any(keyword in fmt_str for keyword in rgb_keywords):
+                    return True
+                    
+            # Check device model name for RGB indicators
+            if hasattr(self.camera, 'DeviceModelName') and self.camera.DeviceModelName.is_readable():
+                model_name = self.camera.DeviceModelName.get()
+                if 'RGB' in model_name.upper() or 'COLOR' in model_name.upper():
+                    return True
+                    
+        except Exception as e:
+            self.__logger.debug(f"Error during RGB detection: {e}")
+            
+        return False
+
+    def getTriggerTypes(self) -> List[str]:
+        """Return a list of available trigger types to match HIK interface."""
+        try:
+            if not self.is_connected:
+                return ["Camera not connected"]
+            return [
+                "Continuous",
+                "Internal trigger", 
+                "External trigger"
+            ]
+        except Exception as e:
+            self.__logger.error(f"Error getting trigger types: {e}")
+            return ["Error getting trigger types"]
+
+    def getTriggerSource(self) -> str:
+        """Return the current trigger source as a string to match HIK interface."""
+        try:
+            if not self.is_connected:
+                return "Camera not connected"
+            return getattr(self, 'trigger_source', 'Continuous')
+        except Exception as e:
+            self.__logger.error(f"Error getting trigger source: {e}")
+            return "Error getting trigger source"
+
+    def sendSoftwareTrigger(self):
+        """Send software trigger for compatibility with detector interface."""
+        return self.send_trigger()
+
     def send_trigger(self):
+        """Fire software trigger pulse.""" 
         if self.is_streaming:
             self.camera.TriggerSoftware.send_command()
+            return True
         else:
-        	self.__logger.debug('trigger not sent - camera is not streaming')
+            self.__logger.debug('trigger not sent - camera is not streaming')
+            return False
 
     def openPropertiesGUI(self):
         pass
 
     def set_frame(self, params, frame):
+        """Callback function to process frames from the camera."""
         if frame is None:
             self.__logger.error("Getting image failed.")
             return
@@ -409,40 +564,47 @@ class CameraGXIPY:
             self.__logger.error("Got an incomplete frame")
             return
 
-        
-        # if RGB
-        if self.isRGB:
-            rgb_image = frame.convert("RGB")
-            if rgb_image is None:
-                return
+        try:
+            # if RGB camera
+            if self.isRGB:
+                rgb_image = frame.convert("RGB")
+                if rgb_image is None:
+                    return
 
-            # improve image quality
-            rgb_image.image_improvement(self.color_correction_param, self.contrast_lut, self.gamma_lut)
+                # improve image quality
+                try:
+                    rgb_image.image_improvement(self.color_correction_param, self.contrast_lut, self.gamma_lut)
+                except Exception as e:
+                    self.__logger.debug(f"Image improvement failed: {e}")
 
-            # create numpy array with data from raw image
-            numpy_image = rgb_image.get_numpy_array()
+                # create numpy array with data from raw image
+                numpy_image = rgb_image.get_numpy_array()
+                if numpy_image is None:
+                    return
+
+            else:
+                numpy_image = frame.get_numpy_array()
+
+            # flip image if needed
+            if self.flipImage[0]: # Y
+                numpy_image = np.flip(numpy_image, axis=0)
+            if self.flipImage[1]: # X
+                numpy_image = np.flip(numpy_image, axis=1)
             if numpy_image is None:
+                self.__logger.error("Got a None frame")
                 return
+                
+            self.frame = numpy_image.copy()
+            self.frameNumber = frame.get_frame_id()
+            self.timestamp = time.time()
 
-        else:
-            numpy_image = frame.get_numpy_array()
-
-        # flip image if needed
-        if self.flipImage[0]: # Y
-            numpy_image = np.flip(numpy_image, axis=0)
-        if self.flipImage[1]: # X
-            numpy_image = np.flip(numpy_image, axis=1)
-        if numpy_image is None:
-            self.__logger.error("Got a None frame")
+            # Add to ring buffer 
+            self.frame_buffer.append(numpy_image)
+            self.frameid_buffer.append(self.frameNumber)
+            
+        except Exception as e:
+            self.__logger.error(f"Error processing frame: {e}")
             return
-        self.frame = numpy_image.copy()
-        self.frameNumber = frame.get_frame_id()
-        self.timestamp = time.time()
-
-        #if self.binning > 1:
-        #    numpy_image = cv2.resize(numpy_image, dsize=None, fx=1/self.binning, fy=1/self.binning, interpolation=cv2.INTER_AREA)
-        self.frame_buffer.append(numpy_image)
-        self.frameid_buffer.append(self.frameNumber)
 
     def recordFlatfieldImage(self, nFrames=10, nGauss=5, nMedian=5):
         # record a flatfield image and save it in the flatfield variable
@@ -454,7 +616,7 @@ class CameraGXIPY:
         flatfield = gaussian(flatfield, sigma=nGauss)
         flatfield = median(flatfield, selem=np.ones((nMedian, nMedian)))
         self.flatfieldImage = flatfield
-        
+
     def setFlatfieldImage(self, flatfieldImage, isFlatfieldEnabeled=True):
         self.flatfieldImage = flatfieldImage
         self.isFlatfielding = isFlatfieldEnabeled

@@ -31,7 +31,7 @@ class SuperScanManager(ABC):
             self._TTLCycleDesigner = None
 
         self._expectedSyncParameters = []
-   
+
     def isValidChild(self):  # For future possible implementation
         return True
 
@@ -121,7 +121,7 @@ class ScanManagerBase(SuperScanManager):
         )
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

@@ -10,7 +10,7 @@ class LaserWidget(Widget):
 
     sigEnableChanged = QtCore.Signal(str, bool)  # (laserName, enabled)
     sigValueChanged = QtCore.Signal(str, float)  # (laserName, value)
-    
+
     sigModEnabledChanged = QtCore.Signal(str, bool) # (laserName, modulationEnabled)
     sigFreqChanged = QtCore.Signal(str, int)        # (laserName, frequency)
     sigDutyCycleChanged = QtCore.Signal(str, int)   # (laserName, dutyCycle)
@@ -155,7 +155,7 @@ class LaserWidget(Widget):
         """ Sets the value of the specified laser, in the units that the laser
         uses. """
         self.laserModules[laserName].setValue(value)
-    
+
     def setModulationFrequency(self, laserName, value):
         """ Sets the modulation frequency of the specified laser. """
         self.laserModules[laserName].setModulationFrequency(value)
@@ -252,7 +252,7 @@ class LaserModule(QtWidgets.QWidget):
         self.setPointEdit.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         self.buttonPlus = QtWidgets.QPushButton('+')
         self.buttonMinus = QtWidgets.QPushButton('-')
-        
+
 
         self.minpower = QtWidgets.QLabel()
         self.minpower.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
@@ -274,7 +274,7 @@ class LaserModule(QtWidgets.QWidget):
             self.slider.setTickInterval(tickInterval)
             self.slider.setSingleStep(singleStep)
             self.slider.setValue(0)
-    
+
 
         powerFrame = QtWidgets.QFrame(self)
         self.powerGrid = QtWidgets.QGridLayout()
@@ -288,8 +288,8 @@ class LaserModule(QtWidgets.QWidget):
         self.powerGrid.addWidget(self.slider, 0, 4, 2, 1)
         self.powerGrid.addWidget(self.buttonPlus, 0, 5, 2, 1)
         self.powerGrid.addWidget(self.maxpower, 0, 6, 2, 1)
-        
-        
+
+
         if isModulated:
             freqRangeMin, freqRangeMax, initialFrequency = frequencyRange
             # laser modulation widgets
@@ -343,7 +343,7 @@ class LaserModule(QtWidgets.QWidget):
             self.modulationGroup.setLayout(self.modulationLayout)
 
             self.powerGrid.addWidget(self.modulationGroup, 2, 0, 1, 5)
-                
+
         self.enableButton = guitools.BetterPushButton('ON')
         self.enableButton.setSizePolicy(QtWidgets.QSizePolicy.Minimum,
                                         QtWidgets.QSizePolicy.Expanding)
@@ -399,12 +399,12 @@ class LaserModule(QtWidgets.QWidget):
         """ Returns the value of the laser, in the units that the laser
         uses. """
         return float(self.setPointEdit.text())
-    
+
     def getFrequency(self):
         """ Returns the selected frequency of the laser.
         """
         return int(self.modulationFrequencyEdit.text())
-    
+
     def getDutyCycle(self):
         """ Returns the selected duty cycle of the laser.
         """
@@ -428,19 +428,19 @@ class LaserModule(QtWidgets.QWidget):
         """ Sets the value of the laser, in the units that the laser uses. """
         self.setPointEdit.setText(f'%.{self.valueDecimals}f' % value)
         self.slider.setValue(value)
-    
+
     def setModulationFrequency(self, value):
         """ Sets the laser modulation frequency. """
         self.modulationFrequencyEdit.setText(f"{value}")
         self.modulationFrequencySlider.setValue(value)
-    
+
     def setModulationDutyCycle(self, value):
         """ Sets the laser modulation duty cycle. """
         self.modulationDutyCycleEdit.setText(f"{value}")
         self.modulationDutyCycleSlider.setValue(value)
 
 
-# Copyright (C) 2017 Federico Barabas 2020-2023 ImSwitch developers
+# Copyright (C) 2017 Federico Barabas 2020-2024 ImSwitch developers
 # This file is part of Tormenta and ImSwitch.
 #
 # Tormenta and ImSwitch are free software: you can redistribute it and/or modify

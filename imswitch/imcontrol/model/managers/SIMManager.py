@@ -5,17 +5,16 @@ import os
 import re
 import numpy as np
 from PIL import Image
-from scipy import signal as sg
 
 from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import initLogger
 
 
 class SIMManager(SignalInterface):
-    sigSIMMaskUpdated = Signal(object)  # (maskCombined)
 
     def __init__(self, simInfo, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.sigSIMMaskUpdated = Signal(object)  # (maskCombined)
         self.__logger = initLogger(self)
 
         if simInfo is None:

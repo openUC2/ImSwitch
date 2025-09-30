@@ -10,20 +10,20 @@ class JoystickController(LiveUpdatedController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         # scaler
         self.scaler = 100
-        
+
         # initialize the positioner
         self.positioner_name = self._master.positionersManager.getAllDeviceNames()[0]
         self.positioner = self._master.positionersManager[self.positioner_name]
-        
+
         if IS_HEADLESS:
             return
-        
+
         self._widget.sigJoystickXY.connect(self.moveXY)
         self._widget.sigJoystickZA.connect(self.moveZA)
-        
+
     def moveXY(self, x, y):
         if abs(x)>0 or abs(y) >0:
             self.positioner.moveForever(speed=(0, x*self.scaler, y*self.scaler, 0), is_stop=False)
@@ -32,7 +32,7 @@ class JoystickController(LiveUpdatedController):
                 self.stop("X")
                 self.stop("Y")
         return x, y
-    
+
     def moveZA(self, a, z):
         if abs(a)>0 or abs(z) >0:
             self.positioner.moveForever(speed=(a*self.scaler, 0, 0, z*self.scaler), is_stop=False)
@@ -42,18 +42,18 @@ class JoystickController(LiveUpdatedController):
                 self.stop("A")
                 self.stop("Z")
         return a, z
-    
+
     def stop(self, axis="X"):
         self.positioner.forceStop(axis)
 
-        
-        
-        
-        
 
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+
+
+
+
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

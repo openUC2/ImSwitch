@@ -11,19 +11,19 @@ class OFMManager:
         self.__logger = initLogger(self, instanceName=name)
         self._settings = rs232Info.managerProperties
         self._name = name
-        
+
         self.host = self._settings['host']
         self.__logger.debug(f"Attempting to connect to '{self.host}'")
 
         if self.host is None:
             self._OFM = ofm_client.find_first_microscope()
-        else:        
+        else:
             try:
-                self._OFM = ofm_client.MicroscopeClient(self.host) 
+                self._OFM = ofm_client.MicroscopeClient(self.host)
             except:
                 self.__logger.debug(f"Attempting to connect to '{self.host}' failed, looking for other HOST")
                 try:
-                    self._OFM = ofm_client.find_first_microscope()    
+                    self._OFM = ofm_client.find_first_microscope()
                 except:
                     self._OFM = None
 
@@ -31,7 +31,7 @@ class OFMManager:
         pass
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

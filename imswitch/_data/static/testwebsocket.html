@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Client</title>
+</head>
+<body>
+    <h1>WebSocket Signal Messages</h1>
+    <div id="messages"></div>
+
+    <script>
+        const socket = new WebSocket("https://0.0.0.0:8002/ws");
+
+        socket.onopen = function (event) {
+            console.log("WebSocket is open now.");
+        };
+
+        socket.onmessage = function (event) {
+            const messageDiv = document.getElementById("messages");
+            messageDiv.innerHTML += `<p>${event.data}</p>`;
+        };
+
+        socket.onclose = function (event) {
+            console.log("WebSocket is closed now.");
+        };
+
+        socket.onerror = function (error) {
+            console.error("WebSocket error:", error);
+        };
+    </script>
+</body>
+</html>

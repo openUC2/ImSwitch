@@ -1,14 +1,45 @@
 from imswitch.imcommon.model import VFileItem, initLogger
-from imswitch import IS_HEADLESS
 
 import pkg_resources
-        
+
+# TODO: Import managers dynamically - similar to the controllers - to save time
 from imswitch.imcontrol.model import (
-    DetectorsManager, LasersManager, MultiManager, PositionersManager,
-    RecordingManager, RS232sManager, SLMManager, SIMManager, DPCManager, LEDMatrixsManager, MCTManager, ROIScanManager, MockXXManager, WebRTCManager, HyphaManager,
-    ISMManager, UC2ConfigManager, AutofocusManager, HistoScanManager, PixelCalibrationManager, LightsheetManager, NidaqManager, FOVLockManager,
-    StandManager, RotatorsManager, JetsonNanoManager, LEDsManager, ScanManagerBase, ScanManagerPointScan, ScanManagerMoNaLISA, FlatfieldManager, 
-    FlowStopManager
+    DetectorsManager,
+    LasersManager,
+    MultiManager,
+    PositionersManager,
+    RecordingManager,
+    RS232sManager,
+    SLMManager,
+    SIMManager,
+    DPCManager,
+    LEDMatrixsManager,
+    MCTManager,
+    ROIScanManager,
+    WebRTCManager,
+    HyphaManager,
+    UC2ConfigManager,
+    AutofocusManager,
+    HistoScanManager,
+    StresstestManager,
+    PixelCalibrationManager,
+    LightsheetManager,
+    NidaqManager,
+    FOVLockManager,
+    StandManager,
+    RotatorsManager,
+    LEDsManager,
+    ScanManagerBase,
+    ScanManagerPointScan,
+    ScanManagerMoNaLISA,
+    FlatfieldManager,
+    FlowStopManager,
+    WorkflowManager,
+    TimelapseManager,
+    LepmonManager,
+    ExperimentManager,
+    ObjectiveManager,
+    ArkitektManager,
 )
 
 
@@ -27,72 +58,103 @@ class MasterController:
         # Init managers
         self.rs232sManager = RS232sManager(self.__setupInfo.rs232devices)
 
-        lowLevelManagers = {
-            'rs232sManager': self.rs232sManager
-        }
+        lowLevelManagers = {"rs232sManager": self.rs232sManager}
 
-        self.detectorsManager = DetectorsManager(self.__setupInfo.detectors, updatePeriod=100,
-                                                 **lowLevelManagers)
-        self.lasersManager = LasersManager(self.__setupInfo.lasers,
-                                           **lowLevelManagers)
-        self.positionersManager = PositionersManager(self.__setupInfo.positioners,
-                                                     self.__commChannel,
-                                                     **lowLevelManagers)
-        self.LEDMatrixsManager = LEDMatrixsManager(self.__setupInfo.LEDMatrixs,
-                                           **lowLevelManagers)
-        self.rotatorsManager = RotatorsManager(self.__setupInfo.rotators,
-                                            **lowLevelManagers)
+        self.detectorsManager = DetectorsManager(
+            self.__setupInfo.detectors, updatePeriod=100, **lowLevelManagers
+        )
+        self.lasersManager = LasersManager(self.__setupInfo.lasers, **lowLevelManagers)
+        self.positionersManager = PositionersManager(
+            self.__setupInfo.positioners, self.__commChannel, **lowLevelManagers
+        )
+        self.LEDMatrixsManager = LEDMatrixsManager(
+            self.__setupInfo.LEDMatrixs, **lowLevelManagers
+        )
+        self.rotatorsManager = RotatorsManager(
+            self.__setupInfo.rotators, **lowLevelManagers
+        )
 
         self.LEDsManager = LEDsManager(self.__setupInfo.LEDs)
-        #self.scanManager = ScanManager(self.__setupInfo)
+        # self.scanManager = ScanManager(self.__setupInfo)
         self.recordingManager = RecordingManager(self.detectorsManager)
-        self.slmManager = SLMManager(self.__setupInfo.slm)
-        self.UC2ConfigManager = UC2ConfigManager(self.__setupInfo.uc2Config, lowLevelManagers)
-        self.simManager = SIMManager(self.__setupInfo.sim)
-        self.dpcManager = DPCManager(self.__setupInfo.dpc)
-        self.mctManager = MCTManager(self.__setupInfo.mct)
+        if "SLM" in self.__setupInfo.availableWidgets:
+            self.slmManager = SLMManager(self.__setupInfo.slm)
+        self.UC2ConfigManager = UC2ConfigManager(
+            self.__setupInfo.uc2Config, lowLevelManagers
+        )
+        if "SIM" in self.__setupInfo.availableWidgets:
+            self.simManager = SIMManager(self.__setupInfo.sim)
+        if "DPC" in self.__setupInfo.availableWidgets:
+            self.dpcManager = DPCManager(self.__setupInfo.dpc)
+        if "MCT" in self.__setupInfo.availableWidgets:
+            self.mctManager = MCTManager(self.__setupInfo.mct)
         self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
         self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
-        self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
-        self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
-        self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
-        self.MockXXManager = MockXXManager(self.__setupInfo.mockxx)
-        self.jetsonnanoManager = JetsonNanoManager(self.__setupInfo.jetsonnano)
-        self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
-        self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
-        self.FlatfieldManager = FlatfieldManager(self.__setupInfo.Flatfield)
-        self.PixelCalibrationManager = PixelCalibrationManager(self.__setupInfo.PixelCalibration)
-        self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)
-        self.FOVLockManager = FOVLockManager(self.__setupInfo.fovLock)
-        self.ismManager = ISMManager(self.__setupInfo.ism)
+        if "Lightsheet" in self.__setupInfo.availableWidgets:
+            self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
+        if "WebRTC" in self.__setupInfo.availableWidgets:
+            self.webrtcManager = WebRTCManager(self.__setupInfo.webrtc)
+        if "Timelapse" in self.__setupInfo.availableWidgets:
+            self.timelapseManager = TimelapseManager()
+        if "Experiment" in self.__setupInfo.availableWidgets:
+            self.experimentManager = ExperimentManager(self.__setupInfo.experiment)
+        if "Objective" in self.__setupInfo.availableWidgets:
+            self.objectiveManager = ObjectiveManager(self.__setupInfo.objective)
+        if "HistoScan" in self.__setupInfo.availableWidgets:
+            self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
+        if "Stresstest" in self.__setupInfo.availableWidgets:
+            self.StresstestManager = StresstestManager(self.__setupInfo.Stresstest)
+        if "FlowStop" in self.__setupInfo.availableWidgets:
+            self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
+        if "Lepmon" in self.__setupInfo.availableWidgets:
+            self.LepmonManager = LepmonManager(self.__setupInfo.Lepmon)
+        if "FlatField" in self.__setupInfo.availableWidgets:
+            self.FlatfieldManager = FlatfieldManager(self.__setupInfo.Flatfield)
+        if "PixelCalibration" in self.__setupInfo.availableWidgets:
+            self.PixelCalibrationManager = PixelCalibrationManager(
+                self.__setupInfo.PixelCalibration
+            )
+        if "AutoFocus" in self.__setupInfo.availableWidgets:
+            self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)
+        if "FOV" in self.__setupInfo.availableWidgets:
+            self.FOVLockManager = FOVLockManager(self.__setupInfo.fovLock)
+        if "Workflow" in self.__setupInfo.availableWidgets:
+            self.workflowManager = WorkflowManager()
+        if "Arkitekt" in self.__setupInfo.availableWidgets:
+            self.arkitektManager = ArkitektManager(self.__setupInfo.arkitekt)
         # load all implugin-related managers and add them to the class
         # try to get it from the plugins
-        # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the 
+        # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the
         # MasterController Class
-        try:
-            for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
-                if entry_point.name.find("manager")>=0:
-                    ManagerClass = entry_point.load()  # Load the manager class
-                    self.__setupInfo.add_attribute(attr_name=entry_point.name.split("_manager")[0], attr_value={})
-                    manager_setup_info = getattr(self.__setupInfo, entry_point.name.split("_manager")[0], None)
-                    
-                    # get info from user config dict
-                    # sideload the simInfo from the user config dict
-                    moduleInfo_dict = self.__setupInfo._catchAll[entry_point.name.split("_manager")[0]]
-                    class ModuleInfoClass:
-                        def __init__(self, dictionary):
-                            for key, value in dictionary.items():
-                                setattr(self, key, value)
-                    moduleInfo = ModuleInfoClass(moduleInfo_dict) # assign class structure
-                    
+
+        for entry_point in pkg_resources.iter_entry_points(f"imswitch.implugins"):
+            InfoClass = None
+            print(f"entry_point: {entry_point.name}")
+            try:
+                if entry_point.name.find("manager") >= 0:
+                    # check if there is an info class, too
+                    try:
+                        InfoClassName = entry_point.name.split("_manager")[0] + "_info"
+                        # load the info class from InfoClassName
+                        InfoClass = pkg_resources.load_entry_point(
+                            "imswitch", "imswitch.implugins", InfoClassName
+                        )
+                    except Exception as e:
+                        InfoClass = None
+                    ManagerClass = entry_point.load(InfoClass)  # Load the manager class
+                    # self.__setupInfo.add_attribute(attr_name=entry_point.name.split("_manager")[0], attr_value={})
+                    moduleInfo = None  # TODO: This is not complete yet - the setupinfo would need to be added to the class in the very begnning prior to detecing external plugins/hooks
                     manager = ManagerClass(moduleInfo)  # Initialize the manager
-                    setattr(self, entry_point.name, manager)  # Add the manager to the class
-        except Exception as e:
-            self.__logger.error(e)
-            
+                    setattr(
+                        self, entry_point.name, manager
+                    )  # Add the manager to the class
+            except Exception as e:
+                self.__logger.error(e)
+
         if self.__setupInfo.microscopeStand:
-            self.standManager = StandManager(self.__setupInfo.microscopeStand,
-                                             **lowLevelManagers)
+            self.standManager = StandManager(
+                self.__setupInfo.microscopeStand, **lowLevelManagers
+            )
 
         # Generate scanManager type according to setupInfo
         if self.__setupInfo.scan:
@@ -120,16 +182,18 @@ class MasterController:
 
         self.recordingManager.sigRecordingStarted.connect(cc.sigRecordingStarted)
         self.recordingManager.sigRecordingEnded.connect(cc.sigRecordingEnded)
-        self.recordingManager.sigRecordingFrameNumUpdated.connect(cc.sigUpdateRecFrameNum)
+        self.recordingManager.sigRecordingFrameNumUpdated.connect(
+            cc.sigUpdateRecFrameNum
+        )
         self.recordingManager.sigRecordingTimeUpdated.connect(cc.sigUpdateRecTime)
         self.recordingManager.sigMemorySnapAvailable.connect(cc.sigMemorySnapAvailable)
-        if 0: #IS_HEADLESS:
-            self.recordingManager.sigMemoryRecordingAvailable.connect(self.memoryRecordingAvailable, check_nargs=False) 
-        else:
-            self.recordingManager.sigMemoryRecordingAvailable.connect(self.memoryRecordingAvailable) 
-            
-        self.slmManager.sigSLMMaskUpdated.connect(cc.sigSLMMaskUpdated)
-        self.simManager.sigSIMMaskUpdated.connect(cc.sigSIMMaskUpdated)
+        self.recordingManager.sigMemoryRecordingAvailable.connect(
+            self.memoryRecordingAvailable
+        )
+
+        if "SLM" in self.__setupInfo.availableWidgets:
+            self.slmManager.sigSLMMaskUpdated.connect(cc.sigSLMMaskUpdated)
+            self.simManager.sigSIMMaskUpdated.connect(cc.sigSIMMaskUpdated)
 
     def memoryRecordingAvailable(self, name, file, filePath, savedToDisk):
         self.__moduleCommChannel.memoryRecordings[name] = VFileItem(
@@ -145,7 +209,7 @@ class MasterController:
                 attr.finalize()
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

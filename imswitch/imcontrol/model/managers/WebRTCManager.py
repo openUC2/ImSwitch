@@ -5,7 +5,6 @@ import os
 
 import numpy as np
 from PIL import Image
-from scipy import signal as sg
 
 from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import initLogger
@@ -24,7 +23,7 @@ class WebRTCManager(SignalInterface):
     def update(self):
         return None
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

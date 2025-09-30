@@ -123,13 +123,13 @@ class ScanWidgetPointScan(SuperScanWidget):
         self.grid.addWidget(self.seqTimePar, currentRow, 6)
 
         currentRow += 1
-        
+
         # Add detection phase delay parameter
         self.grid.addWidget(QtWidgets.QLabel('Phase delay (samples):'), currentRow, 5)
         self.grid.addWidget(self.phaseDelayPar, currentRow, 6)
 
         #currentRow += 1
-        
+
         # Add detection phase delay parameter
         #self.grid.addWidget(QtWidgets.QLabel('Extra laser on (samples):'), currentRow, 5)
         #self.grid.addWidget(self.extraLaserOnPar, currentRow, 6)
@@ -169,7 +169,7 @@ class ScanWidgetPointScan(SuperScanWidget):
             # Connect signals
             self.ttlParameters['seq' + deviceName].textChanged.connect(self.sigSignalParChanged)
             self.ttlParameters['seqAxis' + deviceName].currentIndexChanged.connect(self.sigSignalParChanged)
-        
+
         # Set grid layout options
         self.grid.setColumnMinimumWidth(6, 90)
 
@@ -227,7 +227,7 @@ class ScanWidgetPointScan(SuperScanWidget):
         self.phaseDelayPar.setText(str(round(int(phaseDelayPar))))
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

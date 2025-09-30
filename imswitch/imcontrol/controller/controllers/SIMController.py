@@ -72,7 +72,7 @@ class SIMController(ImConWidgetController):
     """Linked to SIMWidget."""
 
     sigImageReceived = Signal(np.ndarray, str, np.float32)
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
@@ -264,7 +264,7 @@ class SIMController(ImConWidgetController):
             self.detector.setParameter("buffer_size",-1)
             self.detector.flushBuffers()
 
-    
+
     def startSIM(self):
         #  need to be in trigger mode
         # therefore, we need to stop the camera first and then set the trigger mode
@@ -288,7 +288,7 @@ class SIMController(ImConWidgetController):
     # for timelapse and zstack, check running is still needed also stop
     @APIExport(runOnUIThread=True)
     def startTimelapse(self):
-        if self.isPCO:    
+        if self.isPCO:
             self._commChannel.sigStopLiveAcquisition.emit(True)
             self.detector.setParameter("trigger_source","External start")
             self.detector.setParameter("buffer_size",9)
@@ -316,13 +316,13 @@ class SIMController(ImConWidgetController):
         self.active = False
         self.lasers[0].setEnabled(False)
         self.lasers[1].setEnabled(False)
-        if self.isPCO:    
+        if self.isPCO:
             self.detector.setParameter("trigger_source","Internal trigger")
             self.detector.setParameter("buffer_size",-1)
         self.detector.flushBuffers()
 
     def startZstack(self):
-        
+
         if self.isPCO:
             self._commChannel.sigStopLiveAcquisition.emit(True)
             self.detector.setParameter("trigger_source","External start")
@@ -480,13 +480,13 @@ class SIMController(ImConWidgetController):
                                 mFrame, currentFrameNumber = self.detector.getLatestFrame(returnFrameNumber=True)
                                 if currentFrameNumber <= lastFrameNumber:
                                     time.sleep(0.05)
-                                    continue  
+                                    continue
                                 frameRequestNumber += 1
                                 if frameRequestNumber > self.nsimFrameSyncVal:
-                                    print(f"Frame number used for stack: {currentFrameNumber}") 
+                                    print(f"Frame number used for stack: {currentFrameNumber}")
                                     break
                                 lastFrameNumber = currentFrameNumber
-                                
+
                                 #mFrame = self.detector.getLatestFrame() # get the next frame after the pattern has been updated
                             self.SIMStack.append(mFrame)
                         if self.SIMStack is None:
@@ -604,20 +604,20 @@ class SIMController(ImConWidgetController):
                         mFrame, currentFrameNumber = self.detector.getLatestFrame(returnFrameNumber=True)
                         if currentFrameNumber <= lastFrameNumber:
                             time.sleep(0.05)
-                            continue  
+                            continue
                         frameRequestNumber += 1
                         if frameRequestNumber > self.nsimFrameSyncVal:
-                            print(f"Frame number used for stack: {currentFrameNumber}") 
+                            print(f"Frame number used for stack: {currentFrameNumber}")
                             break
                         lastFrameNumber = currentFrameNumber
-                        
+
                         #mFrame = self.detector.getLatestFrame() # get the next frame after the pattern has been updated
                     self.SIMStack.append(mFrame)
                 if self.SIMStack is None:
                     self._logger.error("No image received")
                     continue
-                
-                
+
+
             self.sigImageReceived.emit(np.array(self.SIMStack),"SIMStack"+str(processor.wavelength), np.float32(self._widget.pixelsize_textedit.text()))
             processor.setSIMStack(self.SIMStack)
 
@@ -793,7 +793,7 @@ class SIMProcessor(object):
         import cv2
 
         if path is None:
-            pass 
+            pass
             # FIXME: not implemented: path = sim_parameters["patternPath"]
         allPatternPaths = sorted(glob.glob(os.path.join(path, "*."+filetype)))
         self.allPatterns = []
@@ -1138,7 +1138,7 @@ class SIMClient:
 
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

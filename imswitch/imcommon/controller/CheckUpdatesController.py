@@ -50,6 +50,7 @@ class CheckUpdatesThread(Thread):
     sigNewVersionPyInstaller = Signal(str)  # (latestVersion)
     sigNewVersionPyPI = Signal(str)  # (latestVersion)
     sigNewVersionShowInfo = Signal(str) # (someText)
+
     def __init__(self):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=True)
@@ -72,7 +73,7 @@ class CheckUpdatesThread(Thread):
                     ## attempting to downloda the current ImSwitch version
                     downloadURL = releaseResponse.json()['assets'][0]['browser_download_url']
                     self.__logger.debug("We are downloading the software from: "+downloadURL)
-                
+
                     ## inplace replacement won't work I guess? => seems to work
                     def dlImSwitch(downloadURL, fileName):
                         resultDL = urllib.request.urlretrieve(downloadURL, fileName)
@@ -84,7 +85,7 @@ class CheckUpdatesThread(Thread):
                     mThread.join()
 
                     # make a backup copy of the file
-                    if os.path.isfile(ImSwitchExeFilename):                    
+                    if os.path.isfile(ImSwitchExeFilename):
                         self.__logger.debug("Renaming old ImSwitch.exe file")
                         tz = datetime.timezone.utc
                         ft = "%Y-%m-%dT%H-%M-%S"
@@ -97,8 +98,8 @@ class CheckUpdatesThread(Thread):
                     self.__logger.debug("Download successful!")
                     self.sigNewVersionShowInfo.emit("Download successful! Please restart ImSwitch. ")
 
-                    
-                
+
+
                 else:
                     self.sigNoUpdate.emit()
             else:
@@ -117,14 +118,14 @@ class CheckUpdatesThread(Thread):
             #self.sigFailed.emit()
             self.sigNewVersionShowInfo.emit("Updating failed. "+str(e))
 
-            
-            
+
+
     def getCurrentCommitDate(self):
         return str(subprocess.check_output(['git', 'log', '-n', '1', '--pretty=tformat:%h-%ad', '--date=short']).strip()).split("-")[-3:]
 
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

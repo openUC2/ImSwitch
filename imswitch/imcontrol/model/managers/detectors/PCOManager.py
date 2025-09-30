@@ -18,18 +18,18 @@ class PCOManager(DetectorManager):
         binning = 1
         cameraId = detectorInfo.managerProperties['cameraListIndex']
         self._camera = self._getPCOObj(cameraId, binning)
-        
+
         for propertyName, propertyValue in detectorInfo.managerProperties['PCOcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
 
-        fullShape = (self._camera.SensorWidth, 
+        fullShape = (self._camera.SensorWidth,
                      self._camera.SensorHeight)
-        
+
         model = self._camera.model
         self._running = False
         self._adjustingParameters = False
 
-        # TODO: Not implemented yet 
+        # TODO: Not implemented yet
         self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
 
 
@@ -56,7 +56,7 @@ class PCOManager(DetectorManager):
                             editable=True),
             "buffer_size": DetectorNumberParameter(group='Misc', value=100, valueUnits='arb.u.',
                                     editable=True),
-            }            
+            }
 
         # Prepare actions
         actions = {
@@ -66,7 +66,7 @@ class PCOManager(DetectorManager):
 
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=True)
-        
+
     def getLatestFrame(self, is_save=False):
         return self._camera.getLast()
 
@@ -95,7 +95,7 @@ class PCOManager(DetectorManager):
 
         value = self._camera.getPropertyValue(name)
         return value
-        
+
     def getChunk(self):
         try:
             return self._camera.getLastChunk()
@@ -131,7 +131,7 @@ class PCOManager(DetectorManager):
     @property
     def pixelSizeUm(self):
         return [1, 1, 1]
-    
+
     def crop(self, hpos, vpos, hsize, vsize):
 
         def cropAction():
@@ -149,10 +149,10 @@ class PCOManager(DetectorManager):
             self.__logger.error(e)
             # TODO: unsure if frameStart is needed? Try without.
         # This should be the only place where self.frameStart is changed
-        
+
         # Only place self.shapes is changed
-        
-        pass 
+
+        pass
 
     def _performSafeCameraAction(self, function):
         """ This method is used to change those camera properties that need
@@ -192,7 +192,7 @@ class PCOManager(DetectorManager):
     # for simulation only
     def setIlluPatternByID(self, iRot, iPhi):
         self._camera.setIlluPatternByID(iRot, iPhi)
-        
+
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.
 #

@@ -20,26 +20,26 @@ class SquidStageScanWidget(NapariHybridWidget):
         # Graphical elements
         '''
         we need:
-        
+
         input:
             start X
             start Y
             stop X
             stop Y
-            
+
             pixelsize (effective)
-        
+
         output:
             current X
             currnt Y
             status
-            
+
         buttons:
             Start scan/Stop scan
             Homing
-        
+
         '''
-        
+
         self.labelStartX = QtWidgets.QLabel('Start Pos. (X):')
         self.labelStartY = QtWidgets.QLabel('Start Pos. (Y):')
         self.labelCurrentX = QtWidgets.QLabel('Current Pos. (X): 0 µm')
@@ -48,13 +48,13 @@ class SquidStageScanWidget(NapariHybridWidget):
         self.labelStopX = QtWidgets.QLabel('Stop Pos. (X):')
         self.labelStopY = QtWidgets.QLabel('Stop Pos. (Y):')
         self.labelPixelsize = QtWidgets.QLabel('Pixelsize:')
-        
+
         self.editStartX = QtWidgets.QLineEdit('0.0')
         self.editStartY = QtWidgets.QLineEdit('0.0')
         self.editStopX = QtWidgets.QLineEdit('1000.0')
         self.editStopY = QtWidgets.QLineEdit('1000.0')
         self.editPixelsize = QtWidgets.QLineEdit('1.0')
-        
+
         self.btnStart = guitools.BetterPushButton('Start Scan')
         self.btnHome = guitools.BetterPushButton('Home')
         self.btnStop = guitools.BetterPushButton('STOP!')
@@ -62,7 +62,7 @@ class SquidStageScanWidget(NapariHybridWidget):
         self.labelCurrentX = QtWidgets.QLabel('Current Pos. (X):')
         self.labelCurrentY = QtWidgets.QLabel('Current Pos. (Y):')
 
-        # setup buttons 
+        # setup buttons
         self.btnStart.setCheckable(True)
         self.btnStart.setSizePolicy(QtWidgets.QSizePolicy.Preferred,
                                       QtWidgets.QSizePolicy.Expanding)
@@ -88,11 +88,11 @@ class SquidStageScanWidget(NapariHybridWidget):
         grid.addWidget(self.editStopX, 2, 1, 1, 1)
         grid.addWidget(self.editStopY, 3, 1, 1, 1)
         grid.addWidget(self.editPixelsize, 4, 1, 1, 1)
-        
-        
+
+
         grid.addWidget(self.labelCurrentX, 0, 2, 1, 1)
         grid.addWidget(self.labelCurrentY, 1, 2, 1, 1)
-        
+
         grid.addWidget(self.btnStart, 4, 2, 1, 1)
         grid.addWidget(self.btnHome, 3, 2, 1, 1)
         grid.addWidget(self.btnStop, 3, 2, 1, 1)
@@ -104,10 +104,10 @@ class SquidStageScanWidget(NapariHybridWidget):
 
     def updateCurrentX(self, position):
         self.labelCurrentX.setText(f'Current Pos. (X) {position} [µm]')
-    
+
     def updateCurrentY(self, position):
         self.labelCurrentX.setText(f'Current Pos. (Y) {position} [µm]')
-        
+
     def updateRotationSpeed(self, speed):
         self.labelRotationSpeed.setText(f'Speed Rotation {speed} [stp\s]')
 
@@ -132,7 +132,7 @@ class SquidStageScanWidget(NapariHybridWidget):
         self.layer.data = im
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

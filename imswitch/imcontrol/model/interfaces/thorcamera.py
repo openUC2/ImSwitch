@@ -10,7 +10,7 @@ import collections
 import numpy as np
 import matplotlib.pyplot as plt
 
-# init devwraps 
+# init devwraps
 #import devwraps
 
 # removes all DLLs
@@ -36,15 +36,15 @@ class ThorCamera:
 
 
 
-        
+
         # many to be purged
         self.model = "ThorCamera"
         self.shape = (0, 0)
-        
+
         self.is_connected = False
         self.is_streaming = False
 
-        # unload CPU? 
+        # unload CPU?
         self.downsamplepreview = 1
 
         # camera parameters
@@ -57,20 +57,20 @@ class ThorCamera:
         NBuffer = 60
         self.frame_buffer = collections.deque(maxlen=NBuffer)
         self.frameid_buffer = collections.deque(maxlen=NBuffer)
-        
+
         #%% starting the camera thread
         self.camera = None
 
-        # binning 
+        # binning
         self.binning = binning
 
         self._init_cam(cameraNo=self.cameraNo)
-        
+
 
     def _init_cam(self, cameraNo=1, callback_fct=None):
         # start camera
         self.is_connected = True
-        
+
         # open the first device
         self.camera = ThorCam()
         cameraNo = self.camera.get_number_of_cameras()
@@ -82,36 +82,36 @@ class ThorCamera:
 
         # set gain
         # not available? self.camera.Gain.set(self.gain)
-        
+
         # set blacklevel
         # not available? self.camera.BlackLevel.set(self.blacklevel)
 
-        # get framesize 
+        # get framesize
         self.SensorHeight = self.camera.shape()[0]
         self.SensorWidth = self.camera.shape()[1]
-        
+
     def start_live(self):
         pass
 
     def stop_live(self):
         pass
-    
+
     def suspend_live(self):
-        pass 
-    
+        pass
+
     def prepare_live(self):
         pass
 
     def close(self):
         self.camera.close()
-        
+
     def set_exposure_time(self,exposure_time):
         self.exposure_time = exposure_time
         self.camera.set_exposure(self.exposure_time)
 
     def set_gain(self,gain):
         pass
-        
+
     def set_blacklevel(self,blacklevel):
         pass
 
@@ -126,7 +126,7 @@ class ThorCamera:
 
     def getLast(self, is_resize=True):
         # get frame and save
-#        frame_norm = cv2.normalize(self.frame, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)       
+#        frame_norm = cv2.normalize(self.frame, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         #TODO: Napari only displays 8Bit?
         try:
             return self.camera.grab_image(wait=1)
@@ -136,7 +136,7 @@ class ThorCamera:
     def getLastChunk(self):
         chunk = np.expand_dims(self.camera.grab_image(),0)
         return chunk
-    
+
     def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
         pass
 
@@ -160,7 +160,7 @@ class ThorCamera:
 
     def openPropertiesGUI(self):
         pass
-    
+
 
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.
@@ -176,4 +176,4 @@ class ThorCamera:
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.    
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.

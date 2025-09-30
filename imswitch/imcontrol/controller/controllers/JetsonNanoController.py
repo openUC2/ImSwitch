@@ -37,7 +37,7 @@ class JetsonNanoController(ImConWidgetController):
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
         self._master.detectorsManager.startAcquisition(liveView=True)
 
-        
+
         # TODO: misleading we have LEDs and LED Matrices here...
         self.intensity = 100
         allLEDNames = self._master.LEDMatrixsManager.getAllDeviceNames()
@@ -47,10 +47,10 @@ class JetsonNanoController(ImConWidgetController):
                 self.leds.append(self._master.LEDMatrixsManager[iDevice])
         # turn on a little bit
         self.leds[0].setAll(self.intensity)
-        
+
         # default stepsize for steppers
         self.zDistance = 1000
-        
+
         # connect XY Stagescanning live update  https://github.com/napari/napari/issues/1110
         self.sigImageReceived.connect(self.displayImage)
 
@@ -58,8 +58,8 @@ class JetsonNanoController(ImConWidgetController):
         self.stages = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
         self.isJetsonNanorunning = False
 
-        
-        # wire up the gui        
+
+        # wire up the gui
         self._widget.pushButtonFocusDown.clicked.connect(self.focusDown)
         self._widget.pushButtonFocusUp.clicked.connect(self.focusUp)
         self._widget.pushButtonAutofocus.clicked.connect(self.autofocus)
@@ -70,7 +70,7 @@ class JetsonNanoController(ImConWidgetController):
         self._widget.spinBoxExposure.valueChanged.connect(self.setExposureTime)
         self._widget.spinBoxGain.valueChanged.connect(self.setGain)
         self._widget.spinBoxBlacklevel.valueChanged.connect(self.setBlacklevel)
-        
+
         # autofocus related
         self.isAutofocusRunning = False
         #self._commChannel.sigAutoFocusRunning.connect(self.setAutoFocusIsRunning)
@@ -80,51 +80,51 @@ class JetsonNanoController(ImConWidgetController):
             value = self._widget.spinBoxExposure.value()
         #self.detector.setProperty("exposure", value)
         self.detector._camera.set_exposure_time(value*1e-3)
-        
+
     def setGain(self, value=None):
         if value is None:
             value = self._widget.spinBoxGain.value()
         #self.detector.setProperty("gain", value)
         self.detector._camera.set_gain(value)
-        
+
     def setBlacklevel(self, value=None):
         if value is None:
             value = self._widget.spinBoxBlacklevel.value()
         #self.detector.setProperty("blacklevel", value)
         self.detector._camera.set_blacklevel(value)
-               
+
     def moveFocusStage(self, zDistance=100):
         self.illuOff()
         self.stages.move(value=zDistance, axis="Z", is_absolute=False, is_blocking=True)
         self.illuOn()
-    
+
     def focusDown(self, buttonValue):
         self.moveFocusStage(zDistance=-100)
-        
+
     def focusUp(self, buttonValue=False, zDistance=-100):
         self.moveFocusStage(zDistance=100)
-        
+
     def autofocus(self):
         #autofocusParams = self._widget.getAutofocusValues()
         autofocusParams = {}
         autofocusParams["valueRange"] = 400
         autofocusParams["valueSteps"] = 30
-        
+
         # turn on illumination
         self.illuOn(value=255)
         time.sleep(.05)
 
         self.doAutofocus(autofocusParams)
-    
+
     def setIllu(self, value=100):
         self.leds[0].setAll(value)
-        
+
     def illuOn(self, buttonValue=False):
         self.setIllu(self.intensity)
-        
+
     def illuOff(self, buttonValue=False):
         self.setIllu(0)
-    
+
     def snap(self):
         '''snap a single image and save it to disk'''
         self.JetsonNanoFilename = "UC2_JetsonNano_Snap"
@@ -136,7 +136,7 @@ class JetsonNanoController(ImConWidgetController):
                     extension=fileExtension)
         self.leds[0].setAll(100)
         time.sleep(0.1)
-        
+
         lastFrame = self.detector.getLatestFrame()
         # wait for frame after next frame to appear. Avoid motion blurring
         #while self.detector.getFrameNumber()<(frameNumber+nFrameSyncWait):time.sleep(0.05)
@@ -147,7 +147,7 @@ class JetsonNanoController(ImConWidgetController):
     def toggleRec(self):
         """ Start or end recording. """
         if self.isJetsonNanorunning  and not self.recording:
-        
+
             self.updateRecAttrs(isSnapping=False)
 
             folder = self._widget.getRecFolder()
@@ -196,8 +196,8 @@ class JetsonNanoController(ImConWidgetController):
         else:
             if self.recMode == RecMode.ScanLapse and self.lapseCurrent != -1:
                 self._commChannel.sigAbortScan.emit()
-            self._master.recordingManager.endRecording()        
-        
+            self._master.recordingManager.endRecording()
+
     def displayImage(self, image, name="UC2 Snap"):
         # a bit weird, but we cannot update outside the main thread
         name = "tilescanning"
@@ -216,8 +216,8 @@ class JetsonNanoController(ImConWidgetController):
         return newPath
 
 
-    
-# Copyright (C) 2020-2023 ImSwitch developers
+
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

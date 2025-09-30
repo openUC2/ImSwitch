@@ -39,7 +39,7 @@ class MultiManager(ABC):
                                 managedDeviceInfo, managedDeviceName, **lowLevelManagers)
                     except Exception as e:
                         self.__logger.error(e)
-                        
+
     def hasDevices(self):
         """ Returns whether this manager manages any devices. """
         return len(self._subManagers) > 0
@@ -95,7 +95,7 @@ class NoSuchSubManagerError(RuntimeError):
     pass
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

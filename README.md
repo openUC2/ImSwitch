@@ -23,6 +23,23 @@ specific design of individual custom-built microscopes, all while using the same
 would like to involve the community in further developing ImSwitch in this direction, believing
 that it is possible to integrate current state-of-the-art solutions into one unified software.
 
+## UC2 Ecosystem Integration
+
+ImSwitch is a core component of the UC2 (You.See.Too) ecosystem, designed to work seamlessly with various UC2 hardware and software components:
+
+### Hardware Integration
+- **[UC2-ESP Firmware](https://github.com/youseetoo/uc2-esp32)**: Low-level firmware for ESP32-based controllers that manage UC2 hardware components like motors, LEDs, and lasers. ImSwitch communicates with these devices through serial protocols.
+- **[UC2-REST Interface](https://github.com/openUC2/UC2-REST/)**: A REST API middleware that provides standardized HTTP communication between ImSwitch and UC2 devices. This enables remote control and web-based interfaces.
+
+### Web Interface
+- **[ImSwitch React Frontend](https://github.com/openUC2/ImSwitch-ReactAPP)**: A modern web-based user interface built with React that provides remote access to ImSwitch functionality through web browsers. This allows for mobile control and remote microscopy operations.
+
+### Complete Operating System
+- **[ImSwitch-OS](https://github.com/openUC2/imswitch-os/tree/main)**: A complete Raspberry Pi-based operating system image with ImSwitch and all UC2 components pre-installed and configured. This provides a plug-and-play solution for UC2 microscopy systems.
+
+### Docker Support
+ImSwitch provides comprehensive Docker support for containerized deployments, enabling easy installation across different platforms and cloud environments. The Docker implementation supports both headless and GUI modes, making it suitable for both automated systems and interactive use. See the [Docker documentation](docker/README.md) for detailed setup instructions and configuration options.
+
 ## Installation
 
 ### Option A: Standalone bundles for Windows
@@ -36,14 +53,68 @@ set SETUPTOOLS_USE_DISTUTILS=stdlib
 ImSwitch.exe
 ```
 
-### Option B: Install using pip
+### Option B: Install using UV (Recommended)
 
-ImSwitch is also published on PyPI and can be installed using pip. Python 3.7 or later is required. Additionally, certain components (the image reconstruction module and support for TIS cameras) require the software to be running on Windows, but most of the functionality is available on other operating systems as well.
+ImSwitch can be installed using UV, a fast Python package installer written in Rust that's significantly faster than pip. Python 3.9 or later is required. Additionally, certain components (the image reconstruction module and support for TIS cameras) require the software to be running on Windows, but most of the functionality is available on other operating systems as well.
+
+**Why UV?**
+- **~10-100x faster** package installation and dependency resolution
+- **Better dependency resolution** - finds compatible package versions more reliably
+- **Lock file support** - ensures reproducible builds across environments
+- **Drop-in replacement** for pip with improved caching and parallelization
+
+First, install UV:
+
+```bash
+# On macOS and Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# On Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# On Linux 
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+
+
+Then install ImSwitch:
+
+```bash
+uv pip install ImSwitchUC2
+```
+
+**For developers working from source:**
+
+```bash
+# Clone the repository
+git clone https://github.com/openUC2/ImSwitch/
+cd ImSwitch
+
+# Create a virtual environment and install with UV
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv pip install -e .[PyQt5,dev]
+
+# UV automatically creates a uv.lock file for reproducible builds
+```
+
+For detailed UV usage instructions, see [docs/uv-guide.md](docs/uv-guide.md).
+
+You will then be able to start ImSwitch with this command:
+
+```
+imswitch
+```
+
+### Option C: Install using pip
+
+ImSwitch is also published on PyPI and can be installed using pip. Python 3.9 or later is required.
 
 To install ImSwitch from PyPI, run the following command:
 
 ```
-pip install ImSwitch
+pip install ImSwitchUC2
 ```
 
 You will then be able to start ImSwitch with this command:
@@ -53,7 +124,7 @@ imswitch
 ```
 
 
-### Option C: Install from Github (UC2 version)
+### Option D: Install from Github (UC2 version)
 
 **Installation**
 ```
@@ -63,10 +134,15 @@ cd ImSwitch
 # alternatively download this repo, unzip the .zip-file and open the command prompt in this directory
 conda create -n imswitch python=3.9 -y
 conda activate imswitch
-pip install -r requirements.txt --user
-#pip install -e ./
-pip install -e . --use-deprecated=legacy-resolver
-pip install git+https://gitlab.com/bionanoimaging/nanoimagingpack
+
+# Install UV (recommended for faster package management)
+curl -LsSf https://astral.sh/uv/install.sh | sh  # On macOS/Linux
+# OR on Windows: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Install dependencies with UV (faster and more reliable)
+uv pip install -r requirements.txt
+uv pip install -e .
+uv pip install git+https://gitlab.com/bionanoimaging/nanoimagingpack
 
 cd ~/Documents/
 # if there is a folder called ImSwitchConfig => rename it!
@@ -160,11 +236,11 @@ For the ***Daheng Imaging Cameras*** please go to [this website](https://www.get
 
 For the ***Allied Vision Cameras*** please go to [this website](https://www.alliedvision.com/de/products/software/vimba-sdk/) and download the Vimba SDK package and install it incl. the drivers.
 
-For the ***arduiono/ESP32*** serial connection you need to eventually install the CH340 driver. Please find additional steps [here](https://learn.sparkfun.com/tutorials/how-to-install-ch340-drivers/all).
+For the ***Arduino/ESP32*** serial connection you need to eventually install the CH340 driver. Please find additional steps [here](https://learn.sparkfun.com/tutorials/how-to-install-ch340-drivers/all). These ESP32 devices run the [UC2-ESP firmware](https://github.com/youseetoo/uc2-esp32) for controlling UC2 hardware components.
 
 ## Optional: Add UC2 configurations
 
-Go [here](https://github.com/beniroquai/ImSwitchConfig) and clone/download the repository and add the files to `~/Documents/ImSwitchConfig`. You should find additional files in the same format there.
+Go [here](https://github.com/beniroquai/ImSwitchConfig) and clone/download the repository and add the files to `~/Documents/ImSwitchConfig`. You should find additional files in the same format there. These configuration files define the specific hardware setup for your UC2 microscope system and enable proper communication with UC2-ESP firmware and UC2-REST interfaces.
 
 ## On Jetson Nano
 
@@ -389,6 +465,8 @@ source ~/.bashrc
 
 ```
 sudo usermod -a -G dialout $USER
+newgrp dialout
+ls -l /dev/ttyUSB0
 ```
 
 ## Install on Raspberry PI
@@ -405,7 +483,7 @@ git clone https://github.com/openUC2/UC2-REST
 cd UC2-REST
 pip install -e .
 cd ..
-git clone git clone https://github.com/openUC2/imswitch
+git clone https://github.com/openUC2/imswitch
 cd imswitch
 # nano setup.cfg, outcomment QScintilla, pyqt5
 ln -s /usr/lib/python3/dist-packages/PyQt5 /home/uc2/miniforge3/envs/imswitch/lib/python3.9/site-packages/
@@ -593,7 +671,7 @@ reduce `nFramebuffer from 200 to 10!!!!
 
 ## Configure the System
 
-We created a set of UC2-specific `json`-configuration files. ***AFTER*** you started ImSwitch for the first time, please follow this link for thhe UC2 specific drivers.
+We created a set of UC2-specific `json`-configuration files. ***AFTER*** you started ImSwitch for the first time, please follow this link for the UC2 specific drivers.
 
 Please go to the Review [here]()
 

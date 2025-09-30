@@ -35,7 +35,7 @@ class LEDMatrixWidget(Widget):
         for ix in range(nLedsX):
             for iy in range(nLedsY):
                 buttons[str(nLedsX*iy+ix)]=(iy,ix)
-        
+
         # Create leds (buttons) and add them to the grid layout
         for corrds, pos in buttons.items():
             self.leds[corrds] = guitools.BetterPushButton(corrds)
@@ -84,7 +84,7 @@ class LEDMatrixWidget(Widget):
         return f'{positionerName}--{axis}'
 
 
-    # Copyright (C) 2020-2023 ImSwitch developers
+    # Copyright (C) 2020-2024 ImSwitch developers
     # This file is part of ImSwitch.
     #
     # ImSwitch is free software: you can redistribute it and/or modify

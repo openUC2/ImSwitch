@@ -5,7 +5,7 @@ try:
     isQsciAvailable = True
 except:
     isQsciAvailable = False
-    
+
 from .FilesController import FilesController
 from .OutputController import OutputController
 from .basecontrollers import ImScrWidgetController
@@ -18,10 +18,10 @@ class ImScrMainViewController(ImScrWidgetController):
         super().__init__(*args, **kwargs)
         if not isQsciAvailable or IS_HEADLESS:
             return
-        
+
         self.filesController = self._factory.createController(FilesController,
                                                               self._widget.files)
-        
+
         self.editorController = self._factory.createController(EditorController,
                                                                self._widget.editor)
         self.consoleController = self._factory.createController(ConsoleController,
@@ -36,7 +36,7 @@ class ImScrMainViewController(ImScrWidgetController):
         self._widget.sigSaveAsFile.connect(self._commChannel.sigSaveAsFile)
 
 
-# Copyright (C) 2020-2023 ImSwitch developers
+# Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

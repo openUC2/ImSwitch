@@ -35,6 +35,7 @@ class FocusMetricBase:
     def __init__(self, config: Optional[FocusConfig] = None):
         self.config = config or FocusConfig()
         logger.debug(f"Focus metric initialized with config: {self.config}")
+        self._rotation_angle = 0.0  # Placeholder for potential future use
 
     def preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
         """
@@ -53,6 +54,10 @@ class FocusMetricBase:
             im = frame.astype(np.uint16)
 
         im = im.astype(float)
+        # rotate image if needed
+        if self._rotation_angle != 0.0:
+            from scipy.ndimage import rotate
+            im = rotate(im, self._rotation_angle, reshape=False)
 
         # Crop around brightest region if crop_radius > 0
         if 0 and self.config.crop_radius > 0:
@@ -71,13 +76,14 @@ class FocusMetricBase:
 
         # Background subtraction and thresholding
         # TODO: normalize intensity to compensate laser fluctuations? 
-        im = im / np.max((np.max(im), 0.1)) * 255
-        im = im - np.mean(im) / 2.0
-        im[im < self.config.background_threshold] = 0
+        if 0:
+            im = im / np.max((np.max(im), 0.1)) * 255
+            im = im - np.min(im) / 2.0
+            im[im < self.config.background_threshold] = 0
         
         return im
 
-    def compute(self, frame: np.ndarray) -> Dict[str, Any]:
+    def compute(self, frame: np.ndarray):
         """
         Compute focus metric.
         
@@ -162,7 +168,10 @@ class AstigmatismFocusMetric(FocusMetricBase):
             init_guess_x = [i0_x, w1 / 2, sigma_x_init, amp_x, 100.0]
         else:
             init_guess_x = [i0_x, w1 / 2, sigma_x_init, amp_x]
-        init_guess_y = [i0_y, h1 / 2, sigma_y_init, amp_y]
+        if isDoubleGaussY:
+            init_guess_y = [i0_y, h1 / 2, sigma_y_init, amp_y, 100.0]
+        else:   
+            init_guess_y = [i0_y, h1 / 2, sigma_y_init, amp_y]
 
         try:
             # Fit X projection
@@ -192,7 +201,7 @@ class AstigmatismFocusMetric(FocusMetricBase):
 
         return sigma_x, sigma_y
 
-    def compute(self, frame: np.ndarray) -> Dict[str, Any]:
+    def compute(self, frame: np.ndarray):
         """
         Compute astigmatism-based focus metric.
         
@@ -206,22 +215,25 @@ class AstigmatismFocusMetric(FocusMetricBase):
         
         try:
             # Preprocess frame
-            im = self.preprocess_frame(np.array(frame))
+            processed_image = self.preprocess_frame(np.array(frame))
             
             # Check for minimum signal
-            if np.max(im) < self.config.min_signal_threshold:
+            if np.max(processed_image) < self.config.min_signal_threshold:
                 logger.warning("Signal below threshold")
-                return {"t": timestamp, "focus": self.config.max_focus_value, "error": "low_signal"}
+                return {"t": timestamp, "focus": self.config.max_focus_value, "error": "low_signal"}, None
             
             # Compute projections and fit Gaussians
-            projX, projY = self.compute_projections(im)
+            projX, projY = self.compute_projections(processed_image)
             sigma_x, sigma_y = self.fit_projections(projX, projY)
             
             # Calculate focus value as ratio
-            if sigma_y == 0 or sigma_y < 1e-6:
-                focus_value = self.config.max_focus_value
+            if 1:
+                if sigma_y == 0 or sigma_y < 1e-6:
+                    focus_value = self.config.max_focus_value
+                else:
+                    focus_value = float(sigma_x / sigma_y)
             else:
-                focus_value = float(sigma_x / sigma_y)
+                focus_value = float(sigma_x)  # Use product for better sensitivity
                 
             # Clamp to reasonable range
             focus_value = min(focus_value, self.config.max_focus_value)
@@ -233,13 +245,13 @@ class AstigmatismFocusMetric(FocusMetricBase):
                 "focus": focus_value,
                 "sigma_x": sigma_x,
                 "sigma_y": sigma_y,
-                "signal_max": float(np.max(im)),
-                "signal_mean": float(np.mean(im))
-            }
+                "signal_max": float(np.max(frame)),
+                "signal_mean": float(np.mean(frame)),
+            }, processed_image
             
         except Exception as e:
             logger.error(f"Focus computation failed: {e}")
-            return {"t": timestamp, "focus": self.config.max_focus_value, "error": str(e)}
+            return {"t": timestamp, "focus": self.config.max_focus_value, "error": str(e)}, None
 
 
 class CenterOfMassFocusMetric(FocusMetricBase):

@@ -71,6 +71,7 @@ class ImConMainView(QMainWindow):
             'SLM': _DockInfo(name='SLM', yPosition=0),
             'UC2Config': _DockInfo(name='UC2Config', yPosition=0),
             'SIM': _DockInfo(name='SIM', yPosition=0),
+            'OSSIM': _DockInfo(name='OSSIM', yPosition=0),
             'DPC': _DockInfo(name='DPC', yPosition=0),
             'MCT': _DockInfo(name='MCT', yPosition=0),
             'Lepmon': _DockInfo(name='Lepmon', yPosition=0),

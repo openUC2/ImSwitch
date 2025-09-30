@@ -13,6 +13,7 @@ from imswitch.imcontrol.view import guitools
 #from . import controllers
 from .CommunicationChannel import CommunicationChannel
 from .MasterController import MasterController
+from .ossim_controller import OssimController as OssimBackgroundController
 from .PickSetupController import PickSetupController
 from .basecontrollers import ImConWidgetControllerFactory
 import threading
@@ -52,9 +53,20 @@ class ImConMainController(MainController):
             )
 
         self.controllers = {}
+        self._ossim_background = {}
 
         for widgetKey, widget in self.__mainView.widgets.items():
             self.__logger.info(f'Creating controller for widget {widgetKey}')
+
+            if widgetKey == 'OSSIM':
+                try:
+                    logic = OssimBackgroundController(self.__masterController.detectorsManager)
+                    if hasattr(widget, 'bind_controller'):
+                        widget.bind_controller(logic)
+                    self._ossim_background[widgetKey] = logic
+                except Exception as exc:
+                    self.__logger.error(f'Could not initialize OSSIM workflow: {exc}')
+                continue
 
             controller_name = f'{widgetKey}Controller'
             if widgetKey == 'Scan':
@@ -209,6 +221,11 @@ class ImConMainController(MainController):
         self.__logger.debug('Shutting down')
         self.__factory.closeAllCreatedControllers()
         self.__masterController.closeEvent()
+        for controller in self._ossim_background.values():
+            try:
+                controller.stop()
+            except Exception:
+                pass
 
         # seems like the imswitchserver is not closing from the closing event, need to hard kill it
         self._serverWorker.stop()

@@ -63,6 +63,7 @@ if not IS_HEADLESS:
     from .ULensesWidget import ULensesWidget
     from .ViewWidget import ViewWidget
     from .WatcherWidget import WatcherWidget
+    from .ossim_widget import OssimWidget
     try:
         from .HyphaWidget import HyphaWidget
     except ModuleNotFoundError:

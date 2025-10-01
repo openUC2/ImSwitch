@@ -126,7 +126,7 @@ class VirtualMicroscopeManager:
 
         try:
             self._imagePath = rs232Info.managerProperties["imagePath"]
-            if self._imagePath not in ["simplant", "smlm", "astigmatism"]:
+            if self._imagePath not in ["simplant", "smlm", "astigmatism", "wellplatecalib"]:
                 raise NameError
         except:
             package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -355,6 +355,20 @@ class Camera:
             self.image /= np.max(self.image)
             self.SensorHeight = 300  # self.image.shape[1]
             self.SensorWidth = 400  # self.image.shape[0]
+            
+        elif self.filePath == "wellplatecalib":
+            ''' load calibration_front.svg '''
+            package_dir = os.path.dirname(os.path.abspath(__file__))
+            self._imagePath = os.path.join(
+                package_dir, "_data/images/calibration_front.png"
+            )
+            self.image = cv2.imread(self._imagePath, cv2.IMREAD_GRAYSCALE)
+            # invert image
+            self.image = 255 - self.image
+            self.image = self.image / np.max(self.image)
+            self.SensorHeight = 300  # self.image.shape[1]
+            self.SensorWidth = 400  # self.image.shape[0]
+            
         
         elif self.filePath == "astigmatism":
             self.SensorHeight = 512  # self.image.shape[1]

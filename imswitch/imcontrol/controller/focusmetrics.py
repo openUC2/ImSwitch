@@ -14,6 +14,8 @@ import numpy as np
 from scipy.optimize import curve_fit
 from scipy.ndimage import gaussian_filter, center_of_mass
 from skimage.feature import peak_local_max
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,10 @@ class FocusConfig:
     enable_gaussian_blur: bool = True
     min_signal_threshold: float = 10.0  # Minimum signal for valid measurement
     max_focus_value: float = 1e6  # Maximum valid focus value
-
+    # peak-specific
+    peak_distance: int = 150                 # minimal separation (px) between the two peaks
+    peak_height: Optional[float] = None      # required absolute height in projection units
+    max_peaks: int = 2                       # keep at most two strongest peaks
 
 class FocusMetricBase:
     """Base class for focus metrics."""
@@ -253,6 +258,54 @@ class AstigmatismFocusMetric(FocusMetricBase):
             logger.error(f"Focus computation failed: {e}")
             return {"t": timestamp, "focus": self.config.max_focus_value, "error": str(e)}, None
 
+class PeakMetric(FocusMetricBase):
+    """
+    X-only peak finder.
+    Returns integer peak positions along X and their distance. No PID, no Y-fit.
+    """
+
+    @staticmethod
+    def _projection_x(im: np.ndarray) -> np.ndarray:
+        return np.mean(im, axis=0)
+
+    @staticmethod
+    def _smooth_1d(x: np.ndarray, sigma: float) -> np.ndarray:
+        return gaussian_filter1d(x, sigma) if sigma and sigma > 0 else x
+
+    def compute(self, frame: np.ndarray) -> Dict[str, Any]:
+        ts = time.time()
+
+        # preprocess (uses FocusMetricBase.preprocess_frame)
+        im = self.preprocess_frame(np.asarray(frame))
+        if im.size == 0 or np.max(im) < self.config.min_signal_threshold:
+            return {"t": ts, "x_peaks": np.array([], dtype=int), "x_peak_distance": None, "error": "low_signal"}
+
+        # X projection and optional 1D smoothing
+        projx = self._projection_x(np.max(im-self.config.background_threshold, 0))
+        projx_s = self._smooth_1d(projx, self.config.gaussian_sigma if self.config.enable_gaussian_blur else 0.0)
+
+        # peak detection (keep the strongest two if more found)
+        peaks, props = find_peaks(
+            projx_s,
+            distance=self.config.peak_distance,
+            height=self.config.peak_height
+        )
+        if not type(peaks) == np.ndarray and len(peaks) <2:
+            peaks = (1,1)
+        focus_value = np.mean(peaks)
+
+        # outputs
+        result: Dict[str, Any] = {
+            "t": ts,
+            "x_peaks": focus_value,
+            "proj_x": projx_s.astype(float),
+            "signal_max": float(np.max(im)),
+            "signal_mean": float(np.mean(im)),
+            "focus": focus_value
+        }
+
+        return result
+
 
 class CenterOfMassFocusMetric(FocusMetricBase):
     """
@@ -383,8 +436,9 @@ class FocusMetricFactory:
     _metrics = {
         "astigmatism": AstigmatismFocusMetric,
         "center_of_mass": CenterOfMassFocusMetric,
-        "gaussian": AstigmatismFocusMetric,  # Alias
-        "gradient": CenterOfMassFocusMetric,  # Alias for now
+        "gaussian": AstigmatismFocusMetric, 
+        "gradient": CenterOfMassFocusMetric, 
+        "peak": PeakMetric,  
     }
 
     @classmethod

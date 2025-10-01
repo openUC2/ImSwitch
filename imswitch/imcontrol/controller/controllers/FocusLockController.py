@@ -30,7 +30,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 # =========================
 @dataclass
 class FocusLockParams:
-    focus_metric: str = "astigmatism" # "astigmatism", "gaussian", "gradient"
+    focus_metric: str = "peak" # "astigmatism", "gaussian", "gradient", "peak"
     crop_center: Optional[List[int]] = None
     crop_size: Optional[int] = None
     gaussian_sigma: float = 11.0
@@ -188,7 +188,7 @@ class FocusLockController(ImConWidgetController):
 
         # Params - Consolidated focus parameters
         self._focus_params = FocusLockParams(
-            focus_metric=getattr(self._setupInfo.focusLock, "focusLockMetric", "astigmatism"),
+            focus_metric=getattr(self._setupInfo.focusLock, "focusLockMetric", "peak"),
             crop_center=getattr(self._setupInfo.focusLock, "cropCenter", None),
             crop_size=getattr(self._setupInfo.focusLock, "cropSize", None),
             update_freq=self._setupInfo.focusLock.updateFreq or 10,
@@ -442,7 +442,7 @@ class FocusLockController(ImConWidgetController):
         try:
             if not self._state.is_measuring:
                 self._state.is_measuring = True
-                self._emitStateChangedSignal() # TODO: What is this good for? Actually needed? 
+                self._emitStateChangedSignal() # TODO: What is this good for? Actually needed?  
                 self._logger.info("Focus measurement started")
                 return True
             return False
@@ -565,24 +565,23 @@ class FocusLockController(ImConWidgetController):
         tLast = 0
         # store a history of the last 5 values and filter out outliers
 
-        nFreeBufferFrames = 3
         try:
+            nFreeBufferFrames = 3
             while self.__isPollingFramesActive:
-                
                 if (time.time() - tLast) < self.pollingFrameUpdatePeriode:
                     time.sleep(0.001)
                     continue
-                self._logger.debug("Current frame polling frequency: %.2f Hz", 1.0 / (time.time() - tLast))
                 tLast = time.time()
                 if not self._state.is_measuring and not self.locked and not self.aboutToLock:
                     continue
+                
                 for i in range(nFreeBufferFrames): # Kinda clear buffer and wait a bit? 
                     im = self._master.detectorsManager[self.camera].getLatestFrame()
-                
+
                 # Crop (prefer NiP if present)
                 try:
                     import NanoImagingPack as nip
-                    cropped_im = nip.extract(
+                    self.cropped_im = nip.extract(
                         img=im,
                         ROIsize=(self._focus_params.crop_size, self._focus_params.crop_size),
                         centerpos=self._focus_params.crop_center,
@@ -590,14 +589,13 @@ class FocusLockController(ImConWidgetController):
                         checkComplex=True,
                     )
                 except Exception:
-                    cropped_im = self.extract(im, crop_size=self._focus_params.crop_size,
+                    self.cropped_im = self.extract(im, crop_size=self._focus_params.crop_size,
                                                 crop_center=self._focus_params.crop_center)
 
 
                 
                 # Compute focus value using extracted focus metrics module
-                focus_result, processed_image = self._focus_metric.compute(cropped_im)
-                self.cropped_im = processed_image  # For debugging/display
+                focus_result = self._focus_metric.compute(self.cropped_im)
                 self.current_focus_value = focus_result.get("focus", 0.0)
                 
                 # TODO: Remove outliers in PID loop
@@ -615,10 +613,14 @@ class FocusLockController(ImConWidgetController):
                     "is_locked": self.locked,
                     "current_position": self.currentZPosition,
                     "focus_metric": self._focus_params.focus_metric,
-                    "focus_result": focus_result,  # Include full result for debugging
+                    # "focus_result": focus_result,  # Include full result for debugging
                     "focus_setpoint": self._pi_params.set_point if self.pi else 0,
                 }
-                if np.isnan(focus_result['focus']): 
+                try:    
+                    if np.isnan(focus_result['focus']): 
+                        continue
+                except Exception as e:
+                    self._logger.error(f"Error processing focus result: {e}")
                     continue
                 self.sigFocusValueUpdate.emit(focus_data)
 
@@ -641,9 +643,10 @@ class FocusLockController(ImConWidgetController):
                     scale_factor = self._getCalibrationBasedScale()
                     step_um = u * scale_factor        # convert to µm
 
-
-                        
-                        
+                    # clamping if below threshold
+                    # deadband
+                    if abs(step_um) < self._pi_params.min_step_threshold:
+                        step_um = 0.0
 
                     # per-update clamp & optional safety gating
                     limit = abs(self._pi_params.safety_move_limit) if self._pi_params.safety_motion_active else abs(self._pi_params.safety_move_limit)
@@ -651,8 +654,13 @@ class FocusLockController(ImConWidgetController):
 
                     if step_um != 0.0:
                         # Use absolute movement instead of relative
-                        self.stage.move(value=step_um, axis="Z", speed=MAX_SPEED, is_blocking=False, is_absolute=False)
-                        time.sleep(0.1*abs(step_um)/10)  # allow some time for the command to be sent
+                        new_z_position = self.currentZPosition + step_um
+                        if abs(lastPosition-new_z_position) >  abs(limit*2):
+                            self._logger.warning("Travel budget exceeded; unlocking focus.")
+                            self.unlockFocus()
+                        else:
+                            lastPosition = new_z_position
+                        self.stage.move(value=new_z_position, axis="Z", speed=MAX_SPEED, is_blocking=False, is_absolute=True)
                         self._travel_used_um += abs(step_um) # TODO: Still not sure if we need to use this! 
                         # travel budget acts like safety_distance_limit
                         if self._pi_params.safety_motion_active and self._travel_used_um > self._pi_params.safety_distance_limit:
@@ -668,6 +676,7 @@ class FocusLockController(ImConWidgetController):
 
                 # Log focus measurement to CSV using extracted logging module
                 if (self._state.is_measuring or self.locked or self.aboutToLock) and self._csv_logger:
+                
                     try:
                         self._csv_logger.log_focus_lock_data(
                             focus_value=float(self.current_focus_value),
@@ -684,8 +693,8 @@ class FocusLockController(ImConWidgetController):
                     except Exception as e:
                         self._logger.error(f"Failed to log focus measurement: {e}")
 
-                # Update plotting buffers
-                self.updateSetPointData()
+                    # Update plotting buffers
+                    self.updateSetPointData()
         except Exception as e:
             self._logger.error(f"Error in frame polling thread: {e}")
             self.__isPollingFramesActive = False

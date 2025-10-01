@@ -4,7 +4,7 @@ import subprocess
 import threading
 import signal
 import time
-from imswitch import __jupyter_port__
+from imswitch import __jupyter_port__, WITH_KERNEL
 from .logger import log
 
 _process = None
@@ -27,51 +27,72 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
     if not testnotebook(notebook_executable):
         print("Notebook executable not found")
     # it is necessary to redirect all 3 outputs or .app does not open
-    notebookp = subprocess.Popen([notebook_executable,
-                            "--port=%s" % port,
-                            "--allow-root",
-                            "--no-browser",
-                            "--ip=0.0.0.0",
-                            "--config=%s" % configfile,
-                            "--notebook-dir=%s" % directory,
-                            "--KernelProvisionerFactory.default_provisioner_name=imswitch-provisioner"
-                            ], bufsize=1, stderr=subprocess.PIPE)
-    
-    print("Starting jupyter with: %s" % " ".join(notebookp.args))
-    # concat the string to have the full terminal command 
-    print("Waiting for server to start...")
-    webaddr = None
-    time0 = time.time()
-    while webaddr is None:
-        line = notebookp.stderr.readline().decode('utf-8').strip()
-        log(line)
-        if "http://" in line:
-            start = line.find("http://")
-            # end = line.find("/", start+len("http://")) new notebook
-            # needs a token which is at the end of the line
-            # replace hostname.local with localhost
-            webaddr = line[start:]
-            if ".local" in webaddr:
-                # replace hostname.local with localhost # TODO: Not good!
-                webaddr = "http://localhost"+webaddr.split(".local")[1]
-                break
+    if 0:
+        if WITH_KERNEL:
+            notebookp = subprocess.Popen([notebook_executable,
+                                    "--port=%s" % port,
+                                    "--allow-root",
+                                    "--no-browser",
+                                    "--ip=0.0.0.0",
+                                    "--config=%s" % configfile,
+                                    "--notebook-dir=%s" % directory,
+                                    "--KernelProvisionerFactory.default_provisioner_name=imswitch-provisioner"
+                                    ], bufsize=1, stderr=subprocess.PIPE)
+        else:
+            notebookp = subprocess.Popen([notebook_executable,
+                                    "--port=%s" % port,
+                                    "--allow-root",
+                                    "--no-browser",
+                                    "--ip=0.0.0.0",
+                                    "--config=%s" % configfile,
+                                    "--notebook-dir=%s" % directory,
+                                    ], bufsize=1, stderr=subprocess.PIPE)
+            
+        print("Starting jupyter with: %s" % " ".join(notebookp.args))
+        # concat the string to have the full terminal command 
+        print("Waiting for server to start...")
+        webaddr = None
+        time0 = time.time()
+        while webaddr is None:
+            line = notebookp.stderr.readline().decode('utf-8').strip()
+            log(line)
+            if "http://" in line:
+                start = line.find("http://")
+                # end = line.find("/", start+len("http://")) new notebook
+                # needs a token which is at the end of the line
+                # replace hostname.local with localhost
+                webaddr = line[start:]
+                if ".local" in webaddr:
+                    # replace hostname.local with localhost # TODO: Not good!
+                    webaddr = "http://localhost"+webaddr.split(".local")[1]
+                    break
 
-        if time.time() - time0 > 10:
-            print("Timeout waiting for server to start")
-            return None
-    print("Server found at %s, migrating monitoring to listener thread" % webaddr)
+            if time.time() - time0 > 10:
+                print("Timeout waiting for server to start")
+                return None
+        print("Server found at %s, migrating monitoring to listener thread" % webaddr)
 
-    # pass monitoring over to child thread
-    def process_thread_pipe(process):
-        while process.poll() is None:  # while process is still alive
-            log(process.stderr.readline().decode('utf-8').strip())
-    notebookmonitor = threading.Thread(name="Notebook Monitor", target=process_thread_pipe,
-                                       args=(notebookp,), daemon=True)
-    notebookmonitor.start()
-    _process = notebookp
-    _monitor = notebookmonitor
-    _webaddr = webaddr
-    return webaddr
+        # pass monitoring over to child thread
+        def process_thread_pipe(process):
+            while process.poll() is None:  # while process is still alive
+                log(process.stderr.readline().decode('utf-8').strip())
+        notebookmonitor = threading.Thread(name="Notebook Monitor", target=process_thread_pipe,
+                                        args=(notebookp,), daemon=True)
+        notebookmonitor.start()
+        _process = notebookp
+        _monitor = notebookmonitor
+        _webaddr = webaddr
+        return webaddr
+    else:
+        print("Starting jupyter with: %s" % " ".join([notebook_executable,
+                                    "--port=%s" % port,
+                                    "--allow-root",
+                                    "--no-browser",
+                                    "--ip=0.0.0.0",
+                                    "--config=%s" % configfile,
+                                    "--notebook-dir=%s" % directory,
+                                    ]))
+    return "http://localhost:%s" % port
 
 
 def stopnotebook():

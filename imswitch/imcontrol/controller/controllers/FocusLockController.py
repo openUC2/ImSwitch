@@ -205,13 +205,13 @@ class FocusLockController(ImConWidgetController):
 
         # Camera ROI settings
         fovWidth = getattr(self._setupInfo.focusLock, "fovWidth", 1024)
+        fovHeight = getattr(self._setupInfo.focusLock, "fovHeight", fovWidth) # if not set, assume square FOV
         fovCenter = getattr(self._setupInfo.focusLock, "fovCenter", [None, None])
         if fovCenter[0] is None or fovCenter[1] is None:
             # Default to image center
             cam = self._master.detectorsManager[self.camera]
             imageWidth, imageHeight = cam.fullShape[0], cam.fullShape[1]
             fovCenter = [imageWidth // 2, imageHeight // 2]
-                
         # set up the FOV on the camera side 
         try:
             cam = self._master.detectorsManager[self.camera]
@@ -219,8 +219,8 @@ class FocusLockController(ImConWidgetController):
             # computing coordinates for cropping the image
             imageWidth, imageHeight = cam.fullShape[0], cam.fullShape[1]
             hpos = imageWidth//2 - fovWidth//2 
-            vpos = imageHeight//2 - fovWidth//2
-            cam.crop(hpos = hpos, vpos = vpos, hsize = fovWidth, vsize = fovWidth)
+            vpos = imageHeight//2 - fovHeight//2
+            cam.crop(hpos = hpos, vpos = vpos, hsize = fovWidth, vsize = fovHeight)
         except Exception as e:
             self._logger.error(f"Failed to set camera ROI: {e}")
 

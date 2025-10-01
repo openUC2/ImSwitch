@@ -31,7 +31,7 @@ class FocusConfig:
     max_focus_value: float = 1e6  # Maximum valid focus value
     # peak-specific
     peak_distance: int = 150                 # minimal separation (px) between the two peaks
-    peak_height: Optional[float] = 40      # required absolute height in projection units
+    peak_height: Optional[float] = 20      # required absolute height in projection units
     max_peaks: int = 2                       # keep at most two strongest peaks
 
 class FocusMetricBase:
@@ -324,12 +324,13 @@ class PeakMetric(FocusMetricBase):
         projx = np.maximum(self._projection_x(np.asarray(frame))-self.config.background_threshold,0)
         projx_s = self._smooth_1d(projx, self.config.gaussian_sigma if self.config.enable_gaussian_blur else 0.0)
         projx_s = projx_s - np.min(projx_s)
-        projx_s = projx_s / np.max(projx_s) * 255
+        #projx_s = np.exp(1+projx_s)
+        projx_s = projx_s / np.max(projx_s)*255
         # peak detection (keep the strongest two if more found)
         peaks, props = find_peaks(
             projx_s,
             distance=self.config.peak_distance,
-            height=self.config.peak_height
+            height=self.config.peak_height # TODO: These values have to be adapted to objectives - larger magnification => larger
         )
         
         # Only process measurements with exactly 2 peaks
@@ -355,7 +356,6 @@ class PeakMetric(FocusMetricBase):
             logger.debug(f"Found {len(peaks)} peaks, need exactly 2 - skipping measurement")
             # Return None for focus to indicate skipped measurement
             focus_value = None
-            x_peaks = peaks if len(peaks) > 0 else np.array([])
             x_peak_distance = None
             if 0:
                 import matplotlib

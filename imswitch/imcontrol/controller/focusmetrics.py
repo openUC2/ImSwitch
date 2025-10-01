@@ -31,7 +31,7 @@ class FocusConfig:
     max_focus_value: float = 1e6  # Maximum valid focus value
     # peak-specific
     peak_distance: int = 150                 # minimal separation (px) between the two peaks
-    peak_height: Optional[float] = None      # required absolute height in projection units
+    peak_height: Optional[float] = 40      # required absolute height in projection units
     max_peaks: int = 2                       # keep at most two strongest peaks
 
 class FocusMetricBase:
@@ -42,6 +42,10 @@ class FocusMetricBase:
         logger.debug(f"Focus metric initialized with config: {self.config}")
         self._rotation_angle = 0.0  # Placeholder for potential future use
 
+    def reset_history(self):
+        """Reset any internal history (if applicable)."""
+        pass
+    
     def preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
         """
         Preprocess frame for focus computation.
@@ -262,7 +266,14 @@ class PeakMetric(FocusMetricBase):
     """
     X-only peak finder.
     Returns integer peak positions along X and their distance. No PID, no Y-fit.
+    Computes rolling average of peak distances over 5 values and detects outliers.
     """
+
+    def __init__(self, config: Optional[FocusConfig] = None):
+        super().__init__(config)
+        self.peak_distances = []  # Store last 5 peak distances
+        self.max_history = 5
+        self.outlier_threshold = 50.0  # Standard deviations for outlier detection
 
     @staticmethod
     def _projection_x(im: np.ndarray) -> np.ndarray:
@@ -272,36 +283,97 @@ class PeakMetric(FocusMetricBase):
     def _smooth_1d(x: np.ndarray, sigma: float) -> np.ndarray:
         return gaussian_filter1d(x, sigma) if sigma and sigma > 0 else x
 
+    def _is_outlier(self, distance: float) -> bool:
+        """Check if current distance is an outlier based on rolling history."""
+        if len(self.peak_distances) < 3:  # Need at least 3 values for outlier detection
+            return False
+        
+        mean_dist = np.mean(self.peak_distances)
+        std_dist = np.std(self.peak_distances)
+        
+        # Avoid division by zero
+        if std_dist < 1e-6:
+            return False
+            
+        z_score = abs(distance - mean_dist) / std_dist
+        if z_score > self.outlier_threshold:
+            return True
+        return False
+
+    def _update_history(self, distance: float) -> None:
+        """Update the rolling history of peak distances."""
+        self.peak_distances.append(distance)
+        if len(self.peak_distances) > self.max_history:
+            self.peak_distances.pop(0)
+
+    def _get_average_distance(self) -> Optional[float]:
+        """Get the rolling average of peak distances."""
+        if len(self.peak_distances) == 0:
+            return None
+        return float(np.mean(self.peak_distances))
+
+    def reset_history(self):
+        """Reset the history of peak distances."""
+        self.peak_distances = []
+        
     def compute(self, frame: np.ndarray) -> Dict[str, Any]:
         ts = time.time()
 
-        # preprocess (uses FocusMetricBase.preprocess_frame)
-        im = self.preprocess_frame(np.asarray(frame))
-        if im.size == 0 or np.max(im) < self.config.min_signal_threshold:
-            return {"t": ts, "x_peaks": np.array([], dtype=int), "x_peak_distance": None, "error": "low_signal"}
-
         # X projection and optional 1D smoothing
-        projx = self._projection_x(np.max(im-self.config.background_threshold, 0))
+        # remove background 
+        projx = np.maximum(self._projection_x(np.asarray(frame))-self.config.background_threshold,0)
         projx_s = self._smooth_1d(projx, self.config.gaussian_sigma if self.config.enable_gaussian_blur else 0.0)
-
+        projx_s = projx_s - np.min(projx_s)
+        projx_s = projx_s / np.max(projx_s) * 255
         # peak detection (keep the strongest two if more found)
         peaks, props = find_peaks(
             projx_s,
             distance=self.config.peak_distance,
             height=self.config.peak_height
         )
-        if not type(peaks) == np.ndarray and len(peaks) <2:
-            peaks = (1,1)
-        focus_value = np.mean(peaks)
-
+        
+        # Only process measurements with exactly 2 peaks
+        if len(peaks) == 2:
+           
+            # Calculate distance between the two peaks
+            peak_distance = abs(peaks[1] - peaks[0])
+            
+            # Check for outliers - if outlier, skip this measurement entirely
+            if self._is_outlier(peak_distance):
+                logger.debug(f"Peak distance {peak_distance:.1f} detected as outlier - skipping measurement")
+                # Return None for focus to indicate skipped measurement
+                focus_value = None
+                x_peak_distance = None
+            else:
+                # Valid measurement: update history and calculate focus value
+                self._update_history(peak_distance)
+                # avg_distance = self._get_average_distance() # TODO: we would need to reset the averagge if we restart the scan
+                focus_value = np.mean(peaks)
+                x_peak_distance = peak_distance
+        else:
+            # Skip measurements without exactly 2 peaks
+            logger.debug(f"Found {len(peaks)} peaks, need exactly 2 - skipping measurement")
+            # Return None for focus to indicate skipped measurement
+            focus_value = None
+            x_peaks = peaks if len(peaks) > 0 else np.array([])
+            x_peak_distance = None
+            if 0:
+                import matplotlib
+                matplotlib.use('Agg')
+                import matplotlib.pyplot as plt
+                plt.figure()
+                plt.plot(projx_s)
+                plt.plot(peaks, projx_s[peaks], "x")
+                plt.title(f"Found {len(peaks)} peaks")
+                plt.savefig("test.png")
         # outputs
         result: Dict[str, Any] = {
             "t": ts,
-            "x_peaks": focus_value,
+            "x_peak_distance": x_peak_distance,
             "proj_x": projx_s.astype(float),
-            "signal_max": float(np.max(im)),
-            "signal_mean": float(np.mean(im)),
-            "focus": focus_value
+            "focus": focus_value,
+            "avg_peak_distance": self._get_average_distance(),
+            "peak_history_length": len(self.peak_distances)
         }
 
         return result

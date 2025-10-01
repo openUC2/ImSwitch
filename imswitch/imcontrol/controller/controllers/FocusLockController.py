@@ -564,9 +564,9 @@ class FocusLockController(ImConWidgetController):
     def _pollFrames(self):
         tLast = 0
         # store a history of the last 5 values and filter out outliers
-
+        self._focus_metric.reset_history()
         try:
-            nFreeBufferFrames = 3
+            nFreeBufferFrames = 2   
             while self.__isPollingFramesActive:
                 if (time.time() - tLast) < self.pollingFrameUpdatePeriode:
                     time.sleep(0.001)
@@ -574,11 +574,11 @@ class FocusLockController(ImConWidgetController):
                 tLast = time.time()
                 if not self._state.is_measuring and not self.locked and not self.aboutToLock:
                     continue
-                
+                frameAverrage = []
                 for i in range(nFreeBufferFrames): # Kinda clear buffer and wait a bit? 
-                    im = self._master.detectorsManager[self.camera].getLatestFrame()
-
-                # Crop (prefer NiP if present)
+                    frame = self._master.detectorsManager[self.camera].getLatestFrame()
+                    frameAverrage.append(frame)
+                im = np.mean(np.array(frameAverrage), axis=0)
                 try:
                     import NanoImagingPack as nip
                     self.cropped_im = nip.extract(
@@ -597,7 +597,7 @@ class FocusLockController(ImConWidgetController):
                 # Compute focus value using extracted focus metrics module
                 focus_result = self._focus_metric.compute(self.cropped_im)
                 self.current_focus_value = focus_result.get("focus", 0.0)
-                
+                print(f"Focus value: {self.current_focus_value}")
                 # TODO: Remove outliers in PID loop
 
                 # Legacy compatibility # TODO: remove all legacy vars
@@ -612,12 +612,12 @@ class FocusLockController(ImConWidgetController):
                     "timestamp": current_timestamp,
                     "is_locked": self.locked,
                     "current_position": self.currentZPosition,
-                    "focus_metric": self._focus_params.focus_metric,
+                    "focus_mxetric": self._focus_params.focus_metric,
                     # "focus_result": focus_result,  # Include full result for debugging
                     "focus_setpoint": self._pi_params.set_point if self.pi else 0,
                 }
                 try:    
-                    if np.isnan(focus_result['focus']): 
+                    if self.current_focus_value is None or np.isnan(focus_result['focus']): 
                         continue
                 except Exception as e:
                     self._logger.error(f"Error processing focus result: {e}")
@@ -653,14 +653,8 @@ class FocusLockController(ImConWidgetController):
                     step_um = max(min(step_um, limit), -limit)
 
                     if step_um != 0.0:
-                        # Use absolute movement instead of relative
-                        new_z_position = self.currentZPosition + step_um
-                        if abs(lastPosition-new_z_position) >  abs(limit*2):
-                            self._logger.warning("Travel budget exceeded; unlocking focus.")
-                            self.unlockFocus()
-                        else:
-                            lastPosition = new_z_position
-                        self.stage.move(value=new_z_position, axis="Z", speed=MAX_SPEED, is_blocking=False, is_absolute=True)
+                        # Use relative movement
+                        self.stage.move(value=step_um, axis="Z", speed=MAX_SPEED, is_blocking=False, is_absolute=False)
                         self._travel_used_um += abs(step_um) # TODO: Still not sure if we need to use this! 
                         # travel budget acts like safety_distance_limit
                         if self._pi_params.safety_motion_active and self._travel_used_um > self._pi_params.safety_distance_limit:

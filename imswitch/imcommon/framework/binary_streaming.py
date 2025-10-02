@@ -48,7 +48,6 @@ class BinaryFrameEncoder:
                  compression_algorithm: str = COMPRESSION_LZ4,
                  compression_level: int = 0,
                  subsampling_factor: int = 1,
-                 subsampling_auto_max_dim: int = 0,
                  bitdepth: int = 12,
                  pixfmt: str = "GRAY16"):
         """
@@ -58,14 +57,12 @@ class BinaryFrameEncoder:
             compression_algorithm: Compression algorithm ("none", "lz4", "zstd")
             compression_level: Compression level (algorithm-specific)
             subsampling_factor: Subsampling factor (1=no downscale, 2/3/4 reduces resolution)
-            subsampling_auto_max_dim: Auto max dimension (0=off, else max width/height target)
             bitdepth: Bit depth of input data (e.g., 12)
             pixfmt: Pixel format ("GRAY16", "BAYER_RG16", "RGB48")
         """
         self.compression_algorithm = compression_algorithm
         self.compression_level = compression_level
         self.subsampling_factor = subsampling_factor
-        self.subsampling_auto_max_dim = subsampling_auto_max_dim
         self.bitdepth = bitdepth
         self.pixfmt = self._get_pixfmt_code(pixfmt)
         
@@ -89,8 +86,7 @@ class BinaryFrameEncoder:
     def update_config(self, 
                      compression_algorithm: Optional[str] = None,
                      compression_level: Optional[int] = None,
-                     subsampling_factor: Optional[int] = None,
-                     subsampling_auto_max_dim: Optional[int] = None):
+                     subsampling_factor: Optional[int] = None):
         """Update encoder configuration at runtime."""
         if compression_algorithm is not None:
             # Validate availability
@@ -108,8 +104,7 @@ class BinaryFrameEncoder:
             self.compression_level = compression_level
         if subsampling_factor is not None:
             self.subsampling_factor = max(1, subsampling_factor)
-        if subsampling_auto_max_dim is not None:
-            self.subsampling_auto_max_dim = max(0, subsampling_auto_max_dim)
+
     
     def subsample(self, img: np.ndarray) -> Tuple[np.ndarray, int]:
         """
@@ -125,18 +120,8 @@ class BinaryFrameEncoder:
             return img, 1
             
         h, w = img.shape[:2]
-        effective_factor = self.subsampling_factor
-        
-        # Apply auto max dimension if enabled
-        if self.subsampling_auto_max_dim > 0:
-            max_dim = max(h, w)
-            if max_dim > self.subsampling_auto_max_dim:
-                auto_factor = int(np.ceil(max_dim / self.subsampling_auto_max_dim))
-                effective_factor = max(effective_factor, auto_factor)
-        
-        if effective_factor <= 1:
-            return np.ascontiguousarray(img), 1
-            
+        effective_factor = self.subsampling_factor 
+
         # Use nearest-neighbor stride slicing
         subsampled = img[::effective_factor, ::effective_factor]
         return np.ascontiguousarray(subsampled), effective_factor
@@ -184,7 +169,11 @@ class BinaryFrameEncoder:
             Tuple of (binary_packet, metadata_dict)
         """
         start_time = time.time()
-        
+        # if image is rgb we need to convert it to grayscale for now # TODO: support rgb
+        if len(img.shape) == 3 and img.shape[2] == 3:
+            img = np.dot(img[...,:3], [0.2989, 0.5870, 0.1140]).astype(img.dtype)
+            # TODO: logger.warning("RGB image converted to grayscale for binary streaming")
+    
         # Convert to uint16 if needed
         if img.dtype != np.uint16:
             if img.dtype == np.uint8:

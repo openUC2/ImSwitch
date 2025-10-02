@@ -621,11 +621,13 @@ class RecordingController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def snapImageToPath(self, fileName: str = ".") -> dict:
         """Take a snap and save it to a .tiff file at the given fileName."""
+        '''
         numpy_array = list(self.snapNumpy().values())[0]
         deconvoled_image = self._master.arkitekt_controller.upload_and_deconvolve_image(
             numpy_array
         )
         print(deconvoled_image)
+        '''
         # do nothing here
         return self.snap(name=fileName, mSaveFormat=SaveFormat.TIFF)
 

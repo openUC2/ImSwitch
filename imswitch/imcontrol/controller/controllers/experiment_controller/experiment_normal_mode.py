@@ -27,6 +27,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                          snake_tiles: List[List[Dict]],
                          illumination_intensities: List[float],
                          illumination_sources: List[str],
+                         isRGB: bool = False,
                          **kwargs) -> Dict[str, Any]:
         """
         Execute experiment in normal mode.
@@ -66,7 +67,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         # Set up OME writers for each tile - create new writers for each timepoint
         file_writers = self._setup_ome_writers(
             snake_tiles, t, exp_name, dir_path, m_file_name, 
-            z_positions, illumination_intensities
+            z_positions, illumination_intensities, isRGB=isRGB  
         )
         
         # Create workflow steps for each tile
@@ -99,7 +100,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                           dir_path: str,
                           m_file_name: str,
                           z_positions: List[float],
-                          illumination_intensities: List[float]) -> List[OMEWriter]:
+                          illumination_intensities: List[float], 
+                          isRGB: bool) -> List[OMEWriter]:
+        
         """
         Set up OME writers for each tile.
         
@@ -195,7 +198,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                     grid_shape=grid_shape,
                     grid_geometry=grid_geometry,
                     config=writer_config,
-                    logger=self._logger
+                    logger=self._logger, 
+                    isRGB=isRGB
                 )
                 file_writers.append(ome_writer)
         

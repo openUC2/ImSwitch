@@ -503,12 +503,11 @@ class SettingsController(ImConWidgetController):
         
         Args:
             compression: Dict with 'algorithm' and 'level' keys
-            subsampling: Dict with 'factor' and 'auto_max_dim' keys  
             throttle_ms: Throttling interval in milliseconds
         """
         
         update_params = {}
-        
+        # TODO: We need to be able to switch to JPEG streaming as well e.g. compression={'type':'jpeg', 'level': 80}
         if compression:
             if 'algorithm' in compression:
                 update_params['stream_compression_algorithm'] = compression['algorithm']
@@ -518,8 +517,6 @@ class SettingsController(ImConWidgetController):
         if subsampling:
             if 'factor' in subsampling:
                 update_params['stream_subsampling_factor'] = subsampling['factor']
-            if 'auto_max_dim' in subsampling:
-                update_params['stream_subsampling_auto_max_dim'] = subsampling['auto_max_dim']
         
         if throttle_ms is not None:
             update_params['stream_throttle_ms'] = throttle_ms
@@ -535,15 +532,15 @@ class SettingsController(ImConWidgetController):
         global_params = self._master.detectorsManager.getGlobalDetectorParams()
         
         return {
+            "current_compression_algorithm": global_params.get('stream_compression_algorithm', 'lz4'),
             "binary": {
                 "compression": {
                     "algorithm": global_params.get('stream_compression_algorithm', 'lz4'),
                     "level": global_params.get('stream_compression_level', 0)
                 },
                 "subsampling": {
-                    "factor": global_params.get('stream_subsampling_factor', 1),
-                    "auto_max_dim": global_params.get('stream_subsampling_auto_max_dim', 0)
-                },
+                    "factor": global_params.get('stream_subsampling_factor', 4)
+                    },
                 "throttle_ms": global_params.get('stream_throttle_ms', 200)
             },
             "jpeg": {

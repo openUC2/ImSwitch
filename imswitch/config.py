@@ -44,7 +44,6 @@ class ImSwitchConfig:
     stream_binary_compression_algorithm: str = "lz4"
     stream_binary_compression_level: int = 0
     stream_binary_subsampling_factor: int = 1
-    stream_binary_subsampling_auto_max_dim: int = 0
     stream_binary_throttle_ms: int = 50
     
     # Legacy JPEG streaming

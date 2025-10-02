@@ -411,6 +411,13 @@ class CameraHIK:
             param_dict["model_name"] = stName.chCurValue.decode("utf-8")
             if param_dict["model_name"].find("UC")>0:
                 param_dict["isRGB"] = True
+        # if isRGB switch off AWB 
+        if param_dict["isRGB"]:
+            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_OFF)
+            if ret != 0:
+                print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
+                self.init_ok = False
+
 
         # Image Width
         stWidth = MVCC_INTVALUE()

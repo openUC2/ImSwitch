@@ -142,11 +142,12 @@ class SignalInstance(psygnal.SignalInstance):
                     
                     # Check stream parameters for binary streaming
                     stream_compression_algorithm = global_params.get('stream_compression_algorithm')
-                    if stream_compression_algorithm is not None:
+                    if stream_compression_algorithm in ["LZ4", "lz4", "ZSTD", "zstd", "ZStandard"]:
                         self._emit_binary_frame(output_frame, detectorName, pixelSize, global_params)
+                    elif stream_compression_algorithm == "jpeg":
+                        # emit JPEG (legacy behavior for compatibility)
+                        self._emit_jpeg_frame(output_frame, detectorName, pixelSize, global_params)
                     
-                    # Always emit JPEG (legacy behavior for compatibility)
-                    self._emit_jpeg_frame(output_frame, detectorName, pixelSize, global_params)
                         
         except Exception as e:
             print(f"Error processing image signal: {e}")
@@ -167,7 +168,6 @@ class SignalInstance(psygnal.SignalInstance):
         compression_algorithm = global_params.get('stream_compression_algorithm', 'lz4')
         compression_level = global_params.get('stream_compression_level', 0)
         subsampling_factor = global_params.get('stream_subsampling_factor', 1)
-        subsampling_auto_max_dim = global_params.get('stream_subsampling_auto_max_dim', 0)
         
         # Create or update encoder with current parameters
         try:
@@ -176,7 +176,6 @@ class SignalInstance(psygnal.SignalInstance):
                 compression_algorithm=compression_algorithm,
                 compression_level=compression_level,
                 subsampling_factor=subsampling_factor,
-                subsampling_auto_max_dim=subsampling_auto_max_dim
             )
         except ImportError:
             return  # Binary streaming not available

@@ -299,11 +299,6 @@ class FocusLockController(ImConWidgetController):
         # Measurement smoothing
         self._meas_filt = None
 
-        # Camera acquisition
-        try:
-            self._master.detectorsManager[self.camera].startAcquisition()
-        except Exception as e:
-            self._logger.error(f"Failed to start acquisition on camera '{self.camera}': {e}")
 
         # Threads
         self._focusCalibThread = FocusCalibThread(self)
@@ -438,6 +433,11 @@ class FocusLockController(ImConWidgetController):
     def startFocusMeasurement(self) -> bool:
         # Start polling
         self.updateThread() # TODO: Shall we do that from the beginning? 
+        # Camera acquisition
+        try:
+            self._master.detectorsManager[self.camera].startAcquisition()
+        except Exception as e:
+            self._logger.error(f"Failed to start acquisition on camera '{self.camera}': {e}")
 
         try:
             if not self._state.is_measuring:
@@ -452,6 +452,12 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def stopFocusMeasurement(self) -> bool:
+        # Camera acquisition
+        try:
+            self._master.detectorsManager[self.camera].stopAcquisition()
+        except Exception as e:
+            self._logger.error(f"Failed to start acquisition on camera '{self.camera}': {e}")
+
         try:
             if self._state.is_measuring:
                 self._state.is_measuring = False

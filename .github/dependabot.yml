@@ -12,3 +12,31 @@ updates:
       interval: "monthly"
     commit-message:
       prefix: build(ci)
+    groups:
+      ci:
+        patterns:
+          - '*'
+
+  # Maintain dependencies for pip
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: build(pip)
+    groups:
+      pip:
+        patterns:
+          - '*'
+
+  # Maintain dependencies for docker
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: build(docker)
+    groups:
+      docker:
+        patterns:
+          - '*'

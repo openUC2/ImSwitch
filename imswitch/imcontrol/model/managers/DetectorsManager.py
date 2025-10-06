@@ -26,9 +26,9 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._activeAcqsMutex = Mutex()
 
         self._currentDetectorName = None
-
+        # Default parameters for the streaming  # TODO: Not sure if this is the best place to have them - maybe a dedicated dataclass?
         self.detectorParams["compressionlevel"]=80
-
+        self.detectorParams["stream_compression_algorithm"]="lz4"
         for detectorName, detectorInfo in detectorInfos.items():
             if not self._subManagers[detectorName].forAcquisition:
                 continue

@@ -232,7 +232,7 @@ class SignalInstance(psygnal.SignalInstance):
 
             # Create a minimal message
             message = {
-                "name": self.name,
+                "name": self.name, # e.g. sigUpdateImage
                 "detectorname": detector_name,
                 "pixelsize": int(pixel_size), # must not be int64
                 "format": "jpeg",

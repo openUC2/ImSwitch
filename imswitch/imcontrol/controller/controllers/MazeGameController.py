@@ -196,11 +196,9 @@ class MazeGameController(ImConWidgetController):
     # ------------------------- Loops -------------------------
 
     def _grab_loop(self):
-        iTime = time.time()
         while self._running:
             try:
-                print("polling frame...:" + str(time.time()-iTime))
-                iTime = time.time()
+                print("polling frame...")
                 frame = self.camera.getLatestFrame()  # np.ndarray (H,W) or (H,W,C)
                 if frame is None:
                     time.sleep(self._poll_dt)
@@ -220,13 +218,11 @@ class MazeGameController(ImConWidgetController):
         was_high = False    # track last state for LOW→HIGH edge detection
 
         while self._running:
-            iTime = time.time()
             try:
                 frame = self._q.get(timeout=0.2)
             except queue.Empty:
                 continue
 
-            print("processing frame...:" + str(time.time()-iTime))
             gray = to_gray_float(frame)
             crop, box = center_crop(gray, self._crop)
             # ignore edges for robustness
@@ -240,7 +236,7 @@ class MazeGameController(ImConWidgetController):
             if len(roll) > self._history:
                 roll.pop(0)
             self._m_smooth = float(np.mean(roll))
-            print("processing frame 2...:" + str(time.time()-iTime))
+
             # debounced LOW→HIGH
             print(f"  m={m:.3f}  self._m_smooth={self._m_smooth:.3f}  low_run={low_run}  was_high={was_high}")
             if self._m_smooth < self._jump_low:
@@ -252,7 +248,7 @@ class MazeGameController(ImConWidgetController):
                 was_high = True
             else:
                 was_high = self._m_smooth > self._jump_high
-            print("processing frame 3...:" + str(time.time()-iTime))
+
             # preview: draw crop box + current state color
             self._last_preview = draw_overlay(gray, box, color=(0, 255, 0) if was_high else (255, 0, 0))
             
@@ -263,7 +259,6 @@ class MazeGameController(ImConWidgetController):
             payload = {"jpeg_b64": jpeg_b64, "ts": time.time()}
             self.sigPreviewUpdated.emit(payload)
             self.sigGameState.emit(self._state_dict())
-            print("processing frame 4...:" + str(time.time()-iTime))
     # ------------------------- Helpers -------------------------
 
     def _increment_counter(self):

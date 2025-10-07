@@ -43,6 +43,10 @@ class Mutex(abstract.Mutex):
 sio = AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 app = ASGIApp(sio)
 
+# Per-client frame acknowledgement tracking
+_client_frame_ready = {}  # sid -> bool (True if client is ready for next frame)
+_client_frame_lock = threading.Lock()
+
 # Fallback message queue and worker thread for Socket.IO failures
 _fallback_message_queue = queue.Queue()
 _fallback_worker_thread = None
@@ -153,7 +157,7 @@ class SignalInstance(psygnal.SignalInstance):
             print(f"Error processing image signal: {e}")
     
     def _emit_binary_frame(self, img: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
-        """Emit binary frame via Socket.IO."""
+        """Emit binary frame via Socket.IO with flow control."""
         if not HAS_BINARY_STREAMING:
             return
             
@@ -184,20 +188,46 @@ class SignalInstance(psygnal.SignalInstance):
             # Encode frame
             packet, metadata = encoder.encode_frame(img)
             
-            # Emit binary frame
-            sio.start_background_task(sio.emit, "frame", packet)
+            # Add timestamp to metadata for latency tracking
+            metadata['server_timestamp'] = time.time()
             
-            # Emit metadata as JSON signal
-            meta_message = {
-                "name": "frame_meta",
-                "detectorname": detector_name,
-                "pixelsize": int(pixel_size),
-                "format": "binary",
-                "metadata": metadata
-            }
-            sio.start_background_task(sio.emit, "signal", json.dumps(meta_message))
+            # Emit to clients that are ready (acknowledged previous frame)
+            with _client_frame_lock:
+                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
             
-            self._last_binary_emit_time = now
+            if ready_clients:
+                # Mark clients as not ready (waiting for acknowledgement)
+                with _client_frame_lock:
+                    for sid in ready_clients:
+                        _client_frame_ready[sid] = False
+                
+                # Emit binary frame with acknowledgement callback
+                for sid in ready_clients:
+                    def ack_callback(sid=sid):
+                        """Mark client as ready for next frame"""
+                        with _client_frame_lock:
+                            _client_frame_ready[sid] = True
+                    
+                    sio.start_background_task(
+                        sio.emit, 
+                        "frame", 
+                        packet, 
+                        to=sid,
+                        callback=ack_callback
+                    )
+                
+                # Emit metadata as JSON signal
+                meta_message = {
+                    "name": "frame_meta",
+                    "detectorname": detector_name,
+                    "pixelsize": int(pixel_size),
+                    "format": "binary",
+                    "metadata": metadata
+                }
+                for sid in ready_clients:
+                    sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
+                
+                self._last_binary_emit_time = now
             
         except Exception as e:
             print(f"Error emitting binary frame: {e}")
@@ -205,7 +235,7 @@ class SignalInstance(psygnal.SignalInstance):
             self._emit_jpeg_frame(img, detector_name, pixel_size, global_params)
     
     def _emit_jpeg_frame(self, output_frame: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
-        """Emit JPEG frame (legacy path)."""
+        """Emit JPEG frame (legacy path) with flow control."""
         try:
             # Apply legacy subsampling logic
             if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
@@ -230,15 +260,41 @@ class SignalInstance(psygnal.SignalInstance):
             flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
             encoded_image = base64.b64encode(compressed).decode('utf-8')
 
-            # Create a minimal message
+            # Create a minimal message with timestamp
             message = {
                 "name": self.name, # e.g. sigUpdateImage
                 "detectorname": detector_name,
                 "pixelsize": int(pixel_size), # must not be int64
                 "format": "jpeg",
                 "image": encoded_image,
+                "server_timestamp": time.time()  # Add timestamp for latency tracking
             }
-            self._safe_broadcast_message(message)
+            
+            # Emit to clients that are ready (acknowledged previous frame)
+            with _client_frame_lock:
+                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
+            
+            if ready_clients:
+                # Mark clients as not ready (waiting for acknowledgement)
+                with _client_frame_lock:
+                    for sid in ready_clients:
+                        _client_frame_ready[sid] = False
+                
+                # Emit with acknowledgement callback
+                for sid in ready_clients:
+                    def ack_callback(sid=sid):
+                        """Mark client as ready for next frame"""
+                        with _client_frame_lock:
+                            _client_frame_ready[sid] = True
+                    
+                    sio.start_background_task(
+                        sio.emit,
+                        "signal",
+                        json.dumps(message),
+                        to=sid,
+                        callback=ack_callback
+                    )
+            
             del message
         except Exception as e:
             print(f"Error processing JPEG image signal: {e}")
@@ -447,6 +503,27 @@ class FrameworkUtils(abstract.FrameworkUtils):
     @staticmethod
     def processPendingEventsCurrThread():
         emit_queued()
+
+# Socket.IO event handlers for client connection management
+@sio.event
+async def connect(sid, environ):
+    """Handle client connection - mark as ready for frames"""
+    print(f"Client connected: {sid}")
+    with _client_frame_lock:
+        _client_frame_ready[sid] = True
+
+@sio.event
+async def disconnect(sid):
+    """Handle client disconnection - cleanup state"""
+    print(f"Client disconnected: {sid}")
+    with _client_frame_lock:
+        _client_frame_ready.pop(sid, None)
+
+@sio.event
+async def frame_ack(sid):
+    """Client explicitly acknowledges frame processing complete"""
+    with _client_frame_lock:
+        _client_frame_ready[sid] = True
 
 # Function to run Uvicorn server with Socket.IO app
 def run_uvicorn():

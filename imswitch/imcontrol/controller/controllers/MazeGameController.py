@@ -64,19 +64,34 @@ class MazeGameController(ImConWidgetController):
         self._lock = threading.Lock()
 
     # ------------------------- API (REST) -------------------------
+    @APIExport()
+    def moveToStartPosition(self, x: int = None, y: int = None):
+        """Move stage to specified (x,y) position."""
+        if x is None:
+            x = self._start_pos_x
+        if y is None:
+            y = self._start_pos_y
+        try:
+            self.positioner.move(value=x, speed=20000, axis="X", is_absolute=True, is_blocking=False)
+            self.positioner.move(value=y, speed=20000, axis="Y", is_absolute=True, is_blocking=False)
+            return {"ok": True, "x": x, "y": y}
+        except Exception as e:
+            self.__logger.error(f"MazeGameController: could not move to position ({x}, {y}): {e}")
+            return {"ok": False, "error": str(e)}
+
 
     @APIExport()
     def startGame(self, startX: int = None, startY: int = None):
         """Reset counter + timer and start background grab/process."""
-        if startX is not None:
+        if startX is not None and startX != 0:
             # move to initial position if requested
             try:
-                self.positioner.move(value=startX, speed=10000, axis="X", is_absolute=True, is_blocking=True)
+                self.positioner.move(value=startX, speed=20000, axis="X", is_absolute=True, is_blocking=True)
             except Exception as e:
                 self.__logger.error(f"MazeGameController: could not move to start position ({startX}, {startY}): {e}")  
-        if startY is not None:
+        if startY is not None and startY != 0:
             try:
-                self.positioner.move(value=startY, speed=10000, axis="Y", is_absolute=True, is_blocking=True)
+                self.positioner.move(value=startY, speed=20000, axis="Y", is_absolute=True, is_blocking=True)
             except Exception as e:
                 self.__logger.error(f"MazeGameController: could not move to start position ({startX}, {startY}): {e}")
              
@@ -156,6 +171,8 @@ class MazeGameController(ImConWidgetController):
     def getLatestProcessedPreview(self) -> Response:
         """Return latest processed preview with overlay as PNG image."""
         try:
+            was_high = False
+            self._last_preview = draw_overlay(gray, box, color=(0, 255, 0) if was_high else (255, 0, 0))
             if hasattr(self, '_last_preview') and self._last_preview is not None:
                 im = Image.fromarray(self._last_preview)
             else:
@@ -178,20 +195,6 @@ class MazeGameController(ImConWidgetController):
             self.__logger.error(f"Error generating preview image: {e}")
             return Response(status_code=500, content="Error generating preview image")
 
-    @APIExport()
-    def moveToStartPosition(self, x: int = None, y: int = None):
-        """Move stage to specified (x,y) position."""
-        if x is None:
-            x = self._start_pos_x
-        if y is None:
-            y = self._start_pos_y
-        try:
-            self.positioner.move(value=x, speed=10000, axis="X", is_absolute=True, is_blocking=True)
-            self.positioner.move(value=y, speed=10000, axis="Y", is_absolute=True, is_blocking=True)
-            return {"ok": True, "x": x, "y": y}
-        except Exception as e:
-            self.__logger.error(f"MazeGameController: could not move to position ({x}, {y}): {e}")
-            return {"ok": False, "error": str(e)}
 
     # ------------------------- Loops -------------------------
 
@@ -250,14 +253,13 @@ class MazeGameController(ImConWidgetController):
                 was_high = self._m_smooth > self._jump_high
 
             # preview: draw crop box + current state color
-            self._last_preview = draw_overlay(gray, box, color=(0, 255, 0) if was_high else (255, 0, 0))
-            
+            # self._last_preview = draw_overlay(gray, box, color=(0, 255, 0) if was_high else (255, 0, 0))
             # encode to jpeg (base64) and send via socket as payload
             # use helper that encodes via OpenCV + base64 for smaller payloads
-            img_uint8 = to_uint8(self._last_preview)
-            jpeg_b64 = encode_jpeg_b64(img_uint8, quality=self._jpeg_quality)
-            payload = {"jpeg_b64": jpeg_b64, "ts": time.time()}
-            self.sigPreviewUpdated.emit(payload)
+            #img_uint8 = to_uint8(self._last_preview)
+            #jpeg_b64 = encode_jpeg_b64(img_uint8, quality=self._jpeg_quality)
+            #payload = {"jpeg_b64": jpeg_b64, "ts": time.time()}
+            #self.sigPreviewUpdated.emit(payload)
             self.sigGameState.emit(self._state_dict())
     # ------------------------- Helpers -------------------------
 

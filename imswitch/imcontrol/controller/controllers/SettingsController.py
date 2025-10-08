@@ -498,13 +498,18 @@ class SettingsController(ImConWidgetController):
         return self._master.detectorsManager.getGlobalDetectorParams()
     
     @APIExport(requestType="POST")
-    def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None):
+    def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None, throttlems: int = None):
         """Set streaming parameters for binary frame streaming.
         
         Args:
             compression: Dict with 'algorithm' and 'level' keys
-            throttle_ms: Throttling interval in milliseconds
+            subsampling: Dict with 'factor' key
+            throttle_ms: Throttling interval in milliseconds (preferred)
+            throttlems: Throttling interval in milliseconds (alternative naming)
         """
+        
+        # Accept both throttle_ms and throttlems for compatibility
+        throttle_value = throttle_ms if throttle_ms is not None else throttlems
         
         update_params = {}
         # TODO: We need to be able to switch to JPEG streaming as well e.g. compression={'type':'jpeg', 'level': 80}
@@ -518,8 +523,8 @@ class SettingsController(ImConWidgetController):
             if 'factor' in subsampling:
                 update_params['stream_subsampling_factor'] = subsampling['factor']
         
-        if throttle_ms is not None:
-            update_params['stream_throttle_ms'] = throttle_ms
+        if throttle_value is not None:
+            update_params['stream_throttle_ms'] = throttle_value
             
         # Update using the same mechanism as compressionlevel
         self._master.detectorsManager.updateGlobalDetectorParams(update_params)

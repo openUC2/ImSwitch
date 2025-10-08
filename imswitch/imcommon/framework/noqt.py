@@ -93,7 +93,7 @@ class SignalInstance(psygnal.SignalInstance):
     last_image_emit_time = 0
     image_emit_interval = .2  # Emit at most every 200ms
     IMG_QUALITY = 80  # Set the desired quality level (0-100)
-    
+    image_id = 0
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Initialize timing for binary streaming
@@ -151,7 +151,8 @@ class SignalInstance(psygnal.SignalInstance):
                     elif stream_compression_algorithm == "jpeg":
                         # emit JPEG (legacy behavior for compatibility)
                         self._emit_jpeg_frame(output_frame, detectorName, pixelSize, global_params)
-                    
+                    self.image_id += 1
+                    # print(f"Emitted image id {self.image_id} from detector {detectorName}")
                         
         except Exception as e:
             print(f"Error processing image signal: {e}")
@@ -190,7 +191,8 @@ class SignalInstance(psygnal.SignalInstance):
             
             # Add timestamp to metadata for latency tracking
             metadata['server_timestamp'] = time.time()
-            
+            metadata['image_id'] = self.image_id
+
             # Emit to clients that are ready (acknowledged previous frame)
             with _client_frame_lock:
                 ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
@@ -207,6 +209,7 @@ class SignalInstance(psygnal.SignalInstance):
                         """Mark client as ready for next frame"""
                         with _client_frame_lock:
                             _client_frame_ready[sid] = True
+                            #print(f"Client {sid} acknowledged frame {self.image_id}")
                     
                     sio.start_background_task(
                         sio.emit, 
@@ -223,7 +226,7 @@ class SignalInstance(psygnal.SignalInstance):
                     "pixelsize": int(pixel_size),
                     "format": "binary",
                     "metadata": metadata
-                }
+                    }
                 for sid in ready_clients:
                     sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
                 
@@ -242,7 +245,7 @@ class SignalInstance(psygnal.SignalInstance):
                 everyNthsPixel = np.min((np.min([output_frame.shape[0]//240, output_frame.shape[1]//320]), 3))
             else:
                 everyNthsPixel = 1
-
+            everyNthsPixel = global_params.get("stream_subsampling_factor", everyNthsPixel)                
             try:
                 output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
             except:
@@ -268,6 +271,7 @@ class SignalInstance(psygnal.SignalInstance):
                 "format": "jpeg",
                 "image": encoded_image,
                 "server_timestamp": time.time()  # Add timestamp for latency tracking
+                ,"image_id": self.image_id
             }
             
             # Emit to clients that are ready (acknowledged previous frame)
@@ -524,6 +528,7 @@ async def frame_ack(sid):
     """Client explicitly acknowledges frame processing complete"""
     with _client_frame_lock:
         _client_frame_ready[sid] = True
+        # print(f"Client {sid} acknowledged frame")
 
 # Function to run Uvicorn server with Socket.IO app
 def run_uvicorn():

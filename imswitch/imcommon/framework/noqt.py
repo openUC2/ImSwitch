@@ -143,7 +143,11 @@ class SignalInstance(psygnal.SignalInstance):
             for arg in args:
                 if isinstance(arg, np.ndarray):
                     output_frame = np.ascontiguousarray(arg)  # Avoid memory fragmentation
-                    
+                    # if frame is float, we need to convert to uint8
+                    if output_frame.dtype == np.float32 or output_frame.dtype == np.float64:
+                        output_frame = np.uint8(output_frame*255)
+                    if output_frame.dtype not in [np.uint8, np.uint16]:
+                        output_frame = np.uint8(output_frame)  # Convert to uint8 for visualization
                     # Check stream parameters for binary streaming
                     stream_compression_algorithm = global_params.get('stream_compression_algorithm')
                     if stream_compression_algorithm in ["LZ4", "lz4", "ZSTD", "zstd", "ZStandard"]:

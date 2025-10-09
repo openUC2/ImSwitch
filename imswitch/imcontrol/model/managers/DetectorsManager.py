@@ -29,6 +29,7 @@ class DetectorsManager(MultiManager, SignalInterface):
         # Default parameters for the streaming  # TODO: Not sure if this is the best place to have them - maybe a dedicated dataclass?
         self.detectorParams["compressionlevel"]=80
         self.detectorParams["stream_compression_algorithm"]="lz4"
+        self.detectorParams["stream_subsampling_factor"]=4  # 8 or 16
         for detectorName, detectorInfo in detectorInfos.items():
             if not self._subManagers[detectorName].forAcquisition:
                 continue

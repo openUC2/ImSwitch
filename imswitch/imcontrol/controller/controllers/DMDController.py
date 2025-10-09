@@ -202,14 +202,34 @@ class DMDController(ImConWidgetController):
 
     @APIExport(runOnUIThread=False)
     def reconstructIOS(self):
-        """Compute Classic IOS sqrt((I1-I2)^2 + (I1-I3)^2 + (I2-I3)^2) and show on napari."""
+        """Compute Classic IOS sqrt((I1-I2)^2 + (I1-I3)^2 + (I2-I3)^2) and show on napari.
+        Adds optional constant offset subtraction (from widget) to reduce squared background noise.
+        """
         if len(self._last_images) != 3:
             if not IS_HEADLESS:
                 self._widget.setStatus("No images captured. Run 3-shot first.")
             return {"status": "error", "message": "need 3 images"}
 
         try:
-            I1, I2, I3 = [np.asarray(im, dtype=np.float32) for im in self._last_images]
+            # Preserve raw frames and dtypes for bit-depth report/export
+            raw1, raw2, raw3 = [np.asarray(im) for im in self._last_images]
+            dtypes = [raw1.dtype, raw2.dtype, raw3.dtype]
+
+            # Work in float32 for math
+            I1, I2, I3 = [arr.astype(np.float32, copy=False) for arr in (raw1, raw2, raw3)]
+
+            # Optional offset subtraction (units: ADU counts). If widget lacks control, offset=0.
+            offset_val = 0.0
+            if not IS_HEADLESS:
+                try:
+                    offset_val = float(getattr(self._widget, 'getOffset', lambda: 0.0)())
+                except Exception:
+                    offset_val = 0.0
+            if offset_val != 0.0:
+                I1 = np.clip(I1 - offset_val, 0, None)
+                I2 = np.clip(I2 - offset_val, 0, None)
+                I3 = np.clip(I3 - offset_val, 0, None)
+
             ios = np.sqrt((I1 - I2) ** 2 + (I1 - I3) ** 2 + (I2 - I3) ** 2)
             widefield = (I1 + I2 + I3) / 3.0
 
@@ -253,6 +273,7 @@ class DMDController(ImConWidgetController):
                     ios = _gaussian_filter(ios, sigma=sigma, preserve_range=True)
                 except Exception:
                     pass
+
             # Normalize to 0..1 for viewing (both ios and widefield)
             def _norm(a: np.ndarray):
                 m, M = float(np.min(a)), float(np.max(a))
@@ -264,6 +285,17 @@ class DMDController(ImConWidgetController):
             wf_norm = _norm(widefield)
 
             if not IS_HEADLESS:
+                # Bit-depth heuristic from raw dtypes
+                try:
+                    base_dtype = max(dtypes, key=lambda dt: np.dtype(dt).itemsize)
+                    if np.issubdtype(base_dtype, np.integer):
+                        bits = np.dtype(base_dtype).itemsize * 8
+                        bit_info = "16-bit" if bits >= 16 else "8-bit"
+                    else:
+                        bit_info = str(base_dtype)
+                except Exception:
+                    bit_info = "unknown"
+
                 self._widget.showImage(ios_norm, name="DMD Reconstruction")
                 if widefield_enabled:
                     try:
@@ -324,9 +356,9 @@ class DMDController(ImConWidgetController):
                                 i1_path = base + "_i1_raw.tif"
                                 i2_path = base + "_i2_raw.tif"
                                 i3_path = base + "_i3_raw.tif"
-                                tifffile.imwrite(i1_path, I1.astype(self._last_images[0].dtype, copy=False))
-                                tifffile.imwrite(i2_path, I2.astype(self._last_images[1].dtype, copy=False))
-                                tifffile.imwrite(i3_path, I3.astype(self._last_images[2].dtype, copy=False))
+                                tifffile.imwrite(i1_path, raw1)
+                                tifffile.imwrite(i2_path, raw2)
+                                tifffile.imwrite(i3_path, raw3)
                                 export_msg += f" + raw frames (i1,i2,i3)"
                             except Exception as eraw:
                                 export_msg += f" (raw export failed: {eraw})"
@@ -334,7 +366,9 @@ class DMDController(ImConWidgetController):
                         export_msg = f" Export failed: {ee}"  # keep going
 
                 self._widget.setStatus(
-                    f"Reconstruction displayed. sigma={sigma if gaussian_enabled else 'off'} wf={'on' if widefield_enabled else 'off'} raw={'on' if export_raw_enabled else 'off'}{export_msg}"
+                    f"Reconstruction displayed. dtype~{bit_info} offset={offset_val if offset_val != 0.0 else 'off'} "
+                    f"sigma={sigma if gaussian_enabled else 'off'} wf={'on' if widefield_enabled else 'off'} "
+                    f"raw={'on' if export_raw_enabled else 'off'}{export_msg}"
                 )
             return {"status": "ok"}
         except Exception as e:

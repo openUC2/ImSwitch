@@ -48,7 +48,7 @@ class DMDWidget(NapariHybridWidget):
         self.delaySpin = QtWidgets.QSpinBox()
         self.delaySpin.setRange(0, 10000)
         self.delaySpin.setSingleStep(10)
-        self.delaySpin.setValue(200)  # default 0.2 s
+        self.delaySpin.setValue(50)  # default 0.2 s
         self.delaySpin.setToolTip("Delay between pattern switches (ms). Original default 200 ms")
         grid.addWidget(self.delaySpin, 2, 1)
 
@@ -58,7 +58,7 @@ class DMDWidget(NapariHybridWidget):
         self.sigmaSpin.setDecimals(2)
         self.sigmaSpin.setRange(0.0, 50.0)
         self.sigmaSpin.setSingleStep(0.25)
-        self.sigmaSpin.setValue(3.0)
+        self.sigmaSpin.setValue(1.0)
         self.sigmaSpin.setToolTip("Gaussian filter sigma (pixels) applied after reconstruction. Set 0 to disable")
         grid.addWidget(self.sigmaSpin, 2, 3)
 
@@ -106,9 +106,13 @@ class DMDWidget(NapariHybridWidget):
         grid.addWidget(self.btnThreeShot, 3, 0, 1, 2)
         grid.addWidget(self.btnReconstruct, 3, 2)
 
-        # Status
-        self.statusLabel = QtWidgets.QLabel("")
-        grid.addWidget(self.statusLabel, 6, 0, 1, 4)
+        # Status (scrollable, fixed height) moved to row 7 to avoid overlap
+        self.statusEdit = QtWidgets.QPlainTextEdit()
+        self.statusEdit.setReadOnly(True)
+        self.statusEdit.setFixedHeight(80)
+        self.statusEdit.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.statusEdit.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        grid.addWidget(self.statusEdit, 7, 0, 1, 4)
 
         # Connections
         self.btnCheck.clicked.connect(self.sigCheckStatus.emit)
@@ -154,7 +158,12 @@ class DMDWidget(NapariHybridWidget):
             self.exportDirEdit.setText(d)
 
     def setStatus(self, text: str):
-        self.statusLabel.setText(text)
+        """Replace full status text (scrollable, not resizing layout)."""
+        self.statusEdit.setPlainText(text or "")
+
+    # (Optional helper if you later want incremental logs)
+    # def appendStatus(self, line: str):
+    #     self.statusEdit.appendPlainText(line)
 
     def showImage(self, im: np.ndarray, name: str = "DMD Reconstruction"):
         """Display or update an image in napari."""

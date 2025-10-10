@@ -38,6 +38,31 @@ class TucsenMode(Enum):
     HIGH_SPEED = 2
 
 
+class CallBack():
+    def __init__(self, TUCAMOPEN_PARA):
+        self.TUCAMOPEN = TUCAMOPEN_PARA
+    def OnCallbackBuffer(self):
+        m_rawHeader = TUCAM_RAWIMG_HEADER()
+        print('TUCAM_Buf_GetData')
+        try:
+            # ch:回调获取数据流 | en:Callback get stream
+            Result = TUCAM_Buf_GetData(self.TUCAMOPEN.hIdxTUCam, pointer(m_rawHeader))
+            print('TUCAM_Buf_GetData = ', Result)
+            # buf = create_string_buffer(m_rawHeader.uiImgSize)
+            # pointer_data = c_void_p(m_rawHeader.pImgData)
+            # memmove(buf, pointer_data, m_rawHeader.uiImgSize)
+            #
+            # test_path = "result.raw"
+            # with open(test_path, 'wb') as f:
+            #     f.write(bytes(buf))
+            #     f.close()
+            # print(m_rawHeader.uiIndex)
+            # print(m_rawHeader.uiImgSize)
+            # print(m_rawHeader.usWidth)
+            # print(m_rawHeader.usHeight)
+        except Exception:
+            print('except')
+
 # ----------------------------------------------------------------------------
 #  Callback signature for Tucsen
 # ----------------------------------------------------------------------------
@@ -132,7 +157,8 @@ class CameraTucsen:
             self.TUCAMINIT = None
             self.TUCAMOPEN = None
 
-        self.force_cleanup()
+        if sys.platform.startswith('win'):
+            self.force_cleanup()
        
         self._open_camera(self.cameraNo)
         self.trigger_source = "Continuous"
@@ -144,6 +170,15 @@ class CameraTucsen:
 
     def _setup_callback(self):
         """Setup callback function for frame capture like HIK camera"""
+        if False and sys.platform.startswith('linux'):
+            m_callback = CallBack(self.camera_handle)
+            CALL_BACK_FUN = BUFFER_CALLBACK(m_callback.OnCallbackBuffer)
+            CALL_BACK_USER = CONTEXT_CALLBACK(m_callback.__class__)
+            TUCAM_Buf_DataCallBack(self.camera_handle, CALL_BACK_FUN, CALL_BACK_USER)
+            
+
+            
+
         self._sdk_cb = self._wrap_callback(self._on_frame_callback)
         try:
             ret = TUCAM_Buf_DataCallBack(self.camera_handle, self._sdk_cb, None)
@@ -240,14 +275,29 @@ class CameraTucsen:
             raise
 
     def _open_camera_linux(self, camera_index: int):
-        ret = TUCAM_Api_Init()
+        self.Path = '/home/uc2/ImSwitch' #'./'
+        self.TUCAMINIT = TUCAM_INIT(0, self.Path.encode('utf-8'))
+        TUCAM_Api_Init(pointer(self.TUCAMINIT), 5000)
+        print(self.TUCAMINIT.uiCamCount)
+        print(self.TUCAMINIT.pstrConfigPath)
+        
+        self.TUCAMOPEN = TUCAM_OPEN(0, 0)
+        # ch:初始化相机枚举相机个数 | en:Initializing Cameras Enumerates the number of cameras
+        if self.TUCAMINIT.uiCamCount == 0:
+            print('No Camera found!')
+            return
+        print('Connect %d camera' % self.TUCAMINIT.uiCamCount)
+        TUCAM_Dev_Open(pointer(self.TUCAMOPEN))  # TODO need camera connected
+
+        
+        #ret = TUCAM_Api_Init()
         # Do not hard-fail on non-zero here; Linux bindings may return 0/None
-        opCam = TUCAM_OPEN()
-        opCam.uiIdxOpen = camera_index
-        ret = TUCAM_Dev_Open(byref(opCam))
-        if not self._ok(ret):
-            raise Exception(f"Failed to open Tucsen camera {camera_index}: {ret}")
-        self.camera_handle = opCam.hIdxTUCam
+        #opCam = TUCAM_OPEN(0, 0)
+        #opCam.uiIdxOpen = camera_index
+        #ret = TUCAM_Dev_Open(byref(opCam))
+        #if not self._ok(ret):
+        #    raise Exception(f"Failed to open Tucsen camera {camera_index}: {ret}")
+        self.camera_handle = self.TUCAMOPEN.hIdxTUCam
         self._get_sensor_info()
         self.is_connected = True
         self.__logger.info(f"Opened Tucsen camera {camera_index} (Linux)")

@@ -110,7 +110,7 @@ class SignalInstance(psygnal.SignalInstance):
         # Skip large data signals
         if self.name in ["sigUpdateImage", "sigExperimentImageUpdate"]:  #, "sigImageUpdated"]:
             now = time.time()
-            if SOCKET_STREAM and (now - self.last_image_emit_time > self.image_emit_interval) or self.name == "sigExperimentImageUpdate":
+            if SOCKET_STREAM: # TODO: Shall we implement the throttle here?  and (now - self.last_image_emit_time > self.image_emit_interval) or self.name == "sigExperimentImageUpdate":
                 self._handle_image_signal(args)
                 self.last_image_emit_time = now
             return
@@ -191,7 +191,9 @@ class SignalInstance(psygnal.SignalInstance):
         
         try:
             # Encode frame
+            t1 = time.time()
             packet, metadata = encoder.encode_frame(img)
+            #print("Encoding frame with binary encoder...", time.time()-t1)
             
             # Add timestamp to metadata for latency tracking
             metadata['server_timestamp'] = time.time()
@@ -213,7 +215,7 @@ class SignalInstance(psygnal.SignalInstance):
                         """Mark client as ready for next frame"""
                         with _client_frame_lock:
                             _client_frame_ready[sid] = True
-                            #print(f"Client {sid} acknowledged frame {self.image_id}")
+                            # print(f"Client {sid} acknowledged frame {self.image_id}")
                     
                     sio.start_background_task(
                         sio.emit, 

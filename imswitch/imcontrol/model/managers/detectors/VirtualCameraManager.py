@@ -1,5 +1,5 @@
 import numpy as np
-
+import time
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter, DetectorBooleanParameter
 
@@ -29,7 +29,7 @@ class VirtualCameraManager(DetectorManager):
         self._running = True
         self.ExposureTime  = 0
         self.Gain = 0
-
+        self.tLast = time.time()
         # Prepare parameters
         parameters = {
             'exposure': DetectorNumberParameter(group='Misc', value=1, valueUnits='ms',
@@ -98,6 +98,7 @@ class VirtualCameraManager(DetectorManager):
             return frame
 
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
+        self.tLast = time.time()
         if returnFrameNumber:
             frame, frameNumber = self._camera.getLast(returnFrameNumber=returnFrameNumber)
             return frame, frameNumber
@@ -139,10 +140,12 @@ class VirtualCameraManager(DetectorManager):
             return None
 
     def startAcquisition(self, liveView=False):
-        pass
+        """Start continuous frame acquisition in the camera thread"""
+        self._camera.startAcquisition()
 
     def stopAcquisition(self):
-        pass
+        """Stop continuous frame acquisition"""
+        self._camera.stopAcquisition()
 
     def stopAcquisitionForROIChange(self):
         pass

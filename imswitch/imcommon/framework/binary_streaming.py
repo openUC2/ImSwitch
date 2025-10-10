@@ -188,7 +188,7 @@ class BinaryFrameEncoder:
             
         # Apply subsampling
         subsampled_img, effective_factor = self.subsample(u16_img)
-        
+        #print("Subsampled image shape took ", time.time()-start_time)
         # Ensure contiguous array
         if not subsampled_img.flags.c_contiguous:
             subsampled_img = np.ascontiguousarray(subsampled_img)
@@ -211,7 +211,7 @@ class BinaryFrameEncoder:
             logger.warning(f"Compression failed, falling back to uncompressed: {e}")
             compressed = bytes(memoryview(subsampled_img))
             compression_success = False
-        
+        #print("Compressed image took ", time.time()-start_time  )
         # Build packet: [header][u32 compressed_size][compressed_bytes]
         packet = header + struct.pack("<I", len(compressed)) + compressed
         
@@ -233,7 +233,7 @@ class BinaryFrameEncoder:
             "encode_time_ms": encode_time_ms,
             "timestamp_ns": timestamp_ns
         }
-        
+        #print("Total encoding took ", time.time()-start_time  )
         return packet, metadata
 
 

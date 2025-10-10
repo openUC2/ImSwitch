@@ -14,6 +14,8 @@ import numpy as np
 from scipy.optimize import curve_fit
 from scipy.ndimage import gaussian_filter, center_of_mass
 from skimage.feature import peak_local_max
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,10 @@ class FocusConfig:
     enable_gaussian_blur: bool = True
     min_signal_threshold: float = 10.0  # Minimum signal for valid measurement
     max_focus_value: float = 1e6  # Maximum valid focus value
-
+    # peak-specific
+    peak_distance: int = 150                 # minimal separation (px) between the two peaks
+    peak_height: Optional[float] = 20      # required absolute height in projection units
+    max_peaks: int = 2                       # keep at most two strongest peaks
 
 class FocusMetricBase:
     """Base class for focus metrics."""
@@ -35,7 +40,12 @@ class FocusMetricBase:
     def __init__(self, config: Optional[FocusConfig] = None):
         self.config = config or FocusConfig()
         logger.debug(f"Focus metric initialized with config: {self.config}")
+        self._rotation_angle = 0.0  # Placeholder for potential future use
 
+    def reset_history(self):
+        """Reset any internal history (if applicable)."""
+        pass
+    
     def preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
         """
         Preprocess frame for focus computation.
@@ -53,6 +63,10 @@ class FocusMetricBase:
             im = frame.astype(np.uint16)
 
         im = im.astype(float)
+        # rotate image if needed
+        if self._rotation_angle != 0.0:
+            from scipy.ndimage import rotate
+            im = rotate(im, self._rotation_angle, reshape=False)
 
         # Crop around brightest region if crop_radius > 0
         if 0 and self.config.crop_radius > 0:
@@ -71,13 +85,14 @@ class FocusMetricBase:
 
         # Background subtraction and thresholding
         # TODO: normalize intensity to compensate laser fluctuations? 
-        im = im / np.max((np.max(im), 0.1)) * 255
-        im = im - np.mean(im) / 2.0
-        im[im < self.config.background_threshold] = 0
+        if 0:
+            im = im / np.max((np.max(im), 0.1)) * 255
+            im = im - np.min(im) / 2.0
+            im[im < self.config.background_threshold] = 0
         
         return im
 
-    def compute(self, frame: np.ndarray) -> Dict[str, Any]:
+    def compute(self, frame: np.ndarray):
         """
         Compute focus metric.
         
@@ -162,7 +177,10 @@ class AstigmatismFocusMetric(FocusMetricBase):
             init_guess_x = [i0_x, w1 / 2, sigma_x_init, amp_x, 100.0]
         else:
             init_guess_x = [i0_x, w1 / 2, sigma_x_init, amp_x]
-        init_guess_y = [i0_y, h1 / 2, sigma_y_init, amp_y]
+        if isDoubleGaussY:
+            init_guess_y = [i0_y, h1 / 2, sigma_y_init, amp_y, 100.0]
+        else:   
+            init_guess_y = [i0_y, h1 / 2, sigma_y_init, amp_y]
 
         try:
             # Fit X projection
@@ -192,7 +210,7 @@ class AstigmatismFocusMetric(FocusMetricBase):
 
         return sigma_x, sigma_y
 
-    def compute(self, frame: np.ndarray) -> Dict[str, Any]:
+    def compute(self, frame: np.ndarray):
         """
         Compute astigmatism-based focus metric.
         
@@ -206,22 +224,25 @@ class AstigmatismFocusMetric(FocusMetricBase):
         
         try:
             # Preprocess frame
-            im = self.preprocess_frame(np.array(frame))
+            processed_image = self.preprocess_frame(np.array(frame))
             
             # Check for minimum signal
-            if np.max(im) < self.config.min_signal_threshold:
+            if np.max(processed_image) < self.config.min_signal_threshold:
                 logger.warning("Signal below threshold")
-                return {"t": timestamp, "focus": self.config.max_focus_value, "error": "low_signal"}
+                return {"t": timestamp, "focus": self.config.max_focus_value, "error": "low_signal"}, None
             
             # Compute projections and fit Gaussians
-            projX, projY = self.compute_projections(im)
+            projX, projY = self.compute_projections(processed_image)
             sigma_x, sigma_y = self.fit_projections(projX, projY)
             
             # Calculate focus value as ratio
-            if sigma_y == 0 or sigma_y < 1e-6:
-                focus_value = self.config.max_focus_value
+            if 1:
+                if sigma_y == 0 or sigma_y < 1e-6:
+                    focus_value = self.config.max_focus_value
+                else:
+                    focus_value = float(sigma_x / sigma_y)
             else:
-                focus_value = float(sigma_x / sigma_y)
+                focus_value = float(sigma_x)  # Use product for better sensitivity
                 
             # Clamp to reasonable range
             focus_value = min(focus_value, self.config.max_focus_value)
@@ -233,13 +254,129 @@ class AstigmatismFocusMetric(FocusMetricBase):
                 "focus": focus_value,
                 "sigma_x": sigma_x,
                 "sigma_y": sigma_y,
-                "signal_max": float(np.max(im)),
-                "signal_mean": float(np.mean(im))
-            }
+                "signal_max": float(np.max(frame)),
+                "signal_mean": float(np.mean(frame)),
+            }, processed_image
             
         except Exception as e:
             logger.error(f"Focus computation failed: {e}")
-            return {"t": timestamp, "focus": self.config.max_focus_value, "error": str(e)}
+            return {"t": timestamp, "focus": self.config.max_focus_value, "error": str(e)}, None
+
+class PeakMetric(FocusMetricBase):
+    """
+    X-only peak finder.
+    Returns integer peak positions along X and their distance. No PID, no Y-fit.
+    Computes rolling average of peak distances over 5 values and detects outliers.
+    """
+
+    def __init__(self, config: Optional[FocusConfig] = None):
+        super().__init__(config)
+        self.peak_distances = []  # Store last 5 peak distances
+        self.max_history = 5
+        self.outlier_threshold = 50.0  # Standard deviations for outlier detection
+
+    @staticmethod
+    def _projection_x(im: np.ndarray) -> np.ndarray:
+        return np.mean(im, axis=0)
+
+    @staticmethod
+    def _smooth_1d(x: np.ndarray, sigma: float) -> np.ndarray:
+        return gaussian_filter1d(x, sigma) if sigma and sigma > 0 else x
+
+    def _is_outlier(self, distance: float) -> bool:
+        """Check if current distance is an outlier based on rolling history."""
+        if len(self.peak_distances) < 3:  # Need at least 3 values for outlier detection
+            return False
+        
+        mean_dist = np.mean(self.peak_distances)
+        std_dist = np.std(self.peak_distances)
+        
+        # Avoid division by zero
+        if std_dist < 1e-6:
+            return False
+            
+        z_score = abs(distance - mean_dist) / std_dist
+        if z_score > self.outlier_threshold:
+            return True
+        return False
+
+    def _update_history(self, distance: float) -> None:
+        """Update the rolling history of peak distances."""
+        self.peak_distances.append(distance)
+        if len(self.peak_distances) > self.max_history:
+            self.peak_distances.pop(0)
+
+    def _get_average_distance(self) -> Optional[float]:
+        """Get the rolling average of peak distances."""
+        if len(self.peak_distances) == 0:
+            return None
+        return float(np.mean(self.peak_distances))
+
+    def reset_history(self):
+        """Reset the history of peak distances."""
+        self.peak_distances = []
+        
+    def compute(self, frame: np.ndarray) -> Dict[str, Any]:
+        ts = time.time()
+
+        # X projection and optional 1D smoothing
+        # remove background 
+        projx = np.maximum(self._projection_x(np.asarray(frame))-self.config.background_threshold,0)
+        projx_s = self._smooth_1d(projx, self.config.gaussian_sigma if self.config.enable_gaussian_blur else 0.0)
+        projx_s = projx_s - np.min(projx_s)
+        #projx_s = np.exp(1+projx_s)
+        projx_s = projx_s / np.max(projx_s)*255
+        # peak detection (keep the strongest two if more found)
+        peaks, props = find_peaks(
+            projx_s,
+            distance=self.config.peak_distance,
+            height=self.config.peak_height # TODO: These values have to be adapted to objectives - larger magnification => larger
+        )
+        
+        # Only process measurements with exactly 2 peaks
+        if len(peaks) == 2:
+           
+            # Calculate distance between the two peaks
+            peak_distance = abs(peaks[1] - peaks[0])
+            
+            # Check for outliers - if outlier, skip this measurement entirely
+            if self._is_outlier(peak_distance):
+                logger.debug(f"Peak distance {peak_distance:.1f} detected as outlier - skipping measurement")
+                # Return None for focus to indicate skipped measurement
+                focus_value = None
+                x_peak_distance = None
+            else:
+                # Valid measurement: update history and calculate focus value
+                self._update_history(peak_distance)
+                # avg_distance = self._get_average_distance() # TODO: we would need to reset the averagge if we restart the scan
+                focus_value = np.mean(peaks)
+                x_peak_distance = peak_distance
+        else:
+            # Skip measurements without exactly 2 peaks
+            logger.debug(f"Found {len(peaks)} peaks, need exactly 2 - skipping measurement")
+            # Return None for focus to indicate skipped measurement
+            focus_value = None
+            x_peak_distance = None
+            if 0:
+                import matplotlib
+                matplotlib.use('Agg')
+                import matplotlib.pyplot as plt
+                plt.figure()
+                plt.plot(projx_s)
+                plt.plot(peaks, projx_s[peaks], "x")
+                plt.title(f"Found {len(peaks)} peaks")
+                plt.savefig("test.png")
+        # outputs
+        result: Dict[str, Any] = {
+            "t": ts,
+            "x_peak_distance": x_peak_distance,
+            "proj_x": projx_s.astype(float),
+            "focus": focus_value,
+            "avg_peak_distance": self._get_average_distance(),
+            "peak_history_length": len(self.peak_distances)
+        }
+
+        return result
 
 
 class CenterOfMassFocusMetric(FocusMetricBase):
@@ -371,8 +508,9 @@ class FocusMetricFactory:
     _metrics = {
         "astigmatism": AstigmatismFocusMetric,
         "center_of_mass": CenterOfMassFocusMetric,
-        "gaussian": AstigmatismFocusMetric,  # Alias
-        "gradient": CenterOfMassFocusMetric,  # Alias for now
+        "gaussian": AstigmatismFocusMetric, 
+        "gradient": CenterOfMassFocusMetric, 
+        "peak": PeakMetric,  
     }
 
     @classmethod

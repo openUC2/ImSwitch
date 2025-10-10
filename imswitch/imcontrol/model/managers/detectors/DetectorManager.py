@@ -143,7 +143,6 @@ class DetectorManager(SignalInterface):
                 we have 255 levels of gray, so we can use the min and max values to scale the image
 
                 TODO: not ideal as we scale noise, but we need to do this for the preview
-                '''
                 def stretch_pixels(image_12bit, lower_clip, upper_clip):
                     # Clamping to the range [lower_clip, upper_clip]
                     clamped = np.clip(image_12bit, lower_clip, upper_clip)
@@ -153,6 +152,7 @@ class DetectorManager(SignalInterface):
                     return np.clip(scaled, 0, 255).astype(np.uint8)
                 if self._maxValueFramePreview != -1 and self._minValueFramePreview != -1:
                     self.__image = stretch_pixels(self.__image, self._minValueFramePreview, self._maxValueFramePreview)
+                '''
                 self.sigImageUpdated.emit(self.__image, init, self.scale) # TODO - inject compressionrate?
 
     def setMinValueFramePreview(self, value):

@@ -36,6 +36,19 @@ class ImSwitchConfig:
     # Streaming settings
     socket_stream: bool = True
     
+    # Binary streaming configuration
+    stream_binary_enabled: bool = True
+    stream_binary_websocket_path: str = "/ws/frames"
+    stream_binary_bitdepth_in: int = 12
+    stream_binary_pixfmt: str = "GRAY16"
+    stream_binary_compression_algorithm: str = "lz4"
+    stream_binary_compression_level: int = 0
+    stream_binary_subsampling_factor: int = 1
+    stream_binary_throttle_ms: int = 50
+    
+    # Legacy JPEG streaming
+    stream_jpeg_enabled: bool = False
+    
     # Jupyter settings
     jupyter_port: int = 8888
     jupyter_url: str = ""

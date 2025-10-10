@@ -71,7 +71,7 @@ class ImConMainController(MainController):
                 controller_class = getattr(module, controller_name)
                 #module = importlib.import_module(f'.{controller_name}', package='imswitch.imcontrol.controller.controllers')
             except Exception as e:
-                self.__logger.warning(f"Could not dynamically import {controller_name}: {e}")
+                self.__logger.warning(f"Could not dynamically import (1) {controller_name}: {e}")
                 continue
             if controller_class is not None:
                 try:

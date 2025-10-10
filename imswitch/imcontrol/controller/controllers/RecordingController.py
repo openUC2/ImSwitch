@@ -619,15 +619,17 @@ class RecordingController(ImConWidgetController):
             return HTTPException(detail="Variable not found", status_code=404)
 
     @APIExport(runOnUIThread=True)
-    def snapImageToPath(self, fileName: str = ".") -> dict:
+    def snapImageToPath(self, fileName: str = ".", saveFormat:SaveFormat = SaveFormat.TIFF) -> dict:
         """Take a snap and save it to a .tiff file at the given fileName."""
+        '''
         numpy_array = list(self.snapNumpy().values())[0]
         deconvoled_image = self._master.arkitekt_controller.upload_and_deconvolve_image(
             numpy_array
         )
         print(deconvoled_image)
+        '''
         # do nothing here
-        return self.snap(name=fileName, mSaveFormat=SaveFormat.TIFF)
+        return self.snap(name=fileName, mSaveFormat=saveFormat)
 
     @APIExport(runOnUIThread=False)
     def snapImage(self, output: bool = False, toList: bool = True) -> Union[None, list]:

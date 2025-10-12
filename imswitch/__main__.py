@@ -133,8 +133,14 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         # Apply final configuration update to legacy globals (ensures consistency)
         config.to_legacy_globals(imswitch)
 
+        # FIXME: !!!! This is because the headless flag is loaded after commandline input
+        from imswitch.imcommon import prepareApp, launchApp
+        from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
+        from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
+
         # Setup logging system with configuration
-        from imswitch.imcommon.model import setup_logging, enable_signal_emission
+        # Import after framework is loaded to avoid circular dependencies
+        from imswitch.imcommon.model.logging import setup_logging, enable_signal_emission
         setup_logging(
             log_level=config.log_level,
             log_to_file=config.log_to_file,
@@ -149,11 +155,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 enable_signal_emission(sigLog)
             except Exception as e:
                 logging.warning(f"Could not enable signal emission for logging: {e}")
-
-        # FIXME: !!!! This is because the headless flag is loaded after commandline input
-        from imswitch.imcommon import prepareApp, launchApp
-        from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
-        from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
 
         logger = initLogger('main')
         logger.info(f'Starting ImSwitch {config.version}')

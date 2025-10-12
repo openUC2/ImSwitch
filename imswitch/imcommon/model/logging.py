@@ -61,9 +61,14 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = True,
         # Determine log folder
         if log_folder is None:
             if config_folder is None:
-                # Use default location
-                from imswitch.imcommon.model import dirtools
-                config_folder = dirtools.UserFileDirs.Root
+                # Use default location - avoid circular import by importing directly
+                try:
+                    from imswitch.imcommon.model.dirtools import UserFileDirs
+                    config_folder = UserFileDirs.Root
+                except ImportError:
+                    # Fallback to home directory if dirtools cannot be imported
+                    import os
+                    config_folder = os.path.expanduser('~/ImSwitchConfig')
             log_folder = os.path.join(config_folder, 'logs')
         
         # Create log folder if it doesn't exist
@@ -96,8 +101,12 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = True,
 def get_log_folder(config_folder: Optional[str] = None) -> str:
     """Get the log folder path."""
     if config_folder is None:
-        from imswitch.imcommon.model import dirtools
-        config_folder = dirtools.UserFileDirs.Root
+        try:
+            from imswitch.imcommon.model.dirtools import UserFileDirs
+            config_folder = UserFileDirs.Root
+        except ImportError:
+            # Fallback to home directory if dirtools cannot be imported
+            config_folder = os.path.expanduser('~/ImSwitchConfig')
     return os.path.join(config_folder, 'logs')
 
 

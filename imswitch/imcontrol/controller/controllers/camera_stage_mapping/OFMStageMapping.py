@@ -3,6 +3,10 @@ from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage_tracker import Tracker
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.closed_loop_move import closed_loop_move, closed_loop_scan
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.scan_coords_times import ordered_spiral
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
+    calibrate_affine_transform, validate_calibration, apply_affine_transform
+)
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.calibration_storage import CalibrationStorage
 import logging
 import time
 import numpy as np
@@ -75,6 +79,9 @@ class OFMStageScanClass(object):
         # get hold on detector and stage
         self.microscopeDetector = mDetector
         self.microscopeStage = mStage
+        
+        # Initialize calibration storage for per-objective data
+        self._calibration_storage = CalibrationStorage(calibration_file_path, logger=self._logger)
 
     def stop(self):
         self.isStop = True
@@ -194,14 +201,210 @@ class OFMStageScanClass(object):
 
         return data
 
+    def calibrate_affine(
+        self,
+        objective_id: str = "default",
+        step_size_um: float = 100.0,
+        pattern: str = "cross",
+        n_steps: int = 4,
+        auto_exposure: bool = True,
+        validate: bool = True
+    ):
+        """
+        Perform robust affine calibration using the new protocol.
+        
+        This method replaces the old calibrate_xy with a more robust approach:
+        - Uses phase correlation for sub-pixel accuracy
+        - Computes full 2x3 affine transformation
+        - Includes outlier detection and validation
+        - Stores per-objective calibration data
+        
+        Args:
+            objective_id: Identifier for the objective being calibrated
+            step_size_um: Step size in microns (50-200 recommended)
+            pattern: Movement pattern - "cross" or "grid"
+            n_steps: Number of steps in each direction
+            auto_exposure: Whether to automatically adjust exposure
+            validate: Whether to validate the calibration
+        
+        Returns:
+            Dictionary with calibration results
+        """
+        self._logger.info(f"Starting affine calibration for objective '{objective_id}'")
+        
+        # Get camera and stage interface functions
+        grab_image, get_position, move, wait = self.camera_stage_functions()
+        
+        # Auto-adjust exposure if requested
+        if auto_exposure:
+            self._logger.info("Auto-adjusting exposure...")
+            try:
+                # Create a simple set_exposure function
+                # Note: This is a placeholder - actual implementation depends on camera API
+                def set_exposure(exposure_ms):
+                    self._logger.info(f"Setting exposure to {exposure_ms:.1f}ms")
+                    # TODO: Implement actual exposure setting via camera API
+                    pass
+                
+                # For now, skip auto-exposure if we can't set it
+                self._logger.info("Auto-exposure not implemented for this camera, using current settings")
+            except Exception as e:
+                self._logger.warning(f"Could not adjust exposure: {e}")
+        
+        # Create tracker
+        tracker = Tracker(grab_image, get_position, settle=wait)
+        
+        # Perform calibration
+        try:
+            result = calibrate_affine_transform(
+                tracker=tracker,
+                move=move,
+                step_size_um=step_size_um,
+                pattern=pattern,
+                n_steps=n_steps,
+                settle_time=0.2,
+                logger=self._logger
+            )
+            
+            # Validate calibration if requested
+            if validate:
+                is_valid, message = validate_calibration(
+                    result["affine_matrix"],
+                    result["metrics"],
+                    logger=self._logger
+                )
+                result["validation"] = {
+                    "is_valid": is_valid,
+                    "message": message
+                }
+                
+                if not is_valid:
+                    self._logger.warning("Calibration validation failed but data will still be saved")
+            
+            # Store calibration data
+            objective_info = {
+                "name": objective_id,
+                "effective_pixel_size_um": self._effPixelsize,
+                "stage_step_size_um": self._stageStepSize
+            }
+            
+            self._calibration_storage.save_calibration(
+                objective_id=objective_id,
+                affine_matrix=result["affine_matrix"],
+                metrics=result["metrics"],
+                objective_info=objective_info
+            )
+            
+            self._logger.info(f"Affine calibration completed for objective '{objective_id}'")
+            return result
+            
+        except Exception as e:
+            self._logger.error(f"Affine calibration failed: {e}")
+            raise
+
+    def get_affine_matrix(self, objective_id: str = "default") -> np.ndarray:
+        """
+        Get the affine transformation matrix for a specific objective.
+        
+        Args:
+            objective_id: Identifier for the objective
+        
+        Returns:
+            2x3 affine transformation matrix
+        
+        Raises:
+            ValueError: If calibration not found
+        """
+        matrix = self._calibration_storage.get_affine_matrix(objective_id)
+        if matrix is None:
+            raise ValueError(f"No calibration found for objective '{objective_id}'")
+        return matrix
+
+    def list_calibrated_objectives(self) -> list:
+        """
+        Get list of all objectives with calibration data.
+        
+        Returns:
+            List of objective identifiers
+        """
+        return self._calibration_storage.list_objectives()
+
+    def move_in_image_coordinates_affine(
+        self,
+        displacement_in_pixels: np.ndarray,
+        objective_id: str = "default"
+    ):
+        """
+        Move by a given number of pixels using affine transformation.
+        
+        Args:
+            displacement_in_pixels: 2D displacement [dx, dy] in pixels
+            objective_id: Identifier for the objective to use
+        """
+        affine_matrix = self.get_affine_matrix(objective_id)
+        
+        # Apply affine transformation
+        stage_displacement = apply_affine_transform(affine_matrix, displacement_in_pixels)
+        
+        # Convert from microns to stage steps
+        stage_displacement_steps = stage_displacement / self._stageStepSize
+        
+        # Move stage
+        if self._is_client:
+            positioner_names = self._client.positionersManager.getAllDeviceNames()
+            positioner_name = positioner_names[0]
+            self._client.positionersManager.movePositioner(
+                positioner_name,
+                dist=float(stage_displacement_steps[0]),
+                axis=self._stageOrder[0],
+                is_absolute=False,
+                is_blocking=True
+            )
+            time.sleep(.1)
+            self._client.positionersManager.movePositioner(
+                positioner_name,
+                dist=float(stage_displacement_steps[1]),
+                axis=self._stageOrder[1],
+                is_absolute=False,
+                is_blocking=True
+            )
+        else:
+            self.microscopeStage.move(
+                value=float(stage_displacement_steps[0]),
+                axis=self._stageOrder[0],
+                is_absolute=False,
+                is_blocking=True
+            )
+            self.microscopeStage.move(
+                value=float(stage_displacement_steps[1]),
+                axis=self._stageOrder[1],
+                is_absolute=False,
+                is_blocking=True
+            )
+
     @property
     def image_to_stage_displacement_matrix(self):
         """A 2x2 matrix that converts displacement in image coordinates to stage coordinates."""
         try:
-            settings = self.get_settings()
-            return settings["image_to_stage_displacement"]
-        except KeyError:
-            raise ValueError("The microscope has not yet been calibrated.")
+            # Try to get affine calibration first
+            objectives = self.list_calibrated_objectives()
+            if objectives:
+                # Use first available objective
+                affine_matrix = self.get_affine_matrix(objectives[0])
+                # Return just the 2x2 part (ignore translation)
+                return affine_matrix[:, :2]
+        except:
+            pass
+        
+        # Fallback to legacy calibration
+        try:
+            legacy_data = self._calibration_storage.get_legacy_data()
+            if legacy_data and "camera_stage_mapping_calibration" in legacy_data:
+                return legacy_data["camera_stage_mapping_calibration"]["image_to_stage_displacement"]
+        except:
+            pass
+        
+        raise ValueError("The microscope has not yet been calibrated.")
 
     def move_in_image_coordinates(self, displacement_in_pixels):
         """Move by a given number of pixels on the camera"""

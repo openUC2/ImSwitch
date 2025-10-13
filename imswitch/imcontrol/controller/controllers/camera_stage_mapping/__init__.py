@@ -7,6 +7,11 @@ creating nice tiled images.
 The main calibration routine is :py:func:`camera_stage_calibration_1d.calibrate_backlash_1d`
 which operates in 1D, but can be run twice in orthogonal directions and
 then combined with :py:func:`camera_stage_calibration_1d.image_to_stage_displacement_from_1d`.
+
+A more robust calibration method is available via :py:func:`affine_stage_calibration.calibrate_affine_transform`
+which computes a full 2x3 affine transformation matrix with outlier rejection and validation.
+This method supports per-objective calibration via :py:class:`calibration_storage.CalibrationStorage`.
+
 The underlying cross-correlation tracking code can be configured to use
 either FFT or direct correlation (FFT is recommended), and the details
 are in :py:mod:`camera_stage_mapping.fft_image_tracking` or :py:mod:`camera_stage_mapping.correlation_image_tracking`.

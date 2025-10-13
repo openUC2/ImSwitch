@@ -33,6 +33,10 @@ try:
     from camera_stage_mapping.camera_stage_tracker import Tracker
     from camera_stage_mapping.closed_loop_move import closed_loop_move, closed_loop_scan
     from camera_stage_mapping.scan_coords_times import ordered_spiral
+    from camera_stage_mapping.affine_stage_calibration import (
+        calibrate_affine_transform, validate_calibration, apply_affine_transform
+    )
+    from camera_stage_mapping.calibration_storage import CalibrationStorage
     IS_CAMERA_STAGE_MAPPING_INSTALLED = True
 except ImportError:
     IS_CAMERA_STAGE_MAPPING_INSTALLED = False
@@ -104,6 +108,32 @@ class PixelCalibrationController(LiveUpdatedController):
         stageCalibrationT = threading.Thread(target=self.stageCalibrationThread, args=())
         stageCalibrationT.start()
 
+    def stageCalibrationAffine(self, objective_id: str = "default", step_size_um: float = 100.0):
+        """
+        Start affine calibration in a background thread.
+        
+        Args:
+            objective_id: Identifier for the objective being calibrated
+            step_size_um: Step size in microns
+        """
+        def affine_calibration_thread():
+            try:
+                csm_extension = CSMExtension(self)
+                csm_extension.calibrate_affine(
+                    objective_id=objective_id,
+                    step_size_um=step_size_um,
+                    pattern="cross",
+                    n_steps=4,
+                    validate=True
+                )
+            except Exception as e:
+                self._logger.error(f"Affine calibration thread failed: {e}")
+                if not IS_HEADLESS:
+                    self._widget.setInformationLabel(f"Calibration failed: {str(e)}")
+        
+        calibrationThread = threading.Thread(target=affine_calibration_thread)
+        calibrationThread.start()
+
     def stageCalibrationThread(self, stageName=None, scanMax=100, scanMin=-100, scanStep = 50, rescalingFac=10.0, gridScan=True):
         # we assume we have a structured sample in focus
         # the sample is moved around and the deltas are measured
@@ -160,6 +190,12 @@ class CSMExtension(object):
 
     def __init__(self, parent):
         self._parent = parent
+        # Initialize calibration storage
+        calib_file_path = os.path.join(dirtools.UserFileDirs.Root, "camera_stage_calibration.json")
+        if IS_CAMERA_STAGE_MAPPING_INSTALLED:
+            self._calibration_storage = CalibrationStorage(calib_file_path, logger=self._parent._logger)
+        else:
+            self._calibration_storage = None
 
 
     def update_settings(self, settings):
@@ -262,9 +298,155 @@ class CSMExtension(object):
             json.dump(data, json_file, indent=4, sort_keys=True, cls=NumpyEncoder)
         return data
 
+    def calibrate_affine(
+        self,
+        objective_id: str = "default",
+        step_size_um: float = 100.0,
+        pattern: str = "cross",
+        n_steps: int = 4,
+        validate: bool = True
+    ):
+        """
+        Perform robust affine calibration using the new protocol.
+        
+        This method provides a more robust approach than calibrate_xy:
+        - Uses phase correlation for sub-pixel accuracy
+        - Computes full 2x3 affine transformation
+        - Includes outlier detection and validation
+        - Stores per-objective calibration data
+        
+        Args:
+            objective_id: Identifier for the objective being calibrated
+            step_size_um: Step size in microns (50-200 recommended)
+            pattern: Movement pattern - "cross" or "grid"
+            n_steps: Number of steps in each direction
+            validate: Whether to validate the calibration
+        
+        Returns:
+            Dictionary with calibration results
+        """
+        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
+            raise ImportError("Camera stage mapping module is not available")
+        
+        self._parent._logger.info(f"Starting affine calibration for objective '{objective_id}'")
+        
+        # Get camera and stage interface functions
+        grab_image, get_position, move, wait = self.camera_stage_functions()
+        
+        # Create tracker
+        tracker = Tracker(grab_image, get_position, settle=wait)
+        
+        # Perform calibration
+        try:
+            result = calibrate_affine_transform(
+                tracker=tracker,
+                move=move,
+                step_size_um=step_size_um,
+                pattern=pattern,
+                n_steps=n_steps,
+                settle_time=0.2,
+                logger=self._parent._logger
+            )
+            
+            # Validate calibration if requested
+            if validate:
+                is_valid, message = validate_calibration(
+                    result["affine_matrix"],
+                    result["metrics"],
+                    logger=self._parent._logger
+                )
+                result["validation"] = {
+                    "is_valid": is_valid,
+                    "message": message
+                }
+                
+                if not is_valid:
+                    self._parent._logger.warning("Calibration validation failed but data will still be saved")
+            
+            # Store calibration data
+            objective_info = {
+                "name": objective_id,
+                "detector": self._parent.detector._camera.model if hasattr(self._parent.detector._camera, 'model') else "unknown"
+            }
+            
+            self._calibration_storage.save_calibration(
+                objective_id=objective_id,
+                affine_matrix=result["affine_matrix"],
+                metrics=result["metrics"],
+                objective_info=objective_info
+            )
+            
+            self._parent._logger.info(f"Affine calibration completed for objective '{objective_id}'")
+            
+            # Update widget with results
+            if not IS_HEADLESS and hasattr(self._parent, '_widget'):
+                metrics = result["metrics"]
+                info_text = (
+                    f"Calibration completed for {objective_id}\n"
+                    f"Quality: {metrics.get('quality', 'unknown')}\n"
+                    f"RMSE: {metrics.get('rmse_um', 0):.3f} µm\n"
+                    f"Rotation: {metrics.get('rotation_deg', 0):.2f}°\n"
+                    f"Scale X: {metrics.get('scale_x_um_per_pixel', 0):.3f} µm/px\n"
+                    f"Scale Y: {metrics.get('scale_y_um_per_pixel', 0):.3f} µm/px"
+                )
+                self._parent._widget.setInformationLabel(info_text)
+            
+            return result
+            
+        except Exception as e:
+            self._parent._logger.error(f"Affine calibration failed: {e}")
+            if not IS_HEADLESS and hasattr(self._parent, '_widget'):
+                self._parent._widget.setInformationLabel(f"Calibration failed: {str(e)}")
+            raise
+
+    def get_affine_matrix(self, objective_id: str = "default") -> np.ndarray:
+        """
+        Get the affine transformation matrix for a specific objective.
+        
+        Args:
+            objective_id: Identifier for the objective
+        
+        Returns:
+            2x3 affine transformation matrix
+        
+        Raises:
+            ValueError: If calibration not found
+        """
+        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
+            raise ImportError("Camera stage mapping module is not available")
+        
+        matrix = self._calibration_storage.get_affine_matrix(objective_id)
+        if matrix is None:
+            raise ValueError(f"No calibration found for objective '{objective_id}'")
+        return matrix
+
+    def list_calibrated_objectives(self) -> list:
+        """
+        Get list of all objectives with calibration data.
+        
+        Returns:
+            List of objective identifiers
+        """
+        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
+            return []
+        return self._calibration_storage.list_objectives()
+
     @property
     def image_to_stage_displacement_matrix(self):
         """A 2x2 matrix that converts displacement in image coordinates to stage coordinates."""
+        if IS_CAMERA_STAGE_MAPPING_INSTALLED and self._calibration_storage:
+            try:
+                # Try to get affine calibration first
+                objectives = self.list_calibrated_objectives()
+                if objectives:
+                    # Use first available objective
+                    affine_matrix = self.get_affine_matrix(objectives[0])
+                    # Return just the 2x2 part (ignore translation)
+                    return affine_matrix[:, :2]
+            except:
+                pass
+        
+        # Fallback to legacy calibration
         try:
             settings = self.get_settings()
             return settings["image_to_stage_displacement"]

@@ -3,7 +3,7 @@ import os
 import base64
 from fastapi import FastAPI, Response, HTTPException
 from imswitch import IS_HEADLESS, __file__
-from  imswitch.imcontrol.controller.controllers.camera_stage_mapping import OFMStageMapping
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping import StageMapping
 from imswitch.imcommon.model import initLogger, ostools
 import numpy as np
 import time
@@ -591,10 +591,10 @@ class HistoScanController(LiveUpdatedController):
             pixelSize = self.microscopeDetector.pixelSizeUm[-1] # µm
             # mumPerStep = 1 # µm
             try:
-                self.mStageMapper = OFMStageMapping.OFMStageScanClass(self, calibration_file_path=calibFilePath, effPixelsize=pixelSize, stageStepSize=mumPerStep,
+                self.mStageMapper = StageMapping.StageMappingCalibration(self, calibration_file_path=calibFilePath, effPixelsize=pixelSize, stageStepSize=mumPerStep,
                                                                 IS_CLIENT=False, mDetector=self.microscopeDetector, mStage=self.stages)
                 def launchStageMappingBackground():
-                    self.stageMappingResult = self.mStageMapper.calibrate_xy(return_backlash_data=0)
+                    self.stageMappingResult = self.mStageMapper.calibrate_affine(objective_id="default")
                     if self.stageMappingResult is bool:
                         self._logger.error("Calibration failed")
                         self._widget.sigStageMappingComplete.emit(None, None, False)

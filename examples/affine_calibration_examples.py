@@ -23,11 +23,11 @@ def example_basic_calibration():
     print("Example 1: Basic Affine Calibration")
     print("="*70)
     
-    from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import OFMStageScanClass
+    from imswitch.imcontrol.controller.controllers.camera_stage_mapping.StageMapping import StageMappingCalibration
     
     # Initialize the stage mapping class
     # In a real setup, you would pass actual detector and stage objects
-    stage_mapping = OFMStageScanClass(
+    stage_mapping = StageMappingCalibration(
         calibration_file_path="microscope_calibration.json",
         effPixelsize=1.0,     # 1.0 micron effective pixel size
         stageStepSize=1.0,    # 1.0 micron stage step size
@@ -81,9 +81,9 @@ def example_multiple_objectives():
     print("Example 2: Calibrating Multiple Objectives")
     print("="*70)
     
-    from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import OFMStageScanClass
+    from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import StageMappingCalibration
     
-    stage_mapping = OFMStageScanClass(
+    stage_mapping = StageMappingCalibration(
         calibration_file_path="microscope_calibration.json",
         effPixelsize=1.0,
         stageStepSize=1.0,
@@ -129,9 +129,9 @@ def example_using_calibration():
     print("Example 3: Using Calibration for Movement")
     print("="*70)
     
-    from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import OFMStageScanClass
+    from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import StageMappingCalibration
     
-    stage_mapping = OFMStageScanClass(
+    stage_mapping = StageMappingCalibration(
         calibration_file_path="microscope_calibration.json",
         effPixelsize=1.0,
         stageStepSize=1.0,
@@ -215,9 +215,9 @@ def example_custom_pattern():
     print("Example 5: High-Precision Grid Calibration")
     print("="*70)
     
-    from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import OFMStageScanClass
+    from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import StageMappingCalibration
     
-    stage_mapping = OFMStageScanClass(
+    stage_mapping = StageMappingCalibration(
         calibration_file_path="microscope_calibration.json",
         effPixelsize=1.0,
         stageStepSize=1.0,

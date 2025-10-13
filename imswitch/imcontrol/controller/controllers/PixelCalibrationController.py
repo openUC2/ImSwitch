@@ -28,8 +28,6 @@ import json
 from collections import namedtuple
 
 try:
-    from camera_stage_mapping.camera_stage_calibration_1d import calibrate_backlash_1d, image_to_stage_displacement_from_1d
-
     from camera_stage_mapping.camera_stage_tracker import Tracker
     from camera_stage_mapping.closed_loop_move import closed_loop_move, closed_loop_scan
     from camera_stage_mapping.scan_coords_times import ordered_spiral
@@ -83,12 +81,9 @@ class PixelCalibrationController(LiveUpdatedController):
         self._widget.addPointLayer()
 
     def startPixelCalibration(self):
-        # initilaze setup
-        # this is not a thread!
-
-        csm_extension = CSMExtension(self)
+        """Start affine calibration (replaces old calibrate_xy)."""
         if IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            csm_extension.calibrate_xy()
+            self.stageCalibrationAffine(objective_id="default", step_size_um=100.0)
 
 
     def setPixelSize(self):
@@ -135,52 +130,14 @@ class PixelCalibrationController(LiveUpdatedController):
         calibrationThread.start()
 
     def stageCalibrationThread(self, stageName=None, scanMax=100, scanMin=-100, scanStep = 50, rescalingFac=10.0, gridScan=True):
-        # we assume we have a structured sample in focus
-        # the sample is moved around and the deltas are measured
-        # everything has to be inside a thread
+        """Legacy method - now calls affine calibration."""
         csm_extension = CSMExtension(self)
-        csm_extension.calibrate_xy()
+        csm_extension.calibrate_affine(objective_id="default", step_size_um=100.0)
 
 
 
 
 
-CSM_DATAFILE_NAME = "csm_calibration.json"
-#CSM_DATAFILE_PATH = data_file_path(CSM_DATAFILE_NAME)
-
-MoveHistory = namedtuple("MoveHistory", ["times", "stage_positions"])
-class LoggingMoveWrapper():
-    """Wrap a move function, and maintain a log position/time.
-
-    This class is callable, so it doesn't change the signature
-    of the function it wraps - it just makes it possible to get
-    a list of all the moves we've made, and how long they took.
-
-    Said list is intended to be useful for calibrating the stage
-    so we can estimate how long moves will take.
-    """
-    def __init__(self, move_function):
-        self._move_function = move_function
-        self._current_position = None
-        self.clear_history()
-
-    def __call__(self, new_position, *args, **kwargs):
-        """Move to a new position, and record it"""
-        self._history.append((time.time(), self._current_position))
-        self._move_function(new_position, *args, **kwargs)
-        self._current_position = new_position
-        self._history.append((time.time(), self._current_position))
-
-    @property
-    def history(self):
-        """The history, as a numpy array of times and another of positions"""
-        times = np.array([t for t, p in self._history])
-        positions = np.array([p for t, p in self._history])
-        return MoveHistory(times, positions)
-
-    def clear_history(self):
-        """Reset our history to be an empty list"""
-        self._history = []
 
 
 class CSMExtension(object):
@@ -254,49 +211,6 @@ class CSMExtension(object):
         wait = time.sleep(0.1)
 
         return grab_image, get_position, move, wait
-
-    def calibrate_1d(self, direction):
-        """Move a microscope's stage in 1D, and figure out the relationship with the camera"""
-        grab_image, get_position, move, wait = self.camera_stage_functions()
-        move = LoggingMoveWrapper(move)  # log positions and times for stage calibration
-
-        tracker = Tracker(grab_image, get_position, settle=wait)
-
-        result = calibrate_backlash_1d(tracker, move, direction)
-        result["move_history"] = move.history
-        return result
-
-
-
-    def calibrate_xy(self):
-        """Move the microscope's stage in X and Y, to calibrate its relationship to the camera"""
-        self._parent._logger.info("Calibrating X axis:")
-        cal_x = self.calibrate_1d(np.array([1, 0, 0]))
-        self._parent._logger.info("Calibrating Y axis:")
-        cal_y = self.calibrate_1d(np.array([0, 1, 0]))
-
-        # Combine X and Y calibrations to make a 2D calibration
-        cal_xy = image_to_stage_displacement_from_1d([cal_x, cal_y])
-        self.update_settings(cal_xy)
-
-        data = {
-            "camera_stage_mapping_calibration": cal_xy,
-            "linear_calibration_x": cal_x,
-            "linear_calibration_y": cal_y,
-        }
-        CSM_DATAFILE_PATH = os.path.join(dirtools.UserFileDirs.Root, "pixelcalibration_uc2.json")
-
-        # Custom JSON encoder for NumPy arrays
-        class NumpyEncoder(json.JSONEncoder):
-            def default(self, obj):
-                if isinstance(obj, np.ndarray):
-                    return obj.tolist()  # Convert NumPy arrays to lists
-                return super(NumpyEncoder, self).default(obj)
-
-        # Convert NumPy arrays to lists and save the JSON file with the custom encoder
-        with open(CSM_DATAFILE_PATH, 'w') as json_file:
-            json.dump(data, json_file, indent=4, sort_keys=True, cls=NumpyEncoder)
-        return data
 
     def calibrate_affine(
         self,

@@ -56,10 +56,10 @@ This implementation provides a production-ready automated calibration system tha
 ### Basic Calibration
 
 ```python
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import OFMStageScanClass
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import StageMappingCalibration
 
 # Initialize stage mapping
-stage_mapping = OFMStageScanClass(
+stage_mapping = StageMappingCalibration(
     calibration_file_path="my_calibration.json",
     effPixelsize=1.0,  # Effective pixel size in microns
     stageStepSize=1.0,  # Stage step size in microns

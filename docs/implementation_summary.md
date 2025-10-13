@@ -213,10 +213,10 @@ Old format files are automatically detected and migrated:
 ### Basic Calibration
 
 ```python
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import OFMStageScanClass
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.OFMStageMapping import StageMappingCalibration
 
 # Initialize
-stage_mapping = OFMStageScanClass(
+stage_mapping = StageMappingCalibration(
     calibration_file_path="microscope_calibration.json",
     effPixelsize=1.0,
     stageStepSize=1.0,

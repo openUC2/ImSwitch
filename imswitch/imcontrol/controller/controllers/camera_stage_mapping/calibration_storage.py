@@ -42,8 +42,7 @@ class CalibrationStorage:
                 "objective_info": {...}
             },
             ...
-        },
-        "legacy_data": {...}  # For backward compatibility
+        }
     }
     """
     
@@ -70,12 +69,17 @@ class CalibrationStorage:
                     self._data = json.load(f)
                 
                 # Check format version
-                version = self._data.get("format_version", "1.0")
+                version = self._data.get("format_version", self.FORMAT_VERSION)
                 if version != self.FORMAT_VERSION:
-                    self.logger.info(f"Migrating calibration file from v{version} to v{self.FORMAT_VERSION}")
-                    self._migrate_format(version)
-                else:
-                    self.logger.info(f"Loaded calibration data from {self.filepath}")
+                    self.logger.warning(f"Calibration file has version {version}, expected {self.FORMAT_VERSION}")
+                    # Just update the version, don't migrate
+                    self._data["format_version"] = self.FORMAT_VERSION
+                
+                # Ensure objectives key exists
+                if "objectives" not in self._data:
+                    self._data["objectives"] = {}
+                
+                self.logger.info(f"Loaded calibration data from {self.filepath}")
             except Exception as e:
                 self.logger.error(f"Failed to load calibration file: {e}")
                 self._data = self._create_empty_data()
@@ -87,49 +91,8 @@ class CalibrationStorage:
         """Create an empty calibration data structure."""
         return {
             "format_version": self.FORMAT_VERSION,
-            "objectives": {},
-            "legacy_data": {}
+            "objectives": {}
         }
-    
-    def _migrate_format(self, old_version: str):
-        """
-        Migrate calibration data from older format.
-        
-        Args:
-            old_version: Old format version string
-        """
-        if old_version == "1.0" or "camera_stage_mapping_calibration" in self._data:
-            # Old format had a single calibration, move it to legacy_data
-            legacy = {}
-            for key in list(self._data.keys()):
-                if key not in ["format_version", "objectives"]:
-                    legacy[key] = self._data.pop(key)
-            
-            new_data = self._create_empty_data()
-            new_data["legacy_data"] = legacy
-            
-            # Try to extract affine matrix from legacy data
-            if "camera_stage_mapping_calibration" in legacy:
-                old_calib = legacy["camera_stage_mapping_calibration"]
-                if "image_to_stage_displacement" in old_calib:
-                    # Convert 2x2 matrix to 2x3 by adding zero translation
-                    A = np.array(old_calib["image_to_stage_displacement"])
-                    if A.shape == (2, 2):
-                        affine_matrix = np.column_stack([A, [0, 0]])
-                        new_data["objectives"]["default"] = {
-                            "affine_matrix": affine_matrix.tolist(),
-                            "metrics": {"source": "migrated_from_v1.0"},
-                            "timestamp": datetime.now().isoformat(),
-                            "objective_info": {"name": "default"}
-                        }
-                        self.logger.info("Migrated legacy calibration to 'default' objective")
-            
-            self._data = new_data
-        else:
-            # Unknown version, keep as-is but add new structure
-            if "objectives" not in self._data:
-                self._data["objectives"] = {}
-            self._data["format_version"] = self.FORMAT_VERSION
     
     def save_calibration(
         self,
@@ -224,51 +187,6 @@ class CalibrationStorage:
             self.logger.error(f"Failed to save calibration file: {e}")
             raise
     
-    def get_legacy_data(self) -> Dict:
-        """
-        Get legacy calibration data for backward compatibility.
-        
-        Returns:
-            Dictionary with legacy calibration data
-        """
-        return self._data.get("legacy_data", {})
-    
-    def export_to_legacy_format(self, objective_id: str = None) -> Dict:
-        """
-        Export calibration to legacy format for backward compatibility.
-        
-        If objective_id is not specified, uses the first available objective.
-        
-        Args:
-            objective_id: Optional objective identifier
-        
-        Returns:
-            Dictionary in legacy format
-        """
-        if objective_id is None:
-            objectives = self.list_objectives()
-            if not objectives:
-                return {}
-            objective_id = objectives[0]
-        
-        calib = self.load_calibration(objective_id)
-        if calib is None:
-            return {}
-        
-        # Extract 2x2 matrix (ignore translation component)
-        affine_matrix = calib["affine_matrix"]
-        A = affine_matrix[:, :2]
-        
-        # Create legacy format
-        legacy = {
-            "camera_stage_mapping_calibration": {
-                "image_to_stage_displacement": A.tolist(),
-                "backlash_vector": [0, 0, 0],  # Not used in new system
-                "backlash": 0  # Not used in new system
-            }
-        }
-        
-        return legacy
     
     def get_affine_matrix(self, objective_id: str) -> Optional[np.ndarray]:
         """

@@ -135,12 +135,14 @@ def list_items(base_path: str) -> List[Dict]:
                     full_path = entry.path
                     rel_path = f"/{os.path.relpath(full_path, BASE_DIR).replace(os.path.sep, '/')}"
                     preview_url = f"/preview{rel_path}" if entry.is_file() else None
+                    stat_info = entry.stat()
                     items.append({
                         "name": entry.name,
                         "isDirectory": entry.is_dir(),
                         "path": rel_path,
-                        "size": entry.stat().st_size if entry.is_file() else None,
-                        "filePreviewPath": preview_url
+                        "size": stat_info.st_size if entry.is_file() else None,
+                        "filePreviewPath": preview_url,
+                        "modifiedTime": stat_info.st_mtime  # Add modification timestamp
                     })
                     if entry.is_dir():
                         scan_directory(full_path)
@@ -148,6 +150,8 @@ def list_items(base_path: str) -> List[Dict]:
                     print(f"Error scanning {entry.path}: {e}")
 
     scan_directory(base_path)
+    # Sort items by modification time (newest first)
+    items.sort(key=lambda x: x["modifiedTime"], reverse=True)
     return items
 
 
@@ -173,16 +177,12 @@ def preview_file(file_path: str):
     # Serve the file
     return FileResponse(absolute_path, filename=absolute_path.name)
 
-# 📂 Get All Files/Folders
 @app.get("/FileManager/")
 def get_items(path: str = ""):
     directory = os.path.join(BASE_DIR, path)
     if not os.path.exists(directory):
         raise HTTPException(status_code=404, detail="Path not found")
     return list_items(directory)
-
-
-# ⬆️ Upload a File
 
 @app.post("/FileManager/upload")
 def upload_file(file: UploadFile = File(...), target_path: Optional[str] = Form("")):

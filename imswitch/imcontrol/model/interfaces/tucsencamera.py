@@ -133,13 +133,13 @@ class CameraTucsen:
         self.NBuffer = 5
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
-
+        self.global_frameid = 0
+        
         self.SensorHeight = 0
         self.SensorWidth = 0
 
         self.lastFrameFromBuffer = None
         self.lastFrameId = -1
-        self.frameNumber = -1
 
         # Callback-based approach - no threading
         self._current_frame: Optional[np.ndarray] = None
@@ -252,8 +252,12 @@ class CameraTucsen:
         """Handle new frame from callback - similar to HIK camera"""
         try:
             self.frame_buffer.append(frame)
-            self.frameid_buffer.append(frame_id)
-            self.frameNumber = frame_id
+            self.global_frameid += 1
+            # interestingly the camera produces frames with number of 8bit rollovers, 
+            # hence we need to detect if the last frame is 255, so that we can increment 
+            # the frame id with the inverse modulo operation
+            # in a way we need to unwrap the frame id
+            self.frameid_buffer.append(self.global_frameid)
             self._current_frame = frame
             
 
@@ -275,7 +279,7 @@ class CameraTucsen:
             raise
 
     def _open_camera_linux(self, camera_index: int):
-        self.Path = '/home/uc2/ImSwitch' #'./'
+        self.Path = '/home/uc2/ImSwitch' #'./' # TODO: 
         self.TUCAMINIT = TUCAM_INIT(0, self.Path.encode('utf-8'))
         TUCAM_Api_Init(pointer(self.TUCAMINIT), 5000)
         print(self.TUCAMINIT.uiCamCount)

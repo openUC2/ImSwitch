@@ -657,6 +657,8 @@ class ExperimentController(ImConWidgetController):
                 lastFrameNumber = currentFrameNumber
             if time.time()-cTime> timeoutFrameRequest:
                 # in case exposure time is too long we need break at one point
+                if mFrame is None: 
+                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False) 
                 break
             if currentFrameNumber <= lastFrameNumber+frameSync:
                 time.sleep(0.01) # off-load CPU

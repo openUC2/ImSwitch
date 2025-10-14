@@ -152,32 +152,33 @@ class DMDController(ImConWidgetController):
                     except Exception:
                         raise RuntimeError("No frame available from detector")
 
-                # Step 1: pattern 0 -> snap
+                # Step 1: display 0 -> wait -> flush -> snap
+                self._http_get("/display/0")
+                time.sleep(delay_s)
                 try:
                     det.flushBuffers()
                 except Exception:
                     pass
-                self._http_get("/display/0")
                 img0 = next_frame()
                 imgs.append(img0)
 
-                # Step 2: wait user delay -> pattern 1 -> snap
+                # Step 2: display 1 -> wait -> flush -> snap
+                self._http_get("/display/1")
                 time.sleep(delay_s)
                 try:
                     det.flushBuffers()
                 except Exception:
                     pass
-                self._http_get("/display/1")
                 img1 = next_frame()
                 imgs.append(img1)
 
-                # Step 3: wait user delay -> pattern 2 -> snap
+                # Step 3: display 2 -> wait -> flush -> snap
+                self._http_get("/display/2")
                 time.sleep(delay_s)
                 try:
                     det.flushBuffers()
                 except Exception:
                     pass
-                self._http_get("/display/2")
                 img2 = next_frame()
                 imgs.append(img2)
 

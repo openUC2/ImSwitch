@@ -14,7 +14,7 @@ from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.closed_loop_move import closed_loop_move, closed_loop_scan
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.scan_coords_times import ordered_spiral
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
-    calibrate_affine_transform, validate_calibration, apply_affine_transform
+    measure_pixel_shift, compute_affine_matrix, validate_calibration
 )
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.calibration_storage import CalibrationStorage
 from ..basecontrollers import LiveUpdatedController
@@ -242,42 +242,33 @@ class CSMExtension(object):
             #return get_by_path(self.microscope.read_settings(), keys)
         return {}
 
-    def camera_stage_functions(self):
-        """Return functions that allow us to interface with the microscope"""
+    def _grab_image(self, crop_size=512):
+        """Capture a cropped image from the detector."""
+        marray = self._parent.detector.getLatestFrame()
+        center_x, center_y = marray.shape[1] // 2, marray.shape[0] // 2
 
-        def grabCroppedFrame(crop_size=512):
-            marray = self._parent.detector.getLatestFrame()
-            center_x, center_y = marray.shape[1] // 2, marray.shape[0] // 2
+        # Calculate the starting and ending indices for cropping
+        x_start = center_x - crop_size // 2
+        x_end = x_start + crop_size
+        y_start = center_y - crop_size // 2
+        y_end = y_start + crop_size
 
-            # Calculate the starting and ending indices for cropping
-            x_start = center_x - crop_size // 2
-            x_end = x_start + crop_size
-            y_start = center_y - crop_size // 2
-            y_end = y_start + crop_size
+        # Crop the center region
+        return marray[y_start:y_end, x_start:x_end]
 
-            # Crop the center region
-            return marray[y_start:y_end, x_start:x_end]
+    def _get_stage_position(self):
+        """Get current stage position in microns [X, Y, Z]."""
+        stage = self._parent._master.positionersManager[self._parent._master.positionersManager.getAllDeviceNames()[0]]
+        posDict = stage.getPosition()
+        return np.array([posDict["X"], posDict["Y"], posDict["Z"]])
 
-        def getPositionList():
-            posDict = self._parent._master.positionersManager[self._parent._master.positionersManager.getAllDeviceNames()[0]].getPosition()
-            return (posDict["X"], posDict["Y"], posDict["Z"])
-
-        def movePosition(posList):
-            stage = self._parent._master.positionersManager[self._parent._master.positionersManager.getAllDeviceNames()[0]]
-            stepSizeX = 1
-            stepSizeY = 1
-            stage.move(value=posList[0]/stepSizeX, axis="X", is_absolute=True, is_blocking=True)
-            stage.move(value=posList[1]/stepSizeY, axis="Y", is_absolute=True, is_blocking=True)
-            self._parent._logger.info("Moving to: "+str(posList))
-            if len(posList)>2:
-                stage.move(value=posList[2], axis="Z", is_absolute=True, is_blocking=True)
-
-        grab_image = grabCroppedFrame
-        get_position = getPositionList
-        move = movePosition
-        wait = time.sleep(0.1)
-
-        return grab_image, get_position, move, wait
+    def _move_stage(self, position_um):
+        """Move stage to absolute position in microns [X, Y, Z]."""
+        stage = self._parent._master.positionersManager[self._parent._master.positionersManager.getAllDeviceNames()[0]]
+        stage.move(value=position_um[0], axis="X", is_absolute=True, is_blocking=True)
+        stage.move(value=position_um[1], axis="Y", is_absolute=True, is_blocking=True)
+        if len(position_um) > 2:
+            stage.move(value=position_um[2], axis="Z", is_absolute=True, is_blocking=True)
 
     def calibrate_affine(
         self,
@@ -285,16 +276,18 @@ class CSMExtension(object):
         step_size_um: float = 100.0,
         pattern: str = "cross",
         n_steps: int = 4,
-        validate: bool = True
+        validate: bool = True,
+        settle_time: float = 0.2
     ):
         """
-        Perform robust affine calibration using the new protocol.
+        Perform robust affine calibration using direct method calls.
         
-        This method provides a more robust approach than calibrate_xy:
-        - Uses phase correlation for sub-pixel accuracy
+        This method provides a straightforward calibration approach:
+        - Captures reference image
+        - Moves stage to multiple positions
+        - Measures pixel shifts using phase correlation
         - Computes full 2x3 affine transformation
-        - Includes outlier detection and validation
-        - Stores per-objective calibration data
+        - Validates and stores per-objective calibration data
         
         Args:
             objective_id: Identifier for the objective being calibrated
@@ -302,36 +295,104 @@ class CSMExtension(object):
             pattern: Movement pattern - "cross" or "grid"
             n_steps: Number of steps in each direction
             validate: Whether to validate the calibration
+            settle_time: Time to wait after stage movement (seconds)
         
         Returns:
             Dictionary with calibration results
         """
         self._parent._logger.info(f"Starting affine calibration for objective '{objective_id}'")
         
-        # Get camera and stage interface functions
-        grab_image, get_position, move, wait = self.camera_stage_functions()
-        
-        # Create tracker
-        tracker = Tracker(grab_image, get_position, settle=wait)
-        
-        # Perform calibration
         try:
-            result = calibrate_affine_transform(
-                tracker=tracker,
-                move=move,
-                step_size_um=step_size_um,
-                pattern=pattern,
-                n_steps=n_steps,
-                settle_time=0.2,
-                logger=self._parent._logger
+            # 1. Get starting position and capture reference image
+            start_position = self._get_stage_position()
+            self._parent._logger.info(f"Starting position: {start_position[:2]} µm")
+            
+            time.sleep(settle_time)
+            ref_image = self._grab_image()
+            self._parent._logger.info(f"Reference image captured: {ref_image.shape}")
+            
+            # 2. Generate movement pattern
+            if pattern == "cross":
+                # Cross pattern: center + 4 cardinal + 4 diagonal = 9 positions
+                offsets = [
+                    (0, 0),
+                    (step_size_um, 0), (0, step_size_um), (-step_size_um, 0), (0, -step_size_um),
+                    (step_size_um, step_size_um), (step_size_um, -step_size_um),
+                    (-step_size_um, step_size_um), (-step_size_um, -step_size_um)
+                ]
+            elif pattern == "grid":
+                # Grid pattern: n_steps x n_steps
+                offsets = []
+                half_range = (n_steps - 1) / 2.0
+                for i in range(n_steps):
+                    for j in range(n_steps):
+                        dx = (i - half_range) * step_size_um
+                        dy = (j - half_range) * step_size_um
+                        offsets.append((dx, dy))
+            else:
+                raise ValueError(f"Unknown pattern: {pattern}")
+            
+            self._parent._logger.info(f"Using pattern '{pattern}' with {len(offsets)} positions")
+            
+            # 3. Move stage and measure pixel shifts
+            pixel_shifts = []
+            stage_shifts = []
+            correlation_values = []
+            
+            for i, (dx, dy) in enumerate(offsets):
+                # Move to target position
+                target_position = start_position + np.array([dx, dy, 0])
+                self._move_stage(target_position)
+                time.sleep(settle_time)
+                
+                # Capture image
+                image = self._grab_image()
+                
+                # Measure pixel shift using phase correlation
+                shift, correlation = measure_pixel_shift(ref_image, image)
+                
+                pixel_shifts.append(shift)
+                stage_shifts.append([dx, dy])
+                correlation_values.append(correlation)
+                
+                self._parent._logger.debug(f"Position {i+1}/{len(offsets)}: stage=({dx:.1f}, {dy:.1f}), "
+                                          f"pixels=({shift[0]:.2f}, {shift[1]:.2f}), corr={correlation:.3f}")
+            
+            # 4. Return to starting position
+            self._move_stage(start_position)
+            self._parent._logger.info("Returned to starting position")
+            
+            # 5. Compute affine transformation matrix
+            pixel_shifts = np.array(pixel_shifts)
+            stage_shifts = np.array(stage_shifts)
+            correlation_values = np.array(correlation_values)
+            
+            affine_matrix, inlier_mask, metrics = compute_affine_matrix(
+                pixel_shifts, stage_shifts, logger=self._parent._logger
             )
             
-            # Validate calibration if requested
+            # Add correlation info to metrics
+            metrics["mean_correlation"] = float(np.mean(correlation_values))
+            metrics["min_correlation"] = float(np.min(correlation_values))
+            
+            self._parent._logger.info(f"Calibration quality: {metrics.get('quality', 'unknown')}")
+            self._parent._logger.info(f"RMSE: {metrics.get('rmse_um', 0):.3f} µm")
+            self._parent._logger.info(f"Rotation: {metrics.get('rotation_deg', 0):.2f}°")
+            
+            # 6. Validate calibration if requested
+            result = {
+                "affine_matrix": affine_matrix,
+                "metrics": metrics,
+                "pixel_displacements": pixel_shifts,
+                "stage_displacements": stage_shifts,
+                "correlation_values": correlation_values,
+                "inlier_mask": inlier_mask,
+                "starting_position": start_position
+            }
+            
             if validate:
                 is_valid, message = validate_calibration(
-                    result["affine_matrix"],
-                    result["metrics"],
-                    logger=self._parent._logger
+                    affine_matrix, metrics, logger=self._parent._logger
                 )
                 result["validation"] = {
                     "is_valid": is_valid,
@@ -341,7 +402,7 @@ class CSMExtension(object):
                 if not is_valid:
                     self._parent._logger.warning("Calibration validation failed but data will still be saved")
             
-            # Store calibration data
+            # 7. Store calibration data
             objective_info = {
                 "name": objective_id,
                 "detector": self._parent.detector._camera.model if hasattr(self._parent.detector._camera, 'model') else "unknown"
@@ -349,30 +410,23 @@ class CSMExtension(object):
             
             self._calibration_storage.save_calibration(
                 objective_id=objective_id,
-                affine_matrix=result["affine_matrix"],
-                metrics=result["metrics"],
+                affine_matrix=affine_matrix,
+                metrics=metrics,
                 objective_info=objective_info
             )
             
             self._parent._logger.info(f"Affine calibration completed for objective '{objective_id}'")
             
-            # Update widget with results
-            if 1:
-                metrics = result["metrics"]
-                info_text = (
-                    f"Calibration completed for {objective_id}\n"
-                    f"Quality: {metrics.get('quality', 'unknown')}\n"
-                    f"RMSE: {metrics.get('rmse_um', 0):.3f} µm\n"
-                    f"Rotation: {metrics.get('rotation_deg', 0):.2f}°\n"
-                    f"Scale X: {metrics.get('scale_x_um_per_pixel', 0):.3f} µm/px\n"
-                    f"Scale Y: {metrics.get('scale_y_um_per_pixel', 0):.3f} µm/px"
-                )
-                # TODO: report as socket/signal?
-
             return result
             
         except Exception as e:
             self._parent._logger.error(f"Affine calibration failed: {e}")
+            # Try to return to start position
+            try:
+                self._move_stage(start_position)
+            except:
+                pass
+            raise
 
     def get_affine_matrix(self, objective_id: str = "default") -> np.ndarray:
         """
@@ -443,9 +497,17 @@ class CSMExtension(object):
 
     def closed_loop_move_in_image_coordinates(self, displacement_in_pixels, **kwargs):
         """Move by a given number of pixels on the camera, using the camera as an encoder."""
-        grab_image, get_position, move, wait = self.camera_stage_functions()
-
-        tracker = Tracker(grab_image, get_position, settle=wait)
+        # Create inline wrapper functions for Tracker compatibility
+        def grab_wrapper():
+            return self._grab_image()
+        
+        def position_wrapper():
+            return self._get_stage_position()
+        
+        def wait_wrapper():
+            time.sleep(0.1)
+        
+        tracker = Tracker(grab_wrapper, position_wrapper, settle=wait_wrapper)
         tracker.acquire_template()
         closed_loop_move(tracker, self.move_in_image_coordinates, displacement_in_pixels, **kwargs)
 
@@ -468,12 +530,23 @@ class CSMExtension(object):
         starting point.  Keyword arguments are passed to
         ``closed_loop_move.closed_loop_scan``.
         """
-        grab_image, get_position, move, wait = self.camera_stage_functions()
-
-        tracker = Tracker(grab_image, get_position, settle=wait)
+        # Create inline wrapper functions for Tracker compatibility
+        def grab_wrapper():
+            return self._grab_image()
+        
+        def position_wrapper():
+            return self._get_stage_position()
+        
+        def move_wrapper(pos):
+            self._move_stage(pos)
+        
+        def wait_wrapper():
+            time.sleep(0.1)
+        
+        tracker = Tracker(grab_wrapper, position_wrapper, settle=wait_wrapper)
         tracker.acquire_template()
 
-        return closed_loop_scan(tracker, self.move_in_image_coordinates, move, np.array(scan_path), **kwargs)
+        return closed_loop_scan(tracker, self.move_in_image_coordinates, move_wrapper, np.array(scan_path), **kwargs)
 
 
     def test_closed_loop_spiral_scan(self, step_size, N, **kwargs):

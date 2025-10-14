@@ -11,6 +11,7 @@ import cv2
 from skimage.registration import phase_cross_correlation
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
+from imswitch.imcommon.model import APIExport, dirtools
 from imswitch.imcontrol.model import configfiletools, initLogger
 import time
 from imswitch import IS_HEADLESS
@@ -101,6 +102,141 @@ class PixelCalibrationController(LiveUpdatedController):
         """Legacy method - now calls affine calibration."""
         csm_extension = CSMExtension(self)
         csm_extension.calibrate_affine(objective_id="default", step_size_um=100.0)
+
+    # API Methods for web interface
+    
+    @APIExport(runOnUIThread=True)
+    def calibrateStageAffine(self, objectiveId: str = "default", stepSizeUm: float = 100.0, 
+                             pattern: str = "cross", nSteps: int = 4, validate: bool = True):
+        """
+        Perform affine stage-to-camera calibration via API.
+        
+        Args:
+            objectiveId: Identifier for the objective being calibrated
+            stepSizeUm: Step size in microns (50-200 recommended)
+            pattern: Movement pattern - "cross" or "grid"
+            nSteps: Number of steps in each direction
+            validate: Whether to validate the calibration
+            
+        Returns:
+            Dictionary with calibration results including metrics
+        """
+        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
+            return {"error": "Camera stage mapping module not available"}
+        
+        try:
+            csm_extension = CSMExtension(self)
+            result = csm_extension.calibrate_affine(
+                objective_id=objectiveId,
+                step_size_um=stepSizeUm,
+                pattern=pattern,
+                n_steps=nSteps,
+                validate=validate
+            )
+            
+            # Convert numpy arrays to lists for JSON serialization
+            if "affine_matrix" in result:
+                result["affine_matrix"] = result["affine_matrix"].tolist()
+            if "pixel_displacements" in result:
+                result["pixel_displacements"] = result["pixel_displacements"].tolist()
+            if "stage_displacements" in result:
+                result["stage_displacements"] = result["stage_displacements"].tolist()
+            if "correlation_values" in result:
+                result["correlation_values"] = result["correlation_values"].tolist()
+            if "inlier_mask" in result:
+                result["inlier_mask"] = result["inlier_mask"].tolist()
+            if "starting_position" in result:
+                result["starting_position"] = result["starting_position"].tolist()
+            
+            return {
+                "success": True,
+                "objectiveId": objectiveId,
+                "metrics": result.get("metrics", {}),
+                "validation": result.get("validation", {})
+            }
+        except Exception as e:
+            self._logger.error(f"API calibration failed: {e}")
+            return {"error": str(e), "success": False}
+    
+    @APIExport()
+    def getCalibrationObjectives(self):
+        """
+        Get list of all objectives with calibration data.
+        
+        Returns:
+            List of objective identifiers that have been calibrated
+        """
+        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
+            return {"error": "Camera stage mapping module not available"}
+        
+        try:
+            csm_extension = CSMExtension(self)
+            objectives = csm_extension.list_calibrated_objectives()
+            return {"success": True, "objectives": objectives}
+        except Exception as e:
+            self._logger.error(f"Failed to get calibrated objectives: {e}")
+            return {"error": str(e), "success": False}
+    
+    @APIExport()
+    def getCalibrationData(self, objectiveId: str = "default"):
+        """
+        Get calibration data for a specific objective.
+        
+        Args:
+            objectiveId: Identifier for the objective
+            
+        Returns:
+            Dictionary with calibration data including affine matrix and metrics
+        """
+        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
+            return {"error": "Camera stage mapping module not available"}
+        
+        try:
+            csm_extension = CSMExtension(self)
+            
+            # Get affine matrix
+            affine_matrix = csm_extension.get_affine_matrix(objectiveId)
+            if affine_matrix is None:
+                return {"error": f"No calibration found for objective '{objectiveId}'", "success": False}
+            
+            # Get metrics
+            metrics = csm_extension.get_metrics(objectiveId)
+            
+            return {
+                "success": True,
+                "objectiveId": objectiveId,
+                "affineMatrix": affine_matrix.tolist(),
+                "metrics": metrics
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to get calibration data: {e}")
+            return {"error": str(e), "success": False}
+    
+    @APIExport()
+    def deleteCalibration(self, objectiveId: str):
+        """
+        Delete calibration data for a specific objective.
+        
+        Args:
+            objectiveId: Identifier for the objective
+            
+        Returns:
+            Success status
+        """
+        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
+            return {"error": "Camera stage mapping module not available"}
+        
+        try:
+            csm_extension = CSMExtension(self)
+            success = csm_extension._calibration_storage.delete_calibration(objectiveId)
+            return {
+                "success": success,
+                "objectiveId": objectiveId,
+                "message": f"Calibration deleted for '{objectiveId}'" if success else f"No calibration found for '{objectiveId}'"
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to delete calibration: {e}")
+            return {"error": str(e), "success": False}
 
 
 
@@ -309,6 +445,20 @@ class CSMExtension(object):
         if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
             return []
         return self._calibration_storage.list_objectives()
+    
+    def get_metrics(self, objective_id: str = "default"):
+        """
+        Get calibration metrics for a specific objective.
+        
+        Args:
+            objective_id: Identifier for the objective
+            
+        Returns:
+            Dictionary of metrics or None if not found
+        """
+        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
+            return None
+        return self._calibration_storage.get_metrics(objective_id)
 
     @property
     def image_to_stage_displacement_matrix(self):

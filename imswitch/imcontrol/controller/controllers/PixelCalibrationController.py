@@ -9,9 +9,9 @@ import time
 from imswitch import IS_HEADLESS
 import time
 import numpy as np
+import NanoImagingPack as nip
 import os
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage_tracker import Tracker
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.closed_loop_move import closed_loop_move, closed_loop_scan
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.scan_coords_times import ordered_spiral
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
     measure_pixel_shift, compute_affine_matrix, validate_calibration
@@ -41,42 +41,7 @@ class PixelCalibrationController(LiveUpdatedController):
         self._logger.info("Snap preview...")
         previewImage = self._master.detectorsManager.execOnCurrent(lambda c: c.getLatestFrame())
 
-    def startPixelCalibration(self):
-        """Start affine calibration (replaces old calibrate_xy)."""
-        self.stageCalibrationAffine(objective_id="default", step_size_um=100.0)
 
-    def stageCalibration(self):
-        stageCalibrationT = threading.Thread(target=self.stageCalibrationThread, args=())
-        stageCalibrationT.start()
-
-    def stageCalibrationAffine(self, objective_id: str = "default", step_size_um: float = 100.0):
-        """
-        Start affine calibration in a background thread.
-        
-        Args:
-            objective_id: Identifier for the objective being calibrated
-            step_size_um: Step size in microns
-        """
-        def affine_calibration_thread():
-            try:
-                csm_extension = CSMExtension(self)
-                csm_extension.calibrate_affine(
-                    objective_id=objective_id,
-                    step_size_um=step_size_um,
-                    pattern="cross",
-                    n_steps=4,
-                    validate=True
-                )
-            except Exception as e:
-                self._logger.error(f"Affine calibration thread failed: {e}")
-
-        calibrationThread = threading.Thread(target=affine_calibration_thread)
-        calibrationThread.start()
-
-    def stageCalibrationThread(self, stageName=None, scanMax=100, scanMin=-100, scanStep = 50, rescalingFac=10.0, gridScan=True):
-        """Legacy method - now calls affine calibration."""
-        csm_extension = CSMExtension(self)
-        csm_extension.calibrate_affine(objective_id="default", step_size_um=100.0)
 
     # API Methods for web interface
     
@@ -98,6 +63,9 @@ class PixelCalibrationController(LiveUpdatedController):
         """
         try:
             csm_extension = CSMExtension(self)
+            # TODO: This has to run in a thread and has to be stopable from the API
+            # TODO: the result has to be send to the socket via the Signal
+            # TODO: we want to access the results via the API as well
             result = csm_extension.calibrate_affine(
                 objective_id=objectiveId,
                 step_size_um=stepSizeUm,
@@ -120,6 +88,84 @@ class PixelCalibrationController(LiveUpdatedController):
             if "starting_position" in result:
                 result["starting_position"] = result["starting_position"].tolist()
             
+            '''
+            TOTO: We get a serialization error here:
+            >>>>> Sending message {"id":"f99a6822-5f67-4eb6-b456-28ec89b277f9","type":"HEARTBEAT_ANSWER"}
+                INFO:     100.71.92.70:59867 - "GET /PixelCalibrationController/calibrateStageAffine?objectiveId=default&stepSizeUm=100&pattern=cross&nSteps=4&validate=true HTTP/1.1" 500 Internal Server Error
+                ERROR:    Exception in ASGI application
+                Traceback (most recent call last):
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/encoders.py", line 324, in jsonable_encoder
+                    data = dict(obj)
+                        ^^^^^^^^^
+                TypeError: 'numpy.int64' object is not iterable
+
+                During handling of the above exception, another exception occurred:
+
+                Traceback (most recent call last):
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/encoders.py", line 329, in jsonable_encoder
+                    data = vars(obj)
+                        ^^^^^^^^^
+                TypeError: vars() argument must have __dict__ attribute
+
+                The above exception was the direct cause of the following exception:
+
+                Traceback (most recent call last):
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/uvicorn/protocols/http/httptools_impl.py", line 409, in run_asgi
+                    result = await app(  # type: ignore[func-returns-value]
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+                    return await self.app(scope, receive, send)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/applications.py", line 1054, in __call__
+                    await super().__call__(scope, receive, send)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/applications.py", line 113, in __call__
+                    await self.middleware_stack(scope, receive, send)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
+                    raise exc
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
+                    await self.app(scope, receive, _send)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/middleware/cors.py", line 85, in __call__
+                    await self.app(scope, receive, send)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+                    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+                    raise exc
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+                    await app(scope, receive, sender)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/routing.py", line 716, in __call__
+                    await self.middleware_stack(scope, receive, send)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/routing.py", line 736, in app
+                    await route.handle(scope, receive, send)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/routing.py", line 290, in handle
+                    await self.app(scope, receive, send)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/routing.py", line 78, in app
+                    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+                    raise exc
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+                    await app(scope, receive, sender)
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/routing.py", line 75, in app
+                    response = await f(request)
+                            ^^^^^^^^^^^^^^^^
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/routing.py", line 328, in app
+                    content = await serialize_response(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/routing.py", line 202, in serialize_response
+                    return jsonable_encoder(response_content)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/encoders.py", line 289, in jsonable_encoder
+                    encoded_value = jsonable_encoder(
+                                    ^^^^^^^^^^^^^^^^^
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/encoders.py", line 289, in jsonable_encoder
+                    encoded_value = jsonable_encoder(
+                                    ^^^^^^^^^^^^^^^^^
+                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/encoders.py", line 332, in jsonable_encoder
+                    raise ValueError(errors) from e
+                ValueError: [TypeError("'numpy.int64' object is not iterable"), TypeError('vars() argument must have __dict__ attribute')]
+                Received message {"id":"38ba3f5f-7a88-44d3-8862-1363aa2decf7","type":"HEARTBEAT"}
+                >>>>> Sending message {"id":"6acfacf3-a3d2-465e-93a3-30a0b8a367cc","type":"HEARTBEAT_ANSWER"}
+
+                ''' 
             return {
                 "success": True,
                 "objectiveId": objectiveId,
@@ -222,39 +268,12 @@ class CSMExtension(object):
         self._calibration_storage = CalibrationStorage(calib_file_path, logger=self._parent._logger)
 
 
-    def update_settings(self, settings):
-        """Update the stored extension settings dictionary"""
-        if 0:
-            pass
-            '''
-            keys = ["extensions", self.name]
-            dictionary = create_from_path(keys)
-            set_by_path(dictionary, keys, settings)
-            logging.info(f"Updating settings with {dictionary}")
-            self.microscope.update_settings(dictionary)
-            self.microscope.save_settings()
-            '''
-
-    def get_settings(self):
-        """Retrieve the settings for this extension"""
-        if 0:
-            keys = ["extensions", self.name]
-            #return get_by_path(self.microscope.read_settings(), keys)
-        return {}
-
     def _grab_image(self, crop_size=512):
         """Capture a cropped image from the detector."""
         marray = self._parent.detector.getLatestFrame()
-        center_x, center_y = marray.shape[1] // 2, marray.shape[0] // 2
-
-        # Calculate the starting and ending indices for cropping
-        x_start = center_x - crop_size // 2
-        x_end = x_start + crop_size
-        y_start = center_y - crop_size // 2
-        y_end = y_start + crop_size
-
+        crop_size = min(crop_size, marray.shape[0], marray.shape[1])
         # Crop the center region
-        return marray[y_start:y_end, x_start:x_end]
+        return nip.extract(marray, crop_size)
 
     def _get_stage_position(self):
         """Get current stage position in microns [X, Y, Z]."""
@@ -276,7 +295,7 @@ class CSMExtension(object):
         step_size_um: float = 100.0,
         pattern: str = "cross",
         n_steps: int = 4,
-        validate: bool = True,
+        validate: bool = False,
         settle_time: float = 0.2
     ):
         """
@@ -368,7 +387,7 @@ class CSMExtension(object):
             correlation_values = np.array(correlation_values)
             
             affine_matrix, inlier_mask, metrics = compute_affine_matrix(
-                pixel_shifts, stage_shifts, logger=self._parent._logger
+                pixel_shifts, stage_shifts
             )
             
             # Add correlation info to metrics
@@ -482,79 +501,12 @@ class CSMExtension(object):
             except:
                 pass
         
-        # Fallback to legacy calibration
-        try:
-            settings = self.get_settings()
-            return settings["image_to_stage_displacement"]
-        except KeyError:
-            raise ValueError("The microscope has not yet been calibrated.")
-
     def move_in_image_coordinates(self, displacement_in_pixels):
         """Move by a given number of pixels on the camera"""
         p = np.array(displacement_in_pixels)
         relative_move = np.dot(p, self.image_to_stage_displacement_matrix)
         self.microscope.stage.move_rel([relative_move[0], relative_move[1], 0])
 
-    def closed_loop_move_in_image_coordinates(self, displacement_in_pixels, **kwargs):
-        """Move by a given number of pixels on the camera, using the camera as an encoder."""
-        # Create inline wrapper functions for Tracker compatibility
-        def grab_wrapper():
-            return self._grab_image()
-        
-        def position_wrapper():
-            return self._get_stage_position()
-        
-        def wait_wrapper():
-            time.sleep(0.1)
-        
-        tracker = Tracker(grab_wrapper, position_wrapper, settle=wait_wrapper)
-        tracker.acquire_template()
-        closed_loop_move(tracker, self.move_in_image_coordinates, displacement_in_pixels, **kwargs)
-
-    def closed_loop_scan(self, scan_path, **kwargs):
-        """Perform closed-loop moves to each point defined in scan_path.
-
-        This returns a generator, which will move the stage to each point in
-        ``scan_path``, then yield ``i, pos`` where ``i``
-        is the index of the scan point, and ``pos`` is the estimated position
-        in pixels relative to the starting point.  To use it properly, you
-        should iterate over it, for example::
-
-            for i, pos in csm_extension.closed_loop_scan(scan_path):
-                capture_image(f"image_{i}.jpg")
-
-        ``scan_path`` should be an Nx2 numpy array defining
-        the points to visit in pixels relative to the current position.
-
-        If an exception occurs during the scan, we automatically return to the
-        starting point.  Keyword arguments are passed to
-        ``closed_loop_move.closed_loop_scan``.
-        """
-        # Create inline wrapper functions for Tracker compatibility
-        def grab_wrapper():
-            return self._grab_image()
-        
-        def position_wrapper():
-            return self._get_stage_position()
-        
-        def move_wrapper(pos):
-            self._move_stage(pos)
-        
-        def wait_wrapper():
-            time.sleep(0.1)
-        
-        tracker = Tracker(grab_wrapper, position_wrapper, settle=wait_wrapper)
-        tracker.acquire_template()
-
-        return closed_loop_scan(tracker, self.move_in_image_coordinates, move_wrapper, np.array(scan_path), **kwargs)
-
-
-    def test_closed_loop_spiral_scan(self, step_size, N, **kwargs):
-        """Move the microscope in a spiral scan, and return the positions."""
-        scan_path = ordered_spiral(0,0, N, *step_size)
-
-        for i, pos in self.closed_loop_scan(np.array(scan_path), **kwargs):
-            pass
 
 
 

@@ -5,7 +5,7 @@ This module provides robust automated calibration for mapping stage coordinates
 to camera pixel coordinates using full 2×3 affine transformations.
 """
 
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.closed_loop_move import closed_loop_move, closed_loop_scan
+
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.scan_coords_times import ordered_spiral
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
     measure_pixel_shift, compute_affine_matrix, validate_calibration, apply_affine_transform
@@ -413,91 +413,3 @@ class StageMappingCalibration(object):
         """
         # This is just a wrapper that calls move_in_image_coordinates_affine
         self.move_in_image_coordinates_affine(displacement_in_pixels, objective_id)
-
-    def closed_loop_move_in_image_coordinates(self, displacement_in_pixels, objective_id: str = "default", **kwargs):
-        """
-        Move by a given number of pixels on the camera, using the camera as an encoder.
-        
-        This is a closed-loop move that tracks the actual displacement using the camera
-        to ensure accurate positioning even with stage backlash or errors.
-        """
-        from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage_tracker import Tracker
-        
-        # Create wrapper functions for Tracker compatibility
-        def grab_image():
-            return self._grab_image()
-        
-        def get_position():
-            return self._get_stage_position()
-        
-        def settle(t=0.1):
-            time.sleep(t)
-        
-        tracker = Tracker(grab_image, get_position, settle=settle)
-        tracker.acquire_template()
-        
-        # Create a move function that uses affine transformation
-        def move_func(disp):
-            self.move_in_image_coordinates_affine(disp, objective_id)
-        
-        closed_loop_move(tracker, move_func, displacement_in_pixels, **kwargs)
-
-    def closed_loop_scan(self, scan_path, objective_id: str = "default", **kwargs):
-        """
-        Perform closed-loop moves to each point defined in scan_path.
-
-        This returns a generator, which will move the stage to each point in
-        ``scan_path``, then yield ``i, pos`` where ``i``
-        is the index of the scan point, and ``pos`` is the estimated position
-        in pixels relative to the starting point.  To use it properly, you
-        should iterate over it, for example::
-
-            for i, pos in stage_mapping.closed_loop_scan(scan_path):
-                capture_image(f"image_{i}.jpg")
-
-        ``scan_path`` should be an Nx2 numpy array defining
-        the points to visit in pixels relative to the current position.
-
-        If an exception occurs during the scan, we automatically return to the
-        starting point.  Keyword arguments are passed to
-        ``closed_loop_move.closed_loop_scan``.
-        
-        Args:
-            scan_path: Nx2 array of pixel coordinates
-            objective_id: Identifier for the objective to use
-        """
-        from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage_tracker import Tracker
-        
-        # Create wrapper functions for Tracker compatibility
-        def grab_image():
-            return self._grab_image()
-        
-        def get_position():
-            return self._get_stage_position()
-        
-        def settle(t=0.1):
-            time.sleep(t)
-
-        tracker = Tracker(grab_image, get_position, settle=settle)
-        tracker.acquire_template()
-        
-        # Create a move function that uses affine transformation
-        def move_func(disp):
-            self.move_in_image_coordinates_affine(disp, objective_id)
-        
-        return closed_loop_scan(tracker, move_func, self._move_stage, np.array(scan_path), **kwargs)
-
-    def test_closed_loop_spiral_scan(self, step_size, N, objective_id: str = "default", **kwargs):
-        """
-        Test closed-loop spiral scan.
-        
-        Args:
-            step_size: Step size for spiral
-            N: Number of spiral steps
-            objective_id: Identifier for the objective to use
-        """
-        scan_path = ordered_spiral(0, 0, N, *step_size)
-
-        for i, pos in self.closed_loop_scan(np.array(scan_path), objective_id=objective_id, **kwargs):
-            pass
-

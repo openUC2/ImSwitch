@@ -14,7 +14,6 @@ import os
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
     measure_pixel_shift, compute_affine_matrix, validate_calibration
 )
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.calibration_storage import CalibrationStorage
 from ..basecontrollers import LiveUpdatedController
 
 #import NanoImagingPack as nip
@@ -28,9 +27,15 @@ class PixelCalibrationController(LiveUpdatedController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
-        self.pixelSize=500 # defaul FIXME: Load from json?
+        
+        # Get pixel size from setup info or use default
+        if hasattr(self._setupInfo, 'PixelCalibration') and self._setupInfo.PixelCalibration:
+            # Pixel size might be stored in the calibration info or detector info
+            self.pixelSize = 500  # Default, will be updated per objective
+        else:
+            self.pixelSize = 500  # Default value
 
-        # select detectors # TODO: Bad practice, but how can we access the pixelsize then?
+        # Get detector - prefer the one used for acquisition
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
 
@@ -43,11 +48,13 @@ class PixelCalibrationController(LiveUpdatedController):
 
     # API Methods for web interface
     
-    @APIExport(runOnUIThread=True)
+    @APIExport(runOnUIThread=False)  # Run in background thread
     def calibrateStageAffine(self, objectiveId: str = "default", stepSizeUm: float = 100.0, 
                              pattern: str = "cross", nSteps: int = 4, validate: bool = True):
         """
         Perform affine stage-to-camera calibration via API.
+        
+        This runs in a background thread and can be monitored via signals.
         
         Args:
             objectiveId: Identifier for the objective being calibrated
@@ -61,9 +68,7 @@ class PixelCalibrationController(LiveUpdatedController):
         """
         try:
             csm_extension = CSMExtension(self)
-            # TODO: This has to run in a thread and has to be stopable from the API
-            # TODO: the result has to be send to the socket via the Signal
-            # TODO: we want to access the results via the API as well
+            
             result = csm_extension.calibrate_affine(
                 objective_id=objectiveId,
                 step_size_um=stepSizeUm,
@@ -72,106 +77,36 @@ class PixelCalibrationController(LiveUpdatedController):
                 validate=validate
             )
             
-            # Convert numpy arrays to lists for JSON serialization
-            if "affine_matrix" in result:
-                result["affine_matrix"] = result["affine_matrix"].tolist()
-            if "pixel_displacements" in result:
-                result["pixel_displacements"] = result["pixel_displacements"].tolist()
-            if "stage_displacements" in result:
-                result["stage_displacements"] = result["stage_displacements"].tolist()
-            if "correlation_values" in result:
-                result["correlation_values"] = result["correlation_values"].tolist()
-            if "inlier_mask" in result:
-                result["inlier_mask"] = result["inlier_mask"].tolist()
-            if "starting_position" in result:
-                result["starting_position"] = result["starting_position"].tolist()
+            # Convert all numpy types to Python native types for JSON serialization
+            def convert_to_native(obj):
+                """Recursively convert numpy types to Python native types."""
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                elif isinstance(obj, (np.integer, np.int64, np.int32)):
+                    return int(obj)
+                elif isinstance(obj, (np.floating, np.float64, np.float32)):
+                    return float(obj)
+                elif isinstance(obj, dict):
+                    return {key: convert_to_native(value) for key, value in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_to_native(item) for item in obj]
+                elif isinstance(obj, tuple):
+                    return tuple(convert_to_native(item) for item in obj)
+                else:
+                    return obj
             
-            '''
-            TOTO: We get a serialization error here:
-            >>>>> Sending message {"id":"f99a6822-5f67-4eb6-b456-28ec89b277f9","type":"HEARTBEAT_ANSWER"}
-                INFO:     100.71.92.70:59867 - "GET /PixelCalibrationController/calibrateStageAffine?objectiveId=default&stepSizeUm=100&pattern=cross&nSteps=4&validate=true HTTP/1.1" 500 Internal Server Error
-                ERROR:    Exception in ASGI application
-                Traceback (most recent call last):
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/encoders.py", line 324, in jsonable_encoder
-                    data = dict(obj)
-                        ^^^^^^^^^
-                TypeError: 'numpy.int64' object is not iterable
-
-                During handling of the above exception, another exception occurred:
-
-                Traceback (most recent call last):
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/encoders.py", line 329, in jsonable_encoder
-                    data = vars(obj)
-                        ^^^^^^^^^
-                TypeError: vars() argument must have __dict__ attribute
-
-                The above exception was the direct cause of the following exception:
-
-                Traceback (most recent call last):
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/uvicorn/protocols/http/httptools_impl.py", line 409, in run_asgi
-                    result = await app(  # type: ignore[func-returns-value]
-                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
-                    return await self.app(scope, receive, send)
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/applications.py", line 1054, in __call__
-                    await super().__call__(scope, receive, send)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/applications.py", line 113, in __call__
-                    await self.middleware_stack(scope, receive, send)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
-                    raise exc
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
-                    await self.app(scope, receive, _send)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/middleware/cors.py", line 85, in __call__
-                    await self.app(scope, receive, send)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
-                    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
-                    raise exc
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
-                    await app(scope, receive, sender)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/routing.py", line 716, in __call__
-                    await self.middleware_stack(scope, receive, send)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/routing.py", line 736, in app
-                    await route.handle(scope, receive, send)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/routing.py", line 290, in handle
-                    await self.app(scope, receive, send)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/routing.py", line 78, in app
-                    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
-                    raise exc
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
-                    await app(scope, receive, sender)
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/starlette/routing.py", line 75, in app
-                    response = await f(request)
-                            ^^^^^^^^^^^^^^^^
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/routing.py", line 328, in app
-                    content = await serialize_response(
-                            ^^^^^^^^^^^^^^^^^^^^^^^^^
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/routing.py", line 202, in serialize_response
-                    return jsonable_encoder(response_content)
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/encoders.py", line 289, in jsonable_encoder
-                    encoded_value = jsonable_encoder(
-                                    ^^^^^^^^^^^^^^^^^
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/encoders.py", line 289, in jsonable_encoder
-                    encoded_value = jsonable_encoder(
-                                    ^^^^^^^^^^^^^^^^^
-                File "/Users/bene/mambaforge/envs/intel_env/lib/python3.11/site-packages/fastapi/encoders.py", line 332, in jsonable_encoder
-                    raise ValueError(errors) from e
-                ValueError: [TypeError("'numpy.int64' object is not iterable"), TypeError('vars() argument must have __dict__ attribute')]
-                Received message {"id":"38ba3f5f-7a88-44d3-8862-1363aa2decf7","type":"HEARTBEAT"}
-                >>>>> Sending message {"id":"6acfacf3-a3d2-465e-93a3-30a0b8a367cc","type":"HEARTBEAT_ANSWER"}
-
-                ''' 
+            # Convert result to JSON-serializable format
+            result_serializable = convert_to_native(result)
+            
             return {
                 "success": True,
                 "objectiveId": objectiveId,
-                "metrics": result.get("metrics", {}),
-                "validation": result.get("validation", {})
+                "metrics": result_serializable.get("metrics", {}),
+                "validation": result_serializable.get("validation", {}),
+                "affineMatrix": result_serializable.get("affine_matrix", [])
             }
         except Exception as e:
-            self._logger.error(f"API calibration failed: {e}")
+            self._logger.error(f"API calibration failed: {e}", exc_info=True)
             return {"error": str(e), "success": False}
     
     @APIExport()
@@ -237,12 +172,29 @@ class PixelCalibrationController(LiveUpdatedController):
         """
 
         try:
-            csm_extension = CSMExtension(self)
-            success = csm_extension._calibration_storage.delete_calibration(objectiveId)
+            # Check if calibration exists
+            if self._setupInfo.PixelCalibration is None or objectiveId not in self._setupInfo.PixelCalibration.affineCalibrations:
+                return {
+                    "success": False,
+                    "objectiveId": objectiveId,
+                    "message": f"No calibration found for '{objectiveId}'"
+                }
+            
+            # Delete from setup info
+            del self._setupInfo.PixelCalibration.affineCalibrations[objectiveId]
+            
+            # Save to disk
+            try:
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                config_file_path, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(config_file_path, self._setupInfo)
+            except Exception as e:
+                self._logger.warning(f"Could not save setup configuration: {e}")
+            
             return {
-                "success": success,
+                "success": True,
                 "objectiveId": objectiveId,
-                "message": f"Calibration deleted for '{objectiveId}'" if success else f"No calibration found for '{objectiveId}'"
+                "message": f"Calibration deleted for '{objectiveId}'"
             }
         except Exception as e:
             self._logger.error(f"Failed to delete calibration: {e}")
@@ -256,14 +208,18 @@ class PixelCalibrationController(LiveUpdatedController):
 
 class CSMExtension(object):
     """
-    Use the camera as an encoder, so we can relate camera and stage coordinates
+    Camera-to-stage mapping calibration.
+    
+    Performs affine calibration and stores results in the setup configuration.
+    The affine matrix is applied by:
+    - Camera transformations (rotation/flip) handled in DetectorManager
+    - Stage coordinate mapping handled here
     """
 
     def __init__(self, parent):
         self._parent = parent
-        # Initialize calibration storage
-        calib_file_path = os.path.join(dirtools.UserFileDirs.Root, "camera_stage_calibration.json")
-        self._calibration_storage = CalibrationStorage(calib_file_path, logger=self._parent._logger)
+        # Use setup info for storage (not separate JSON file)
+        # Calibration data is stored in self._parent._setupInfo.PixelCalibration
 
 
     def _grab_image(self, crop_size=512):
@@ -419,18 +375,31 @@ class CSMExtension(object):
                 if not is_valid:
                     self._parent._logger.warning("Calibration validation failed but data will still be saved")
             
-            # 7. Store calibration data
+            # 7. Store calibration data in setup configuration
             objective_info = {
                 "name": objective_id,
                 "detector": self._parent.detector._camera.model if hasattr(self._parent.detector._camera, 'model') else "unknown"
             }
             
-            self._calibration_storage.save_calibration(
-                objective_id=objective_id,
-                affine_matrix=affine_matrix,
-                metrics=metrics,
-                objective_info=objective_info
-            )
+            calibration_data = {
+                "affine_matrix": affine_matrix.tolist(),
+                "metrics": {k: float(v) if isinstance(v, (np.integer, np.floating)) else v 
+                           for k, v in metrics.items()},
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "objective_info": objective_info
+            }
+            
+            # Save to setup configuration
+            self._parent._setupInfo.setAffineCalibration(objective_id, calibration_data)
+            
+            # Save setup configuration to disk
+            try:
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                config_file_path, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(config_file_path, self._parent._setupInfo)
+                self._parent._logger.info(f"Calibration saved to setup configuration: {config_file_path}")
+            except Exception as e:
+                self._parent._logger.warning(f"Could not save setup configuration: {e}")
             
             self._parent._logger.info(f"Affine calibration completed for objective '{objective_id}'")
             
@@ -448,20 +417,15 @@ class CSMExtension(object):
     def get_affine_matrix(self, objective_id: str = "default") -> np.ndarray:
         """
         Get the affine transformation matrix for a specific objective.
+        Returns default identity matrix if no calibration exists.
         
         Args:
             objective_id: Identifier for the objective
         
         Returns:
             2x3 affine transformation matrix
-        
-        Raises:
-            ValueError: If calibration not found
         """
-        matrix = self._calibration_storage.get_affine_matrix(objective_id)
-        if matrix is None:
-            raise ValueError(f"No calibration found for objective '{objective_id}'")
-        return matrix
+        return self._parent._setupInfo.getAffineMatrix(objective_id)
 
     def list_calibrated_objectives(self) -> list:
         """
@@ -470,7 +434,9 @@ class CSMExtension(object):
         Returns:
             List of objective identifiers
         """
-        return self._calibration_storage.list_objectives()
+        if self._parent._setupInfo.PixelCalibration is None:
+            return []
+        return list(self._parent._setupInfo.PixelCalibration.affineCalibrations.keys())
     
     def get_metrics(self, objective_id: str = "default"):
         """
@@ -482,22 +448,28 @@ class CSMExtension(object):
         Returns:
             Dictionary of metrics or None if not found
         """
-        return self._calibration_storage.get_metrics(objective_id)
+        calib = self._parent._setupInfo.getAffineCalibration(objective_id)
+        return calib.get("metrics", {}) if calib else {}
 
     @property
     def image_to_stage_displacement_matrix(self):
-        """A 2x2 matrix that converts displacement in image coordinates to stage coordinates."""
-        if  self._calibration_storage:
-            try:
-                # Try to get affine calibration first
-                objectives = self.list_calibrated_objectives()
-                if objectives:
-                    # Use first available objective
-                    affine_matrix = self.get_affine_matrix(objectives[0])
-                    # Return just the 2x2 part (ignore translation)
-                    return affine_matrix[:, :2]
-            except:
-                pass
+        """
+        A 2x2 matrix that converts displacement in image coordinates to stage coordinates.
+        Returns the default identity matrix if no calibration exists.
+        """
+        try:
+            # Try to get affine calibration
+            objectives = self.list_calibrated_objectives()
+            if objectives:
+                # Use first available objective
+                affine_matrix = self.get_affine_matrix(objectives[0])
+                # Return just the 2x2 part (ignore translation)
+                return affine_matrix[:, :2]
+        except Exception as e:
+            self._parent._logger.debug(f"Could not get calibrated matrix: {e}")
+        
+        # Return default identity matrix
+        return np.array([[1.0, 0.0], [0.0, 1.0]])
         
     def move_in_image_coordinates(self, displacement_in_pixels):
         """Move by a given number of pixels on the camera"""

@@ -297,7 +297,41 @@ class FlatfieldInfo:
 
 @dataclass(frozen=False)
 class PixelCalibrationInfo:
-    pass
+    """
+    Configuration for stage-to-camera affine calibration.
+    
+    Stores per-objective affine transformation matrices that map pixel coordinates
+    to stage micron coordinates. The affine matrix handles rotation, scaling, shear,
+    and translation between camera and stage coordinate systems.
+    """
+    
+    affineCalibrations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    """ Per-objective affine calibration data. 
+    Format: {
+        "objectiveId": {
+            "affine_matrix": [[a11, a12, tx], [a21, a22, ty]],  # 2x3 matrix
+            "metrics": {...},
+            "timestamp": "...",
+            "objective_info": {...}
+        }
+    }
+    
+    The affine matrix transforms pixel coordinates to stage coordinates:
+    [stage_x]   [a11 a12 tx]   [pixel_x]
+    [stage_y] = [a21 a22 ty] × [pixel_y]
+                               [   1   ]
+    
+    Common transformations:
+    - Rotation: off-diagonal elements (a12, a21)
+    - Scaling: diagonal elements (a11, a22)
+    - Flip X: a11 = -1
+    - Flip Y: a22 = -1
+    - Translation: tx, ty (usually 0 for displacement-based calibration)
+    """
+    
+    defaultAffineMatrix: List[List[float]] = field(default_factory=lambda: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    """ Default identity transformation when no calibration is available.
+    [[1, 0, 0], [0, 1, 0]] means 1:1 mapping with no rotation. """
 
 
 @dataclass(frozen=False)
@@ -735,6 +769,63 @@ class SetupInfo:
             devices.update(deviceInfos)
 
         return devices
+
+    def setAffineCalibration(self, objectiveId: str, calibrationData: dict):
+        """
+        Save affine calibration data for a specific objective to the setup configuration.
+        
+        Args:
+            objectiveId: Identifier for the objective (e.g., "10x", "20x", "default")
+            calibrationData: Dictionary containing:
+                - affine_matrix: 2x3 transformation matrix
+                - metrics: Quality metrics
+                - timestamp: ISO format timestamp
+                - objective_info: Additional objective information
+        """
+        if self.PixelCalibration is None:
+            self.PixelCalibration = PixelCalibrationInfo()
+        
+        self.PixelCalibration.affineCalibrations[objectiveId] = calibrationData
+    
+    def getAffineCalibration(self, objectiveId: str = "default"):
+        """
+        Get affine calibration data for a specific objective.
+        
+        Args:
+            objectiveId: Identifier for the objective
+            
+        Returns:
+            Calibration data dictionary or None if not found
+        """
+        if self.PixelCalibration is None:
+            return None
+        
+        return self.PixelCalibration.affineCalibrations.get(objectiveId, None)
+    
+    def getAffineMatrix(self, objectiveId: str = "default"):
+        """
+        Get the affine transformation matrix for a specific objective.
+        Returns the default identity matrix if no calibration exists.
+        
+        Args:
+            objectiveId: Identifier for the objective
+            
+        Returns:
+            2x3 numpy array representing the affine transformation
+        """
+        import numpy as np
+        
+        # Try to get calibration
+        calib = self.getAffineCalibration(objectiveId)
+        if calib and "affine_matrix" in calib:
+            return np.array(calib["affine_matrix"])
+        
+        # Return default identity matrix
+        if self.PixelCalibration and self.PixelCalibration.defaultAffineMatrix:
+            return np.array(self.PixelCalibration.defaultAffineMatrix)
+        
+        # Fallback to identity
+        return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

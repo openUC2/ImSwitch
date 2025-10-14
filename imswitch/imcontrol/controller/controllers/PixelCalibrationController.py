@@ -9,12 +9,12 @@ from datetime import datetime
 import threading
 import cv2
 from skimage.registration import phase_cross_correlation
-from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
-from imswitch.imcontrol.model import configfiletools
+from imswitch.imcontrol.model import configfiletools, initLogger
 import time
 from imswitch import IS_HEADLESS
+
 
 from fractions import Fraction
 from uuid import UUID
@@ -59,45 +59,15 @@ class PixelCalibrationController(LiveUpdatedController):
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
 
-        if not IS_HEADLESS:
-            # Connect PixelCalibrationWidget signals
-            #self._widget.PixelCalibrationLabelInfo.clicked.connect()
-            self._widget.PixelCalibrationSnapPreviewButton.clicked.connect(self.snapPreview)
-            self._widget.PixelCalibrationUndoButton.clicked.connect(self.undoSelection)
-            self._widget.PixelCalibrationCalibrateButton.clicked.connect(self.startPixelCalibration)
-            self._widget.PixelCalibrationStageCalibrationButton.clicked.connect(self.stageCalibration)
-
-            self._widget.PixelCalibrationPixelSizeButton.clicked.connect(self.setPixelSize)
-
-
-    def undoSelection(self):
-        # recover the previous selection
-        self._widget.canvas.undoSelection()
 
     def snapPreview(self):
         self._logger.info("Snap preview...")
         previewImage = self._master.detectorsManager.execOnCurrent(lambda c: c.getLatestFrame())
-        self._widget.setImage(previewImage)
-        self._widget.addPointLayer()
 
     def startPixelCalibration(self):
         """Start affine calibration (replaces old calibrate_xy)."""
         if IS_CAMERA_STAGE_MAPPING_INSTALLED:
             self.stageCalibrationAffine(objective_id="default", step_size_um=100.0)
-
-
-    def setPixelSize(self):
-        # returns nm from textedit
-        self.pixelSize = self._widget.getPixelSizeTextEdit()
-        self._widget.setInformationLabel(str(self.pixelSize)+" µm")
-        #try setting it in the camera parameters
-        try:
-            self.detector.setPixelSizeUm(self.pixelSize*1e-3) # convert from nm to um
-            self._widget.setInformationLabel(str(self.pixelSize)+" µm")
-        except Exception as e:
-            self._logger.error("Could not set pixel size in camera parameters")
-            self._logger.error(e)
-            self._widget.setInformationLabel("Could not set pixel size in camera parameters")
 
     def stageCalibration(self):
         stageCalibrationT = threading.Thread(target=self.stageCalibrationThread, args=())
@@ -123,9 +93,7 @@ class PixelCalibrationController(LiveUpdatedController):
                 )
             except Exception as e:
                 self._logger.error(f"Affine calibration thread failed: {e}")
-                if not IS_HEADLESS:
-                    self._widget.setInformationLabel(f"Calibration failed: {str(e)}")
-        
+
         calibrationThread = threading.Thread(target=affine_calibration_thread)
         calibrationThread.start()
 
@@ -293,7 +261,7 @@ class CSMExtension(object):
             self._parent._logger.info(f"Affine calibration completed for objective '{objective_id}'")
             
             # Update widget with results
-            if not IS_HEADLESS and hasattr(self._parent, '_widget'):
+            if 1:
                 metrics = result["metrics"]
                 info_text = (
                     f"Calibration completed for {objective_id}\n"
@@ -303,15 +271,12 @@ class CSMExtension(object):
                     f"Scale X: {metrics.get('scale_x_um_per_pixel', 0):.3f} µm/px\n"
                     f"Scale Y: {metrics.get('scale_y_um_per_pixel', 0):.3f} µm/px"
                 )
-                self._parent._widget.setInformationLabel(info_text)
-            
+                # TODO: report as socket/signal?
+
             return result
             
         except Exception as e:
             self._parent._logger.error(f"Affine calibration failed: {e}")
-            if not IS_HEADLESS and hasattr(self._parent, '_widget'):
-                self._parent._widget.setInformationLabel(f"Calibration failed: {str(e)}")
-            raise
 
     def get_affine_matrix(self, objective_id: str = "default") -> np.ndarray:
         """

@@ -5,11 +5,10 @@ This module provides robust automated calibration for mapping stage coordinates
 to camera pixel coordinates using full 2×3 affine transformations.
 """
 
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage_tracker import Tracker
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.closed_loop_move import closed_loop_move, closed_loop_scan
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.scan_coords_times import ordered_spiral
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
-    calibrate_affine_transform, validate_calibration, apply_affine_transform
+    measure_pixel_shift, compute_affine_matrix, validate_calibration, apply_affine_transform
 )
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.calibration_storage import CalibrationStorage
 import logging
@@ -67,61 +66,78 @@ class StageMappingCalibration(object):
     def getIsStop(self):
         return self.isStop
 
-    def camera_stage_functions(self):
-        """Return functions that allow us to interface with the microscope"""
-
-        def grabCroppedFrame(crop_size=512):
-            if self._is_client:
-                marray = self._client.recordingManager.snapNumpyToFastAPI()
-            else:
-                marray = self.microscopeDetector.getLatestFrame()
-            #marray = self._client.detector.getLatestFrame()
-            center_x, center_y = marray.shape[1] // 2, marray.shape[0] // 2
-
-            # Calculate the starting and ending indices for cropping
-            x_start = center_x - crop_size // 2
-            x_end = x_start + crop_size
-            y_start = center_y - crop_size // 2
-            y_end = y_start + crop_size
-
-            # Crop the center region
-            return marray[y_start:y_end, x_start:x_end]
-
-        def getPositionList():
-            if self._is_client:
-                positioner_names = self._client.positionersManager.getAllDeviceNames()
-                positioner_name = positioner_names[0]
-                posDict = self._client.positionersManager.getPositionerPositions()[positioner_name]
-            else:
-                posDict = self.microscopeStage.getPosition()
-            return (SIGN_AXES[STAGE_ORDER[0]]*posDict["X"]/self._micronToPixel, SIGN_AXES[STAGE_ORDER[1]]*posDict["Y"]/self._micronToPixel, SIGN_AXES[STAGE_ORDER[2]]*posDict["Z"]/self._micronToPixel)
-
-        def movePosition(posList):
-
-            if self._is_client:
-                positioner_names = self._client.positionersManager.getAllDeviceNames()
-                positioner_name = positioner_names[0]
-                self._client.positionersManager.movePositioner(positioner_name, dist=SIGN_AXES[STAGE_ORDER[0]]*posList[0]*self._micronToPixel, axis=self._stageOrder[0], is_absolute=True, is_blocking=True)
-                time.sleep(.1)
-                self._client.positionersManager.movePositioner(positioner_name, dist=SIGN_AXES[STAGE_ORDER[1]]*posList[1]*self._micronToPixel, axis=self._stageOrder[1], is_absolute=True, is_blocking=True)
-            else:
-                self.microscopeStage.move(value=SIGN_AXES[STAGE_ORDER[0]]*posList[0]*self._micronToPixel, axis=self._stageOrder[0], is_absolute=True, is_blocking=True)
-                self.microscopeStage.move(value=SIGN_AXES[STAGE_ORDER[1]]*posList[1]*self._micronToPixel, axis=self._stageOrder[1], is_absolute=True, is_blocking=True)
-
-            if len(posList)>2:
-                if self._is_client:
-                    self._client.positionersManager.movePositioner(positioner_name, dist=SIGN_AXES[STAGE_ORDER[2]]*posList[2]*self._micronToPixel, axis=self._stageOrder[2], is_absolute=True, is_blocking=True)
-                else:
-                    self.microscopeStage.move(value=SIGN_AXES[STAGE_ORDER[2]]*posList[2]*self._micronToPixel, axis=self._stageOrder[2], is_absolute=True, is_blocking=True)
-
-        def settle(tWait=.1):
-            time.sleep(tWait)
-        grab_image = grabCroppedFrame
-        get_position = getPositionList
-        move = movePosition
-        wait = settle
-
-        return grab_image, get_position, move, wait
+    def _grab_image(self):
+        """Capture an image from the camera."""
+        if self._is_client:
+            return self._client.recordingManager.snapNumpyToFastAPI()
+        else:
+            return self.microscopeDetector.getLatestFrame()
+    
+    def _get_stage_position(self):
+        """Get current stage position in microns (X, Y, Z)."""
+        if self._is_client:
+            positioner_names = self._client.positionersManager.getAllDeviceNames()
+            positioner_name = positioner_names[0]
+            pos_dict = self._client.positionersManager.getPositionerPositions()[positioner_name]
+        else:
+            pos_dict = self.microscopeStage.getPosition()
+        
+        # Convert to microns and apply axis configuration
+        x = SIGN_AXES["X"] * pos_dict["X"]
+        y = SIGN_AXES["Y"] * pos_dict["Y"]
+        z = SIGN_AXES["Z"] * pos_dict["Z"]
+        return np.array([x, y, z])
+    
+    def _move_stage(self, position_um):
+        """Move stage to absolute position in microns (X, Y, Z)."""
+        x, y, z = position_um[0], position_um[1], position_um[2] if len(position_um) > 2 else 0
+        
+        if self._is_client:
+            positioner_names = self._client.positionersManager.getAllDeviceNames()
+            positioner_name = positioner_names[0]
+            self._client.positionersManager.movePositioner(
+                positioner_name, 
+                dist=SIGN_AXES["X"] * x, 
+                axis=self._stageOrder[0], 
+                is_absolute=True, 
+                is_blocking=True
+            )
+            time.sleep(0.1)
+            self._client.positionersManager.movePositioner(
+                positioner_name, 
+                dist=SIGN_AXES["Y"] * y, 
+                axis=self._stageOrder[1], 
+                is_absolute=True, 
+                is_blocking=True
+            )
+            if len(position_um) > 2:
+                self._client.positionersManager.movePositioner(
+                    positioner_name, 
+                    dist=SIGN_AXES["Z"] * z, 
+                    axis=self._stageOrder[2], 
+                    is_absolute=True, 
+                    is_blocking=True
+                )
+        else:
+            self.microscopeStage.move(
+                value=SIGN_AXES["X"] * x, 
+                axis=self._stageOrder[0], 
+                is_absolute=True, 
+                is_blocking=True
+            )
+            self.microscopeStage.move(
+                value=SIGN_AXES["Y"] * y, 
+                axis=self._stageOrder[1], 
+                is_absolute=True, 
+                is_blocking=True
+            )
+            if len(position_um) > 2:
+                self.microscopeStage.move(
+                    value=SIGN_AXES["Z"] * z, 
+                    axis=self._stageOrder[2], 
+                    is_absolute=True, 
+                    is_blocking=True
+                )
 
     def calibrate_affine(
         self,
@@ -129,79 +145,124 @@ class StageMappingCalibration(object):
         step_size_um: float = 100.0,
         pattern: str = "cross",
         n_steps: int = 4,
-        auto_exposure: bool = True,
+        settle_time: float = 0.2,
         validate: bool = True
     ):
         """
         Perform robust affine calibration.
         
-        Uses phase correlation for sub-pixel accuracy, computes full 2×3 affine
-        transformation, includes outlier detection and validation, and stores
-        per-objective calibration data.
+        Direct calibration procedure:
+        1. Capture reference image at starting position
+        2. Move stage to multiple positions (cross or grid pattern)
+        3. Measure pixel displacement at each position using phase correlation
+        4. Compute 2×3 affine matrix from correspondences
+        5. Validate and store calibration data
         
         Args:
             objective_id: Identifier for the objective being calibrated
             step_size_um: Step size in microns (50-200 recommended)
-            pattern: Movement pattern - "cross" or "grid"
-            n_steps: Number of steps in each direction
-            auto_exposure: Whether to automatically adjust exposure
+            pattern: Movement pattern - "cross" (9 points) or "grid" (n×n points)
+            n_steps: For grid pattern, number of steps per axis
+            settle_time: Seconds to wait after each move
             validate: Whether to validate the calibration
         
         Returns:
-            Dictionary with calibration results
+            Dictionary with calibration results including affine_matrix and metrics
         """
         self._logger.info(f"Starting affine calibration for objective '{objective_id}'")
+        self._logger.info(f"Pattern: {pattern}, step size: {step_size_um}µm")
         
-        # Get camera and stage interface functions
-        grab_image, get_position, move, wait = self.camera_stage_functions()
-        
-        # Auto-adjust exposure if requested
-        if auto_exposure:
-            self._logger.info("Auto-adjusting exposure...")
-            try:
-                # Create a simple set_exposure function
-                # Note: This is a placeholder - actual implementation depends on camera API
-                def set_exposure(exposure_ms):
-                    self._logger.info(f"Setting exposure to {exposure_ms:.1f}ms")
-                    # TODO: Implement actual exposure setting via camera API
-                    pass
-                
-                # For now, skip auto-exposure if we can't set it
-                self._logger.info("Auto-exposure not implemented for this camera, using current settings")
-            except Exception as e:
-                self._logger.warning(f"Could not adjust exposure: {e}")
-        
-        # Create tracker
-        tracker = Tracker(grab_image, get_position, settle=wait)
-        
-        # Perform calibration
+        # Direct calibration without abstractions
         try:
-            result = calibrate_affine_transform(
-                tracker=tracker,
-                move=move,
-                step_size_um=step_size_um,
-                pattern=pattern,
-                n_steps=n_steps,
-                settle_time=0.2,
-                logger=self._logger
-            )
+            # 1. Get starting position and reference image
+            start_position = self._get_stage_position()
+            ref_image = self._grab_image()
+            self._logger.info(f"Starting position: {start_position[:2]} µm")
             
-            # Validate calibration if requested
+            # 2. Generate calibration positions
+            if pattern == "cross":
+                # Cross: center + 4 cardinal + 4 diagonal = 9 points
+                offsets = [
+                    (0, 0),
+                    (step_size_um, 0), (0, step_size_um), (-step_size_um, 0), (0, -step_size_um),
+                    (step_size_um, step_size_um), (step_size_um, -step_size_um),
+                    (-step_size_um, step_size_um), (-step_size_um, -step_size_um)
+                ]
+            elif pattern == "grid":
+                # Grid: n_steps × n_steps points
+                half = n_steps // 2
+                offsets = [(i * step_size_um, j * step_size_um) 
+                           for i in range(-half, half + 1) 
+                           for j in range(-half, half + 1)]
+            else:
+                raise ValueError(f"Unknown pattern '{pattern}'. Use 'cross' or 'grid'")
+            
+            # 3. Move and measure pixel shifts
+            pixel_shifts = []
+            stage_shifts = []
+            correlations = []
+            
+            for i, (dx, dy) in enumerate(offsets):
+                # Move stage
+                target_position = start_position + np.array([dx, dy, 0])
+                self._move_stage(target_position)
+                time.sleep(settle_time)
+                
+                # Capture image and measure shift
+                image = self._grab_image()
+                (shift_x, shift_y), corr = measure_pixel_shift(ref_image, image)
+                
+                pixel_shifts.append([shift_x, shift_y])
+                stage_shifts.append([dx, dy])
+                correlations.append(corr)
+                
+                self._logger.debug(f"Point {i+1}/{len(offsets)}: stage=({dx:+.0f},{dy:+.0f})µm, "
+                                  f"pixel=({shift_x:+.2f},{shift_y:+.2f})px, corr={corr:.3f}")
+            
+            # Return to starting position
+            self._move_stage(start_position)
+            
+            # 4. Compute affine transformation matrix
+            pixel_shifts = np.array(pixel_shifts)
+            stage_shifts = np.array(stage_shifts)
+            correlations = np.array(correlations)
+            
+            affine_matrix, inliers, metrics = compute_affine_matrix(pixel_shifts, stage_shifts)
+            
+            # Add correlation metrics
+            metrics["mean_correlation"] = np.mean(correlations[inliers])
+            metrics["min_correlation"] = np.min(correlations[inliers])
+            
+            # Classify quality
+            rmse = metrics["rmse_um"]
+            corr_mean = metrics["mean_correlation"]
+            if rmse < 1.0 and corr_mean > 0.5:
+                quality = "excellent"
+            elif rmse < 2.0 and corr_mean > 0.3:
+                quality = "good"
+            elif rmse < 5.0:
+                quality = "acceptable"
+            else:
+                quality = "poor"
+            
+            metrics["quality"] = quality
+            
+            self._logger.info(f"Calibration quality: {quality}, RMSE={rmse:.3f}µm, "
+                            f"rotation={metrics['rotation_deg']:.2f}°")
+            
+            # 5. Validate calibration if requested
             if validate:
-                is_valid, message = validate_calibration(
-                    result["affine_matrix"],
-                    result["metrics"],
-                    logger=self._logger
-                )
-                result["validation"] = {
+                is_valid, message = validate_calibration(affine_matrix, metrics, logger=self._logger)
+                validation_result = {
                     "is_valid": is_valid,
                     "message": message
                 }
-                
                 if not is_valid:
-                    self._logger.warning("Calibration validation failed but data will still be saved")
+                    self._logger.warning(f"Validation warning: {message}")
+            else:
+                validation_result = None
             
-            # Store calibration data
+            # 6. Store calibration data
             objective_info = {
                 "name": objective_id,
                 "effective_pixel_size_um": self._effPixelsize,
@@ -210,16 +271,36 @@ class StageMappingCalibration(object):
             
             self._calibration_storage.save_calibration(
                 objective_id=objective_id,
-                affine_matrix=result["affine_matrix"],
-                metrics=result["metrics"],
+                affine_matrix=affine_matrix,
+                metrics=metrics,
                 objective_info=objective_info
             )
+            
+            result = {
+                "affine_matrix": affine_matrix,
+                "metrics": metrics,
+                "quality": quality,
+                "pixel_displacements": pixel_shifts,
+                "stage_displacements": stage_shifts,
+                "correlation_values": correlations,
+                "inlier_mask": inliers,
+                "starting_position": start_position,
+                "timestamp": time.time()
+            }
+            
+            if validation_result:
+                result["validation"] = validation_result
             
             self._logger.info(f"Affine calibration completed for objective '{objective_id}'")
             return result
             
         except Exception as e:
             self._logger.error(f"Affine calibration failed: {e}")
+            # Try to return to starting position on error
+            try:
+                self._move_stage(start_position)
+            except:
+                pass
             raise
 
     def get_affine_matrix(self, objective_id: str = "default") -> np.ndarray:
@@ -334,10 +415,25 @@ class StageMappingCalibration(object):
         self.move_in_image_coordinates_affine(displacement_in_pixels, objective_id)
 
     def closed_loop_move_in_image_coordinates(self, displacement_in_pixels, objective_id: str = "default", **kwargs):
-        """Move by a given number of pixels on the camera, using the camera as an encoder."""
-        grab_image, get_position, move, wait = self.camera_stage_functions()
-
-        tracker = Tracker(grab_image, get_position, settle=wait)
+        """
+        Move by a given number of pixels on the camera, using the camera as an encoder.
+        
+        This is a closed-loop move that tracks the actual displacement using the camera
+        to ensure accurate positioning even with stage backlash or errors.
+        """
+        from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage_tracker import Tracker
+        
+        # Create wrapper functions for Tracker compatibility
+        def grab_image():
+            return self._grab_image()
+        
+        def get_position():
+            return self._get_stage_position()
+        
+        def settle(t=0.1):
+            time.sleep(t)
+        
+        tracker = Tracker(grab_image, get_position, settle=settle)
         tracker.acquire_template()
         
         # Create a move function that uses affine transformation
@@ -370,19 +466,26 @@ class StageMappingCalibration(object):
             scan_path: Nx2 array of pixel coordinates
             objective_id: Identifier for the objective to use
         """
-        grab_image, get_position, move, wait = self.camera_stage_functions()
+        from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage_tracker import Tracker
+        
+        # Create wrapper functions for Tracker compatibility
+        def grab_image():
+            return self._grab_image()
+        
+        def get_position():
+            return self._get_stage_position()
+        
+        def settle(t=0.1):
+            time.sleep(t)
 
-        tracker = Tracker(grab_image, get_position, settle=wait)
+        tracker = Tracker(grab_image, get_position, settle=settle)
         tracker.acquire_template()
         
         # Create a move function that uses affine transformation
         def move_func(disp):
             self.move_in_image_coordinates_affine(disp, objective_id)
-
-        # Get actual stage move function
-        _, _, stage_move, _ = self.camera_stage_functions()
         
-        return closed_loop_scan(tracker, move_func, stage_move, np.array(scan_path), **kwargs)
+        return closed_loop_scan(tracker, move_func, self._move_stage, np.array(scan_path), **kwargs)
 
     def test_closed_loop_spiral_scan(self, step_size, N, objective_id: str = "default", **kwargs):
         """

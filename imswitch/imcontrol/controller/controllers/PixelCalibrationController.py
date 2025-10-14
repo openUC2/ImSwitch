@@ -11,8 +11,6 @@ import time
 import numpy as np
 import NanoImagingPack as nip
 import os
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage_tracker import Tracker
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.scan_coords_times import ordered_spiral
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
     measure_pixel_shift, compute_affine_matrix, validate_calibration
 )
@@ -273,7 +271,7 @@ class CSMExtension(object):
         marray = self._parent.detector.getLatestFrame()
         crop_size = min(crop_size, marray.shape[0], marray.shape[1])
         # Crop the center region
-        return nip.extract(marray, crop_size)
+        return np.array(nip.extract(marray, crop_size))
 
     def _get_stage_position(self):
         """Get current stage position in microns [X, Y, Z]."""
@@ -368,7 +366,7 @@ class CSMExtension(object):
                 image = self._grab_image()
                 
                 # Measure pixel shift using phase correlation
-                shift, correlation = measure_pixel_shift(ref_image, image)
+                shift, correlation = measure_pixel_shift(np.array(ref_image), np.array(image))
                 
                 pixel_shifts.append(shift)
                 stage_shifts.append([dx, dy])

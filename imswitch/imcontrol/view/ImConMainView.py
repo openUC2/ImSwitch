@@ -43,6 +43,7 @@ class ImConMainView(QMainWindow):
         menuBar = self.menuBar()
         file = menuBar.addMenu('&File')
         tools = menuBar.addMenu('&Tools')
+        configuration = menuBar.addMenu('&Configuration')
         self.shortcuts = menuBar.addMenu('&Shortcuts')
 
         self.loadParamsAction = QtWidgets.QAction('Load parameters from saved HDF5 file…', self)
@@ -52,7 +53,7 @@ class ImConMainView(QMainWindow):
 
         self.pickSetupAction = QtWidgets.QAction('Pick hardware setup…', self)
         self.pickSetupAction.triggered.connect(self.sigPickSetup)
-        tools.addAction(self.pickSetupAction)
+        configuration.addAction(self.pickSetupAction)
 
 
         # Window
@@ -69,7 +70,6 @@ class ImConMainView(QMainWindow):
             'FocusLock': _DockInfo(name='Focus Lock', yPosition=0),
             'FOVLock': _DockInfo(name='FOV Lock', yPosition=0),
             'SLM': _DockInfo(name='SLM', yPosition=0),
-            'UC2Config': _DockInfo(name='UC2Config', yPosition=0),
             'SIM': _DockInfo(name='SIM', yPosition=0),
             'DPC': _DockInfo(name='DPC', yPosition=0),
             'MCT': _DockInfo(name='MCT', yPosition=0),
@@ -86,7 +86,6 @@ class ImConMainView(QMainWindow):
             'HistoScan': _DockInfo(name='HistoScan', yPosition=1),
             'Workflow': _DockInfo(name='Workflow', yPosition=1),
             'Flatfield': _DockInfo(name='Flatfield', yPosition=1),
-            'PixelCalibration': _DockInfo(name='PixelCalibration', yPosition=1),
             'ISM': _DockInfo(name='ISM', yPosition=0),
             'Laser': _DockInfo(name='Laser Control', yPosition=0),
             'LED': _DockInfo(name='LED Control', yPosition=0),
@@ -121,6 +120,13 @@ class ImConMainView(QMainWindow):
             'Watcher': _DockInfo(name='File Watcher', yPosition=3),
             'Tiling': _DockInfo(name='Tiling', yPosition=3)
             }
+        
+        # Configuration tools - separated from UC2 and other widgets
+        configDockInfos = {
+            'UC2Config': _DockInfo(name='Hardware Config', yPosition=0),
+            'PixelCalibration': _DockInfo(name='Pixel Calibration', yPosition=1),
+        }
+        
         leftDockInfos = {
             'Settings': _DockInfo(name='Detector Settings', yPosition=0),
             'View': _DockInfo(name='Image Controls', yPosition=1),
@@ -128,7 +134,7 @@ class ImConMainView(QMainWindow):
             'Console': _DockInfo(name='Console', yPosition=3)
         }
         otherDockKeys = ['Image']
-        allDockKeys = list(rightDockInfos.keys()) + list(leftDockInfos.keys()) + otherDockKeys
+        allDockKeys = list(rightDockInfos.keys()) + list(configDockInfos.keys()) + list(leftDockInfos.keys()) + otherDockKeys
 
         dockArea = DockArea()
         enabledDockKeys = self.viewSetupInfo.availableWidgets
@@ -144,8 +150,8 @@ class ImConMainView(QMainWindow):
             self.factory.setArgument('napariViewer', self.widgets['Image'].napariViewer)
             dockArea.addDock(self.docks['Image'], 'left')
         # if we load the widget as a plugin we have to set a default position
-        # filter those enabeldDockKeys that are not in rightDockInfos
-        pluginDockKeys = [key for key in enabledDockKeys if (key not in rightDockInfos and key not in leftDockInfos and key!="Image")]
+        # filter those enabeldDockKeys that are not in rightDockInfos, configDockInfos or leftDockInfos
+        pluginDockKeys = [key for key in enabledDockKeys if (key not in rightDockInfos and key not in configDockInfos and key not in leftDockInfos and key!="Image")]
         # add the pluginDockKeys to the rightDockInfos with default position
         for widgetKey in pluginDockKeys:
             rightDockInfos[widgetKey] = _DockInfo(name=widgetKey, yPosition=0)
@@ -155,6 +161,11 @@ class ImConMainView(QMainWindow):
             dockArea, 'right'
         )
 
+        # Configuration docks - separate area for config tools
+        configDocks = self._addDocks(
+            {k: v for k, v in configDockInfos.items() if k in enabledDockKeys},
+            dockArea, 'bottom'
+        )
 
         lefDocks = self._addDocks(
             {k: v for k, v in leftDockInfos.items() if k in enabledDockKeys},

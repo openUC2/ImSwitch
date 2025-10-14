@@ -1,46 +1,22 @@
-import json
 import os
 
 import numpy as np
 import time
-import tifffile as tif
 import threading
-from datetime import datetime
-import threading
-import cv2
-from skimage.registration import phase_cross_correlation
-from ..basecontrollers import ImConWidgetController
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
-from imswitch.imcommon.model import APIExport, dirtools
-from imswitch.imcontrol.model import configfiletools, initLogger
+from imswitch.imcommon.model import initLogger, dirtools, APIExport
+from imswitch.imcommon.framework import Signal
 import time
 from imswitch import IS_HEADLESS
-
-
-from fractions import Fraction
-from uuid import UUID
-import logging
 import time
 import numpy as np
-import PIL
-import io
 import os
-import json
-from collections import namedtuple
-
-try:
-    from camera_stage_mapping.camera_stage_tracker import Tracker
-    from camera_stage_mapping.closed_loop_move import closed_loop_move, closed_loop_scan
-    from camera_stage_mapping.scan_coords_times import ordered_spiral
-    from camera_stage_mapping.affine_stage_calibration import (
-        calibrate_affine_transform, validate_calibration, apply_affine_transform
-    )
-    from camera_stage_mapping.calibration_storage import CalibrationStorage
-    IS_CAMERA_STAGE_MAPPING_INSTALLED = True
-except ImportError:
-    IS_CAMERA_STAGE_MAPPING_INSTALLED = False
-
-
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.camera_stage_tracker import Tracker
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.closed_loop_move import closed_loop_move, closed_loop_scan
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.scan_coords_times import ordered_spiral
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
+    calibrate_affine_transform, validate_calibration, apply_affine_transform
+)
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.calibration_storage import CalibrationStorage
 from ..basecontrollers import LiveUpdatedController
 
 #import NanoImagingPack as nip
@@ -67,8 +43,7 @@ class PixelCalibrationController(LiveUpdatedController):
 
     def startPixelCalibration(self):
         """Start affine calibration (replaces old calibrate_xy)."""
-        if IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            self.stageCalibrationAffine(objective_id="default", step_size_um=100.0)
+        self.stageCalibrationAffine(objective_id="default", step_size_um=100.0)
 
     def stageCalibration(self):
         stageCalibrationT = threading.Thread(target=self.stageCalibrationThread, args=())
@@ -121,9 +96,6 @@ class PixelCalibrationController(LiveUpdatedController):
         Returns:
             Dictionary with calibration results including metrics
         """
-        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            return {"error": "Camera stage mapping module not available"}
-        
         try:
             csm_extension = CSMExtension(self)
             result = csm_extension.calibrate_affine(
@@ -166,9 +138,7 @@ class PixelCalibrationController(LiveUpdatedController):
         Returns:
             List of objective identifiers that have been calibrated
         """
-        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            return {"error": "Camera stage mapping module not available"}
-        
+
         try:
             csm_extension = CSMExtension(self)
             objectives = csm_extension.list_calibrated_objectives()
@@ -188,9 +158,7 @@ class PixelCalibrationController(LiveUpdatedController):
         Returns:
             Dictionary with calibration data including affine matrix and metrics
         """
-        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            return {"error": "Camera stage mapping module not available"}
-        
+
         try:
             csm_extension = CSMExtension(self)
             
@@ -223,9 +191,7 @@ class PixelCalibrationController(LiveUpdatedController):
         Returns:
             Success status
         """
-        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            return {"error": "Camera stage mapping module not available"}
-        
+
         try:
             csm_extension = CSMExtension(self)
             success = csm_extension._calibration_storage.delete_calibration(objectiveId)
@@ -253,10 +219,7 @@ class CSMExtension(object):
         self._parent = parent
         # Initialize calibration storage
         calib_file_path = os.path.join(dirtools.UserFileDirs.Root, "camera_stage_calibration.json")
-        if IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            self._calibration_storage = CalibrationStorage(calib_file_path, logger=self._parent._logger)
-        else:
-            self._calibration_storage = None
+        self._calibration_storage = CalibrationStorage(calib_file_path, logger=self._parent._logger)
 
 
     def update_settings(self, settings):
@@ -343,9 +306,6 @@ class CSMExtension(object):
         Returns:
             Dictionary with calibration results
         """
-        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            raise ImportError("Camera stage mapping module is not available")
-        
         self._parent._logger.info(f"Starting affine calibration for objective '{objective_id}'")
         
         # Get camera and stage interface functions
@@ -427,9 +387,6 @@ class CSMExtension(object):
         Raises:
             ValueError: If calibration not found
         """
-        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            raise ImportError("Camera stage mapping module is not available")
-        
         matrix = self._calibration_storage.get_affine_matrix(objective_id)
         if matrix is None:
             raise ValueError(f"No calibration found for objective '{objective_id}'")
@@ -442,8 +399,6 @@ class CSMExtension(object):
         Returns:
             List of objective identifiers
         """
-        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            return []
         return self._calibration_storage.list_objectives()
     
     def get_metrics(self, objective_id: str = "default"):
@@ -456,14 +411,12 @@ class CSMExtension(object):
         Returns:
             Dictionary of metrics or None if not found
         """
-        if not IS_CAMERA_STAGE_MAPPING_INSTALLED:
-            return None
         return self._calibration_storage.get_metrics(objective_id)
 
     @property
     def image_to_stage_displacement_matrix(self):
         """A 2x2 matrix that converts displacement in image coordinates to stage coordinates."""
-        if IS_CAMERA_STAGE_MAPPING_INSTALLED and self._calibration_storage:
+        if  self._calibration_storage:
             try:
                 # Try to get affine calibration first
                 objectives = self.list_calibrated_objectives()

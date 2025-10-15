@@ -28,20 +28,121 @@ class PixelCalibrationController(LiveUpdatedController):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
         
-        # Get pixel size from setup info or use default
-        if hasattr(self._setupInfo, 'PixelCalibration') and self._setupInfo.PixelCalibration:
-            # Pixel size might be stored in the calibration info or detector info
-            ''' has the following format:
-            self._setupInfo.PixelCalibration = "PixelCalibration": { "affineCalibrations": { "default": { "affine_matrix": [ [ -1.0, 0.0, 0.0 ], [ 0.0, -1.0, 0.0 ] ], "metrics": { "rmse_um": 0.0, "max_error_um": 0.0, "mean_error_um": 0.0, "n_inliers": 9.0, "n_outliers": 0.0, "rotation_deg": 0.0, "scale_x_um_per_pixel": 1.0, "scale_y_um_per_pixel": 1.0, "condition_number": 1.0, "mean_correlation": 0.0, "min_correlation": 0.0 }, "timestamp": "2025-10-15T21:34:20", "objective_info": { "name": "default", "detector": "VirtualCamera" } } }, "defaultAffineMatrix": [ [ 1.0, 0.0, 0.0 ], [ 0.0, 1.0, 0.0 ] ] }'''
-            self.pixelSize = 1  # Default, will be updated per objective # TODO: This should actually be read from the setup info if available...
-        else:
-            self.pixelSize = 1  # Default value
-
         # Get detector - prefer the one used for acquisition
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
+        
+        # Load affine calibrations from setup info and distribute them
+        self.affineCalibrations = {}
+        self.currentObjective = "default"
+        self._loadAffineCalibrations()
 
-
+    def _loadAffineCalibrations(self):
+        """
+        Load affine calibrations from setup configuration on startup.
+        
+        This method reads calibration data from config.json and makes it available
+        throughout the application. The calibrations are distributed to relevant
+        components:
+        - Stored in self.affineCalibrations for easy access
+        - Can be queried via getAffineMatrix() for coordinate transformations
+        - Pixel size extracted from scale parameters for each objective
+        """
+        if not hasattr(self._setupInfo, 'PixelCalibration') or self._setupInfo.PixelCalibration is None:
+            self._logger.info("No PixelCalibration in setup configuration - using default identity matrix")
+            return
+        
+        pixel_calibration = self._setupInfo.PixelCalibration
+        
+        if not hasattr(pixel_calibration, 'affineCalibrations') or not pixel_calibration.affineCalibrations:
+            self._logger.info("No affine calibrations found in setup configuration")
+            return
+        
+        # Load all calibrations
+        self.affineCalibrations = pixel_calibration.affineCalibrations
+        
+        self._logger.info(f"Loaded {len(self.affineCalibrations)} affine calibration(s) from setup configuration:")
+        
+        for objective_id, calib_data in self.affineCalibrations.items():
+            affine_matrix = np.array(calib_data.get('affine_matrix', [[1, 0, 0], [0, 1, 0]]))
+            metrics = calib_data.get('metrics', {})
+            
+            # Extract pixel size from scale parameters
+            scale_x = metrics.get('scale_x_um_per_pixel', 1.0)
+            scale_y = metrics.get('scale_y_um_per_pixel', 1.0)
+            rotation = metrics.get('rotation_deg', 0.0)
+            quality = metrics.get('quality', 'unknown')
+            timestamp = calib_data.get('timestamp', 'unknown')
+            
+            self._logger.info(f"  - {objective_id}: "
+                            f"scale=({scale_x:.3f}, {scale_y:.3f}) µm/px, "
+                            f"rotation={rotation:.2f}°, "
+                            f"quality={quality}, "
+                            f"calibrated={timestamp}")
+            
+            # Store pixel size for this objective (can be used by other components)
+            # Average of X and Y scales for general use
+            pixel_size_um = (scale_x + scale_y) / 2.0
+            
+            # If this is the default/current objective, set it as active
+            if objective_id == "default" or objective_id == self.currentObjective:
+                self._logger.info(f"Set '{objective_id}' as active calibration")
+    
+    def getAffineMatrix(self, objective_id: str = None) -> np.ndarray:
+        """
+        Get affine transformation matrix for current or specified objective.
+        
+        Args:
+            objective_id: Optional objective identifier. If None, uses current objective.
+            
+        Returns:
+            2x3 numpy array representing affine transformation
+        """
+        if objective_id is None:
+            objective_id = self.currentObjective
+        
+        return self._setupInfo.getAffineMatrix(objective_id)
+    
+    def getPixelSize(self, objective_id: str = None) -> tuple:
+        """
+        Get pixel size in microns for current or specified objective.
+        
+        Extracted from the scale parameters in the affine calibration.
+        
+        Args:
+            objective_id: Optional objective identifier. If None, uses current objective.
+            
+        Returns:
+            Tuple of (scale_x_um_per_pixel, scale_y_um_per_pixel)
+        """
+        if objective_id is None:
+            objective_id = self.currentObjective
+        
+        if objective_id in self.affineCalibrations:
+            metrics = self.affineCalibrations[objective_id].get('metrics', {})
+            scale_x = metrics.get('scale_x_um_per_pixel', 1.0)
+            scale_y = metrics.get('scale_y_um_per_pixel', 1.0)
+            return (scale_x, scale_y)
+        else:
+            # Return default if no calibration
+            return (1.0, 1.0)
+    
+    def setCurrentObjective(self, objective_id: str):
+        """
+        Set the current active objective for calibration.
+        
+        Args:
+            objective_id: Identifier for the objective to activate
+        """
+        self.currentObjective = objective_id
+        self._logger.info(f"Switched to objective '{objective_id}'")
+        
+        # Log if calibration exists for this objective
+        if objective_id in self.affineCalibrations:
+            scale_x, scale_y = self.getPixelSize(objective_id)
+            self._logger.info(f"Calibration loaded: pixel size = ({scale_x:.3f}, {scale_y:.3f}) µm/px")
+        else:
+            self._logger.info(f"No calibration for '{objective_id}' - using default identity matrix")
 
 
 

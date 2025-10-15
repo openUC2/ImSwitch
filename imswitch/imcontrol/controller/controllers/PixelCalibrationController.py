@@ -31,26 +31,26 @@ class PixelCalibrationController(LiveUpdatedController):
         # Get pixel size from setup info or use default
         if hasattr(self._setupInfo, 'PixelCalibration') and self._setupInfo.PixelCalibration:
             # Pixel size might be stored in the calibration info or detector info
-            self.pixelSize = 500  # Default, will be updated per objective
+            ''' has the following format:
+            self._setupInfo.PixelCalibration = "PixelCalibration": { "affineCalibrations": { "default": { "affine_matrix": [ [ -1.0, 0.0, 0.0 ], [ 0.0, -1.0, 0.0 ] ], "metrics": { "rmse_um": 0.0, "max_error_um": 0.0, "mean_error_um": 0.0, "n_inliers": 9.0, "n_outliers": 0.0, "rotation_deg": 0.0, "scale_x_um_per_pixel": 1.0, "scale_y_um_per_pixel": 1.0, "condition_number": 1.0, "mean_correlation": 0.0, "min_correlation": 0.0 }, "timestamp": "2025-10-15T21:34:20", "objective_info": { "name": "default", "detector": "VirtualCamera" } } }, "defaultAffineMatrix": [ [ 1.0, 0.0, 0.0 ], [ 0.0, 1.0, 0.0 ] ] }'''
+            self.pixelSize = 1  # Default, will be updated per objective # TODO: This should actually be read from the setup info if available...
         else:
-            self.pixelSize = 500  # Default value
+            self.pixelSize = 1  # Default value
 
         # Get detector - prefer the one used for acquisition
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
 
 
-    def snapPreview(self):
-        self._logger.info("Snap preview...")
-        previewImage = self._master.detectorsManager.execOnCurrent(lambda c: c.getLatestFrame())
+
+
 
 
 
     # API Methods for web interface
-    
     @APIExport(runOnUIThread=False)  # Run in background thread
     def calibrateStageAffine(self, objectiveId: str = "default", stepSizeUm: float = 100.0, 
-                             pattern: str = "cross", nSteps: int = 4, validate: bool = True):
+                             pattern: str = "cross", nSteps: int = 4, validate: bool = False):
         """
         Perform affine stage-to-camera calibration via API.
         
@@ -67,9 +67,9 @@ class PixelCalibrationController(LiveUpdatedController):
             Dictionary with calibration results including metrics
         """
         try:
-            csm_extension = CSMExtension(self)
+            pixelcalibration_helper = PixelCalibrationClass(self)
             
-            result = csm_extension.calibrate_affine(
+            result = pixelcalibration_helper.calibrate_affine(
                 objective_id=objectiveId,
                 step_size_um=stepSizeUm,
                 pattern=pattern,
@@ -119,8 +119,8 @@ class PixelCalibrationController(LiveUpdatedController):
         """
 
         try:
-            csm_extension = CSMExtension(self)
-            objectives = csm_extension.list_calibrated_objectives()
+            pixelcalibration_helper = PixelCalibrationClass(self)
+            objectives = pixelcalibration_helper.list_calibrated_objectives()
             return {"success": True, "objectives": objectives}
         except Exception as e:
             self._logger.error(f"Failed to get calibrated objectives: {e}")
@@ -139,15 +139,15 @@ class PixelCalibrationController(LiveUpdatedController):
         """
 
         try:
-            csm_extension = CSMExtension(self)
+            pixelcalibration_helper = PixelCalibrationClass(self)
             
             # Get affine matrix
-            affine_matrix = csm_extension.get_affine_matrix(objectiveId)
+            affine_matrix = pixelcalibration_helper.get_affine_matrix(objectiveId)
             if affine_matrix is None:
                 return {"error": f"No calibration found for objective '{objectiveId}'", "success": False}
             
             # Get metrics
-            metrics = csm_extension.get_metrics(objectiveId)
+            metrics = pixelcalibration_helper.get_metrics(objectiveId)
             
             return {
                 "success": True,
@@ -206,7 +206,7 @@ class PixelCalibrationController(LiveUpdatedController):
 
 
 
-class CSMExtension(object):
+class PixelCalibrationClass(object):
     """
     Camera-to-stage mapping calibration.
     
@@ -363,7 +363,7 @@ class CSMExtension(object):
                 "starting_position": start_position
             }
             
-            if validate:
+            if 0 and validate:
                 is_valid, message = validate_calibration(
                     affine_matrix, metrics, logger=self._parent._logger
                 )

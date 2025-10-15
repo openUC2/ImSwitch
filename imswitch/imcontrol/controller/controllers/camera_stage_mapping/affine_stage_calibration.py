@@ -94,7 +94,7 @@ def compute_affine_matrix(pixel_shifts: np.ndarray, stage_shifts: np.ndarray) ->
     median_error = np.median(error_norms)
     mad = np.median(np.abs(error_norms - median_error))
     threshold = median_error + 3.0 * 1.4826 * mad
-    inliers = error_norms < threshold
+    inliers = error_norms <= threshold
     
     # Refit with inliers only if we removed any outliers
     n_outliers = np.sum(~inliers)

@@ -158,6 +158,51 @@ Calibrations are stored in `config.json`:
 
 ## Integration with Other Components
 
+### Automatic Pixel Size Distribution
+
+When calibrations load, pixel sizes are **automatically distributed** to ObjectiveInfo:
+
+1. **Matching by Name**: Calibration objective ID matched to `objectiveNames` list
+2. **Default Handling**: "default" calibration applied to first objective
+3. **Magnification Matching**: Attempts to match by magnification when name fails
+4. **Live Update**: ObjectiveController.pixelsizes refreshed if controller exists
+
+**Example Log Output**:
+```
+[INFO] Updated pixelsize for objective '10x' (slot 1): 5.0 → 0.500 µm/px
+[INFO] Updated pixelsize for objective '20x' (slot 2): 10.0 → 0.250 µm/px
+[INFO] Successfully distributed 2 calibrated pixel size(s) to ObjectiveInfo
+[INFO] Updated pixelsizes in ObjectiveController
+```
+
+**Configuration After Distribution**:
+```json
+{
+  "objective": {
+    "objectiveNames": ["10x", "20x"],
+    "pixelsizes": [0.5, 0.25],  // Updated from calibration
+    "magnifications": [10, 20],
+    "NAs": [0.5, 0.8]
+  },
+  "PixelCalibration": {
+    "affineCalibrations": {
+      "10x": {
+        "metrics": {
+          "scale_x_um_per_pixel": 0.5,
+          "scale_y_um_per_pixel": 0.5
+        }
+      },
+      "20x": {
+        "metrics": {
+          "scale_x_um_per_pixel": 0.25,
+          "scale_y_um_per_pixel": 0.25
+        }
+      }
+    }
+  }
+}
+```
+
 ### ObjectiveController
 
 Update calibration when objective changes:

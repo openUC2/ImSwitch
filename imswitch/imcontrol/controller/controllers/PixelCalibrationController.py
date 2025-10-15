@@ -39,14 +39,15 @@ class PixelCalibrationController(LiveUpdatedController):
 
     def _loadAffineCalibrations(self):
         """
-        Load affine calibrations from setup configuration on startup.
+        Load affine calibrations from setup configuration on startup and distribute to components.
         
         This method reads calibration data from config.json and makes it available
         throughout the application. The calibrations are distributed to relevant
         components:
         - Stored in self.affineCalibrations for easy access
         - Can be queried via getAffineMatrix() for coordinate transformations
-        - Pixel size extracted from scale parameters for each objective
+        - Pixel sizes extracted and updated in ObjectiveInfo for each objective
+        - Detector pixel size updated based on current objective
         """
         if not hasattr(self._setupInfo, 'PixelCalibration') or self._setupInfo.PixelCalibration is None:
             self._logger.info("No PixelCalibration in setup configuration - using default identity matrix")
@@ -63,6 +64,9 @@ class PixelCalibrationController(LiveUpdatedController):
         
         self._logger.info(f"Loaded {len(self.affineCalibrations)} affine calibration(s) from setup configuration:")
         
+        # Map objective names to their indices if ObjectiveInfo exists
+        objective_pixelsizes_map = {}
+        
         for objective_id, calib_data in self.affineCalibrations.items():
             affine_matrix = np.array(calib_data.get('affine_matrix', [[1, 0, 0], [0, 1, 0]]))
             metrics = calib_data.get('metrics', {})
@@ -74,19 +78,91 @@ class PixelCalibrationController(LiveUpdatedController):
             quality = metrics.get('quality', 'unknown')
             timestamp = calib_data.get('timestamp', 'unknown')
             
+            # Average pixel size for compatibility with existing code
+            pixel_size_um = (scale_x + scale_y) / 2.0
+            objective_pixelsizes_map[objective_id] = pixel_size_um
+            
             self._logger.info(f"  - {objective_id}: "
                             f"scale=({scale_x:.3f}, {scale_y:.3f}) µm/px, "
                             f"rotation={rotation:.2f}°, "
                             f"quality={quality}, "
                             f"calibrated={timestamp}")
             
-            # Store pixel size for this objective (can be used by other components)
-            # Average of X and Y scales for general use
-            pixel_size_um = (scale_x + scale_y) / 2.0
-            
             # If this is the default/current objective, set it as active
             if objective_id == "default" or objective_id == self.currentObjective:
                 self._logger.info(f"Set '{objective_id}' as active calibration")
+        
+        # Update ObjectiveInfo pixelsizes if available
+        self._distributePixelSizesToObjectives(objective_pixelsizes_map)
+    
+    def _distributePixelSizesToObjectives(self, objective_pixelsizes_map: dict):
+        """
+        Distribute calibrated pixel sizes to ObjectiveInfo configuration.
+        
+        This updates the pixelsizes list in ObjectiveInfo to match the calibrated
+        values from affine calibration. Objectives are matched by name or index.
+        
+        Args:
+            objective_pixelsizes_map: Dictionary mapping objective IDs to pixel sizes
+        """
+        if not hasattr(self._setupInfo, 'objective') or self._setupInfo.objective is None:
+            self._logger.debug("No ObjectiveInfo in setup - skipping pixel size distribution")
+            return
+        
+        objective_info = self._setupInfo.objective
+        
+        if not hasattr(objective_info, 'objectiveNames') or not objective_info.objectiveNames:
+            self._logger.debug("No objective names defined - skipping pixel size distribution")
+            return
+        
+        # Create mapping from objective names to indices
+        objective_name_to_index = {}
+        for idx, name in enumerate(objective_info.objectiveNames):
+            objective_name_to_index[name] = idx
+        
+        # Update pixelsizes based on calibration data
+        updated_count = 0
+        for objective_id, pixel_size in objective_pixelsizes_map.items():
+            # Try matching by exact name first
+            if objective_id in objective_name_to_index:
+                idx = objective_name_to_index[objective_id]
+                old_value = objective_info.pixelsizes[idx] if idx < len(objective_info.pixelsizes) else None
+                objective_info.pixelsizes[idx] = pixel_size
+                self._logger.info(f"Updated pixelsize for objective '{objective_id}' (slot {idx+1}): "
+                                f"{old_value} → {pixel_size:.3f} µm/px")
+                updated_count += 1
+            # Try matching "default" to first objective
+            elif objective_id == "default" and len(objective_info.objectiveNames) > 0:
+                idx = 0
+                old_value = objective_info.pixelsizes[idx] if idx < len(objective_info.pixelsizes) else None
+                objective_info.pixelsizes[idx] = pixel_size
+                self._logger.info(f"Updated pixelsize for default objective '{objective_info.objectiveNames[idx]}' "
+                                f"(slot {idx+1}): {old_value} → {pixel_size:.3f} µm/px")
+                updated_count += 1
+            # Try matching by index if objective_id is like "10x", "20x" and matches magnification
+            elif hasattr(objective_info, 'magnifications'):
+                # Extract magnification value from objective_id if possible
+                try:
+                    # Check if any objective has this as its name
+                    for mag_idx, mag in enumerate(objective_info.magnifications):
+                        objective_name = objective_info.objectiveNames[mag_idx] if mag_idx < len(objective_info.objectiveNames) else None
+                        if objective_name and objective_id.lower() == objective_name.lower():
+                            old_value = objective_info.pixelsizes[mag_idx] if mag_idx < len(objective_info.pixelsizes) else None
+                            objective_info.pixelsizes[mag_idx] = pixel_size
+                            self._logger.info(f"Updated pixelsize for objective '{objective_name}' (slot {mag_idx+1}): "
+                                            f"{old_value} → {pixel_size:.3f} µm/px")
+                            updated_count += 1
+                            break
+                except:
+                    pass
+        
+        if updated_count > 0:
+            self._logger.info(f"Successfully distributed {updated_count} calibrated pixel size(s) to ObjectiveInfo")
+            # Also update the ObjectiveController if it exists
+            if hasattr(self._master, 'objectiveController'):
+                # Reload pixelsizes in ObjectiveController
+                self._master.objectiveController.pixelsizes = objective_info.pixelsizes
+                self._logger.debug("Updated pixelsizes in ObjectiveController")
     
     def getAffineMatrix(self, objective_id: str = None) -> np.ndarray:
         """

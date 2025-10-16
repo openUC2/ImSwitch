@@ -166,7 +166,8 @@ class ExperimentModeBase(ABC):
         all_points = []
         for point in tiles:
             if point is not None:
-                all_points.append([point["x"], point["y"]])
+                try:all_points.append([point["x"], point["y"]])
+                except Exception as e: self._logger.error(f"Error processing point {point}: {e}")
         
         if all_points:
             x_coords = [p[0] for p in all_points]

@@ -34,8 +34,9 @@ class PixelCalibrationController(LiveUpdatedController):
         
         # Load affine calibrations from setup info and distribute them
         self.affineCalibrations = {}
-        self.currentObjective = "default"
+        self.currentObjective = "default" # TODO: This has to be read from the ObjectiveController / via the ObjectiveManager, the state has to be stored from controller to manager - it is either 0 or 1
         self._loadAffineCalibrations()
+        
 
     def _loadAffineCalibrations(self):
         """
@@ -52,7 +53,7 @@ class PixelCalibrationController(LiveUpdatedController):
         if not hasattr(self._setupInfo, 'PixelCalibration') or self._setupInfo.PixelCalibration is None:
             self._logger.info("No PixelCalibration in setup configuration - using default identity matrix")
             return
-        
+        # TODO: We should only have one affine transfomration as the rotation/flip is the same for all objective lenses, only the scaling changes - also, we should only save one calibration affine transformation and overwrite with each calibration
         pixel_calibration = self._setupInfo.PixelCalibration
         
         if not hasattr(pixel_calibration, 'affineCalibrations') or not pixel_calibration.affineCalibrations:
@@ -66,9 +67,10 @@ class PixelCalibrationController(LiveUpdatedController):
         
         # Map objective names to their indices if ObjectiveInfo exists
         objective_pixelsizes_map = {}
+        objective_flips_map = {}
         
         for objective_id, calib_data in self.affineCalibrations.items():
-            affine_matrix = np.array(calib_data.get('affine_matrix', [[1, 0, 0], [0, 1, 0]]))
+            affine_matrix = np.array(calib_data.get('affine_matrix', [[1, 0, 0], [0, 1, 0]])) # TODO: Unused, use it?
             metrics = calib_data.get('metrics', {})
             
             # Extract pixel size from scale parameters
@@ -79,12 +81,17 @@ class PixelCalibrationController(LiveUpdatedController):
             timestamp = calib_data.get('timestamp', 'unknown')
             
             # Average pixel size for compatibility with existing code
-            pixel_size_um = (scale_x + scale_y) / 2.0
+            pixel_size_um = (abs(scale_x) + abs(scale_y)) / 2.0
             objective_pixelsizes_map[objective_id] = pixel_size_um
+            
+            # Extract flip information from affine matrix
+            flip_info = self._setupInfo.getFlipFromAffineMatrix(objective_id)
+            objective_flips_map[objective_id] = flip_info
             
             self._logger.info(f"  - {objective_id}: "
                             f"scale=({scale_x:.3f}, {scale_y:.3f}) µm/px, "
                             f"rotation={rotation:.2f}°, "
+                            f"flip=(Y:{flip_info[0]}, X:{flip_info[1]}), "
                             f"quality={quality}, "
                             f"calibrated={timestamp}")
             
@@ -94,6 +101,9 @@ class PixelCalibrationController(LiveUpdatedController):
         
         # Update ObjectiveInfo pixelsizes if available
         self._distributePixelSizesToObjectives(objective_pixelsizes_map)
+        
+        # Distribute flip information to detectors
+        self._distributeFlipsToDetectors(objective_flips_map)
     
     def _distributePixelSizesToObjectives(self, objective_pixelsizes_map: dict):
         """
@@ -105,6 +115,9 @@ class PixelCalibrationController(LiveUpdatedController):
         Args:
             objective_pixelsizes_map: Dictionary mapping objective IDs to pixel sizes
         """
+        
+        # TODO: We need to distribute the information via the OBjectiveManager and implement this mechanism in the ObjectiveController
+        '''
         if not hasattr(self._setupInfo, 'objective') or self._setupInfo.objective is None:
             self._logger.debug("No ObjectiveInfo in setup - skipping pixel size distribution")
             return
@@ -158,11 +171,71 @@ class PixelCalibrationController(LiveUpdatedController):
         
         if updated_count > 0:
             self._logger.info(f"Successfully distributed {updated_count} calibrated pixel size(s) to ObjectiveInfo")
+        '''
+    def _distributeFlipsToDetectors(self, objective_flips_map: dict):
+        """
+        Distribute flip settings from affine calibration to detector managers.
+        
+        This updates the flipImage settings in detector cameras based on the
+        affine transformation matrix. The flip is applied as a zero-CPU operation
+        using numpy's flip function in the camera interface.
+        
+        Args:
+            objective_flips_map: Dictionary mapping objective IDs to (flipY, flipX) tuples
+        """
+        if not hasattr(self._master, 'detectorsManager'):
+            self._logger.debug("No detectorsManager available - skipping flip distribution")
+            return
+        
+        # Get all detectors
+        all_detectors = self._master.detectorsManager.getAllDeviceNames()
+        
+        if not all_detectors:
+            self._logger.debug("No detectors found - skipping flip distribution")
+            return
+        
+        # For now, apply to the first detector (typically the acquisition camera)
+        # TODO: Could be extended to match detector to objective in multi-camera setups
+        detector_name = all_detectors[0]
+        detector = self._master.detectorsManager[detector_name]
+        
+        # Try to match objective to flip settings
+        # Priority: current objective > "default" > first available
+        flip_to_apply = None
+        
+        if self.currentObjective in objective_flips_map:
+            flip_to_apply = objective_flips_map[self.currentObjective]
+            self._logger.info(f"Applying flip settings for objective '{self.currentObjective}': {flip_to_apply}")
+        elif "default" in objective_flips_map:
+            flip_to_apply = objective_flips_map["default"]
+            self._logger.info(f"Applying default flip settings: {flip_to_apply}")
+        elif objective_flips_map:
+            # Use first available
+            first_obj = list(objective_flips_map.keys())[0]
+            flip_to_apply = objective_flips_map[first_obj]
+            self._logger.info(f"Applying flip settings from '{first_obj}': {flip_to_apply}")
+        
+        if flip_to_apply is not None:
+            # Apply to detector using the manager's setFlipImage method if available
+            if hasattr(detector, 'setFlipImage'):
+                flipY, flipX = flip_to_apply
+                detector.setFlipImage(flipY, flipX)
+                self._logger.info(f"Updated detector '{detector_name}' flip settings via manager: Y={flipY}, X={flipX}")
+            # Fallback: apply directly to camera if manager doesn't have method
+            elif hasattr(detector, '_camera') and hasattr(detector._camera, 'flipImage'):
+                old_flip = getattr(detector._camera, 'flipImage', (False, False))
+                detector._camera.flipImage = flip_to_apply
+                self._logger.info(f"Updated detector '{detector_name}' flip settings directly: {old_flip} → {flip_to_apply}")
+            else:
+                self._logger.warning(f"Detector '{detector_name}' does not support flip operations")
+            
             # Also update the ObjectiveController if it exists
-            if hasattr(self._master, 'objectiveController'):
-                # Reload pixelsizes in ObjectiveController
-                self._master.objectiveController.pixelsizes = objective_info.pixelsizes
-                self._logger.debug("Updated pixelsizes in ObjectiveController")
+            if hasattr(self._master, 'objectiveController') and hasattr(self._setupInfo, 'objective'):
+                # Reload pixelsizes in ObjectiveController from SetupInfo
+                obj_info = self._setupInfo.objective
+                if hasattr(obj_info, 'pixelsizes'):
+                    self._master.objectiveController.pixelsizes = obj_info.pixelsizes
+                    self._logger.debug("Updated pixelsizes in ObjectiveController")
     
     def getAffineMatrix(self, objective_id: str = None) -> np.ndarray:
         """
@@ -226,7 +299,7 @@ class PixelCalibrationController(LiveUpdatedController):
 
     # API Methods for web interface
     @APIExport(runOnUIThread=False)  # Run in background thread
-    def calibrateStageAffine(self, objectiveId: str = "default", stepSizeUm: float = 100.0, 
+    def calibrateStageAffine(self, objectiveId: int = 0, stepSizeUm: float = 100.0, 
                              pattern: str = "cross", nSteps: int = 4, validate: bool = False):
         """
         Perform affine stage-to-camera calibration via API.
@@ -244,8 +317,11 @@ class PixelCalibrationController(LiveUpdatedController):
             Dictionary with calibration results including metrics
         """
         try:
+            # TODO: before we do the calibration we need to check if the intensity is in a reasonable regime of the camera
+        
+        
             pixelcalibration_helper = PixelCalibrationClass(self)
-            
+            # TODO: The objectiveID should be one of the two available objectives - we need to check that
             result = pixelcalibration_helper.calibrate_affine(
                 objective_id=objectiveId,
                 step_size_um=stepSizeUm,
@@ -274,7 +350,8 @@ class PixelCalibrationController(LiveUpdatedController):
             
             # Convert result to JSON-serializable format
             result_serializable = convert_to_native(result)
-            
+            # TODO: We would probably need to apply these parameters to the Objective/Detector (e.g. flip/rot, pixelsize)
+            self._loadAffineCalibrations() # FIXME: doing that for now through the file - not ideal as we reload all calibrations and a missing file causes it to crash..
             return {
                 "success": True,
                 "objectiveId": objectiveId,

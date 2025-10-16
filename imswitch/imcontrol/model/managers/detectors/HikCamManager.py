@@ -41,8 +41,20 @@ class HikCamManager(DetectorManager):
         except:
             self._mocktype = "normal"
 
+        # Get flip settings from affine calibration if available
+        try:
+            flipX = detectorInfo.managerProperties['hikcam']['flipX']
+        except:
+            flipX = False
 
-        self._camera = self._getHikObj(cameraId, isRGB, binning)
+        try:
+            flipY = detectorInfo.managerProperties['hikcam']['flipY']
+        except:
+            flipY = False
+
+        flipImage = (flipY, flipX)
+
+        self._camera = self._getHikObj(cameraId, isRGB, binning, flipImage)
 
         for propertyName, propertyValue in detectorInfo.managerProperties['hikcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
@@ -182,6 +194,17 @@ class HikCamManager(DetectorManager):
     def setPixelSizeUm(self, pixelSizeUm):
         self.parameters['Camera pixel size'].value = pixelSizeUm
 
+    def setFlipImage(self, flipY: bool, flipX: bool):
+        """
+        Set flip settings for the camera during runtime.
+        
+        Args:
+            flipY: Whether to flip vertically
+            flipX: Whether to flip horizontally
+        """
+        self._camera.flipImage = (flipY, flipX)
+        self.__logger.info(f"Updated flip settings: flipY={flipY}, flipX={flipX}")
+
     def crop(self, hpos, vpos, hsize, vsize):
         '''
         hpos - horizontal start position of crop window
@@ -238,11 +261,11 @@ class HikCamManager(DetectorManager):
         """Get the available trigger types for the camera."""
         return self._camera.getTriggerTypes()
 
-    def _getHikObj(self, cameraId, isRGB = False, binning=1):
+    def _getHikObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False)):
         try:
             from imswitch.imcontrol.model.interfaces.hikcamera import CameraHIK
             self.__logger.debug(f'Trying to initialize Hik camera {cameraId}')
-            camera = CameraHIK(cameraNo=cameraId, isRGB=isRGB, binning=binning)#, pixeltype=PixelType_Gvsp_BayerRG8)
+            camera = CameraHIK(cameraNo=cameraId, isRGB=isRGB, binning=binning, flipImage=flipImage)
         except Exception as e:
             self.__logger.error(e)
             self.__logger.warning(f'Failed to initialize CameraHik {cameraId}, loading TIS mocker')

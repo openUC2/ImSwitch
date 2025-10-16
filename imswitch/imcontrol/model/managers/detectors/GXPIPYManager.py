@@ -261,6 +261,24 @@ class GXPIPYManager(DetectorManager):
     def setPixelSizeUm(self, pixelSizeUm):
         self.parameters['Camera pixel size'].value = pixelSizeUm
 
+    def setFlipImage(self, flipY: bool, flipX: bool):
+        """
+        Set flip settings for the camera during runtime.
+        
+        Args:
+            flipY: Whether to flip vertically
+            flipX: Whether to flip horizontally
+        """
+        self._camera.flipImage = (flipY, flipX)
+        self.flipX = flipX
+        self.flipY = flipY
+        # Update parameters if they exist
+        if 'flipX' in self.parameters:
+            self.parameters['flipX'].value = flipX
+        if 'flipY' in self.parameters:
+            self.parameters['flipY'].value = flipY
+        self.__logger.info(f"Updated flip settings: flipY={flipY}, flipX={flipX}")
+
     def crop(self, hpos, vpos, hsize, vsize):
         '''
         hpos - horizontal start position of crop window

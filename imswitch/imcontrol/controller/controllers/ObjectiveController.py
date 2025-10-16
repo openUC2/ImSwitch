@@ -208,6 +208,59 @@ class ObjectiveController(LiveUpdatedController):
         '''
         return self._objective.setPositions(x1, x2, z1, z2, isBlocking)
 
+    @APIExport(runOnUIThread=True)
+    def setObjectiveParameters(self, objectiveSlot: int, pixelsize: float = None, 
+                               objectiveName: str = None, NA: float = None, 
+                               magnification: int = None):
+        """
+        Set objective parameters for a specific objective slot.
+        This overwrites the configuration values and propagates changes to the detector.
+        
+        Args:
+            objectiveSlot: Objective slot number (1 or 2)
+            pixelsize: Pixel size in micrometers
+            objectiveName: Name of the objective
+            NA: Numerical aperture
+            magnification: Magnification value
+            
+        Returns:
+            Dictionary with updated parameters
+        """
+        if objectiveSlot not in [1, 2]:
+            raise ValueError("Objective slot must be 1 or 2")
+        
+        idx = objectiveSlot - 1
+        
+        # Update parameters if provided
+        if pixelsize is not None:
+            self.pixelsizes[idx] = pixelsize
+            self._logger.info(f"Updated pixelsize for objective {objectiveSlot}: {pixelsize} µm/px")
+        
+        if objectiveName is not None:
+            self.objectiveNames[idx] = objectiveName
+            self._logger.info(f"Updated name for objective {objectiveSlot}: {objectiveName}")
+        
+        if NA is not None:
+            self.NAs[idx] = NA
+            self._logger.info(f"Updated NA for objective {objectiveSlot}: {NA}")
+        
+        if magnification is not None:
+            self.magnifications[idx] = magnification
+            self._logger.info(f"Updated magnification for objective {objectiveSlot}: {magnification}x")
+        
+        # If this is the current objective, propagate changes immediately
+        if self.currentObjective == objectiveSlot:
+            self._updatePixelSize()
+        
+        # Return current parameters for this slot
+        return {
+            "objectiveSlot": objectiveSlot,
+            "pixelsize": self.pixelsizes[idx],
+            "objectiveName": self.objectiveNames[idx],
+            "NA": self.NAs[idx],
+            "magnification": self.magnifications[idx]
+        }
+
 
     @APIExport(runOnUIThread=True)
     def getstatus(self):

@@ -54,7 +54,7 @@ CALLBACK_SIG = CFUNCTYPE(
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
 
-    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=-1, blacklevel=100, isRGB=False, binning=2):
+    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=-1, blacklevel=100, isRGB=False, binning=2, flipImage=(False, False)):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -71,6 +71,7 @@ class CameraHIK:
         self.preview_height = 600
         self.frame_rate = frame_rate
         self.cameraNo = cameraNo
+        self.flipImage = flipImage  # (flipY, flipX)
 
         self.NBuffer = 5
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
@@ -382,6 +383,12 @@ class CameraHIK:
             else:
                 self.__logger.error(f"Unsupported pixel type 0x{pix:x}")
                 return
+
+            # Apply flip if needed (zero-CPU operation using numpy)
+            if self.flipImage[0]:  # flipY
+                frame = np.flip(frame, axis=0)
+            if self.flipImage[1]:  # flipX
+                frame = np.flip(frame, axis=1)
 
             # push into ring buffers for later use
             #self.frame_buffer.append(frame)

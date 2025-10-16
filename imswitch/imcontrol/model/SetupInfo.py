@@ -328,7 +328,7 @@ class PixelCalibrationInfo:
     - Flip Y: a22 = -1
     - Translation: tx, ty (usually 0 for displacement-based calibration)
     """
-    
+    # TODO: We should only have one affine transfomration as the rotation/flip is the same for all objective lenses, only the scaling changes
     defaultAffineMatrix: List[List[float]] = field(default_factory=lambda: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
     """ Default identity transformation when no calibration is available.
     [[1, 0, 0], [0, 1, 0]] means 1:1 mapping with no rotation. """
@@ -826,6 +826,56 @@ class SetupInfo:
         
         # Fallback to identity
         return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    
+    def getFlipFromAffineMatrix(self, objectiveId: str = "default"):
+        """
+        Extract flip information from affine matrix.
+        
+        The affine matrix encodes flips as negative scale factors:
+        - Negative scale in X-axis (M[0,0] < 0): flipX = True
+        - Negative scale in Y-axis (M[1,1] < 0): flipY = True
+        
+        Args:
+            objectiveId: Identifier for the objective
+            
+        Returns:
+            Tuple (flipX, flipY) where each is a boolean
+        """
+        import numpy as np
+        
+        matrix = self.getAffineMatrix(objectiveId)
+        
+        # Extract scale components (diagonal elements)
+        scale_x = matrix[0, 0]
+        scale_y = matrix[1, 1]
+        
+        # Flip is indicated by negative scale
+        flipX = bool(scale_x < 0)
+        flipY = bool(scale_y < 0)
+        
+        return (flipY, flipX)  # Return as (flipY, flipX) to match axis convention
+    
+    def getPixelSizeFromAffineMatrix(self, objectiveId: str = "default"):
+        """
+        Extract pixel size from affine calibration metrics.
+        
+        Args:
+            objectiveId: Identifier for the objective
+            
+        Returns:
+            Pixel size in micrometers (average of X and Y) or None if not available
+        """
+        calib = self.getAffineCalibration(objectiveId)
+        if calib and "metrics" in calib:
+            metrics = calib["metrics"]
+            scale_x = metrics.get("scale_x_um_per_pixel", None)
+            scale_y = metrics.get("scale_y_um_per_pixel", None)
+            
+            if scale_x is not None and scale_y is not None:
+                # Return average pixel size (for isotropic pixels)
+                return (abs(scale_x) + abs(scale_y)) / 2.0
+        
+        return None
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

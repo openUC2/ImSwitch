@@ -372,113 +372,127 @@ class ExperimentController(ImConWidgetController):
             tiles.append(fallback_tile)
             return tiles
         
-        '''
-        TODO: We want to have a special case: If each tile has only the center point (no neighbors), we want to scan only the center point and create a grid of the same 
-        
-        in that case the List is as follows, where we have multiple Point objects in the pointList with only one neighborPoint in the neighborPointList:
-        
-        mExperiment.pointList
-            [Point(id=UUID('d7525fae-a577-457b-860c-280f5ff5c181'), name='', x=29490.625, y=30688....nt(x=29490.625, y=30688.125, iX=0, iY=0)]), Point(id=UUID('05d60572-e9f8-4cea-8f04-17866cba858d'), name='', x=33990.625, y=30688....nt(x=33990.625, y=30688.125, iX=0, iY=0)]), Point(id=UUID('c19a76af-dd94-43f9-a423-ba8dc552413e'), name='', x=38490.625, y=30688....nt(x=38490.625, y=30688.125, iX=0, iY=0)]), Point(id=UUID('309c04ba-1d3c-4d3e-a87f-1272d0a99be6'), name='', x=29490.625, y=35188....nt(x=29490.625, y=35188.125, iX=0, iY=0)]), Point(id=UUID('02488933-257b-45b1-a1c9-c0a2ef8868d3'), name='', x=33990.625, y=35188....nt(x=33990.625, y=35188.125, iX=0, iY=0)]), Point(id=UUID('e9d43eca-4d5f-479b-a8f2-adfcf81698f4'), name='', x=38490.625, y=35188....nt(x=38490.625, y=35188.125, iX=0, iY=0)])]
-            special variables
-            function variables
-            0 =
-            Point(id=UUID('d7525fae-a577-457b-860c-280f5ff5c181'), name='', x=29490.625, y=30688.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=29490.625, y=30688.125, iX=0, iY=0)])
-            1 =
-            Point(id=UUID('05d60572-e9f8-4cea-8f04-17866cba858d'), name='', x=33990.625, y=30688.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=33990.625, y=30688.125, iX=0, iY=0)])
-            2 =
-            Point(id=UUID('c19a76af-dd94-43f9-a423-ba8dc552413e'), name='', x=38490.625, y=30688.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=38490.625, y=30688.125, iX=0, iY=0)])
-            3 =
-            Point(id=UUID('309c04ba-1d3c-4d3e-a87f-1272d0a99be6'), name='', x=29490.625, y=35188.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=29490.625, y=35188.125, iX=0, iY=0)])
-            4 =
-            Point(id=UUID('02488933-257b-45b1-a1c9-c0a2ef8868d3'), name='', x=33990.625, y=35188.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=33990.625, y=35188.125, iX=0, iY=0)])
-            5 =
-            Point(id=UUID('e9d43eca-4d5f-479b-a8f2-adfcf81698f4'), name='', x=38490.625, y=35188.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=38490.625, y=35188.125, iX=0, iY=0)])
-        
-        
-        We want to convert it such that the single neighborpoints are used to create a grid as in the following example, where we have a single point but multiple neighborpoint objects in the neighborpointlist
-        
-        neighborPointList =
-            [NeighborPoint(x=45195.83023082651, y=33598.65971705138, iX=0, iY=0), NeighborPoint(x=45595.83023082651, y=33598.65971705138, iX=1, iY=0), NeighborPoint(x=44795.83023082651, y=33598.65971705138, iX=-1, iY=0), NeighborPoint(x=45195.83023082651, y=33898.65971705138, iX=0, iY=1), NeighborPoint(x=45195.83023082651, y=33298.65971705138, iX=0, iY=-1), NeighborPoint(x=45595.83023082651, y=33898.65971705138, iX=1, iY=1), NeighborPoint(x=45595.83023082651, y=33298.65971705138, iX=1, iY=-1), NeighborPoint(x=44795.83023082651, y=33898.65971705138, iX=-1, iY=1), NeighborPoint(x=44795.83023082651, y=33298.65971705138, iX=-1, iY=-1), NeighborPoint(x=45195.83023082651, y=34198.65971705138, iX=0, iY=2), NeighborPoint(x=45195.83023082651, y=32998.65971705138, iX=0, iY=-2), NeighborPoint(x=45595.83023082651, y=34198.65971705138, iX=1, iY=2), NeighborPoint(x=45595.83023082651, y=32998.65971705138, iX=1, iY=-2), NeighborPoint(x=44795.83023082651, y=34198.65971705138, iX=-1, iY=2), NeighborPoint(x=44795.83023082651, y=32998.65971...
-            special variables
-            function variables
-            00 =
-            NeighborPoint(x=45195.83023082651, y=33598.65971705138, iX=0, iY=0)
-            01 =
-            NeighborPoint(x=45595.83023082651, y=33598.65971705138, iX=1, iY=0)
-            02 =
-            NeighborPoint(x=44795.83023082651, y=33598.65971705138, iX=-1, iY=0)
-            03 =
-            NeighborPoint(x=45195.83023082651, y=33898.65971705138, iX=0, iY=1)
-            04 =
-            NeighborPoint(x=45195.83023082651, y=33298.65971705138, iX=0, iY=-1)
-            05 =
-            NeighborPoint(x=45595.83023082651, y=33898.65971705138, iX=1, iY=1)
-            06 =
-            NeighborPoint(x=45595.83023082651, y=33298.65971705138, iX=1, iY=-1)
-            07 =
-            NeighborPoint(x=44795.83023082651, y=33898.65971705138, iX=-1, iY=1)
-            08 =
-            NeighborPoint(x=44795.83023082651, y=33298.65971705138, iX=-1, iY=-1)
-            09 =
-            NeighborPoint(x=45195.83023082651, y=34198.65971705138, iX=0, iY=2)
-            10 =
-            NeighborPoint(x=45195.83023082651, y=32998.65971705138, iX=0, iY=-2)
-            11 =
-            NeighborPoint(x=45595.83023082651, y=34198.65971705138, iX=1, iY=2)
-            12 =
-            NeighborPoint(x=45595.83023082651, y=32998.65971705138, iX=1, iY=-2)
-            13 =
-            NeighborPoint(x=44795.83023082651, y=34198.65971705138, iX=-1, iY=2)
-            14 =
-            NeighborPoint(x=44795.83023082651, y=32998.65971705138, iX=-1, iY=-2)
-        '''
-        # Original logic for when pointList is provided
-        for iCenter, centerPoint in enumerate(mExperiment.pointList):
-            # Collect central and neighbour points (without duplicating the center)
-            allPoints = [(n.x, n.y) for n in centerPoint.neighborPointList]
+        # Special case: If each point has only one neighbor (itself), merge them into a single grid
+        # This happens when multiple separate points are selected but no grid is defined for each
+        elif len(mExperiment.pointList) > 1 and all(len(point.neighborPointList) == 1 for point in mExperiment.pointList):
+            self._logger.info(f"Detected {len(mExperiment.pointList)} single-point tiles. Merging into a single grid.")
             
-            # Handle case where neighborPointList is empty but centerPoint is provided
-            # This means scan at the center point position only (useful for z-stack-only)
-            if len(allPoints) == 0:
-                self._logger.info(f"Empty neighborPointList for center point {iCenter}. Using center point position for z-stack scanning.")
-                fallback_tile = [{
-                    "iterator": 0,
-                    "centerIndex": iCenter,
-                    "iX": 0,
-                    "iY": 0,
-                    "x": centerPoint.x,
-                    "y": centerPoint.y,
-                }]
-                tiles.append(fallback_tile)
-                continue
+            # Collect all single points as neighbor points
+            merged_neighbor_list = []
+            for idx, point in enumerate(mExperiment.pointList):
+                # Use the point's own coordinates and indices
+                neighbor = NeighborPoint(
+                    x=point.x,
+                    y=point.y,
+                    iX=point.iX,
+                    iY=point.iY
+                )
+                merged_neighbor_list.append(neighbor)
             
-            # Sort by y then by x (i.e., raster order)
-            allPoints.sort(key=lambda coords: (coords[1], coords[0]))
-
-            num_x_steps, num_y_steps = self.get_num_xy_steps(centerPoint.neighborPointList)
-            allPointsSnake = [0] * (num_x_steps * num_y_steps)
+            # Sort by y then by x (raster order)
+            merged_neighbor_list.sort(key=lambda n: (n.y, n.x))
+            
+            # Recalculate iX and iY based on the sorted positions
+            # Determine grid dimensions
+            unique_x = sorted(set(n.x for n in merged_neighbor_list))
+            unique_y = sorted(set(n.y for n in merged_neighbor_list))
+            
+            # Create mapping from position to grid indices
+            x_to_ix = {x: i for i, x in enumerate(unique_x)}
+            y_to_iy = {y: i for i, y in enumerate(unique_y)}
+            
+            # Update iX and iY based on sorted positions
+            for neighbor in merged_neighbor_list:
+                neighbor.iX = x_to_ix[neighbor.x]
+                neighbor.iY = y_to_iy[neighbor.y]
+            
+            # Create snake scan order
+            num_x_steps = len(unique_x)
+            num_y_steps = len(unique_y)
+            allPointsSnake = [None] * (num_x_steps * num_y_steps)
+            
             iTile = 0
             for iY in range(num_y_steps):
                 for iX in range(num_x_steps):
+                    # Snake pattern: reverse x direction on odd rows
                     if iY % 2 == 1 and num_x_steps != 1:
                         mIdex = iY * num_x_steps + num_x_steps - 1 - iX
                     else:
                         mIdex = iTile
-                    if len(allPointsSnake) <= mIdex or len(allPoints) <= iTile:
-                        # remove that index from allPointsSnake
-                        allPointsSnake[mIdex] = None
-                        continue
-                    allPointsSnake[mIdex] = {
-                        "iterator": iTile,
-                        "centerIndex": iCenter,
-                        "iX": iX,
-                        "iY": iY,
-                        "x": allPoints[iTile][0],
-                        "y": allPoints[iTile][1],
-                    }
+                    
+                    # Find the neighbor point with matching grid indices
+                    matching_neighbor = None
+                    for neighbor in merged_neighbor_list:
+                        if neighbor.iX == iX and neighbor.iY == iY:
+                            matching_neighbor = neighbor
+                            break
+                    
+                    if matching_neighbor and mIdex < len(allPointsSnake):
+                        allPointsSnake[mIdex] = {
+                            "iterator": iTile,
+                            "centerIndex": 0,  # All belong to the merged grid
+                            "iX": iX,
+                            "iY": iY,
+                            "x": matching_neighbor.x,
+                            "y": matching_neighbor.y,
+                        }
                     iTile += 1
+            
+            # Remove None values
+            allPointsSnake = [pt for pt in allPointsSnake if pt is not None]
             tiles.append(allPointsSnake)
-        return tiles
+            return tiles
+        
+        else:
+        
+            # Original logic: Process each point with its neighbor list as a separate tile
+            # Original logic for when pointList is provided
+            for iCenter, centerPoint in enumerate(mExperiment.pointList):
+                # Collect central and neighbour points (without duplicating the center)
+                allPoints = [(n.x, n.y) for n in centerPoint.neighborPointList]
+                
+                # Handle case where neighborPointList is empty but centerPoint is provided
+                # This means scan at the center point position only (useful for z-stack-only)
+                if len(allPoints) == 0:
+                    self._logger.info(f"Empty neighborPointList for center point {iCenter}. Using center point position for z-stack scanning.")
+                    fallback_tile = [{
+                        "iterator": 0,
+                        "centerIndex": iCenter,
+                        "iX": 0,
+                        "iY": 0,
+                        "x": centerPoint.x,
+                        "y": centerPoint.y,
+                    }]
+                    tiles.append(fallback_tile)
+                    continue
+                
+                # Sort by y then by x (i.e., raster order)
+                allPoints.sort(key=lambda coords: (coords[1], coords[0]))
+
+                num_x_steps, num_y_steps = self.get_num_xy_steps(centerPoint.neighborPointList)
+                allPointsSnake = [0] * (num_x_steps * num_y_steps)
+                iTile = 0
+                for iY in range(num_y_steps):
+                    for iX in range(num_x_steps):
+                        if iY % 2 == 1 and num_x_steps != 1:
+                            mIdex = iY * num_x_steps + num_x_steps - 1 - iX
+                        else:
+                            mIdex = iTile
+                        if len(allPointsSnake) <= mIdex or len(allPoints) <= iTile:
+                            # remove that index from allPointsSnake
+                            allPointsSnake[mIdex] = None
+                            continue
+                        allPointsSnake[mIdex] = {
+                            "iterator": iTile,
+                            "centerIndex": iCenter,
+                            "iX": iX,
+                            "iY": iY,
+                            "x": allPoints[iTile][0],
+                            "y": allPoints[iTile][1],
+                        }
+                        iTile += 1
+                tiles.append(allPointsSnake)
+            return tiles
 
     @APIExport()
     def getLastScanAsOMEZARR(self):

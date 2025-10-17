@@ -372,6 +372,66 @@ class ExperimentController(ImConWidgetController):
             tiles.append(fallback_tile)
             return tiles
         
+        '''
+        TODO: We want to have a special case: If each tile has only the center point (no neighbors), we want to scan only the center point and create a grid of the same 
+        
+        in that case the List is as follows, where we have multiple Point objects in the pointList with only one neighborPoint in the neighborPointList:
+        
+        mExperiment.pointList
+            [Point(id=UUID('d7525fae-a577-457b-860c-280f5ff5c181'), name='', x=29490.625, y=30688....nt(x=29490.625, y=30688.125, iX=0, iY=0)]), Point(id=UUID('05d60572-e9f8-4cea-8f04-17866cba858d'), name='', x=33990.625, y=30688....nt(x=33990.625, y=30688.125, iX=0, iY=0)]), Point(id=UUID('c19a76af-dd94-43f9-a423-ba8dc552413e'), name='', x=38490.625, y=30688....nt(x=38490.625, y=30688.125, iX=0, iY=0)]), Point(id=UUID('309c04ba-1d3c-4d3e-a87f-1272d0a99be6'), name='', x=29490.625, y=35188....nt(x=29490.625, y=35188.125, iX=0, iY=0)]), Point(id=UUID('02488933-257b-45b1-a1c9-c0a2ef8868d3'), name='', x=33990.625, y=35188....nt(x=33990.625, y=35188.125, iX=0, iY=0)]), Point(id=UUID('e9d43eca-4d5f-479b-a8f2-adfcf81698f4'), name='', x=38490.625, y=35188....nt(x=38490.625, y=35188.125, iX=0, iY=0)])]
+            special variables
+            function variables
+            0 =
+            Point(id=UUID('d7525fae-a577-457b-860c-280f5ff5c181'), name='', x=29490.625, y=30688.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=29490.625, y=30688.125, iX=0, iY=0)])
+            1 =
+            Point(id=UUID('05d60572-e9f8-4cea-8f04-17866cba858d'), name='', x=33990.625, y=30688.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=33990.625, y=30688.125, iX=0, iY=0)])
+            2 =
+            Point(id=UUID('c19a76af-dd94-43f9-a423-ba8dc552413e'), name='', x=38490.625, y=30688.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=38490.625, y=30688.125, iX=0, iY=0)])
+            3 =
+            Point(id=UUID('309c04ba-1d3c-4d3e-a87f-1272d0a99be6'), name='', x=29490.625, y=35188.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=29490.625, y=35188.125, iX=0, iY=0)])
+            4 =
+            Point(id=UUID('02488933-257b-45b1-a1c9-c0a2ef8868d3'), name='', x=33990.625, y=35188.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=33990.625, y=35188.125, iX=0, iY=0)])
+            5 =
+            Point(id=UUID('e9d43eca-4d5f-479b-a8f2-adfcf81698f4'), name='', x=38490.625, y=35188.125, iX=0, iY=0, neighborPointList=[NeighborPoint(x=38490.625, y=35188.125, iX=0, iY=0)])
+        
+        
+        We want to convert it such that the single neighborpoints are used to create a grid as in the following example, where we have a single point but multiple neighborpoint objects in the neighborpointlist
+        
+        neighborPointList =
+            [NeighborPoint(x=45195.83023082651, y=33598.65971705138, iX=0, iY=0), NeighborPoint(x=45595.83023082651, y=33598.65971705138, iX=1, iY=0), NeighborPoint(x=44795.83023082651, y=33598.65971705138, iX=-1, iY=0), NeighborPoint(x=45195.83023082651, y=33898.65971705138, iX=0, iY=1), NeighborPoint(x=45195.83023082651, y=33298.65971705138, iX=0, iY=-1), NeighborPoint(x=45595.83023082651, y=33898.65971705138, iX=1, iY=1), NeighborPoint(x=45595.83023082651, y=33298.65971705138, iX=1, iY=-1), NeighborPoint(x=44795.83023082651, y=33898.65971705138, iX=-1, iY=1), NeighborPoint(x=44795.83023082651, y=33298.65971705138, iX=-1, iY=-1), NeighborPoint(x=45195.83023082651, y=34198.65971705138, iX=0, iY=2), NeighborPoint(x=45195.83023082651, y=32998.65971705138, iX=0, iY=-2), NeighborPoint(x=45595.83023082651, y=34198.65971705138, iX=1, iY=2), NeighborPoint(x=45595.83023082651, y=32998.65971705138, iX=1, iY=-2), NeighborPoint(x=44795.83023082651, y=34198.65971705138, iX=-1, iY=2), NeighborPoint(x=44795.83023082651, y=32998.65971...
+            special variables
+            function variables
+            00 =
+            NeighborPoint(x=45195.83023082651, y=33598.65971705138, iX=0, iY=0)
+            01 =
+            NeighborPoint(x=45595.83023082651, y=33598.65971705138, iX=1, iY=0)
+            02 =
+            NeighborPoint(x=44795.83023082651, y=33598.65971705138, iX=-1, iY=0)
+            03 =
+            NeighborPoint(x=45195.83023082651, y=33898.65971705138, iX=0, iY=1)
+            04 =
+            NeighborPoint(x=45195.83023082651, y=33298.65971705138, iX=0, iY=-1)
+            05 =
+            NeighborPoint(x=45595.83023082651, y=33898.65971705138, iX=1, iY=1)
+            06 =
+            NeighborPoint(x=45595.83023082651, y=33298.65971705138, iX=1, iY=-1)
+            07 =
+            NeighborPoint(x=44795.83023082651, y=33898.65971705138, iX=-1, iY=1)
+            08 =
+            NeighborPoint(x=44795.83023082651, y=33298.65971705138, iX=-1, iY=-1)
+            09 =
+            NeighborPoint(x=45195.83023082651, y=34198.65971705138, iX=0, iY=2)
+            10 =
+            NeighborPoint(x=45195.83023082651, y=32998.65971705138, iX=0, iY=-2)
+            11 =
+            NeighborPoint(x=45595.83023082651, y=34198.65971705138, iX=1, iY=2)
+            12 =
+            NeighborPoint(x=45595.83023082651, y=32998.65971705138, iX=1, iY=-2)
+            13 =
+            NeighborPoint(x=44795.83023082651, y=34198.65971705138, iX=-1, iY=2)
+            14 =
+            NeighborPoint(x=44795.83023082651, y=32998.65971705138, iX=-1, iY=-2)
+        '''
         # Original logic for when pointList is provided
         for iCenter, centerPoint in enumerate(mExperiment.pointList):
             # Collect central and neighbour points (without duplicating the center)

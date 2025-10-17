@@ -128,9 +128,11 @@ class ObjectiveController(LiveUpdatedController):
             # After calibration, move to the first objective position (X1)
             self._objective.move(slot=1, isBlocking=True)
             self.currentObjective = 1
+            self._master.objectiveManager.setCurrentObjective(1)
         else:
             status = self._objective.getstatus()
             self.currentObjective = status.get("state", 1)
+            self._master.objectiveManager.setCurrentObjective(self.currentObjective)
         self._updatePixelSize()
 
 
@@ -153,6 +155,7 @@ class ObjectiveController(LiveUpdatedController):
         # state has to be within [0, 1]
         state = 1 if state > 1 else state
         self.currentObjective = state
+        self._master.objectiveManager.setCurrentObjective(state)
         self._updatePixelSize()
 
 
@@ -164,6 +167,7 @@ class ObjectiveController(LiveUpdatedController):
             return
         self._objective.move(slot=slot, isBlocking=True)
         self.currentObjective = slot
+        self._master.objectiveManager.setCurrentObjective(slot)
         self._updatePixelSize()
         if not IS_HEADLESS:
             self._widget.setCurrentObjectiveInfo(self.currentObjective)

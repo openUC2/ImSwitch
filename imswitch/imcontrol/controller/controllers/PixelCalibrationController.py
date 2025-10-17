@@ -34,15 +34,49 @@ class PixelCalibrationController(LiveUpdatedController):
         
         # Load affine calibrations from setup info and distribute them
         self.affineCalibrations = {}
-        self.currentObjective = "default" # TODO: This has to be read from the ObjectiveController / via the ObjectiveManager, the state has to be stored from controller to manager - it is either 0 or 1
-        self._loadAffineCalibrations()
         
+        # Get current objective from ObjectiveController if available
+        self.currentObjective = self._getCurrentObjectiveId()
+        self._loadAffineCalibrations()
+    
+    def _getCurrentObjectiveId(self) -> str:
+        """
+        Get the current objective ID from ObjectiveManager.
+        
+        The ObjectiveManager maintains the authoritative state for the current
+        objective slot, which is synchronized by the ObjectiveController.
+        
+        Returns:
+            Objective ID string (e.g., "10x", "20x") or "default" if not available
+        """
+        try:
+            obj_mgr = self._master.objectiveManager
+            
+            # Use the manager's built-in method if available
+            if hasattr(obj_mgr, 'getCurrentObjectiveName'):
+                return obj_mgr.getCurrentObjectiveName()
+            
+            # Fallback: manual lookup
+            if hasattr(obj_mgr, 'objectiveNames') and obj_mgr.objectiveNames:
+                current_slot = getattr(obj_mgr, '_currentObjective', None)
+                
+                if current_slot is not None and current_slot > 0:
+                    idx = current_slot - 1  # 1-based to 0-based
+                    if idx < len(obj_mgr.objectiveNames):
+                        return obj_mgr.objectiveNames[idx]
+                
+                # Return first objective as default
+                return obj_mgr.objectiveNames[0]
+        
+        except Exception as e:
+            self._logger.debug(f"Could not read current objective: {e}")
+            return "default"
 
     def _loadAffineCalibrations(self):
         """
         Load affine calibrations from setup configuration on startup and distribute to components.
         
-        This method reads calibration data from config.json and makes it available
+        This method reads calibration data from ImSwitchConfig/imcontrol_setups/XXX_config.json and makes it available
         throughout the application. The calibrations are distributed to relevant
         components:
         - Stored in self.affineCalibrations for easy access
@@ -53,7 +87,11 @@ class PixelCalibrationController(LiveUpdatedController):
         if not hasattr(self._setupInfo, 'PixelCalibration') or self._setupInfo.PixelCalibration is None:
             self._logger.info("No PixelCalibration in setup configuration - using default identity matrix")
             return
-        # TODO: We should only have one affine transfomration as the rotation/flip is the same for all objective lenses, only the scaling changes - also, we should only save one calibration affine transformation and overwrite with each calibration
+        
+        # Note: Currently storing separate affine matrices per objective to support
+        # potential per-objective misalignment (e.g., objective turret rotation).
+        # Rotation/flip is typically the same, only scaling changes between objectives (> pixelsize!)
+        # Future optimization: Store single rotation/flip + per-objective scale factors.
         pixel_calibration = self._setupInfo.PixelCalibration
         
         if not hasattr(pixel_calibration, 'affineCalibrations') or not pixel_calibration.affineCalibrations:
@@ -70,10 +108,11 @@ class PixelCalibrationController(LiveUpdatedController):
         objective_flips_map = {}
         
         for objective_id, calib_data in self.affineCalibrations.items():
-            affine_matrix = np.array(calib_data.get('affine_matrix', [[1, 0, 0], [0, 1, 0]])) # TODO: Unused, use it?
+            # Store affine matrix for coordinate transformations (used by getAffineMatrix API)
+            affine_matrix = np.array(calib_data.get('affine_matrix', [[1, 0, 0], [0, 1, 0]]))
             metrics = calib_data.get('metrics', {})
             
-            # Extract pixel size from scale parameters
+            # Extract metrics from affine matrix for distribution to components
             scale_x = metrics.get('scale_x_um_per_pixel', 1.0)
             scale_y = metrics.get('scale_y_um_per_pixel', 1.0)
             rotation = metrics.get('rotation_deg', 0.0)
@@ -107,71 +146,64 @@ class PixelCalibrationController(LiveUpdatedController):
     
     def _distributePixelSizesToObjectives(self, objective_pixelsizes_map: dict):
         """
-        Distribute calibrated pixel sizes to ObjectiveInfo configuration.
+        Distribute calibrated pixel sizes to ObjectiveManager configuration.
         
-        This updates the pixelsizes list in ObjectiveInfo to match the calibrated
-        values from affine calibration. Objectives are matched by name or index.
+        This updates the pixelsizes in ObjectiveManager which is the source of truth
+        for objective configuration. The ObjectiveController reads from ObjectiveManager
+        and will pick up these changes.
+        
+        Note: For runtime updates after initialization, use the API endpoint:
+        objectiveController.setObjectiveParameters(objectiveSlot, pixelsize=value)
         
         Args:
             objective_pixelsizes_map: Dictionary mapping objective IDs to pixel sizes
         """
-        
-        # TODO: We need to distribute the information via the OBjectiveManager and implement this mechanism in the ObjectiveController
-        '''
-        if not hasattr(self._setupInfo, 'objective') or self._setupInfo.objective is None:
-            self._logger.debug("No ObjectiveInfo in setup - skipping pixel size distribution")
+        if not hasattr(self._master, 'objectiveManager'):
+            self._logger.debug("No objectiveManager available - skipping pixel size distribution")
             return
         
-        objective_info = self._setupInfo.objective
+        obj_mgr = self._master.objectiveManager
         
-        if not hasattr(objective_info, 'objectiveNames') or not objective_info.objectiveNames:
-            self._logger.debug("No objective names defined - skipping pixel size distribution")
+        if not hasattr(obj_mgr, 'objectiveNames') or not obj_mgr.objectiveNames:
+            self._logger.debug("No objective names in ObjectiveManager - skipping pixel size distribution")
             return
         
-        # Create mapping from objective names to indices
-        objective_name_to_index = {}
-        for idx, name in enumerate(objective_info.objectiveNames):
-            objective_name_to_index[name] = idx
+        if not hasattr(obj_mgr, 'pixelsizes') or not obj_mgr.pixelsizes:
+            self._logger.debug("No pixelsizes in ObjectiveManager - skipping pixel size distribution")
+            return
         
-        # Update pixelsizes based on calibration data
+        # Update pixel sizes in ObjectiveManager based on objective names
         updated_count = 0
         for objective_id, pixel_size in objective_pixelsizes_map.items():
-            # Try matching by exact name first
-            if objective_id in objective_name_to_index:
-                idx = objective_name_to_index[objective_id]
-                old_value = objective_info.pixelsizes[idx] if idx < len(objective_info.pixelsizes) else None
-                objective_info.pixelsizes[idx] = pixel_size
-                self._logger.info(f"Updated pixelsize for objective '{objective_id}' (slot {idx+1}): "
-                                f"{old_value} → {pixel_size:.3f} µm/px")
-                updated_count += 1
-            # Try matching "default" to first objective
-            elif objective_id == "default" and len(objective_info.objectiveNames) > 0:
-                idx = 0
-                old_value = objective_info.pixelsizes[idx] if idx < len(objective_info.pixelsizes) else None
-                objective_info.pixelsizes[idx] = pixel_size
-                self._logger.info(f"Updated pixelsize for default objective '{objective_info.objectiveNames[idx]}' "
-                                f"(slot {idx+1}): {old_value} → {pixel_size:.3f} µm/px")
-                updated_count += 1
-            # Try matching by index if objective_id is like "10x", "20x" and matches magnification
-            elif hasattr(objective_info, 'magnifications'):
-                # Extract magnification value from objective_id if possible
-                try:
-                    # Check if any objective has this as its name
-                    for mag_idx, mag in enumerate(objective_info.magnifications):
-                        objective_name = objective_info.objectiveNames[mag_idx] if mag_idx < len(objective_info.objectiveNames) else None
-                        if objective_name and objective_id.lower() == objective_name.lower():
-                            old_value = objective_info.pixelsizes[mag_idx] if mag_idx < len(objective_info.pixelsizes) else None
-                            objective_info.pixelsizes[mag_idx] = pixel_size
-                            self._logger.info(f"Updated pixelsize for objective '{objective_name}' (slot {mag_idx+1}): "
-                                            f"{old_value} → {pixel_size:.3f} µm/px")
-                            updated_count += 1
-                            break
-                except:
-                    pass
+            # Try to find matching objective by name
+            try:
+                if objective_id in obj_mgr.objectiveNames:
+                    idx = obj_mgr.objectiveNames.index(objective_id)
+                    old_value = obj_mgr.pixelsizes[idx]
+                    obj_mgr.pixelsizes[idx] = pixel_size
+                    self._logger.info(f"Updated ObjectiveManager pixelsize for '{objective_id}' (slot {idx+1}): "
+                                    f"{old_value:.3f} → {pixel_size:.3f} µm/px")
+                    updated_count += 1
+                elif objective_id == "default" and len(obj_mgr.objectiveNames) > 0:
+                    # Apply to first objective
+                    idx = 0
+                    old_value = obj_mgr.pixelsizes[idx]
+                    obj_mgr.pixelsizes[idx] = pixel_size
+                    self._logger.info(f"Updated ObjectiveManager pixelsize for default objective '{obj_mgr.objectiveNames[idx]}' "
+                                    f"(slot {idx+1}): {old_value:.3f} → {pixel_size:.3f} µm/px")
+                    updated_count += 1
+            except Exception as e:
+                self._logger.warning(f"Could not update pixelsize for objective '{objective_id}': {e}")
         
         if updated_count > 0:
-            self._logger.info(f"Successfully distributed {updated_count} calibrated pixel size(s) to ObjectiveInfo")
-        '''
+            self._logger.info(f"Successfully updated {updated_count} pixel size(s) in ObjectiveManager")
+            
+            # If ObjectiveController exists, it will read from ObjectiveManager on next update
+            if hasattr(self._master, 'objectiveController'):
+                obj_ctrl = self._master.objectiveController
+                # Sync the controller's copy with the manager's data
+                obj_ctrl.pixelsizes = obj_mgr.pixelsizes
+                self._logger.debug("Synchronized ObjectiveController pixelsizes with ObjectiveManager")
     def _distributeFlipsToDetectors(self, objective_flips_map: dict):
         """
         Distribute flip settings from affine calibration to detector managers.
@@ -195,7 +227,9 @@ class PixelCalibrationController(LiveUpdatedController):
             return
         
         # For now, apply to the first detector (typically the acquisition camera)
-        # TODO: Could be extended to match detector to objective in multi-camera setups
+        # Note: Multi-camera setups with different optical paths would need per-detector
+        # calibrations. Current implementation assumes single camera path per objective.
+        # Extension point: Add detector-to-objective mapping in config if needed.
         detector_name = all_detectors[0]
         detector = self._master.detectorsManager[detector_name]
         
@@ -317,11 +351,22 @@ class PixelCalibrationController(LiveUpdatedController):
             Dictionary with calibration results including metrics
         """
         try:
-            # TODO: before we do the calibration we need to check if the intensity is in a reasonable regime of the camera
-        
-        
+            # Validate camera intensity before calibration
+            if not self._validateCameraIntensity():
+                return {
+                    "error": "Camera intensity out of range (saturated or too dark). Adjust exposure or lighting before calibration.",
+                    "success": False
+                }
+            
             pixelcalibration_helper = PixelCalibrationClass(self)
-            # TODO: The objectiveID should be one of the two available objectives - we need to check that
+            
+            # Validate objective ID against available objectives
+            if not self._validateObjectiveId(objectiveId):
+                return {
+                    "error": f"Invalid objective ID '{objectiveId}'. Use one of the configured objectives or 'default'.",
+                    "success": False
+                }
+            
             result = pixelcalibration_helper.calibrate_affine(
                 objective_id=objectiveId,
                 step_size_um=stepSizeUm,
@@ -350,8 +395,10 @@ class PixelCalibrationController(LiveUpdatedController):
             
             # Convert result to JSON-serializable format
             result_serializable = convert_to_native(result)
-            # TODO: We would probably need to apply these parameters to the Objective/Detector (e.g. flip/rot, pixelsize)
-            self._loadAffineCalibrations() # FIXME: doing that for now through the file - not ideal as we reload all calibrations and a missing file causes it to crash..
+            
+            # Apply calibration results immediately without file reload
+            self._applyCalibrationResults(objectiveId, result_serializable)
+            
             return {
                 "success": True,
                 "objectiveId": objectiveId,
@@ -730,6 +777,179 @@ class PixelCalibrationClass(object):
         p = np.array(displacement_in_pixels)
         relative_move = np.dot(p, self.image_to_stage_displacement_matrix)
         self.microscope.stage.move_rel([relative_move[0], relative_move[1], 0])
+    
+    def _validateCameraIntensity(self) -> bool:
+        """
+        Validate that camera intensity is in a reasonable range for calibration.
+        
+        Returns:
+            True if intensity is acceptable, False if saturated or too dark
+        """
+        try:
+            if not hasattr(self._master, 'detectorsManager'):
+                self._logger.warning("No detectorsManager available - skipping intensity check")
+                return True
+            
+            all_detectors = self._master.detectorsManager.getAllDeviceNames()
+            if not all_detectors:
+                self._logger.warning("No detectors found - skipping intensity check")
+                return True
+            
+            detector = self._master.detectorsManager[all_detectors[0]]
+            
+            # Get current frame
+            if hasattr(detector, 'getLatestFrame'):
+                frame = detector.getLatestFrame()
+            elif hasattr(detector, '_camera') and hasattr(detector._camera, 'getLatestFrame'):
+                frame = detector._camera.getLatestFrame()
+            else:
+                self._logger.warning("Cannot access camera frame - skipping intensity check")
+                return True
+            
+            if frame is None:
+                self._logger.warning("No frame available - skipping intensity check")
+                return True
+            
+            # Check intensity range
+            max_val = np.max(frame)
+            mean_val = np.mean(frame)
+            
+            # Determine bit depth (assume 8-bit, 12-bit, or 16-bit)
+            if frame.dtype == np.uint8:
+                saturation_threshold = 250
+                min_threshold = 10
+            elif frame.dtype == np.uint16:
+                # Check if it's actually 12-bit data in 16-bit container
+                if max_val < 4096:
+                    saturation_threshold = 4000
+                    min_threshold = 50
+                else:
+                    saturation_threshold = 64000
+                    min_threshold = 500
+            else:
+                # Unknown type, assume normalized
+                saturation_threshold = 0.98
+                min_threshold = 0.02
+            
+            # Check for saturation
+            if max_val >= saturation_threshold:
+                self._logger.warning(f"Camera saturated (max={max_val}, threshold={saturation_threshold})")
+                return False
+            
+            # Check for too dark
+            if mean_val <= min_threshold:
+                self._logger.warning(f"Camera too dark (mean={mean_val}, threshold={min_threshold})")
+                return False
+            
+            self._logger.info(f"Camera intensity OK: mean={mean_val:.1f}, max={max_val}")
+            return True
+            
+        except Exception as e:
+            self._logger.warning(f"Failed to validate camera intensity: {e}")
+            # Don't block calibration on validation errors
+            return True
+    
+    def _validateObjectiveId(self, objective_id: str) -> bool:
+        """
+        Validate that the objective ID is valid.
+        
+        Args:
+            objective_id: Objective identifier to validate
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        # "default" is always valid
+        if objective_id == "default":
+            return True
+        
+        try:
+            # Check if objective controller is available
+            if hasattr(self._master, 'objectiveController'):
+                obj_ctrl = self._master.objectiveController
+                if hasattr(obj_ctrl, 'objectiveNames'):
+                    valid_names = obj_ctrl.objectiveNames
+                    if objective_id in valid_names:
+                        return True
+                    self._logger.warning(f"Objective '{objective_id}' not in configured objectives: {valid_names}")
+                    return False
+            
+            # If no objective controller, allow any non-empty string
+            if objective_id and len(objective_id) > 0:
+                self._logger.info(f"No ObjectiveController - accepting objective ID '{objective_id}'")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            self._logger.warning(f"Failed to validate objective ID: {e}")
+            # Don't block calibration on validation errors
+            return True
+    
+    def _applyCalibrationResults(self, objective_id: str, result: dict):
+        """
+        Apply calibration results immediately without file reload.
+        
+        This updates the in-memory calibration data and applies flip/pixel size
+        to the active detector and objective.
+        
+        Args:
+            objective_id: Objective identifier that was calibrated
+            result: Calibration result dictionary with metrics and affine matrix
+        """
+        try:
+            # Update in-memory calibration storage
+            if not hasattr(self, 'affineCalibrations') or self.affineCalibrations is None:
+                self.affineCalibrations = {}
+            
+            # Store the calibration data
+            metrics = result.get('metrics', {})
+            affine_matrix = result.get('affine_matrix', [[1, 0, 0], [0, 1, 0]])
+            
+            # Update affineCalibrations dict
+            if objective_id not in self.affineCalibrations:
+                self.affineCalibrations[objective_id] = {}
+            
+            self.affineCalibrations[objective_id]['affine_matrix'] = affine_matrix
+            self.affineCalibrations[objective_id]['metrics'] = metrics
+            self.affineCalibrations[objective_id]['timestamp'] = time.strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Extract flip and pixel size from metrics
+            scale_x = metrics.get('scale_x_um_per_pixel', 1.0)
+            scale_y = metrics.get('scale_y_um_per_pixel', 1.0)
+            pixel_size = (abs(scale_x) + abs(scale_y)) / 2.0
+            
+            flipY = scale_y < 0
+            flipX = scale_x < 0
+            
+            self._logger.info(f"Applying calibration results for '{objective_id}': "
+                            f"pixelsize={pixel_size:.3f} µm/px, flip=(Y:{flipY}, X:{flipX})")
+            
+            # Apply flip to detector immediately
+            if hasattr(self._master, 'detectorsManager'):
+                all_detectors = self._master.detectorsManager.getAllDeviceNames()
+                if all_detectors:
+                    detector = self._master.detectorsManager[all_detectors[0]]
+                    if hasattr(detector, 'setFlipImage'):
+                        detector.setFlipImage(flipY, flipX)
+                        self._logger.info(f"Applied flip to detector: Y={flipY}, X={flipX}")
+            
+            # Update objective pixel size if this is the current objective
+            if hasattr(self._master, 'objectiveController'):
+                obj_ctrl = self._master.objectiveController
+                # If calibrated objective matches current objective, update immediately
+                if objective_id == self.currentObjective or objective_id == "default":
+                    if hasattr(obj_ctrl, 'setObjectiveParameters'):
+                        # Get current slot
+                        if hasattr(obj_ctrl, 'currentObjective'):
+                            slot = obj_ctrl.currentObjective
+                            obj_ctrl.setObjectiveParameters(slot, pixelsize=pixel_size)
+                            self._logger.info(f"Updated objective slot {slot} pixelsize to {pixel_size:.3f} µm/px")
+            
+            self._logger.info(f"Successfully applied calibration results for '{objective_id}'")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to apply calibration results: {e}", exc_info=True)
 
 
 

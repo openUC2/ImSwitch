@@ -48,8 +48,65 @@ class ObjectiveManager(SignalInterface):
         self.homeAcceleration = self.__ObjectiveInfo.homeAcceleration
         self.calibrateOnStart = self.__ObjectiveInfo.calibrateOnStart
         self.isActive = self.__ObjectiveInfo.active
+        
+        # Track current objective slot (1 or 2, or None if not initialized)
+        # This provides a centralized state that other controllers can query
+        self._currentObjective = None
 
+    def getCurrentObjective(self) -> int:
+        """
+        Get the current objective slot.
+        
+        Returns:
+            Current objective slot (1 or 2) or None if not set
+        """
+        return self._currentObjective
+    
+    def setCurrentObjective(self, slot: int):
+        """
+        Set the current objective slot.
+        
+        This should be called by ObjectiveController when the objective changes.
+        Provides a centralized state that other components can query.
+        
+        Args:
+            slot: Objective slot number (1 or 2)
+            
+        Raises:
+            ValueError: If slot is not 1 or 2
+        """
+        if slot not in [1, 2, None]:
+            raise ValueError(f"Objective slot must be 1, 2, or None, got {slot}")
+        
+        old_slot = self._currentObjective
+        self._currentObjective = slot
+        
+        if old_slot != slot:
+            self.__logger.info(f"Current objective changed: {old_slot} → {slot}")
+            if slot is not None and 0 <= slot - 1 < len(self.objectiveNames):
+                self.__logger.info(f"Active objective: {self.objectiveNames[slot - 1]}")
+    
+    def getCurrentObjectiveName(self) -> str:
+        """
+        Get the name of the current objective.
+        
+        Returns:
+            Objective name (e.g., "10x", "20x") or "default" if not set
+        """
+        if self._currentObjective is not None and 0 <= self._currentObjective - 1 < len(self.objectiveNames):
+            return self.objectiveNames[self._currentObjective - 1]
+        elif len(self.objectiveNames) > 0:
+            return self.objectiveNames[0]  # Return first as default
+        return "default"
 
+    def getCurrentObjectiveID(self) -> int:
+        """
+        Get the current objective slot.
+        
+        Returns:
+            Current objective slot (1 or 2) or None if not set
+        """
+        return self._currentObjective
 
     def update(self):
         return None

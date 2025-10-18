@@ -138,6 +138,24 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
         from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
 
+        # Setup logging system with configuration
+        # Import after framework is loaded to avoid circular dependencies
+        from imswitch.imcommon.model.logging import setup_logging, enable_signal_emission
+        setup_logging(
+            log_level=config.log_level,
+            log_to_file=config.log_to_file,
+            log_folder=config.log_folder,
+            config_folder=config.config_folder
+        )
+        
+        # Enable signal emission for log messages if in headless mode
+        if config.is_headless:
+            try:
+                from imswitch.imcommon.framework.noqt import sigLog
+                enable_signal_emission(sigLog)
+            except Exception as e:
+                logging.warning(f"Could not enable signal emission for logging: {e}")
+
         logger = initLogger('main')
         logger.info(f'Starting ImSwitch {config.version}')
         logger.info(f'Headless mode: {config.is_headless}')
@@ -145,6 +163,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         logger.info(f'Config file: {config.default_config}')
         logger.info(f'Config folder: {config.config_folder}')
         logger.info(f'Data folder: {config.data_folder}')
+        logger.info(f'Log level: {config.log_level}')
+        logger.info(f'Log to file: {config.log_to_file}')
 
         # TODO: check if port is already in use
         

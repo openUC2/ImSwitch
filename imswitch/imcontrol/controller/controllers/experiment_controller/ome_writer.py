@@ -66,7 +66,7 @@ class OMEWriter:
     both fast stage scan and normal stage scan writing operations.
     """
     
-    def __init__(self, file_paths, tile_shape, grid_shape, grid_geometry, config: OMEWriterConfig, logger=None):
+    def __init__(self, file_paths, tile_shape, grid_shape, grid_geometry, config: OMEWriterConfig, logger=None, isRGB=False):
         """
         Initialize the OME writer.
         
@@ -84,6 +84,7 @@ class OMEWriter:
         self.x_start, self.y_start, self.x_step, self.y_step = grid_geometry # TODO: this should be set per each grid 
         self.config = config
         self.logger = logger
+        self.isRGB = isRGB
         
         # Zarr components
         self.store = None
@@ -152,7 +153,7 @@ class OMEWriter:
     def _setup_tiff_stitcher(self):
         """Set up the TIFF stitcher for creating stitched OME-TIFF files."""
         stitched_tiff_path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
-        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True)
+        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB)
         self.tiff_stitcher.start()
         if self.logger:
             self.logger.debug(f"TIFF stitcher initialized: {stitched_tiff_path}")

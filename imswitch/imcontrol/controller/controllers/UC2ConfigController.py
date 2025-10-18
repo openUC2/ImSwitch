@@ -307,8 +307,6 @@ class UC2ConfigController(ImConWidgetController):
 
     @APIExport(runOnUIThread=False)
     def espRestart(self):
-        if not HAS_ESPTOOL:
-            return {"error": "esptool not installed"}
         try:
             self._master.UC2ConfigManager.restartESP()
             return {"status": "ESP32 restarted successfully"}

@@ -3,6 +3,7 @@ from ..basecontrollers import LiveUpdatedController
 from imswitch.imcommon.model import initLogger, APIExport
 import numpy as np
 import re
+import time
 
 class ImageController(LiveUpdatedController):
     """ Linked to ImageWidget."""
@@ -125,6 +126,95 @@ class ImageController(LiveUpdatedController):
         """ Set image layer to widget. """
         self._commChannel.sigUpdateImage.emit(layerName, image, True, (1,1), True)
         ## (detectorName, image, init, scale, isCurrentDetector)
+    
+    @APIExport(runOnUIThread=False)
+    def snapFrame(self, detector_name: str = None, format: str = "png16") -> dict:
+        """
+        Capture a single frame and return it in the specified format.
+        
+        Args:
+            detector_name: Name of detector (use current if None)
+            format: Output format ("png16", "tiff", "binary")
+            
+        Returns:
+            Dictionary with frame data and metadata
+        """
+        try:
+            # Get current detector if not specified
+            if detector_name is None:
+                detector_name = self._master.detectorsManager.getCurrentDetectorName()
+            
+            # Get latest frame
+            detector = self._master.detectorsManager[detector_name]
+            frame = detector.getLatestFrame()
+            
+            if frame is None:
+                raise ValueError("No frame available")
+            
+            # Ensure uint16 format for consistency
+            if frame.dtype != np.uint16:
+                if frame.dtype == np.uint8:
+                    frame = frame.astype(np.uint16) << 8
+                else:
+                    frame = frame.astype(np.uint16)
+            
+            result = {
+                "detector": detector_name,
+                "format": format,
+                "shape": frame.shape,
+                "dtype": str(frame.dtype),
+                "timestamp": time.time()
+            }
+            
+            if format == "binary":
+                # Use binary encoder
+                from imswitch.imcommon.framework.binary_streaming import BinaryFrameEncoder
+                from imswitch.config import get_config
+                
+                config = get_config()
+                encoder = BinaryFrameEncoder(
+                    compression_algorithm="none",  # No compression for snapshots
+                    subsampling_factor=1,  # No subsampling for snapshots
+                    bitdepth=config.stream_binary_bitdepth_in,
+                    pixfmt=config.stream_binary_pixfmt
+                )
+                
+                packet, metadata = encoder.encode_frame(frame)
+                result["data"] = packet
+                result["metadata"] = metadata
+                
+            elif format in ["png16", "tiff"]:
+                # Save to temporary file and return path/data
+                import tempfile
+                import os
+                from PIL import Image
+                import tifffile
+                
+                if format == "png16":
+                    # Save as 16-bit PNG
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                        # PIL doesn't handle 16-bit grayscale well, use tifffile
+                        if len(frame.shape) == 2:
+                            img = Image.fromarray(frame, mode='I;16')
+                            img.save(tmp.name, "PNG")
+                        else:
+                            raise ValueError("RGB PNG16 not implemented")
+                        result["file_path"] = tmp.name
+                        
+                elif format == "tiff":
+                    # Save as TIFF
+                    with tempfile.NamedTemporaryFile(suffix=".tiff", delete=False) as tmp:
+                        tifffile.imwrite(tmp.name, frame)
+                        result["file_path"] = tmp.name
+            
+            else:
+                raise ValueError(f"Unsupported format: {format}")
+                
+            return result
+            
+        except Exception as e:
+            self.__logger.error(f"Error capturing frame: {e}")
+            return {"error": str(e)}
 
 
 

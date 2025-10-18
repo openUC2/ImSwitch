@@ -591,7 +591,8 @@ class ExperimentController(ImConWidgetController):
                     autofocus_min=autofocusMin,
                     autofocus_max=autofocusMax,
                     autofocus_step_size=autofocusStepSize,
-                    t_period=tPeriod
+                    t_period=tPeriod, 
+                    isRGB=self.mDetector._isRGB
                 )
 
                 # Append workflow steps and file writers to the accumulated lists
@@ -640,9 +641,29 @@ class ExperimentController(ImConWidgetController):
     ########################################
     # Hardware-related functions
     ########################################
-    def acquire_frame(self, channel: str):
+    def acquire_frame(self, channel: str, frameSync: int = 3):
         self._logger.debug(f"Acquiring frame on channel {channel}")
-        mFrame = self.mDetector.getLatestFrame()
+
+        # ensure we get a fresh frame
+        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        cTime = time.time()
+        
+        lastFrameNumber=-1
+        while(1):
+            # get frame and frame number to get one that is newer than the one with illumination off eventually
+            mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
+            if lastFrameNumber==-1:
+                # first round
+                lastFrameNumber = currentFrameNumber
+            if time.time()-cTime> timeoutFrameRequest:
+                # in case exposure time is too long we need break at one point
+                if mFrame is None: 
+                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False) 
+                break
+            if currentFrameNumber <= lastFrameNumber+frameSync:
+                time.sleep(0.01) # off-load CPU
+            else:
+                break
         return mFrame
 
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):

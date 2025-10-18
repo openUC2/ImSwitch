@@ -6,6 +6,7 @@ from imswitch import IS_HEADLESS, __file__
 import threading
 import numpy as np
 import matplotlib.pyplot as plt
+from queue import Queue, Empty
 
 from skimage.draw import line
 from scipy.signal import convolve2d
@@ -30,6 +31,86 @@ except ModuleNotFoundError:
 
         return wrapper
 
+"""
+End-to-end astigmatism autofocus simulation:
+- Simulated microscope with Z-scan, rotated astigmatism, and XY drift
+- Rotation-invariant second-moment focus metric (fast, no fits)
+- Plots + saves stack (NPZ) and metrics (CSV)
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from math import cos, sin
+
+# ----------------------- Simulation -----------------------
+
+class AstigmaticMicroscopeSimulator:
+    def __init__(
+        self,
+        H=128,
+        W=128,
+        roi_half=28,
+        phi_deg=33.0,      # astig axis rotation w.r.t. camera x
+        s0=1.7,            # base sigma at nominal focus (px)
+        astig_slope=0.33,  # sigma_x = s0 + a*z, sigma_y = s0 - a*z
+        amp=2400.0,
+        bg=35.0,
+        read_noise=0*2.2,
+        poisson=0*True,
+        seed=7,
+    ):
+        self.H, self.W = H, W
+        self.roi_half = roi_half
+        self.phi = np.deg2rad(phi_deg)
+        self.s0 = float(s0)
+        self.a = float(astig_slope)
+        self.amp = float(amp)
+        self.bg = float(bg)
+        self.read_noise = float(read_noise)
+        self.poisson = bool(poisson)
+        self.rng = np.random.default_rng(seed)
+
+        y, x = np.mgrid[0:H, 0:W].astype(np.float32)
+        self.xgrid = x
+        self.ygrid = y
+
+        # ROI indices (fixed crop around center; centroiding handles drift)
+        cx = W // 2
+        cy = H // 2
+        r = roi_half
+        self.roi_slice = np.s_[cy - r : cy + r, cx - r : cx + r]
+
+    def xy_drift(self, z):
+        # linear + sinusoidal drift to stress-test the metric
+        dx = 0.25 * z + 1.2 * np.sin(0.8 * z)
+        dy = -0.18 * z + 1.0 * np.cos(0.6 * z)
+        return dx, dy
+
+    def render_frame(self, z):
+        x, y = self.xgrid, self.ygrid
+        dx, dy = self.xy_drift(z)
+        cx = self.W / 2 + dx
+        cy = self.H / 2 + dy
+
+        sx = max(self.s0 + self.a * z, 0.5)
+        sy = max(self.s0 - self.a * z, 0.5)
+
+        # rotate coords by phi (principal axes of astigmatism)
+        xp = (x - cx) * cos(self.phi) + (y - cy) * sin(self.phi)
+        yp = -(x - cx) * sin(self.phi) + (y - cy) * cos(self.phi)
+
+        g = np.exp(-0.5 * ((xp / sx) ** 2 + (yp / sy) ** 2))
+        I = self.amp * g + self.bg
+
+        if self.poisson:
+            I = self.rng.poisson(I).astype(np.float32)
+        else:
+            I = I.astype(np.float32)
+
+        I += self.rng.normal(0, self.read_noise, I.shape).astype(np.float32)
+        return np.clip(I, 0, None)
+
 
 
 class VirtualMicroscopeManager:
@@ -46,7 +127,7 @@ class VirtualMicroscopeManager:
 
         try:
             self._imagePath = rs232Info.managerProperties["imagePath"]
-            if self._imagePath not in ["simplant", "smlm"]:
+            if self._imagePath not in ["simplant", "smlm", "astigmatism", "wellplatecalib"]:
                 raise NameError
         except:
             package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -54,7 +135,7 @@ class VirtualMicroscopeManager:
                 package_dir, "_data/images/histoASHLARStitch.jpg"
             )
             self.__logger.info(
-                "If you want to use the plant, use 'imagePath': 'simplant' in your setup.json"
+                "If you want to use the plant, use 'imagePath': 'simplant', 'astigmatism' in your setup.json"
             )
 
         self._virtualMicroscope = VirtualMicroscopy(self._imagePath)
@@ -172,9 +253,18 @@ class VirtualMicroscopy:
         self.positioner = Positioner(self)
         self.illuminator = Illuminator(self)
         self.objective = Objective(self)
+    
+    def startAcquisition(self):
+        """Start continuous frame acquisition"""
+        self.camera.startAcquisition()
+    
+    def stopAcquisition(self):
+        """Stop continuous frame acquisition"""
+        self.camera.stopAcquisition()
 
     def stop(self):
-        pass
+        """Stop all operations and clean up"""
+        self.camera.stopAcquisition()
 
 
 @njit(parallel=True)
@@ -271,22 +361,48 @@ class Camera:
         self.filePath = filePath
 
         if self.filePath == "simplant":
-            self.image = createBranchingTree(width=5000, height=5000)
-            self.image /= np.max(self.image)
+            self._image = createBranchingTree(width=5000, height=5000)
+            self._image /= np.max(self._image)
+            self.SensorHeight = 300  # self._image.shape[1]
+            self.SensorWidth = 400  # self._image.shape[0]
+            
+        elif self.filePath == "wellplatecalib":
+            ''' load calibration_front.svg '''
+            package_dir = os.path.dirname(os.path.abspath(__file__))
+            self._imagePath = os.path.join(
+                package_dir, "_data/images/calibration_front.png"
+            )
+            self._image = cv2.imread(self._imagePath, cv2.IMREAD_GRAYSCALE)
+            # invert image
+            self._image = 255 - self._image
+            self._image = self._image / np.max(self._image)
+            self.SensorHeight = 300  # self._image.shape[1]
+            self.SensorWidth = 400  # self._image.shape[0]
+            
+        
+        elif self.filePath == "astigmatism":
+            self.SensorHeight = 512  # self._image.shape[1]
+            self.SensorWidth = 512  # self._image.shape[0]
+
+            self.astimulator = AstigmaticMicroscopeSimulator(W=self.SensorHeight, H=self.SensorWidth, roi_half=256)
+
         elif self.filePath == "smlm":
+            self.SensorHeight = 300  # self._image.shape[1]
+            self.SensorWidth = 400  # self._image.shape[0]
+            
             tmp = createBranchingTree(width=5000, height=5000)
             tmp_min = np.min(tmp)
             tmp_max = np.max(tmp)
-            self.image = (
+            self._image = (
                 1 - ((tmp - tmp_min) / (tmp_max - tmp_min)) > 0
             )  # generating binary image
         else:
-            self.image = np.mean(cv2.imread(filePath), axis=2)
-            self.image /= np.max(self.image)
-
+            self._image = np.mean(cv2.imread(filePath), axis=2)
+            self._image /= np.max(self._image)
+            self.SensorHeight = 300  # self._image.shape[1]
+            self.SensorWidth = 400  # self._image.shape[0]
+            
         self.lock = threading.Lock()
-        self.SensorHeight = 300  # self.image.shape[1]
-        self.SensorWidth = 400  # self.image.shape[0]
         self.model = "VirtualCamera"
         self.PixelSize = 1.0
         self.isRGB = False
@@ -295,110 +411,212 @@ class Camera:
         self.noiseStack = np.abs(
             np.random.randn(self.SensorHeight, self.SensorWidth, 100) * 2
         )
+        
+        # Thread-safe frame queue and acquisition thread
+        self.frame_queue = Queue(maxsize=5)  # Limit queue size to prevent memory overflow
+        self.acquisition_active = False
+        self.acquisition_thread = None
+        self.acquisition_lock = threading.Lock()
+        
+        # Cached parameters to avoid locking parent constantly
+        self._cached_position = {"X": 0, "Y": 0, "Z": 0, "A": 0}
+        self._cached_intensity = 1.0
+        self._cached_psf = None
+        self.binning = False  # For objective binning support
+
+    def startAcquisition(self):
+        """Start the continuous frame production thread"""
+        with self.acquisition_lock:
+            if not self.acquisition_active:
+                self.acquisition_active = True
+                self.acquisition_thread = threading.Thread(target=self._frame_producer_loop, daemon=True)
+                self.acquisition_thread.start()
+                
+    def stopAcquisition(self):
+        """Stop the continuous frame production thread"""
+        with self.acquisition_lock:
+            if self.acquisition_active:
+                self.acquisition_active = False
+                if self.acquisition_thread:
+                    self.acquisition_thread.join(timeout=1.0)
+                    self.acquisition_thread = None
+                # Clear remaining frames from queue
+                while not self.frame_queue.empty():
+                    try:
+                        self.frame_queue.get_nowait()
+                    except Empty:
+                        break
+    
+    def _update_cached_parameters(self):
+        """Update cached parameters from parent to minimize locking overhead"""
+        try:
+            self._cached_position = self._parent.positioner.get_position()
+            self._cached_intensity = self._parent.illuminator.get_intensity(1)
+            self._cached_psf = np.squeeze(self._parent.positioner.get_psf())
+        except Exception:
+            # In case parent doesn't have these methods yet
+            pass
+    
+    def _frame_producer_loop(self):
+        """Continuous frame production loop running in separate thread"""
+        while self.acquisition_active:
+            try:
+                # Update cached parameters from parent (reduces lock contention)
+                self._update_cached_parameters()
+                # Produce frame with cached parameters
+                frame = self.produce_frame(
+                    x_offset=self._cached_position["X"],
+                    y_offset=self._cached_position["Y"],
+                    z_offset=self._cached_position["Z"],
+                    light_intensity=self._cached_intensity,
+                    defocusPSF=self._cached_psf,
+                )
+                
+                self.frameNumber += 1
+                # Try to put frame in queue (non-blocking to avoid backlog)
+                try:
+                    self.frame_queue.put((frame, self.frameNumber), block=False)
+                except:
+                    # Queue is full, drop oldest frame and add new one
+                    try:
+                        self.frame_queue.get_nowait()
+                        self.frame_queue.put((frame, self.frameNumber), block=False)
+                    except:
+                        pass
+                # Small sleep to reduce CPU load (adjust based on desired frame rate)
+                time.sleep(0.01)  # ~100 fps max, adjust as needed
+            except Exception as e:
+                print(f"Error in frame producer loop: {e}")
+                time.sleep(0.1)  # Back off on error
 
     def produce_frame(
-        self, x_offset=0, y_offset=0, light_intensity=1.0, defocusPSF=None
+        self, x_offset=0, y_offset=0, z_offset=0, light_intensity=1.0, defocusPSF=None
     ):
         """Generate a frame based on the current settings."""
         if self.filePath == "smlm": # There is likely a better way of handling this
-            return self.produce_smlm_frame(x_offset, y_offset, light_intensity)
+            return self.produce_smlm_frame(x_offset, y_offset, light_intensity).astype(np.uint16)
+        elif self.filePath == "astigmatism":
+            return self.produce_astigmatism_frame(z_offset).astype(np.uint16)
         else:
-            with self.lock:
-                # add moise
-                image = self.image.copy()
-                # Adjust image based on offsets
-                image = np.roll(
-                    np.roll(image, int(x_offset), axis=1), int(y_offset), axis=0
-                )
-                image = nip.extract(image, (self.SensorHeight, self.SensorWidth)) # extract the image to the sensor size
-
-                # do all post-processing on cropped image
-                if IS_NIP and defocusPSF is not None and not defocusPSF.shape == ():
-                    print("Defocus:" + str(defocusPSF.shape))
-                    image = np.array(np.real(nip.convolve(image, defocusPSF)))
-                image = np.float32(image) * np.float32(light_intensity)
-                image += self.noiseStack[:, :, np.random.randint(0, 100)]
-                
-
-                # Adjust illumination
-                image = image.astype(np.uint16)
-                time.sleep(0.1)
-                return np.array(image)
-
-    def produce_smlm_frame(self, x_offset=0, y_offset=0, light_intensity=5000):
-        """Generate a SMLM frame based on the current settings."""
-        with self.lock:
-            # add moise
-            image = self.image.copy()
+            # Removed lock here since we're using cached parameters
+            # add noise
+            image = self._image#.copy()
             # Adjust image based on offsets
             image = np.roll(
                 np.roll(image, int(x_offset), axis=1), int(y_offset), axis=0
             )
-            image = np.array(nip.extract(image, (self.SensorHeight, self.SensorWidth)))
+            image = nip.extract(image, (self.SensorHeight, self.SensorWidth)) # extract the image to the sensor size
+            # do all post-processing on cropped image
+            if IS_NIP and defocusPSF is not None and not defocusPSF.shape == ():
+                image = np.array(np.real(nip.convolve(image, defocusPSF)))
+            image = np.float32(image) * np.float32(light_intensity)
+            image += self.noiseStack[:, :, np.random.randint(0, 100)]
+            # Adjust illumination
+            image = image.astype(np.uint16)
+            # Removed sleep here - controlled in producer loop
+            return image
 
-            yc_array, xc_array = binary2locs(image, density=0.05)
-            photon_array = np.random.normal(
-                light_intensity * 5, light_intensity * 0.05, size=len(xc_array)
-            )
+    def produce_astigmatism_frame(self, z_offset=0):
+        #!/usr/bin/env python3
+        return self.astimulator.render_frame(z=z_offset)
 
-            wavelenght = 6  # change to get it from microscope settings
-            wavelenght_std = 0.5  # change to get it from microscope settings
-            NA = 1.2  # change to get it from microscope settings
-            sigma = 0.21 * wavelenght / NA  # change to get it from microscope settings
-            sigma_std = (
-                0.21 * wavelenght_std / NA
-            )  # change to get it from microscope settings
-            sigma_array = np.random.normal(sigma, sigma_std, size=len(xc_array))
+    def produce_smlm_frame(self, x_offset=0, y_offset=0, light_intensity=5000):
+        """Generate a SMLM frame based on the current settings."""
+        # Removed lock here since we're using cached parameters
+        # add noise
+        image = self._image.copy()
+        # Adjust image based on offsets
+        image = np.roll(
+            np.roll(image, int(x_offset), axis=1), int(y_offset), axis=0
+        )
+        image = np.array(nip.extract(image, (self.SensorHeight, self.SensorWidth)))
 
-            ADC_per_photon_conversion = 1.0  # change to get it from microscope settings
-            readout_noise = 50  # change to get it from microscope settings
-            ADC_offset = 100  # change to get it from microscope settings
+        yc_array, xc_array = binary2locs(image, density=0.05)
+        photon_array = np.random.normal(
+            light_intensity * 5, light_intensity * 0.05, size=len(xc_array)
+        )
 
-            out = FromLoc2Image_MultiThreaded(
-                xc_array,
-                yc_array,
-                photon_array,
-                sigma_array,
-                self.SensorHeight,
-                self.SensorWidth,
-                self.PixelSize,
-            )
-            out = (
-                ADC_per_photon_conversion * np.random.poisson(out)
-                + readout_noise
-                * np.random.normal(size=(self.SensorHeight, self.SensorWidth))
-                + ADC_offset
-            )
-            time.sleep(0.1)
-            return np.array(out)
+        wavelenght = 6  # change to get it from microscope settings
+        wavelenght_std = 0.5  # change to get it from microscope settings
+        NA = 1.2  # change to get it from microscope settings
+        sigma = 0.21 * wavelenght / NA  # change to get it from microscope settings
+        sigma_std = (
+            0.21 * wavelenght_std / NA
+        )  # change to get it from microscope settings
+        sigma_array = np.random.normal(sigma, sigma_std, size=len(xc_array))
+
+        ADC_per_photon_conversion = 1.0  # change to get it from microscope settings
+        readout_noise = 50  # change to get it from microscope settings
+        ADC_offset = 100  # change to get it from microscope settings
+
+        out = FromLoc2Image_MultiThreaded(
+            xc_array,
+            yc_array,
+            photon_array,
+            sigma_array,
+            self.SensorHeight,
+            self.SensorWidth,
+            self.PixelSize,
+        )
+        out = (
+            ADC_per_photon_conversion * np.random.poisson(out)
+            + readout_noise
+            * np.random.normal(size=(self.SensorHeight, self.SensorWidth))
+            + ADC_offset
+        )
+        # Removed sleep here - controlled in producer loop
+        return np.array(out)
 
     def getLast(self, returnFrameNumber=False):
+        """Get the latest frame from the queue or generate one if acquisition not active"""
+        # Try to get frame from queue if acquisition is active
+        if self.acquisition_active:
+            try:
+                frame, frame_number = self.frame_queue.get(timeout=0.5)
+                if self.binning:
+                    # Apply 2x2 binning for objective magnification
+                    frame = self._apply_binning(frame)
+                if returnFrameNumber:
+                    return frame, frame_number
+                else:
+                    return frame
+            except Empty:
+                # Queue is empty, fall back to direct generation
+                pass
+        
+        # Fallback: generate frame directly (legacy behavior for non-acquisition mode)
         position = self._parent.positioner.get_position()
         defocusPSF = np.squeeze(self._parent.positioner.get_psf())
         intensity = self._parent.illuminator.get_intensity(1)
         self.frameNumber += 1
+        
+        frame = self.produce_frame(
+            x_offset=position["X"],
+            y_offset=position["Y"],
+            z_offset=position["Z"],
+            light_intensity=intensity,
+            defocusPSF=defocusPSF,
+        )
+        
+        if self.binning:
+            frame = self._apply_binning(frame)
+            
         if returnFrameNumber:
-            return (
-                self.produce_frame(
-                    x_offset=position["X"],
-                    y_offset=position["Y"],
-                    light_intensity=intensity,
-                    defocusPSF=defocusPSF,
-                ),
-                self.frameNumber,
-            )
+            return frame, self.frameNumber
         else:
-            return self.produce_frame(
-                x_offset=position["X"],
-                y_offset=position["Y"],
-                light_intensity=intensity,
-                defocusPSF=defocusPSF,
-            )
+            return frame
 
+    def _apply_binning(self, frame):
+        """Apply 2x2 binning to simulate objective magnification"""
+        h, w = frame.shape
+        binned_h, binned_w = h // 2, w // 2
+        binned = frame.reshape(binned_h, 2, binned_w, 2).mean(axis=(1, 3))
+        return binned.astype(frame.dtype)
 
     def getLastChunk(self):
+        """Get the latest frame chunk"""
         mFrame = self.getLast()
-        return np.expand_dims(mFrame, axis=0), [self.frameNumber] # we only provide one chunk, so we return a list with one element
+        return np.expand_dims(mFrame, axis=0), [self.frameNumber]
     
     def setPropertyValue(self, propertyName, propertyValue):
         pass

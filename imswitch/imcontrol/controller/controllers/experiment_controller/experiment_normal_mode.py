@@ -27,6 +27,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                          snake_tiles: List[List[Dict]],
                          illumination_intensities: List[float],
                          illumination_sources: List[str],
+                         isRGB: bool = False,
                          **kwargs) -> Dict[str, Any]:
         """
         Execute experiment in normal mode.
@@ -66,7 +67,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         # Set up OME writers for each tile - create new writers for each timepoint
         file_writers = self._setup_ome_writers(
             snake_tiles, t, exp_name, dir_path, m_file_name, 
-            z_positions, illumination_intensities
+            z_positions, illumination_intensities, isRGB=isRGB  
         )
         
         # Create workflow steps for each tile
@@ -99,7 +100,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                           dir_path: str,
                           m_file_name: str,
                           z_positions: List[float],
-                          illumination_intensities: List[float]) -> List[OMEWriter]:
+                          illumination_intensities: List[float], 
+                          isRGB: bool) -> List[OMEWriter]:
+        
         """
         Set up OME writers for each tile.
         
@@ -195,7 +198,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                     grid_shape=grid_shape,
                     grid_geometry=grid_geometry,
                     config=writer_config,
-                    logger=self._logger
+                    logger=self._logger, 
+                    isRGB=isRGB
                 )
                 file_writers.append(ome_writer)
         
@@ -244,6 +248,25 @@ class ExperimentNormalMode(ExperimentModeBase):
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
         
+        # Turn on illumination once at the beginning if only one source
+        active_sources_count = sum(np.array(illumination_intensities) > 0)
+        is_first_tile = (position_center_index == 0)
+        
+        if active_sources_count == 1 and is_first_tile:
+            for illu_index, illu_source in enumerate(illumination_sources):
+                illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
+                if illu_intensity > 0:
+                    workflow_steps.append(WorkflowStep(
+                        name="Turn on single illumination source for entire scan",
+                        step_id=step_id,
+                        main_func=self.controller.set_laser_power,
+                        main_params={"power": illu_intensity, "channel": illu_source},
+                        post_funcs=[self.controller.wait_time],
+                        post_params={"seconds": 0.05},
+                    ))
+                    step_id += 1
+                    break  # Only one active source
+        
         # Iterate over positions in the tile
         for m_index, m_point in enumerate(tiles):
             try:
@@ -280,8 +303,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                     if illu_intensity <= 0:
                         continue
 
-                    # Turn on illumination
-                    if sum(np.array(illumination_intensities) > 0) > 1 or m_index == 0:
+                    # Turn on illumination only for multiple sources (single source was turned on once at the beginning)
+                    if active_sources_count > 1:
                         workflow_steps.append(WorkflowStep(
                             name="Turn on illumination",
                             step_id=step_id,
@@ -330,8 +353,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                     ))
                     step_id += 1
 
-                    # Turn off illumination if multiple sources
-                    if len(illumination_intensities) > 1 and sum(np.array(illumination_intensities) > 0) > 1:
+                    # Turn off illumination only if multiple sources (for switching between them)
+                    if active_sources_count > 1:
                         workflow_steps.append(WorkflowStep(
                             name="Turn off illumination",
                             step_id=step_id,

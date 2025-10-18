@@ -384,7 +384,12 @@ class FocusLockInfo:
     laserValue: int
     """ Value of the laser to use for focus lock. This is usually a wavelength in nm. """
 
-
+    fovWidth: int = 512
+    """ Width of the field of view for focus lock, in pixels. """
+    
+    fovCenter: list = field(default_factory=lambda: [None, None])
+    """ Center of the field of view for focus lock, in pixels. [x, y] """
+    
 @dataclass(frozen=False)
 class ArkitektInfo:
     enabled: bool = True

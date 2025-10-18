@@ -3,7 +3,6 @@ import os
 import base64
 from fastapi import FastAPI, Response, HTTPException
 from imswitch import IS_HEADLESS, __file__
-from  imswitch.imcontrol.controller.controllers.camera_stage_mapping import OFMStageMapping
 from imswitch.imcommon.model import initLogger, ostools
 import numpy as np
 import time
@@ -150,8 +149,6 @@ class HistoScanController(LiveUpdatedController):
         else:
             self.webCamDetector = None
 
-        # object for stage mapping/calibration
-        self.mStageMapper = None
 
         # some locking mechanisms
         self.ishistoscanRunning = False
@@ -235,8 +232,6 @@ class HistoScanController(LiveUpdatedController):
             self._widget.setDefaultSavePath(self._master.HistoScanManager.defaultConfigPath)
             self.sigUpdateLoadingBar.connect(self._widget.setLoadingBarAndText)
 
-            self._widget.startCalibrationButton.clicked.connect(self.startStageMapping)
-            self._widget.stopCalibrationButton.clicked.connect(self.stopStageMapping)
 
             # Image View
             self._widget.resetScanCoordinatesButton.clicked.connect(self.resetScanCoordinates)
@@ -244,9 +239,6 @@ class HistoScanController(LiveUpdatedController):
             self._widget.startButton3.clicked.connect(self.starthistoscanCamerabased)
             self._widget.stopButton3.clicked.connect(self.stophistoscanCamerabased)
 
-            # connect to stage mapping
-            self._widget.buttonStartCalibration.clicked.connect(self.startStageMappingFromButton)
-            self._widget.buttonStopCalibration.clicked.connect(self.stopHistoScanFromButton)
 
             # on tab click, add the image to the napari viewer
             self._widget.tabWidget.currentChanged.connect(self.onTabChanged)
@@ -583,93 +575,6 @@ class HistoScanController(LiveUpdatedController):
         except json.JSONDecodeError:
             return {"status": "error", "message": "Invalid JSON format"}
 
-    @APIExport(runOnUIThread=False)
-    def startStageMapping(self, mumPerStep: int=1, calibFilePath: str = "calibFile.json") -> str:
-        self.stageMappingResult = None
-        if not self.ishistoscanRunning or not self.ishistoscanRunning:
-            self.ishistoscanRunning = True
-            pixelSize = self.microscopeDetector.pixelSizeUm[-1] # µm
-            # mumPerStep = 1 # µm
-            try:
-                self.mStageMapper = OFMStageMapping.OFMStageScanClass(self, calibration_file_path=calibFilePath, effPixelsize=pixelSize, stageStepSize=mumPerStep,
-                                                                IS_CLIENT=False, mDetector=self.microscopeDetector, mStage=self.stages)
-                def launchStageMappingBackground():
-                    self.stageMappingResult = self.mStageMapper.calibrate_xy(return_backlash_data=0)
-                    if self.stageMappingResult is bool:
-                        self._logger.error("Calibration failed")
-                        self._widget.sigStageMappingComplete.emit(None, None, False)
-                    print(f"Calibration result:")
-                    for k, v in self.stageMappingResult.items():
-                        print(f"    {k}:")
-                        for l, w in v.items():
-                            if len(str(w)) < 50:
-                                print(f"        {l}: {w}")
-                            else:
-                                print(f"        {l}: too long to print")
-                    image_to_stage_displacement = self.stageMappingResult["camera_stage_mapping_calibration"]["image_to_stage_displacement"]
-                    backlash_vector = self.stageMappingResult["camera_stage_mapping_calibration"]["backlash_vector"]
-                    self._widget.sigStageMappingComplete.emit(image_to_stage_displacement, backlash_vector, True)
-                threading.Thread(target=launchStageMappingBackground).start()
-                '''
-                The result:
-                mData["camera_stage_mapping_calibration"]["image_to_stage_displacement"]=
-                array([[ 0.        , -1.00135997],
-                    [-1.00135997,  0.        ]])
-
-                mData["camera_stage_mapping_calibration"]["backlash_vector"]=
-                array([ 0.,  0.,  0.])
-
-                From Richard:
-                """Combine X and Y calibrations
-
-                This uses the output from :func:`.calibrate_backlash_1d`, run at least
-                twice with orthogonal (or at least different) `direction` parameters.
-                The resulting 2x2 transformation matrix should map from image
-                to stage coordinates.  Currently, the backlash estimate given
-                by this function is only really trustworthy if you've supplied
-                two orthogonal calibrations - that will usually be the case.
-
-                Returns
-                -------
-                dict
-                    A dictionary of the resulting calibration, including:
-
-                    * **image_to_stage_displacement:** (`numpy.ndarray`) - a 2x2 matrix mapping
-                    image displacement to stage displacement
-                    * **backlash_vector:** (`numpy.ndarray`) - representing the estimated
-                    backlash in each direction
-                    * **backlash:** (`number`) - the highest element of `backlash_vector`
-                """
-
-                '''
-            except Exception as e:
-                self._logger.error(e)
-                self.stageMappingResult = ((0,0),(0,0))
-            self.ishistoscanRunning = False
-            return self.ishistoscanRunning
-        else:
-            return "busy"
-
-    def startStageMappingFromButton(self):
-        self.positionBeforeStageMapping = self.stages.getPosition()
-        self.isStopStageMapping = False
-        self._widget.buttonStartCalibration.setEnabled(False)
-        self.mStageMappingThread = threading.Thread(target=self.startStageMapping)
-        self.mStageMappingThread.start()
-
-    def stopHistoScanFromButton(self):
-        self._widget.buttonStartCalibration.setEnabled(True)
-        self.isStopStageMapping = True
-        try:
-            # move back to the position before the stage mapping
-            del self.mStageMappingThread
-            self.stages.move(value=(self.positionBeforeStageMapping["X"], self.positionBeforeStageMapping["Y"]), axis="XY", is_absolute=True, is_blocking=False, acceleration=(self.acceleration,self.acceleration))
-        except Exception as e:
-            self._logger.error(e)
-
-    @APIExport()
-    def stopStageMapping(self):
-        self.mStageMapper.stop()
 
     def starthistoscanCamerabased(self):
         '''

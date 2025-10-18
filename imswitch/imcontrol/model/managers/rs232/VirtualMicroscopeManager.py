@@ -406,6 +406,9 @@ class Camera:
         self.model = "VirtualCamera"
         self.PixelSize = 1.0
         self.isRGB = False
+        self.flipX = False
+        self.flipY = False
+        self.flipImage = (self.flipY, self.flipX)        
         self.frameNumber = 0
         # precompute noise so that we will save energy and trees
         self.noiseStack = np.abs(
@@ -494,9 +497,9 @@ class Camera:
     ):
         """Generate a frame based on the current settings."""
         if self.filePath == "smlm": # There is likely a better way of handling this
-            return self.produce_smlm_frame(x_offset, y_offset, light_intensity).astype(np.uint16)
+            frame = self.produce_smlm_frame(x_offset, y_offset, light_intensity).astype(np.uint16)
         elif self.filePath == "astigmatism":
-            return self.produce_astigmatism_frame(z_offset).astype(np.uint16)
+            frame = self.produce_astigmatism_frame(z_offset).astype(np.uint16)
         else:
             # Removed lock here since we're using cached parameters
             # add noise
@@ -512,9 +515,16 @@ class Camera:
             image = np.float32(image) * np.float32(light_intensity)
             image += self.noiseStack[:, :, np.random.randint(0, 100)]
             # Adjust illumination
-            image = image.astype(np.uint16)
+            frame = image.astype(np.uint16)
             # Removed sleep here - controlled in producer loop
-            return image
+        
+        # Apply flip if needed (zero-CPU operation using numpy)
+        if self.flipImage[0]:  # flipY
+            frame = np.flip(frame, axis=0)
+        if self.flipImage[1]:  # flipX
+            frame = np.flip(frame, axis=1)
+            
+        return frame
 
     def produce_astigmatism_frame(self, z_offset=0):
         #!/usr/bin/env python3

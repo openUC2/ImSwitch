@@ -161,6 +161,19 @@ class VirtualCameraManager(DetectorManager):
     def setPixelSizeUm(self, pixelSizeUm):
         self.parameters['Camera pixel size'].value = pixelSizeUm
 
+    def setFlipImage(self, flipY: bool, flipX: bool):
+        """
+        Set flip settings for the camera during runtime.
+        
+        Args:
+            flipY: Whether to flip vertically
+            flipX: Whether to flip horizontally
+        """
+        self._camera.flipImage = (flipY, flipX)
+        self._camera.flipY = flipY
+        self._camera.flipX = flipX
+        self.__logger.info(f"Updated flip settings: flipY={flipY}, flipX={flipX}")
+
     def _performSafeCameraAction(self, function):
         pass
 

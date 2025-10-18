@@ -34,7 +34,7 @@ class DetectorsManager(MultiManager, SignalInterface):
         for detectorName, detectorInfo in detectorInfos.items():
             if not self._subManagers[detectorName].forAcquisition:
                 continue
-            # Connect signals
+            # Connect signals - this is only used to trigger live-view # TODO: We should think about a better way to handle this as we also have the sigImageUpdated and sigUpdateImage - basically whenever we have a sigImageUpdated, the sigUpdateImage is triggered, through the MasterController - why? I think this has to go that way as
             self._subManagers[detectorName].sigImageUpdated.connect(
                 lambda image, init, scale, detectorName=detectorName: self.sigImageUpdated.emit(
                     detectorName, image, init, scale, detectorName==self._currentDetectorName, self.detectorParams
@@ -217,6 +217,19 @@ class LVWorker(Worker):
 
     def setUpdatePeriod(self, updatePeriod):
         self._updatePeriod = updatePeriod
+        # Restart timer with new period
+        if self._vtimer is not None:
+            self._vtimer.stop()
+            self._vtimer.start(self._updatePeriod)
+        print("start lvworker")
+        self._detectorsManager.execOnAll(lambda c: c.updateLatestFrame(False),
+                                         condition=lambda c: c.forAcquisition)
+        self._vtimer = Timer()
+        self._vtimer.timeout.connect(
+            lambda: self._detectorsManager.execOnAll(lambda c: c.updateLatestFrame(True),
+                                                     condition=lambda c: c.forAcquisition)
+        )
+        self._vtimer.start(self._updatePeriod)
 
 class NoDetectorsError(RuntimeError):
     """ Error raised when a function related to the current detector is called

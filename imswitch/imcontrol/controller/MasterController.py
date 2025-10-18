@@ -61,7 +61,7 @@ class MasterController:
         lowLevelManagers = {"rs232sManager": self.rs232sManager}
 
         self.detectorsManager = DetectorsManager(
-            self.__setupInfo.detectors, updatePeriod=100, **lowLevelManagers
+            self.__setupInfo.detectors, updatePeriod=50, **lowLevelManagers
         )
         self.lasersManager = LasersManager(self.__setupInfo.lasers, **lowLevelManagers)
         self.positionersManager = PositionersManager(
@@ -177,7 +177,7 @@ class MasterController:
         self.detectorsManager.sigAcquisitionStarted.connect(cc.sigAcquisitionStarted)
         self.detectorsManager.sigAcquisitionStopped.connect(cc.sigAcquisitionStopped)
         self.detectorsManager.sigDetectorSwitched.connect(cc.sigDetectorSwitched)
-        self.detectorsManager.sigImageUpdated.connect(cc.sigUpdateImage)
+        self.detectorsManager.sigImageUpdated.connect(cc.sigUpdateImage) # TODO: why do we need to map a signal into a signal and cannot direclty use it ?! 
         self.detectorsManager.sigNewFrame.connect(cc.sigNewFrame)
 
         self.recordingManager.sigRecordingStarted.connect(cc.sigRecordingStarted)
@@ -190,10 +190,6 @@ class MasterController:
         self.recordingManager.sigMemoryRecordingAvailable.connect(
             self.memoryRecordingAvailable
         )
-
-        if "SLM" in self.__setupInfo.availableWidgets:
-            self.slmManager.sigSLMMaskUpdated.connect(cc.sigSLMMaskUpdated)
-            self.simManager.sigSIMMaskUpdated.connect(cc.sigSIMMaskUpdated)
 
     def memoryRecordingAvailable(self, name, file, filePath, savedToDisk):
         self.__moduleCommChannel.memoryRecordings[name] = VFileItem(

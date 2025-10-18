@@ -75,7 +75,7 @@ class ObjectiveManager(SignalInterface):
         Raises:
             ValueError: If slot is not 1 or 2
         """
-        if slot not in [1, 2, None]:
+        if slot not in [0,1, None]:
             raise ValueError(f"Objective slot must be 1, 2, or None, got {slot}")
         
         old_slot = self._currentObjective
@@ -104,7 +104,7 @@ class ObjectiveManager(SignalInterface):
         Get the current objective slot.
         
         Returns:
-            Current objective slot (1 or 2) or None if not set
+            Current objective slot (0 or 1) or None if not set
         """
         return self._currentObjective
 

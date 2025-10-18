@@ -580,16 +580,20 @@ class Camera:
     def getLast(self, returnFrameNumber=False):
         """Get the latest frame from the queue or generate one if acquisition not active"""
         # Try to get frame from queue if acquisition is active
+        now = time.time()
         if self.acquisition_active:
             try:
-                frame, frame_number = self.frame_queue.get(timeout=0.5)
+                frame, frame_number = self.frame_queue.get(timeout=0.02)
+                if frame is None:
+                    return None
+                self.frame = frame
                 if self.binning:
                     # Apply 2x2 binning for objective magnification
-                    frame = self._apply_binning(frame)
+                    self.frame = self._apply_binning(self.frame)
                 if returnFrameNumber:
-                    return frame, frame_number
+                    return self.frame, frame_number
                 else:
-                    return frame
+                    return self.frame
             except Empty:
                 # Queue is empty, fall back to direct generation
                 pass

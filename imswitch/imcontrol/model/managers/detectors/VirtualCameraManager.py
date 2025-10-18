@@ -97,14 +97,6 @@ class VirtualCameraManager(DetectorManager):
             frame = self._camera.getLast()
             return frame
 
-    def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
-        self.tLast = time.time()
-        if returnFrameNumber:
-            frame, frameNumber = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame, frameNumber
-        else:
-            frame = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame
 
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.

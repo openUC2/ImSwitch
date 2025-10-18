@@ -132,8 +132,6 @@ class DetectorManager(SignalInterface):
 
     def updateLatestFrame(self, init):
         """ :meta private: """
-        
-        
         try:
             self.__image = self.getLatestFrame()
         except Exception:
@@ -141,7 +139,6 @@ class DetectorManager(SignalInterface):
         else:
             if self.__image is not None:
                 self.sigImageUpdated.emit(self.__image, init, self.scale) 
-
     def setMinValueFramePreview(self, value):
         """ Sets the minimum value for the frame preview to display via a jpeg image """
         self._minValueFramePreview = value

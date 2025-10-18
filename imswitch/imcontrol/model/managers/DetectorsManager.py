@@ -1,6 +1,7 @@
 from time import sleep
 import threading
 import numpy as np
+from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Mutex, Signal, SignalInterface, Thread, Timer, Worker
 from .MultiManager import MultiManager
 
@@ -58,11 +59,15 @@ class DetectorsManager(MultiManager, SignalInterface):
                 self._currentDetectorName = detectorName
 
         # A timer will collect the new frame and update it through the communication channel
+        # In headless mode, we don't start the timer automatically - streaming is managed by LiveViewController
         self._lvWorker = LVWorker(self, updatePeriod)
         self._thread = Thread()
         self._lvWorker.moveToThread(self._thread)
         self._thread.started.connect(self._lvWorker.run)
         self._thread.finished.connect(self._lvWorker.stop)
+        
+        # Note: In headless mode, LVWorker is only started when live view acquisition is explicitly requested
+        # This avoids unnecessary resource consumption. The LiveViewController handles explicit streaming.
 
     def updateGlobalDetectorParams(self, params):
         # we expect a dictionary with the parameters

@@ -642,6 +642,82 @@ class LiveViewController(ImConWidgetController):
         if isinstance(worker, MJPEGStreamWorker):
             return worker
         return None
+    
+    @APIExport(runOnUIThread=False)
+    def video_feeder(self, startStream: bool = True, detectorName: Optional[str] = None):
+        """
+        HTTP endpoint for MJPEG streaming.
+        Replaces RecordingController.video_feeder with LiveViewController implementation.
+        
+        Args:
+            startStream: Whether to start streaming
+            detectorName: Name of detector (None = first available)
+        
+        Returns:
+            StreamingResponse with MJPEG data or status message
+        """
+        try:
+            from fastapi.responses import StreamingResponse
+        except ImportError:
+            return {"status": "error", "message": "FastAPI not available"}
+        
+        if not startStream:
+            # Stop the stream
+            if detectorName is None:
+                # Stop all MJPEG streams
+                for key in list(self._activeStreams.keys()):
+                    det_name, protocol = key
+                    if protocol == "mjpeg":
+                        self.stopLiveView(det_name, protocol)
+            else:
+                self.stopLiveView(detectorName, "mjpeg")
+            
+            return {"status": "success", "message": "stream stopped"}
+        
+        # Start streaming
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
+        
+        # Check if stream already exists
+        stream_key = (detectorName, "mjpeg")
+        if stream_key not in self._activeStreams:
+            # Start the MJPEG stream
+            result = self.startLiveView(detectorName, "mjpeg")
+            if result['status'] != 'success':
+                return result
+        
+        # Get the worker
+        worker = self.getMJPEGWorker(detectorName)
+        if worker is None:
+            return {"status": "error", "message": "Failed to get MJPEG worker"}
+        
+        # Create generator for streaming response
+        def frame_generator():
+            """Generator that yields MJPEG frames."""
+            try:
+                while stream_key in self._activeStreams:
+                    frame = worker.get_frame(timeout=1.0)
+                    if frame:
+                        yield frame
+            except GeneratorExit:
+                self._logger.debug("MJPEG stream connection closed by client")
+            except Exception as e:
+                self._logger.error(f"Error in MJPEG frame generator: {e}")
+        
+        # Return streaming response with proper headers
+        headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+        
+        return StreamingResponse(
+            frame_generator(),
+            media_type="multipart/x-mixed-replace;boundary=frame",
+            headers=headers
+        )
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

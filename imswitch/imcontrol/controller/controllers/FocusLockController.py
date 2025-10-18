@@ -877,6 +877,7 @@ class FocusLockController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def returnLastImage(self) -> Response:
         lastFrame = self._master.detectorsManager[self.camera].getLatestFrame()
+        lastFrame = lastFrame/np.max(lastFrame)*512.0
         lastFrame = lastFrame[::self.reduceImageScaleFactor, ::self.reduceImageScaleFactor]
         if lastFrame is None:
             raise RuntimeError("No image available. Please run update() first.")
@@ -898,13 +899,15 @@ class FocusLockController(ImConWidgetController):
         if cropCenter is None:
             _cropCenter = [detectorSize[1] // 2, detectorSize[0] // 2]
         else:
-            _cropCenter = [int(cropCenter[1] * self.reduceImageScaleFactor), int(cropCenter[0] * self.reduceImageScaleFactor)]
-        if cropSize < 100:
-            cropSize = 100
+            cropCenter = [int(cropCenter[1] * mRatio), int(cropCenter[0] * mRatio)]
+        if self._focus_params.crop_size < 100:
+            self._focus_params.crop_size = 100
         detectorSize = self._master.detectorsManager[self.camera].shape
-        if cropSize > detectorSize[0] or cropSize > detectorSize[1]:
-            raise ValueError(f"Crop size {cropSize} exceeds detector size {detectorSize}.")
-        self._focus_params.crop_center = _cropCenter
+        if self._focus_params.crop_size > detectorSize[0] or self._focus_params.crop_size > detectorSize[1]:
+            raise ValueError(f"Crop size {self._focus_params.crop_size} exceeds detector size {detectorSize}.")
+        if cropCenter is None:
+            cropCenter = [self._focus_params.crop_size // 2, self._focus_params.crop_size // 2]
+        self._focus_params.crop_center = cropCenter
         self._logger.info(f"Set crop parameters: size={self._focus_params.crop_size}, center={self._focus_params.crop_center}")
         
         # Save the crop parameters to config file

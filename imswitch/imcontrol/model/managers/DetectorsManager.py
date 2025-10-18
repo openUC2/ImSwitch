@@ -201,6 +201,15 @@ class LVWorker(Worker):
 
     def run(self):
         print("start lvworker")
+        # for all available detectors with the "forAcquisition" flag start polling frames 
+        for detectorName in self._detectorsManager.getAllDeviceNames():
+            if self._detectorsManager[detectorName]._DetectorManager__forAcquisition:
+                # initialize the latest frame acquisition
+                pass
+        # TODO: This is a very complicated way of getting franes periodically:
+        # For all forAcquisiton detectors we we connect their updateLatestFrame function to a timer that triggers every updatePeriod ms
+        # via a signal; This signal is then consumed by the detector which emits the frame via sigImageUpdated which is then caught by the MasterController and sent to the client
+        # then we send this out via the socket connection - does not seem very efficient...
         self._detectorsManager.execOnAll(lambda c: c.updateLatestFrame(False),
                                          condition=lambda c: c.forAcquisition)
         self._vtimer = Timer()

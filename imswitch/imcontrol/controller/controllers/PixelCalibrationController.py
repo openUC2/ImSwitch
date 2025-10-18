@@ -226,13 +226,12 @@ class PixelCalibrationController(LiveUpdatedController):
             self._logger.debug("No detectors found - skipping flip distribution")
             return
         
-        # For now, apply to the first detector (typically the acquisition camera)
-        # Note: Multi-camera setups with different optical paths would need per-detector
-        # calibrations. Current implementation assumes single camera path per objective.
-        # Extension point: Add detector-to-objective mapping in config if needed.
-        detector_name = all_detectors[0]
+        # Filter the acquisition camera
+        for detector_name in all_detectors:
+            if self._master.detectorsManager[detector_name]._DetectorManager__forAcquisition:
+                break 
         detector = self._master.detectorsManager[detector_name]
-        
+
         # Try to match objective to flip settings
         # Priority: current objective > "default" > first available
         flip_to_apply = None
@@ -416,14 +415,28 @@ class PixelCalibrationController(LiveUpdatedController):
         """
         Get list of all objectives with calibration data.
         
+        Reads directly from configuration file on disk.
+        
         Returns:
-            List of objective identifiers that have been calibrated
+            Dictionary with list of objective identifiers that have been calibrated
         """
-
         try:
-            pixelcalibration_helper = PixelCalibrationClass(self)
-            objectives = pixelcalibration_helper.list_calibrated_objectives()
+            # Reload setup info from disk to get fresh data
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            options, _ = configfiletools.loadOptions()
+            
+            # Load setup from file
+            setupInfo = configfiletools.loadSetupInfo(options, self._setupInfo.__class__)
+            
+            if not hasattr(setupInfo, 'PixelCalibration') or setupInfo.PixelCalibration is None:
+                return {"success": True, "objectives": []}
+            
+            if not hasattr(setupInfo.PixelCalibration, 'affineCalibrations'):
+                return {"success": True, "objectives": []}
+            
+            objectives = list(setupInfo.PixelCalibration.affineCalibrations.keys())
             return {"success": True, "objectives": objectives}
+            
         except Exception as e:
             self._logger.error(f"Failed to get calibrated objectives: {e}")
             return {"error": str(e), "success": False}
@@ -433,38 +446,126 @@ class PixelCalibrationController(LiveUpdatedController):
         """
         Get calibration data for a specific objective.
         
+        Reads directly from configuration file on disk.
+        
         Args:
             objectiveId: Identifier for the objective
             
         Returns:
             Dictionary with calibration data including affine matrix and metrics
         """
-
         try:
-            pixelcalibration_helper = PixelCalibrationClass(self)
+            # Reload setup info from disk to get fresh data
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            options, _ = configfiletools.loadOptions()
             
-            # Get affine matrix
-            affine_matrix = pixelcalibration_helper.get_affine_matrix(objectiveId)
-            if affine_matrix is None:
+            # Load setup from file
+            setupInfo = configfiletools.loadSetupInfo(options, self._setupInfo.__class__)
+            
+            if not hasattr(setupInfo, 'PixelCalibration') or setupInfo.PixelCalibration is None:
+                return {"error": f"No PixelCalibration configuration found", "success": False}
+            
+            if not hasattr(setupInfo.PixelCalibration, 'affineCalibrations'):
+                return {"error": f"No affine calibrations found", "success": False}
+            
+            if objectiveId not in setupInfo.PixelCalibration.affineCalibrations:
                 return {"error": f"No calibration found for objective '{objectiveId}'", "success": False}
             
-            # Get metrics
-            metrics = pixelcalibration_helper.get_metrics(objectiveId)
+            # Get calibration data
+            calib_data = setupInfo.PixelCalibration.affineCalibrations[objectiveId]
+            
+            # Convert to serializable dictionary
+            result = {
+                "success": True,
+                "objectiveId": objectiveId,
+                "affineMatrix": calib_data.get("affine_matrix", [[1, 0, 0], [0, 1, 0]]),
+                "metrics": calib_data.get("metrics", {}),
+                "timestamp": calib_data.get("timestamp", "unknown"),
+                "objectiveInfo": calib_data.get("objective_info", {})
+            }
+            
+            return result
+            
+        except Exception as e:
+            self._logger.error(f"Failed to get calibration data: {e}")
+            return {"error": str(e), "success": False}
+    
+    @APIExport(requestType="POST")
+    def setCalibrationData(self, objectiveId: str, affineMatrix: list, 
+                          metrics: dict = None, objectiveInfo: dict = None):
+        """
+        Set calibration data for a specific objective.
+        
+        Args:
+            objectiveId: Identifier for the objective
+            affineMatrix: 2x3 affine transformation matrix as nested list: [[a, b, c], [d, e, f]]
+            metrics: Optional dictionary with calibration metrics: 
+            objectiveInfo: Optional dictionary with objective information
+            
+        Returns:
+            Success status
+        """
+        try:
+            # Validate affine matrix format
+            if not isinstance(affineMatrix, list):
+                return {"error": "affineMatrix must be a list", "success": False}
+            
+            if len(affineMatrix) != 2:
+                return {"error": "affineMatrix must have 2 rows", "success": False}
+            
+            for row in affineMatrix:
+                if not isinstance(row, list) or len(row) != 3:
+                    return {"error": "affineMatrix rows must have 3 elements", "success": False}
+            
+            # Convert to float to ensure correct data types
+            try:
+                affineMatrix = [[float(val) for val in row] for row in affineMatrix]
+            except (ValueError, TypeError) as e:
+                return {"error": f"affineMatrix contains non-numeric values: {e}", "success": False}
+            
+            # Create calibration data dictionary
+            calibration_data = {
+                "affine_matrix": affineMatrix,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "metrics": metrics if metrics is not None else {},
+                "objective_info": objectiveInfo if objectiveInfo is not None else {}
+            }
+            
+            # Update setup info
+            self._setupInfo.setAffineCalibration(objectiveId, calibration_data)
+            
+            # Save to disk
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            options, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(options, self._setupInfo)
+            
+            self._logger.info(f"Calibration data saved for objective '{objectiveId}'")
+            
+            # Apply calibration immediately
+            result = {
+                "affine_matrix": affineMatrix,
+                "metrics": metrics if metrics is not None else {}
+            }
+            self._applyCalibrationResults(objectiveId, result)
             
             return {
                 "success": True,
                 "objectiveId": objectiveId,
-                "affineMatrix": affine_matrix.tolist(),
-                "metrics": metrics
+                "message": f"Calibration data saved for '{objectiveId}'"
             }
+            
         except Exception as e:
-            self._logger.error(f"Failed to get calibration data: {e}")
+            self._logger.error(f"Failed to set calibration data: {e}")
             return {"error": str(e), "success": False}
     
     @APIExport()
     def deleteCalibration(self, objectiveId: str):
         """
-        Delete calibration data for a specific objective.
+        Delete calibration data for a specific objective and reset to default values.
+        
+        Default values:
+        - Pixel size: 1.0 µm/pixel
+        - Affine matrix: Identity matrix [[1, 0, 0], [0, 1, 0]]
         
         Args:
             objectiveId: Identifier for the objective
@@ -472,10 +573,18 @@ class PixelCalibrationController(LiveUpdatedController):
         Returns:
             Success status
         """
-
         try:
+            # Check if PixelCalibration exists
+            if self._setupInfo.PixelCalibration is None:
+                return {
+                    "success": False,
+                    "objectiveId": objectiveId,
+                    "message": f"No PixelCalibration configuration found"
+                }
+            
             # Check if calibration exists
-            if self._setupInfo.PixelCalibration is None or objectiveId not in self._setupInfo.PixelCalibration.affineCalibrations:
+            if not hasattr(self._setupInfo.PixelCalibration, 'affineCalibrations') or \
+               objectiveId not in self._setupInfo.PixelCalibration.affineCalibrations:
                 return {
                     "success": False,
                     "objectiveId": objectiveId,
@@ -486,18 +595,29 @@ class PixelCalibrationController(LiveUpdatedController):
             del self._setupInfo.PixelCalibration.affineCalibrations[objectiveId]
             
             # Save to disk
-            try:
-                import imswitch.imcontrol.model.configfiletools as configfiletools
-                config_file_path, _ = configfiletools.loadOptions()
-                configfiletools.saveSetupInfo(config_file_path, self._setupInfo)
-            except Exception as e:
-                self._logger.warning(f"Could not save setup configuration: {e}")
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            options, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(options, self._setupInfo)
+            
+            self._logger.info(f"Calibration deleted for objective '{objectiveId}'")
+            
+            # Apply default calibration (identity matrix, pixel size = 1.0)
+            default_result = {
+                "affine_matrix": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                "metrics": {
+                    "scale_x_um_per_pixel": 1.0,
+                    "scale_y_um_per_pixel": 1.0,
+                    "rotation_deg": 0.0
+                }
+            }
+            self._applyCalibrationResults(objectiveId, default_result)
             
             return {
                 "success": True,
                 "objectiveId": objectiveId,
-                "message": f"Calibration deleted for '{objectiveId}'"
+                "message": f"Calibration deleted for '{objectiveId}' and reset to default values (pixelsize=1.0, identity matrix)"
             }
+            
         except Exception as e:
             self._logger.error(f"Failed to delete calibration: {e}")
             return {"error": str(e), "success": False}

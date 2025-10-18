@@ -438,14 +438,14 @@ class RecordingController(ImConWidgetController):
 
     def getTimelapseFreq(self):
         return self._widget.getTimelapseFreq()
-
-    def setLiveStreamStart(self):
+ 
+    def setLiveStreamStart(self): # TODO: we need to connect that to the signal in the communication channel
         self.streamRunning = True
 
-    def setLiveStreamStop(self):
+    def setLiveStreamStop(self): # TODO: we need to connect that to the signal in the communication channel
         self.streamRunning = False
 
-    def stopStream(self):
+    def stopStream(self): # TODO: we need to connect that to the signal in the communication channel
         self.streamRunning = False
         self.streamstarted = False
         self.streamQueue = None
@@ -533,7 +533,7 @@ class RecordingController(ImConWidgetController):
 
     def streamer(self):
         # Start the streaming worker thread once and create a thread-safe queue
-        if not self.streamstarted:
+        if not self.streamstarted: # TODO: This has to be connected to the signal in the communication channel and also check if the thrad is still running
             import threading
 
             self.streamQueue = queue.Queue(maxsize=10)

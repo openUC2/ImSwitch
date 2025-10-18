@@ -226,12 +226,12 @@ class MJPEGStreamWorker(StreamWorker):
             if success:
                 jpeg_bytes = encoded.tobytes()
                 # Build MJPEG frame with proper headers
-                mjpeg_frame = (
+                header = (
                     b'--frame\r\n'
                     b'Content-Type: image/jpeg\r\n'
-                    f'Content-Length: {len(jpeg_bytes)}\r\n\r\n'.encode('ascii') +
-                    jpeg_bytes + b'\r\n'
                 )
+                content_length = f'Content-Length: {len(jpeg_bytes)}\r\n\r\n'.encode('ascii')
+                mjpeg_frame = header + content_length + jpeg_bytes + b'\r\n'
                 
                 # Put in queue, drop frame if full
                 try:

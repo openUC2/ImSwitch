@@ -4,11 +4,11 @@
         <Resolution>0</Resolution>
         <PixelClock>0</PixelClock>
         <BitOfDepth>16</BitOfDepth>
-        <GlobalGain>2</GlobalGain>
+        <GlobalGain>1</GlobalGain>
         <ATExposure>0</ATExposure>
-        <FMExposure>0</FMExposure>
-        <LNExposure>830</LNExposure>
-        <BlackLevel>2</BlackLevel>
+        <FMExposure>58</FMExposure>
+        <LNExposure>49237</LNExposure>
+        <BlackLevel>100</BlackLevel>
         <FlatFieldCorrection>0</FlatFieldCorrection>
         <Temperature>250</Temperature>
         <FanMode>0</FanMode>
@@ -28,7 +28,7 @@
         <RotateR90>0</RotateR90>
         <RotateL90>0</RotateL90>
         <USBLed>1</USBLed>
-        <DigitalGain>172</DigitalGain>
+        <DigitalGain>100</DigitalGain>
         <SumBin>0</SumBin>
         <FrameRate>0</FrameRate>
         <PGAHigh>100</PGAHigh>

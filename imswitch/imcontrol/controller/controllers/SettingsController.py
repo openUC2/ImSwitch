@@ -498,7 +498,7 @@ class SettingsController(ImConWidgetController):
         return self._master.detectorsManager.getGlobalDetectorParams()
     
     @APIExport(requestType="POST")
-    def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None, throttlems: int = None):
+    def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None):
         """Set streaming parameters for binary frame streaming.
         
         Args:
@@ -508,9 +508,8 @@ class SettingsController(ImConWidgetController):
             throttlems: Throttling interval in milliseconds (alternative naming)
         """
         
-        # Accept both throttle_ms and throttlems for compatibility
-        throttle_value = throttle_ms if throttle_ms is not None else throttlems
-        
+
+
         update_params = {}
         # TODO: We need to be able to switch to JPEG streaming as well e.g. compression={'type':'jpeg', 'level': 80}
         if compression:
@@ -523,8 +522,8 @@ class SettingsController(ImConWidgetController):
             if 'factor' in subsampling:
                 update_params['stream_subsampling_factor'] = subsampling['factor']
         
-        if throttle_value is not None:
-            update_params['stream_throttle_ms'] = throttle_value
+        if throttle_ms is not None:
+            update_params['stream_throttle_ms'] = throttle_ms
             
         # Update using the same mechanism as compressionlevel
         self._master.detectorsManager.updateGlobalDetectorParams(update_params)
@@ -546,7 +545,7 @@ class SettingsController(ImConWidgetController):
                 "subsampling": {
                     "factor": global_params.get('stream_subsampling_factor', 4)
                     },
-                "throttle_ms": global_params.get('stream_throttle_ms', 200)
+                "throttle_ms": global_params.get('stream_throttle_ms', 50)
             },
             "jpeg": {
                 "compression_level": global_params.get('compressionlevel', 80)

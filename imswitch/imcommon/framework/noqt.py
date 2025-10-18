@@ -94,10 +94,11 @@ class SignalInstance(psygnal.SignalInstance):
     image_emit_interval = .2  # Emit at most every 200ms
     IMG_QUALITY = 80  # Set the desired quality level (0-100)
     image_id = 0
+    _sending_image = False  # To avoid re-entrance
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Initialize timing for binary streaming
-        self._last_binary_emit_time = 0
+        self._last_frame_emit_time = 0
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
     ) -> None:
@@ -109,13 +110,13 @@ class SignalInstance(psygnal.SignalInstance):
 
         # Skip large data signals
         if self.name in ["sigUpdateImage", "sigExperimentImageUpdate"]:  #, "sigImageUpdated"]:
-            now = time.time()
-            if SOCKET_STREAM: # TODO: Shall we implement the throttle here?  and (now - self.last_image_emit_time > self.image_emit_interval) or self.name == "sigExperimentImageUpdate":
+            if SOCKET_STREAM and not self._sending_image: # avoid re-entrance and/or queue buildup
+                self._sending_image = True
                 self._handle_image_signal(args)
-                self.last_image_emit_time = now
+
             return
         elif self.name in ["sigImageUpdated"]:
-            return # ignore for now TODO:
+            return # ignore for now TODO: This signal is mapped into sigImageUpdated of MasterController - we should think about a better way of handling this
 
         try:
             message = self._generate_json_message(args)
@@ -160,7 +161,9 @@ class SignalInstance(psygnal.SignalInstance):
                         
         except Exception as e:
             print(f"Error processing image signal: {e}")
-    
+
+        self._sending_image = False
+
     def _emit_binary_frame(self, img: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
         """Emit binary frame via Socket.IO with flow control."""
         if not HAS_BINARY_STREAMING:
@@ -170,7 +173,7 @@ class SignalInstance(psygnal.SignalInstance):
         throttle_ms = global_params.get('stream_throttle_ms', 200) / 1000.0
         
         now = time.time()
-        if now - self._last_binary_emit_time < throttle_ms:
+        if now - self._last_frame_emit_time < throttle_ms:
             return  # Throttle binary emissions
         
         # Update encoder config from global params
@@ -236,7 +239,7 @@ class SignalInstance(psygnal.SignalInstance):
                 for sid in ready_clients:
                     sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
                 
-                self._last_binary_emit_time = now
+                self._last_frame_emit_time = now
             
         except Exception as e:
             print(f"Error emitting binary frame: {e}")
@@ -246,7 +249,14 @@ class SignalInstance(psygnal.SignalInstance):
     def _emit_jpeg_frame(self, output_frame: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
         """Emit JPEG frame (legacy path) with flow control."""
         try:
-            # Apply legacy subsampling logic
+            # Get throttle interval from global params
+            throttle_ms = global_params.get('stream_throttle_ms', 200) / 1000.0
+            
+            now = time.time()
+            if now - self._last_frame_emit_time < throttle_ms:
+                return  # Throttle binary emissions
+            
+            # Apply jpeg logic # TOOD: We should have the same parameters for subsampling and quality as for binary streaming
             if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
                 everyNthsPixel = np.min((np.min([output_frame.shape[0]//240, output_frame.shape[1]//320]), 3))
             else:
@@ -265,10 +275,10 @@ class SignalInstance(psygnal.SignalInstance):
             jpegQuality = global_params.get("compressionlevel", self.IMG_QUALITY)
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, jpegQuality]
 
-            # Compress image using JPEG format
+            # Compress image using JPEG format # TODO: Maybe use messagepack instead? 
             flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
             encoded_image = base64.b64encode(compressed).decode('utf-8')
-
+            #print(time.time())
             # Create a minimal message with timestamp
             message = {
                 "name": self.name, # e.g. sigUpdateImage
@@ -304,7 +314,7 @@ class SignalInstance(psygnal.SignalInstance):
                         to=sid,
                         callback=ack_callback
                     )
-            
+            self._last_frame_emit_time = now
             del message
         except Exception as e:
             print(f"Error processing JPEG image signal: {e}")

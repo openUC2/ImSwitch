@@ -351,13 +351,14 @@ class PixelCalibrationController(LiveUpdatedController):
             Dictionary with calibration results including metrics
         """
         try:
+            
             # Validate camera intensity before calibration
             if not self._validateCameraIntensity():
                 return {
                     "error": "Camera intensity out of range (saturated or too dark). Adjust exposure or lighting before calibration.",
                     "success": False
                 }
-            
+                
             pixelcalibration_helper = PixelCalibrationClass(self)
             
             # Validate objective ID against available objectives
@@ -501,7 +502,114 @@ class PixelCalibrationController(LiveUpdatedController):
             self._logger.error(f"Failed to delete calibration: {e}")
             return {"error": str(e), "success": False}
 
+    def _validateObjectiveId(self, objective_id: str) -> bool:
+        """
+        Validate that the objective ID is valid.
+        
+        Args:
+            objective_id: Objective identifier to validate
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        # "default" is always valid
+        if objective_id == "default":
+            return True
+        
+        try:
+            # Check if objective controller is available
+            if hasattr(self._master, 'objectiveController'):
+                obj_ctrl = self._master.objectiveController
+                if hasattr(obj_ctrl, 'objectiveNames'):
+                    valid_names = obj_ctrl.objectiveNames
+                    if objective_id in valid_names:
+                        return True
+                    self._logger.warning(f"Objective '{objective_id}' not in configured objectives: {valid_names}")
+                    return False
+            
+            # If no objective controller, allow any non-empty string
+            if objective_id and len(objective_id) > 0:
+                self._logger.info(f"No ObjectiveController - accepting objective ID '{objective_id}'")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            self._logger.warning(f"Failed to validate objective ID: {e}")
+            # Don't block calibration on validation errors
+            return True
+    
 
+    def _validateCameraIntensity(self) -> bool:
+        """
+        Validate that camera intensity is in a reasonable range for calibration.
+        
+        Returns:
+            True if intensity is acceptable, False if saturated or too dark
+        """
+        try:
+            if not hasattr(self._master, 'detectorsManager'):
+                self._logger.warning("No detectorsManager available - skipping intensity check")
+                return True
+            
+            all_detectors = self._master.detectorsManager.getAllDeviceNames()
+            if not all_detectors:
+                self._logger.warning("No detectors found - skipping intensity check")
+                return True
+            
+            detector = self._master.detectorsManager[all_detectors[0]]
+            
+            # Get current frame
+            if hasattr(detector, 'getLatestFrame'):
+                frame = detector.getLatestFrame()
+            elif hasattr(detector, '_camera') and hasattr(detector._camera, 'getLatestFrame'):
+                frame = detector._camera.getLatestFrame()
+            else:
+                self._logger.warning("Cannot access camera frame - skipping intensity check")
+                return True
+            
+            if frame is None:
+                self._logger.warning("No frame available - skipping intensity check")
+                return True
+            
+            # Check intensity range
+            max_val = np.max(frame)
+            mean_val = np.mean(frame)
+            
+            # Determine bit depth (assume 8-bit, 12-bit, or 16-bit)
+            if frame.dtype == np.uint8:
+                saturation_threshold = 250
+                min_threshold = 10
+            elif frame.dtype == np.uint16:
+                # Check if it's actually 12-bit data in 16-bit container
+                if max_val < 4096:
+                    saturation_threshold = 4000
+                    min_threshold = 50
+                else:
+                    saturation_threshold = 64000
+                    min_threshold = 500
+            else:
+                # Unknown type, assume normalized
+                saturation_threshold = 0.98
+                min_threshold = 0.02
+            
+            # Check for saturation
+            if max_val >= saturation_threshold:
+                self._logger.warning(f"Camera saturated (max={max_val}, threshold={saturation_threshold})")
+                return False
+            
+            # Check for too dark
+            if mean_val <= min_threshold:
+                self._logger.warning(f"Camera too dark (mean={mean_val}, threshold={min_threshold})")
+                return False
+            
+            self._logger.info(f"Camera intensity OK: mean={mean_val:.1f}, max={max_val}")
+            return True
+            
+        except Exception as e:
+            self._logger.warning(f"Failed to validate camera intensity: {e}")
+            # Don't block calibration on validation errors
+            return True
 
 
 
@@ -778,113 +886,6 @@ class PixelCalibrationClass(object):
         relative_move = np.dot(p, self.image_to_stage_displacement_matrix)
         self.microscope.stage.move_rel([relative_move[0], relative_move[1], 0])
     
-    def _validateCameraIntensity(self) -> bool:
-        """
-        Validate that camera intensity is in a reasonable range for calibration.
-        
-        Returns:
-            True if intensity is acceptable, False if saturated or too dark
-        """
-        try:
-            if not hasattr(self._master, 'detectorsManager'):
-                self._logger.warning("No detectorsManager available - skipping intensity check")
-                return True
-            
-            all_detectors = self._master.detectorsManager.getAllDeviceNames()
-            if not all_detectors:
-                self._logger.warning("No detectors found - skipping intensity check")
-                return True
-            
-            detector = self._master.detectorsManager[all_detectors[0]]
-            
-            # Get current frame
-            if hasattr(detector, 'getLatestFrame'):
-                frame = detector.getLatestFrame()
-            elif hasattr(detector, '_camera') and hasattr(detector._camera, 'getLatestFrame'):
-                frame = detector._camera.getLatestFrame()
-            else:
-                self._logger.warning("Cannot access camera frame - skipping intensity check")
-                return True
-            
-            if frame is None:
-                self._logger.warning("No frame available - skipping intensity check")
-                return True
-            
-            # Check intensity range
-            max_val = np.max(frame)
-            mean_val = np.mean(frame)
-            
-            # Determine bit depth (assume 8-bit, 12-bit, or 16-bit)
-            if frame.dtype == np.uint8:
-                saturation_threshold = 250
-                min_threshold = 10
-            elif frame.dtype == np.uint16:
-                # Check if it's actually 12-bit data in 16-bit container
-                if max_val < 4096:
-                    saturation_threshold = 4000
-                    min_threshold = 50
-                else:
-                    saturation_threshold = 64000
-                    min_threshold = 500
-            else:
-                # Unknown type, assume normalized
-                saturation_threshold = 0.98
-                min_threshold = 0.02
-            
-            # Check for saturation
-            if max_val >= saturation_threshold:
-                self._logger.warning(f"Camera saturated (max={max_val}, threshold={saturation_threshold})")
-                return False
-            
-            # Check for too dark
-            if mean_val <= min_threshold:
-                self._logger.warning(f"Camera too dark (mean={mean_val}, threshold={min_threshold})")
-                return False
-            
-            self._logger.info(f"Camera intensity OK: mean={mean_val:.1f}, max={max_val}")
-            return True
-            
-        except Exception as e:
-            self._logger.warning(f"Failed to validate camera intensity: {e}")
-            # Don't block calibration on validation errors
-            return True
-    
-    def _validateObjectiveId(self, objective_id: str) -> bool:
-        """
-        Validate that the objective ID is valid.
-        
-        Args:
-            objective_id: Objective identifier to validate
-            
-        Returns:
-            True if valid, False otherwise
-        """
-        # "default" is always valid
-        if objective_id == "default":
-            return True
-        
-        try:
-            # Check if objective controller is available
-            if hasattr(self._master, 'objectiveController'):
-                obj_ctrl = self._master.objectiveController
-                if hasattr(obj_ctrl, 'objectiveNames'):
-                    valid_names = obj_ctrl.objectiveNames
-                    if objective_id in valid_names:
-                        return True
-                    self._logger.warning(f"Objective '{objective_id}' not in configured objectives: {valid_names}")
-                    return False
-            
-            # If no objective controller, allow any non-empty string
-            if objective_id and len(objective_id) > 0:
-                self._logger.info(f"No ObjectiveController - accepting objective ID '{objective_id}'")
-                return True
-            
-            return False
-            
-        except Exception as e:
-            self._logger.warning(f"Failed to validate objective ID: {e}")
-            # Don't block calibration on validation errors
-            return True
     
     def _applyCalibrationResults(self, objective_id: str, result: dict):
         """

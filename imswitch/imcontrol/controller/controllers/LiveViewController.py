@@ -341,27 +341,27 @@ class MJPEGStreamWorker(StreamWorker):
 class WebRTCStreamWorker(StreamWorker):
     """
     Worker for WebRTC streaming using aiortc.
-    Provides foundation for low-latency real-time streaming.
+    Provides low-latency real-time streaming using WebRTC protocol.
     """
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._rtcConnection = None
-        self._videoTrack = None
+        self._video_track = None
+        self._frame_queue = queue.Queue(maxsize=2)  # Small queue for latest frames
         
         try:
-            from aiortc import RTCPeerConnection, VideoStreamTrack
+            from aiortc import VideoStreamTrack
             import av
-            self._RTCPeerConnection = RTCPeerConnection
             self._VideoStreamTrack = VideoStreamTrack
             self._av = av
+            self._has_webrtc = True
         except ImportError:
             self._logger.error("aiortc and av required for WebRTC streaming")
-            self._RTCPeerConnection = None
+            self._has_webrtc = False
     
     def _captureAndEmit(self):
-        """Capture frame and push to WebRTC track."""
-        if self._RTCPeerConnection is None or self._videoTrack is None:
+        """Capture frame and put in queue for WebRTC streaming."""
+        if not self._has_webrtc:
             return
         
         try:
@@ -369,16 +369,95 @@ class WebRTCStreamWorker(StreamWorker):
             if frame is None:
                 return
             
-            # Convert numpy array to av.VideoFrame
-            # This is a placeholder - actual implementation would need proper frame conversion
-            # video_frame = self._convertToAVFrame(frame)
-            # self._videoTrack.putFrame(video_frame)
+            # Normalize to uint8 if needed
+            if frame.dtype != np.uint8:
+                vmin = float(np.min(frame))
+                vmax = float(np.max(frame))
+                if vmax > vmin:
+                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
+                else:
+                    frame = np.zeros_like(frame, dtype=np.uint8)
             
-            # For now, just log that we would send a frame
-            # Full implementation requires more complex async handling
-            pass
+            # Put frame in queue, replacing old frame if full
+            try:
+                # Try to clear old frame
+                try:
+                    self._frame_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                self._frame_queue.put_nowait(frame)
+            except queue.Full:
+                pass  # Drop frame if queue is full
+                
         except Exception as e:
             self._logger.error(f"Error in WebRTCStreamWorker: {e}")
+    
+    def get_video_track(self):
+        """Get or create video track for WebRTC."""
+        if self._video_track is None and self._has_webrtc:
+            self._video_track = DetectorVideoTrack(
+                self._frame_queue, 
+                self._detector.name,
+                self._VideoStreamTrack,
+                self._av
+            )
+        return self._video_track
+
+
+class DetectorVideoTrack:
+    """Custom video track that reads frames from detector queue."""
+    
+    def __init__(self, frame_queue, detector_name, VideoStreamTrack, av):
+        self._queue = frame_queue
+        self._detector_name = detector_name
+        self._av = av
+        
+        # Create custom track class that inherits from VideoStreamTrack
+        class CustomVideoTrack(VideoStreamTrack):
+            def __init__(inner_self):
+                super().__init__()
+                inner_self.kind = "video"
+                inner_self._queue = frame_queue
+                inner_self._av = av
+                inner_self._timestamp = 0
+                inner_self._time_base = 1 / 30  # 30 fps
+            
+            async def recv(inner_self):
+                """Receive next video frame."""
+                import asyncio
+                
+                # Wait for frame from queue (with timeout)
+                try:
+                    frame = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None, inner_self._queue.get, True, 1.0
+                        ),
+                        timeout=1.0
+                    )
+                except (asyncio.TimeoutError, queue.Empty):
+                    # Return black frame if no frame available
+                    frame = np.zeros((480, 640), dtype=np.uint8)
+                
+                # Ensure frame is the right shape
+                if len(frame.shape) == 2:
+                    # Grayscale - convert to RGB
+                    frame = np.stack([frame, frame, frame], axis=2)
+                elif frame.shape[2] == 1:
+                    frame = np.repeat(frame, 3, axis=2)
+                
+                # Create av.VideoFrame
+                new_frame = inner_self._av.VideoFrame.from_ndarray(frame, format="rgb24")
+                new_frame.pts = inner_self._timestamp
+                new_frame.time_base = inner_self._time_base
+                inner_self._timestamp += 1
+                
+                return new_frame
+        
+        self._track = CustomVideoTrack()
+    
+    def __getattr__(self, name):
+        """Delegate attribute access to the underlying track."""
+        return getattr(self._track, name)
 
 
 class LiveViewController(LiveUpdatedController):
@@ -806,6 +885,108 @@ class LiveViewController(LiveUpdatedController):
             media_type="multipart/x-mixed-replace;boundary=frame",
             headers=headers
         )
+    
+    def getWebRTCWorker(self, detectorName: str) -> Optional[WebRTCStreamWorker]:
+        """Get WebRTC worker for signaling (used by WebRTC endpoints)."""
+        if detectorName in self._activeStreams:
+            protocol, worker = self._activeStreams[detectorName]
+            if protocol == "webrtc" and isinstance(worker, WebRTCStreamWorker):
+                return worker
+        return None
+    
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def webrtc_offer(self, detectorName: Optional[str] = None, sdp: str = None, type: str = None):
+        """
+        Handle WebRTC offer from client and return answer.
+        
+        Args:
+            detectorName: Name of detector (None = first available)
+            sdp: Session Description Protocol from client
+            type: Type of SDP (should be "offer")
+        
+        Returns:
+            Dictionary with answer SDP
+        """
+        try:
+            from aiortc import RTCPeerConnection, RTCSessionDescription
+            import asyncio
+            import json
+        except ImportError:
+            return {"status": "error", "message": "aiortc not available"}
+        
+        # Get detector name
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
+        
+        # Start WebRTC stream if not already active
+        if detectorName not in self._activeStreams:
+            result = self.startLiveView(detectorName, "webrtc")
+            if result['status'] != 'success':
+                return result
+        
+        # Get the worker
+        worker = self.getWebRTCWorker(detectorName)
+        if worker is None:
+            return {"status": "error", "message": "Failed to get WebRTC worker"}
+        
+        # Create peer connection
+        pc = RTCPeerConnection()
+        
+        # Store PC for cleanup
+        if not hasattr(self, '_webrtc_peers'):
+            self._webrtc_peers = set()
+        self._webrtc_peers.add(pc)
+        
+        @pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            self._logger.info(f"WebRTC connection state: {pc.connectionState}")
+            if pc.connectionState == "failed" or pc.connectionState == "closed":
+                await pc.close()
+                if pc in self._webrtc_peers:
+                    self._webrtc_peers.discard(pc)
+        
+        # Add video track
+        video_track = worker.get_video_track()
+        if video_track:
+            pc.addTrack(video_track)
+        
+        # Handle offer and create answer
+        async def process_offer():
+            offer_desc = RTCSessionDescription(sdp=sdp, type=type)
+            await pc.setRemoteDescription(offer_desc)
+            
+            answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+            
+            return {
+                "status": "success",
+                "sdp": pc.localDescription.sdp,
+                "type": pc.localDescription.type
+            }
+        
+        # Run async function
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(process_offer())
+            return result
+        finally:
+            loop.close()
+    
+    @APIExport(runOnUIThread=False)
+    def webrtc_ice_candidate(self, detectorName: Optional[str] = None, candidate: dict = None):
+        """
+        Handle ICE candidate from client.
+        
+        Args:
+            detectorName: Name of detector
+            candidate: ICE candidate information
+        
+        Returns:
+            Status dictionary
+        """
+        # This is a simplified version - full implementation would need to store
+        # and manage ICE candidates per peer connection
+        return {"status": "success", "message": "ICE candidate received"}
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

@@ -63,12 +63,22 @@ def _fallback_worker():
                 message = _fallback_message_queue.get(timeout=1.0)
                 if message is None:  # Poison pill to stop worker
                     break
-                loop.run_until_complete(sio.emit("signal", message))
+                
+                # Handle different message formats
+                if isinstance(message, tuple) and len(message) == 3:
+                    # New format: (event, data, sid) for targeted emission
+                    event, data, sid = message
+                    loop.run_until_complete(sio.emit(event, data, to=sid))
+                else:
+                    # Legacy format: string message for broadcast
+                    loop.run_until_complete(sio.emit("signal", message))
+                
                 _fallback_message_queue.task_done()
             except queue.Empty:
                 continue
-            except Exception:
+            except Exception as e:
                 # Silently handle errors to avoid spam
+                # print(f"Fallback worker error: {e}")
                 pass
     finally:
         loop.close()
@@ -90,13 +100,14 @@ class SignalInterface(abstract.SignalInterface):
 class SignalInstance(psygnal.SignalInstance):
     last_emit_time = 0
     emit_interval = 0.0  # Emit at most every 100ms
-    IMG_QUALITY = 80  # Set the desired quality level (0-100)
     image_id = 0
     _sending_image = False  # To avoid re-entrance
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Initialize timing for binary streaming
         self._last_frame_emit_time = 0
+    
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
     ) -> None:
@@ -106,14 +117,11 @@ class SignalInstance(psygnal.SignalInstance):
         if not args:
             return
 
-        # Skip large data signals
-        if self.name in ["sigUpdateImage", "sigExperimentImageUpdate"]:  #, "sigImageUpdated"]:
-            if SOCKET_STREAM and not self._sending_image: # avoid re-entrance and/or queue buildup
-                self._sending_image = True
-                self._handle_image_signal(args)
-
+        # Handle pre-formatted stream messages from LiveViewController
+        if self.name == "sigUpdateImage":
+            self._handle_stream_frame(args[0])
             return
-        elif self.name in ["sigImageUpdated"]:
+        elif self.name in ["sigImageUpdated", "sigStreamFrame"]:
             return # ignore for now TODO: This signal is mapped into sigImageUpdated of MasterController - we should think about a better way of handling this
 
         try:
@@ -124,237 +132,93 @@ class SignalInstance(psygnal.SignalInstance):
 
         self._safe_broadcast_message(message)
         del message
-
-    def _handle_image_signal(self, args):
+    
+    def _handle_stream_frame(self, message: dict):
         """
-        Handle image signals.
-        Note: Frame encoding is now handled by LiveViewController for streaming.
-        This is kept for backward compatibility with non-headless GUI mode.
+        Handle pre-formatted stream frame message from LiveViewController.
+        Message format: {'type': 'binary_frame' or 'jpeg_frame', 'event': str, 'data': bytes or dict, 'metadata': dict}
+        Uses sio.start_background_task to properly handle emission with acknowledgements.
         """
-        detectorName = args[0]
-        try:pixelSize = np.min(args[3])
-        except:pixelSize = 1
-        
-        # Get stream parameters from globalDetectorParams (like compressionlevel)
         try:
-            # Get the global detector parameters if available
-            global_params = args[5] if len(args) > 5 and isinstance(args[5], dict) else {}
-        except:
-            global_params = {}
-        
-        # In headless mode with LiveViewController, encoding is done in LiveViewController
-        # This legacy path is kept for non-headless mode compatibility
-        try:
-            for arg in args:
-                if isinstance(arg, np.ndarray):
-                    output_frame = np.ascontiguousarray(arg)  # Avoid memory fragmentation
-                    # if frame is float, we need to convert to uint8
-                    if output_frame.dtype == np.float32 or output_frame.dtype == np.float64:
-                        output_frame = np.uint8(output_frame*255)
-                    if output_frame.dtype not in [np.uint8, np.uint16]:
-                        output_frame = np.uint8(output_frame)  # Convert to uint8 for visualization
-                    
-                    # Check stream parameters for binary streaming
-                    # Note: In headless mode, this should not be called as LiveViewController handles it
-                    stream_compression_algorithm = global_params.get('stream_compression_algorithm')
-                    if stream_compression_algorithm in ["LZ4", "lz4", "ZSTD", "zstd", "ZStandard"]:
-                        # Legacy: This is only used when not using LiveViewController
-                        self._emit_binary_frame(output_frame, detectorName, pixelSize, global_params)
-                    elif stream_compression_algorithm == "jpeg":
-                        # Legacy: emit JPEG (legacy behavior for compatibility)
-                        self._emit_jpeg_frame(output_frame, detectorName, pixelSize, global_params)
-                    self.image_id += 1
-                        
-        except Exception as e:
-            print(f"Error processing image signal: {e}")
-
-        self._sending_image = False
-
-    def _emit_binary_frame(self, img: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
-        """
-        Emit binary frame via Socket.IO with flow control.
-        LEGACY: This should only be used when not using LiveViewController (non-headless mode).
-        In headless mode, LiveViewController handles encoding and emission.
-        """
-        if not HAS_BINARY_STREAMING:
-            return
+            msg_type = message.get('type')
+            event = message.get('event', 'frame')
+            data = message.get('data')
+            metadata = message.get('metadata', {})
             
-        # Get throttle interval from global params
-        throttle_ms = global_params.get('stream_throttle_ms', 200) / 1000.0
-        
-        now = time.time()
-        if now - self._last_frame_emit_time < throttle_ms:
-            return  # Throttle binary emissions
-        
-        # Update encoder config from global params
-        compression_algorithm = global_params.get('stream_compression_algorithm', 'lz4')
-        compression_level = global_params.get('stream_compression_level', 0)
-        subsampling_factor = global_params.get('stream_subsampling_factor', 1)
-        
-        # Create or update encoder with current parameters
-        try:
-            from imswitch.imcommon.framework.binary_streaming import BinaryFrameEncoder
-            encoder = BinaryFrameEncoder(
-                compression_algorithm=compression_algorithm,
-                compression_level=compression_level,
-                subsampling_factor=subsampling_factor,
-            )
-        except ImportError:
-            return  # Binary streaming not available
-        
-        try:
-            # Encode frame
-            t1 = time.time()
-            packet, metadata = encoder.encode_frame(img)
-            #print("Encoding frame with binary encoder...", time.time()-t1)
-            
-            # Add timestamp to metadata for latency tracking
-            metadata['server_timestamp'] = time.time()
-            metadata['image_id'] = self.image_id
-
-            # Emit to clients that are ready (acknowledged previous frame)
+            # Get ready clients
             with _client_frame_lock:
                 ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
             
-            if ready_clients:
-                # Mark clients as not ready (waiting for acknowledgement)
-                with _client_frame_lock:
-                    for sid in ready_clients:
-                        _client_frame_ready[sid] = False
-                
+            if not ready_clients:
+                return
+            
+            # Mark clients as not ready (waiting for acknowledgement)
+            with _client_frame_lock:
+                for sid in ready_clients:
+                    _client_frame_ready[sid] = True  # TODO: Set to False when frontend implements acknowledgement
+            
+            # Emit frame data using sio.start_background_task with acknowledgement callbacks
+            if msg_type == 'binary_frame':
                 # Emit binary frame with acknowledgement callback
                 for sid in ready_clients:
                     def ack_callback(sid=sid):
                         """Mark client as ready for next frame"""
                         with _client_frame_lock:
                             _client_frame_ready[sid] = True
-                            # print(f"Client {sid} acknowledged frame {self.image_id}")
                     
-                    sio.start_background_task(
-                        sio.emit, 
-                        "frame", 
-                        packet, 
-                        to=sid,
-                        callback=ack_callback
-                    )
+                    try:
+                        sio.start_background_task(
+                            sio.emit, 
+                            event, 
+                            data, 
+                            to=sid,
+                            callback=ack_callback
+                        )
+                    except RuntimeError:
+                        # No event loop in thread - use fallback queue
+                        _start_fallback_worker()
+                        _fallback_message_queue.put_nowait(('frame', data, sid))
                 
                 # Emit metadata as JSON signal
                 meta_message = {
                     "name": "frame_meta",
-                    "detectorname": detector_name,
-                    "pixelsize": int(pixel_size),
+                    "detectorname": metadata.get('detectorname', ''),
+                    "pixelsize": metadata.get('pixelsize', 1),
                     "format": "binary",
                     "metadata": metadata
-                    }
+                }
                 for sid in ready_clients:
-                    sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
-                
-                self._last_frame_emit_time = now
-            
-        except Exception as e:
-            print(f"Error emitting binary frame: {e}")
-            # Fallback to JPEG if binary fails
-            self._emit_jpeg_frame(img, detector_name, pixel_size, global_params)
-    
-    def _emit_jpeg_frame(self, output_frame: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
-        """
-        Emit JPEG frame (legacy path) with flow control.
-        LEGACY: This should only be used when not using LiveViewController (non-headless mode).
-        In headless mode, LiveViewController handles encoding and emission.
-        """
-        # TODO: This should be removed and be part of the LiveViewController instead
-        try:
-            # Get throttle interval from global params
-            throttle_ms = global_params.get('stream_throttle_ms', 200) / 1000.0
-            
-            now = time.time()
-            if now - self._last_frame_emit_time < throttle_ms:
-                return  # Throttle binary emissions
-            
-            # Apply jpeg logic # TOOD: We should have the same parameters for subsampling and quality as for binary streaming
-            if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
-                everyNthsPixel = np.min((np.min([output_frame.shape[0]//240, output_frame.shape[1]//320]), 3))
-            else:
-                everyNthsPixel = 1
-            everyNthsPixel = global_params.get("stream_subsampling_factor", everyNthsPixel)                
-            try:
-                output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
-            except:
-                output_frame = np.zeros((640,460))
-                
-            # convert 16 bit to 8 bit for visualization
-            if output_frame.dtype == np.uint16:
-                output_frame = np.uint8(output_frame//128) 
-
-            # Get JPEG quality from global params
-            jpegQuality = global_params.get("compressionlevel", self.IMG_QUALITY)
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, jpegQuality]
-
-            # Compress image using JPEG format # TODO: Maybe use messagepack instead? 
-            flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
-            encoded_image = base64.b64encode(compressed).decode('utf-8')
-            #print(time.time())
-            # Create a minimal message with timestamp
-            message = {
-                "name": self.name, # e.g. sigUpdateImage
-                "detectorname": detector_name,
-                "pixelsize": int(pixel_size), # must not be int64
-                "format": "jpeg",
-                "image": encoded_image,
-                "server_timestamp": time.time()  # Add timestamp for latency tracking
-                ,"image_id": self.image_id
-            }
-            
-            # Emit to clients that are ready (acknowledged previous frame)
-            with _client_frame_lock:
-                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
-            
-            if ready_clients:
-                # Mark clients as not ready (waiting for acknowledgement)
-                with _client_frame_lock:
-                    for sid in ready_clients:
-                        _client_frame_ready[sid] = False
-                
-                # Emit with acknowledgement callback
+                    try:
+                        sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
+                    except RuntimeError:
+                        # No event loop in thread - use fallback queue
+                        _start_fallback_worker()
+                        _fallback_message_queue.put_nowait(('signal', json.dumps(meta_message), sid))
+                    
+            elif msg_type == 'jpeg_frame':
+                # Emit JPEG frame as JSON signal with acknowledgement
+                json_message = json.dumps(data)
                 for sid in ready_clients:
                     def ack_callback(sid=sid):
                         """Mark client as ready for next frame"""
                         with _client_frame_lock:
                             _client_frame_ready[sid] = True
                     
-                    sio.start_background_task(
-                        sio.emit,
-                        "signal",
-                        json.dumps(message),
-                        to=sid,
-                        callback=ack_callback
-                    )
-            self._last_frame_emit_time = now
-            del message
+                    try:
+                        sio.start_background_task(
+                            sio.emit,
+                            "signal",
+                            json_message,
+                            to=sid,
+                            callback=ack_callback
+                        )
+                    except RuntimeError:
+                        # No event loop in thread - use fallback queue
+                        _start_fallback_worker()
+                        _fallback_message_queue.put_nowait(('signal', json_message, sid))
+                
         except Exception as e:
-            print(f"Error processing JPEG image signal: {e}")
-
-            # Create a minimal message
-            message = {
-                "name": self.name,
-                "detectorname": detector_name,
-                "pixelsize": int(pixel_size), # must not be int64
-                "format": "jpeg",
-                "image": encoded_image,
-            }
-            self._safe_broadcast_message(message)
-            del message
-        except Exception as e:
-            self._logger.error(f"Error emitting JPEG frame: {e}")
-    
-    def update_binary_config(self, **kwargs):
-        """Update binary streaming configuration at runtime."""
-        if self._binary_encoder is not None:
-            self._binary_encoder.update_config(**kwargs)
-        
-        # Update throttle if provided
-        if 'throttle_ms' in kwargs:
-            self._binary_throttle_ms = kwargs['throttle_ms'] / 1000.0
+            print(f"Error handling stream frame: {e}")
 
     def _generate_json_message(self, args):  # Consider using msgpspec for efficiency
         param_names = list(self.signature.parameters.keys())
@@ -543,14 +407,14 @@ class FrameworkUtils(abstract.FrameworkUtils):
 @sio.event
 async def connect(sid, environ):
     """Handle client connection - mark as ready for frames"""
-    print(f"Client connected: {sid}")
+    print(f"SocketIO Client connected: {sid}")
     with _client_frame_lock:
         _client_frame_ready[sid] = True
 
 @sio.event
 async def disconnect(sid):
     """Handle client disconnection - cleanup state"""
-    print(f"Client disconnected: {sid}")
+    print(f"SocketIO Client disconnected: {sid}")
     with _client_frame_lock:
         _client_frame_ready.pop(sid, None)
 

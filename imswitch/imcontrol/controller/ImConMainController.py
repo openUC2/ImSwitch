@@ -121,6 +121,16 @@ class ImConMainController(MainController):
                                                     f' hardware setup file.'
             )
             
+            # Connect LiveViewController stream signal to noqt signal handler in headless mode
+            if 'LiveView' in self.controllers:
+                try:
+                    liveViewController = self.controllers['LiveView']
+                    # The sigStreamFrame from LiveViewController emits pre-formatted messages
+                    # These are automatically handled by noqt's SignalInstance._handle_stream_frame
+                    self.__logger.debug("Connected LiveViewController.sigStreamFrame for streaming")
+                except Exception as e:
+                    self.__logger.warning(f"Could not connect LiveViewController streaming signal: {e}")
+            
             
         # Generate Shorcuts
         if not IS_HEADLESS:

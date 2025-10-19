@@ -65,10 +65,10 @@ class StreamWorker(Worker):
     Base class for protocol-specific stream workers.
     Each worker runs in its own thread and waits for new frames without using a timer.
     This avoids skipping frames and ensures consistent frame rate.
-    Workers do the actual encoding and emit encoded bytes.
+    Workers do the actual encoding and emit encoded bytes that match socket.io message format.
     """
     
-    sigFrameReady = Signal(str, bytes, dict)  # (detectorName, encodedData, metadata)
+    sigStreamFrame = Signal(dict)  # Emits pre-formatted message dict ready for socket.io emission
     
     def __init__(self, detectorManager, updatePeriodMs: int, streamParams: StreamParams):
         super().__init__()
@@ -134,7 +134,7 @@ class BinaryStreamWorker(StreamWorker):
             return None
     
     def _captureAndEmit(self):
-        """Capture frame from detector, compress it, and emit binary data."""
+        """Capture frame from detector, compress it, and emit pre-formatted socket.io message."""
         try:
             frame = self._detector.getLatestFrame()
             if frame is None:
@@ -172,8 +172,16 @@ class BinaryStreamWorker(StreamWorker):
             
             self._image_id += 1
             
-            # Emit encoded frame with metadata
-            self.sigFrameReady.emit(detector_name, packet, metadata)
+            # Create pre-formatted message for socket.io
+            message = {
+                'type': 'binary_frame',
+                'event': 'frame',
+                'data': packet,
+                'metadata': metadata
+            }
+            
+            # Emit pre-formatted message
+            self.sigStreamFrame.emit(message)
             
         except Exception as e:
             self._logger.error(f"Error in BinaryStreamWorker: {e}")
@@ -193,7 +201,7 @@ class JPEGStreamWorker(StreamWorker):
             self._cv2 = None
     
     def _captureAndEmit(self):
-        """Capture frame from detector, encode as JPEG, and emit."""
+        """Capture frame from detector, encode as JPEG, and emit pre-formatted socket.io message."""
         if self._cv2 is None:
             return
         
@@ -219,12 +227,18 @@ class JPEGStreamWorker(StreamWorker):
                 else:
                     frame = np.zeros_like(frame, dtype=np.uint8)
             
+            # Apply subsampling if needed
+            if self._params.subsampling_factor > 1:
+                frame = frame[::self._params.subsampling_factor, ::self._params.subsampling_factor]
+            
             # Encode as JPEG
             encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
             success, encoded = self._cv2.imencode('.jpg', frame, encode_params)
-            
-            if success:
+
+            if success: # TODO: Eventually think about messagepack instead of base64
+                import base64
                 jpeg_bytes = encoded.tobytes()
+                encoded_image = base64.b64encode(jpeg_bytes).decode('utf-8')
                 
                 # Create metadata
                 metadata = {
@@ -237,8 +251,23 @@ class JPEGStreamWorker(StreamWorker):
                 
                 self._image_id += 1
                 
-                # Emit encoded JPEG with metadata
-                self.sigFrameReady.emit(detector_name, jpeg_bytes, metadata)
+                # Create pre-formatted message for socket.io (JSON signal format)
+                message = {
+                    'type': 'jpeg_frame',
+                    'event': 'signal',
+                    'data': {
+                        'name': 'sigUpdateImage',
+                        'detectorname': detector_name,
+                        'pixelsize': int(pixel_size),
+                        'format': 'jpeg',
+                        'image': encoded_image,
+                        'server_timestamp': metadata['server_timestamp'],
+                        'image_id': self._image_id
+                    }
+                }
+                
+                # Emit pre-formatted message
+                self.sigStreamFrame.emit(message)
                 
         except Exception as e:
             self._logger.error(f"Error in JPEGStreamWorker: {e}")
@@ -361,6 +390,7 @@ class LiveViewController(LiveUpdatedController):
     
     sigStreamStarted = Signal(str, str)      # (detectorName, protocol)
     sigStreamStopped = Signal(str, str)      # (detectorName, protocol)
+    sigStreamFrame = Signal(dict)            # Pre-formatted socket.io message
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -402,58 +432,6 @@ class LiveViewController(LiveUpdatedController):
             for detector_name in list(self._activeStreams.keys()):
                 self.stopLiveView(detector_name)
     
-    def _onFrameReady(self, detector_name: str, encoded_data: bytes, metadata: dict):
-        """
-        Handle encoded frame from worker and emit via socket.io.
-        This is the single source of truth for frame emission.
-        """
-        try:
-            # Import socketio on demand
-            from imswitch.imcommon.framework.noqt import sio, _client_frame_ready, _client_frame_lock
-            import json
-            
-            # Get ready clients
-            with _client_frame_lock:
-                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
-            
-            if not ready_clients:
-                return
-            
-            # Mark clients as not ready (waiting for acknowledgement)
-            with _client_frame_lock:
-                for sid in ready_clients:
-                    _client_frame_ready[sid] = False
-            
-            # Emit binary/jpeg frame with acknowledgement callback
-            for sid in ready_clients:
-                def ack_callback(sid=sid):
-                    """Mark client as ready for next frame"""
-                    with _client_frame_lock:
-                        _client_frame_ready[sid] = True
-                
-                sio.start_background_task(
-                    sio.emit, 
-                    "frame", 
-                    encoded_data, 
-                    to=sid,
-                    callback=ack_callback
-                )
-            
-            # Emit metadata as JSON signal
-            meta_message = {
-                "name": "frame_meta",
-                "detectorname": metadata.get('detectorname', detector_name),
-                "pixelsize": metadata.get('pixelsize', 1),
-                "format": metadata.get('format', 'binary'),
-                "metadata": metadata
-            }
-            
-            for sid in ready_clients:
-                sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
-                
-        except Exception as e:
-            self._logger.error(f"Error emitting frame via socket.io: {e}")
-
     @APIExport(requestType="POST")
     def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "binary",
                       params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -503,8 +481,8 @@ class LiveViewController(LiveUpdatedController):
                 update_params['stream_throttle_ms'] = stream_params.throttle_ms
                 if protocol == "jpeg":
                     update_params['compressionlevel'] = stream_params.jpeg_quality
-            
-            self._master.detectorsManager.updateGlobalDetectorParams(update_params)
+                
+                self._master.detectorsManager.updateGlobalDetectorParams(update_params) # TOOD: I think this is still not needed anymore
             
             # Create appropriate worker
             worker = self._createWorker(detector, protocol, stream_params)
@@ -514,8 +492,9 @@ class LiveViewController(LiveUpdatedController):
                     "message": f"Failed to create worker for protocol {protocol}"
                 }
             
-            # Connect worker to emit encoded frames via socket.io
-            worker.sigFrameReady.connect(self._onFrameReady)
+            # Connect worker signal to controller's signal, which is then handled by noqt
+            # The worker emits pre-formatted messages ready for socket.io emission
+            worker.sigStreamFrame.connect(self._commChannel.sigUpdateImage)
             
             # Start worker in thread
             thread = threading.Thread(target=worker.run, daemon=True)
@@ -635,11 +614,11 @@ class LiveViewController(LiveUpdatedController):
                     update_params['stream_subsampling_factor'] = params['subsampling_factor']
                 if 'throttle_ms' in params:
                     update_params['stream_throttle_ms'] = params['throttle_ms']
-                
+                # TOOD: I think this is still not needed anymore
                 self._master.detectorsManager.updateGlobalDetectorParams(update_params)
             elif protocol == "jpeg":
-                if 'jpeg_quality' in params:
-                    self._master.detectorsManager.updateGlobalDetectorParams({
+                if 'jpeg_quality' in params: 
+                    self._master.detectorsManager.updateGlobalDetectorParams({ # TOOD: I think this is still not needed anymore
                         'compressionlevel': params['jpeg_quality']
                     })
             

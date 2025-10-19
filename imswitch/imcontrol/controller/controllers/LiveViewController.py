@@ -63,33 +63,45 @@ class StreamParams:
 class StreamWorker(Worker):
     """
     Base class for protocol-specific stream workers.
-    Each worker runs in its own thread and polls frames at the configured rate.
+    Each worker runs in its own thread and waits for new frames without using a timer.
+    This avoids skipping frames and ensures consistent frame rate.
     """
     
-    sigFrameReady = Signal(bytes)  # Emits processed frame data
+    sigFrameReady = Signal(str, np.ndarray, bool, list, bool)  # Reuse sigUpdateImage format
     
     def __init__(self, detectorManager, updatePeriodMs: int, streamParams: StreamParams):
         super().__init__()
         self._detector = detectorManager
-        self._updatePeriod = updatePeriodMs
+        self._updatePeriod = updatePeriodMs / 1000.0  # Convert to seconds
         self._params = streamParams
         self._running = False
-        self._timer = None
+        self._thread = None
         self._logger = initLogger(self)
+        self._last_frame_time = 0
     
     def run(self):
-        """Start polling frames at configured rate."""
+        """Start polling frames without timer - wait and push immediately."""
         self._running = True
-        self._timer = Timer()
-        self._timer.timeout.connect(self._captureAndEmit)
-        self._timer.start(self._updatePeriod)
-        self._logger.debug(f"StreamWorker started with update period {self._updatePeriod}ms")
+        self._logger.debug(f"StreamWorker started with update period {self._updatePeriod}s")
+        
+        while self._running:
+            try:
+                # Wait for minimum period
+                elapsed = time.time() - self._last_frame_time
+                if elapsed < self._updatePeriod:
+                    time.sleep(self._updatePeriod - elapsed)
+                
+                # Capture and emit immediately
+                self._captureAndEmit()
+                self._last_frame_time = time.time()
+                
+            except Exception as e:
+                self._logger.error(f"Error in StreamWorker loop: {e}")
+                time.sleep(0.1)  # Brief pause on error
     
     def stop(self):
         """Stop polling frames."""
         self._running = False
-        if self._timer:
-            self._timer.stop()
         self._logger.debug("StreamWorker stopped")
     
     @abstractmethod
@@ -99,87 +111,53 @@ class StreamWorker(Worker):
 
 
 class BinaryStreamWorker(StreamWorker):
-    """Worker for binary frame streaming with LZ4/Zstandard compression."""
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Import compression libraries on demand
-        if self._params.compression_algorithm == "lz4":
-            try:
-                import lz4.frame
-                self._compress = lz4.frame.compress
-            except ImportError:
-                self._logger.warning("lz4 not available, falling back to no compression")
-                self._compress = lambda x: x.tobytes()
-        elif self._params.compression_algorithm == "zstandard":
-            try:
-                import zstandard as zstd
-                self._compressor = zstd.ZstdCompressor(level=self._params.compression_level)
-                self._compress = self._compressor.compress
-            except ImportError:
-                self._logger.warning("zstandard not available, falling back to no compression")
-                self._compress = lambda x: x.tobytes()
-        else:
-            self._compress = lambda x: x.tobytes()
+    """Worker for binary frame streaming - processing happens in noqt framework."""
     
     def _captureAndEmit(self):
-        """Capture frame from detector and emit compressed binary data."""
+        """Capture frame from detector and emit in sigUpdateImage format."""
         try:
             frame = self._detector.getLatestFrame()
             if frame is None:
                 return
             
-            # Apply subsampling if configured
-            if self._params.subsampling_factor > 1:
-                frame = frame[::self._params.subsampling_factor, 
-                             ::self._params.subsampling_factor]
+            # Get detector info
+            detector_name = self._detector.name
+            pixel_size = [1.0]  # Default pixel size
+            try:
+                pixel_size = [self._detector.pixelSizeUm[-1]]
+            except:
+                pass
             
-            # Compress frame
-            compressed = self._compress(np.array(frame))
+            # Emit in sigUpdateImage format: (detectorName, image, init, scale, isCurrentDetector)
+            # The noqt framework will handle the actual compression based on stream params
+            self.sigFrameReady.emit(detector_name, frame, False, pixel_size, True)
             
-            # Emit compressed frame
-            self.sigFrameReady.emit(compressed)
         except Exception as e:
             self._logger.error(f"Error in BinaryStreamWorker: {e}")
 
 
 class JPEGStreamWorker(StreamWorker):
-    """Worker for JPEG frame streaming."""
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        try:
-            import cv2
-            self._cv2 = cv2
-        except ImportError:
-            self._logger.error("opencv-python required for JPEG streaming")
-            self._cv2 = None
+    """Worker for JPEG frame streaming - processing happens in noqt framework."""
     
     def _captureAndEmit(self):
-        """Capture frame from detector and emit JPEG data."""
-        if self._cv2 is None:
-            return
-        
+        """Capture frame from detector and emit in sigUpdateImage format."""
         try:
             frame = self._detector.getLatestFrame()
             if frame is None:
                 return
             
-            # Normalize to uint8 if needed
-            if frame.dtype != np.uint8:
-                vmin = float(np.min(frame))
-                vmax = float(np.max(frame))
-                if vmax > vmin:
-                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
-                else:
-                    frame = np.zeros_like(frame, dtype=np.uint8)
+            # Get detector info
+            detector_name = self._detector.name
+            pixel_size = [1.0]  # Default pixel size
+            try:
+                pixel_size = [self._detector.pixelSizeUm[-1]]
+            except:
+                pass
             
-            # Encode as JPEG
-            encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
-            success, encoded = self._cv2.imencode('.jpg', frame, encode_params)
+            # Emit in sigUpdateImage format: (detectorName, image, init, scale, isCurrentDetector)
+            # The noqt framework will handle the actual JPEG encoding based on stream params
+            self.sigFrameReady.emit(detector_name, frame, False, pixel_size, True)
             
-            if success:
-                self.sigFrameReady.emit(encoded.tobytes())
         except Exception as e:
             self._logger.error(f"Error in JPEGStreamWorker: {e}")
 
@@ -296,9 +274,9 @@ class LiveViewController(LiveUpdatedController):
     """
     Centralized controller for all live streaming functionality.
     Manages per-detector streaming with dedicated worker threads.
+    Only one protocol can be active per detector at a time.
     """
     
-    sigFrameReady = Signal(str, str, bytes)  # (detectorName, protocol, frameData)
     sigStreamStarted = Signal(str, str)      # (detectorName, protocol)
     sigStreamStopped = Signal(str, str)      # (detectorName, protocol)
     
@@ -306,9 +284,10 @@ class LiveViewController(LiveUpdatedController):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
         
-        # Active streams: {(detectorName, protocol): StreamWorker}
-        self._activeStreams: Dict[tuple, StreamWorker] = {}
-        self._streamThreads: Dict[tuple, threading.Thread] = {}
+        # Active streams: {detectorName: (protocol, StreamWorker)}
+        # Only one protocol per detector allowed
+        self._activeStreams: Dict[str, tuple] = {}
+        self._streamThreads: Dict[str, threading.Thread] = {}
         
         # Global stream parameters per protocol
         self._streamParams: Dict[str, StreamParams] = {
@@ -338,15 +317,15 @@ class LiveViewController(LiveUpdatedController):
         if stop:
             self._logger.debug("Stopping all live acquisitions")
             # Stop all active streams
-            for key in list(self._activeStreams.keys()):
-                detector_name, protocol = key
-                self.stopLiveView(detector_name, protocol)
+            for detector_name in list(self._activeStreams.keys()):
+                self.stopLiveView(detector_name)
 
     @APIExport(requestType="POST")
     def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "binary",
                       params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Start live streaming for a specific detector.
+        Only one protocol can be active per detector at a time.
         
         Args:
             detectorName: Name of detector to stream from (None = first available)
@@ -355,19 +334,6 @@ class LiveViewController(LiveUpdatedController):
         
         Returns:
             Dictionary with status and stream info
-            
-        parameters are:
-        params: Dict[str, Any] = {
-                "detectorName": "Camera",  // optional, uses first detector if not specified
-                "protocol": "binary",      // binary, jpeg, mjpeg, webrtc
-                "params": {               
-                    "compression_algorithm": "lz4",
-                    "compression_level": 0,
-                    "subsampling_factor": 4,
-                    "throttle_ms": 50,
-                    "jpeg_quality": 80
-                }
-                }
         """
         try:
             # Get detector
@@ -376,23 +342,35 @@ class LiveViewController(LiveUpdatedController):
             
             detector = self._master.detectorsManager[detectorName]
             
-            # Check if stream already active
-            stream_key = (detectorName, protocol)
-            if stream_key in self._activeStreams:
+            # Check if detector already has an active stream
+            if detectorName in self._activeStreams:
+                old_protocol, old_worker = self._activeStreams[detectorName]
                 return {
                     "status": "already_running",
                     "detector": detectorName,
-                    "protocol": protocol,
-                    "message": f"Stream already active for {detectorName} with protocol {protocol}"
+                    "protocol": old_protocol,
+                    "message": f"Stream already active for {detectorName} with protocol {old_protocol}. Stop it first."
                 }
             
-            # Get stream parameters
+            # Get stream parameters and update global params
             stream_params = self._streamParams.get(protocol, StreamParams(protocol=protocol))
             if params:
                 # Update with provided parameters
                 for key, value in params.items():
                     if hasattr(stream_params, key):
                         setattr(stream_params, key, value)
+            
+            # Update DetectorsManager global params for streaming configuration
+            update_params = {}
+            if protocol in ["binary", "jpeg"]:
+                update_params['stream_compression_algorithm'] = stream_params.compression_algorithm if protocol == "binary" else "jpeg"
+                update_params['stream_compression_level'] = stream_params.compression_level
+                update_params['stream_subsampling_factor'] = stream_params.subsampling_factor
+                update_params['stream_throttle_ms'] = stream_params.throttle_ms
+                if protocol == "jpeg":
+                    update_params['compressionlevel'] = stream_params.jpeg_quality
+            
+            self._master.detectorsManager.updateGlobalDetectorParams(update_params)
             
             # Create appropriate worker
             worker = self._createWorker(detector, protocol, stream_params)
@@ -402,18 +380,19 @@ class LiveViewController(LiveUpdatedController):
                     "message": f"Failed to create worker for protocol {protocol}"
                 }
             
-            # Connect worker signals
+            # Connect worker to emit sigUpdateImage through communication channel
             worker.sigFrameReady.connect(
-                lambda data, dn=detectorName, p=protocol: self.sigFrameReady.emit(dn, p, data)
+                lambda detectorName, image, init, scale, isCurrentDetector: 
+                self._commChannel.sigUpdateImage.emit(detectorName, image, init, scale, isCurrentDetector)
             )
-            # TODO: use self._commChannel.sigUpdateImage instead of sigFrameReady
+            
             # Start worker in thread
             thread = threading.Thread(target=worker.run, daemon=True)
             thread.start()
             
-            # Store worker and thread
-            self._activeStreams[stream_key] = worker
-            self._streamThreads[stream_key] = thread
+            # Store worker and thread (only protocol and worker, not tuple key)
+            self._activeStreams[detectorName] = (protocol, worker)
+            self._streamThreads[detectorName] = thread
             
             # Emit signal
             self.sigStreamStarted.emit(detectorName, protocol)
@@ -434,40 +413,46 @@ class LiveViewController(LiveUpdatedController):
             }
     
     @APIExport()
-    def stopLiveView(self, detectorName: str=None, protocol: str=None) -> Dict[str, Any]:
+    def stopLiveView(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
         """
         Stop live streaming for a specific detector.
+        If detectorName is None, stops the first active stream.
+        Protocol is ignored - we only care about the detector.
         
         Args:
-            detectorName: Name of detector
-            protocol: Streaming protocol
+            detectorName: Name of detector (None = stop first active detector)
         
         Returns:
             Dictionary with status
         """
-        if detectorName is None:
-            detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
-        if protocol is None:
-            protocol = "binary" # TODO: We want to stop all protocols!
         try:
-            stream_key = (detectorName, protocol)
+            # If no detector specified, stop first active stream
+            if detectorName is None:
+                if not self._activeStreams:
+                    return {
+                        "status": "not_running",
+                        "message": "No active streams to stop"
+                    }
+                detectorName = list(self._activeStreams.keys())[0]
             
-            if stream_key not in self._activeStreams:
+            # Check if detector has active stream
+            if detectorName not in self._activeStreams:
                 return {
                     "status": "not_running",
                     "detector": detectorName,
-                    "protocol": protocol,
-                    "message": f"No active stream for {detectorName} with protocol {protocol}"
+                    "message": f"No active stream for detector {detectorName}"
                 }
             
+            # Get protocol and worker
+            protocol, worker = self._activeStreams[detectorName]
+            
             # Stop worker
-            worker = self._activeStreams[stream_key]
             worker.stop()
             
             # Clean up
-            del self._activeStreams[stream_key]
-            if stream_key in self._streamThreads:
-                del self._streamThreads[stream_key]
+            del self._activeStreams[detectorName]
+            if detectorName in self._streamThreads:
+                del self._streamThreads[detectorName]
             
             # Emit signal
             self.sigStreamStopped.emit(detectorName, protocol)
@@ -594,7 +579,7 @@ class LiveViewController(LiveUpdatedController):
                     "detector": detector_name,
                     "protocol": protocol
                 }
-                for detector_name, protocol in self._activeStreams.keys()
+                for detector_name, (protocol, worker) in self._activeStreams.items()
             ]
         }
     
@@ -616,10 +601,10 @@ class LiveViewController(LiveUpdatedController):
     
     def getMJPEGWorker(self, detectorName: str) -> Optional[MJPEGStreamWorker]:
         """Get MJPEG worker for HTTP streaming (used by video_feeder endpoint)."""
-        stream_key = (detectorName, "mjpeg")
-        worker = self._activeStreams.get(stream_key)
-        if isinstance(worker, MJPEGStreamWorker):
-            return worker
+        if detectorName in self._activeStreams:
+            protocol, worker = self._activeStreams[detectorName]
+            if protocol == "mjpeg" and isinstance(worker, MJPEGStreamWorker):
+                return worker
         return None
     
     @APIExport(runOnUIThread=False)
@@ -641,25 +626,16 @@ class LiveViewController(LiveUpdatedController):
             return {"status": "error", "message": "FastAPI not available"}
         
         if not startStream:
-            # Stop the stream
-            if detectorName is None:
-                # Stop all MJPEG streams
-                for key in list(self._activeStreams.keys()):
-                    det_name, protocol = key
-                    if protocol == "mjpeg":
-                        self.stopLiveView(det_name, protocol)
-            else:
-                self.stopLiveView(detectorName, "mjpeg")
-            
+            # Stop the stream - only care about detector
+            self.stopLiveView(detectorName)
             return {"status": "success", "message": "stream stopped"}
         
         # Start streaming
         if detectorName is None:
             detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
         
-        # Check if stream already exists
-        stream_key = (detectorName, "mjpeg")
-        if stream_key not in self._activeStreams:
+        # Check if stream already exists for this detector
+        if detectorName not in self._activeStreams:
             # Start the MJPEG stream
             result = self.startLiveView(detectorName, "mjpeg")
             if result['status'] != 'success':
@@ -674,7 +650,7 @@ class LiveViewController(LiveUpdatedController):
         def frame_generator():
             """Generator that yields MJPEG frames."""
             try:
-                while stream_key in self._activeStreams:
+                while detectorName in self._activeStreams:
                     frame = worker.get_frame(timeout=1.0)
                     if frame:
                         yield frame

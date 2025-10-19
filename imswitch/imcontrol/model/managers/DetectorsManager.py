@@ -146,7 +146,9 @@ class DetectorsManager(MultiManager, SignalInterface):
         if enableAcq:
             self.execOnAll(lambda c: c.startAcquisition(), condition=lambda c: c.forAcquisition)
             self.sigAcquisitionStarted.emit()
-        if enableLV:
+        if enableLV and not IS_HEADLESS:
+            # In headless mode, don't start the LVWorker timer automatically
+            # Streaming is managed explicitly by LiveViewController
             sleep(0.3)
             self._thread.start()
 

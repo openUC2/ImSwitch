@@ -65,9 +65,10 @@ class StreamWorker(Worker):
     Base class for protocol-specific stream workers.
     Each worker runs in its own thread and waits for new frames without using a timer.
     This avoids skipping frames and ensures consistent frame rate.
+    Workers do the actual encoding and emit encoded bytes.
     """
     
-    sigFrameReady = Signal(str, np.ndarray, bool, list, bool)  # Reuse sigUpdateImage format
+    sigFrameReady = Signal(str, bytes, dict)  # (detectorName, encodedData, metadata)
     
     def __init__(self, detectorManager, updatePeriodMs: int, streamParams: StreamParams):
         super().__init__()
@@ -106,15 +107,34 @@ class StreamWorker(Worker):
     
     @abstractmethod
     def _captureAndEmit(self):
-        """Capture frame from detector and emit processed data."""
+        """Capture frame from detector, encode it, and emit processed data."""
         pass
 
 
 class BinaryStreamWorker(StreamWorker):
-    """Worker for binary frame streaming - processing happens in noqt framework."""
+    """Worker for binary frame streaming with LZ4/Zstandard compression."""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._image_id = 0
+        # Import compression libraries on demand
+        self._encoder = None
+        
+    def _get_encoder(self):
+        """Get or create encoder with current parameters."""
+        try:
+            from imswitch.imcommon.framework.binary_streaming import BinaryFrameEncoder
+            return BinaryFrameEncoder(
+                compression_algorithm=self._params.compression_algorithm,
+                compression_level=self._params.compression_level,
+                subsampling_factor=self._params.subsampling_factor,
+            )
+        except ImportError:
+            self._logger.error("BinaryFrameEncoder not available")
+            return None
     
     def _captureAndEmit(self):
-        """Capture frame from detector and emit in sigUpdateImage format."""
+        """Capture frame from detector, compress it, and emit binary data."""
         try:
             frame = self._detector.getLatestFrame()
             if frame is None:
@@ -122,25 +142,61 @@ class BinaryStreamWorker(StreamWorker):
             
             # Get detector info
             detector_name = self._detector.name
-            pixel_size = [1.0]  # Default pixel size
+            pixel_size = 1.0
             try:
-                pixel_size = [self._detector.pixelSizeUm[-1]]
+                pixel_size = self._detector.pixelSizeUm[-1]
             except:
                 pass
             
-            # Emit in sigUpdateImage format: (detectorName, image, init, scale, isCurrentDetector)
-            # The noqt framework will handle the actual compression based on stream params
-            self.sigFrameReady.emit(detector_name, frame, False, pixel_size, True)
+            # Ensure frame is contiguous and proper type
+            frame = np.ascontiguousarray(frame)
+            if frame.dtype == np.float32 or frame.dtype == np.float64:
+                frame = np.uint8(frame * 255)
+            if frame.dtype not in [np.uint8, np.uint16]:
+                frame = np.uint8(frame)
+            
+            # Get encoder
+            encoder = self._get_encoder()
+            if encoder is None:
+                return
+            
+            # Encode frame
+            packet, metadata = encoder.encode_frame(frame)
+            
+            # Add metadata
+            metadata['server_timestamp'] = time.time()
+            metadata['image_id'] = self._image_id
+            metadata['detectorname'] = detector_name
+            metadata['pixelsize'] = int(pixel_size)
+            metadata['format'] = 'binary'
+            
+            self._image_id += 1
+            
+            # Emit encoded frame with metadata
+            self.sigFrameReady.emit(detector_name, packet, metadata)
             
         except Exception as e:
             self._logger.error(f"Error in BinaryStreamWorker: {e}")
 
 
 class JPEGStreamWorker(StreamWorker):
-    """Worker for JPEG frame streaming - processing happens in noqt framework."""
+    """Worker for JPEG frame streaming with compression."""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._image_id = 0
+        try:
+            import cv2
+            self._cv2 = cv2
+        except ImportError:
+            self._logger.error("opencv-python required for JPEG streaming")
+            self._cv2 = None
     
     def _captureAndEmit(self):
-        """Capture frame from detector and emit in sigUpdateImage format."""
+        """Capture frame from detector, encode as JPEG, and emit."""
+        if self._cv2 is None:
+            return
+        
         try:
             frame = self._detector.getLatestFrame()
             if frame is None:
@@ -148,16 +204,42 @@ class JPEGStreamWorker(StreamWorker):
             
             # Get detector info
             detector_name = self._detector.name
-            pixel_size = [1.0]  # Default pixel size
+            pixel_size = 1.0
             try:
-                pixel_size = [self._detector.pixelSizeUm[-1]]
+                pixel_size = self._detector.pixelSizeUm[-1]
             except:
                 pass
             
-            # Emit in sigUpdateImage format: (detectorName, image, init, scale, isCurrentDetector)
-            # The noqt framework will handle the actual JPEG encoding based on stream params
-            self.sigFrameReady.emit(detector_name, frame, False, pixel_size, True)
+            # Normalize to uint8 if needed
+            if frame.dtype != np.uint8:
+                vmin = float(np.min(frame))
+                vmax = float(np.max(frame))
+                if vmax > vmin:
+                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
+                else:
+                    frame = np.zeros_like(frame, dtype=np.uint8)
             
+            # Encode as JPEG
+            encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
+            success, encoded = self._cv2.imencode('.jpg', frame, encode_params)
+            
+            if success:
+                jpeg_bytes = encoded.tobytes()
+                
+                # Create metadata
+                metadata = {
+                    'server_timestamp': time.time(),
+                    'image_id': self._image_id,
+                    'detectorname': detector_name,
+                    'pixelsize': int(pixel_size),
+                    'format': 'jpeg'
+                }
+                
+                self._image_id += 1
+                
+                # Emit encoded JPEG with metadata
+                self.sigFrameReady.emit(detector_name, jpeg_bytes, metadata)
+                
         except Exception as e:
             self._logger.error(f"Error in JPEGStreamWorker: {e}")
 
@@ -319,6 +401,58 @@ class LiveViewController(LiveUpdatedController):
             # Stop all active streams
             for detector_name in list(self._activeStreams.keys()):
                 self.stopLiveView(detector_name)
+    
+    def _onFrameReady(self, detector_name: str, encoded_data: bytes, metadata: dict):
+        """
+        Handle encoded frame from worker and emit via socket.io.
+        This is the single source of truth for frame emission.
+        """
+        try:
+            # Import socketio on demand
+            from imswitch.imcommon.framework.noqt import sio, _client_frame_ready, _client_frame_lock
+            import json
+            
+            # Get ready clients
+            with _client_frame_lock:
+                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
+            
+            if not ready_clients:
+                return
+            
+            # Mark clients as not ready (waiting for acknowledgement)
+            with _client_frame_lock:
+                for sid in ready_clients:
+                    _client_frame_ready[sid] = False
+            
+            # Emit binary/jpeg frame with acknowledgement callback
+            for sid in ready_clients:
+                def ack_callback(sid=sid):
+                    """Mark client as ready for next frame"""
+                    with _client_frame_lock:
+                        _client_frame_ready[sid] = True
+                
+                sio.start_background_task(
+                    sio.emit, 
+                    "frame", 
+                    encoded_data, 
+                    to=sid,
+                    callback=ack_callback
+                )
+            
+            # Emit metadata as JSON signal
+            meta_message = {
+                "name": "frame_meta",
+                "detectorname": metadata.get('detectorname', detector_name),
+                "pixelsize": metadata.get('pixelsize', 1),
+                "format": metadata.get('format', 'binary'),
+                "metadata": metadata
+            }
+            
+            for sid in ready_clients:
+                sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
+                
+        except Exception as e:
+            self._logger.error(f"Error emitting frame via socket.io: {e}")
 
     @APIExport(requestType="POST")
     def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "binary",
@@ -380,11 +514,8 @@ class LiveViewController(LiveUpdatedController):
                     "message": f"Failed to create worker for protocol {protocol}"
                 }
             
-            # Connect worker to emit sigUpdateImage through communication channel
-            worker.sigFrameReady.connect(
-                lambda detectorName, image, init, scale, isCurrentDetector: 
-                self._commChannel.sigUpdateImage.emit(detectorName, image, init, scale, isCurrentDetector)
-            )
+            # Connect worker to emit encoded frames via socket.io
+            worker.sigFrameReady.connect(self._onFrameReady)
             
             # Start worker in thread
             thread = threading.Thread(target=worker.run, daemon=True)

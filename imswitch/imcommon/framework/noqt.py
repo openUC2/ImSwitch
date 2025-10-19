@@ -126,7 +126,11 @@ class SignalInstance(psygnal.SignalInstance):
         del message
 
     def _handle_image_signal(self, args):
-        """Compress and broadcast image signals."""
+        """
+        Handle image signals.
+        Note: Frame encoding is now handled by LiveViewController for streaming.
+        This is kept for backward compatibility with non-headless GUI mode.
+        """
         detectorName = args[0]
         try:pixelSize = np.min(args[3])
         except:pixelSize = 1
@@ -138,25 +142,28 @@ class SignalInstance(psygnal.SignalInstance):
         except:
             global_params = {}
         
+        # In headless mode with LiveViewController, encoding is done in LiveViewController
+        # This legacy path is kept for non-headless mode compatibility
         try:
             for arg in args:
                 if isinstance(arg, np.ndarray):
-                    #print(time.time())
                     output_frame = np.ascontiguousarray(arg)  # Avoid memory fragmentation
                     # if frame is float, we need to convert to uint8
                     if output_frame.dtype == np.float32 or output_frame.dtype == np.float64:
                         output_frame = np.uint8(output_frame*255)
                     if output_frame.dtype not in [np.uint8, np.uint16]:
                         output_frame = np.uint8(output_frame)  # Convert to uint8 for visualization
+                    
                     # Check stream parameters for binary streaming
+                    # Note: In headless mode, this should not be called as LiveViewController handles it
                     stream_compression_algorithm = global_params.get('stream_compression_algorithm')
                     if stream_compression_algorithm in ["LZ4", "lz4", "ZSTD", "zstd", "ZStandard"]:
+                        # Legacy: This is only used when not using LiveViewController
                         self._emit_binary_frame(output_frame, detectorName, pixelSize, global_params)
                     elif stream_compression_algorithm == "jpeg":
-                        # emit JPEG (legacy behavior for compatibility)
+                        # Legacy: emit JPEG (legacy behavior for compatibility)
                         self._emit_jpeg_frame(output_frame, detectorName, pixelSize, global_params)
                     self.image_id += 1
-                    # print(f"Emitted image id {self.image_id} from detector {detectorName}")
                         
         except Exception as e:
             print(f"Error processing image signal: {e}")
@@ -164,8 +171,11 @@ class SignalInstance(psygnal.SignalInstance):
         self._sending_image = False
 
     def _emit_binary_frame(self, img: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
-        """Emit binary frame via Socket.IO with flow control."""
-        # TODO: This should be removed and be part of the LiveViewController instead
+        """
+        Emit binary frame via Socket.IO with flow control.
+        LEGACY: This should only be used when not using LiveViewController (non-headless mode).
+        In headless mode, LiveViewController handles encoding and emission.
+        """
         if not HAS_BINARY_STREAMING:
             return
             
@@ -247,7 +257,11 @@ class SignalInstance(psygnal.SignalInstance):
             self._emit_jpeg_frame(img, detector_name, pixel_size, global_params)
     
     def _emit_jpeg_frame(self, output_frame: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
-        """Emit JPEG frame (legacy path) with flow control."""
+        """
+        Emit JPEG frame (legacy path) with flow control.
+        LEGACY: This should only be used when not using LiveViewController (non-headless mode).
+        In headless mode, LiveViewController handles encoding and emission.
+        """
         # TODO: This should be removed and be part of the LiveViewController instead
         try:
             # Get throttle interval from global params

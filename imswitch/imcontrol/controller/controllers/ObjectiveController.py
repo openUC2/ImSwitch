@@ -28,39 +28,42 @@ class ObjectiveStatusModel(BaseModel):
     magnification: int
 
 class ObjectiveController(LiveUpdatedController):
+    """
+    Controller for objective operations following the Model-View-Presenter pattern.
+    This controller manipulates state through ObjectiveManager and responds to its signals.
+    All state is stored in the manager, not in the controller.
+    """
+    
+    # Signal for backwards compatibility and UI updates
     sigObjectiveChanged = Signal(dict) # pixelsize, NA, magnification, objectiveName, FOVx, FOVy
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self, tryInheritParent=False)
 
-        # filter detector
-        allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
-        self.detector= self._master.detectorsManager[allDetectorNames[0]]
+        # Reference to the manager (holds all state)
+        self._manager = self._master.objectiveManager
+        
+        # Connect to manager signals
+        self._manager.sigObjectiveStateChanged.connect(self._onObjectiveStateChanged)
+        self._manager.sigObjectiveParametersChanged.connect(self._onObjectiveParametersChanged)
 
-        # Assign configuration values from the dataclass
-        self.pixelsizes = self._master.objectiveManager.pixelsizes
-        self.NAs = self._master.objectiveManager.NAs
-        self.magnifications = self._master.objectiveManager.magnifications
-        self.objectiveNames = self._master.objectiveManager.objectiveNames
-        self.objectivePositions = self._master.objectiveManager.objectivePositions
-        self.homeDirection = self._master.objectiveManager.homeDirection
-        self.homePolarity = self._master.objectiveManager.homePolarity
-        self.homeSpeed = self._master.objectiveManager.homeSpeed
-        self.homeAcceleration = self._master.objectiveManager.homeAcceleration
-        self.calibrateOnStart = self._master.objectiveManager.calibrateOnStart
-        self.isActive = self._master.objectiveManager.isActive
-        self.detectorWidth, self.detectorHeight = self.detector._camera.SensorWidth, self.detector._camera.SensorHeight
-        self.currentObjective = None  # Will be set after calibration
+        # Get detector reference and set dimensions in manager
+        allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
+        self.detector = self._master.detectorsManager[allDetectorNames[0]]
+        detectorWidth = self.detector._camera.SensorWidth
+        detectorHeight = self.detector._camera.SensorHeight
+        self._manager.setDetectorDimensions(detectorWidth, detectorHeight)
 
         # Create new objective instance (expects a parent with post_json)
         try:
-            if not self.isActive:
+            if not self._manager.isActive:
                 raise Exception("Objective is not active in the setup, skipping initialization.")
             self._objective = self._master.rs232sManager["ESP32"]._esp32.objective
         except:
             class dummyObjective:
-                def __init__(self, pixelsizes, NAs, magnifications, objectiveNames):
+                def __init__(self, manager):
+                    self._manager = manager
                     self.move = lambda slot, isBlocking: None
                     self.home = lambda direction, endstoppolarity, isBlocking: None
                     self.x1 = 0
@@ -69,10 +72,6 @@ class ObjectiveController(LiveUpdatedController):
                     self.isHomed = 0
                     self.z1 = 0
                     self.z2 = 0
-                    self.pixelsizes = pixelsizes
-                    self.NAs = NAs
-                    self.magnifications = magnifications
-                    self.objectiveNames = objectiveNames
 
                 def home(self, direction, endstoppolarity, isBlocking):
                     if direction is not None:
@@ -100,12 +99,7 @@ class ObjectiveController(LiveUpdatedController):
                         "pos": 0,
                         "isHomed": self.isHomed,
                         "state": self.slot,
-                        "isRunning": 0,
-                        "FOV": (100,100),
-                        "pixelsize": self.pixelsizes[self.slot - 1],
-                        "objectiveName": self.objectiveNames[self.slot - 1],
-                        "NA": self.NAs[self.slot - 1],
-                        "magnification": self.magnifications[self.slot - 1]
+                        "isRunning": 0
                     }
 
                 def setPositions(self, x1, x2, z1, z2, isBlocking):
@@ -118,98 +112,178 @@ class ObjectiveController(LiveUpdatedController):
                     if z2 is not None:
                         self.z2 = z2
 
-            self._objective = dummyObjective(pixelsizes=self.pixelsizes, 
-                                             NAs=self.NAs, 
-                                             magnifications=self.magnifications, 
-                                             objectiveNames=self.objectiveNames)
+            self._objective = dummyObjective(manager=self._manager)
 
-        if self.calibrateOnStart:
+        # Initialize objective state
+        if self._manager.calibrateOnStart:
             self.calibrateObjective()
             # After calibration, move to the first objective position (X1)
             self._objective.move(slot=1, isBlocking=True)
-            self.currentObjective = 1
-            self._master.objectiveManager.setCurrentObjective(1)
+            self._manager.setCurrentObjective(1)
         else:
             status = self._objective.getstatus()
-            self.currentObjective = status.get("state", 1)
-            self._master.objectiveManager.setCurrentObjective(self.currentObjective)
+            currentSlot = status.get("state", 1)
+            self._manager.setCurrentObjective(currentSlot)
+            isHomed = status.get("isHomed", 0) == 1
+            self._manager.setHomedState(isHomed)
+        
+        # Update detector with current pixel size
         self._updatePixelSize()
 
 
     @APIExport(runOnUIThread=True)
     def calibrateObjective(self, homeDirection:int=None, homePolarity:int=None):
-        if homeDirection is not None:
-            self.homeDirection = homeDirection
-        if homePolarity is not None:
-            self.homePolarity = homePolarity
+        """
+        Calibrate (home) the objective turret.
+        
+        Args:
+            homeDirection: Override home direction
+            homePolarity: Override home polarity
+        """
+        # Note: We don't update manager state here as these are temporary overrides
+        # The actual configuration should be updated through setObjectiveParameters if needed
+        if homeDirection is None:
+            homeDirection = self._manager.homeDirection
+        if homePolarity is None:
+            homePolarity = self._manager.homePolarity
+            
         # Calibrate (home) the objective on the microcontroller side (blocking)
-        # self._objective.calibrate(isBlocking=True)
         if not self._master.positionersManager.getAllDeviceNames()[0] == "ESP32Stage":
             self._logger.error("ESP32Stage is not available in the positioners manager, cannot home objective.")
             return
-        self._master.positionersManager["ESP32Stage"].home_a() # will home the objective - only the 
+        
+        self._master.positionersManager["ESP32Stage"].home_a() # will home the objective
+        
+        # Update homing state in manager
+        self._manager.setHomedState(True)
+        
+        # Get current state from hardware
         status = self._objective.getstatus()
         # Assume status is structured as: {"objective": {"state": 1, ...}}
-        try:state = status.get("objective", {}).get("state", 1)
-        except:state = 0 # Assume calibration failed
+        try:
+            state = status.get("objective", {}).get("state", 1)
+        except:
+            state = 0 # Assume calibration failed
+        
         # state has to be within [0, 1]
         state = 1 if state > 1 else state
-        self.currentObjective = state
-        self._master.objectiveManager.setCurrentObjective(state)
+        
+        # Update manager state (will emit signal)
+        self._manager.setCurrentObjective(state)
+        
+        # Update detector pixel size
         self._updatePixelSize()
 
 
     @APIExport(runOnUIThread=True)
     def moveToObjective(self, slot: int):
+        """
+        Move to a specific objective slot.
+        
+        Args:
+            slot: Objective slot number (1 or 2)
+        """
         # slot should be 1 or 2
-        if slot not in [1, 2]:
+        if slot not in [0, 1, 2]:
             self._logger.error("Invalid objective slot: %s", slot)
             return
+        
+        # Move hardware
         self._objective.move(slot=slot, isBlocking=True)
-        self.currentObjective = slot
-        self._master.objectiveManager.setCurrentObjective(slot)
+        
+        # Update manager state (will emit signal)
+        self._manager.setCurrentObjective(slot)
+        
+        # Update detector pixel size
         self._updatePixelSize()
+        
+        # Update UI if not headless
         if not IS_HEADLESS:
-            self._widget.setCurrentObjectiveInfo(self.currentObjective)
+            self._widget.setCurrentObjectiveInfo(self._manager.getCurrentObjective())
 
     @APIExport(runOnUIThread=True)
     def getCurrentObjective(self):
-        # Return a tuple: (current objective slot, objective name)
-        name = self.objectiveNames[0] if self.currentObjective == 1 else self.objectiveNames[1]
-        return self.currentObjective, name
+        """
+        Get current objective information.
+        
+        Returns:
+            Tuple of (slot, name)
+        """
+        # Read from manager state
+        slot = self._manager.getCurrentObjective()
+        name = self._manager.getCurrentObjectiveName()
+        return slot, name
 
     def _updatePixelSize(self):
-        if self.currentObjective is None or self.currentObjective not in [1, 2]:
+        """
+        Update pixel size in detector based on current objective.
+        Internal method called after objective changes.
+        """
+        currentObjective = self._manager.getCurrentObjective()
+        if currentObjective is None or currentObjective not in [0, 1, 2]:
             return
 
-        # update information based on the current objective
+        # Get status from manager
         mStatus = self.getstatus()
 
-        # Über das Signal als dict senden
+        # Emit signal for backwards compatibility
         self.sigObjectiveChanged.emit(mStatus)
 
-        # Setzen der Pixelgröße in der Detector-Objekt
-        self.detector.setPixelSizeUm(mStatus["pixelsize"])
-
-        #objective_params["objective"]["FOV"] = self.pixelsizes[0] * (self.detectorWidth, self.detectorHeight)
-        #objective_params["objective"]["pixelsize"] = self.detector.pixelSizeUm[-1]
+        # Update detector pixel size
+        pixelsize = self._manager.getCurrentPixelSize()
+        if pixelsize is not None:
+            self.detector.setPixelSizeUm(pixelsize)
+    
+    def _onObjectiveStateChanged(self, status: dict):
+        """
+        Handle objective state changed signal from manager.
+        
+        Args:
+            status: Full status dictionary from manager
+        """
+        self._logger.debug(f"Objective state changed: {status.get('currentObjective')}")
+        # Could trigger UI updates or other reactions here
+        # For now, the signal is mainly for other controllers to observe
+    
+    def _onObjectiveParametersChanged(self, slot: int, params: dict):
+        """
+        Handle objective parameters changed signal from manager.
+        
+        Args:
+            slot: Objective slot that was updated
+            params: Updated parameters
+        """
+        self._logger.debug(f"Objective {slot} parameters changed: {params}")
+        # If this is the current objective, update detector
+        if slot == self._manager.getCurrentObjective():
+            self._updatePixelSize()
 
     def onObj1Clicked(self):
-        if self.currentObjective != 1:
+        """Handle UI button click for objective 1"""
+        if self._manager.getCurrentObjective() != 1:
             self.moveToObjective(1)
 
     def onObj2Clicked(self):
-        if self.currentObjective != 2:
+        """Handle UI button click for objective 2"""
+        if self._manager.getCurrentObjective() != 2:
             self.moveToObjective(2)
 
     def onCalibrateClicked(self):
+        """Handle UI button click for calibration"""
         self.calibrateObjective()
 
     @APIExport(runOnUIThread=True)
     def setPositions(self, x1:float=None, x2:float=None, z1:float=None, z2:float=None, isBlocking:bool=False):
-        '''
-        overwrite the positions for objective 1 and 2 in the EEPROMof the ESP32
-        '''
+        """
+        Overwrite the positions for objective 1 and 2 in the EEPROM of the ESP32.
+        
+        Args:
+            x1: Position for objective 1 in X
+            x2: Position for objective 2 in X
+            z1: Position for objective 1 in Z
+            z2: Position for objective 2 in Z
+            isBlocking: Whether to block until complete
+        """
         return self._objective.setPositions(x1, x2, z1, z2, isBlocking)
 
     @APIExport(runOnUIThread=True)
@@ -218,7 +292,7 @@ class ObjectiveController(LiveUpdatedController):
                                magnification: int = None):
         """
         Set objective parameters for a specific objective slot.
-        This overwrites the configuration values and propagates changes to the detector.
+        This updates the manager state and propagates changes to the detector.
         
         Args:
             objectiveSlot: Objective slot number (1 or 2)
@@ -233,93 +307,40 @@ class ObjectiveController(LiveUpdatedController):
         if objectiveSlot not in [1, 2]:
             raise ValueError("Objective slot must be 1 or 2")
         
-        idx = objectiveSlot - 1
+        # Update manager state (will emit signal)
+        self._manager.setObjectiveParameters(
+            slot=objectiveSlot,
+            pixelsize=pixelsize,
+            NA=NA,
+            magnification=magnification,
+            objectiveName=objectiveName,
+            emitSignal=True
+        )
         
-        # Update parameters if provided
-        if pixelsize is not None:
-            self.pixelsizes[idx] = pixelsize
-            self._logger.info(f"Updated pixelsize for objective {objectiveSlot}: {pixelsize} µm/px")
-        
-        if objectiveName is not None:
-            self.objectiveNames[idx] = objectiveName
-            self._logger.info(f"Updated name for objective {objectiveSlot}: {objectiveName}")
-        
-        if NA is not None:
-            self.NAs[idx] = NA
-            self._logger.info(f"Updated NA for objective {objectiveSlot}: {NA}")
-        
-        if magnification is not None:
-            self.magnifications[idx] = magnification
-            self._logger.info(f"Updated magnification for objective {objectiveSlot}: {magnification}x")
-        
-        # If this is the current objective, propagate changes immediately
-        if self.currentObjective == objectiveSlot:
-            self._updatePixelSize()
-        
-        # Return current parameters for this slot
-        return {
-            "objectiveSlot": objectiveSlot,
-            "pixelsize": self.pixelsizes[idx],
-            "objectiveName": self.objectiveNames[idx],
-            "NA": self.NAs[idx],
-            "magnification": self.magnifications[idx]
-        }
+        # Return updated parameters from manager
+        return self._manager.getObjectiveParameters(objectiveSlot)
 
 
     @APIExport(runOnUIThread=True)
     def getstatus(self):
         """
         Get the current status of the objective.
-
+        Combines hardware status with manager state.
+        
+        Returns:
+            Dictionary with complete objective status
         """
-        # default status
-        status = {
-            "x1": 0,
-            "x2": 0,
-            "z1": 0,
-            "z2": 0,
-            "pos": 0,
-            "isHomed": 0,
-            "state": 0,
-            "isRunning": 0,
-            "FOV": (100,100),
-            "pixelsize": 1,
-            "objectiveName": "TEST",
-            "NA": 1.0,
-            "magnification": 1,
-            "availableObjectives": [1, 2],
-            "availableObjectivesNames": self.objectiveNames,
-            "availableObjectivesPositions": self.objectivePositions,
-            "homeDirection": self.homeDirection,
-            "homePolarity": self.homePolarity,
-            "homeSpeed": self.homeSpeed,
-            "homeAcceleration": self.homeAcceleration,
-            "availableObjectiveMagnifications": self.magnifications,
-            "availableObjectiveNAs": self.NAs,
-            "availableObjectivePixelSizes": self.pixelsizes,
-            "detectorWidth": self.detectorWidth,
-            "detectorHeight": self.detectorHeight
-        }
+        # Get base status from manager (includes all configuration and current state)
+        status = self._manager.getFullStatus()
 
-        # get the status from the objective
-        objective_raw = self._objective.getstatus()
-        status.update(objective_raw)
+        # Get hardware-specific status from objective device
+        try:
+            objective_raw = self._objective.getstatus()
+            status.update(objective_raw)
+        except Exception as e:
+            self._logger.warning(f"Failed to get hardware status: {e}")
 
-        # calculate the field of view and pixel size
-        fov_x = self.pixelsizes[self.currentObjective - 1] * self.detectorWidth
-        fov_y = self.pixelsizes[self.currentObjective - 1] * self.detectorHeight
-        current_pixelsize = self.pixelsizes[self.currentObjective - 1]
-        current_NA = self.NAs[self.currentObjective - 1]
-        current_magnification = self.magnifications[self.currentObjective - 1]
-        current_objective_name = self.objectiveNames[self.currentObjective-1]
-
-        status["FOV"] = (fov_x, fov_y)
-        status["pixelsize"] = current_pixelsize
-        status["NA"] = current_NA
-        status["magnification"] = current_magnification
-        status["objectiveName"] = current_objective_name
-
-        # return the data as a dictionary
+        # Return combined status
         return status
 
 

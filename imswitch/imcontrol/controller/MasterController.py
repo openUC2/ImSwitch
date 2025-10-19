@@ -88,8 +88,12 @@ class MasterController:
             self.dpcManager = DPCManager(self.__setupInfo.dpc)
         if "MCT" in self.__setupInfo.availableWidgets:
             self.mctManager = MCTManager(self.__setupInfo.mct)
-        self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
-        self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
+        if "NIDAQ" in self.__setupInfo.availableWidgets:
+            self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
+        if "Hypha" in self.__setupInfo.availableWidgets:
+            self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
+        if "ROIScan" in self.__setupInfo.availableWidgets:
+            self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
         if "Lightsheet" in self.__setupInfo.availableWidgets:
             self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
         if "WebRTC" in self.__setupInfo.availableWidgets:

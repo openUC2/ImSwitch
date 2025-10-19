@@ -165,6 +165,7 @@ class SignalInstance(psygnal.SignalInstance):
 
     def _emit_binary_frame(self, img: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
         """Emit binary frame via Socket.IO with flow control."""
+        # TODO: This should be removed and be part of the LiveViewController instead
         if not HAS_BINARY_STREAMING:
             return
             
@@ -247,6 +248,7 @@ class SignalInstance(psygnal.SignalInstance):
     
     def _emit_jpeg_frame(self, output_frame: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
         """Emit JPEG frame (legacy path) with flow control."""
+        # TODO: This should be removed and be part of the LiveViewController instead
         try:
             # Get throttle interval from global params
             throttle_ms = global_params.get('stream_throttle_ms', 200) / 1000.0

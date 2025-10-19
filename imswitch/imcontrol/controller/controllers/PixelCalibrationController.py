@@ -325,17 +325,41 @@ class PixelCalibrationController(LiveUpdatedController):
         """
         Set the current active objective for calibration.
         
-        Args:
-            objective_id: Identifier for the objective to activate
-        """
-        # TODO: We should also inform ObjectiveManager/ObjectiveController about this change and move the objective lens - probably fire a signal
-        self.currentObjective = objective_id
-        self._logger.info(f"Switched to objective '{objective_id}'")
+        This method:
+        1. Updates the internal tracking of current objective
+        2. Attempts to physically move the objective turret if ObjectiveController is available
+        3. Updates the ObjectiveManager state if available
+        4. Applies the corresponding calibration data (pixel size, flip settings)
         
-        # Log if calibration exists for this objective
+        Args:
+            objective_id: Identifier for the objective to activate (e.g., "10x", "20x")
+        """
+        # Update local tracking
+        old_objective = self.currentObjective
+        self.currentObjective = objective_id
+        self._logger.info(f"Switched to objective '{objective_id}' (was '{old_objective}')")
+        
+        # Request objective change via communication channel
+        # This allows decoupled communication between controllers
+        try:
+            #self._commChannel.sigSetObjectiveByName.emit(objective_id)
+            self._commChannel.sigSetObjectiveByID.emit(objective_id)
+            self._logger.debug(f"Emitted signal to change objective to '{objective_id}'")
+        except Exception as e:
+            self._logger.warning(f"Could not emit objective change signal: {e}")
+        
+        # Apply calibration data for this objective if available
         if objective_id in self.affineCalibrations:
             scale_x, scale_y = self.getPixelSize(objective_id)
             self._logger.info(f"Calibration loaded: pixel size = ({scale_x:.3f}, {scale_y:.3f}) µm/px")
+            
+            # Apply the calibration results to update detector flip and objective parameters
+            calib_data = self.affineCalibrations[objective_id]
+            result = {
+                "affine_matrix": calib_data.get('affine_matrix', [[1, 0, 0], [0, 1, 0]]),
+                "metrics": calib_data.get('metrics', {})
+            }
+            self._applyCalibrationResults(objective_id, result)
         else:
             self._logger.info(f"No calibration for '{objective_id}' - using default identity matrix")
 
@@ -370,7 +394,7 @@ class PixelCalibrationController(LiveUpdatedController):
                     "error": "Camera intensity out of range (saturated or too dark). Adjust exposure or lighting before calibration.",
                     "success": False
                 }
-                
+            # TODO: I think we should put this into a seperate thread, otherwise it may block the API
             pixelcalibration_helper = PixelCalibrationClass(self)
 
             # Perform the calibration

@@ -103,7 +103,7 @@ class MasterController:
         if "Experiment" in self.__setupInfo.availableWidgets:
             self.experimentManager = ExperimentManager(self.__setupInfo.experiment)
         if "Objective" in self.__setupInfo.availableWidgets:
-            self.objectiveManager = ObjectiveManager(self.__setupInfo.objective)
+            self.objectiveManager = ObjectiveManager(self.__setupInfo.objective, setupInfo=self.__setupInfo)
         if "HistoScan" in self.__setupInfo.availableWidgets:
             self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "Stresstest" in self.__setupInfo.availableWidgets:

@@ -47,7 +47,10 @@ class ObjectiveController(LiveUpdatedController):
         # Connect to manager signals
         self._manager.sigObjectiveStateChanged.connect(self._onObjectiveStateChanged)
         self._manager.sigObjectiveParametersChanged.connect(self._onObjectiveParametersChanged)
-
+        
+        # Connect to communication channel signals
+        self._commChannel.sigSetObjectiveByName.connect(self._onSetObjectiveByName)
+        self._commChannel.sigSetObjectiveByID.connect(self._onSetObjectiveByID)
         # Get detector reference and set dimensions in manager
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
@@ -257,6 +260,58 @@ class ObjectiveController(LiveUpdatedController):
         # If this is the current objective, update detector
         if slot == self._manager.getCurrentObjective():
             self._updatePixelSize()
+    
+    def _onSetObjectiveByID(self, objective_id: int):
+        """
+        Handle request to set objective by ID from communication channel.
+        
+        This allows other controllers to request objective changes without
+        direct coupling.
+        
+        Args:
+            objective_id: ID of objective to switch to (1 or 2)
+        """
+        try:
+            if objective_id in [1, 2]:
+                # Check if we need to move
+                current_slot = self._manager.getCurrentObjective()
+                if current_slot != objective_id:
+                    self._logger.info(f"Received request to move to objective ID {objective_id}")
+                    self.moveToObjective(objective_id)
+                else:
+                    self._logger.debug(f"Already on objective ID {objective_id}, no movement needed")
+            else:
+                self._logger.warning(f"Invalid objective ID {objective_id} received")
+        except Exception as e:
+            self._logger.error(f"Failed to set objective by ID {objective_id}: {e}", exc_info=True)
+    
+    def _onSetObjectiveByName(self, objective_name: str):
+        """
+        Handle request to set objective by name from communication channel.
+        
+        This allows other controllers to request objective changes without
+        direct coupling.
+        
+        Args:
+            objective_name: Name of objective to switch to (e.g., "10x", "20x")
+        """
+        try:
+            # Find slot number for the objective name
+            objective_names = self._manager.objectiveNames
+            if objective_name in objective_names:
+                slot = objective_names.index(objective_name) + 1  # Convert to 1-based slot
+                
+                # Check if we need to move
+                current_slot = self._manager.getCurrentObjective()
+                if current_slot != slot:
+                    self._logger.info(f"Received request to move to objective '{objective_name}' (slot {slot})")
+                    self.moveToObjective(slot)
+                else:
+                    self._logger.debug(f"Already on objective '{objective_name}' (slot {slot}), no movement needed")
+            else:
+                self._logger.warning(f"Objective '{objective_name}' not found in ObjectiveManager. Available: {objective_names}")
+        except Exception as e:
+            self._logger.error(f"Failed to set objective by name '{objective_name}': {e}", exc_info=True)
 
     def onObj1Clicked(self):
         """Handle UI button click for objective 1"""

@@ -27,9 +27,12 @@ class ObjectiveManager(SignalInterface):
     # Signal emitted when objective parameters are updated
     sigObjectiveParametersChanged = Signal(int, dict)  # slot, parameters
 
-    def __init__(self, ObjectiveInfo, *args, **kwargs):
+    def __init__(self, ObjectiveInfo, setupInfo=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
+        
+        # Store reference to setupInfo for saving configuration
+        self._setupInfo = setupInfo
 
         if ObjectiveInfo is None:
             # define default
@@ -328,45 +331,17 @@ class ObjectiveManager(SignalInterface):
             changes["objectiveName"] = objectiveName
             self.__logger.info(f"Updated name for objective {slot}: {objectiveName}")
         
-        if changes and emitSignal:
-            params = self.getObjectiveParameters(slot)
-            self.sigObjectiveParametersChanged.emit(slot, params)
+        if changes:
+            # Save to configuration file
+            self._saveObjectiveConfigToFile()
             
-            # If this is the current objective, also emit state changed
-            if self._currentObjective == slot:
-                self.sigObjectiveStateChanged.emit(self.getFullStatus())
-    
-        # TODO: We need to store the data in the config file as well:
-        '''
-            "objective": {
-        "pixelsizes": [
-            1.0,
-            10
-        ],
-        "NAs": [
-            0.5,
-            0.8
-        ],
-        "magnifications": [
-            10,
-            20
-        ],
-        "objectiveNames": [
-            "10x",
-            "20x"
-        ],
-        "objectivePositions": [
-            0,
-            1
-        ],
-        "homeDirection": -1,
-        "homePolarity": 1,
-        "homeSpeed": 20000,
-        "homeAcceleration": 20000,
-        "calibrateOnStart": true,
-        "active": true
-    },
-'''
+            if emitSignal:
+                params = self.getObjectiveParameters(slot)
+                self.sigObjectiveParametersChanged.emit(slot, params)
+                
+                # If this is the current objective, also emit state changed
+                if self._currentObjective == slot:
+                    self.sigObjectiveStateChanged.emit(self.getFullStatus())
     def getObjectiveParameters(self, slot: int) -> dict:
         """
         Get parameters for a specific objective slot.
@@ -426,6 +401,43 @@ class ObjectiveManager(SignalInterface):
             status["FOV"] = self.getCurrentFOV()
         
         return status
+    
+    def _saveObjectiveConfigToFile(self):
+        """
+        Save current objective configuration to setup configuration file.
+        
+        This persists the in-memory objective parameters (pixelsizes, NAs, magnifications, etc.)
+        to the configuration file on disk. Similar to how PixelCalibration data is saved.
+        """
+        try:
+            # Update the ObjectiveInfo with current values
+            self.__ObjectiveInfo.pixelsizes = list(self._pixelsizes)
+            self.__ObjectiveInfo.NAs = list(self._NAs)
+            self.__ObjectiveInfo.magnifications = list(self._magnifications)
+            self.__ObjectiveInfo.objectiveNames = list(self._objectiveNames)
+            self.__ObjectiveInfo.objectivePositions = list(self._objectivePositions)
+            self.__ObjectiveInfo.homeDirection = self._homeDirection
+            self.__ObjectiveInfo.homePolarity = self._homePolarity
+            self.__ObjectiveInfo.homeSpeed = self._homeSpeed
+            self.__ObjectiveInfo.homeAcceleration = self._homeAcceleration
+            self.__ObjectiveInfo.calibrateOnStart = self._calibrateOnStart
+            self.__ObjectiveInfo.active = self._isActive
+            
+            # Import configfiletools to save the configuration
+            from imswitch.imcontrol.model import configfiletools
+            
+            # Get the setup info reference (should be available through a parent reference)
+            # Note: This assumes ObjectiveManager has access to setupInfo
+            # If not available directly, this should be passed during initialization
+            if hasattr(self, '_setupInfo'):
+                options, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                self.__logger.info("Objective configuration saved to setup file")
+            else:
+                self.__logger.warning("Cannot save objective config: no setupInfo reference available")
+                
+        except Exception as e:
+            self.__logger.error(f"Failed to save objective configuration to file: {e}", exc_info=True)
         
     def update(self):
         """Legacy update method - kept for compatibility"""

@@ -400,6 +400,7 @@ class LiveViewController(LiveUpdatedController):
         # Only one protocol per detector allowed
         self._activeStreams: Dict[str, tuple] = {}
         self._streamThreads: Dict[str, threading.Thread] = {}
+        self._streamIsRunning = False
         
         # Global stream parameters per protocol
         self._streamParams: Dict[str, StreamParams] = {
@@ -412,7 +413,14 @@ class LiveViewController(LiveUpdatedController):
         # Connect to communication channel signals
         self._commChannel.sigStartLiveAcquistion.connect(self._onStartLiveAcquisition)
         self._commChannel.sigStopLiveAcquisition.connect(self._onStopLiveAcquisition)
+        '''
+        TODO: need to handle 
         
+            self.execOnAll(lambda c: c.stopAcquisition(), condition=lambda c: c.forAcquisition)
+            self.sigAcquisitionStopped.emit()
+            self.execOnAll(lambda c: c.startAcquisition(), condition=lambda c: c.forAcquisition)
+            self.sigAcquisitionStarted.emit()
+            '''
         self._logger.info("LiveViewController initialized")
     
     def _onStartLiveAcquisition(self, start: bool):
@@ -431,6 +439,11 @@ class LiveViewController(LiveUpdatedController):
             # Stop all active streams
             for detector_name in list(self._activeStreams.keys()):
                 self.stopLiveView(detector_name)
+    
+    @APIExport()
+    def getLiveViewActive(self) -> bool:
+        """Check if any live view stream is currently active."""
+        return len(self._activeStreams) > 0
     
     @APIExport(requestType="POST")
     def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "binary",
@@ -592,6 +605,16 @@ class LiveViewController(LiveUpdatedController):
         
         Returns:
             Dictionary with status and updated params
+            
+        example params:
+            For binary:
+                {'compression_algorithm': 'lz4', 'compression_level': 0, 'subsampling_factor': 4, 'throttle_ms': 50}
+            For jpeg:
+                {'jpeg_quality': 80, 'subsampling_factor': 4, 'throttle_ms': 50}
+            For mjpeg:
+                {'jpeg_quality': 80, 'subsampling_factor': 4, 'throttle_ms': 50}
+            For webrtc:
+                {'ice_servers': [{'urls': ['stun:stun.l.google.com:19302']}], 'media_constraints': {'video': True, 'audio': True}}
         """
         try:
             if protocol not in self._streamParams:

@@ -90,8 +90,6 @@ class SignalInterface(abstract.SignalInterface):
 class SignalInstance(psygnal.SignalInstance):
     last_emit_time = 0
     emit_interval = 0.0  # Emit at most every 100ms
-    last_image_emit_time = 0
-    image_emit_interval = .2  # Emit at most every 200ms
     IMG_QUALITY = 80  # Set the desired quality level (0-100)
     image_id = 0
     _sending_image = False  # To avoid re-entrance
@@ -143,7 +141,7 @@ class SignalInstance(psygnal.SignalInstance):
         try:
             for arg in args:
                 if isinstance(arg, np.ndarray):
-                    print(time.time())
+                    #print(time.time())
                     output_frame = np.ascontiguousarray(arg)  # Avoid memory fragmentation
                     # if frame is float, we need to convert to uint8
                     if output_frame.dtype == np.float32 or output_frame.dtype == np.float64:

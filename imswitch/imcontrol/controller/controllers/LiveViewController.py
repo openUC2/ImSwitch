@@ -16,7 +16,7 @@ import time
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal, Timer, Worker
 from imswitch.imcommon.model import APIExport, initLogger
-from ..basecontrollers import ImConWidgetController
+from ..basecontrollers import LiveUpdatedController
 
 
 @dataclass
@@ -135,7 +135,7 @@ class BinaryStreamWorker(StreamWorker):
                              ::self._params.subsampling_factor]
             
             # Compress frame
-            compressed = self._compress(frame)
+            compressed = self._compress(np.array(frame))
             
             # Emit compressed frame
             self.sigFrameReady.emit(compressed)
@@ -292,7 +292,7 @@ class WebRTCStreamWorker(StreamWorker):
             self._logger.error(f"Error in WebRTCStreamWorker: {e}")
 
 
-class LiveViewController(ImConWidgetController):
+class LiveViewController(LiveUpdatedController):
     """
     Centralized controller for all live streaming functionality.
     Manages per-detector streaming with dedicated worker threads.
@@ -322,16 +322,6 @@ class LiveViewController(ImConWidgetController):
         self._commChannel.sigStartLiveAcquistion.connect(self._onStartLiveAcquisition)
         self._commChannel.sigStopLiveAcquisition.connect(self._onStopLiveAcquisition)
         
-        # Connect widget signals if not headless
-        if not IS_HEADLESS and self._widget is not None:
-            # Populate detector list
-            detectorNames = self._master.detectorsManager.getAllDeviceNames()
-            self._widget.setDetectorList(detectorNames)
-            
-            # Connect widget signals
-            self._widget.sigStartStream.connect(self._onWidgetStartStream)
-            self._widget.sigStopStream.connect(self._onWidgetStopStream)
-        
         self._logger.info("LiveViewController initialized")
     
     def _onStartLiveAcquisition(self, start: bool):
@@ -351,37 +341,9 @@ class LiveViewController(ImConWidgetController):
             for key in list(self._activeStreams.keys()):
                 detector_name, protocol = key
                 self.stopLiveView(detector_name, protocol)
-    
-    def _onWidgetStartStream(self, detectorName: str, protocol: str):
-        """Handle start stream from widget."""
-        if not IS_HEADLESS and self._widget is not None:
-            result = self.startLiveView(detectorName, protocol)
-            if result['status'] == 'success':
-                self._widget.setStatus(f"Streaming {protocol} from {detectorName}")
-                self._widget.setButtonsEnabled(False, True)
-                self._updateWidgetActiveStreams()
-            else:
-                self._widget.setStatus(f"Error: {result.get('message', 'Unknown error')}")
-    
-    def _onWidgetStopStream(self, detectorName: str, protocol: str):
-        """Handle stop stream from widget."""
-        if not IS_HEADLESS and self._widget is not None:
-            result = self.stopLiveView(detectorName, protocol)
-            if result['status'] == 'success':
-                self._widget.setStatus("Stream stopped")
-                self._widget.setButtonsEnabled(True, False)
-                self._updateWidgetActiveStreams()
-            else:
-                self._widget.setStatus(f"Error: {result.get('message', 'Unknown error')}")
-    
-    def _updateWidgetActiveStreams(self):
-        """Update widget with current active streams."""
-        if not IS_HEADLESS and self._widget is not None:
-            streams = self.getActiveStreams()
-            self._widget.updateActiveStreams(streams.get('active_streams', []))
-    
-    @APIExport()
-    def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "binary", 
+
+    @APIExport(requestType="POST")
+    def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "binary",
                       params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Start live streaming for a specific detector.
@@ -393,6 +355,19 @@ class LiveViewController(ImConWidgetController):
         
         Returns:
             Dictionary with status and stream info
+            
+        parameters are:
+        params: Dict[str, Any] = {
+                "detectorName": "Camera",  // optional, uses first detector if not specified
+                "protocol": "binary",      // binary, jpeg, mjpeg, webrtc
+                "params": {               
+                    "compression_algorithm": "lz4",
+                    "compression_level": 0,
+                    "subsampling_factor": 4,
+                    "throttle_ms": 50,
+                    "jpeg_quality": 80
+                }
+                }
         """
         try:
             # Get detector
@@ -431,7 +406,7 @@ class LiveViewController(ImConWidgetController):
             worker.sigFrameReady.connect(
                 lambda data, dn=detectorName, p=protocol: self.sigFrameReady.emit(dn, p, data)
             )
-            
+            # TODO: use self._commChannel.sigUpdateImage instead of sigFrameReady
             # Start worker in thread
             thread = threading.Thread(target=worker.run, daemon=True)
             thread.start()
@@ -459,7 +434,7 @@ class LiveViewController(ImConWidgetController):
             }
     
     @APIExport()
-    def stopLiveView(self, detectorName: str, protocol: str) -> Dict[str, Any]:
+    def stopLiveView(self, detectorName: str=None, protocol: str=None) -> Dict[str, Any]:
         """
         Stop live streaming for a specific detector.
         
@@ -470,6 +445,10 @@ class LiveViewController(ImConWidgetController):
         Returns:
             Dictionary with status
         """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
+        if protocol is None:
+            protocol = "binary" # TODO: We want to stop all protocols!
         try:
             stream_key = (detectorName, protocol)
             
@@ -508,7 +487,7 @@ class LiveViewController(ImConWidgetController):
             }
     
     @APIExport()
-    def setStreamParams(self, protocol: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    def setStreamParameters(self, protocol: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Configure streaming parameters for a protocol (global settings).
         
@@ -561,7 +540,7 @@ class LiveViewController(ImConWidgetController):
             }
     
     @APIExport()
-    def getStreamParams(self, protocol: Optional[str] = None) -> Dict[str, Any]:
+    def getStreamParameters(self, protocol: Optional[str] = None) -> Dict[str, Any]:
         """
         Get current streaming parameters.
         
@@ -644,7 +623,7 @@ class LiveViewController(ImConWidgetController):
         return None
     
     @APIExport(runOnUIThread=False)
-    def video_feeder(self, startStream: bool = True, detectorName: Optional[str] = None):
+    def mjpeg_stream(self, startStream: bool = True, detectorName: Optional[str] = None):
         """
         HTTP endpoint for MJPEG streaming.
         Replaces RecordingController.video_feeder with LiveViewController implementation.

@@ -63,7 +63,7 @@ class ViewController(ImConWidgetController):
         else:
             self._widget.setLiveViewActive(active)
 
-    @APIExport(runOnUIThread=False)
+    #@APIExport(runOnUIThread=False)
     def getLiveViewActive(self) -> bool:
         """ Returns whether the LiveView is active and updating. """
         if not IS_HEADLESS:

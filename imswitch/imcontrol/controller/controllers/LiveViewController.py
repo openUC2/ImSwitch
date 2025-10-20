@@ -79,12 +79,17 @@ class StreamWorker(Worker):
         self._thread = None
         self._logger = initLogger(self)
         self._last_frame_time = 0
+        self._was_running = False
     
     def run(self):
         """Start polling frames without timer - wait and push immediately."""
         self._running = True
         self._logger.debug(f"StreamWorker started with update period {self._updatePeriod}s")
         
+        self._was_running = self._detector._running
+        if not self._detector._running:
+            self._detector.startAcquisition()
+
         while self._running:
             try:
                 # Wait for minimum period
@@ -99,6 +104,10 @@ class StreamWorker(Worker):
             except Exception as e:
                 self._logger.error(f"Error in StreamWorker loop: {e}")
                 time.sleep(0.1)  # Brief pause on error
+    
+        if self._was_running is False:
+            self._detector.stopAcquisition()
+            
     
     def stop(self):
         """Stop polling frames."""
@@ -538,6 +547,16 @@ class LiveViewController(LiveUpdatedController):
         
         Returns:
             Dictionary with status and stream info
+            
+        Example:
+            -> binary
+            params: {"compression_algorithm": "lz4", "compression_level": 0, "subsampling_factor": 4, "throttle_ms": 50}
+            -> jpeg
+            params: {"jpeg_quality": 80, "subsampling_factor": 4, "throttle_ms": 50}
+            -> mjpeg
+            params: {"jpeg_quality": 80, "throttle_ms": 50}
+            -> webrtc
+            params: {"stun_servers": ["stun:stun.l.google.com:19302"], "turn_servers": []}
         """
         try:
             # Get detector
@@ -574,7 +593,7 @@ class LiveViewController(LiveUpdatedController):
                 if protocol == "jpeg":
                     update_params['compressionlevel'] = stream_params.jpeg_quality
                 
-                self._master.detectorsManager.updateGlobalDetectorParams(update_params) # TOOD: I think this is still not needed anymore
+                # self._master.detectorsManager.updateGlobalDetectorParams(update_params) # TOOD: I think this is still not needed anymore
             
             # Create appropriate worker
             worker = self._createWorker(detector, protocol, stream_params)
@@ -673,7 +692,7 @@ class LiveViewController(LiveUpdatedController):
                 "message": str(e)
             }
     
-    @APIExport()
+    @APIExport(requestType="POST")
     def setStreamParameters(self, protocol: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Configure streaming parameters for a protocol (global settings).
@@ -699,36 +718,46 @@ class LiveViewController(LiveUpdatedController):
             if protocol not in self._streamParams:
                 self._streamParams[protocol] = StreamParams(protocol=protocol)
             
-            # Update parameters
+            # Update global parameters
             stream_params = self._streamParams[protocol]
             for key, value in params.items():
                 if hasattr(stream_params, key):
                     setattr(stream_params, key, value)
             
-            # Also update DetectorsManager global params for backward compatibility
-            if protocol == "binary":
-                update_params = {}
-                if 'compression_algorithm' in params:
-                    update_params['stream_compression_algorithm'] = params['compression_algorithm']
-                if 'compression_level' in params:
-                    update_params['stream_compression_level'] = params['compression_level']
-                if 'subsampling_factor' in params:
-                    update_params['stream_subsampling_factor'] = params['subsampling_factor']
-                if 'throttle_ms' in params:
-                    update_params['stream_throttle_ms'] = params['throttle_ms']
-                # TOOD: I think this is still not needed anymore
-                self._master.detectorsManager.updateGlobalDetectorParams(update_params)
-            elif protocol == "jpeg":
-                if 'jpeg_quality' in params: 
-                    self._master.detectorsManager.updateGlobalDetectorParams({ # TOOD: I think this is still not needed anymore
-                        'compressionlevel': params['jpeg_quality']
-                    })
+            # Check if any detector is currently streaming with this protocol
+            # and restart it if necessary to apply the new parameters
+            detectors_to_restart = []
+            for detector_name, (active_protocol, worker) in self._activeStreams.items():
+                # close any streams with this protocol
+                if active_protocol != protocol:
+                  detectors_to_restart.append(detector_name)
             
-            return {
+            # Restart streams with updated parameters
+            restarted_streams = []
+            for detector_name in detectors_to_restart:
+                self._logger.info(f"Restarting {protocol} stream for {detector_name} with updated parameters")
+                # Stop the current stream
+                self.stopLiveView(detector_name)
+                # Start with new parameters
+                result = self.startLiveView(detector_name, protocol, params)
+                if result['status'] == 'success':
+                    restarted_streams.append(detector_name)
+            
+            
+            response = {
                 "status": "success",
                 "protocol": protocol,
                 "params": stream_params.to_dict()
             }
+            
+            if restarted_streams:
+                response["restarted_detectors"] = restarted_streams
+                response["message"] = f"Parameters updated and {len(restarted_streams)} stream(s) restarted"
+            else:
+                response["message"] = "Parameters updated (no active streams to restart)"
+            
+            return response
+            
         except Exception as e:
             self._logger.error(f"Error setting stream params: {e}")
             return {
@@ -746,6 +775,14 @@ class LiveViewController(LiveUpdatedController):
         
         Returns:
             Dictionary with streaming parameters
+            
+        Example return:
+        {
+            "binary": {"detector_name": null, "protocol": "binary", "compression_algorithm": "lz4", "compression_level": 0, "subsampling_factor": 2, "throttle_ms": 100, "jpeg_quality": 80, "stun_servers": ["stun:stun.l.google.com:19302"], "turn_servers": []}, 
+            "jpeg": {"detector_name": null, "protocol": "jpeg", "compression_algorithm": "lz4", "compression_level": 0, "subsampling_factor": 1, "throttle_ms": 100, "jpeg_quality": 85, "stun_servers": ["stun:stun.l.google.com:19302"], "turn_servers": []}, 
+            "mjpeg": {"detector_name": null, "protocol": "mjpeg", "compression_algorithm": "lz4", "compression_level": 0, "subsampling_factor": 4, "throttle_ms": 50, "jpeg_quality": 80, "stun_servers": ["stun:stun.l.google.com:19302"], "turn_servers": []}, 
+            "webrtc": {"detector_name": null, "protocol": "webrtc", "compression_algorithm": "lz4", "compression_level": 0, "subsampling_factor": 4, "throttle_ms": 50, "jpeg_quality": 80, "stun_servers": ["stun:stun.l.google.com:19302"], "turn_servers": []}
+        }
         """
         try:
             if protocol:
@@ -764,6 +801,7 @@ class LiveViewController(LiveUpdatedController):
                 # Return all protocols
                 return {
                     "status": "success",
+                    "current_protocol": next(iter(self._activeStreams.values()))[0] if self._activeStreams else None,
                     "protocols": {
                         p: params.to_dict() 
                         for p, params in self._streamParams.items()
@@ -895,14 +933,14 @@ class LiveViewController(LiveUpdatedController):
         return None
     
     @APIExport(runOnUIThread=False, requestType="POST")
-    def webrtc_offer(self, detectorName: Optional[str] = None, sdp: str = None, type: str = None):
+    def webrtc_offer(self, detectorName: Optional[str] = None, sdp: str = None, sdp_type: str = None):
         """
         Handle WebRTC offer from client and return answer.
         
         Args:
             detectorName: Name of detector (None = first available)
             sdp: Session Description Protocol from client
-            type: Type of SDP (should be "offer")
+            sdp_type: Type of SDP (should be "offer")
         
         Returns:
             Dictionary with answer SDP
@@ -913,6 +951,15 @@ class LiveViewController(LiveUpdatedController):
             import json
         except ImportError:
             return {"status": "error", "message": "aiortc not available"}
+        
+
+        # Validate parameters
+        if sdp is None:
+            return {"status": "error", "message": "sdp parameter is required"}
+        if sdp_type is None:
+            return {"status": "error", "message": "type parameter is required"}
+        
+        self._logger.debug(f"Received WebRTC offer: type={sdp_type}, sdp length={len(sdp)}")
         
         # Get detector name
         if detectorName is None:
@@ -929,34 +976,42 @@ class LiveViewController(LiveUpdatedController):
         if worker is None:
             return {"status": "error", "message": "Failed to get WebRTC worker"}
         
-        # Create peer connection
-        pc = RTCPeerConnection()
-        
-        # Store PC for cleanup
-        if not hasattr(self, '_webrtc_peers'):
-            self._webrtc_peers = set()
-        self._webrtc_peers.add(pc)
-        
-        @pc.on("connectionstatechange")
-        async def on_connectionstatechange():
-            self._logger.info(f"WebRTC connection state: {pc.connectionState}")
-            if pc.connectionState == "failed" or pc.connectionState == "closed":
-                await pc.close()
-                if pc in self._webrtc_peers:
-                    self._webrtc_peers.discard(pc)
-        
-        # Add video track
-        video_track = worker.get_video_track()
-        if video_track:
-            pc.addTrack(video_track)
-        
-        # Handle offer and create answer
+        # Handle offer and create answer in async context
         async def process_offer():
-            offer_desc = RTCSessionDescription(sdp=sdp, type=type)
+            # Create peer connection in async context
+            pc = RTCPeerConnection()
+            
+            # Store PC for cleanup
+            if not hasattr(self, '_webrtc_peers'):
+                self._webrtc_peers = set()
+            self._webrtc_peers.add(pc)
+            
+            @pc.on("connectionstatechange")
+            async def on_connectionstatechange():
+                self._logger.info(f"WebRTC connection state: {pc.connectionState}")
+                if pc.connectionState == "failed" or pc.connectionState == "closed":
+                    await pc.close()
+                    if pc in self._webrtc_peers:
+                        self._webrtc_peers.discard(pc)
+            
+            # Add video track
+            video_track = worker.get_video_track()
+            if video_track:
+                pc.addTrack(video_track)
+            else:
+                self._logger.error("Failed to get video track from worker")
+                raise Exception("No video track available")
+            
+            # Process offer
+            self._logger.debug(f"Creating RTCSessionDescription with type={sdp_type}")
+            offer_desc = RTCSessionDescription(sdp=sdp, type=sdp_type)
             await pc.setRemoteDescription(offer_desc)
             
+            # Create and set answer
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
+            
+            self._logger.info(f"WebRTC answer created: type={pc.localDescription.type}")
             
             return {
                 "status": "success",
@@ -964,13 +1019,27 @@ class LiveViewController(LiveUpdatedController):
                 "type": pc.localDescription.type
             }
         
-        # Run async function
+        # Run async function with proper event loop handling
         loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
             result = loop.run_until_complete(process_offer())
             return result
+        except Exception as e:
+            self._logger.error(f"Error processing WebRTC offer: {e}")
+            return {"status": "error", "message": str(e)}
         finally:
-            loop.close()
+            try:
+                # Clean up pending tasks
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
     
     @APIExport(runOnUIThread=False)
     def webrtc_ice_candidate(self, detectorName: Optional[str] = None, candidate: dict = None):

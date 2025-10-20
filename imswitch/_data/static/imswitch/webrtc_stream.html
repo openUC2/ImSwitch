@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ImSwitch WebRTC Streaming</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        button.primary {
+            background-color: #4CAF50;
+            color: white;
+        }
+        button.primary:hover {
+            background-color: #45a049;
+        }
+        button.primary:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        button.danger {
+            background-color: #f44336;
+            color: white;
+        }
+        button.danger:hover {
+            background-color: #da190b;
+        }
+        input, select {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        #videoContainer {
+            position: relative;
+            background-color: #000;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .stats {
+            font-family: monospace;
+            font-size: 12px;
+            background-color: #f4f4f4;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>ImSwitch WebRTC Live Streaming</h1>
+    
+    <div class="container">
+        <h2>WebRTC Video Stream</h2>
+        <div class="controls">
+            <input type="text" id="serverUrl" placeholder="Server URL" value="http://localhost:8001">
+            <input type="text" id="detectorName" placeholder="Detector Name (optional)">
+            <button class="primary" id="startBtn" onclick="start()">Start WebRTC Stream</button>
+            <button class="danger" id="stopBtn" onclick="stop()" disabled>Stop Stream</button>
+        </div>
+        <div id="status"></div>
+        <div id="videoContainer">
+            <video id="video" autoplay playsinline controls></video>
+        </div>
+        <div id="stats" class="stats hidden"></div>
+    </div>
+
+    <div class="container">
+        <h2>How it works</h2>
+        <p>This page uses WebRTC to stream live video from your ImSwitch detector with low latency.</p>
+        <ul>
+            <li><strong>Step 1:</strong> Click "Start WebRTC Stream" to connect to the server</li>
+            <li><strong>Step 2:</strong> The browser will create a WebRTC offer and send it to the server</li>
+            <li><strong>Step 3:</strong> The server will start streaming frames and send back an answer</li>
+            <li><strong>Step 4:</strong> The WebRTC connection is established and video starts playing</li>
+        </ul>
+        <p><strong>Requirements:</strong> Your browser must support WebRTC (all modern browsers do)</p>
+    </div>
+
+    <script>
+        let pc = null;
+        let video = document.getElementById('video');
+        let statsInterval = null;
+
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+        }
+
+        function updateStats() {
+            if (!pc) return;
+            
+            pc.getStats(null).then(stats => {
+                let statsText = '';
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        statsText += `Frames Received: ${report.framesReceived || 0}\n`;
+                        statsText += `Frames Decoded: ${report.framesDecoded || 0}\n`;
+                        statsText += `Frames Dropped: ${report.framesDropped || 0}\n`;
+                        statsText += `Bytes Received: ${(report.bytesReceived || 0) / 1024 / 1024} MB\n`;
+                        
+                        if (report.framesPerSecond) {
+                            statsText += `FPS: ${report.framesPerSecond.toFixed(1)}\n`;
+                        }
+                    }
+                });
+                
+                if (statsText) {
+                    document.getElementById('stats').textContent = statsText;
+                    document.getElementById('stats').classList.remove('hidden');
+                }
+            });
+        }
+
+        async function negotiate() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const detectorName = document.getElementById('detectorName').value;
+            
+            try {
+                showStatus('Creating offer...', 'info');
+                
+                // Add a transceiver to receive video (this triggers ICE gathering)
+                // Without this, the peer connection has no media and ICE gathering may not complete
+                pc.addTransceiver('video', { direction: 'recvonly' });
+                
+                // Create offer
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                
+                console.log('ICE gathering state after setLocalDescription:', pc.iceGatheringState);
+                
+                // Wait for ICE gathering to complete (with timeout)
+                await new Promise((resolve, reject) => {
+                    let timeoutId = null;
+                    
+                    // Define the state change handler first
+                    const checkState = () => {
+                        console.log('ICE gathering state changed to:', pc.iceGatheringState);
+                        if (pc.iceGatheringState === 'complete') {
+                            if (timeoutId) clearTimeout(timeoutId);
+                            pc.removeEventListener('icegatheringstatechange', checkState);
+                            resolve();
+                        }
+                    };
+                    
+                    // Check if already complete
+                    if (pc.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        // Add event listener
+                        pc.addEventListener('icegatheringstatechange', checkState);
+                        
+                        // Add timeout to prevent infinite waiting
+                        timeoutId = setTimeout(() => {
+                            pc.removeEventListener('icegatheringstatechange', checkState);
+                            console.log('ICE gathering timeout, proceeding anyway. State:', pc.iceGatheringState);
+                            resolve(); // Proceed even if not complete
+                        }, 5000); // 5 second timeout
+                    }
+                });
+                
+                console.log('Final ICE gathering state:', pc.iceGatheringState);
+                console.log('Offer SDP length:', pc.localDescription.sdp.length);
+                console.log('Offer type:', pc.localDescription.type);
+                
+                showStatus('Sending offer to server...', 'info');
+                
+                // Send offer to server
+                const url = `${serverUrl}/LiveViewController/webrtc_offer`;
+                const params = {
+                    sdp: pc.localDescription.sdp,
+                    sdp_type: pc.localDescription.type  // Changed from 'type' to 'sdp_type'
+                };
+                
+                if (detectorName) {
+                    params.detectorName = detectorName;
+                }
+                
+                console.log('Sending params:', {
+                    detectorName: params.detectorName,
+                    sdp_type: params.sdp_type,
+                    sdp_length: params.sdp.length
+                });
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(params)
+                });
+                
+                console.log('Response status:', response.status);
+                const answer = await response.json();
+                console.log('Answer received:', {
+                    status: answer.status,
+                    type: answer.type,
+                    has_sdp: !!answer.sdp
+                });
+                
+                if (answer.status === 'error') {
+                    throw new Error(answer.message || 'Server error');
+                }
+                
+                showStatus('Received answer from server, establishing connection...', 'info');
+                
+                // Set remote description
+                await pc.setRemoteDescription(new RTCSessionDescription({
+                    sdp: answer.sdp,
+                    type: answer.type
+                }));
+                
+                showStatus('WebRTC connection established!', 'success');
+                
+                // Start stats monitoring
+                statsInterval = setInterval(updateStats, 1000);
+                
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                console.error('Negotiation error:', error);
+                stop();
+            }
+        }
+
+        async function start() {
+            try {
+                showStatus('Starting WebRTC connection...', 'info');
+                
+                // Disable start button
+                document.getElementById('startBtn').disabled = true;
+                
+                // Create peer connection
+                const config = {
+                    iceServers: [{urls: ['stun:stun.l.google.com:19302']}]
+                };
+                
+                pc = new RTCPeerConnection(config);
+                
+                // Handle incoming tracks
+                pc.addEventListener('track', (evt) => {
+                    console.log('Track received:', evt.track.kind);
+                    if (evt.track.kind === 'video') {
+                        video.srcObject = evt.streams[0];
+                        showStatus('Video track received, starting playback...', 'success');
+                    }
+                });
+                
+                // Handle connection state
+                pc.addEventListener('connectionstatechange', () => {
+                    console.log('Connection state:', pc.connectionState);
+                    if (pc.connectionState === 'connected') {
+                        showStatus('Connected! Streaming video...', 'success');
+                        document.getElementById('stopBtn').disabled = false;
+                    } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+                        showStatus('Connection failed or closed', 'error');
+                        stop();
+                    }
+                });
+                
+                // Handle ICE connection state
+                pc.addEventListener('iceconnectionstatechange', () => {
+                    console.log('ICE connection state:', pc.iceConnectionState);
+                });
+                
+                // Start negotiation
+                await negotiate();
+                
+            } catch (error) {
+                showStatus(`Error starting stream: ${error.message}`, 'error');
+                console.error('Start error:', error);
+                document.getElementById('startBtn').disabled = false;
+            }
+        }
+
+        function stop() {
+            showStatus('Stopping stream...', 'info');
+            
+            // Stop stats monitoring
+            if (statsInterval) {
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
+            
+            // Close peer connection
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            
+            // Stop video
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+            
+            // Hide stats
+            document.getElementById('stats').classList.add('hidden');
+            
+            // Update UI
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            showStatus('Stream stopped', 'info');
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', stop);
+    </script>
+</body>
+</html>

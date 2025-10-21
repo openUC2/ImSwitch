@@ -26,7 +26,6 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._activeAcqLVHandles = []
         self._activeAcqsMutex = Mutex()
 
-        self._currentDetectorName = None
         '''
         # Default parameters for the streaming  # TODO: Not sure if this is the best place to have them - maybe a dedicated dataclass?
         self.detectorParams["compressionlevel"]=80
@@ -35,8 +34,12 @@ class DetectorsManager(MultiManager, SignalInterface):
         self.detectorParams["stream_throttle_ms"]=50  # 1,2,4,8
         '''
         if IS_HEADLESS:
+            # get first detector name from dictionary
+            detectorName, detectorInfo = next(iter(detectorInfos.items()))
+            self._currentDetectorName = detectorName
             return # In headless mode, we don't start the LV worker automatically - streaming is managed by LiveViewController
         for detectorName, detectorInfo in detectorInfos.items():
+            self._currentDetectorName = None
             if not self._subManagers[detectorName].forAcquisition:
                 continue
             # Connect signals - this is only used to trigger live-view # TODO: We should think about a better way to handle this as we also have the sigImageUpdated and sigUpdateImage - basically whenever we have a sigImageUpdated, the sigUpdateImage is triggered, through the MasterController - why? I think this has to go that way as

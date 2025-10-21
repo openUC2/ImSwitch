@@ -12,6 +12,7 @@ import numpy as np
 import threading
 import queue
 import time
+from pydantic import BaseModel
 
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal, Timer, Worker
@@ -85,29 +86,20 @@ class StreamWorker(Worker):
         """Start polling frames without timer - wait and push immediately."""
         self._running = True
         self._logger.debug(f"StreamWorker started with update period {self._updatePeriod}s")
-        
-        self._was_running = self._detector._running
-        if not self._detector._running:
-            self._detector.startAcquisition()
-
+        # TODO: How can we optimize the speed here?
         while self._running:
+            self._last_frame_time = time.time() 
             try:
-                # Wait for minimum period
-                elapsed = time.time() - self._last_frame_time
-                if elapsed < self._updatePeriod:
-                    time.sleep(self._updatePeriod - elapsed)
-                
+                # frame due? 
+                if self._last_frame_time + self._updatePeriod < time.time():
+                    continue
                 # Capture and emit immediately
                 self._captureAndEmit()
                 self._last_frame_time = time.time()
-                
+                print("Time now: ", time.time())
             except Exception as e:
                 self._logger.error(f"Error in StreamWorker loop: {e}")
                 time.sleep(0.1)  # Brief pause on error
-    
-        if self._was_running is False:
-            self._detector.stopAcquisition()
-            
     
     def stop(self):
         """Stop polling frames."""
@@ -469,6 +461,13 @@ class DetectorVideoTrack:
         return getattr(self._track, name)
 
 
+class WebRTCOfferRequest(BaseModel):
+    """Request model for WebRTC offer."""
+    sdp: str
+    sdp_type: str  # Should be "offer"
+    detectorName: Optional[str] = None
+
+
 class LiveViewController(LiveUpdatedController):
     """
     Centralized controller for all live streaming functionality.
@@ -489,6 +488,11 @@ class LiveViewController(LiveUpdatedController):
         self._activeStreams: Dict[str, tuple] = {}
         self._streamThreads: Dict[str, threading.Thread] = {}
         self._streamIsRunning = False
+        
+        # WebRTC peer connections: {detectorName: RTCPeerConnection}
+        self._webrtc_peers: Dict[str, Any] = {}
+        self._webrtc_loop = None
+        self._webrtc_loop_thread = None
         
         # Global stream parameters per protocol
         self._streamParams: Dict[str, StreamParams] = {
@@ -511,6 +515,40 @@ class LiveViewController(LiveUpdatedController):
             '''
         self._logger.info("LiveViewController initialized")
     
+    def _get_or_create_webrtc_loop(self):
+        """Get or create a persistent event loop for WebRTC in a separate thread."""
+        if self._webrtc_loop is None or not self._webrtc_loop.is_running():
+            import asyncio
+            
+            def run_loop():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                self._webrtc_loop = loop
+                self._logger.debug("WebRTC event loop started")
+                loop.run_forever()
+            
+            self._webrtc_loop_thread = threading.Thread(target=run_loop, daemon=True)
+            self._webrtc_loop_thread.start()
+            
+            # Wait for loop to be ready
+            import time
+            max_wait = 2.0
+            start = time.time()
+            while self._webrtc_loop is None and (time.time() - start) < max_wait:
+                time.sleep(0.01)
+        
+        return self._webrtc_loop
+    
+    def _stop_webrtc_loop(self):
+        """Stop the WebRTC event loop."""
+        if self._webrtc_loop and self._webrtc_loop.is_running():
+            self._webrtc_loop.call_soon_threadsafe(self._webrtc_loop.stop)
+            if self._webrtc_loop_thread:
+                self._webrtc_loop_thread.join(timeout=1.0)
+            self._webrtc_loop = None
+            self._webrtc_loop_thread = None
+            self._logger.debug("WebRTC event loop stopped")
+    
     def _onStartLiveAcquisition(self, start: bool):
         """Handle start live acquisition signal."""
         if start:
@@ -526,7 +564,7 @@ class LiveViewController(LiveUpdatedController):
             self._logger.debug("Stopping all live acquisitions")
             # Stop all active streams
             for detector_name in list(self._activeStreams.keys()):
-                self.stopLiveView(detector_name)
+                self.stopLiveView(detector_name, stopCamera=False)
     
     @APIExport()
     def getLiveViewActive(self) -> bool:
@@ -562,8 +600,11 @@ class LiveViewController(LiveUpdatedController):
             # Get detector
             if detectorName is None:
                 detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
-            
             detector = self._master.detectorsManager[detectorName]
+
+            # ensure the detector is actually started
+            if not detector._running:
+                detector.startAcquisition()           
             
             # Check if detector already has an active stream
             if detectorName in self._activeStreams:
@@ -634,7 +675,7 @@ class LiveViewController(LiveUpdatedController):
             }
     
     @APIExport()
-    def stopLiveView(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
+    def stopLiveView(self, detectorName: Optional[str] = None, stopCamera: bool=True) -> Dict[str, Any]:
         """
         Stop live streaming for a specific detector.
         If detectorName is None, stops the first active stream.
@@ -655,7 +696,9 @@ class LiveViewController(LiveUpdatedController):
                         "message": "No active streams to stop"
                     }
                 detectorName = list(self._activeStreams.keys())[0]
-            
+
+                self._detector.stopAcquisition()
+
             # Check if detector has active stream
             if detectorName not in self._activeStreams:
                 return {
@@ -669,6 +712,24 @@ class LiveViewController(LiveUpdatedController):
             
             # Stop worker
             worker.stop()
+            
+            # If it's WebRTC, close the peer connection
+            if protocol == "webrtc" and detectorName in self._webrtc_peers:
+                import asyncio
+                loop = self._get_or_create_webrtc_loop()
+                
+                async def close_pc():
+                    pc = self._webrtc_peers[detectorName]
+                    await pc.close()
+                    del self._webrtc_peers[detectorName]
+                    self._logger.debug(f"Closed WebRTC peer connection for {detectorName}")
+                
+                # Schedule close on the event loop
+                future = asyncio.run_coroutine_threadsafe(close_pc(), loop)
+                try:
+                    future.result(timeout=5.0)
+                except Exception as e:
+                    self._logger.error(f"Error closing WebRTC peer: {e}")
             
             # Clean up
             del self._activeStreams[detectorName]
@@ -691,6 +752,13 @@ class LiveViewController(LiveUpdatedController):
                 "status": "error",
                 "message": str(e)
             }
+    
+    def detectorIsRunning(self, detectorName: str=None) -> bool:
+        """Check if a detector is currently running acquisition."""
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
+        detector = self._master.detectorsManager[detectorName]
+        return detector._running
     
     @APIExport(requestType="POST")
     def setStreamParameters(self, protocol: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -730,14 +798,15 @@ class LiveViewController(LiveUpdatedController):
             for detector_name, (active_protocol, worker) in self._activeStreams.items():
                 # close any streams with this protocol
                 if active_protocol != protocol:
-                  detectors_to_restart.append(detector_name)
+                    detectors_to_restart.append(detector_name)
             
             # Restart streams with updated parameters
             restarted_streams = []
             for detector_name in detectors_to_restart:
                 self._logger.info(f"Restarting {protocol} stream for {detector_name} with updated parameters")
                 # Stop the current stream
-                self.stopLiveView(detector_name)
+                self.stopLiveView(detectorName=detector_name, stopCamera=False)
+                    
                 # Start with new parameters
                 result = self.startLiveView(detector_name, protocol, params)
                 if result['status'] == 'success':
@@ -766,31 +835,46 @@ class LiveViewController(LiveUpdatedController):
             }
     
     @APIExport()
-    def getStreamParameters(self, protocol: Optional[str] = None) -> Dict[str, Any]:
+    def getStreamParameters(self, protocol: Optional[str] = None, detectorName: Optional[str] = None) -> Dict[str, Any]:
         """
         Get current streaming parameters.
         
         Args:
             protocol: Optional protocol to get params for (None = all protocols)
+            detectorName: Optional detector to get current protocol for (None = first active)
         
         Returns:
             Dictionary with streaming parameters
             
         Example return:
         {
-            "binary": {"detector_name": null, "protocol": "binary", "compression_algorithm": "lz4", "compression_level": 0, "subsampling_factor": 2, "throttle_ms": 100, "jpeg_quality": 80, "stun_servers": ["stun:stun.l.google.com:19302"], "turn_servers": []}, 
-            "jpeg": {"detector_name": null, "protocol": "jpeg", "compression_algorithm": "lz4", "compression_level": 0, "subsampling_factor": 1, "throttle_ms": 100, "jpeg_quality": 85, "stun_servers": ["stun:stun.l.google.com:19302"], "turn_servers": []}, 
-            "mjpeg": {"detector_name": null, "protocol": "mjpeg", "compression_algorithm": "lz4", "compression_level": 0, "subsampling_factor": 4, "throttle_ms": 50, "jpeg_quality": 80, "stun_servers": ["stun:stun.l.google.com:19302"], "turn_servers": []}, 
-            "webrtc": {"detector_name": null, "protocol": "webrtc", "compression_algorithm": "lz4", "compression_level": 0, "subsampling_factor": 4, "throttle_ms": 50, "jpeg_quality": 80, "stun_servers": ["stun:stun.l.google.com:19302"], "turn_servers": []}
+            "status": "success",
+            "current_active_protocols": {"detector1": "binary", "detector2": "jpeg"},
+            "requested_protocol": "binary",
+            "protocols": {
+                "binary": {"detector_name": null, "protocol": "binary", ...},
+                "jpeg": {"detector_name": null, "protocol": "jpeg", ...}
+            }
         }
         """
         try:
+            # Build active protocols mapping
+            active_protocols = {
+                det_name: prot for det_name, (prot, worker) in self._activeStreams.items()
+            }
+            
             if protocol:
+                # Return specific protocol parameters
                 if protocol in self._streamParams:
+                    # Check which detectors are using this protocol
+                    active_detectors = [det for det, prot in active_protocols.items() if prot == protocol]
+                    
                     return {
                         "status": "success",
                         "protocol": protocol,
-                        "params": self._streamParams[protocol].to_dict()
+                        "params": self._streamParams[protocol].to_dict(),
+                        "active_detectors": active_detectors,
+                        "is_active": len(active_detectors) > 0
                     }
                 else:
                     return {
@@ -798,12 +882,25 @@ class LiveViewController(LiveUpdatedController):
                         "message": f"Unknown protocol: {protocol}"
                     }
             else:
-                # Return all protocols
+                # Return all protocols with current status
+                current_protocol = None
+                if detectorName and detectorName in active_protocols:
+                    current_protocol = active_protocols[detectorName]
+                elif active_protocols:
+                    # Use first active protocol if no detector specified
+                    current_protocol = next(iter(active_protocols.values()))
+                
                 return {
                     "status": "success",
-                    "current_protocol": next(iter(self._activeStreams.values()))[0] if self._activeStreams else None,
+                    "current_active_protocols": active_protocols,
+                    "current_protocol": current_protocol,
+                    "total_active_streams": len(active_protocols),
                     "protocols": {
-                        p: params.to_dict() 
+                        p: {
+                            **params.to_dict(),
+                            "active_detectors": [det for det, prot in active_protocols.items() if prot == p],
+                            "is_active": any(prot == p for prot in active_protocols.values())
+                        }
                         for p, params in self._streamParams.items()
                     }
                 }
@@ -832,6 +929,93 @@ class LiveViewController(LiveUpdatedController):
                 for detector_name, (protocol, worker) in self._activeStreams.items()
             ]
         }
+    
+    @APIExport()
+    def getCurrentStreamProtocol(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get the current streaming protocol for a specific detector.
+        
+        Args:
+            detectorName: Name of detector (None = first available or first active)
+        
+        Returns:
+            Dictionary with current protocol information
+        """
+        try:
+            # If no detector specified, use first active stream or first available detector
+            if detectorName is None:
+                if self._activeStreams:
+                    detectorName = list(self._activeStreams.keys())[0]
+                else:
+                    detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
+            
+            # Check if detector has active stream
+            if detectorName in self._activeStreams:
+                protocol, worker = self._activeStreams[detectorName]
+                if protocol is None:
+                    protocol = "binary" # Default protocol if none set
+                return {
+                    "status": "success",
+                    "detector": detectorName,
+                    "protocol": protocol,
+                    "is_streaming": True,
+                    "params": self._streamParams[protocol].to_dict() if protocol in self._streamParams else {}
+                }
+            else:
+                return {
+                    "status": "success",
+                    "detector": detectorName,
+                    "protocol": None,
+                    "is_streaming": False,
+                    "message": f"No active stream for detector {detectorName}"
+                }
+        except Exception as e:
+            self._logger.error(f"Error getting current stream protocol: {e}")
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+    
+    @APIExport()
+    def getStreamStatus(self) -> Dict[str, Any]:
+        """
+        Get comprehensive streaming status for all detectors.
+        
+        Returns:
+            Dictionary with complete streaming status
+        """
+        try:
+            all_detectors = self._master.detectorsManager.getAllDeviceNames()
+            detector_status = {}
+            
+            for detector_name in all_detectors:
+                if detector_name in self._activeStreams:
+                    protocol, worker = self._activeStreams[detector_name]
+                    detector_status[detector_name] = {
+                        "is_streaming": True,
+                        "protocol": protocol,
+                        "params": self._streamParams[protocol].to_dict() if protocol in self._streamParams else {}
+                    }
+                else:
+                    detector_status[detector_name] = {
+                        "is_streaming": False,
+                        "protocol": None,
+                        "params": {}
+                    }
+            
+            return {
+                "status": "success",
+                "total_detectors": len(all_detectors),
+                "active_streams": len(self._activeStreams),
+                "detectors": detector_status,
+                "available_protocols": list(self._streamParams.keys())
+            }
+        except Exception as e:
+            self._logger.error(f"Error getting stream status: {e}")
+            return {
+                "status": "error",
+                "message": str(e)
+            }
     
     def _createWorker(self, detector, protocol: str, params: StreamParams) -> Optional[StreamWorker]:
         """Create appropriate worker for the given protocol."""
@@ -877,7 +1061,7 @@ class LiveViewController(LiveUpdatedController):
         
         if not startStream:
             # Stop the stream - only care about detector
-            self.stopLiveView(detectorName)
+            self.stopLiveView(detectorName=detectorName, stopCamera=False)
             return {"status": "success", "message": "stream stopped"}
         
         # Start streaming
@@ -933,14 +1117,12 @@ class LiveViewController(LiveUpdatedController):
         return None
     
     @APIExport(runOnUIThread=False, requestType="POST")
-    def webrtc_offer(self, detectorName: Optional[str] = None, sdp: str = None, sdp_type: str = None):
+    def webrtc_offer(self, request: WebRTCOfferRequest):
         """
         Handle WebRTC offer from client and return answer.
         
         Args:
-            detectorName: Name of detector (None = first available)
-            sdp: Session Description Protocol from client
-            sdp_type: Type of SDP (should be "offer")
+            request: WebRTCOfferRequest containing SDP offer and detector name
         
         Returns:
             Dictionary with answer SDP
@@ -952,12 +1134,10 @@ class LiveViewController(LiveUpdatedController):
         except ImportError:
             return {"status": "error", "message": "aiortc not available"}
         
-
-        # Validate parameters
-        if sdp is None:
-            return {"status": "error", "message": "sdp parameter is required"}
-        if sdp_type is None:
-            return {"status": "error", "message": "type parameter is required"}
+        # Extract parameters from request
+        sdp = request.sdp
+        sdp_type = request.sdp_type
+        detectorName = request.detectorName
         
         self._logger.debug(f"Received WebRTC offer: type={sdp_type}, sdp length={len(sdp)}")
         
@@ -976,28 +1156,45 @@ class LiveViewController(LiveUpdatedController):
         if worker is None:
             return {"status": "error", "message": "Failed to get WebRTC worker"}
         
+        # Get or create persistent event loop
+        loop = self._get_or_create_webrtc_loop()
+        
         # Handle offer and create answer in async context
         async def process_offer():
-            # Create peer connection in async context
+            # Close existing peer connection for this detector if any
+            if detectorName in self._webrtc_peers:
+                old_pc = self._webrtc_peers[detectorName]
+                try:
+                    await old_pc.close()
+                    self._logger.debug(f"Closed old peer connection for {detectorName}")
+                except Exception as e:
+                    self._logger.warning(f"Error closing old peer: {e}")
+            
+            # Create new peer connection
             pc = RTCPeerConnection()
             
-            # Store PC for cleanup
-            if not hasattr(self, '_webrtc_peers'):
-                self._webrtc_peers = set()
-            self._webrtc_peers.add(pc)
+            # Store PC for this detector
+            self._webrtc_peers[detectorName] = pc
             
             @pc.on("connectionstatechange")
             async def on_connectionstatechange():
-                self._logger.info(f"WebRTC connection state: {pc.connectionState}")
-                if pc.connectionState == "failed" or pc.connectionState == "closed":
-                    await pc.close()
-                    if pc in self._webrtc_peers:
-                        self._webrtc_peers.discard(pc)
+                self._logger.info(f"WebRTC connection state for {detectorName}: {pc.connectionState}")
+                if pc.connectionState == "failed":
+                    self._logger.error(f"WebRTC connection failed for {detectorName}")
+                elif pc.connectionState == "closed":
+                    self._logger.info(f"WebRTC connection closed for {detectorName}")
+                    if detectorName in self._webrtc_peers and self._webrtc_peers[detectorName] == pc:
+                        del self._webrtc_peers[detectorName]
+            
+            @pc.on("iceconnectionstatechange")
+            async def on_iceconnectionstatechange():
+                self._logger.debug(f"ICE connection state for {detectorName}: {pc.iceConnectionState}")
             
             # Add video track
             video_track = worker.get_video_track()
             if video_track:
                 pc.addTrack(video_track)
+                self._logger.debug(f"Added video track to peer connection for {detectorName}")
             else:
                 self._logger.error("Failed to get video track from worker")
                 raise Exception("No video track available")
@@ -1006,12 +1203,13 @@ class LiveViewController(LiveUpdatedController):
             self._logger.debug(f"Creating RTCSessionDescription with type={sdp_type}")
             offer_desc = RTCSessionDescription(sdp=sdp, type=sdp_type)
             await pc.setRemoteDescription(offer_desc)
+            self._logger.debug(f"Set remote description for {detectorName}")
             
             # Create and set answer
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
             
-            self._logger.info(f"WebRTC answer created: type={pc.localDescription.type}")
+            self._logger.info(f"WebRTC answer created for {detectorName}: type={pc.localDescription.type}")
             
             return {
                 "status": "success",
@@ -1019,27 +1217,14 @@ class LiveViewController(LiveUpdatedController):
                 "type": pc.localDescription.type
             }
         
-        # Run async function with proper event loop handling
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Run async function on persistent event loop
         try:
-            result = loop.run_until_complete(process_offer())
+            future = asyncio.run_coroutine_threadsafe(process_offer(), loop)
+            result = future.result(timeout=10.0)
             return result
         except Exception as e:
             self._logger.error(f"Error processing WebRTC offer: {e}")
             return {"status": "error", "message": str(e)}
-        finally:
-            try:
-                # Clean up pending tasks
-                pending = asyncio.all_tasks(loop)
-                for task in pending:
-                    task.cancel()
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception:
-                pass
-            finally:
-                loop.close()
-                asyncio.set_event_loop(None)
     
     @APIExport(runOnUIThread=False)
     def webrtc_ice_candidate(self, detectorName: Optional[str] = None, candidate: dict = None):

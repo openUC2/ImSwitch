@@ -510,6 +510,7 @@ class SettingsController(ImConWidgetController):
             throttlems: Throttling interval in milliseconds (alternative naming)
         """
         # Try to use LiveViewController if available through CommunicationChannel
+        print("RReceived parameters: ", compression, subsampling, throttle_ms)
         try:
             # Access controllers through _commChannel.__main
             if hasattr(self._commChannel, '_CommunicationChannel__main'):

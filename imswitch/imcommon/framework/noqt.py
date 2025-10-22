@@ -143,7 +143,6 @@ class SignalInstance(psygnal.SignalInstance):
         try:
             for arg in args:
                 if isinstance(arg, np.ndarray):
-                    print(time.time())
                     output_frame = np.ascontiguousarray(arg)  # Avoid memory fragmentation
                     # if frame is float, we need to convert to uint8
                     if output_frame.dtype == np.float32 or output_frame.dtype == np.float64:

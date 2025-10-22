@@ -88,8 +88,12 @@ class MasterController:
             self.dpcManager = DPCManager(self.__setupInfo.dpc)
         if "MCT" in self.__setupInfo.availableWidgets:
             self.mctManager = MCTManager(self.__setupInfo.mct)
-        self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
-        self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
+        if "NIDAQ" in self.__setupInfo.availableWidgets:
+            self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
+        if "Hypha" in self.__setupInfo.availableWidgets:
+            self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
+        if "ROIScan" in self.__setupInfo.availableWidgets:
+            self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
         if "Lightsheet" in self.__setupInfo.availableWidgets:
             self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
         if "WebRTC" in self.__setupInfo.availableWidgets:
@@ -99,7 +103,7 @@ class MasterController:
         if "Experiment" in self.__setupInfo.availableWidgets:
             self.experimentManager = ExperimentManager(self.__setupInfo.experiment)
         if "Objective" in self.__setupInfo.availableWidgets:
-            self.objectiveManager = ObjectiveManager(self.__setupInfo.objective)
+            self.objectiveManager = ObjectiveManager(self.__setupInfo.objective, setupInfo=self.__setupInfo)
         if "HistoScan" in self.__setupInfo.availableWidgets:
             self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "Stresstest" in self.__setupInfo.availableWidgets:

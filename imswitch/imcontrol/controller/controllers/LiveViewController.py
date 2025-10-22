@@ -94,9 +94,12 @@ class StreamWorker(Worker):
                 if self._last_frame_time + self._updatePeriod < time.time():
                     continue
                 # Capture and emit immediately
-                self._captureAndEmit()
+                frameResult = self._captureAndEmit()
                 self._last_frame_time = time.time()
-                print("Time now: ", time.time())
+                # print("Time now: ", time.time())
+                if not frameResult:
+                    self._running = False
+                    break  # TODO: Need to report this to higher level to indicate failure
             except Exception as e:
                 self._logger.error(f"Error in StreamWorker loop: {e}")
                 time.sleep(0.1)  # Brief pause on error
@@ -139,7 +142,7 @@ class BinaryStreamWorker(StreamWorker):
         try:
             frame = self._detector.getLatestFrame()
             if frame is None:
-                return
+                return False
             
             # Get detector info
             detector_name = self._detector.name
@@ -159,7 +162,7 @@ class BinaryStreamWorker(StreamWorker):
             # Get encoder
             encoder = self._get_encoder()
             if encoder is None:
-                return
+                return False
             
             # Encode frame
             packet, metadata = encoder.encode_frame(frame)
@@ -184,8 +187,11 @@ class BinaryStreamWorker(StreamWorker):
             # Emit pre-formatted message
             self.sigStreamFrame.emit(message)
             
+            return True 
+        
         except Exception as e:
             self._logger.error(f"Error in BinaryStreamWorker: {e}")
+            return False
 
 
 class JPEGStreamWorker(StreamWorker):
@@ -209,7 +215,8 @@ class JPEGStreamWorker(StreamWorker):
         try:
             frame = self._detector.getLatestFrame()
             if frame is None:
-                return
+                return False
+
             
             # Get detector info
             detector_name = self._detector.name
@@ -270,8 +277,11 @@ class JPEGStreamWorker(StreamWorker):
                 # Emit pre-formatted message
                 self.sigStreamFrame.emit(message)
                 
+                return True
+                
         except Exception as e:
             self._logger.error(f"Error in JPEGStreamWorker: {e}")
+            return False
 
 
 class MJPEGStreamWorker(StreamWorker):
@@ -697,8 +707,6 @@ class LiveViewController(LiveUpdatedController):
                     }
                 detectorName = list(self._activeStreams.keys())[0]
 
-                self._detector.stopAcquisition()
-
             # Check if detector has active stream
             if detectorName not in self._activeStreams:
                 return {
@@ -741,6 +749,10 @@ class LiveViewController(LiveUpdatedController):
             
             self._logger.info(f"Stopped {protocol} stream for detector {detectorName}")
             
+            # Optionally stop camera acquisition
+            if stopCamera:
+                detector = self._master.detectorsManager[detectorName]
+                detector.stopAcquisition()
             return {
                 "status": "success",
                 "detector": detectorName,

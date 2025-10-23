@@ -4,7 +4,7 @@ LiveViewController - Centralized controller for all live streaming functionality
 This controller manages per-detector streaming with dedicated worker threads and supports
 multiple streaming protocols (binary, JPEG, MJPEG, WebRTC).
 """
-
+import asyncio
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Any
 from abc import abstractmethod
@@ -38,7 +38,7 @@ class StreamParams:
     jpeg_quality: int = 80
     
     # WebRTC parameters
-    stun_servers: list = field(default_factory=lambda: ["stun:stun.l.google.com:19302"])
+    stun_servers: list = field(default_factory=list)  # Empty by default - works without internet!
     turn_servers: list = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -86,23 +86,34 @@ class StreamWorker(Worker):
         """Start polling frames without timer - wait and push immediately."""
         self._running = True
         self._logger.debug(f"StreamWorker started with update period {self._updatePeriod}s")
-        # TODO: How can we optimize the speed here?
+        
         while self._running:
-            self._last_frame_time = time.time() 
             try:
-                # frame due? 
-                if self._last_frame_time + self._updatePeriod < time.time():
-                    continue
-                # Capture and emit immediately
-                frameResult = self._captureAndEmit()
-                self._last_frame_time = time.time()
-                # print("Time now: ", time.time())
-                if not frameResult:
-                    self._running = False
-                    break  # TODO: Need to report this to higher level to indicate failure
+                # Check if enough time has passed since last frame
+                current_time = time.time()
+                time_since_last_frame = current_time - self._last_frame_time
+                
+                if time_since_last_frame >= self._updatePeriod:
+                    # Capture and emit frame
+                    frameResult = self._captureAndEmit()
+                    self._last_frame_time = current_time
+                    
+                    # Only stop on explicit failure, not on None frames
+                    if frameResult is False:  # Explicitly check for False, not None
+                        self._logger.warning("Frame capture failed, stopping worker")
+                        self._running = False
+                        break
+                else:
+                    # Sleep for a small amount to avoid busy waiting
+                    sleep_time = min(0.001, (self._updatePeriod - time_since_last_frame) / 2)
+                    time.sleep(sleep_time)
+                    
             except Exception as e:
                 self._logger.error(f"Error in StreamWorker loop: {e}")
                 time.sleep(0.1)  # Brief pause on error
+                # Continue running unless explicitly stopped
+        
+        self._logger.debug("StreamWorker run loop exited")
     
     def stop(self):
         """Stop polling frames."""
@@ -142,7 +153,7 @@ class BinaryStreamWorker(StreamWorker):
         try:
             frame = self._detector.getLatestFrame()
             if frame is None:
-                return False
+                return None  # No frame available, but not an error - keep running
             
             # Get detector info
             detector_name = self._detector.name
@@ -162,7 +173,8 @@ class BinaryStreamWorker(StreamWorker):
             # Get encoder
             encoder = self._get_encoder()
             if encoder is None:
-                return False
+                self._logger.error("Failed to get encoder")
+                return False  # This is a real error
             
             # Encode frame
             packet, metadata = encoder.encode_frame(frame)
@@ -191,7 +203,7 @@ class BinaryStreamWorker(StreamWorker):
         
         except Exception as e:
             self._logger.error(f"Error in BinaryStreamWorker: {e}")
-            return False
+            return False  # Real error - stop worker
 
 
 class JPEGStreamWorker(StreamWorker):
@@ -210,12 +222,12 @@ class JPEGStreamWorker(StreamWorker):
     def _captureAndEmit(self):
         """Capture frame from detector, encode as JPEG, and emit pre-formatted socket.io message."""
         if self._cv2 is None:
-            return
+            return False  # This is a configuration error
         
         try:
             frame = self._detector.getLatestFrame()
             if frame is None:
-                return False
+                return None  # No frame available, but not an error - keep running
 
             
             # Get detector info
@@ -278,10 +290,13 @@ class JPEGStreamWorker(StreamWorker):
                 self.sigStreamFrame.emit(message)
                 
                 return True
+            else:
+                self._logger.warning("JPEG encoding failed")
+                return None  # Encoding failed, but keep trying
                 
         except Exception as e:
             self._logger.error(f"Error in JPEGStreamWorker: {e}")
-            return False
+            return False  # Real error - stop worker
 
 
 class MJPEGStreamWorker(StreamWorker):
@@ -303,12 +318,12 @@ class MJPEGStreamWorker(StreamWorker):
     def _captureAndEmit(self):
         """Capture frame and put in queue for MJPEG streaming."""
         if self._cv2 is None:
-            return
+            return False  # This is a configuration error
         
         try:
             frame = self._detector.getLatestFrame()
             if frame is None:
-                return
+                return None  # No frame available, but not an error - keep running
             
             # Normalize to uint8 if needed
             if frame.dtype != np.uint8:
@@ -338,8 +353,14 @@ class MJPEGStreamWorker(StreamWorker):
                     self._frame_queue.put_nowait(mjpeg_frame)
                 except queue.Full:
                     pass  # Drop frame if queue is full
+                return True
+            else:
+                self._logger.warning("MJPEG encoding failed")
+                return None  # Encoding failed, but keep trying
+                
         except Exception as e:
             self._logger.error(f"Error in MJPEGStreamWorker: {e}")
+            return False  # Real error - stop worker
     
     def get_frame(self, timeout=1.0):
         """Get next frame from queue (for HTTP streaming)."""
@@ -373,12 +394,12 @@ class WebRTCStreamWorker(StreamWorker):
     def _captureAndEmit(self):
         """Capture frame and put in queue for WebRTC streaming."""
         if not self._has_webrtc:
-            return
+            return False  # This is a configuration error
         
         try:
-            frame = self._detector.getLatestFrame()
+            frame = np.array(self._detector.getLatestFrame())
             if frame is None:
-                return
+                return None  # No frame available, but not an error - keep running
             
             # Normalize to uint8 if needed
             if frame.dtype != np.uint8:
@@ -391,27 +412,34 @@ class WebRTCStreamWorker(StreamWorker):
             
             # Put frame in queue, replacing old frame if full
             try:
-                # Try to clear old frame
+                # Try to clear old frame to keep only latest
+                old_size = self._frame_queue.qsize()
                 try:
                     self._frame_queue.get_nowait()
                 except queue.Empty:
                     pass
                 self._frame_queue.put_nowait(frame)
+                new_size = self._frame_queue.qsize()
+                return True
             except queue.Full:
-                pass  # Drop frame if queue is full
+                # This should not happen since we clear the queue above, but just in case
+                return None  # Queue management failed, but keep trying
                 
         except Exception as e:
             self._logger.error(f"Error in WebRTCStreamWorker: {e}")
+            return False  # Real error - stop worker
     
     def get_video_track(self):
         """Get or create video track for WebRTC."""
         if self._video_track is None and self._has_webrtc:
-            self._video_track = DetectorVideoTrack(
+            track_wrapper = DetectorVideoTrack(
                 self._frame_queue, 
                 self._detector.name,
                 self._VideoStreamTrack,
                 self._av
             )
+            # Return the actual track, not the wrapper
+            self._video_track = track_wrapper._track
         return self._video_track
 
 
@@ -422,7 +450,7 @@ class DetectorVideoTrack:
         self._queue = frame_queue
         self._detector_name = detector_name
         self._av = av
-        
+               
         # Create custom track class that inherits from VideoStreamTrack
         class CustomVideoTrack(VideoStreamTrack):
             def __init__(inner_self):
@@ -431,41 +459,74 @@ class DetectorVideoTrack:
                 inner_self._queue = frame_queue
                 inner_self._av = av
                 inner_self._timestamp = 0
-                inner_self._time_base = 1 / 30  # 30 fps
+                # time_base must be a Fraction, not a float
+                from fractions import Fraction
+                inner_self._time_base = Fraction(1, 30)  # 30 fps
             
             async def recv(inner_self):
                 """Receive next video frame."""
-                import asyncio
                 
-                # Wait for frame from queue (with timeout)
-                try:
-                    frame = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(
-                            None, inner_self._queue.get, True, 1.0
-                        ),
-                        timeout=1.0
-                    )
-                except (asyncio.TimeoutError, queue.Empty):
-                    # Return black frame if no frame available
-                    frame = np.zeros((480, 640), dtype=np.uint8)
+                # Try to get frame from queue with timeout
+                frame = None
+                start_time = asyncio.get_event_loop().time()
+                timeout = 0.5
                 
-                # Ensure frame is the right shape
+                while frame is None and (asyncio.get_event_loop().time() - start_time) < timeout:
+                    try:
+                        # Non-blocking get
+                        frame = inner_self._queue.get_nowait()
+                        break
+                    except queue.Empty:
+                        # Wait a bit before trying again
+                        await asyncio.sleep(0.01)
+                
+                if frame is None:
+                    # Use last frame if available, otherwise create a small placeholder frame
+                    if hasattr(inner_self, '_last_frame') and inner_self._last_frame is not None:
+                        frame = inner_self._last_frame
+                    else:
+                        # Create a small black frame to reduce bandwidth
+                        frame = np.zeros((240, 320), dtype=np.uint8)
+                else:
+                    # Store the frame as last frame for fallback
+                    inner_self._last_frame = frame
+                
+                # Ensure frame is the right shape and size
                 if len(frame.shape) == 2:
                     # Grayscale - convert to RGB
                     frame = np.stack([frame, frame, frame], axis=2)
-                elif frame.shape[2] == 1:
+                elif len(frame.shape) == 3 and frame.shape[2] == 1:
                     frame = np.repeat(frame, 3, axis=2)
+                elif len(frame.shape) == 3 and frame.shape[2] == 4:
+                    # Remove alpha channel if present
+                    frame = frame[:, :, :3]
                 
+                # Resize if frame is too large (to reduce WebRTC bandwidth)
+                if frame.shape[0] > 480 or frame.shape[1] > 640:
+                    import cv2
+                    frame = cv2.resize(frame, (640, 480))
+                
+                # Ensure frame is contiguous
+                frame = np.ascontiguousarray(frame)
                 # Create av.VideoFrame
-                new_frame = inner_self._av.VideoFrame.from_ndarray(frame, format="rgb24")
-                new_frame.pts = inner_self._timestamp
-                new_frame.time_base = inner_self._time_base
-                inner_self._timestamp += 1
-                
-                return new_frame
+                try:
+                    new_frame = inner_self._av.VideoFrame.from_ndarray(frame, format="rgb24")
+                    new_frame.pts = inner_self._timestamp
+                    new_frame.time_base = inner_self._time_base  # AttributeError: 'float' object has no attribute 'numerator'
+                    inner_self._timestamp += 1
+                    return new_frame
+                except Exception as e:
+                    # If frame creation fails, create a minimal frame
+                    fallback_frame = np.zeros((240, 320, 3), dtype=np.uint8)
+                    new_frame = inner_self._av.VideoFrame.from_ndarray(fallback_frame, format="rgb24")
+                    new_frame.pts = inner_self._timestamp
+                    new_frame.time_base = inner_self._time_base
+                    inner_self._timestamp += 1
+                    print(f"Error creating av.VideoFrame: {e}, using fallback frame")
+                    return new_frame
         
         self._track = CustomVideoTrack()
-    
+        
     def __getattr__(self, name):
         """Delegate attribute access to the underlying track."""
         return getattr(self._track, name)
@@ -1182,8 +1243,25 @@ class LiveViewController(LiveUpdatedController):
                 except Exception as e:
                     self._logger.warning(f"Error closing old peer: {e}")
             
-            # Create new peer connection
-            pc = RTCPeerConnection()
+            # Create new peer connection with ICE servers
+            from aiortc import RTCConfiguration, RTCIceServer
+            
+            # For local connections, we don't need STUN servers (works without internet)
+            # Only add STUN servers if explicitly configured in stream params
+            stream_params = self._streamParams.get('webrtc', StreamParams(protocol='webrtc'))
+            
+            ice_servers = []
+            # Only use STUN servers if user explicitly configured them
+            # For localhost/LAN, WebRTC works fine without any ICE servers
+            if stream_params.stun_servers and len(stream_params.stun_servers) > 0:
+                for stun_url in stream_params.stun_servers:
+                    ice_servers.append(RTCIceServer(stun_url))
+                self._logger.debug(f"Using {len(ice_servers)} ICE servers for WebRTC")
+            else:
+                self._logger.debug("No ICE servers configured - using local connection (perfect for LAN/localhost)")
+            
+            config = RTCConfiguration(iceServers=ice_servers) if ice_servers else RTCConfiguration()
+            pc = RTCPeerConnection(configuration=config)
             
             # Store PC for this detector
             self._webrtc_peers[detectorName] = pc
@@ -1204,38 +1282,60 @@ class LiveViewController(LiveUpdatedController):
             
             # Add video track
             video_track = worker.get_video_track()
+            self._logger.debug(f"Got video track from worker: {video_track}, type: {type(video_track)}")
             if video_track:
+                # Verify the track has the recv method
+                if hasattr(video_track, 'recv'):
+                    self._logger.debug(f"Video track has recv method: {video_track.recv}")
+                else:
+                    self._logger.error(f"Video track missing recv method!")
+                
                 pc.addTrack(video_track)
                 self._logger.debug(f"Added video track to peer connection for {detectorName}")
+                self._logger.debug(f"Peer connection tracks: {pc.getTransceivers()}")
             else:
                 self._logger.error("Failed to get video track from worker")
                 raise Exception("No video track available")
             
             # Process offer
-            self._logger.debug(f"Creating RTCSessionDescription with type={sdp_type}")
-            offer_desc = RTCSessionDescription(sdp=sdp, type=sdp_type)
-            await pc.setRemoteDescription(offer_desc)
-            self._logger.debug(f"Set remote description for {detectorName}")
-            
-            # Create and set answer
-            answer = await pc.createAnswer()
-            await pc.setLocalDescription(answer)
-            
-            self._logger.info(f"WebRTC answer created for {detectorName}: type={pc.localDescription.type}")
-            
-            return {
-                "status": "success",
-                "sdp": pc.localDescription.sdp,
-                "type": pc.localDescription.type
-            }
+            try:
+                self._logger.debug(f"Creating RTCSessionDescription with type={sdp_type}")
+                offer_desc = RTCSessionDescription(sdp=sdp, type=sdp_type)
+                await pc.setRemoteDescription(offer_desc)
+                self._logger.debug(f"Set remote description for {detectorName}")
+                
+                # Create and set answer
+                answer = await pc.createAnswer()
+                await pc.setLocalDescription(answer)
+                
+                self._logger.info(f"WebRTC answer created for {detectorName}: type={pc.localDescription.type}")
+                
+                return {
+                    "status": "success",
+                    "sdp": pc.localDescription.sdp,
+                    "type": pc.localDescription.type
+                }
+            except Exception as offer_error:
+                self._logger.error(f"Error processing SDP offer for {detectorName}: {offer_error}")
+                # Try to close the peer connection on error
+                try:
+                    await pc.close()
+                except:
+                    pass
+                raise offer_error
         
         # Run async function on persistent event loop
         try:
             future = asyncio.run_coroutine_threadsafe(process_offer(), loop)
-            result = future.result(timeout=10.0)
+            result = future.result(timeout=15.0)  # Increased timeout for better reliability
             return result
+        except asyncio.TimeoutError:
+            self._logger.error(f"Timeout processing WebRTC offer for {detectorName}")
+            return {"status": "error", "message": "Timeout processing WebRTC offer"}
         except Exception as e:
-            self._logger.error(f"Error processing WebRTC offer: {e}")
+            import traceback
+            full_error = traceback.format_exc()
+            self._logger.error(f"Error processing WebRTC offer: {e}\n{full_error}")
             return {"status": "error", "message": str(e)}
     
     @APIExport(runOnUIThread=False)

@@ -133,6 +133,8 @@
             <li><strong>Step 4:</strong> The WebRTC connection is established and video starts playing</li>
         </ul>
         <p><strong>Requirements:</strong> Your browser must support WebRTC (all modern browsers do)</p>
+        <p><strong>Local/LAN Usage:</strong> For localhost or LAN connections, no internet access is required! 
+           The system automatically detects local connections and skips STUN server configuration for faster startup.</p>
     </div>
 
     <script>
@@ -189,6 +191,7 @@
                 console.log('ICE gathering state after setLocalDescription:', pc.iceGatheringState);
                 
                 // Wait for ICE gathering to complete (with timeout)
+                // For local connections, we don't need to wait long
                 await new Promise((resolve, reject) => {
                     let timeoutId = null;
                     
@@ -210,11 +213,12 @@
                         pc.addEventListener('icegatheringstatechange', checkState);
                         
                         // Add timeout to prevent infinite waiting
+                        // Shorter timeout for local connections (1 second is enough for localhost/LAN)
                         timeoutId = setTimeout(() => {
                             pc.removeEventListener('icegatheringstatechange', checkState);
                             console.log('ICE gathering timeout, proceeding anyway. State:', pc.iceGatheringState);
                             resolve(); // Proceed even if not complete
-                        }, 5000); // 5 second timeout
+                        }, 1000); // 1 second timeout (reduced from 5 seconds)
                     }
                 });
                 
@@ -289,9 +293,20 @@
                 document.getElementById('startBtn').disabled = true;
                 
                 // Create peer connection
-                const config = {
-                    iceServers: [{urls: ['stun:stun.l.google.com:19302']}]
-                };
+                // For local connections (localhost/LAN), we don't need STUN servers
+                // This makes it work without internet access
+                const serverUrl = document.getElementById('serverUrl').value;
+                const isLocalConnection = serverUrl.includes('localhost') || 
+                                         serverUrl.includes('127.0.0.1') || 
+                                         serverUrl.includes('192.168.') ||
+                                         serverUrl.includes('10.0.') ||
+                                         serverUrl.includes('172.16.');
+                
+                const config = isLocalConnection ? 
+                    {} : // No ICE servers needed for local connections
+                    {iceServers: [{urls: ['stun:stun.l.google.com:19302']}]}; // Use STUN only for remote
+                
+                console.log('Using config:', config, 'isLocal:', isLocalConnection);
                 
                 pc = new RTCPeerConnection(config);
                 

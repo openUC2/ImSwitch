@@ -167,13 +167,12 @@ class SignalInstance(psygnal.SignalInstance):
                             _client_frame_ready[sid] = True
                     
                     try:
-                        sio.start_background_task(
-                            sio.emit, 
-                            event, 
-                            data, 
-                            to=sid,
-                            callback=ack_callback
-                        )
+                        # Wrap the emit call in an async function to properly await it
+                        async def emit_with_callback():
+                            await sio.emit(event, data, to=sid)
+                            ack_callback()
+                        
+                        sio.start_background_task(emit_with_callback)
                     except RuntimeError:
                         # No event loop in thread - use fallback queue
                         _start_fallback_worker()
@@ -189,7 +188,11 @@ class SignalInstance(psygnal.SignalInstance):
                 }
                 for sid in ready_clients:
                     try:
-                        sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
+                        # Wrap the emit call in an async function to properly await it
+                        async def emit_meta_signal():
+                            await sio.emit("signal", json.dumps(meta_message), to=sid)
+                        
+                        sio.start_background_task(emit_meta_signal)
                     except RuntimeError:
                         # No event loop in thread - use fallback queue
                         _start_fallback_worker()
@@ -205,13 +208,12 @@ class SignalInstance(psygnal.SignalInstance):
                             _client_frame_ready[sid] = True
                     
                     try:
-                        sio.start_background_task(
-                            sio.emit,
-                            "signal",
-                            json_message,
-                            to=sid,
-                            callback=ack_callback
-                        )
+                        # Wrap the emit call in an async function to properly await it
+                        async def emit_jpeg_signal():
+                            await sio.emit("signal", json_message, to=sid)
+                            ack_callback()
+                        
+                        sio.start_background_task(emit_jpeg_signal)
                     except RuntimeError:
                         # No event loop in thread - use fallback queue
                         _start_fallback_worker()
@@ -248,7 +250,11 @@ class SignalInstance(psygnal.SignalInstance):
         self.last_emit_time = now
 
         try:
-            sio.start_background_task(sio.emit, "signal", json.dumps(mMessage))
+            # Wrap the emit call in an async function to properly await it
+            async def emit_signal():
+                await sio.emit("signal", json.dumps(mMessage))
+            
+            sio.start_background_task(emit_signal)
         except Exception as e:
             # Use fallback worker thread instead of creating new threads
             try:

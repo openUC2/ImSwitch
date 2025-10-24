@@ -27,7 +27,7 @@ from functools import wraps
 import os
 import socket
 from typing import List, Dict
-from imswitch import IS_HEADLESS, __ssl__, __httpport__
+from imswitch import IS_HEADLESS, __ssl__, __httpport__, __version__
 from imswitch.imcontrol.model import configfiletools
 from fastapi.responses import RedirectResponse
 import socket
@@ -49,6 +49,7 @@ except ImportError:
 
 PORT = __httpport__
 IS_SSL = __ssl__
+VERSION = __version__
 
 _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(imswitch.__file__)), '_data')
 static_dir = os.path.join(_baseDataFilesDir,  'static')
@@ -95,7 +96,9 @@ class CreateFolderRequest(BaseModel):
     name: str
     parentId: Optional[str] = None
 
-# 📁 Create a Folder
+@app.get("/version")
+
+# Create a Folder
 @app.post("/folder")
 def create_folder(request: CreateFolderRequest):
     """

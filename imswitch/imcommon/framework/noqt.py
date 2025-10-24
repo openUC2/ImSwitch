@@ -46,6 +46,7 @@ app = ASGIApp(sio)
 # Per-client frame acknowledgement tracking
 _client_frame_ready = {}  # sid -> bool (True if client is ready for next frame)
 _client_frame_lock = threading.Lock()
+_frame_drop_counter = 0  # Track how many frames we've dropped
 
 # Separate queues for frames and regular messages
 # Frame queue uses maxsize=1 to keep only latest frame (automatic dropping)
@@ -113,6 +114,46 @@ def _start_fallback_worker():
         _fallback_worker_thread = threading.Thread(target=_fallback_worker,
                                                     daemon=True)
         _fallback_worker_thread.start()
+
+
+def _ack_timeout_monitor():
+    """
+    Monitor thread that checks for clients stuck waiting for acknowledgements.
+    Resets clients to ready state if they haven't acknowledged within timeout period.
+    This prevents clients from getting permanently stuck in "not ready" state.
+    """
+    while True:
+        try:
+            time.sleep(_ACK_CHECK_INTERVAL)
+            now = time.time()
+            
+            with _client_frame_lock:
+                # Find clients that are not ready and have timed out
+                timed_out_clients = []
+                for sid in list(_client_frame_ready.keys()):
+                    if not _client_frame_ready.get(sid, True):  # Client is not ready
+                        last_ack_time = _client_last_ack_time.get(sid, now)
+                        if (now - last_ack_time) > _ACK_TIMEOUT_SECONDS:
+                            timed_out_clients.append(sid)
+                            # Reset client to ready state
+                            _client_frame_ready[sid] = True
+                            _client_last_ack_time[sid] = now
+                
+                if timed_out_clients:
+                    print(f"ACK timeout - reset {len(timed_out_clients)} client(s) to ready state")
+                    
+        except Exception as e:
+            print(f"Error in ACK timeout monitor: {e}")
+            time.sleep(1.0)  # Back off on error
+
+
+def _start_ack_timeout_monitor():
+    """Start the acknowledgement timeout monitor thread."""
+    global _ack_timeout_thread
+    if _ack_timeout_thread is None or not _ack_timeout_thread.is_alive():
+        _ack_timeout_thread = threading.Thread(target=_ack_timeout_monitor,
+                                                daemon=True)
+        _ack_timeout_thread.start()
 
 class SignalInterface(abstract.SignalInterface):
     """Base implementation of abstract.SignalInterface."""
@@ -185,6 +226,7 @@ class SignalInstance(psygnal.SignalInstance):
             with _client_frame_lock:
                 for sid in ready_clients:
                     _client_frame_ready[sid] = False  # Wait for acknowledgement!
+                    _client_last_ack_time[sid] = time.time()  # Track when we sent the frame
             
             # Unified frame emission for both binary and JPEG
             # Both use the same backpressure mechanism and acknowledgement flow
@@ -195,6 +237,7 @@ class SignalInstance(psygnal.SignalInstance):
                         """Mark client as ready for next frame when acknowledged"""
                         with _client_frame_lock:
                             _client_frame_ready[sid] = True
+                            _client_last_ack_time[sid] = time.time()  # Update last ACK time
                     
                     try:
                         # Emit binary frame data with acknowledgement
@@ -249,6 +292,7 @@ class SignalInstance(psygnal.SignalInstance):
                         """Mark client as ready for next frame when acknowledged"""
                         with _client_frame_lock:
                             _client_frame_ready[sid] = True
+                            _client_last_ack_time[sid] = time.time()  # Update last ACK time
                     
                     try:
                         # Emit JPEG frame with acknowledgement
@@ -471,6 +515,7 @@ async def connect(sid, environ):
     print(f"SocketIO Client connected: {sid}")
     with _client_frame_lock:
         _client_frame_ready[sid] = True
+        _client_last_ack_time[sid] = time.time()
 
 @sio.event
 async def disconnect(sid):
@@ -478,12 +523,14 @@ async def disconnect(sid):
     print(f"SocketIO Client disconnected: {sid}")
     with _client_frame_lock:
         _client_frame_ready.pop(sid, None)
+        _client_last_ack_time.pop(sid, None)
 
 @sio.event
 async def frame_ack(sid):
     """Client explicitly acknowledges frame processing complete"""
     with _client_frame_lock:
         _client_frame_ready[sid] = True
+        _client_last_ack_time[sid] = time.time()
         # print(f"Client {sid} acknowledged frame")
 
 # Function to run Uvicorn server with Socket.IO app
@@ -508,5 +555,7 @@ def run_uvicorn():
 def start_websocket_server():
     server_thread = threading.Thread(target=run_uvicorn, daemon=True)
     server_thread.start()
+    # Start the acknowledgement timeout monitor
+    _start_ack_timeout_monitor()
 
 start_websocket_server()

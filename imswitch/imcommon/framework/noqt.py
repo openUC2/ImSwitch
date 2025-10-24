@@ -47,26 +47,49 @@ app = ASGIApp(sio)
 _client_frame_ready = {}  # sid -> bool (True if client is ready for next frame)
 _client_frame_lock = threading.Lock()
 
-# Fallback message queue and worker thread for Socket.IO failures
-_fallback_message_queue = queue.Queue()
+# Separate queues for frames and regular messages
+# Frame queue uses maxsize=1 to keep only latest frame (automatic dropping)
+_fallback_frame_queue = queue.Queue(maxsize=1)  # Holds latest frame only - old frames auto-dropped
+_fallback_message_queue = queue.Queue(maxsize=50)  # Regular messages need more buffer
 _fallback_worker_thread = None
+_frame_drop_counter = 0  # Track how many frames we've dropped 
 
 
 def _fallback_worker():
-    """Background worker thread to handle Socket.IO fallback messages."""
+    """
+    Background worker thread to handle Socket.IO fallback messages.
+    Processes both frame queue (with dropping) and regular message queue.
+    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     try:
         while True:
+            # Priority: First check for frames (these are time-critical)
             try:
-                message = _fallback_message_queue.get(timeout=1.0)
-                if message is None:  # Poison pill to stop worker
+                frame_message = _fallback_frame_queue.get_nowait()
+                if frame_message is None:  # Poison pill
+                    break
+                    
+                # Handle frame emission
+                if isinstance(frame_message, tuple) and len(frame_message) == 3:
+                    event, data, sid = frame_message
+                    loop.run_until_complete(sio.emit(event, data, to=sid))
+                
+                _fallback_frame_queue.task_done()
+                continue  # Process next frame immediately
+            except queue.Empty:
+                pass  # No frames, check regular messages
+            
+            # Check regular message queue
+            try:
+                message = _fallback_message_queue.get(timeout=0.1)
+                if message is None:  # Poison pill
                     break
                 
                 # Handle different message formats
                 if isinstance(message, tuple) and len(message) == 3:
-                    # New format: (event, data, sid) for targeted emission
+                    # Format: (event, data, sid) for targeted emission
                     event, data, sid = message
                     loop.run_until_complete(sio.emit(event, data, to=sid))
                 else:
@@ -78,7 +101,6 @@ def _fallback_worker():
                 continue
             except Exception as e:
                 # Silently handle errors to avoid spam
-                # print(f"Fallback worker error: {e}")
                 pass
     finally:
         loop.close()
@@ -138,6 +160,7 @@ class SignalInstance(psygnal.SignalInstance):
         Handle pre-formatted stream frame message from LiveViewController.
         Message format: {'type': 'binary_frame' or 'jpeg_frame', 'event': str, 'data': bytes or dict, 'metadata': dict}
         Uses sio.start_background_task to properly handle emission with acknowledgements.
+        Implements proper flow control - only sends to clients that are ready.
         """
         try:
             msg_type = message.get('type')
@@ -150,35 +173,54 @@ class SignalInstance(psygnal.SignalInstance):
                 ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
             
             if not ready_clients:
+                # No clients ready - drop this frame (implements backpressure)
+                global _frame_drop_counter
+                _frame_drop_counter += 1
+                if _frame_drop_counter % 30 == 0:  # Log every 30 dropped frames
+                    print(f"Dropped {_frame_drop_counter} frames due to client backpressure")
                 return
             
-            # Mark clients as not ready (waiting for acknowledgement)
+            # Mark clients as NOT ready (waiting for acknowledgement)
+            # This implements flow control - they must acknowledge before getting next frame
             with _client_frame_lock:
                 for sid in ready_clients:
-                    _client_frame_ready[sid] = True  # TODO: Set to False when frontend implements acknowledgement
+                    _client_frame_ready[sid] = False  # Wait for acknowledgement!
             
-            # Emit frame data using sio.start_background_task with acknowledgement callbacks
+            # Unified frame emission for both binary and JPEG
+            # Both use the same backpressure mechanism and acknowledgement flow
             if msg_type == 'binary_frame':
-                # Emit binary frame with acknowledgement callback
+                # Binary frame with metadata - emit frame data and metadata separately
                 for sid in ready_clients:
                     def ack_callback(sid=sid):
-                        """Mark client as ready for next frame"""
+                        """Mark client as ready for next frame when acknowledged"""
                         with _client_frame_lock:
                             _client_frame_ready[sid] = True
                     
                     try:
-                        # Wrap the emit call in an async function to properly await it
-                        async def emit_with_callback():
-                            await sio.emit(event, data, to=sid)
-                            ack_callback()
-                        
-                        sio.start_background_task(emit_with_callback)
+                        # Emit binary frame data with acknowledgement
+                        sio.start_background_task(
+                            sio.emit, 
+                            event,  # 'frame' event
+                            data,   # Binary packet
+                            to=sid,
+                            callback=ack_callback
+                        )
                     except RuntimeError:
-                        # No event loop in thread - use fallback queue
+                        # No event loop in thread - use fallback frame queue (with dropping)
                         _start_fallback_worker()
-                        _fallback_message_queue.put_nowait(('frame', data, sid))
+                        try:
+                            # put_nowait will raise queue.Full if queue is full
+                            # Since maxsize=1, this drops old frame and keeps new one
+                            _fallback_frame_queue.put_nowait(('frame', data, sid))
+                        except queue.Full:
+                            # Queue full - drop oldest frame by getting it and replacing
+                            try:
+                                _fallback_frame_queue.get_nowait()
+                                _fallback_frame_queue.put_nowait(('frame', data, sid))
+                            except:
+                                pass
                 
-                # Emit metadata as JSON signal
+                # Emit metadata as JSON signal (separate from frame)
                 meta_message = {
                     "name": "frame_meta",
                     "detectorname": metadata.get('detectorname', ''),
@@ -188,36 +230,49 @@ class SignalInstance(psygnal.SignalInstance):
                 }
                 for sid in ready_clients:
                     try:
-                        # Wrap the emit call in an async function to properly await it
-                        async def emit_meta_signal():
-                            await sio.emit("signal", json.dumps(meta_message), to=sid)
-                        
-                        sio.start_background_task(emit_meta_signal)
+                        sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
                     except RuntimeError:
-                        # No event loop in thread - use fallback queue
+                        # No event loop in thread - use regular message queue
                         _start_fallback_worker()
-                        _fallback_message_queue.put_nowait(('signal', json.dumps(meta_message), sid))
+                        try:
+                            _fallback_message_queue.put_nowait(('signal', json.dumps(meta_message), sid))
+                        except queue.Full:
+                            # Message queue full - this is a problem, log it
+                            print(f"Warning: Fallback message queue full, dropping metadata")
                     
             elif msg_type == 'jpeg_frame':
-                # Emit JPEG frame as JSON signal with acknowledgement
+                # JPEG frame - emit as JSON signal with same acknowledgement mechanism as binary
+                # Uses frame queue for backpressure control (same as binary frames)
                 json_message = json.dumps(data)
                 for sid in ready_clients:
                     def ack_callback(sid=sid):
-                        """Mark client as ready for next frame"""
+                        """Mark client as ready for next frame when acknowledged"""
                         with _client_frame_lock:
                             _client_frame_ready[sid] = True
                     
                     try:
-                        # Wrap the emit call in an async function to properly await it
-                        async def emit_jpeg_signal():
-                            await sio.emit("signal", json_message, to=sid)
-                            ack_callback()
-                        
-                        sio.start_background_task(emit_jpeg_signal)
+                        # Emit JPEG frame with acknowledgement
+                        sio.start_background_task(
+                            sio.emit,
+                            "signal",
+                            json_message,
+                            to=sid,
+                            callback=ack_callback
+                        )
                     except RuntimeError:
-                        # No event loop in thread - use fallback queue
+                        # No event loop in thread - use fallback FRAME queue (not message queue!)
+                        # This ensures JPEG frames get same dropping behavior as binary frames
                         _start_fallback_worker()
-                        _fallback_message_queue.put_nowait(('signal', json_message, sid))
+                        try:
+                            # Use frame queue (maxsize=1) for automatic dropping
+                            _fallback_frame_queue.put_nowait(('signal', json_message, sid))
+                        except queue.Full:
+                            # Queue full - drop oldest frame by getting it and replacing
+                            try:
+                                _fallback_frame_queue.get_nowait()
+                                _fallback_frame_queue.put_nowait(('signal', json_message, sid))
+                            except:
+                                pass
                 
         except Exception as e:
             print(f"Error handling stream frame: {e}")
@@ -239,8 +294,6 @@ class SignalInstance(psygnal.SignalInstance):
 
         return data
 
-
-
     def _safe_broadcast_message(self, mMessage: dict) -> None:
         """Throttle the emit to avoid task buildup."""
         now = time.time()
@@ -250,9 +303,12 @@ class SignalInstance(psygnal.SignalInstance):
         self.last_emit_time = now
 
         try:
+            # Create JSON string before async task to avoid closure issues
+            message_json = json.dumps(mMessage)
+            
             # Wrap the emit call in an async function to properly await it
             async def emit_signal():
-                await sio.emit("signal", json.dumps(mMessage))
+                await sio.emit("signal", message_json)
             
             sio.start_background_task(emit_signal)
         except Exception as e:
@@ -269,7 +325,6 @@ class SignalInstance(psygnal.SignalInstance):
                 # Silently handle any other errors
                 print(f"Error broadcasting message: {e}")
                 pass
-        del mMessage
 
 class Signal(psygnal.Signal):
     def __init__(self, *args: Any, **kwargs: Any) -> None:

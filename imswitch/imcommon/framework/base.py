@@ -79,6 +79,13 @@ class Timer(SignalInterface, ABC):
         pass
 
     @abstractmethod
+    def setSingleShot(self, singleShot: bool) -> None:
+        """Enable/disable single-shot timer behavior.
+        If True, the timer fires once per start(); otherwise, it repeats.
+        """
+        pass
+
+    @abstractmethod
     def start(self, periodMilliseconds: int) -> None:
         pass
 

@@ -82,6 +82,7 @@ class UC2SerialController:
             # New command event callbacks (ESP32 -> Python when user interacts with display)
             'objective_slot_command': [],
             'motor_command': [],
+            'goto_position_command': [],
             'motor_xy_command': [],
             'led_command': [],
             'pwm_command': [],
@@ -203,6 +204,8 @@ class UC2SerialController:
                 self._handle_objective_slot_command(data.get('data', {}))
             elif msg_type == 'motor_command':
                 self._handle_motor_command(data.get('data', {}))
+            elif msg_type == 'goto_position_command':
+                self._handle_motor_position_update(data.get('data', {}))
             elif msg_type == 'motor_xy_command':
                 self._handle_motor_xy_command(data.get('data', {}))
             elif msg_type == 'led_command':
@@ -266,8 +269,16 @@ class UC2SerialController:
         motor = data.get('motor', 0)
         steps = data.get('steps', 0)
         self.logger.info(f"Motor {motor} moved {steps} steps")
-        self._notify_callbacks('motor_update', data)
-        
+        self._notify_callbacks('motor_command', data)
+    
+    def _handle_motor_position_update(self, data: Dict[str, Any]):
+        # {"type":"goto_position_command","data":{"x":5000,"y":0,"z":0}}
+        x = data.get('x', 0)
+        y = data.get('y', 0)
+        z = data.get('z', 0)
+        self.logger.info(f"Motor position update received: X={x}, Y={y}, Z={z}")
+        self._notify_callbacks('goto_position_command', data)
+
     def _handle_pwm_update(self, data: Dict[str, Any]):
         """Handle PWM update"""
         channel = data.get('channel', 0)
@@ -406,6 +417,10 @@ class UC2SerialController:
         """Register callback for snap image commands from display"""
         self.callbacks['snap_image_command'].append(callback)
     
+    def on_goto_position_command(self, callback: Callable[[Dict[str, Any]], None]):
+        """Register callback for goto position for absolute positions"""
+        self.callbacks['goto_position_command'].append(callback)
+
     def send_image_on_snap(self, image_source_callback: Callable[[], Union[np.ndarray, str, None]]):
         """
         Convenience method to automatically send an image when snap button is pressed
@@ -490,13 +505,15 @@ class UC2SerialController:
             "type": "snap_image_command"
         })
     
-    def update_sample_position(self, x: float, y: float):
+    def update_sample_position(self, x: float, y: float, z: float):
         """Update sample position on map (normalized coordinates 0-1)"""
+        # {"type":"position_update","data":{"x":1.2,"y":0,"z":0.1}}
         return self._send_message({
-            "type": "sample_position_command",
+            "type": "position_update",
             "data": {
                 "x": x,
-                "y": y
+                "y": y,
+                "z": z
             }
         })
     

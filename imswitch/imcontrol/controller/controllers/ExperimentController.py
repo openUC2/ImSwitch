@@ -753,8 +753,43 @@ class ExperimentController(ImConWidgetController):
         return True
 
     def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0):
+        """Perform autofocus using the AutofocusController if available.
+        
+        Args:
+            minZ: Minimum Z position for autofocus (not used - uses rangez instead)
+            maxZ: Maximum Z position for autofocus (not used - uses rangez instead)
+            stepSize: Step size for autofocus scan
+            
+        Returns:
+            float: Best focus Z position, or None if autofocus failed
+        """
         self._logger.debug("Performing autofocus... with parameters minZ, maxZ, stepSize: %s, %s, %s", minZ, maxZ, stepSize)
-        # TODO: Connect this to the Autofocus Function
+        
+        # Get the autofocus controller
+        autofocusController = self._master.getController('Autofocus')
+        
+        if autofocusController is None:
+            self._logger.warning("AutofocusController not available - skipping autofocus")
+            return None
+        
+        try:
+            # Calculate range from min/max
+            rangez = abs(maxZ - minZ) / 2.0 if maxZ > minZ else 50.0
+            resolutionz = stepSize if stepSize > 0 else 10.0
+            
+            # Call autofocus directly - the method is already decorated with @APIExport
+            result = autofocusController.autoFocus(
+                rangez=rangez,
+                resolutionz=resolutionz,
+                defocusz=0
+            )
+            
+            self._logger.debug(f"Autofocus completed successfully")
+            return result
+            
+        except Exception as e:
+            self._logger.error(f"Autofocus failed: {e}")
+            return None
 
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
         import time

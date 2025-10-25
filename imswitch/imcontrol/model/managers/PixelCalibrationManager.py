@@ -23,7 +23,7 @@ class PixelCalibrationManager(SignalInterface):
         self.update()
 
     def update(self):
-        return None #returnmask.image()
+        return None 
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

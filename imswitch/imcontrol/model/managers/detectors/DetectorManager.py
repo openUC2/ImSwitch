@@ -138,23 +138,7 @@ class DetectorManager(SignalInterface):
             self.__logger.error(traceback.format_exc())
         else:
             if self.__image is not None:
-                '''
-                eventually manipulate the image before sending it
-                we have 255 levels of gray, so we can use the min and max values to scale the image
-
-                TODO: not ideal as we scale noise, but we need to do this for the preview
-                def stretch_pixels(image_12bit, lower_clip, upper_clip):
-                    # Clamping to the range [lower_clip, upper_clip]
-                    clamped = np.clip(image_12bit, lower_clip, upper_clip)
-                    # Mapping the clamped values to [0, 255]
-                    scaled = (clamped - lower_clip) * 255.0 / (upper_clip - lower_clip)
-                    # Converting to 8-bit
-                    return np.clip(scaled, 0, 255).astype(np.uint8)
-                if self._maxValueFramePreview != -1 and self._minValueFramePreview != -1:
-                    self.__image = stretch_pixels(self.__image, self._minValueFramePreview, self._maxValueFramePreview)
-                '''
-                self.sigImageUpdated.emit(self.__image, init, self.scale) # TODO - inject compressionrate?
-
+                self.sigImageUpdated.emit(self.__image, init, self.scale) 
     def setMinValueFramePreview(self, value):
         """ Sets the minimum value for the frame preview to display via a jpeg image """
         self._minValueFramePreview = value

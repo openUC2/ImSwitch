@@ -88,8 +88,12 @@ class MasterController:
             self.dpcManager = DPCManager(self.__setupInfo.dpc)
         if "MCT" in self.__setupInfo.availableWidgets:
             self.mctManager = MCTManager(self.__setupInfo.mct)
-        self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
-        self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
+        if "NIDAQ" in self.__setupInfo.availableWidgets:
+            self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
+        if "Hypha" in self.__setupInfo.availableWidgets:
+            self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
+        if "ROIScan" in self.__setupInfo.availableWidgets:
+            self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
         if "Lightsheet" in self.__setupInfo.availableWidgets:
             self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
         if "WebRTC" in self.__setupInfo.availableWidgets:
@@ -99,7 +103,7 @@ class MasterController:
         if "Experiment" in self.__setupInfo.availableWidgets:
             self.experimentManager = ExperimentManager(self.__setupInfo.experiment)
         if "Objective" in self.__setupInfo.availableWidgets:
-            self.objectiveManager = ObjectiveManager(self.__setupInfo.objective)
+            self.objectiveManager = ObjectiveManager(self.__setupInfo.objective, setupInfo=self.__setupInfo)
         if "HistoScan" in self.__setupInfo.availableWidgets:
             self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "Stresstest" in self.__setupInfo.availableWidgets:
@@ -177,7 +181,7 @@ class MasterController:
         self.detectorsManager.sigAcquisitionStarted.connect(cc.sigAcquisitionStarted)
         self.detectorsManager.sigAcquisitionStopped.connect(cc.sigAcquisitionStopped)
         self.detectorsManager.sigDetectorSwitched.connect(cc.sigDetectorSwitched)
-        self.detectorsManager.sigImageUpdated.connect(cc.sigUpdateImage)
+        self.detectorsManager.sigImageUpdated.connect(cc.sigUpdateImage) # TODO: why do we need to map a signal into a signal and cannot direclty use it ?! 
         self.detectorsManager.sigNewFrame.connect(cc.sigNewFrame)
 
         self.recordingManager.sigRecordingStarted.connect(cc.sigRecordingStarted)
@@ -190,10 +194,6 @@ class MasterController:
         self.recordingManager.sigMemoryRecordingAvailable.connect(
             self.memoryRecordingAvailable
         )
-
-        if "SLM" in self.__setupInfo.availableWidgets:
-            self.slmManager.sigSLMMaskUpdated.connect(cc.sigSLMMaskUpdated)
-            self.simManager.sigSIMMaskUpdated.connect(cc.sigSIMMaskUpdated)
 
     def memoryRecordingAvailable(self, name, file, filePath, savedToDisk):
         self.__moduleCommChannel.memoryRecordings[name] = VFileItem(

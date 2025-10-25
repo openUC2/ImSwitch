@@ -498,6 +498,8 @@ class ImSwitchServer(Worker):
         """
         _, _ = configfiletools.loadOptions()
         setup_list = configfiletools.getSetupList()
+        # sort list alphabetically
+        setup_list.sort()
         return {"available_setups": setup_list}
 
     @app.get("/UC2ConfigController/getCurrentSetupFilename")

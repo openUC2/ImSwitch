@@ -102,6 +102,8 @@ class CommunicationChannel(SignalInterface):
 
     # Objective 
     sigToggleObjective = Signal(int) # objective slot number 1,2
+    sigSetObjectiveByName = Signal(str) # objective name (e.g., "10x", "20x")
+    sigSetObjectiveByID = Signal(str) # objective ID
     sigStartLiveAcquistion = Signal(bool)
     sigStopLiveAcquisition = Signal(bool)
 

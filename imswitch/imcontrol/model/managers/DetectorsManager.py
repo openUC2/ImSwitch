@@ -34,7 +34,7 @@ class DetectorsManager(MultiManager, SignalInterface):
         for detectorName, detectorInfo in detectorInfos.items():
             if not self._subManagers[detectorName].forAcquisition:
                 continue
-            # Connect signals
+            # Connect signals - this is only used to trigger live-view # TODO: We should think about a better way to handle this as we also have the sigImageUpdated and sigUpdateImage - basically whenever we have a sigImageUpdated, the sigUpdateImage is triggered, through the MasterController - why? I think this has to go that way as
             self._subManagers[detectorName].sigImageUpdated.connect(
                 lambda image, init, scale, detectorName=detectorName: self.sigImageUpdated.emit(
                     detectorName, image, init, scale, detectorName==self._currentDetectorName, self.detectorParams
@@ -201,6 +201,15 @@ class LVWorker(Worker):
 
     def run(self):
         print("start lvworker")
+        # for all available detectors with the "forAcquisition" flag start polling frames 
+        for detectorName in self._detectorsManager.getAllDeviceNames():
+            if self._detectorsManager[detectorName]._DetectorManager__forAcquisition:
+                # initialize the latest frame acquisition
+                pass
+        # TODO: This is a very complicated way of getting franes periodically:
+        # For all forAcquisiton detectors we we connect their updateLatestFrame function to a timer that triggers every updatePeriod ms
+        # via a signal; This signal is then consumed by the detector which emits the frame via sigImageUpdated which is then caught by the MasterController and sent to the client
+        # then we send this out via the socket connection - does not seem very efficient...
         self._detectorsManager.execOnAll(lambda c: c.updateLatestFrame(False),
                                          condition=lambda c: c.forAcquisition)
         self._vtimer = Timer()
@@ -217,6 +226,19 @@ class LVWorker(Worker):
 
     def setUpdatePeriod(self, updatePeriod):
         self._updatePeriod = updatePeriod
+        # Restart timer with new period
+        if self._vtimer is not None:
+            self._vtimer.stop()
+            self._vtimer.start(self._updatePeriod)
+        print("start lvworker")
+        self._detectorsManager.execOnAll(lambda c: c.updateLatestFrame(False),
+                                         condition=lambda c: c.forAcquisition)
+        self._vtimer = Timer()
+        self._vtimer.timeout.connect(
+            lambda: self._detectorsManager.execOnAll(lambda c: c.updateLatestFrame(True),
+                                                     condition=lambda c: c.forAcquisition)
+        )
+        self._vtimer.start(self._updatePeriod)
 
 class NoDetectorsError(RuntimeError):
     """ Error raised when a function related to the current detector is called

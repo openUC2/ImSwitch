@@ -76,6 +76,8 @@ class ImConMainController(MainController):
             if controller_class is not None:
                 try:
                     self.controllers[widgetKey] = self.__factory.createController(controller_class, widget)
+                    # Register controller in MasterController for inter-controller communication
+                    self.__masterController.registerController(widgetKey, self.controllers[widgetKey])
                 except Exception as e:
                     self.__logger.error(f"Could not create controller for {controller_name}: {e}")
             else:
@@ -84,6 +86,8 @@ class ImConMainController(MainController):
                     if mPlugin is None:
                         raise ValueError(f'No controller found for widget {widgetKey}')
                     self.controllers[widgetKey] = self.__factory.createController(mPlugin, widget)
+                    # Register controller in MasterController
+                    self.__masterController.registerController(widgetKey, self.controllers[widgetKey])
                 except Exception as e:
                     self.__logger.debug(e)
 
@@ -96,6 +100,8 @@ class ImConMainController(MainController):
             controller_class = getattr(module, controller_name)
             if controller_class is not None:
                 self.controllers["WiFi"] = self.__factory.createController(controller_class, widget)
+                # Register WiFiController
+                self.__masterController.registerController("WiFi", self.controllers["WiFi"])
         except Exception as e:
             self.__logger.warning(f"Could not dynamically import {controller_name}: {e}")
         
@@ -120,6 +126,16 @@ class ImConMainController(MainController):
                                                     f' is not included in your currently active'
                                                     f' hardware setup file.'
             )
+            
+            # Connect LiveViewController stream signal to noqt signal handler in headless mode
+            if 'LiveView' in self.controllers:
+                try:
+                    liveViewController = self.controllers['LiveView']
+                    # The sigStreamFrame from LiveViewController emits pre-formatted messages
+                    # These are automatically handled by noqt's SignalInstance._handle_stream_frame
+                    self.__logger.debug("Connected LiveViewController.sigStreamFrame for streaming")
+                except Exception as e:
+                    self.__logger.warning(f"Could not connect LiveViewController streaming signal: {e}")
             
             
         # Generate Shorcuts

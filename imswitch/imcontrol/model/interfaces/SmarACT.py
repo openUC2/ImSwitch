@@ -27,7 +27,8 @@ SA_STATUS = ct.c_ulong()
 SA_INDEX  = ct.c_ulong()
 SA_PACKET_TYPE  = ct.c_ulong()
 
-MCS_lib = ct.cdll.LoadLibrary("MCSControl")
+# C:\Users\uc2\Documents\GitHub\ImSwitch\imswitch\imcontrol\model\interfaces\smaract\MCSControl.dll
+MCS_lib = ct.cdll.LoadLibrary("C:\\Users\\uc2\\Documents\\GitHub\\ImSwitch\\imswitch\\imcontrol\\model\\interfaces\\smaract\\MCSControl.dll")
 
 # // defines a data packet for the asynchronous mode
 class SA_packet(ct.Structure):

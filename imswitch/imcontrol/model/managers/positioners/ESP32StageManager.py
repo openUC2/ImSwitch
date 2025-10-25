@@ -344,7 +344,7 @@ class ESP32StageManager(PositionerManager):
             speed[0]=speed
         self.moveForever(speed=speed, is_stop=is_stop)
 
-    def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
+    def moveForever(self, speed=(0, 0, 0, 0), is_stop:bool=False):
         self._motor.move_forever(speed=speed, is_stop=is_stop)
 
     def setEnabled(self, is_enabled):

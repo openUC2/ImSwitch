@@ -54,6 +54,9 @@ class MasterController:
         self.__setupInfo = setupInfo
         self.__commChannel = commChannel
         self.__moduleCommChannel = moduleCommChannel
+        
+        # Dictionary to hold controller references for inter-controller communication
+        self._controllersRegistry = {}
 
         # Init managers
         self.rs232sManager = RS232sManager(self.__setupInfo.rs232devices)
@@ -199,7 +202,39 @@ class MasterController:
         self.__moduleCommChannel.memoryRecordings[name] = VFileItem(
             data=file, filePath=filePath, savedToDisk=savedToDisk
         )
+    
+    def registerController(self, name, controller):
+        """Register a controller for inter-controller communication.
+        
+        This allows controllers to call methods on other controllers directly
+        via self._master.getController('ControllerName').
+        
+        Args:
+            name: Name of the controller (e.g., 'Autofocus', 'Arkitekt')
+            controller: The controller instance
+        """
+        self._controllersRegistry[name] = controller
+        self.__logger.debug(f"Registered controller: {name}")
+    
+    def getController(self, name):
+        """Get a registered controller by name.
+        
+        Args:
+            name: Name of the controller (e.g., 'Autofocus', 'Arkitekt')
+            
+        Returns:
+            The controller instance or None if not found
+        """
+        return self._controllersRegistry.get(name, None)
 
+    def getAllControllerNames(self):
+        """Get a list of all registered controller names.
+        
+        Returns:
+            List of controller names
+        """
+        return list(self._controllersRegistry.keys())
+    
     def closeEvent(self):
         self.recordingManager.endRecording(emitSignal=False, wait=True)
 

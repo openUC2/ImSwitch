@@ -564,8 +564,23 @@ class RecordingController(ImConWidgetController):
     @APIExport(runOnUIThread=False)
     def video_feeder(self, startStream: bool = True) -> StreamingResponse:
         """
-        return a generator that converts frames into jpeg's reads to stream
+        Return a generator that converts frames into jpeg's ready to stream.
+        
+        This method is maintained for backward compatibility but now delegates to LiveViewController.
+        If LiveViewController is not available, falls back to legacy implementation.
         """
+        # Try to use LiveViewController if available
+        try:
+            if hasattr(self._commChannel, '_CommunicationChannel__main'):
+                main_controller = self._commChannel._CommunicationChannel__main
+                if 'LiveView' in main_controller.controllers:
+                    # Delegate to LiveViewController
+                    return main_controller.controllers['LiveView'].video_feeder(startStream)
+        except Exception as e:
+            self.__logger.warning(f"Could not use LiveViewController for video_feeder: {e}")
+            # Fall back to legacy implementation
+        
+        # Legacy implementation (kept for backward compatibility)
         if startStream:
             # start the live video feed
             self._commChannel.sigStartLiveAcquistion.emit(True)

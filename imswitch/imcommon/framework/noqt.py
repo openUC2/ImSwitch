@@ -25,7 +25,6 @@ import logging
 
 # Try to import config and binary streaming - handle gracefully if not available
 from imswitch.config import get_config
-from imswitch.imcommon.framework.binary_streaming import BinaryFrameEncoder
 HAS_BINARY_STREAMING = True
 class Mutex(abstract.Mutex):
     """Wrapper around the `threading.Lock` class."""
@@ -52,8 +51,7 @@ _frame_drop_counter = 0  # Track how many frames we've dropped
 # Frame queue uses maxsize=1 to keep only latest frame (automatic dropping)
 _fallback_frame_queue = queue.Queue(maxsize=1)  # Holds latest frame only - old frames auto-dropped
 _fallback_message_queue = queue.Queue(maxsize=50)  # Regular messages need more buffer
-_fallback_worker_thread = None
-_frame_drop_counter = 0  # Track how many frames we've dropped 
+_fallback_worker_thread = None 
 
 
 def _fallback_worker():
@@ -115,46 +113,6 @@ def _start_fallback_worker():
                                                     daemon=True)
         _fallback_worker_thread.start()
 
-
-def _ack_timeout_monitor():
-    """
-    Monitor thread that checks for clients stuck waiting for acknowledgements.
-    Resets clients to ready state if they haven't acknowledged within timeout period.
-    This prevents clients from getting permanently stuck in "not ready" state.
-    """
-    while True:
-        try:
-            time.sleep(_ACK_CHECK_INTERVAL)
-            now = time.time()
-            
-            with _client_frame_lock:
-                # Find clients that are not ready and have timed out
-                timed_out_clients = []
-                for sid in list(_client_frame_ready.keys()):
-                    if not _client_frame_ready.get(sid, True):  # Client is not ready
-                        last_ack_time = _client_last_ack_time.get(sid, now)
-                        if (now - last_ack_time) > _ACK_TIMEOUT_SECONDS:
-                            timed_out_clients.append(sid)
-                            # Reset client to ready state
-                            _client_frame_ready[sid] = True
-                            _client_last_ack_time[sid] = now
-                
-                if timed_out_clients:
-                    print(f"ACK timeout - reset {len(timed_out_clients)} client(s) to ready state")
-                    
-        except Exception as e:
-            print(f"Error in ACK timeout monitor: {e}")
-            time.sleep(1.0)  # Back off on error
-
-
-def _start_ack_timeout_monitor():
-    """Start the acknowledgement timeout monitor thread."""
-    global _ack_timeout_thread
-    if _ack_timeout_thread is None or not _ack_timeout_thread.is_alive():
-        _ack_timeout_thread = threading.Thread(target=_ack_timeout_monitor,
-                                                daemon=True)
-        _ack_timeout_thread.start()
-
 class SignalInterface(abstract.SignalInterface):
     """Base implementation of abstract.SignalInterface."""
     def __init__(self) -> None:
@@ -200,8 +158,8 @@ class SignalInstance(psygnal.SignalInstance):
         """
         Handle pre-formatted stream frame message from LiveViewController.
         Message format: {'type': 'binary_frame' or 'jpeg_frame', 'event': str, 'data': bytes or dict, 'metadata': dict}
-        Uses sio.start_background_task to properly handle emission with acknowledgements.
-        Implements proper flow control - only sends to clients that are ready.
+        Uses explicit frame_ack event from frontend for flow control.
+        Implements proper backpressure - only sends to clients that are ready.
         """
         try:
             msg_type = message.get('type')
@@ -217,91 +175,66 @@ class SignalInstance(psygnal.SignalInstance):
                 # No clients ready - drop this frame (implements backpressure)
                 global _frame_drop_counter
                 _frame_drop_counter += 1
-                if _frame_drop_counter % 30 == 0:  # Log every 30 dropped frames
-                    print(f"Dropped {_frame_drop_counter} frames due to client backpressure")
-                return
+                if _frame_drop_counter % 10 == 0:  # Log every 30 dropped frames
+                    print(f"Dropped {_frame_drop_counter} frames due to client backpressure") # TODO: if we have e.g. 100 dropped frames, we should stop the live stream but not the camera
+                    # set all available clients to ready to avoid infinite dropping
+                    with _client_frame_lock:
+                        for sid in _client_frame_ready.keys():
+                            _client_frame_ready[sid] = True
+                else:
+                    return # TODO: this is global stop 
             
-            # Mark clients as NOT ready (waiting for acknowledgement)
-            # This implements flow control - they must acknowledge before getting next frame
+            # Mark clients as NOT ready (waiting for acknowledgement via frame_ack event)
+            # Frontend will send frame_ack event after processing the frame
             with _client_frame_lock:
-                for sid in ready_clients:
-                    _client_frame_ready[sid] = False  # Wait for acknowledgement!
-                    _client_last_ack_time[sid] = time.time()  # Track when we sent the frame
+                for sid in ready_clients: #TODO: check if 
+                    _client_frame_ready[sid] = False  # Wait for frame_ack event!
             
             # Unified frame emission for both binary and JPEG
-            # Both use the same backpressure mechanism and acknowledgement flow
+            # Both use the same backpressure mechanism via frame_ack event handler
             if msg_type == 'binary_frame':
-                # Binary frame with metadata - emit frame data and metadata separately
+                # Binary frame with metadata - Socket.IO supports sending binary + JSON together!
+                # Send as array: [metadata, binaryData] - Socket.IO automatically handles serialization
+                frame_payload = [metadata, data]  # First element: JSON metadata, Second: binary data
+                
                 for sid in ready_clients:
-                    def ack_callback(sid=sid):
-                        """Mark client as ready for next frame when acknowledged"""
-                        with _client_frame_lock:
-                            _client_frame_ready[sid] = True
-                            _client_last_ack_time[sid] = time.time()  # Update last ACK time
-                    
                     try:
-                        # Emit binary frame data with acknowledgement
+                        # Emit binary frame with embedded metadata
+                        # Client will send frame_ack event after processing
                         sio.start_background_task(
                             sio.emit, 
                             event,  # 'frame' event
-                            data,   # Binary packet
-                            to=sid,
-                            callback=ack_callback
+                            frame_payload,  # [metadata, binaryData]
+                            to=sid
                         )
                     except RuntimeError:
                         # No event loop in thread - use fallback frame queue (with dropping)
                         _start_fallback_worker()
                         try:
                             # put_nowait will raise queue.Full if queue is full
-                            # Since maxsize=1, this drops old frame and keeps new one
-                            _fallback_frame_queue.put_nowait(('frame', data, sid))
+                            # Since maxsize=1, this drops old frame and keeps new one # TODO: We always run into this, does this cause a problem for the timing -buffering? Why couldn'T we use the start_background_task here??
+                            _fallback_frame_queue.put_nowait(('frame', frame_payload, sid))
                         except queue.Full:
                             # Queue full - drop oldest frame by getting it and replacing
                             try:
                                 _fallback_frame_queue.get_nowait()
-                                _fallback_frame_queue.put_nowait(('frame', data, sid))
+                                _fallback_frame_queue.put_nowait(('frame', frame_payload, sid))
                             except:
                                 pass
-                
-                # Emit metadata as JSON signal (separate from frame)
-                meta_message = {
-                    "name": "frame_meta",
-                    "detectorname": metadata.get('detectorname', ''),
-                    "pixelsize": metadata.get('pixelsize', 1),
-                    "format": "binary",
-                    "metadata": metadata
-                }
-                for sid in ready_clients:
-                    try:
-                        sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
-                    except RuntimeError:
-                        # No event loop in thread - use regular message queue
-                        _start_fallback_worker()
-                        try:
-                            _fallback_message_queue.put_nowait(('signal', json.dumps(meta_message), sid))
-                        except queue.Full:
-                            # Message queue full - this is a problem, log it
-                            print(f"Warning: Fallback message queue full, dropping metadata")
                     
             elif msg_type == 'jpeg_frame':
-                # JPEG frame - emit as JSON signal with same acknowledgement mechanism as binary
-                # Uses frame queue for backpressure control (same as binary frames)
+                # JPEG frame - emit as JSON signal
+                # Client will send frame_ack event after processing
                 json_message = json.dumps(data)
                 for sid in ready_clients:
-                    def ack_callback(sid=sid):
-                        """Mark client as ready for next frame when acknowledged"""
-                        with _client_frame_lock:
-                            _client_frame_ready[sid] = True
-                            _client_last_ack_time[sid] = time.time()  # Update last ACK time
-                    
                     try:
-                        # Emit JPEG frame with acknowledgement
+                        # Emit JPEG frame
+                        # Client will send frame_ack event after processing
                         sio.start_background_task(
                             sio.emit,
                             "signal",
                             json_message,
-                            to=sid,
-                            callback=ack_callback
+                            to=sid
                         )
                     except RuntimeError:
                         # No event loop in thread - use fallback FRAME queue (not message queue!)
@@ -515,7 +448,7 @@ async def connect(sid, environ):
     print(f"SocketIO Client connected: {sid}")
     with _client_frame_lock:
         _client_frame_ready[sid] = True
-        _client_last_ack_time[sid] = time.time()
+        
 
 @sio.event
 async def disconnect(sid):
@@ -523,14 +456,12 @@ async def disconnect(sid):
     print(f"SocketIO Client disconnected: {sid}")
     with _client_frame_lock:
         _client_frame_ready.pop(sid, None)
-        _client_last_ack_time.pop(sid, None)
 
 @sio.event
 async def frame_ack(sid):
     """Client explicitly acknowledges frame processing complete"""
     with _client_frame_lock:
         _client_frame_ready[sid] = True
-        _client_last_ack_time[sid] = time.time()
         # print(f"Client {sid} acknowledged frame")
 
 # Function to run Uvicorn server with Socket.IO app
@@ -555,7 +486,5 @@ def run_uvicorn():
 def start_websocket_server():
     server_thread = threading.Thread(target=run_uvicorn, daemon=True)
     server_thread.start()
-    # Start the acknowledgement timeout monitor
-    _start_ack_timeout_monitor()
-
+    
 start_websocket_server()

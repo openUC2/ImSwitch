@@ -97,6 +97,11 @@ class CreateFolderRequest(BaseModel):
     parentId: Optional[str] = None
 
 @app.get("/version")
+def get_version():
+    """
+    Returns the current version of the ImSwitch server.
+    """
+    return {"version": VERSION}
 
 # Create a Folder
 @app.post("/folder")

@@ -86,17 +86,14 @@ class StreamWorker(Worker):
         """Start polling frames without timer - wait and push immediately."""
         self._running = True
         self._logger.debug(f"StreamWorker started with update period {self._updatePeriod}s")
-        
         while self._running:
             try:
+                self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it 
                 # Check if enough time has passed since last frame
-                current_time = time.time()
-                time_since_last_frame = current_time - self._last_frame_time
-                
-                if time_since_last_frame >= self._updatePeriod:
+                if (time.time() - self._last_frame_time) >= self._updatePeriod:
                     # Capture and emit frame
                     frameResult = self._captureAndEmit()
-                    self._last_frame_time = current_time
+                    self._last_frame_time = time.time()
                     
                     # Only stop on explicit failure, not on None frames
                     if frameResult is False:  # Explicitly check for False, not None
@@ -105,8 +102,7 @@ class StreamWorker(Worker):
                         break
                 else:
                     # Sleep for a small amount to avoid busy waiting
-                    sleep_time = min(0.001, (self._updatePeriod - time_since_last_frame) / 2)
-                    time.sleep(sleep_time)
+                    time.sleep(0.01)
                     
             except Exception as e:
                 self._logger.error(f"Error in StreamWorker loop: {e}")
@@ -185,7 +181,7 @@ class BinaryStreamWorker(StreamWorker):
             metadata['detectorname'] = detector_name
             metadata['pixelsize'] = int(pixel_size)
             metadata['format'] = 'binary'
-            
+
             self._image_id += 1
             
             # Create pre-formatted message for socket.io

@@ -11,7 +11,10 @@ from contextvars import copy_context, Context
 from imswitch.imcommon.model import initLogger
 
 # Import this to make sure that mikro_next is available when ArkitektManager is used
-from mikro_next.api.schema import Image
+try:
+    from mikro_next.api.schema import Image
+except ImportError:
+    Image = None
 
 
 def ensure_context_in_thread(context: Context):

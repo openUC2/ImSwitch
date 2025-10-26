@@ -40,6 +40,7 @@ class StreamParams:
     # WebRTC parameters
     stun_servers: list = field(default_factory=list)  # Empty by default - works without internet!
     turn_servers: list = field(default_factory=list)
+    max_width: int = 1280  # Maximum frame width in pixels, 0 = no limit
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
@@ -53,6 +54,7 @@ class StreamParams:
             "jpeg_quality": self.jpeg_quality,
             "stun_servers": self.stun_servers,
             "turn_servers": self.turn_servers,
+            "max_width": self.max_width,
         }
     
     @classmethod
@@ -397,29 +399,48 @@ class WebRTCStreamWorker(StreamWorker):
             if frame is None:
                 return None  # No frame available, but not an error - keep running
             
-            # Normalize to uint8 if needed
+            # Apply basic preprocessing based on throttle setting
+            # For WebRTC, we want to minimize processing latency
+            throttle_ms = getattr(self._params, 'throttle_ms', 50)
+            
+            # Normalize to uint8 efficiently
             if frame.dtype != np.uint8:
-                vmin = float(np.min(frame))
-                vmax = float(np.max(frame))
-                if vmax > vmin:
-                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
+                if throttle_ms < 33:  # ~30 FPS or higher - use fast conversion
+                    if frame.dtype == np.uint16:
+                        frame = (frame >> 8).astype(np.uint8)  # Quick 16->8 bit conversion
+                    else:
+                        # Quick normalization without min/max calculation
+                        frame = (frame / frame.max() * 255).astype(np.uint8)
                 else:
-                    frame = np.zeros_like(frame, dtype=np.uint8)
+                    # Normal processing for lower frame rates
+                    vmin = float(np.min(frame))
+                    vmax = float(np.max(frame))
+                    if vmax > vmin:
+                        frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
+                    else:
+                        frame = np.zeros_like(frame, dtype=np.uint8)
             
             # Put frame in queue, replacing old frame if full
             try:
-                # Try to clear old frame to keep only latest
-                old_size = self._frame_queue.qsize()
-                try:
-                    self._frame_queue.get_nowait()
-                except queue.Empty:
-                    pass
+                # Clear the queue to keep only the latest frame (reduces latency)
+                while not self._frame_queue.empty():
+                    try:
+                        self._frame_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                        
+                # Add the new frame
                 self._frame_queue.put_nowait(frame)
-                new_size = self._frame_queue.qsize()
                 return True
+                
             except queue.Full:
-                # This should not happen since we clear the queue above, but just in case
-                return None  # Queue management failed, but keep trying
+                # This shouldn't happen since we clear the queue, but just in case
+                try:
+                    self._frame_queue.get_nowait()  # Remove one old frame
+                    self._frame_queue.put_nowait(frame)  # Add new frame
+                    return True
+                except (queue.Empty, queue.Full):
+                    return None  # Queue issues, but not a fatal error
                 
         except Exception as e:
             self._logger.error(f"Error in WebRTCStreamWorker: {e}")
@@ -432,7 +453,8 @@ class WebRTCStreamWorker(StreamWorker):
                 self._frame_queue, 
                 self._detector.name,
                 self._VideoStreamTrack,
-                self._av
+                self._av,
+                self._params  # Pass stream parameters
             )
             # Return the actual track, not the wrapper
             self._video_track = track_wrapper._track
@@ -442,10 +464,12 @@ class WebRTCStreamWorker(StreamWorker):
 class DetectorVideoTrack:
     """Custom video track that reads frames from detector queue."""
     
-    def __init__(self, frame_queue, detector_name, VideoStreamTrack, av):
+    def __init__(self, frame_queue, detector_name, VideoStreamTrack, av, stream_params=None):
         self._queue = frame_queue
         self._detector_name = detector_name
         self._av = av
+        self._stream_params = stream_params or StreamParams(protocol='webrtc')
+        self._logger = initLogger(self)
                
         # Create custom track class that inherits from VideoStreamTrack
         class CustomVideoTrack(VideoStreamTrack):
@@ -455,6 +479,8 @@ class DetectorVideoTrack:
                 inner_self._queue = frame_queue
                 inner_self._av = av
                 inner_self._timestamp = 0
+                inner_self._stream_params = stream_params or StreamParams(protocol='webrtc')
+                inner_self._logger = initLogger(inner_self)
                 # time_base must be a Fraction, not a float
                 from fractions import Fraction
                 inner_self._time_base = Fraction(1, 30)  # 30 fps
@@ -497,10 +523,52 @@ class DetectorVideoTrack:
                     # Remove alpha channel if present
                     frame = frame[:, :, :3]
                 
-                # Resize if frame is too large (to reduce WebRTC bandwidth)
-                if frame.shape[0] > 480 or frame.shape[1] > 640:
+                # Get original dimensions
+                original_height, original_width = frame.shape[:2]
+                
+                # Get max dimensions from stream parameters
+                max_width = getattr(inner_self._stream_params, 'max_width', 1280)  # Default to 1280 if not set
+                if max_width == 0:  # 0 means no limit
+                    max_width = original_width
+                
+                # Calculate max_height based on aspect ratio
+                aspect_ratio = original_width / original_height
+                max_height = int(max_width / aspect_ratio)
+                
+                # Apply subsampling factor if configured
+                if hasattr(inner_self._stream_params, 'subsampling_factor') and inner_self._stream_params.subsampling_factor > 1:
+                    max_width = max_width // inner_self._stream_params.subsampling_factor
+                    max_height = max_height // inner_self._stream_params.subsampling_factor
+                
+                # Resize while preserving aspect ratio if frame is larger than limits
+                if original_width > max_width or original_height > max_height:
                     import cv2
-                    frame = cv2.resize(frame, (640, 480))
+                    # Calculate scaling factor to maintain aspect ratio
+                    scale_width = max_width / original_width
+                    scale_height = max_height / original_height
+                    scale = min(scale_width, scale_height)
+                    
+                    new_width = int(original_width * scale)
+                    new_height = int(original_height * scale)
+                    
+                    # Ensure dimensions are even (required for some video codecs)
+                    new_width = new_width - (new_width % 2)
+                    new_height = new_height - (new_height % 2)
+                    
+                    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+                    inner_self._logger.debug(f"Resized frame from {original_width}x{original_height} to {new_width}x{new_height} (max: {max_width}x{max_height})")
+                elif hasattr(inner_self._stream_params, 'subsampling_factor') and inner_self._stream_params.subsampling_factor > 1:
+                    # Apply subsampling even if frame is within limits
+                    import cv2
+                    new_width = original_width // inner_self._stream_params.subsampling_factor
+                    new_height = original_height // inner_self._stream_params.subsampling_factor
+                    
+                    # Ensure dimensions are even
+                    new_width = new_width - (new_width % 2)
+                    new_height = new_height - (new_height % 2)
+                    
+                    frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+                    inner_self._logger.debug(f"Subsampled frame from {original_width}x{original_height} to {new_width}x{new_height} (factor: {inner_self._stream_params.subsampling_factor})")
                 
                 # Ensure frame is contiguous
                 frame = np.ascontiguousarray(frame)
@@ -533,6 +601,7 @@ class WebRTCOfferRequest(BaseModel):
     sdp: str
     sdp_type: str  # Should be "offer"
     detectorName: Optional[str] = None
+    params: Optional[Dict[str, Any]] = None  # Stream parameters
 
 
 class LiveViewController(LiveUpdatedController):
@@ -1196,6 +1265,10 @@ class LiveViewController(LiveUpdatedController):
         Returns:
             Dictionary with answer SDP
         """
+        import time
+        start_time = time.time()
+        timing = {}
+        
         try:
             from aiortc import RTCPeerConnection, RTCSessionDescription
             import asyncio
@@ -1203,33 +1276,63 @@ class LiveViewController(LiveUpdatedController):
         except ImportError:
             return {"status": "error", "message": "aiortc not available"}
         
+        timing['imports'] = time.time() - start_time
+        self._logger.debug(f"⚡ WebRTC offer processing started")
+        
         # Extract parameters from request
         sdp = request.sdp
         sdp_type = request.sdp_type
         detectorName = request.detectorName
+        params = request.params or {}
         
-        self._logger.debug(f"Received WebRTC offer: type={sdp_type}, sdp length={len(sdp)}")
+        timing['params_extracted'] = time.time() - start_time
+        self._logger.debug(f"Received WebRTC offer: type={sdp_type}, sdp length={len(sdp)}, params={params}")
         
         # Get detector name
         if detectorName is None:
             detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
         
+        # Update stream parameters if provided
+        if params:
+            try:
+                current_params = self._streamParams.get('webrtc', StreamParams(protocol='webrtc'))
+                # Update with new parameters
+                for key, value in params.items():
+                    if hasattr(current_params, key):
+                        setattr(current_params, key, value)
+                        self._logger.debug(f"Updated WebRTC param {key}={value}")
+                self._streamParams['webrtc'] = current_params
+                timing['params_updated'] = time.time() - start_time
+            except Exception as e:
+                self._logger.warning(f"Failed to update stream parameters: {e}")
+        
         # Start WebRTC stream if not already active
         if detectorName not in self._activeStreams:
-            result = self.startLiveView(detectorName, "webrtc")
+            self._logger.debug(f"🚀 Starting WebRTC stream for {detectorName}")
+            result = self.startLiveView(detectorName, "webrtc", params)
             if result['status'] != 'success':
                 return result
+            timing['stream_started'] = time.time() - start_time
+        else:
+            timing['stream_started'] = time.time() - start_time
+            self._logger.debug(f"🔄 WebRTC stream already active for {detectorName}")
         
         # Get the worker
         worker = self.getWebRTCWorker(detectorName)
         if worker is None:
             return {"status": "error", "message": "Failed to get WebRTC worker"}
         
+        timing['worker_ready'] = time.time() - start_time
+        
         # Get or create persistent event loop
         loop = self._get_or_create_webrtc_loop()
+        timing['loop_ready'] = time.time() - start_time
         
         # Handle offer and create answer in async context
         async def process_offer():
+            offer_start = time.time()
+            offer_timing = {}
+            
             # Close existing peer connection for this detector if any
             if detectorName in self._webrtc_peers:
                 old_pc = self._webrtc_peers[detectorName]
@@ -1238,6 +1341,8 @@ class LiveViewController(LiveUpdatedController):
                     self._logger.debug(f"Closed old peer connection for {detectorName}")
                 except Exception as e:
                     self._logger.warning(f"Error closing old peer: {e}")
+            
+            offer_timing['cleanup'] = time.time() - offer_start
             
             # Create new peer connection with ICE servers
             from aiortc import RTCConfiguration, RTCIceServer
@@ -1262,6 +1367,8 @@ class LiveViewController(LiveUpdatedController):
             # Store PC for this detector
             self._webrtc_peers[detectorName] = pc
             
+            offer_timing['pc_created'] = time.time() - offer_start
+            
             @pc.on("connectionstatechange")
             async def on_connectionstatechange():
                 self._logger.info(f"WebRTC connection state for {detectorName}: {pc.connectionState}")
@@ -1278,6 +1385,7 @@ class LiveViewController(LiveUpdatedController):
             
             # Add video track
             video_track = worker.get_video_track()
+            offer_timing['got_track'] = time.time() - offer_start
             self._logger.debug(f"Got video track from worker: {video_track}, type: {type(video_track)}")
             if video_track:
                 # Verify the track has the recv method
@@ -1287,6 +1395,7 @@ class LiveViewController(LiveUpdatedController):
                     self._logger.error(f"Video track missing recv method!")
                 
                 pc.addTrack(video_track)
+                offer_timing['track_added'] = time.time() - offer_start
                 self._logger.debug(f"Added video track to peer connection for {detectorName}")
                 self._logger.debug(f"Peer connection tracks: {pc.getTransceivers()}")
             else:
@@ -1295,16 +1404,33 @@ class LiveViewController(LiveUpdatedController):
             
             # Process offer
             try:
-                self._logger.debug(f"Creating RTCSessionDescription with type={sdp_type}")
+                self._logger.debug(f"🔄 Processing SDP offer...")
                 offer_desc = RTCSessionDescription(sdp=sdp, type=sdp_type)
                 await pc.setRemoteDescription(offer_desc)
+                offer_timing['remote_desc_set'] = time.time() - offer_start
                 self._logger.debug(f"Set remote description for {detectorName}")
                 
                 # Create and set answer
+                self._logger.debug(f"🔄 Creating SDP answer...")
                 answer = await pc.createAnswer()
+                offer_timing['answer_created'] = time.time() - offer_start
+                
                 await pc.setLocalDescription(answer)
+                offer_timing['local_desc_set'] = time.time() - offer_start
                 
                 self._logger.info(f"WebRTC answer created for {detectorName}: type={pc.localDescription.type}")
+                
+                # Log detailed timing breakdown
+                total_offer_time = time.time() - offer_start
+                self._logger.debug(f"🕐 Backend SDP processing timing:")
+                self._logger.debug(f"   Cleanup: {offer_timing.get('cleanup', 0)*1000:.1f}ms")
+                self._logger.debug(f"   PC created: {offer_timing.get('pc_created', 0)*1000:.1f}ms")
+                self._logger.debug(f"   Got track: {(offer_timing.get('got_track', 0) - offer_timing.get('pc_created', 0))*1000:.1f}ms")
+                self._logger.debug(f"   Track added: {(offer_timing.get('track_added', 0) - offer_timing.get('got_track', 0))*1000:.1f}ms")
+                self._logger.debug(f"   Remote desc: {(offer_timing.get('remote_desc_set', 0) - offer_timing.get('track_added', 0))*1000:.1f}ms")
+                self._logger.debug(f"   Answer created: {(offer_timing.get('answer_created', 0) - offer_timing.get('remote_desc_set', 0))*1000:.1f}ms")
+                self._logger.debug(f"   Local desc: {(offer_timing.get('local_desc_set', 0) - offer_timing.get('answer_created', 0))*1000:.1f}ms")
+                self._logger.debug(f"   Total SDP processing: {total_offer_time*1000:.1f}ms")
                 
                 return {
                     "status": "success",
@@ -1322,16 +1448,39 @@ class LiveViewController(LiveUpdatedController):
         
         # Run async function on persistent event loop
         try:
+            self._logger.debug(f"🔄 Running async SDP processing...")
+            timing['async_start'] = time.time() - start_time
+            
             future = asyncio.run_coroutine_threadsafe(process_offer(), loop)
             result = future.result(timeout=15.0)  # Increased timeout for better reliability
+            
+            timing['async_complete'] = time.time() - start_time
+            total_time = time.time() - start_time
+            
+            # Log complete backend timing breakdown
+            self._logger.debug(f"🕐 Complete backend timing breakdown:")
+            self._logger.debug(f"   Total backend time: {total_time*1000:.1f}ms")
+            self._logger.debug(f"   Imports: {timing.get('imports', 0)*1000:.1f}ms")
+            self._logger.debug(f"   Params extracted: {timing.get('params_extracted', 0)*1000:.1f}ms")
+            self._logger.debug(f"   Params updated: {timing.get('params_updated', timing.get('params_extracted', 0))*1000:.1f}ms")
+            self._logger.debug(f"   Stream started: {(timing.get('stream_started', 0) - timing.get('params_updated', timing.get('params_extracted', 0)))*1000:.1f}ms")
+            self._logger.debug(f"   Worker ready: {(timing.get('worker_ready', 0) - timing.get('stream_started', 0))*1000:.1f}ms")
+            self._logger.debug(f"   Loop ready: {(timing.get('loop_ready', 0) - timing.get('worker_ready', 0))*1000:.1f}ms")
+            self._logger.debug(f"   Async setup: {(timing.get('async_start', 0) - timing.get('loop_ready', 0))*1000:.1f}ms")
+            self._logger.debug(f"   Async processing: {(timing.get('async_complete', 0) - timing.get('async_start', 0))*1000:.1f}ms")
+            
+            self._logger.info(f"✅ WebRTC offer processed successfully in {total_time*1000:.1f}ms")
             return result
+            
         except asyncio.TimeoutError:
-            self._logger.error(f"Timeout processing WebRTC offer for {detectorName}")
+            total_time = time.time() - start_time
+            self._logger.error(f"❌ Timeout processing WebRTC offer for {detectorName} after {total_time*1000:.1f}ms")
             return {"status": "error", "message": "Timeout processing WebRTC offer"}
         except Exception as e:
             import traceback
+            total_time = time.time() - start_time
             full_error = traceback.format_exc()
-            self._logger.error(f"Error processing WebRTC offer: {e}\n{full_error}")
+            self._logger.error(f"❌ Error processing WebRTC offer after {total_time*1000:.1f}ms: {e}\n{full_error}")
             return {"status": "error", "message": str(e)}
     
     @APIExport(runOnUIThread=False)

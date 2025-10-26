@@ -87,7 +87,7 @@ class StreamWorker(Worker):
     def run(self):
         """Start polling frames without timer - wait and push immediately."""
         self._running = True
-        self._logger.debug(f"StreamWorker started with update period {self._updatePeriod}s")
+        self._logger.info(f"StreamWorker started with update period {self._updatePeriod}s")
         while self._running:
             try:
                 self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it 
@@ -111,12 +111,12 @@ class StreamWorker(Worker):
                 time.sleep(0.1)  # Brief pause on error
                 # Continue running unless explicitly stopped
         
-        self._logger.debug("StreamWorker run loop exited")
+        self._logger.info("StreamWorker run loop exited")
     
     def stop(self):
         """Stop polling frames."""
         self._running = False
-        self._logger.debug("StreamWorker stopped")
+        self._logger.info("StreamWorker stopped")
     
     @abstractmethod
     def _captureAndEmit(self):
@@ -488,27 +488,32 @@ class DetectorVideoTrack:
             async def recv(inner_self):
                 """Receive next video frame."""
                 
-                # Try to get frame from queue with timeout
+                # Try to get frame from queue with shorter timeout for faster response
                 frame = None
                 start_time = asyncio.get_event_loop().time()
-                timeout = 0.5
+                timeout = 0.1  # Reduced from 0.5 to 0.1 seconds for faster response
                 
-                while frame is None and (asyncio.get_event_loop().time() - start_time) < timeout:
-                    try:
-                        # Non-blocking get
-                        frame = inner_self._queue.get_nowait()
-                        break
-                    except queue.Empty:
-                        # Wait a bit before trying again
+                # Try to get the latest frame immediately
+                try:
+                    frame = inner_self._queue.get_nowait()
+                except queue.Empty:
+                    # If no frame available, wait briefly
+                    for _ in range(3):  # Max 3 attempts, 30ms total
                         await asyncio.sleep(0.01)
+                        try:
+                            frame = inner_self._queue.get_nowait()
+                            break
+                        except queue.Empty:
+                            continue
                 
                 if frame is None:
                     # Use last frame if available, otherwise create a small placeholder frame
                     if hasattr(inner_self, '_last_frame') and inner_self._last_frame is not None:
-                        frame = inner_self._last_frame
+                        frame = inner_self._last_frame.copy()  # Make a copy to avoid issues
                     else:
                         # Create a small black frame to reduce bandwidth
-                        frame = np.zeros((240, 320), dtype=np.uint8)
+                        frame = np.zeros((240, 320, 3), dtype=np.uint8)  # RGB format directly
+                        inner_self._logger.info("Using placeholder frame")
                 else:
                     # Store the frame as last frame for fallback
                     inner_self._last_frame = frame
@@ -556,7 +561,7 @@ class DetectorVideoTrack:
                     new_height = new_height - (new_height % 2)
                     
                     frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-                    inner_self._logger.debug(f"Resized frame from {original_width}x{original_height} to {new_width}x{new_height} (max: {max_width}x{max_height})")
+                    inner_self._logger.info(f"Resized frame from {original_width}x{original_height} to {new_width}x{new_height} (max: {max_width}x{max_height})")
                 elif hasattr(inner_self._stream_params, 'subsampling_factor') and inner_self._stream_params.subsampling_factor > 1:
                     # Apply subsampling even if frame is within limits
                     import cv2
@@ -568,25 +573,46 @@ class DetectorVideoTrack:
                     new_height = new_height - (new_height % 2)
                     
                     frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-                    inner_self._logger.debug(f"Subsampled frame from {original_width}x{original_height} to {new_width}x{new_height} (factor: {inner_self._stream_params.subsampling_factor})")
+                    inner_self._logger.info(f"Subsampled frame from {original_width}x{original_height} to {new_width}x{new_height} (factor: {inner_self._stream_params.subsampling_factor})")
                 
-                # Ensure frame is contiguous
+                # Ensure frame is contiguous and optimize for WebRTC
                 frame = np.ascontiguousarray(frame)
-                # Create av.VideoFrame
+                
+                # Ensure frame dimensions are even (required by some codecs)
+                height, width = frame.shape[:2]
+                if width % 2 != 0:
+                    width -= 1
+                    frame = frame[:, :width]
+                if height % 2 != 0:
+                    height -= 1
+                    frame = frame[:height, :]
+                
+                # Create av.VideoFrame with error handling and timeout protection
                 try:
+                    # Use a smaller frame if the original is too large (reduces encoding time)
+                    if frame.size > 1280 * 720 * 3:  # If frame is larger than 720p
+                        # Quick downsample for faster processing
+                        import cv2
+                        target_height = min(480, height)
+                        target_width = int(target_height * width / height)
+                        # Ensure even dimensions
+                        target_width = target_width - (target_width % 2)
+                        target_height = target_height - (target_height % 2)
+                        frame = cv2.resize(frame, (target_width, target_height), interpolation=cv2.INTER_AREA)
+                    
                     new_frame = inner_self._av.VideoFrame.from_ndarray(frame, format="rgb24")
                     new_frame.pts = inner_self._timestamp
-                    new_frame.time_base = inner_self._time_base  # AttributeError: 'float' object has no attribute 'numerator'
+                    new_frame.time_base = inner_self._time_base
                     inner_self._timestamp += 1
                     return new_frame
                 except Exception as e:
+                    inner_self._logger.warning(f"Error creating av.VideoFrame: {e}, using fallback frame")
                     # If frame creation fails, create a minimal frame
                     fallback_frame = np.zeros((240, 320, 3), dtype=np.uint8)
                     new_frame = inner_self._av.VideoFrame.from_ndarray(fallback_frame, format="rgb24")
                     new_frame.pts = inner_self._timestamp
                     new_frame.time_base = inner_self._time_base
                     inner_self._timestamp += 1
-                    print(f"Error creating av.VideoFrame: {e}, using fallback frame")
                     return new_frame
         
         self._track = CustomVideoTrack()
@@ -660,7 +686,7 @@ class LiveViewController(LiveUpdatedController):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 self._webrtc_loop = loop
-                self._logger.debug("WebRTC event loop started")
+                self._logger.info("WebRTC event loop started")
                 loop.run_forever()
             
             self._webrtc_loop_thread = threading.Thread(target=run_loop, daemon=True)
@@ -683,21 +709,21 @@ class LiveViewController(LiveUpdatedController):
                 self._webrtc_loop_thread.join(timeout=1.0)
             self._webrtc_loop = None
             self._webrtc_loop_thread = None
-            self._logger.debug("WebRTC event loop stopped")
+            self._logger.info("WebRTC event loop stopped")
     
     def _onStartLiveAcquisition(self, start: bool):
         """Handle start live acquisition signal."""
         if start:
-            self._logger.debug("Received start live acquisition signal")
+            self._logger.info("Received start live acquisition signal")
             # This can be used to automatically start default streaming
             # For now, streaming is explicitly controlled via API
         else:
-            self._logger.debug("Received stop live acquisition signal")
+            self._logger.info("Received stop live acquisition signal")
     
     def _onStopLiveAcquisition(self, stop: bool):
         """Handle stop live acquisition signal."""
         if stop:
-            self._logger.debug("Stopping all live acquisitions")
+            self._logger.info("Stopping all live acquisitions")
             # Stop all active streams
             for detector_name in list(self._activeStreams.keys()):
                 self.stopLiveView(detector_name, stopCamera=False)
@@ -856,7 +882,7 @@ class LiveViewController(LiveUpdatedController):
                     pc = self._webrtc_peers[detectorName]
                     await pc.close()
                     del self._webrtc_peers[detectorName]
-                    self._logger.debug(f"Closed WebRTC peer connection for {detectorName}")
+                    self._logger.info(f"Closed WebRTC peer connection for {detectorName}")
                 
                 # Schedule close on the event loop
                 future = asyncio.run_coroutine_threadsafe(close_pc(), loop)
@@ -1227,7 +1253,7 @@ class LiveViewController(LiveUpdatedController):
                     if frame:
                         yield frame
             except GeneratorExit:
-                self._logger.debug("MJPEG stream connection closed by client")
+                self._logger.info("MJPEG stream connection closed by client")
             except Exception as e:
                 self._logger.error(f"Error in MJPEG frame generator: {e}")
         
@@ -1277,7 +1303,7 @@ class LiveViewController(LiveUpdatedController):
             return {"status": "error", "message": "aiortc not available"}
         
         timing['imports'] = time.time() - start_time
-        self._logger.debug(f"⚡ WebRTC offer processing started")
+        self._logger.info(f"⚡ WebRTC offer processing started")
         
         # Extract parameters from request
         sdp = request.sdp
@@ -1286,7 +1312,7 @@ class LiveViewController(LiveUpdatedController):
         params = request.params or {}
         
         timing['params_extracted'] = time.time() - start_time
-        self._logger.debug(f"Received WebRTC offer: type={sdp_type}, sdp length={len(sdp)}, params={params}")
+        self._logger.info(f"Received WebRTC offer: type={sdp_type}, sdp length={len(sdp)}, params={params}")
         
         # Get detector name
         if detectorName is None:
@@ -1300,7 +1326,7 @@ class LiveViewController(LiveUpdatedController):
                 for key, value in params.items():
                     if hasattr(current_params, key):
                         setattr(current_params, key, value)
-                        self._logger.debug(f"Updated WebRTC param {key}={value}")
+                        self._logger.info(f"Updated WebRTC param {key}={value}")
                 self._streamParams['webrtc'] = current_params
                 timing['params_updated'] = time.time() - start_time
             except Exception as e:
@@ -1308,14 +1334,14 @@ class LiveViewController(LiveUpdatedController):
         
         # Start WebRTC stream if not already active
         if detectorName not in self._activeStreams:
-            self._logger.debug(f"🚀 Starting WebRTC stream for {detectorName}")
+            self._logger.info(f"🚀 Starting WebRTC stream for {detectorName}")
             result = self.startLiveView(detectorName, "webrtc", params)
             if result['status'] != 'success':
                 return result
             timing['stream_started'] = time.time() - start_time
         else:
             timing['stream_started'] = time.time() - start_time
-            self._logger.debug(f"🔄 WebRTC stream already active for {detectorName}")
+            self._logger.info(f"🔄 WebRTC stream already active for {detectorName}")
         
         # Get the worker
         worker = self.getWebRTCWorker(detectorName)
@@ -1338,7 +1364,7 @@ class LiveViewController(LiveUpdatedController):
                 old_pc = self._webrtc_peers[detectorName]
                 try:
                     await old_pc.close()
-                    self._logger.debug(f"Closed old peer connection for {detectorName}")
+                    self._logger.info(f"Closed old peer connection for {detectorName}")
                 except Exception as e:
                     self._logger.warning(f"Error closing old peer: {e}")
             
@@ -1348,20 +1374,12 @@ class LiveViewController(LiveUpdatedController):
             from aiortc import RTCConfiguration, RTCIceServer
             
             # For local connections, we don't need STUN servers (works without internet)
-            # Only add STUN servers if explicitly configured in stream params
+            # Explicitly disable ICE servers to prevent STUN timeouts
             stream_params = self._streamParams.get('webrtc', StreamParams(protocol='webrtc'))
             
-            ice_servers = []
-            # Only use STUN servers if user explicitly configured them
-            # For localhost/LAN, WebRTC works fine without any ICE servers
-            if stream_params.stun_servers and len(stream_params.stun_servers) > 0:
-                for stun_url in stream_params.stun_servers:
-                    ice_servers.append(RTCIceServer(stun_url))
-                self._logger.debug(f"Using {len(ice_servers)} ICE servers for WebRTC")
-            else:
-                self._logger.debug("No ICE servers configured - using local connection (perfect for LAN/localhost)")
-            
-            config = RTCConfiguration(iceServers=ice_servers) if ice_servers else RTCConfiguration()
+            # Force empty ICE servers list for local connections to prevent STUN timeouts
+            self._logger.info("✅ Disabling ICE servers for local connection (prevents STUN timeouts)")
+            config = RTCConfiguration(iceServers=[])  # Only iceServers parameter supported
             pc = RTCPeerConnection(configuration=config)
             
             # Store PC for this detector
@@ -1381,74 +1399,115 @@ class LiveViewController(LiveUpdatedController):
             
             @pc.on("iceconnectionstatechange")
             async def on_iceconnectionstatechange():
-                self._logger.debug(f"ICE connection state for {detectorName}: {pc.iceConnectionState}")
+                self._logger.info(f"ICE connection state for {detectorName}: {pc.iceConnectionState}")
             
             # Add video track
             video_track = worker.get_video_track()
             offer_timing['got_track'] = time.time() - offer_start
-            self._logger.debug(f"Got video track from worker: {video_track}, type: {type(video_track)}")
+            self._logger.info(f"Got video track from worker: {video_track}, type: {type(video_track)}")
             if video_track:
                 # Verify the track has the recv method
                 if hasattr(video_track, 'recv'):
-                    self._logger.debug(f"Video track has recv method: {video_track.recv}")
+                    self._logger.info(f"Video track has recv method: {video_track.recv}")
                 else:
                     self._logger.error(f"Video track missing recv method!")
                 
                 pc.addTrack(video_track)
                 offer_timing['track_added'] = time.time() - offer_start
-                self._logger.debug(f"Added video track to peer connection for {detectorName}")
-                self._logger.debug(f"Peer connection tracks: {pc.getTransceivers()}")
+                self._logger.info(f"Added video track to peer connection for {detectorName}")
+                self._logger.info(f"Peer connection tracks: {pc.getTransceivers()}")
             else:
                 self._logger.error("Failed to get video track from worker")
                 raise Exception("No video track available")
             
             # Process offer
             try:
-                self._logger.debug(f"🔄 Processing SDP offer...")
+                self._logger.info(f"🔄 Processing SDP offer...")
                 offer_desc = RTCSessionDescription(sdp=sdp, type=sdp_type)
                 await pc.setRemoteDescription(offer_desc)
                 offer_timing['remote_desc_set'] = time.time() - offer_start
-                self._logger.debug(f"Set remote description for {detectorName}")
+                self._logger.info(f"Set remote description for {detectorName}")
                 
                 # Create and set answer
-                self._logger.debug(f"🔄 Creating SDP answer...")
+                self._logger.info(f"🔄 Creating SDP answer...")
                 answer = await pc.createAnswer()
                 offer_timing['answer_created'] = time.time() - offer_start
                 
-                await pc.setLocalDescription(answer)
-                offer_timing['local_desc_set'] = time.time() - offer_start
+                # Pre-warm the video track by getting a frame
+                self._logger.info(f"🔄 Pre-warming video track...")
+                try:
+                    if video_track and hasattr(video_track, 'recv'):
+                        # Try to get a frame to ensure the track is ready
+                        await asyncio.wait_for(video_track.recv(), timeout=0.5)
+                        self._logger.info(f"✅ Video track pre-warmed successfully")
+                except (asyncio.TimeoutError, Exception) as e:
+                    self._logger.warning(f"⚠️ Video track pre-warm failed (continuing anyway): {e}")
                 
-                self._logger.info(f"WebRTC answer created for {detectorName}: type={pc.localDescription.type}")
+                offer_timing['track_prewarmed'] = time.time() - offer_start
+                
+                # Set local description with timeout to prevent hanging
+                self._logger.info(f"🔄 Setting local description...")
+                local_desc_success = True
+                try:
+                    await asyncio.wait_for(pc.setLocalDescription(answer), timeout=2.0)
+                    offer_timing['local_desc_set'] = time.time() - offer_start
+                    self._logger.info(f"✅ Local description set successfully")
+                except asyncio.TimeoutError:
+                    self._logger.error(f"❌ Timeout setting local description - using answer SDP directly")
+                    local_desc_success = False
+                    offer_timing['local_desc_set'] = time.time() - offer_start
+                except Exception as local_desc_error:
+                    self._logger.error(f"❌ Error setting local description: {local_desc_error}")
+                    local_desc_success = False
+                    offer_timing['local_desc_set'] = time.time() - offer_start
+                
+                # Check if we have a valid local description, otherwise use the answer directly
+                if pc.localDescription and pc.localDescription.type:
+                    self._logger.info(f"WebRTC answer created for {detectorName}: type={pc.localDescription.type}")
+                    answer_sdp = pc.localDescription.sdp
+                    answer_type = pc.localDescription.type
+                else:
+                    self._logger.warning(f"⚠️ Local description not available, using answer SDP directly")
+                    answer_sdp = answer.sdp
+                    answer_type = answer.type
                 
                 # Log detailed timing breakdown
                 total_offer_time = time.time() - offer_start
-                self._logger.debug(f"🕐 Backend SDP processing timing:")
-                self._logger.debug(f"   Cleanup: {offer_timing.get('cleanup', 0)*1000:.1f}ms")
-                self._logger.debug(f"   PC created: {offer_timing.get('pc_created', 0)*1000:.1f}ms")
-                self._logger.debug(f"   Got track: {(offer_timing.get('got_track', 0) - offer_timing.get('pc_created', 0))*1000:.1f}ms")
-                self._logger.debug(f"   Track added: {(offer_timing.get('track_added', 0) - offer_timing.get('got_track', 0))*1000:.1f}ms")
-                self._logger.debug(f"   Remote desc: {(offer_timing.get('remote_desc_set', 0) - offer_timing.get('track_added', 0))*1000:.1f}ms")
-                self._logger.debug(f"   Answer created: {(offer_timing.get('answer_created', 0) - offer_timing.get('remote_desc_set', 0))*1000:.1f}ms")
-                self._logger.debug(f"   Local desc: {(offer_timing.get('local_desc_set', 0) - offer_timing.get('answer_created', 0))*1000:.1f}ms")
-                self._logger.debug(f"   Total SDP processing: {total_offer_time*1000:.1f}ms")
+                self._logger.info(f"🕐 Backend SDP processing timing:")
+                self._logger.info(f"   Cleanup: {offer_timing.get('cleanup', 0)*1000:.1f}ms")
+                self._logger.info(f"   PC created: {offer_timing.get('pc_created', 0)*1000:.1f}ms")
+                self._logger.info(f"   Got track: {(offer_timing.get('got_track', 0) - offer_timing.get('pc_created', 0))*1000:.1f}ms")
+                self._logger.info(f"   Track added: {(offer_timing.get('track_added', 0) - offer_timing.get('got_track', 0))*1000:.1f}ms")
+                self._logger.info(f"   Remote desc: {(offer_timing.get('remote_desc_set', 0) - offer_timing.get('track_added', 0))*1000:.1f}ms")
+                self._logger.info(f"   Answer created: {(offer_timing.get('answer_created', 0) - offer_timing.get('remote_desc_set', 0))*1000:.1f}ms")
+                self._logger.info(f"   Track prewarmed: {(offer_timing.get('track_prewarmed', 0) - offer_timing.get('answer_created', 0))*1000:.1f}ms")
+                self._logger.info(f"   Local desc: {(offer_timing.get('local_desc_set', 0) - offer_timing.get('track_prewarmed', 0))*1000:.1f}ms")
+                self._logger.info(f"   Total SDP processing: {total_offer_time*1000:.1f}ms")
                 
                 return {
                     "status": "success",
-                    "sdp": pc.localDescription.sdp,
-                    "type": pc.localDescription.type
+                    "sdp": answer_sdp,
+                    "type": answer_type
                 }
             except Exception as offer_error:
-                self._logger.error(f"Error processing SDP offer for {detectorName}: {offer_error}")
+                self._logger.error(f"❌ Error processing SDP offer for {detectorName}: {offer_error}")
                 # Try to close the peer connection on error
                 try:
                     await pc.close()
-                except:
-                    pass
-                raise offer_error
+                    if detectorName in self._webrtc_peers:
+                        del self._webrtc_peers[detectorName]
+                except Exception as close_error:
+                    self._logger.warning(f"Error closing peer connection: {close_error}")
+                
+                # Return a fallback error response
+                return {
+                    "status": "error", 
+                    "message": f"SDP processing failed: {str(offer_error)}"
+                }
         
         # Run async function on persistent event loop
         try:
-            self._logger.debug(f"🔄 Running async SDP processing...")
+            self._logger.info(f"🔄 Running async SDP processing...")
             timing['async_start'] = time.time() - start_time
             
             future = asyncio.run_coroutine_threadsafe(process_offer(), loop)
@@ -1458,16 +1517,16 @@ class LiveViewController(LiveUpdatedController):
             total_time = time.time() - start_time
             
             # Log complete backend timing breakdown
-            self._logger.debug(f"🕐 Complete backend timing breakdown:")
-            self._logger.debug(f"   Total backend time: {total_time*1000:.1f}ms")
-            self._logger.debug(f"   Imports: {timing.get('imports', 0)*1000:.1f}ms")
-            self._logger.debug(f"   Params extracted: {timing.get('params_extracted', 0)*1000:.1f}ms")
-            self._logger.debug(f"   Params updated: {timing.get('params_updated', timing.get('params_extracted', 0))*1000:.1f}ms")
-            self._logger.debug(f"   Stream started: {(timing.get('stream_started', 0) - timing.get('params_updated', timing.get('params_extracted', 0)))*1000:.1f}ms")
-            self._logger.debug(f"   Worker ready: {(timing.get('worker_ready', 0) - timing.get('stream_started', 0))*1000:.1f}ms")
-            self._logger.debug(f"   Loop ready: {(timing.get('loop_ready', 0) - timing.get('worker_ready', 0))*1000:.1f}ms")
-            self._logger.debug(f"   Async setup: {(timing.get('async_start', 0) - timing.get('loop_ready', 0))*1000:.1f}ms")
-            self._logger.debug(f"   Async processing: {(timing.get('async_complete', 0) - timing.get('async_start', 0))*1000:.1f}ms")
+            self._logger.info(f"🕐 Complete backend timing breakdown:")
+            self._logger.info(f"   Total backend time: {total_time*1000:.1f}ms")
+            self._logger.info(f"   Imports: {timing.get('imports', 0)*1000:.1f}ms")
+            self._logger.info(f"   Params extracted: {timing.get('params_extracted', 0)*1000:.1f}ms")
+            self._logger.info(f"   Params updated: {timing.get('params_updated', timing.get('params_extracted', 0))*1000:.1f}ms")
+            self._logger.info(f"   Stream started: {(timing.get('stream_started', 0) - timing.get('params_updated', timing.get('params_extracted', 0)))*1000:.1f}ms")
+            self._logger.info(f"   Worker ready: {(timing.get('worker_ready', 0) - timing.get('stream_started', 0))*1000:.1f}ms")
+            self._logger.info(f"   Loop ready: {(timing.get('loop_ready', 0) - timing.get('worker_ready', 0))*1000:.1f}ms")
+            self._logger.info(f"   Async setup: {(timing.get('async_start', 0) - timing.get('loop_ready', 0))*1000:.1f}ms")
+            self._logger.info(f"   Async processing: {(timing.get('async_complete', 0) - timing.get('async_start', 0))*1000:.1f}ms")
             
             self._logger.info(f"✅ WebRTC offer processed successfully in {total_time*1000:.1f}ms")
             return result

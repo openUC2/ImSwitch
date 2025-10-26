@@ -169,7 +169,7 @@ class SignalInstance(psygnal.SignalInstance):
             
             # Get ready clients
             with _client_frame_lock:
-                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
+                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready] # TODO: if we have two browser tabs open, this mechanism won't work properly anymore, timing issue I guess 
             
             if not ready_clients:
                 # No clients ready - drop this frame (implements backpressure)
@@ -181,6 +181,7 @@ class SignalInstance(psygnal.SignalInstance):
                     with _client_frame_lock:
                         for sid in _client_frame_ready.keys():
                             _client_frame_ready[sid] = True
+                            ready_clients.append(sid)
                 else:
                     return # TODO: this is global stop 
             
@@ -462,7 +463,7 @@ async def frame_ack(sid):
     """Client explicitly acknowledges frame processing complete"""
     with _client_frame_lock:
         _client_frame_ready[sid] = True
-        # print(f"Client {sid} acknowledged frame")
+        #print(f"Client {sid} acknowledged frame")
 
 # Function to run Uvicorn server with Socket.IO app
 def run_uvicorn():

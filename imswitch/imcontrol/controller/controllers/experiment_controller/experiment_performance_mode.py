@@ -284,6 +284,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             write_zarr=getattr(self.controller, '_ome_write_zarr', True),
             write_stitched_tiff=False,  # Disable stitched TIFF
             write_tiff_single=True,  # Enable single TIFF writing
+            write_individual_tiffs=getattr(self.controller, '_ome_write_individual_tiffs', False),
             min_period=0.1,
             n_time_points=1,
             n_z_planes=1,  # Performance mode typically single Z

@@ -217,10 +217,10 @@ class Positioner:
         print("Defocus:" + str(dz))
         if IS_NIP and dz != 0:
             obj = nip.image(np.zeros(self.mDimensions))
-            obj.pixelsize = (100.0, 100.0)
+            obj.pixelsize = (100.0, 100.0) # TODO: adjust based on objective
             paraAbber = nip.PSF_PARAMS()
             paraAbber.aberration_types = [paraAbber.aberration_zernikes.spheric]
-            paraAbber.aberration_strength = [np.float32(dz) / 10]
+            paraAbber.aberration_strength = [np.float32(dz / 10.0)]  # scale factor for defocus
             psf = nip.psf(obj, paraAbber)
             self.psf = psf.copy()
             del psf

@@ -83,6 +83,7 @@ class ParameterValue(BaseModel):
     autoFocusMin: float
     autoFocusMax: float
     autoFocusStepSize: float
+    autoFocusIlluminationChannel: str = "" # Selected illumination channel for autofocus
     zStack: bool
     zStackMin: float
     zStackMax: float
@@ -95,6 +96,7 @@ class ParameterValue(BaseModel):
     ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
     ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
+    ome_write_individual_tiffs: bool = Field(False, description="Whether to write individual TIFF files per frame")
 
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
@@ -247,6 +249,7 @@ class ExperimentController(ImConWidgetController):
         self._ome_write_tiff = False
         self._ome_write_zarr = True
         self._ome_write_stitched_tiff = False
+        self._ome_write_individual_tiffs = False
         self._ome_write_single_tiff = False
 
         # Initialize experiment execution modes
@@ -326,7 +329,8 @@ class ExperimentController(ImConWidgetController):
             "write_tiff": getattr(self, '_ome_write_tiff', False),
             "write_zarr": getattr(self, '_ome_write_zarr', True),
             "write_stitched_tiff": getattr(self, '_ome_write_stitched_tiff', False),
-            "write_single_tiff": getattr(self, '_ome_write_single_tiff', False)
+            "write_single_tiff": getattr(self, '_ome_write_single_tiff', False),
+            "write_individual_tiffs": getattr(self, '_ome_write_individual_tiffs', False)
         }
 
 
@@ -537,7 +541,7 @@ class ExperimentController(ImConWidgetController):
         illuminationIntensities = p.illuIntensities
         if type(illuminationIntensities) is not List  and type(illuminationIntensities) is not list: illuminationIntensities = [p.illuIntensities]
         if type(illuSources) is not List  and type(illuSources) is not list: illuSources = [p.illumination]
-        isDarkfield = p.darkfield
+        isDarkfield = p.darkfield # TODO: Needs to be implemented 
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
         
@@ -566,6 +570,7 @@ class ExperimentController(ImConWidgetController):
         autofocusMax = p.autoFocusMax
         autofocusMin = p.autoFocusMin
         autofocusStepSize = p.autoFocusStepSize
+        autofocusIlluminationChannel = getattr(p, 'autoFocusIlluminationChannel', "") or ""
 
         # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
         if type(gains) is not List and type(gains) is not list: gains = [gains]
@@ -613,6 +618,7 @@ class ExperimentController(ImConWidgetController):
         self._ome_write_zarr = p.ome_write_zarr
         self._ome_write_stitched_tiff = p.ome_write_stitched_tiff
         self._ome_write_single_tiff = getattr(p, 'ome_write_single_tiff', False)  # Default to False if not specified
+        self._ome_write_individual_tiffs = getattr(p, 'ome_write_individual_tiffs', False)  # Default to False if not specified
 
         # determine if each sub scan in snake_tiles is a single tile or a multi-tile scan - if single image we should squah them in a single TIF (e.g. by appending )
         is_single_tile_scan = all(len(tile) == 1 for tile in snake_tiles)
@@ -665,6 +671,7 @@ class ExperimentController(ImConWidgetController):
                     autofocus_min=autofocusMin,
                     autofocus_max=autofocusMax,
                     autofocus_step_size=autofocusStepSize,
+                    autofocus_illumination_channel=autofocusIlluminationChannel,
                     t_period=tPeriod, 
                     isRGB=self.mDetector._isRGB
                 )
@@ -752,9 +759,55 @@ class ExperimentController(ImConWidgetController):
         self._logger.debug("Dummy main function called")
         return True
 
-    def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0):
-        self._logger.debug("Performing autofocus... with parameters minZ, maxZ, stepSize: %s, %s, %s", minZ, maxZ, stepSize)
-        # TODO: Connect this to the Autofocus Function
+    def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0, illuminationChannel: str=""):
+        """Perform autofocus using the AutofocusController if available.
+        
+        Args:
+            minZ: Minimum Z position for autofocus (not used - uses rangez instead)
+            maxZ: Maximum Z position for autofocus (not used - uses rangez instead)
+            stepSize: Step size for autofocus scan
+            illuminationChannel: Selected illumination channel for autofocus
+            
+        Returns:
+            float: Best focus Z position, or None if autofocus failed
+        """
+        self._logger.debug("Performing autofocus... with parameters minZ, maxZ, stepSize, illuminationChannel: %s, %s, %s, %s", minZ, maxZ, stepSize, illuminationChannel)
+        
+        # Get the autofocus controller
+        autofocusController = self._master.getController('Autofocus')
+        
+        if autofocusController is None:
+            self._logger.warning("AutofocusController not available - skipping autofocus")
+            return None
+        
+        # Set illumination if specified
+        if illuminationChannel and hasattr(self, '_master') and hasattr(self._master, 'lasersManager'):
+            try:
+                # Turn on the specified illumination channel for autofocus
+                self._logger.debug(f"Setting illumination channel {illuminationChannel} for autofocus")
+                # TODO: Set appropriate intensity - this would require getting current intensity or using a default
+                # For now, we'll let the autofocus controller handle illumination
+            except Exception as e:
+                self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
+        
+        try:
+            # Calculate range from min/max
+            rangez = abs(maxZ - minZ) / 2.0 if maxZ > minZ else 50.0
+            resolutionz = stepSize if stepSize > 0 else 10.0
+            
+            # Call autofocus directly - the method is already decorated with @APIExport
+            result = autofocusController.autoFocus(
+                rangez=rangez,
+                resolutionz=resolutionz,
+                defocusz=0
+            )
+            
+            self._logger.debug(f"Autofocus completed successfully")
+            return result
+            
+        except Exception as e:
+            self._logger.error(f"Autofocus failed: {e}")
+            return None
 
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
         import time
@@ -1216,6 +1269,7 @@ class ExperimentController(ImConWidgetController):
             write_zarr=self._ome_write_zarr,
             write_stitched_tiff=write_stitched_tiff,
             write_tiff_single=self._ome_write_single_tiff,
+            write_individual_tiffs=self._ome_write_individual_tiffs,
             min_period=min_period,
             pixel_size=self.detectorPixelSize[-1] if hasattr(self, 'detectorPixelSize') else 1.0,
             n_time_points=nTimePoints,

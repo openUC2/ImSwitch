@@ -501,15 +501,39 @@ class SettingsController(ImConWidgetController):
     def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None):
         """Set streaming parameters for binary frame streaming.
         
+        This method is maintained for backward compatibility but now delegates to LiveViewController.
+        
         Args:
             compression: Dict with 'algorithm' and 'level' keys
             subsampling: Dict with 'factor' key
             throttle_ms: Throttling interval in milliseconds (preferred)
             throttlems: Throttling interval in milliseconds (alternative naming)
         """
+        # Try to use LiveViewController if available through CommunicationChannel
+        print("RReceived parameters: ", compression, subsampling, throttle_ms)
+        try:
+            # Access controllers through _commChannel.__main
+            if hasattr(self._commChannel, '_CommunicationChannel__main'):
+                main_controller = self._commChannel._CommunicationChannel__main
+                if 'LiveView' in main_controller.controllers:
+                    params = {}
+                    if compression:
+                        if 'algorithm' in compression:
+                            params['compression_algorithm'] = compression['algorithm']
+                        if 'level' in compression:
+                            params['compression_level'] = compression['level']
+                    if subsampling:
+                        if 'factor' in subsampling:
+                            params['subsampling_factor'] = subsampling['factor']
+                    if throttle_ms is not None:
+                        params['throttle_ms'] = throttle_ms
+                    
+                    return main_controller.controllers['LiveView'].setStreamParams('binary', params)
+        except Exception as e:
+            # If LiveViewController not available, fall back to legacy behavior
+            pass
         
-
-
+        # Fallback to legacy behavior
         update_params = {}
         # TODO: We need to be able to switch to JPEG streaming as well e.g. compression={'type':'jpeg', 'level': 80}
         if compression:
@@ -532,7 +556,44 @@ class SettingsController(ImConWidgetController):
     
     @APIExport()
     def getStreamParams(self):
-        """Get current streaming parameters."""
+        """Get current streaming parameters.
+        
+        This method is maintained for backward compatibility but now delegates to LiveViewController.
+        """
+        # Try to use LiveViewController if available through CommunicationChannel
+        try:
+            # Access controllers through _commChannel.__main
+            if hasattr(self._commChannel, '_CommunicationChannel__main'):
+                main_controller = self._commChannel._CommunicationChannel__main
+                if 'LiveView' in main_controller.controllers:
+                    result = main_controller.controllers['LiveView'].getStreamParams()
+                    if result.get('status') == 'success' and 'protocols' in result:
+                        # Convert new format to legacy format for backward compatibility
+                        protocols = result['protocols']
+                        binary_params = protocols.get('binary', {})
+                        jpeg_params = protocols.get('jpeg', {})
+                        
+                        return {
+                            "current_compression_algorithm": binary_params.get('compression_algorithm', 'lz4'),
+                            "binary": {
+                                "compression": {
+                                    "algorithm": binary_params.get('compression_algorithm', 'lz4'),
+                                    "level": binary_params.get('compression_level', 0)
+                                },
+                                "subsampling": {
+                                    "factor": binary_params.get('subsampling_factor', 4)
+                                },
+                                "throttle_ms": binary_params.get('throttle_ms', 50)
+                            },
+                            "jpeg": {
+                                "compression_level": jpeg_params.get('jpeg_quality', 80)
+                            }
+                        }
+        except Exception as e:
+            # If LiveViewController not available, fall back to legacy behavior
+            pass
+        
+        # Fallback to legacy behavior
         global_params = self._master.detectorsManager.getGlobalDetectorParams()
         
         return {

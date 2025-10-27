@@ -164,7 +164,7 @@ class AutofocusController(ImConWidgetController):
             return
         self.isAutofusRunning = True
         self._AutofocusThead = threading.Thread(
-            target=self._doAutofocusBackground,
+            target=self.doAutofocusBackground,
             args=(rangez, resolutionz, defocusz, gAxis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset, twoStage),
             daemon=True
         )
@@ -343,10 +343,10 @@ class AutofocusController(ImConWidgetController):
 
 
     # ---------- Step-scan autofocus with Gaussian fit ----------
-    def _doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=7, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
+    def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=7, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
         try:
             self._commChannel.sigAutoFocusRunning.emit(True)
-            
+            self.isAutofusRunning = True
             # Stage 1: Coarse scan
             self.__logger.info(f"Starting autofocus - Stage 1: Coarse scan (range=±{rangez}, resolution={resolutionz})")
             best_z_coarse = self._doSingleAutofocusScan(rangez, resolutionz, defocusz, axis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset)
@@ -418,8 +418,8 @@ class AutofocusController(ImConWidgetController):
                 center_position = float(self.stages.getPosition()[axis])
             
             # Calculate scan positions
-            Nz = int(max(5, np.floor((2 * abs(rangez)) / max(1e-6, abs(resolutionz))) + 1))
-            relative_positions = np.linspace(-abs(rangez), abs(rangez), Nz).astype(float)
+            Nz = int(max(5, np.floor((abs(rangez)) / max(1e-6, abs(resolutionz))) + 1))
+            relative_positions = np.linspace(-abs(rangez//2), abs(rangez//2), Nz).astype(float)
             absolute_positions = relative_positions + center_position
             
             # Move to start position

@@ -796,10 +796,19 @@ class ExperimentController(ImConWidgetController):
             resolutionz = stepSize if stepSize > 0 else 10.0
             
             # Call autofocus directly - the method is already decorated with @APIExport
-            result = autofocusController.autoFocus(
+            #     def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=7, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
+            result = autofocusController.doAutofocusBackground(
                 rangez=rangez,
                 resolutionz=resolutionz,
-                defocusz=0
+                defocusz=0,
+                axis="Z",
+                tSettle =0.1, # TODO: Implement via frontend parameters
+                isDebug=False,
+                nGauss=7,
+                nCropsize=2048,
+                focusAlgorithm="LAPE",
+                static_offset=0.0,
+                twoStage=False
             )
             
             self._logger.debug(f"Autofocus completed successfully")

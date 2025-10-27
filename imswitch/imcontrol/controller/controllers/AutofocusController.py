@@ -111,8 +111,6 @@ class AutofocusController(ImConWidgetController):
         self.stages = self._master.positionersManager[self.stageName]
 
         self._commChannel.sigAutoFocus.connect(self.autoFocus)
-        if not IS_HEADLESS:
-            self._widget.focusButton.clicked.connect(self.focusButton)
 
         self._moveController = MovementController(self.stages)
 
@@ -126,15 +124,7 @@ class AutofocusController(ImConWidgetController):
         if hasattr(super(), '__del__'):
             super().__del__()
 
-    def focusButton(self):
-        if not self.isAutofusRunning:
-            rangez = float(self._widget.zStepRangeEdit.text())
-            resolutionz = float(self._widget.zStepSizeEdit.text())
-            defocusz = float(self._widget.zBackgroundDefocusEdit.text())
-            self._widget.focusButton.setText('Stop')
-            self.autoFocus(rangez, resolutionz, defocusz)
-        else:
-            self.isAutofusRunning = False
+
 
     @APIExport(runOnUIThread=True)
     def autoFocus(self, rangez: int = 100, resolutionz: int = 10, defocusz: int = 0):
@@ -174,38 +164,39 @@ class AutofocusController(ImConWidgetController):
     def stopAutofocus(self):
         self.isAutofusRunning = False
 
-    def grabCameraFrame(self, returnFrameNumber=False):
-        try:
-            return self.camera.getLatestFrame(returnFrameNumber=returnFrameNumber)
-        except TypeError:
-            if returnFrameNumber:
-                f = self.camera.getLatestFrame()
-                return f, None
-            return self.camera.getLatestFrame()
+    def grabCameraFrame(self, frameSync: int = 2):
+        # ensure we get a fresh frame
+        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        cTime = time.time()
+        
+        lastFrameNumber=-1
+        while(1):
+            # get frame and frame number to get one that is newer than the one with illumination off eventually
+            mFrame, currentFrameNumber = self.camera.getLatestFrame(returnFrameNumber=True)
+            if lastFrameNumber==-1:
+                # first round
+                lastFrameNumber = currentFrameNumber
+            if time.time()-cTime> timeoutFrameRequest:
+                # in case exposure time is too long we need break at one point
+                if mFrame is None: 
+                    mFrame = self.camera.getLatestFrame(returnFrameNumber=False) 
+                break
+            if currentFrameNumber <= lastFrameNumber+frameSync:
+                time.sleep(0.01) # off-load CPU
+            else:
+                break
+        return mFrame
 
-    def recordFlatfield(self, nFrames=10, nGauss=16, defocusPosition=200, defocusAxis=gAxis):
-        flatfield = []
-        time.sleep(0.05)
-        self.stages.move(value=defocusPosition, axis=defocusAxis, is_absolute=False, is_blocking=True)
-        for _ in range(nFrames):
-            flatfield.append(self.grabCameraFrame())
-        flatfield = np.mean(np.array(flatfield), 0)
-        flatfield = gaussian(flatfield, sigma=nGauss)
-        self.stages.move(value=-defocusPosition, axis=defocusAxis, is_absolute=False, is_blocking=True)
-        time.sleep(0.05)
-        return flatfield
+
+
 
     # ---------- Step-scan autofocus with Gaussian fit ----------
     def _doAutofocusBackground(self, rangez=100, resolutionz=10, defocusz=0, axis=gAxis):
         self._commChannel.sigAutoFocusRunning.emit(True)
         mProcessor = FrameProcessor()
 
-        if defocusz != 0:
-            flatfieldImage = self.recordFlatfield(defocusPosition=defocusz, defocusAxis=axis)
-            mProcessor.setFlatfieldFrame(flatfieldImage)
-
         initialPosition = float(self.stages.getPosition()[axis])
-
+        # TODO: We might want to check limits here
         Nz = int(max(5, np.floor((2 * abs(rangez)) / max(1e-6, abs(resolutionz))) + 1))
         relative_positions = np.linspace(-abs(rangez), abs(rangez), Nz).astype(float)
 
@@ -217,6 +208,7 @@ class AutofocusController(ImConWidgetController):
             if iz != 0:
                 step = relative_positions[iz] - relative_positions[iz - 1]
                 self.stages.move(value=step, axis=axis, is_absolute=False, is_blocking=True)
+            time.sleep(0.1)  # allow some settling time
             frame = self.grabCameraFrame()
             mProcessor.add_frame(frame, iz)
 
@@ -227,8 +219,6 @@ class AutofocusController(ImConWidgetController):
             self.stages.move(value=initialPosition, axis=axis, is_absolute=True, is_blocking=True)
             self._commChannel.sigAutoFocusRunning.emit(False)
             self.isAutofusRunning = False
-            if not IS_HEADLESS:
-                self._widget.focusButton.setText('Autofocus')
             self.sigUpdateFocusValue.emit({"bestzpos": initialPosition})
             return initialPosition
 
@@ -256,8 +246,6 @@ class AutofocusController(ImConWidgetController):
         final_z = best_target
         self._commChannel.sigAutoFocusRunning.emit(False)
         self.isAutofusRunning = False
-        if not IS_HEADLESS:
-            self._widget.focusButton.setText('Autofocus')
         self.sigUpdateFocusValue.emit({"bestzpos": final_z})
         return final_z
 
@@ -265,10 +253,6 @@ class AutofocusController(ImConWidgetController):
     def _doAutofocusFastBackground_timeMapped(self, sweep_range=150.0, speed=None, defocusz=0, axis=gAxis):
         self._commChannel.sigAutoFocusRunning.emit(True)
 
-        # Optional flatfield
-        flatfieldImage = None
-        if defocusz != 0:
-            flatfieldImage = self.recordFlatfield(defocusPosition=defocusz, defocusAxis=axis)
 
         # Setup sweep
         z0 = float(self.stages.getPosition()[axis])  # single read at start
@@ -329,8 +313,6 @@ class AutofocusController(ImConWidgetController):
             self.stages.move(value=z0, axis=axis, is_absolute=True, is_blocking=True)
             self._commChannel.sigAutoFocusRunning.emit(False)
             self.isAutofusRunning = False
-            if not IS_HEADLESS:
-                self._widget.focusButton.setText('Autofocus')
             self.sigUpdateFocusValue.emit({"bestzpos": z0})
             return z0
 
@@ -373,8 +355,6 @@ class AutofocusController(ImConWidgetController):
         final_z = best_target
         self._commChannel.sigAutoFocusRunning.emit(False)
         self.isAutofusRunning = False
-        if not IS_HEADLESS:
-            self._widget.focusButton.setText('Autofocus')
         self.sigUpdateFocusValue.emit({"bestzpos": final_z})
         return final_z
 

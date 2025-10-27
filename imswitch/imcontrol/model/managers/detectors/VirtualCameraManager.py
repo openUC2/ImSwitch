@@ -97,14 +97,6 @@ class VirtualCameraManager(DetectorManager):
             frame = self._camera.getLast()
             return frame
 
-    def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
-        self.tLast = time.time()
-        if returnFrameNumber:
-            frame, frameNumber = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame, frameNumber
-        else:
-            frame = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame
 
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
@@ -160,6 +152,19 @@ class VirtualCameraManager(DetectorManager):
 
     def setPixelSizeUm(self, pixelSizeUm):
         self.parameters['Camera pixel size'].value = pixelSizeUm
+
+    def setFlipImage(self, flipY: bool, flipX: bool):
+        """
+        Set flip settings for the camera during runtime.
+        
+        Args:
+            flipY: Whether to flip vertically
+            flipX: Whether to flip horizontally
+        """
+        self._camera.flipImage = (flipY, flipX)
+        self._camera.flipY = flipY
+        self._camera.flipX = flipX
+        self.__logger.info(f"Updated flip settings: flipY={flipY}, flipX={flipX}")
 
     def _performSafeCameraAction(self, function):
         pass

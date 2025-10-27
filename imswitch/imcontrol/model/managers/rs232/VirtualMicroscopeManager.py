@@ -217,10 +217,10 @@ class Positioner:
         print("Defocus:" + str(dz))
         if IS_NIP and dz != 0:
             obj = nip.image(np.zeros(self.mDimensions))
-            obj.pixelsize = (100.0, 100.0)
+            obj.pixelsize = (100.0, 100.0) # TODO: adjust based on objective
             paraAbber = nip.PSF_PARAMS()
             paraAbber.aberration_types = [paraAbber.aberration_zernikes.spheric]
-            paraAbber.aberration_strength = [np.float32(dz) / 10]
+            paraAbber.aberration_strength = [np.float32(dz / 10.0)]  # scale factor for defocus
             psf = nip.psf(obj, paraAbber)
             self.psf = psf.copy()
             del psf
@@ -406,6 +406,9 @@ class Camera:
         self.model = "VirtualCamera"
         self.PixelSize = 1.0
         self.isRGB = False
+        self.flipX = False
+        self.flipY = False
+        self.flipImage = (self.flipY, self.flipX)        
         self.frameNumber = 0
         # precompute noise so that we will save energy and trees
         self.noiseStack = np.abs(
@@ -494,9 +497,9 @@ class Camera:
     ):
         """Generate a frame based on the current settings."""
         if self.filePath == "smlm": # There is likely a better way of handling this
-            return self.produce_smlm_frame(x_offset, y_offset, light_intensity).astype(np.uint16)
+            frame = self.produce_smlm_frame(x_offset, y_offset, light_intensity).astype(np.uint16)
         elif self.filePath == "astigmatism":
-            return self.produce_astigmatism_frame(z_offset).astype(np.uint16)
+            frame = self.produce_astigmatism_frame(z_offset).astype(np.uint16)
         else:
             # Removed lock here since we're using cached parameters
             # add noise
@@ -512,9 +515,16 @@ class Camera:
             image = np.float32(image) * np.float32(light_intensity)
             image += self.noiseStack[:, :, np.random.randint(0, 100)]
             # Adjust illumination
-            image = image.astype(np.uint16)
+            frame = image.astype(np.uint16)
             # Removed sleep here - controlled in producer loop
-            return image
+        
+        # Apply flip if needed (zero-CPU operation using numpy)
+        if self.flipImage[0]:  # flipY
+            frame = np.flip(frame, axis=0)
+        if self.flipImage[1]:  # flipX
+            frame = np.flip(frame, axis=1)
+            
+        return frame
 
     def produce_astigmatism_frame(self, z_offset=0):
         #!/usr/bin/env python3
@@ -570,16 +580,20 @@ class Camera:
     def getLast(self, returnFrameNumber=False):
         """Get the latest frame from the queue or generate one if acquisition not active"""
         # Try to get frame from queue if acquisition is active
+        now = time.time()
         if self.acquisition_active:
             try:
-                frame, frame_number = self.frame_queue.get(timeout=0.5)
+                frame, frame_number = self.frame_queue.get(timeout=0.02)
+                if frame is None:
+                    return None
+                self.frame = frame
                 if self.binning:
                     # Apply 2x2 binning for objective magnification
-                    frame = self._apply_binning(frame)
+                    self.frame = self._apply_binning(self.frame)
                 if returnFrameNumber:
-                    return frame, frame_number
+                    return self.frame, frame_number
                 else:
-                    return frame
+                    return self.frame
             except Empty:
                 # Queue is empty, fall back to direct generation
                 pass

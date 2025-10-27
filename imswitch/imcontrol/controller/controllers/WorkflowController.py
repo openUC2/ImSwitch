@@ -4,7 +4,6 @@ import base64
 from fastapi import FastAPI, Response, HTTPException
 from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
 from imswitch import IS_HEADLESS
-from  imswitch.imcontrol.controller.controllers.camera_stage_mapping import OFMStageMapping
 from imswitch.imcommon.model import initLogger, ostools
 import numpy as np
 import time

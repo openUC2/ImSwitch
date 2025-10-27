@@ -113,7 +113,7 @@ class CameraTucsen:
             success = 0
         return CameraTucsen._rc(ret) == success
 
-    def __init__(self, cameraNo=None, exposure_time=10, gain=0, frame_rate=-1, blacklevel=100, isRGB=False, binning=1):
+    def __init__(self, cameraNo=None, exposure_time=10, gain=0, frame_rate=-1, blacklevel=100, isRGB=False, binning=1, flipImage=(False, False)):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -129,6 +129,7 @@ class CameraTucsen:
         self.cameraNo = cameraNo if cameraNo is not None else 0
         self.isRGB = bool(isRGB)
         self.binning = binning
+        self.flipImage = flipImage  # (flipY, flipX)
 
         self.NBuffer = 5
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
@@ -241,6 +242,12 @@ class CameraTucsen:
                 frame = buf.reshape(height, width, 3)
             else:
                 frame = buf.reshape(height, width)
+            
+            # Apply flip if needed (zero-CPU operation using numpy)
+            if self.flipImage[0]:  # flipY
+                frame = np.flip(frame, axis=0)
+            if self.flipImage[1]:  # flipX
+                frame = np.flip(frame, axis=1)
                 
             return frame.copy()  # Make a copy to avoid memory issues
             

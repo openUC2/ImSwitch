@@ -55,6 +55,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_min = kwargs.get('autofocus_min', 0)
         autofocus_max = kwargs.get('autofocus_max', 0)
         autofocus_step_size = kwargs.get('autofocus_step_size', 1)
+        autofocus_illumination_channel = kwargs.get('autofocus_illumination_channel', '')
         t_period = kwargs.get('t_period', 1)
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
@@ -76,7 +77,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 tiles, position_center_index, step_id, workflow_steps,
                 z_positions, illumination_sources, illumination_intensities,
                 exposures, gains, t, is_auto_focus, autofocus_min, 
-                autofocus_max, autofocus_step_size, n_times
+                autofocus_max, autofocus_step_size, autofocus_illumination_channel, n_times
             )
         
         # Add finalization steps
@@ -144,6 +145,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 write_zarr=self.controller._ome_write_zarr,
                 write_stitched_tiff=False,  # Disable stitched TIFF
                 write_tiff_single=True,  # Enable single TIFF writing
+                write_individual_tiffs=self.controller._ome_write_individual_tiffs,
                 min_period=0.1,
                 n_time_points=1,
                 n_z_planes=len(z_positions),
@@ -185,6 +187,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     write_zarr=self.controller._ome_write_zarr,
                     write_stitched_tiff=self.controller._ome_write_stitched_tiff,
                     write_tiff_single=False,  # Disable single TIFF for multi-tile mode
+                    write_individual_tiffs=self.controller._ome_write_individual_tiffs,
                     min_period=0.1,  # Faster for normal mode
                     n_time_points=1,
                     n_z_planes=len(z_positions),
@@ -220,6 +223,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   autofocus_min: float,
                                   autofocus_max: float,
                                   autofocus_step_size: float,
+                                  autofocus_illumination_channel: str,
                                   n_times: int) -> int:
         """
         Create workflow steps for a single tile.
@@ -239,6 +243,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             autofocus_min: Minimum autofocus position
             autofocus_max: Maximum autofocus position
             autofocus_step_size: Autofocus step size
+            autofocus_illumination_channel: Selected illumination channel for autofocus
             
         Returns:
             Updated step ID
@@ -363,27 +368,27 @@ class ExperimentNormalMode(ExperimentModeBase):
                         ))
                         step_id += 1
                         
-        # Move back to the current Z position after processing all points in the tile
-        if len(z_positions) > 1 :
-            workflow_steps.append(WorkflowStep(
-                name="Move back to current Z position",
-                step_id=step_id,
-                main_func=self.controller.move_stage_z,
-                main_params={"posZ": initial_z_position, "relative": False},
-                pre_funcs=[self.controller.wait_time],
-                pre_params={"seconds": 0.1},
-            ))
-            step_id += 1
+            # Move back to the current Z position after processing all points in the tile
+            if len(z_positions) > 1 :
+                workflow_steps.append(WorkflowStep(
+                    name="Move back to current Z position",
+                    step_id=step_id,
+                    main_func=self.controller.move_stage_z,
+                    main_params={"posZ": initial_z_position, "relative": False},
+                    pre_funcs=[self.controller.wait_time],
+                    pre_params={"seconds": 0.1},
+                ))
+                step_id += 1
 
-        # Perform autofocus if enabled
-        if is_auto_focus:
-            workflow_steps.append(WorkflowStep(
-                name="Autofocus",
-                step_id=step_id,
-                main_func=self.controller.autofocus,
-                main_params={"minZ": autofocus_min, "maxZ": autofocus_max, "stepSize": autofocus_step_size},
-            ))
-            step_id += 1
+            # Perform autofocus if enabled
+            if is_auto_focus:
+                workflow_steps.append(WorkflowStep(
+                    name="Autofocus",
+                    step_id=step_id,
+                    main_func=self.controller.autofocus,
+                    main_params={"minZ": autofocus_min, "maxZ": autofocus_max, "stepSize": autofocus_step_size, "illuminationChannel": autofocus_illumination_channel},
+                ))
+                step_id += 1
 
         # Finalize OME writer for this tile (skip in single TIFF mode since we only have one writer)
         # Always finalize tile writers since each timepoint creates its own writers

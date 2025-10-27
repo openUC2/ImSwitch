@@ -99,9 +99,12 @@ class CommunicationChannel(SignalInterface):
 
     sigAutoFocus =  Signal(float, float) # scanrange and stepsize
     sigAutoFocusRunning = Signal(bool) # indicate if autofocus is running or not
+    sigAutoFocusLiveValue = Signal(object) # live focus value during monitoring mode {"focus_value": float, "timestamp": float}
 
     # Objective 
     sigToggleObjective = Signal(int) # objective slot number 1,2
+    sigSetObjectiveByName = Signal(str) # objective name (e.g., "10x", "20x")
+    sigSetObjectiveByID = Signal(str) # objective ID
     sigStartLiveAcquistion = Signal(bool)
     sigStopLiveAcquisition = Signal(bool)
 

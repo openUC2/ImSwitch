@@ -22,7 +22,15 @@ class OMEFileStorePaths:
         self.base_dir = base_dir
         self.tiff_dir = os.path.join(base_dir, "tiles")
         self.zarr_dir = os.path.join(base_dir + ".ome.zarr")
+        self.individual_tiffs_dir = os.path.join(base_dir, "individual_tiffs")
         os.makedirs(self.tiff_dir) if not os.path.exists(self.tiff_dir) else None
+        os.makedirs(self.individual_tiffs_dir) if not os.path.exists(self.individual_tiffs_dir) else None
+    
+    def get_timepoint_dir(self, timepoint_index: int):
+        """Get or create directory for a specific timepoint."""
+        timepoint_dir = os.path.join(self.individual_tiffs_dir, f"timepoint_{timepoint_index:04d}")
+        os.makedirs(timepoint_dir, exist_ok=True)
+        return timepoint_dir
 
 
 class ExperimentModeBase(ABC):
@@ -81,6 +89,7 @@ class ExperimentModeBase(ABC):
                            write_zarr: bool = True, 
                            write_stitched_tiff: bool = True,
                            write_tiff_single: bool = False,
+                           write_individual_tiffs: bool = False,
                            min_period: float = 0.2,
                            n_time_points: int = 1,
                            n_z_planes: int = 1,
@@ -93,6 +102,7 @@ class ExperimentModeBase(ABC):
             write_zarr: Whether to write OME-Zarr format
             write_stitched_tiff: Whether to write stitched TIFF
             write_tiff_single: Whether to append tiles to a single TIFF file
+            write_individual_tiffs: Whether to write individual TIFF files with position-based naming
             min_period: Minimum period between writes
             n_time_points: Number of time points
             n_z_planes: Number of Z planes
@@ -108,6 +118,7 @@ class ExperimentModeBase(ABC):
             write_zarr=write_zarr,
             write_stitched_tiff=write_stitched_tiff,
             write_tiff_single=write_tiff_single,
+            write_individual_tiffs=write_individual_tiffs,
             min_period=min_period,
             pixel_size=pixel_size,
             n_time_points=n_time_points,

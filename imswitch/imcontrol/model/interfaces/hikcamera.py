@@ -54,7 +54,7 @@ CALLBACK_SIG = CFUNCTYPE(
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
 
-    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=-1, blacklevel=100, isRGB=False, binning=2):
+    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=-1, blacklevel=100, isRGB=False, binning=2, flipImage=(False, False)):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -71,6 +71,7 @@ class CameraHIK:
         self.preview_height = 600
         self.frame_rate = frame_rate
         self.cameraNo = cameraNo
+        self.flipImage = flipImage  # (flipY, flipX)
 
         self.NBuffer = 5
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
@@ -249,6 +250,8 @@ class CameraHIK:
 
     def reconnectCamera(self):
         # Safely close any existing handle
+        
+        # todo: Need to store the current camerano and other settings and open it in case it's the hash/referenc enumber 
         if self.camera is not None:
             try:
                 # Deregister callback if registered
@@ -383,6 +386,12 @@ class CameraHIK:
                 self.__logger.error(f"Unsupported pixel type 0x{pix:x}")
                 return
 
+            # Apply flip if needed (zero-CPU operation using numpy)
+            if self.flipImage[0]:  # flipY
+                frame = np.flip(frame, axis=0)
+            if self.flipImage[1]:  # flipX
+                frame = np.flip(frame, axis=1)
+
             # push into ring buffers for later use
             #self.frame_buffer.append(frame)
             #self.frameid_buffer.append(fid)
@@ -482,8 +491,16 @@ class CameraHIK:
             self._callback_registered = True
             self.__logger.debug("Callback re-registered successfully")
         
-        ret = self.camera.MV_CC_StartGrabbing()
-        if ret != 0:
+        try: 
+            ret = self.camera.MV_CC_StartGrabbing()
+            if ret != 0:
+                #raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
+                self.reconnectCamera()
+                ret = self.camera.MV_CC_StartGrabbing()
+                if ret != 0:
+                    self.__logger.error(f"StartGrabbing exception: {e}")
+                    raise RuntimeError(f"StartGrabbing failed after reconnect 0x{ret:x}")
+        except Exception as e:
             raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
         self.is_streaming = True
 
@@ -611,9 +628,17 @@ class CameraHIK:
                 return (self.lastFrameFromBuffer, self.lastFrameId) if returnFrameNumber else self.lastFrameFromBuffer
             time.sleep(0.005)
 
+        # Get the latest frame and remove it from the buffer to avoid repeated consumption
+        latest_frame = self.frame_buffer.pop()
+        latest_frame_id = self.frameid_buffer.pop()
+        
+        # Store as last frame from buffer for fallback scenarios
+        self.lastFrameFromBuffer = latest_frame
+        self.lastFrameId = latest_frame_id
+
         if returnFrameNumber:
-            return self.frame_buffer[-1], self.frameid_buffer[-1]
-        return self.frame_buffer[-1]
+            return latest_frame, latest_frame_id
+        return latest_frame
 
     def flushBuffer(self):
         self.frameid_buffer.clear()

@@ -27,7 +27,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
     if not testnotebook(notebook_executable):
         print("Notebook executable not found")
     # it is necessary to redirect all 3 outputs or .app does not open
-    if 0:
+    if 0 < 1:
         if WITH_KERNEL:
             notebookp = subprocess.Popen([notebook_executable,
                                     "--port=%s" % port,

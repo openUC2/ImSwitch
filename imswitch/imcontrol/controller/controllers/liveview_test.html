@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ImSwitch LiveView Streaming Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        button.primary {
+            background-color: #4CAF50;
+            color: white;
+        }
+        button.primary:hover {
+            background-color: #45a049;
+        }
+        button.danger {
+            background-color: #f44336;
+            color: white;
+        }
+        button.danger:hover {
+            background-color: #da190b;
+        }
+        button.secondary {
+            background-color: #2196F3;
+            color: white;
+        }
+        button.secondary:hover {
+            background-color: #0b7dda;
+        }
+        select, input {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        #mjpegStream {
+            max-width: 100%;
+            height: auto;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            background-color: #000;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .api-section {
+            margin-top: 20px;
+        }
+        pre {
+            background-color: #f4f4f4;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        code {
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>ImSwitch LiveView Streaming Test</h1>
+    
+    <div class="container">
+        <h2>MJPEG Stream</h2>
+        <div class="controls">
+            <input type="text" id="serverUrl" placeholder="Server URL" value="http://localhost:8001">
+            <input type="text" id="detectorName" placeholder="Detector Name (optional)">
+            <button class="primary" onclick="startMJPEG()">Start MJPEG Stream</button>
+            <button class="danger" onclick="stopMJPEG()">Stop MJPEG Stream</button>
+        </div>
+        <div id="mjpegStatus"></div>
+        <img id="mjpegStream" alt="MJPEG Stream will appear here">
+    </div>
+
+    <div class="container">
+        <h2>API Control</h2>
+        <div class="controls">
+            <select id="protocol">
+                <option value="binary">Binary (LZ4/Zstandard)</option>
+                <option value="jpeg">JPEG</option>
+                <option value="mjpeg">MJPEG</option>
+                <option value="webrtc">WebRTC</option>
+            </select>
+            <button class="secondary" onclick="startAPIStream()">Start API Stream</button>
+            <button class="danger" onclick="stopAPIStream()">Stop API Stream</button>
+            <button class="secondary" onclick="getStreamParams()">Get Stream Params</button>
+            <button class="secondary" onclick="getActiveStreams()">Get Active Streams</button>
+        </div>
+        <div id="apiStatus"></div>
+        <div id="apiResponse"></div>
+    </div>
+
+    <div class="container api-section">
+        <h2>API Documentation</h2>
+        
+        <h3>Start Live Stream</h3>
+        <pre><code>POST /liveview/startLiveView
+{
+  "detectorName": "Camera",  // optional, uses first detector if not specified
+  "protocol": "binary",      // binary, jpeg, mjpeg, webrtc
+  "params": {                // optional protocol-specific params
+    "compression_algorithm": "lz4",
+    "compression_level": 0,
+    "subsampling_factor": 4,
+    "throttle_ms": 50,
+    "jpeg_quality": 80
+  }
+}</code></pre>
+
+        <h3>Stop Live Stream</h3>
+        <pre><code>POST /liveview/stopLiveView
+{
+  "detectorName": "Camera",
+  "protocol": "binary"
+}</code></pre>
+
+        <h3>Get Stream Parameters</h3>
+        <pre><code>GET /liveview/getStreamParams
+GET /liveview/getStreamParams?protocol=binary</code></pre>
+
+        <h3>Set Stream Parameters</h3>
+        <pre><code>POST /liveview/setStreamParams
+{
+  "protocol": "binary",
+  "params": {
+    "compression_algorithm": "lz4",
+    "subsampling_factor": 4,
+    "throttle_ms": 50
+  }
+}</code></pre>
+
+        <h3>Get Active Streams</h3>
+        <pre><code>GET /liveview/getActiveStreams</code></pre>
+
+        <h3>MJPEG Video Feed (HTTP)</h3>
+        <pre><code>GET /liveview/video_feeder?startStream=true
+GET /liveview/video_feeder?startStream=true&detectorName=Camera</code></pre>
+
+        <h3>Legacy API (Backward Compatible)</h3>
+        <pre><code>// Settings Controller endpoints still work
+POST /settings/setStreamParams
+GET /settings/getStreamParams
+GET /recording/video_feeder  // Delegates to LiveViewController</code></pre>
+    </div>
+
+    <script>
+        const serverUrl = () => document.getElementById('serverUrl').value;
+        
+        function showStatus(elementId, message, type = 'info') {
+            const statusDiv = document.getElementById(elementId);
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+        }
+
+        function startMJPEG() {
+            const url = serverUrl();
+            const detector = document.getElementById('detectorName').value;
+            const streamUrl = detector 
+                ? `${url}/liveview/video_feeder?startStream=true&detectorName=${detector}`
+                : `${url}/liveview/video_feeder?startStream=true`;
+            
+            document.getElementById('mjpegStream').src = streamUrl;
+            showStatus('mjpegStatus', 'MJPEG stream started', 'success');
+        }
+
+        function stopMJPEG() {
+            const url = serverUrl();
+            document.getElementById('mjpegStream').src = '';
+            
+            fetch(`${url}/liveview/video_feeder?startStream=false`)
+                .then(response => response.json())
+                .then(data => {
+                    showStatus('mjpegStatus', 'MJPEG stream stopped', 'success');
+                })
+                .catch(error => {
+                    showStatus('mjpegStatus', `Error: ${error}`, 'error');
+                });
+        }
+
+        async function startAPIStream() {
+            const url = serverUrl();
+            const protocol = document.getElementById('protocol').value;
+            const detector = document.getElementById('detectorName').value;
+            
+            try {
+                const response = await fetch(`${url}/liveview/startLiveView`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        detectorName: detector || null,
+                        protocol: protocol
+                    })
+                });
+                
+                const data = await response.json();
+                showStatus('apiStatus', `Stream started: ${JSON.stringify(data)}`, 'success');
+                document.getElementById('apiResponse').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                showStatus('apiStatus', `Error: ${error}`, 'error');
+            }
+        }
+
+        async function stopAPIStream() {
+            const url = serverUrl();
+            const protocol = document.getElementById('protocol').value;
+            const detector = document.getElementById('detectorName').value;
+            
+            try {
+                const response = await fetch(`${url}/liveview/stopLiveView`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        detectorName: detector,
+                        protocol: protocol
+                    })
+                });
+                
+                const data = await response.json();
+                showStatus('apiStatus', `Stream stopped: ${JSON.stringify(data)}`, 'success');
+                document.getElementById('apiResponse').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                showStatus('apiStatus', `Error: ${error}`, 'error');
+            }
+        }
+
+        async function getStreamParams() {
+            const url = serverUrl();
+            const protocol = document.getElementById('protocol').value;
+            
+            try {
+                const response = await fetch(`${url}/liveview/getStreamParams?protocol=${protocol}`);
+                const data = await response.json();
+                showStatus('apiStatus', 'Stream params retrieved', 'success');
+                document.getElementById('apiResponse').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                showStatus('apiStatus', `Error: ${error}`, 'error');
+            }
+        }
+
+        async function getActiveStreams() {
+            const url = serverUrl();
+            
+            try {
+                const response = await fetch(`${url}/liveview/getActiveStreams`);
+                const data = await response.json();
+                showStatus('apiStatus', 'Active streams retrieved', 'success');
+                document.getElementById('apiResponse').innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                showStatus('apiStatus', `Error: ${error}`, 'error');
+            }
+        }
+    </script>
+</body>
+</html>

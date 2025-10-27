@@ -63,6 +63,9 @@ class ArkitektController(ImConWidgetController):
         yStep: int = 10,
         speed: float = 10000,
         positionerName: str | None = None,
+        performAutofocus: bool = False,
+        autofocusRange: float = 100,
+        autofocusResolution: float = 10,
     ) -> Generator[Image, None, None]:
         """Run a tile scan.
 
@@ -78,18 +81,25 @@ class ArkitektController(ImConWidgetController):
             speed (float): Speed of the positioner movement.
             positionerName (str | None): Name of the positioner to use. If None
                 the first available positioner will be used.
+            performAutofocus (bool): Whether to perform autofocus at each tile position.
+            autofocusRange (float): Range for autofocus scan in Z direction.
+            autofocusResolution (float): Step size for autofocus scan.
         Yields:
             Image: Captured image with affine transformation for stitching.
-
-
-
-
-
         """
         # TODO: Implement a check if the positioner supports tile scanning
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._logger.debug(f"Starting tile scan for positioner {positionerName}")
+        
+        # Get autofocus controller if needed
+        autofocusController = None
+        if performAutofocus:
+            autofocusController = self._master.getController('Autofocus')
+            if autofocusController is None:
+                self._logger.warning("Autofocus requested but AutofocusController not available")
+                performAutofocus = False
+        
         # have a tile scan function in the positioner manager inside a for loop
         mFrameList = []
         mPositioner = self._master.positionersManager[positionerName]
@@ -99,6 +109,19 @@ class ArkitektController(ImConWidgetController):
         for y in range(0, yRange, yStep):
             for x in range(0, xRange, xStep):
                 mPositioner.move(value=(x, y), axis="XY", is_absolute=True)
+                
+                # Perform autofocus at this position if requested
+                if performAutofocus and autofocusController is not None:
+                    try:
+                        # Call autofocus directly - no signals needed!
+                        autofocusController.autoFocus(
+                            rangez=autofocusRange,
+                            resolutionz=autofocusResolution,
+                            defocusz=0
+                        )
+                        self._logger.debug(f"Autofocus completed at position ({x}, {y})")
+                    except Exception as e:
+                        self._logger.error(f"Autofocus failed at position ({x}, {y}): {e}")
 
                 numpy_array = self.mDetector.getLatestFrame()
 

@@ -11,10 +11,10 @@ class VirtualStageManager(PositionerManager):
         self.__logger = initLogger(self, instanceName=name)
         self._commChannel = lowLevelManagers['commChannel']
 
-        self.offset_x = 0
-        self.offset_y = 0
-        self.offset_z = 0
-        self.offset_a = 0
+        self.offset_x = 0.
+        self.offset_y = 0.
+        self.offset_z = 0.
+        self.offset_a = 0.
         self.stageOffsetPositions = {"X": self.offset_x, "Y": self.offset_y, "Z": self.offset_z, "A": self.offset_a}
         try:
             self.VirtualMicroscope = lowLevelManagers["rs232sManager"]["VirtualMicroscope"]

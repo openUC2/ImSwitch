@@ -99,6 +99,10 @@ class AutofocusController(ImConWidgetController):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
         self.isAutofusRunning = False  # keep attribute name for compatibility
+        self.isLiveMonitoring = False  # for live focus value monitoring
+        self._liveMonitoringThread = None
+        self._liveMonitoringPeriod = 0.5  # default period in seconds
+        self._focusMethod = "LAPE"  # default focus measurement method
 
         if self._setupInfo.autofocus is not None:
             self.cameraName = self._setupInfo.autofocus.camera
@@ -117,8 +121,11 @@ class AutofocusController(ImConWidgetController):
     def __del__(self):
         try:
             self.isAutofusRunning = False
+            self.isLiveMonitoring = False
             if hasattr(self, '_AutofocusThead') and self._AutofocusThead and self._AutofocusThead.is_alive():
                 self._AutofocusThead.join(timeout=1.0)
+            if hasattr(self, '_liveMonitoringThread') and self._liveMonitoringThread and self._liveMonitoringThread.is_alive():
+                self._liveMonitoringThread.join(timeout=1.0)
         except Exception:
             pass
         if hasattr(super(), '__del__'):
@@ -164,12 +171,122 @@ class AutofocusController(ImConWidgetController):
     def stopAutofocus(self):
         self.isAutofusRunning = False
 
-    def grabCameraFrame(self, frameSync: int = 2):
+    @APIExport(runOnUIThread=True)
+    def startLiveMonitoring(self, period: float = 0.5, method: str = "LAPE"):
+        """
+        Start continuous live focus value monitoring.
+        
+        Args:
+            period: Update period in seconds (default 0.5s)
+            method: Focus measurement method ("LAPE" or "GLVA")
+        """
+        if self.isLiveMonitoring:
+            self.__logger.warning("Live monitoring already running")
+            return {"status": "already_running"}
+        
+        self._liveMonitoringPeriod = max(0.1, float(period))  # minimum 0.1s
+        self._focusMethod = method if method in ["LAPE", "GLVA"] else "LAPE"
+        
+        self.isLiveMonitoring = True
+        self._liveMonitoringThread = threading.Thread(
+            target=self._doLiveMonitoringBackground,
+            daemon=True
+        )
+        self._liveMonitoringThread.start()
+        
+        self.__logger.info(f"Live focus monitoring started with period={self._liveMonitoringPeriod}s, method={self._focusMethod}")
+        return {"status": "started", "period": self._liveMonitoringPeriod, "method": self._focusMethod}
+
+    @APIExport(runOnUIThread=True)
+    def stopLiveMonitoring(self):
+        """Stop continuous live focus value monitoring."""
+        if not self.isLiveMonitoring:
+            return {"status": "not_running"}
+        
+        self.isLiveMonitoring = False
+        if self._liveMonitoringThread and self._liveMonitoringThread.is_alive():
+            self._liveMonitoringThread.join(timeout=2.0)
+        
+        self.__logger.info("Live focus monitoring stopped")
+        return {"status": "stopped"}
+
+    @APIExport(runOnUIThread=True)
+    def setLiveMonitoringParameters(self, period: float = None, method: str = None):
+        """
+        Update live monitoring parameters.
+        
+        Args:
+            period: Update period in seconds (optional)
+            method: Focus measurement method ("LAPE" or "GLVA") (optional)
+        """
+        if period is not None:
+            self._liveMonitoringPeriod = max(0.1, float(period))
+        if method is not None and method in ["LAPE", "GLVA"]:
+            self._focusMethod = method
+        
+        return {
+            "status": "updated",
+            "period": self._liveMonitoringPeriod,
+            "method": self._focusMethod,
+            "is_running": self.isLiveMonitoring
+        }
+
+    @APIExport(runOnUIThread=True)
+    def getLiveMonitoringStatus(self):
+        """Get current status of live monitoring."""
+        return {
+            "is_running": self.isLiveMonitoring,
+            "period": self._liveMonitoringPeriod,
+            "method": self._focusMethod
+        }
+
+    def _doLiveMonitoringBackground(self):
+        """Background thread for continuous focus value monitoring."""
+        self.__logger.info("Live monitoring thread started")
+        
+        while self.isLiveMonitoring:
+            try:
+                t_start = time.time()
+                
+                # Grab a fresh frame
+                frame = self.grabCameraFrame(frameSync=1)
+                if frame is None:
+                    time.sleep(0.01)
+                    continue
+                
+                # Process frame and calculate focus value
+                img = FrameProcessor.extract(frame, min(frame.shape[0], frame.shape[1], 2048))
+                if img.ndim == 3:
+                    img = np.mean(img, axis=-1)
+                
+                focus_value = FrameProcessor.calculate_focus_measure_static(img, method=self._focusMethod)
+                
+                # Emit signal with focus value and timestamp
+                self._commChannel.sigAutoFocusLiveValue.emit({
+                    "focus_value": float(focus_value),
+                    "timestamp": time.time(),
+                    "method": self._focusMethod
+                })
+                
+                # Sleep for remaining period time
+                elapsed = time.time() - t_start
+                sleep_time = max(0, self._liveMonitoringPeriod - elapsed)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                    
+            except Exception as e:
+                self.__logger.error(f"Error in live monitoring: {e}")
+                time.sleep(0.1)  # avoid tight loop on repeated errors
+        
+        self.__logger.info("Live monitoring thread stopped")
+
+    def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
         # ensure we get a fresh frame
         timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
         cTime = time.time()
         
         lastFrameNumber=-1
+        currentFrameNumber = None
         while(1):
             # get frame and frame number to get one that is newer than the one with illumination off eventually
             mFrame, currentFrameNumber = self.camera.getLatestFrame(returnFrameNumber=True)
@@ -185,6 +302,9 @@ class AutofocusController(ImConWidgetController):
                 time.sleep(0.01) # off-load CPU
             else:
                 break
+        
+        if returnFrameNumber:
+            return mFrame, currentFrameNumber
         return mFrame
 
 
@@ -289,8 +409,7 @@ class AutofocusController(ImConWidgetController):
                 last_fn = fn
 
             img = frame
-            if flatfieldImage is not None:
-                img = img / (flatfieldImage + 1e-12)
+            # Note: flatfield correction not implemented in fast autofocus mode
 
             img_proc = FrameProcessor.extract(img, min(img.shape[0], img.shape[1], 2048))
             if img_proc.ndim == 3:

@@ -97,6 +97,8 @@ class DetectorManager(SignalInterface):
 
         self._detectorInfo = detectorInfo
 
+        self._isMock = False
+        
         self._frameStart = (0, 0)
         self._shape = fullShape
 

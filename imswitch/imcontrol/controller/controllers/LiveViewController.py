@@ -561,7 +561,7 @@ class DetectorVideoTrack:
                     new_height = new_height - (new_height % 2)
                     
                     frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-                    inner_self._logger.info(f"Resized frame from {original_width}x{original_height} to {new_width}x{new_height} (max: {max_width}x{max_height})")
+                    # inner_self._logger.info(f"Resized frame from {original_width}x{original_height} to {new_width}x{new_height} (max: {max_width}x{max_height})")
                 elif hasattr(inner_self._stream_params, 'subsampling_factor') and inner_self._stream_params.subsampling_factor > 1:
                     # Apply subsampling even if frame is within limits
                     import cv2

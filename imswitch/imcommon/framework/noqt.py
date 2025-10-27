@@ -107,6 +107,20 @@ class SignalInstance(psygnal.SignalInstance):
         if not args:
             return
 
+        # Handle log signal specially
+        if self.name == "sigLog":
+            # For log signals, args[0] should be a dict with log data
+            try:
+                log_data = args[0] if args else {}
+                message = {
+                    "signal": "sigLog",
+                    "args": log_data
+                }
+                self._safe_broadcast_message(message)
+            except Exception as e:
+                print(f"Error broadcasting log message: {e}")
+            return
+
         # Skip large data signals
         if self.name in ["sigUpdateImage", "sigExperimentImageUpdate"]:  #, "sigImageUpdated"]:
             now = time.time()
@@ -406,6 +420,11 @@ class Signal(psygnal.Signal):
     @property
     def info(self) -> str:
         return self._info
+
+
+# Global signal for log messages
+sigLog = Signal(dict)
+
 
 # Threaded workers for async tasks
 class Worker(abstract.Worker):

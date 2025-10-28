@@ -47,71 +47,6 @@ _client_frame_ready = {}  # sid -> bool (True if client is ready for next frame)
 _client_frame_lock = threading.Lock()
 _frame_drop_counter = 0  # Track how many frames we've dropped
 
-# Separate queues for frames and regular messages
-# Frame queue uses maxsize=1 to keep only latest frame (automatic dropping)
-_fallback_frame_queue = queue.Queue(maxsize=1)  # Holds latest frame only - old frames auto-dropped
-_fallback_message_queue = queue.Queue(maxsize=50)  # Regular messages need more buffer
-_fallback_worker_thread = None 
-
-
-def _fallback_worker():
-    """
-    Background worker thread to handle Socket.IO fallback messages.
-    Processes both frame queue (with dropping) and regular message queue.
-    """
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    try:
-        while True:
-            # Priority: First check for frames (these are time-critical)
-            try:
-                frame_message = _fallback_frame_queue.get_nowait()
-                if frame_message is None:  # Poison pill
-                    break
-                    
-                # Handle frame emission
-                if isinstance(frame_message, tuple) and len(frame_message) == 3:
-                    event, data, sid = frame_message
-                    loop.run_until_complete(sio.emit(event, data, to=sid))
-                
-                _fallback_frame_queue.task_done()
-                continue  # Process next frame immediately
-            except queue.Empty:
-                pass  # No frames, check regular messages
-            
-            # Check regular message queue
-            try:
-                message = _fallback_message_queue.get(timeout=0.1)
-                if message is None:  # Poison pill
-                    break
-                
-                # Handle different message formats
-                if isinstance(message, tuple) and len(message) == 3:
-                    # Format: (event, data, sid) for targeted emission
-                    event, data, sid = message
-                    loop.run_until_complete(sio.emit(event, data, to=sid))
-                else:
-                    # Legacy format: string message for broadcast
-                    loop.run_until_complete(sio.emit("signal", message))
-                
-                _fallback_message_queue.task_done()
-            except queue.Empty:
-                continue
-            except Exception as e:
-                # Silently handle errors to avoid spam
-                pass
-    finally:
-        loop.close()
-
-
-def _start_fallback_worker():
-    """Start the fallback worker thread if not already running."""
-    global _fallback_worker_thread
-    if _fallback_worker_thread is None or not _fallback_worker_thread.is_alive():
-        _fallback_worker_thread = threading.Thread(target=_fallback_worker,
-                                                    daemon=True)
-        _fallback_worker_thread.start()
 
 class SignalInterface(abstract.SignalInterface):
     """Base implementation of abstract.SignalInterface."""
@@ -208,20 +143,11 @@ class SignalInstance(psygnal.SignalInstance):
                             frame_payload,  # [metadata, binaryData]
                             to=sid
                         )
-                    except RuntimeError:
+                    except RuntimeError: #RuntimeError: There is no current event loop in thread 'Thread-16 (run)'.
                         # No event loop in thread - use fallback frame queue (with dropping)
-                        _start_fallback_worker()
-                        try:
-                            # put_nowait will raise queue.Full if queue is full
-                            # Since maxsize=1, this drops old frame and keeps new one # TODO: We always run into this, does this cause a problem for the timing -buffering? Why couldn'T we use the start_background_task here??
-                            _fallback_frame_queue.put_nowait(('frame', frame_payload, sid))
-                        except queue.Full:
-                            # Queue full - drop oldest frame by getting it and replacing
-                            try:
-                                _fallback_frame_queue.get_nowait()
-                                _fallback_frame_queue.put_nowait(('frame', frame_payload, sid))
-                            except:
-                                pass
+                        #_start_fallback_worker()
+                        print("you are still broken")
+                        
                     
             elif msg_type == 'jpeg_frame':
                 # JPEG frame - emit as JSON signal
@@ -240,17 +166,8 @@ class SignalInstance(psygnal.SignalInstance):
                     except RuntimeError:
                         # No event loop in thread - use fallback FRAME queue (not message queue!)
                         # This ensures JPEG frames get same dropping behavior as binary frames
-                        _start_fallback_worker()
-                        try:
-                            # Use frame queue (maxsize=1) for automatic dropping
-                            _fallback_frame_queue.put_nowait(('signal', json_message, sid))
-                        except queue.Full:
-                            # Queue full - drop oldest frame by getting it and replacing
-                            try:
-                                _fallback_frame_queue.get_nowait()
-                                _fallback_frame_queue.put_nowait(('signal', json_message, sid))
-                            except:
-                                pass
+                        #_start_fallback_worker()
+                        print("you are still broken")
                 
         except Exception as e:
             print(f"Error handling stream frame: {e}")
@@ -291,19 +208,10 @@ class SignalInstance(psygnal.SignalInstance):
             sio.start_background_task(emit_signal)
         except Exception as e:
             # Use fallback worker thread instead of creating new threads
-            try:
-                _start_fallback_worker()
-                message = (json.dumps(mMessage) if isinstance(mMessage, dict)
-                           else mMessage)
-                _fallback_message_queue.put_nowait(message)
-            except queue.Full:
-                # Queue is full, drop the message to prevent memory buildup
-                pass
-            except Exception as e:
-                # Silently handle any other errors
-                print(f"Error broadcasting message: {e}")
-                pass
-
+            #message = (json.dumps(mMessage) if isinstance(mMessage, dict)
+            #            else mMessage)
+            print("you are still broken")
+            
 class Signal(psygnal.Signal):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

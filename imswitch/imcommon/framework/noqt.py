@@ -210,7 +210,7 @@ class SignalInstance(psygnal.SignalInstance):
             # Use fallback worker thread instead of creating new threads
             #message = (json.dumps(mMessage) if isinstance(mMessage, dict)
             #            else mMessage)
-            print("you are still broken")
+            print("you are still broken safe mesage, ", e)
 
 class Signal(psygnal.Signal):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -373,6 +373,7 @@ async def frame_ack(sid):
         _client_frame_ready[sid] = True
         #print(f"Client {sid} acknowledged frame")
 
+
 # Function to run Uvicorn server with Socket.IO app
 def run_uvicorn():
     try:
@@ -384,16 +385,24 @@ def run_uvicorn():
             ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if __ssl__ else None,
             ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if __ssl__ else None,
             timeout_keep_alive=2,
+            loop=imswitch._asyncio_loop_imswitchserver
         )
+        imswitch._uvicorn_config = config
         try:
-            uvicorn.Server(config).run()
+            imswitch._asyncio_loop_imswitchserver.run_until_complete(uvicorn.Server(config).serve())
         except Exception as e:
-            print(f"Couldn't start server: {e}")
+            print(f"Couldn't start server (noqt1): {e}")
     except Exception as e:
-        print(f"Couldn't start server: {e}")
+        print(f"Couldn't start server (noqt2): {e}")
+
 
 def start_websocket_server():
     server_thread = threading.Thread(target=run_uvicorn, daemon=True)
     server_thread.start()
+
+# TODO: create the eventloop for the imswitchserver?
+# create a new asyncio event loop
+_asyncio_loop_imswitchserver = asyncio.new_event_loop()
+imswitch._asyncio_loop_imswitchserver = _asyncio_loop_imswitchserver
 
 start_websocket_server()

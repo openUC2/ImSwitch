@@ -33,6 +33,7 @@ from fastapi.responses import RedirectResponse
 import socket
 import os
 import threading
+import asyncio
 from fastapi.openapi.docs import (
     get_redoc_html,
     get_swagger_ui_html,
@@ -304,6 +305,8 @@ class ServerThread(threading.Thread):
     def __init__(self):
         super().__init__()
         self.server = None
+        # get the asyncio loop from imswitch module
+        self._asyncio_loop = imswitch._asyncio_loop_imswitchserver
 
     def run(self):
         try:
@@ -312,12 +315,14 @@ class ServerThread(threading.Thread):
                 host="0.0.0.0",
                 port=PORT,
                 ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if IS_SSL else None,
-                ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None
+                ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None, 
+                loop=self._asyncio_loop,
             )
             self.server = uvicorn.Server(config)
-            self.server.run()
+            self._asyncio_loop.run_until_complete(self.server.serve())
+            #self.server.run()
         except Exception as e:
-            print(f"Couldn't start server: {e}")
+            print(f"Couldn't start server (ImSwitchServer): {e}")
 
     def stop(self):
         if self.server:

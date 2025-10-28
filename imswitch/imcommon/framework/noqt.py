@@ -40,12 +40,15 @@ class Mutex(abstract.Mutex):
 
 # Initialize Socket.IO server
 sio = AsyncServer(async_mode="asgi", cors_allowed_origins="*")
-app = ASGIApp(sio)
+socket_app = ASGIApp(sio)  # Renamed to socket_app - will be mounted on FastAPI app
 
 # Per-client frame acknowledgement tracking
 _client_frame_ready = {}  # sid -> bool (True if client is ready for next frame)
 _client_frame_lock = threading.Lock()
 _frame_drop_counter = 0  # Track how many frames we've dropped
+
+# Event loop reference - will be set by ImSwitchServer
+_shared_event_loop = None
 
 
 class SignalInterface(abstract.SignalInterface):
@@ -95,6 +98,7 @@ class SignalInstance(psygnal.SignalInstance):
         Message format: {'type': 'binary_frame' or 'jpeg_frame', 'event': str, 'data': bytes or dict, 'metadata': dict}
         Uses explicit frame_ack event from frontend for flow control.
         Implements proper backpressure - only sends to clients that are ready.
+        Thread-safe using asyncio.run_coroutine_threadsafe for cross-thread calls.
         """
         try:
             msg_type = message.get('type')
@@ -104,70 +108,54 @@ class SignalInstance(psygnal.SignalInstance):
 
             # Get ready clients
             with _client_frame_lock:
-                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready] # TODO: if we have two browser tabs open, this mechanism won't work properly anymore, timing issue I guess
+                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
 
             if not ready_clients:
                 # No clients ready - drop this frame (implements backpressure)
                 global _frame_drop_counter
                 _frame_drop_counter += 1
-                if _frame_drop_counter % 10 == 0:  # Log every 30 dropped frames
+                if _frame_drop_counter % 10 == 0:  # Log every 10 dropped frames
                     # set all available clients to ready to avoid infinite dropping
                     with _client_frame_lock:
-                        print(f"Dropped {_frame_drop_counter} frames due to client backpressure, try to send some frames anyway using the protocol {msg_type}") # TODO: if we have e.g. 100 dropped frames, we should stop the live stream but not the camera
+                        print(f"Dropped {_frame_drop_counter} frames due to client backpressure, try to send some frames anyway using the protocol {msg_type}")
                         for sid in _client_frame_ready.keys():
                             _client_frame_ready[sid] = True
                             ready_clients.append(sid)
                 else:
-                    return # TODO: this is global stop
+                    return
 
             # Mark clients as NOT ready (waiting for acknowledgement via frame_ack event)
-            # Frontend will send frame_ack event after processing the frame
             with _client_frame_lock:
-                for sid in ready_clients: #TODO: check if
+                for sid in ready_clients:
                     _client_frame_ready[sid] = False  # Wait for frame_ack event!
 
+            # Thread-safe emission using the shared event loop
+            if not _shared_event_loop or not _shared_event_loop.is_running():
+                print("Warning: Event loop not available for frame emission")
+                return
+
             # Unified frame emission for both binary and JPEG
-            # Both use the same backpressure mechanism via frame_ack event handler
             if msg_type == 'binary_frame':
                 # Binary frame with metadata - Socket.IO supports sending binary + JSON together!
-                # Send as array: [metadata, binaryData] - Socket.IO automatically handles serialization
                 frame_payload = [metadata, data]  # First element: JSON metadata, Second: binary data
 
-                for sid in ready_clients:
-                    try:
-                        # Emit binary frame with embedded metadata
-                        # Client will send frame_ack event after processing
-                        sio.start_background_task(
-                            sio.emit,
-                            event,  # 'frame' event
-                            frame_payload,  # [metadata, binaryData]
-                            to=sid
-                        )
-                    except RuntimeError: #RuntimeError: There is no current event loop in thread 'Thread-16 (run)'.
-                        # No event loop in thread - use fallback frame queue (with dropping)
-                        #_start_fallback_worker()
-                        print("you are still broken")
-
+                async def emit_binary_frame():
+                    for sid in ready_clients:
+                        await sio.emit(event, frame_payload, to=sid)
+                
+                # Schedule in the shared event loop from any thread
+                asyncio.run_coroutine_threadsafe(emit_binary_frame(), _shared_event_loop)
 
             elif msg_type == 'jpeg_frame':
                 # JPEG frame - emit as JSON signal
-                # Client will send frame_ack event after processing
                 json_message = json.dumps(data)
-                for sid in ready_clients:
-                    try:
-                        # Emit JPEG frame
-                        # Client will send frame_ack event after processing
-                        sio.start_background_task(
-                            sio.emit,
-                            "signal",
-                            json_message,
-                            to=sid
-                        )
-                    except RuntimeError:
-                        # No event loop in thread - use fallback FRAME queue (not message queue!)
-                        # This ensures JPEG frames get same dropping behavior as binary frames
-                        #_start_fallback_worker()
-                        print("you are still broken")
+                
+                async def emit_jpeg_frame():
+                    for sid in ready_clients:
+                        await sio.emit("signal", json_message, to=sid)
+                
+                # Schedule in the shared event loop from any thread
+                asyncio.run_coroutine_threadsafe(emit_jpeg_frame(), _shared_event_loop)
 
         except Exception as e:
             print(f"Error handling stream frame: {e}")
@@ -190,7 +178,7 @@ class SignalInstance(psygnal.SignalInstance):
         return data
 
     def _safe_broadcast_message(self, mMessage: dict) -> None:
-        """Throttle the emit to avoid task buildup."""
+        """Throttle the emit to avoid task buildup. Thread-safe using call_soon_threadsafe."""
         now = time.time()
         if now - self.last_emit_time < self.emit_interval:
             # print("too fast")
@@ -201,16 +189,17 @@ class SignalInstance(psygnal.SignalInstance):
             # Create JSON string before async task to avoid closure issues
             message_json = json.dumps(mMessage)
 
-            # Wrap the emit call in an async function to properly await it
-            async def emit_signal():
-                await sio.emit("signal", message_json)
-
-            sio.start_background_task(emit_signal)
+            # Thread-safe emission using call_soon_threadsafe
+            if _shared_event_loop and _shared_event_loop.is_running():
+                async def emit_signal():
+                    await sio.emit("signal", message_json)
+                
+                # Schedule the coroutine in the shared event loop from any thread
+                asyncio.run_coroutine_threadsafe(emit_signal(), _shared_event_loop)
+            else:
+                print("Warning: Event loop not available for signal emission")
         except Exception as e:
-            # Use fallback worker thread instead of creating new threads
-            #message = (json.dumps(mMessage) if isinstance(mMessage, dict)
-            #            else mMessage)
-            print("you are still broken safe mesage, ", e)
+            print(f"Error in safe broadcast message: {e}")
 
 class Signal(psygnal.Signal):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -374,35 +363,30 @@ async def frame_ack(sid):
         #print(f"Client {sid} acknowledged frame")
 
 
-# Function to run Uvicorn server with Socket.IO app
+# Function to set the shared event loop (called by ImSwitchServer)
+def set_shared_event_loop(loop):
+    """Set the shared event loop for thread-safe signal emission."""
+    global _shared_event_loop
+    _shared_event_loop = loop
+    print(f"Shared event loop set: {loop}")
+
+
+# Function to get the socket app for mounting on FastAPI
+def get_socket_app():
+    """Returns the Socket.IO ASGI app to be mounted on FastAPI."""
+    return socket_app
+
+
+# Deprecated: No longer need separate Uvicorn server for Socket.IO
+# Socket.IO app will be mounted on FastAPI app in ImSwitchServer
+# The event loop is managed by ImSwitchServer's Uvicorn instance
 def run_uvicorn():
-    try:
-        _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(imswitch.__file__)), '_data')
-        config = uvicorn.Config(
-            app,
-            host="0.0.0.0",
-            port=__socketport__,
-            ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if __ssl__ else None,
-            ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if __ssl__ else None,
-            timeout_keep_alive=2,
-            loop=imswitch._asyncio_loop_imswitchserver
-        )
-        imswitch._uvicorn_config = config
-        try:
-            imswitch._asyncio_loop_imswitchserver.run_until_complete(uvicorn.Server(config).serve())
-        except Exception as e:
-            print(f"Couldn't start server (noqt1): {e}")
-    except Exception as e:
-        print(f"Couldn't start server (noqt2): {e}")
+    """DEPRECATED: Socket.IO is now mounted on FastAPI app in ImSwitchServer."""
+    print("Warning: run_uvicorn() is deprecated. Socket.IO is mounted on FastAPI app.")
+    pass
 
 
 def start_websocket_server():
-    server_thread = threading.Thread(target=run_uvicorn, daemon=True)
-    server_thread.start()
-
-# TODO: create the eventloop for the imswitchserver?
-# create a new asyncio event loop
-_asyncio_loop_imswitchserver = asyncio.new_event_loop()
-imswitch._asyncio_loop_imswitchserver = _asyncio_loop_imswitchserver
-
-start_websocket_server()
+    """DEPRECATED: Socket.IO server is now integrated with FastAPI in ImSwitchServer."""
+    print("Info: Socket.IO server will be started with FastAPI in ImSwitchServer.")
+    pass

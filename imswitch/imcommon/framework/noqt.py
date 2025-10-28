@@ -58,12 +58,12 @@ class SignalInstance(psygnal.SignalInstance):
     emit_interval = 0.0  # Emit at most every 100ms
     image_id = 0
     _sending_image = False  # To avoid re-entrance
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Initialize timing for binary streaming
         self._last_frame_emit_time = 0
-    
+
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
     ) -> None:
@@ -88,7 +88,7 @@ class SignalInstance(psygnal.SignalInstance):
 
         self._safe_broadcast_message(message)
         del message
-    
+
     def _handle_stream_frame(self, message: dict):
         """
         Handle pre-formatted stream frame message from LiveViewController.
@@ -101,44 +101,44 @@ class SignalInstance(psygnal.SignalInstance):
             event = message.get('event', 'frame')
             data = message.get('data')
             metadata = message.get('metadata', {})
-            
+
             # Get ready clients
             with _client_frame_lock:
-                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready] # TODO: if we have two browser tabs open, this mechanism won't work properly anymore, timing issue I guess 
-            
+                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready] # TODO: if we have two browser tabs open, this mechanism won't work properly anymore, timing issue I guess
+
             if not ready_clients:
                 # No clients ready - drop this frame (implements backpressure)
                 global _frame_drop_counter
                 _frame_drop_counter += 1
                 if _frame_drop_counter % 10 == 0:  # Log every 30 dropped frames
-                    print(f"Dropped {_frame_drop_counter} frames due to client backpressure") # TODO: if we have e.g. 100 dropped frames, we should stop the live stream but not the camera
                     # set all available clients to ready to avoid infinite dropping
                     with _client_frame_lock:
+                        print(f"Dropped {_frame_drop_counter} frames due to client backpressure, try to send some frames anyway using the protocol {msg_type}") # TODO: if we have e.g. 100 dropped frames, we should stop the live stream but not the camera
                         for sid in _client_frame_ready.keys():
                             _client_frame_ready[sid] = True
                             ready_clients.append(sid)
                 else:
-                    return # TODO: this is global stop 
-            
+                    return # TODO: this is global stop
+
             # Mark clients as NOT ready (waiting for acknowledgement via frame_ack event)
             # Frontend will send frame_ack event after processing the frame
             with _client_frame_lock:
-                for sid in ready_clients: #TODO: check if 
+                for sid in ready_clients: #TODO: check if
                     _client_frame_ready[sid] = False  # Wait for frame_ack event!
-            
+
             # Unified frame emission for both binary and JPEG
             # Both use the same backpressure mechanism via frame_ack event handler
             if msg_type == 'binary_frame':
                 # Binary frame with metadata - Socket.IO supports sending binary + JSON together!
                 # Send as array: [metadata, binaryData] - Socket.IO automatically handles serialization
                 frame_payload = [metadata, data]  # First element: JSON metadata, Second: binary data
-                
+
                 for sid in ready_clients:
                     try:
                         # Emit binary frame with embedded metadata
                         # Client will send frame_ack event after processing
                         sio.start_background_task(
-                            sio.emit, 
+                            sio.emit,
                             event,  # 'frame' event
                             frame_payload,  # [metadata, binaryData]
                             to=sid
@@ -147,8 +147,8 @@ class SignalInstance(psygnal.SignalInstance):
                         # No event loop in thread - use fallback frame queue (with dropping)
                         #_start_fallback_worker()
                         print("you are still broken")
-                        
-                    
+
+
             elif msg_type == 'jpeg_frame':
                 # JPEG frame - emit as JSON signal
                 # Client will send frame_ack event after processing
@@ -168,7 +168,7 @@ class SignalInstance(psygnal.SignalInstance):
                         # This ensures JPEG frames get same dropping behavior as binary frames
                         #_start_fallback_worker()
                         print("you are still broken")
-                
+
         except Exception as e:
             print(f"Error handling stream frame: {e}")
 
@@ -200,18 +200,18 @@ class SignalInstance(psygnal.SignalInstance):
         try:
             # Create JSON string before async task to avoid closure issues
             message_json = json.dumps(mMessage)
-            
+
             # Wrap the emit call in an async function to properly await it
             async def emit_signal():
                 await sio.emit("signal", message_json)
-            
+
             sio.start_background_task(emit_signal)
         except Exception as e:
             # Use fallback worker thread instead of creating new threads
             #message = (json.dumps(mMessage) if isinstance(mMessage, dict)
             #            else mMessage)
             print("you are still broken")
-            
+
 class Signal(psygnal.Signal):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -357,7 +357,7 @@ async def connect(sid, environ):
     print(f"SocketIO Client connected: {sid}")
     with _client_frame_lock:
         _client_frame_ready[sid] = True
-        
+
 
 @sio.event
 async def disconnect(sid):
@@ -395,5 +395,5 @@ def run_uvicorn():
 def start_websocket_server():
     server_thread = threading.Thread(target=run_uvicorn, daemon=True)
     server_thread.start()
-    
+
 start_websocket_server()

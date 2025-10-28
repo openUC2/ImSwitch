@@ -197,7 +197,7 @@ class ESP32StageManager(PositionerManager):
                         "A": positionerInfo.managerProperties.get('speedA', 10000)}
 
         # save z-position prior to homing
-        self._zPositionPriorHoming = self.getPosition(axis="Z")
+        self._zPositionPriorHoming = self._position["Z"]
         
         # try to register the callback
         try:

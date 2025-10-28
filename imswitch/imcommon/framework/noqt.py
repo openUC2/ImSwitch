@@ -48,8 +48,8 @@ _client_frame_lock = threading.Lock()
 _frame_drop_counter = 0  # Track how many frames we've dropped
 
 # Separate queues for frames and regular messages
-# Frame queue uses maxsize=1 to keep only latest frame (automatic dropping)
-_fallback_frame_queue = queue.Queue(maxsize=1)  # Holds latest frame only - old frames auto-dropped
+# Frame queue uses maxsize=2 to keep only latest frame (automatic dropping)
+_fallback_frame_queue = queue.Queue(maxsize=2)  # Holds latest frame only - old frames auto-dropped
 _fallback_message_queue = queue.Queue(maxsize=50)  # Regular messages need more buffer
 _fallback_worker_thread = None 
 
@@ -176,9 +176,9 @@ class SignalInstance(psygnal.SignalInstance):
                 global _frame_drop_counter
                 _frame_drop_counter += 1
                 if _frame_drop_counter % 10 == 0:  # Log every 30 dropped frames
-                    print(f"Dropped {_frame_drop_counter} frames due to client backpressure") # TODO: if we have e.g. 100 dropped frames, we should stop the live stream but not the camera
                     # set all available clients to ready to avoid infinite dropping
                     with _client_frame_lock:
+                        print(f"Dropped {_frame_drop_counter} frames due to client backpressure, try to send some frames anyway using the protocol {msg_type}") # TODO: if we have e.g. 100 dropped frames, we should stop the live stream but not the camera
                         for sid in _client_frame_ready.keys():
                             _client_frame_ready[sid] = True
                             ready_clients.append(sid)
@@ -213,7 +213,7 @@ class SignalInstance(psygnal.SignalInstance):
                         _start_fallback_worker()
                         try:
                             # put_nowait will raise queue.Full if queue is full
-                            # Since maxsize=1, this drops old frame and keeps new one # TODO: We always run into this, does this cause a problem for the timing -buffering? Why couldn'T we use the start_background_task here??
+                            # Since maxsize=5, this drops old frame and keeps new one # TODO: We always run into this, does this cause a problem for the timing -buffering? Why couldn'T we use the start_background_task here??
                             _fallback_frame_queue.put_nowait(('frame', frame_payload, sid))
                         except queue.Full:
                             # Queue full - drop oldest frame by getting it and replacing

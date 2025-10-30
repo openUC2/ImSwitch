@@ -18,6 +18,7 @@ __jupyter_port__ = 8888
 jupyternotebookurl = ""
 __argparse__ = None
 
+
 '''
 These are LEGACY flags for backward compatibility.
 New code should use the configuration system: from imswitch.config import get_config

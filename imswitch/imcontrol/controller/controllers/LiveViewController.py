@@ -26,7 +26,7 @@ class StreamParams:
     
     # Common parameters
     detector_name: Optional[str] = None  # None means use first available detector
-    protocol: str = "binary"  # binary, jpeg, mjpeg, webrtc
+    protocol: str = "jpeg"  # binary, jpeg, mjpeg, webrtc
     
     # Binary stream parameters
     compression_algorithm: str = "lz4"  # lz4, zstandard
@@ -92,7 +92,7 @@ class StreamWorker(Worker):
             try:
                 self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it 
                 # Check if enough time has passed since last frame
-                if (time.time() - self._last_frame_time) >= self._updatePeriod:
+                if (time.time() - self._last_frame_time) >= self._updatePeriod:  # TODO: and  imswitch.__is_stream_ready_for_sending__
                     # Capture and emit frame
                     frameResult = self._captureAndEmit()
                     self._last_frame_time = time.time()
@@ -733,8 +733,8 @@ class LiveViewController(LiveUpdatedController):
         """Check if any live view stream is currently active."""
         return len(self._activeStreams) > 0
     
-    @APIExport(requestType="POST")
-    def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "binary",
+    @APIExport(requestType="POST") 
+    def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "jpeg",
                       params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Start live streaming for a specific detector.
@@ -811,6 +811,8 @@ class LiveViewController(LiveUpdatedController):
             worker.sigStreamFrame.connect(self._commChannel.sigUpdateImage)
             
             # Start worker in thread
+            # mThread = Thread
+            # worker.moveToThread()
             thread = threading.Thread(target=worker.run, daemon=True)
             thread.start()
             

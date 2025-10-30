@@ -43,6 +43,8 @@ class LaserController(ImConWidgetController):
         self._commChannel.sigScanBuilt.connect(self.scanBuilt)
         self._commChannel.sigScanEnded.connect(lambda: self.scanChanged(False))
 
+        self._commChannel.sigUpdateLaserValue.connect(self.valueChanged)
+        
         # Load presets
         if not IS_HEADLESS:
             for laserPresetName in self._setupInfo.laserPresets:

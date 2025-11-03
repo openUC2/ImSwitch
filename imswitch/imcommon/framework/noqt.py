@@ -373,17 +373,3 @@ def get_socket_app():
     """Returns the Socket.IO ASGI app to be mounted on FastAPI."""
     return socket_app
 
-
-# Deprecated: No longer need separate Uvicorn server for Socket.IO
-# Socket.IO app will be mounted on FastAPI app in ImSwitchServer
-# The event loop is managed by ImSwitchServer's Uvicorn instance
-def run_uvicorn():
-    """DEPRECATED: Socket.IO is now mounted on FastAPI app in ImSwitchServer."""
-    print("Warning: run_uvicorn() is deprecated. Socket.IO is mounted on FastAPI app.")
-    pass
-
-
-def start_websocket_server():
-    """DEPRECATED: Socket.IO server is now integrated with FastAPI in ImSwitchServer."""
-    print("Info: Socket.IO server will be started with FastAPI in ImSwitchServer.")
-    pass

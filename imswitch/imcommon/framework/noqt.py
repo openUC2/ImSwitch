@@ -197,6 +197,7 @@ class SignalInstance(psygnal.SignalInstance):
                 # Schedule the coroutine in the shared event loop from any thread
                 asyncio.run_coroutine_threadsafe(emit_signal(), _shared_event_loop)
             else:
+                # TODO: This is hit in the beginning When the app is starting and imswitchserver is not there yet 
                 print("Warning: Event loop not available for signal emission")
         except Exception as e:
             print(f"Error in safe broadcast message: {e}")

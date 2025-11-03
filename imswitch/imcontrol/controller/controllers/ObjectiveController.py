@@ -11,7 +11,7 @@ from imswitch import IS_HEADLESS
 
 from pydantic import BaseModel
 from typing import Tuple
-
+# TODO: we have to take into account that the ps4 controller can trigger a switch of the lenses, hence we should have a callback on that 
 class ObjectiveStatusModel(BaseModel):
     x1: float
     x2: float
@@ -31,7 +31,7 @@ class ObjectiveController(LiveUpdatedController):
     """
     Controller for objective operations following the Model-View-Presenter pattern.
     This controller manipulates state through ObjectiveManager and responds to its signals.
-    All state is stored in the manager, not in the controller.
+    All state is stored in the manager, anot in the controller.
     """
     
     # Signal for backwards compatibility and UI updates
@@ -186,13 +186,13 @@ class ObjectiveController(LiveUpdatedController):
         Args:
             slot: Objective slot number (1 or 2)
         """
-        # slot should be 1 or 2
-        if slot not in [0, 1, 2]:
+        # slot should be 0 or 1
+        if slot not in [0, 1]:
             self._logger.error("Invalid objective slot: %s", slot)
             return
         
         # Move hardware
-        self._objective.move(slot=slot, isBlocking=True)
+        self._objective.move(slot=slot+1, isBlocking=True) # unfortunately, hardware uses 1-based indexing
         
         # Update manager state (will emit signal)
         self._manager.setCurrentObjective(slot)
@@ -391,6 +391,7 @@ class ObjectiveController(LiveUpdatedController):
         # Get hardware-specific status from objective device
         try:
             objective_raw = self._objective.getstatus()
+            objective_raw["state"] += 1 # TODO: Unfortunately hardware is 1 based
             status.update(objective_raw)
         except Exception as e:
             self._logger.warning(f"Failed to get hardware status: {e}")

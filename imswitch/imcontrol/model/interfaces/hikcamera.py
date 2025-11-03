@@ -54,7 +54,7 @@ CALLBACK_SIG = CFUNCTYPE(
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
 
-    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=-1, blacklevel=100, isRGB=False, binning=2, flipImage=(False, False)):
+    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=2, flipImage=(False, False)):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -227,12 +227,26 @@ class CameraHIK:
         # set parameters
         self.setBinning(binning=self.binning)
         self.trigger_source = self.mParameters.get("trigger_source", "Continuous")
-
+        # TODO: This is necessary to ensure that we don't create delays when operating multiple cameras
         stBool = c_bool(False)
         ret = self.camera.MV_CC_GetBoolValue("AcquisitionFrameRateEnable", stBool)
         if ret != 0:
             self.__logger.debug("Get AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
-
+        # TODO: Limit our framerate (force) to 30 fps for now 
+        if self.frame_rate > 0:
+            stBool.value = True
+            ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", stBool)
+            if ret != 0:
+                self.__logger.debug("Set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
+            ret = self.camera.MV_CC_SetFloatValue("AcquisitionFrameRate", self.frame_rate)
+            if ret != 0:
+                self.__logger.debug("Set AcquisitionFrameRate fail! ret[0x%x]" % ret)
+            self.__logger.info(f"Set frame rate to {self.frame_rate} fps")
+        else:
+            stBool.value = False
+            ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", stBool)
+            if ret != 0:
+                self.__logger.debug("Set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
         ret = self.camera.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
         if ret != 0:
             self.__logger.debug("Set trigger mode fail! ret[0x%x]" % ret)
@@ -267,7 +281,7 @@ class CameraHIK:
 
         # Re-initialize camera with original cameraNo
         try:
-            self._open_camera(cameraNo=self.cameraNo)
+            self._open_camera(number=self.cameraNo)
             self.__logger.debug("Camera reconnected successfully.")
         except Exception as e:
             self.__logger.error(f"Failed to reconnect camera: {e}")
@@ -565,7 +579,7 @@ class CameraHIK:
         ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", True)
         if ret != 0:
             self.__logger.error("set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
-        ret = self.camera.MV_CC_SetFloatValue("AcquisitionFrameRate", 5.0)
+        ret = self.camera.MV_CC_SetFloatValue("AcquisitionFrameRate", frame_rate)
         if ret != 0:
             self.__logger.error("set AcquisitionFrameRate fail! ret[0x%x]" % ret)
 

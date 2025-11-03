@@ -15,7 +15,7 @@ from scipy.optimize import curve_fit
 from scipy.ndimage import gaussian_filter, center_of_mass
 from skimage.feature import peak_local_max
 from scipy.ndimage import gaussian_filter1d
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, resample
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class FocusConfig:
     min_signal_threshold: float = 10.0  # Minimum signal for valid measurement
     max_focus_value: float = 1e6  # Maximum valid focus value
     # peak-specific
-    peak_distance: int = 150                 # minimal separation (px) between the two peaks
+    peak_distance: int = 300                 # minimal separation (px) between the two peaks
     peak_height: Optional[float] = 20      # required absolute height in projection units
     max_peaks: int = 2                       # keep at most two strongest peaks
 
@@ -316,20 +316,23 @@ class PeakMetric(FocusMetricBase):
         """Reset the history of peak distances."""
         self.peak_distances = []
         
-    def compute(self, frame: np.ndarray) -> Dict[str, Any]:
+    def compute(self, frame: np.ndarray, n_supersample: int=2) -> Dict[str, Any]:
         ts = time.time()
-
         # X projection and optional 1D smoothing
         # remove background 
-        projx = np.maximum(self._projection_x(np.asarray(frame))-self.config.background_threshold,0)
-        projx_s = self._smooth_1d(projx, self.config.gaussian_sigma if self.config.enable_gaussian_blur else 0.0)
+        # supersample to get subpixel accuracy?
+        projx = self._projection_x(np.asarray(frame))
+        time0 = time.time()
+        projx_superpixel = resample(projx, num=projx.shape[0]*n_supersample, t=None, axis=0, window=None, domain='time')
+        projx_thresh = np.maximum(projx_superpixel-self.config.background_threshold,0)
+        projx_s = self._smooth_1d(projx_thresh, self.config.gaussian_sigma*n_supersample if self.config.enable_gaussian_blur else 0.0)
         projx_s = projx_s - np.min(projx_s)
         #projx_s = np.exp(1+projx_s)
         projx_s = projx_s / np.max(projx_s)*255
         # peak detection (keep the strongest two if more found)
         peaks, props = find_peaks(
-            projx_s,
-            distance=self.config.peak_distance,
+            projx_s**2,
+            distance=self.config.peak_distance*n_supersample,
             height=self.config.peak_height # TODO: These values have to be adapted to objectives - larger magnification => larger
         )
         
@@ -337,10 +340,10 @@ class PeakMetric(FocusMetricBase):
         if len(peaks) == 2:
            
             # Calculate distance between the two peaks
-            peak_distance = abs(peaks[1] - peaks[0])
+            peak_distance = abs(peaks[1] - peaks[0])/n_supersample
             
             # Check for outliers - if outlier, skip this measurement entirely
-            if self._is_outlier(peak_distance):
+            if False and self._is_outlier(peak_distance):
                 logger.debug(f"Peak distance {peak_distance:.1f} detected as outlier - skipping measurement")
                 # Return None for focus to indicate skipped measurement
                 focus_value = None
@@ -357,15 +360,17 @@ class PeakMetric(FocusMetricBase):
             # Return None for focus to indicate skipped measurement
             focus_value = None
             x_peak_distance = None
-            if 0:
-                import matplotlib
-                matplotlib.use('Agg')
-                import matplotlib.pyplot as plt
-                plt.figure()
-                plt.plot(projx_s)
-                plt.plot(peaks, projx_s[peaks], "x")
-                plt.title(f"Found {len(peaks)} peaks")
-                plt.savefig("test.png")
+        if 1:
+            print("Time for peak detection:", time.time()-time0)
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            plt.figure()
+            plt.plot(projx_s)
+            plt.plot(peaks, projx_s[peaks], "x")
+            plt.title(f"Found {len(peaks)} peaks")
+            plt.savefig("test.png")
+            
         # outputs
         result: Dict[str, Any] = {
             "t": ts,
@@ -535,19 +540,3 @@ class FocusMetricFactory:
     def available_metrics(cls) -> list:
         """Get list of available focus metrics."""
         return list(cls._metrics.keys())
-
-
-# Convenience function for backward compatibility
-def create_focus_metric(metric_type: str, **config_kwargs) -> FocusMetricBase:
-    """
-    Create focus metric with configuration.
-    
-    Args:
-        metric_type: Type of focus metric
-        **config_kwargs: Configuration parameters
-        
-    Returns:
-        Focus metric instance
-    """
-    config = FocusConfig(**config_kwargs) if config_kwargs else None
-    return FocusMetricFactory.create(metric_type, config)

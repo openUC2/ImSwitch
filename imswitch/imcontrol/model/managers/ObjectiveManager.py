@@ -192,8 +192,8 @@ class ObjectiveManager(SignalInterface):
         
         if old_slot != slot:
             self.__logger.info(f"Current objective changed: {old_slot} → {slot}")
-            if slot is not None and 0 <= slot - 1 < len(self._objectiveNames):
-                self.__logger.info(f"Active objective: {self._objectiveNames[slot - 1]}")
+            if slot is not None and 0 <= slot < len(self._objectiveNames):
+                self.__logger.info(f"Active objective: {self._objectiveNames[slot]}")
             
             if emitSignal:
                 self.sigObjectiveStateChanged.emit(self.getFullStatus())
@@ -222,8 +222,8 @@ class ObjectiveManager(SignalInterface):
         Returns:
             Objective name (e.g., "10x", "20x") or "default" if not set
         """
-        if self._currentObjective is not None and 0 <= self._currentObjective - 1 < len(self._objectiveNames):
-            return self._objectiveNames[self._currentObjective - 1]
+        if self._currentObjective is not None and 0 <= self._currentObjective < len(self._objectiveNames):
+            return self._objectiveNames[self._currentObjective]
         elif len(self._objectiveNames) > 0:
             return self._objectiveNames[0]  # Return first as default
         return "default"
@@ -244,8 +244,8 @@ class ObjectiveManager(SignalInterface):
         Returns:
             Pixel size in micrometers or None if no objective is set
         """
-        if self._currentObjective is not None and 0 <= self._currentObjective - 1 < len(self._pixelsizes):
-            return self._pixelsizes[self._currentObjective - 1]
+        if self._currentObjective is not None and 0 <= self._currentObjective  < len(self._pixelsizes):
+            return self._pixelsizes[self._currentObjective]
         return None
     
     def getCurrentNA(self) -> float:
@@ -255,8 +255,8 @@ class ObjectiveManager(SignalInterface):
         Returns:
             Numerical aperture or None if no objective is set
         """
-        if self._currentObjective is not None and 0 <= self._currentObjective - 1 < len(self._NAs):
-            return self._NAs[self._currentObjective - 1]
+        if self._currentObjective is not None and 0 <= self._currentObjective < len(self._NAs):
+            return self._NAs[self._currentObjective ]
         return None
     
     def getCurrentMagnification(self) -> int:
@@ -266,8 +266,8 @@ class ObjectiveManager(SignalInterface):
         Returns:
             Magnification or None if no objective is set
         """
-        if self._currentObjective is not None and 0 <= self._currentObjective - 1 < len(self._magnifications):
-            return self._magnifications[self._currentObjective - 1]
+        if self._currentObjective is not None and 0 <= self._currentObjective  < len(self._magnifications):
+            return self._magnifications[self._currentObjective ]
         return None
     
     def getCurrentFOV(self):
@@ -308,7 +308,7 @@ class ObjectiveManager(SignalInterface):
         if slot not in [1, 2]:
             raise ValueError(f"Objective slot must be 1 or 2, got {slot}")
         
-        idx = slot - 1
+        idx = slot 
         changes = {}
         
         if pixelsize is not None:
@@ -358,7 +358,7 @@ class ObjectiveManager(SignalInterface):
         if slot not in [1, 2]:
             raise ValueError(f"Objective slot must be 1 or 2, got {slot}")
         
-        idx = slot - 1
+        idx = slot
         return {
             "objectiveSlot": slot,
             "pixelsize": self._pixelsizes[idx],

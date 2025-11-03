@@ -189,8 +189,8 @@ class FocusLockController(ImConWidgetController):
         # Params - Consolidated focus parameters
         self._focus_params = FocusLockParams(
             focus_metric=getattr(self._setupInfo.focusLock, "focusLockMetric", "peak"),
-            crop_center=getattr(self._setupInfo.focusLock, "cropCenter", None),
-            crop_size=getattr(self._setupInfo.focusLock, "cropSize", None),
+            crop_center=getattr(self._setupInfo.focusLock, "crop_center", None),
+            crop_size=getattr(self._setupInfo.focusLock, "crop_size", None),
             update_freq=self._setupInfo.focusLock.updateFreq or 10,
         )
         # TODO: if there are no crop settings, we should find them automatically by detecing the maximum intensity spot in the image and crop 300 x/y around it, but only if the laser is on
@@ -431,7 +431,15 @@ class FocusLockController(ImConWidgetController):
     # =========================
     @APIExport(runOnUIThread=True)
     def startFocusMeasurement(self) -> bool:
-        # Start polling
+        # Start polling and create a new focus metric instance to reset any internal state
+        focus_config = FocusConfig(
+            gaussian_sigma=self._focus_params.gaussian_sigma,
+            background_threshold=self._focus_params.background_threshold,
+            crop_radius=self._focus_params.crop_size or 300,
+            enable_gaussian_blur=True,
+        )
+        self._focus_metric = FocusMetricFactory.create(self._focus_params.focus_metric, focus_config)
+
         self.updateThread() # TODO: Shall we do that from the beginning? 
         # Camera acquisition
         try:
@@ -700,13 +708,13 @@ class FocusLockController(ImConWidgetController):
             self.__isPollingFramesActive = False
         
     @APIExport(runOnUIThread=True)
-    def setParamsAstigmatism(self, gaussianSigma: float, backgroundThreshold: float,
-                        cropSize: int, cropCenter: Optional[List[int]] = None):
-        self._focus_params.gaussian_sigma = float(gaussianSigma)
-        self._focus_params.background_threshold = float(backgroundThreshold)
-        self._focus_params.crop_size = int(cropSize)
-        if cropCenter is not None:
-            self._focus_params.crop_center = cropCenter
+    def setParamsAstigmatism(self, gaussian_sigma: float, background_threshold: float,
+                        crop_size: int, crop_center: Optional[List[int]] = None):
+        self._focus_params.gaussian_sigma = float(gaussian_sigma)
+        self._focus_params.background_threshold = float(background_threshold)
+        self._focus_params.crop_size = int(crop_size)
+        if crop_center is not None:
+            self._focus_params.crop_center = crop_center
         
         # Update focus metric config
         self.setFocusLockParams(**self.getParamsAstigmatism())
@@ -715,10 +723,10 @@ class FocusLockController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def getParamsAstigmatism(self):
         return {
-            "gaussianSigma": self._focus_params.gaussian_sigma,
-            "backgroundThreshold": self._focus_params.background_threshold,
-            "cropSize": self._focus_params.crop_size,
-            "cropCenter": self._focus_params.crop_center,
+            "gaussian_sigma": self._focus_params.gaussian_sigma,
+            "background_threshold": self._focus_params.background_threshold,
+            "crop_size": self._focus_params.crop_size,
+            "crop_center": self._focus_params.crop_center,
         }
 
     def aboutToLockUpdate(self):
@@ -876,7 +884,16 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def returnLastImage(self) -> Response:
+        try:
+            if not self._master.detectorsManager[self.camera]._running:
+                self._master.detectorsManager[self.camera].startAcquisition()
+        except Exception as e:
+            self._logger.error(f"Failed to start acquisition on camera '{self.camera}': {e}")
+
         lastFrame = self._master.detectorsManager[self.camera].getLatestFrame()
+        if lastFrame is None:
+            self._logger.error("No image available from camera.")
+            return Response(status_code=404)
         lastFrame = lastFrame/np.max(lastFrame)*512.0
         lastFrame = lastFrame[::self.reduceImageScaleFactor, ::self.reduceImageScaleFactor]
         if lastFrame is None:
@@ -892,22 +909,22 @@ class FocusLockController(ImConWidgetController):
             raise RuntimeError("Failed to convert last image to PNG.") from e
 
     @APIExport(runOnUIThread=True, requestType="POST")
-    def setCropFrameParameters(self, cropSize: int, cropCenter: List[int] = None, frameSize: List[int] = None):
+    def setCropFrameParameters(self, crop_size: int, crop_center: List[int] = None, frameSize: List[int] = None):
         detectorSize = self._master.detectorsManager[self.camera].shape
         
-        self._focus_params.crop_size = int(cropSize * self.reduceImageScaleFactor)
-        if cropCenter is None:
-            _cropCenter = [detectorSize[1] // 2, detectorSize[0] // 2]
+        self._focus_params.crop_size = int(crop_size * self.reduceImageScaleFactor)
+        if crop_center is None:
+            _crop_center = [detectorSize[1] // 2, detectorSize[0] // 2]
         else:
-            cropCenter = [int(cropCenter[1] * mRatio), int(cropCenter[0] * mRatio)]
+            crop_center = [int(crop_center[1] * self.reduceImageScaleFactor), int(crop_center[0] * self.reduceImageScaleFactor)]
         if self._focus_params.crop_size < 100:
             self._focus_params.crop_size = 100
         detectorSize = self._master.detectorsManager[self.camera].shape
         if self._focus_params.crop_size > detectorSize[0] or self._focus_params.crop_size > detectorSize[1]:
             raise ValueError(f"Crop size {self._focus_params.crop_size} exceeds detector size {detectorSize}.")
-        if cropCenter is None:
-            cropCenter = [self._focus_params.crop_size // 2, self._focus_params.crop_size // 2]
-        self._focus_params.crop_center = cropCenter
+        if crop_center is None:
+            crop_center = [self._focus_params.crop_size // 2, self._focus_params.crop_size // 2]
+        self._focus_params.crop_center = crop_center
         self._logger.info(f"Set crop parameters: size={self._focus_params.crop_size}, center={self._focus_params.crop_center}")
         
         # Save the crop parameters to config file
@@ -919,8 +936,8 @@ class FocusLockController(ImConWidgetController):
             # Save crop size and center to setup info
             if hasattr(self, '_setupInfo') and hasattr(self._setupInfo, 'focusLock'):
                 # Set the crop parameters in the setup info
-                self._setupInfo.focusLock.cropSize = self._focus_params.crop_size
-                self._setupInfo.focusLock.cropCenter = self._focus_params.crop_center
+                self._setupInfo.focusLock.crop_size = self._focus_params.crop_size
+                self._setupInfo.focusLock.crop_center = self._focus_params.crop_center
                 
                 # Save the updated setup info to config file
                 from imswitch.imcontrol.model import configfiletools

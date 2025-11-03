@@ -33,12 +33,16 @@ from fastapi.responses import RedirectResponse
 import socket
 import os
 import threading
+import asyncio
 from fastapi.openapi.docs import (
     get_redoc_html,
     get_swagger_ui_html,
     get_swagger_ui_oauth2_redirect_html,
 )
 from fastapi.staticfiles import StaticFiles
+
+# Import Socket.IO app from noqt framework
+from imswitch.imcommon.framework.noqt import get_socket_app, set_shared_event_loop
 
 try:
     pass
@@ -56,6 +60,14 @@ static_dir = os.path.join(_baseDataFilesDir,  'static')
 imswitchapp_dir = os.path.join(_baseDataFilesDir,  'static', 'imswitch')
 images_dir =  os.path.join(_baseDataFilesDir, 'images')
 app = FastAPI(docs_url=None, redoc_url=None)
+
+# Mount Socket.IO app at root path for WebSocket connections
+# This allows Socket.IO to handle all socket.io/* paths
+socket_app = get_socket_app()
+app.mount('/socket.io', socket_app)
+print("Socket.IO app mounted at /socket.io")
+
+# Mount static files and other apps
 app.mount("/static", StaticFiles(directory=static_dir), name="static")  # serve static files such as the swagger UI
 app.mount("/imswitch", StaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
 app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
@@ -304,25 +316,50 @@ class ServerThread(threading.Thread):
     def __init__(self):
         super().__init__()
         self.server = None
+        # Create a new asyncio event loop for the server
+        self._asyncio_loop = asyncio.new_event_loop()
+        # Store reference in imswitch module for global access
+        imswitch._asyncio_loop_imswitchserver = self._asyncio_loop
 
     def run(self):
         try:
+            # Set the event loop for this thread
+            asyncio.set_event_loop(self._asyncio_loop)
+            
+            # Configure the shared event loop for signal emission
+            set_shared_event_loop(self._asyncio_loop)
+            print(f"Shared event loop configured for Socket.IO and FastAPI")
+            
+            # Create Uvicorn config with the shared event loop
             config = uvicorn.Config(
                 app,
                 host="0.0.0.0",
                 port=PORT,
                 ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if IS_SSL else None,
-                ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None
+                ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None, 
+                loop=self._asyncio_loop #loop="none",  # Use "none" to let us manage the loop # TODO: This is not yet complete 
             )
+            
+            # Create server instance
             self.server = uvicorn.Server(config)
-            self.server.run()
+            
+            # Run the server using the existing event loop
+            self._asyncio_loop.run_until_complete(self.server.serve())
         except Exception as e:
-            print(f"Couldn't start server: {e}")
+            print(f"Couldn't start server (ImSwitchServer): {e}")
+        finally:
+            # Clean up the event loop
+            try:
+                self._asyncio_loop.close()
+            except Exception as e:
+                print(f"Error closing event loop: {e}")
 
     def stop(self):
         if self.server:
             self.server.should_exit = True
-            self.server.lifespan.shutdown()
+            # Schedule shutdown in the event loop
+            if self._asyncio_loop and self._asyncio_loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.server.shutdown(), self._asyncio_loop)
             print("Server is stopping...")
 class ImSwitchServer(Worker):
 

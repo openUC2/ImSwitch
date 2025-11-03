@@ -3,6 +3,8 @@ import os
 import numpy as np
 import time
 import threading
+from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, Response, HTTPException
 from imswitch.imcommon.model import initLogger, dirtools, APIExport
 from imswitch.imcommon.framework import Signal
 import time
@@ -38,6 +40,39 @@ class PixelCalibrationController(LiveUpdatedController):
         # Get current objective from ObjectiveController if available
         self.currentObjective = self._getCurrentObjectiveId()
         self._loadAffineCalibrations()
+        
+        # Load the observation Camera 
+        if hasattr(self._setupInfo.PixelCalibration, 'observationCamera') and self._setupInfo.PixelCalibration.observationCamera is not None:
+            self.observationCameraName = self._setupInfo.PixelCalibration.observationCamera
+            # load detector from name
+            if self.observationCameraName in allDetectorNames:
+                self.observationCamera = self._master.detectorsManager[self.observationCameraName]
+            else:
+                self.observationCamera = None
+                self._logger.warning(f"Observation camera '{self.observationCameraName}' not found among detectors")
+        
+
+    @APIExport() # return image via fastapi API
+    def returnObservationCameraImage(self) -> Response:
+        try:
+            mFrame = self.observationCamera.getLatestFrame()
+            from PIL import Image
+            import io
+            # using an in-memory image
+            im = Image.fromarray(mFrame)
+
+            # save image to an in-memory bytes buffer
+            # save image to an in-memory bytes buffer
+            with io.BytesIO() as buf:
+                im = im.convert("L")  # convert image to 'L' mode
+                im.save(buf, format="PNG")
+                im_bytes = buf.getvalue()
+
+            headers = {"Content-Disposition": 'inline; filename="test.png"'}
+            return Response(im_bytes, headers=headers, media_type="image/png")
+        except Exception as e:
+            self._logger.error(f"Failed to return observation camera image: {e}")
+            raise HTTPException(status_code=500, detail=f"Error retrieving image: {e}")
     
     def _getCurrentObjectiveId(self) -> str:
         """

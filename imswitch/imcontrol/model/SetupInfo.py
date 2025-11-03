@@ -333,6 +333,8 @@ class PixelCalibrationInfo:
     """ Default identity transformation when no calibration is available.
     [[1, 0, 0], [0, 1, 0]] means 1:1 mapping with no rotation. """
 
+    ObservationCamera: str = None
+
 
 @dataclass(frozen=False)
 class ExperimentInfo:

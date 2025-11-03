@@ -337,7 +337,7 @@ class ServerThread(threading.Thread):
                 port=PORT,
                 ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if IS_SSL else None,
                 ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None, 
-                #loop="none",  # Use "none" to let us manage the loop # TODO: This is not yet complete 
+                loop=self._asyncio_loop #loop="none",  # Use "none" to let us manage the loop # TODO: This is not yet complete 
             )
             
             # Create server instance

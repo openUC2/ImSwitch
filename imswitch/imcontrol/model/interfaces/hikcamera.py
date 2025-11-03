@@ -497,6 +497,15 @@ class CameraHIK:
             return
         self.flushBuffer()
         
+        # in case the camera is None, we have to restart it anyway
+        if self.camera is None: # TODO: 2025-11-03 15:13:38 ERROR [LiveViewController] Error starting live view: 'NoneType' object has no attribute 'MV_CC_RegisterImageCallBackEx'
+            self.reconnectCamera()
+            ret = self.camera.MV_CC_StartGrabbing()
+            if ret != 0:
+                raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
+            self.is_streaming = True
+            return          
+        
         # Re-register callback if needed (in case it was deregistered during stop)
         if hasattr(self, '_callback_registered') and not self._callback_registered:
             ret = self.camera.MV_CC_RegisterImageCallBackEx(self._sdk_cb, None)

@@ -150,12 +150,8 @@ class SignalInstance(psygnal.SignalInstance):
                 # JPEG frame - emit as JSON signal
                 json_message = json.dumps(data)
                 
-                async def emit_jpeg_frame():
-                    for sid in ready_clients:
-                        await sio.emit("signal", json_message, to=sid)
-                
-                # Schedule in the shared event loop from any thread
-                asyncio.run_coroutine_threadsafe(emit_jpeg_frame(), _shared_event_loop)
+                for sid in ready_clients:
+                        asyncio.run_coroutine_threadsafe(sio.emit("signal", json_message, to=sid), _shared_event_loop)
 
         except Exception as e:
             print(f"Error handling stream frame: {e}")

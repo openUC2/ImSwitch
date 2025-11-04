@@ -43,7 +43,8 @@ sio = AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 socket_app = ASGIApp(sio)  # Renamed to socket_app - will be mounted on FastAPI app
 
 # Per-client frame acknowledgement tracking
-_client_frame_ready = {}  # sid -> bool (True if client is ready for next frame)
+_client_sent_frame_id = {}  # sid -> bool (True if client is ready for next frame)
+_client_ack_frame_id = {}  # sid -> last acked frame id
 _client_frame_lock = threading.Lock()
 _frame_drop_counter = 0  # Track how many frames we've dropped
 
@@ -59,8 +60,6 @@ class SignalInterface(abstract.SignalInterface):
 class SignalInstance(psygnal.SignalInstance):
     last_emit_time = 0
     emit_interval = 0.0  # Emit at most every 100ms
-    image_id = 0
-    _sending_image = False  # To avoid re-entrance
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -104,55 +103,64 @@ class SignalInstance(psygnal.SignalInstance):
             msg_type = message.get('type')
             event = message.get('event', 'frame')
             data = message.get('data')
-            metadata = message.get('metadata', {})
+            metadata = message.get('metadata', {}) # TODO: Unify metadata vs data for image_id
+
+            def get_ready_clients(last_ack, last_sent):
+                next_id = {}
+                for sid, sent_id in last_sent.items():
+                    if sent_id is None or last_ack[sid] is None or sent_id == last_ack[sid] + 1: # TODO: Handle int rollover => frameid%255
+                        next_id[sid] = sent_id + 1 if sent_id is not None else 0
+                    else:
+                        print(f"Client {sid} not ready for new frame (last sent: {sent_id}, last ack: {last_ack[sid]})")
+                return next_id
 
             # Get ready clients
             with _client_frame_lock:
-                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
+                #current_frame_id = data['image_id']
+                ready_clients = get_ready_clients(_client_ack_frame_id, _client_sent_frame_id)
 
-            if not ready_clients:
-                # No clients ready - drop this frame (implements backpressure)
-                global _frame_drop_counter
-                _frame_drop_counter += 1
-                if _frame_drop_counter % 10 == 0:  # Log every 10 dropped frames
-                    # set all available clients to ready to avoid infinite dropping
-                    with _client_frame_lock:
-                        print(f"Dropped {_frame_drop_counter} frames due to client backpressure, try to send some frames anyway using the protocol {msg_type}")
-                        for sid in _client_frame_ready.keys():
-                            _client_frame_ready[sid] = True
-                            ready_clients.append(sid)
-                else:
+                if not ready_clients:
+                    '''
+                    # No clients ready - drop this frame (implements backpressure)
+                    global _frame_drop_counter
+                    _frame_drop_counter += 1
+                    if _frame_drop_counter % 20 == 0:  # Log every 20 dropped frames
+                        # set all available clients to ready to avoid infinite dropping
+                        with _client_frame_lock:
+                            print(f"Dropped {_frame_drop_counter} frames due to client backpressure, try to send some frames anyway using the protocol {msg_type}")
+                            for sid in ready_clients:
+                                _client_sent_frame_id[sid] = True
+                                ready_clients.append(sid)
+                    else:
+                    '''
+                    print("No clients ready for new frame, dropping frame to avoid buildup")
                     return
 
-            # Mark clients as NOT ready (waiting for acknowledgement via frame_ack event)
-            with _client_frame_lock:
-                for sid in ready_clients:
-                    _client_frame_ready[sid] = False  # Wait for frame_ack event!
+                # Thread-safe emission using the shared event loop
+                if not _shared_event_loop or not _shared_event_loop.is_running():
+                    print("Warning: Event loop not available for frame emission")
+                    return
 
-            # Thread-safe emission using the shared event loop
-            if not _shared_event_loop or not _shared_event_loop.is_running():
-                print("Warning: Event loop not available for frame emission")
-                return
+                # Unified frame emission for both binary and JPEG
+                if msg_type == 'binary_frame':
+                    # Binary frame with metadata - Socket.IO supports sending binary + JSON together!
+                    # TODO: unify metadata and data handling
+                    return 
+                    #frame_payload = [metadata, data]  # First element: JSON metadata, Second: binary data
 
-            # Unified frame emission for both binary and JPEG
-            if msg_type == 'binary_frame':
-                # Binary frame with metadata - Socket.IO supports sending binary + JSON together!
-                frame_payload = [metadata, data]  # First element: JSON metadata, Second: binary data
+                    # Schedule in the shared event loop from any thread
+                    #asyncio.run_coroutine_threadsafe(emit_binary_frame(), _shared_event_loop)
 
-                async def emit_binary_frame():
-                    for sid in ready_clients:
-                        await sio.emit(event, frame_payload, to=sid)
-                
-                # Schedule in the shared event loop from any thread
-                asyncio.run_coroutine_threadsafe(emit_binary_frame(), _shared_event_loop)
-
-            elif msg_type == 'jpeg_frame':
-                # JPEG frame - emit as JSON signal
-                json_message = json.dumps(data)
-                
-                for sid in ready_clients:
+                elif msg_type == 'jpeg_frame':
+                    # JPEG frame - emit as JSON signal
+                    for sid, next_frame_id in ready_clients.items():
+                        data['image_id'] = _client_sent_frame_id[sid] # TODO: rename to frame_id 
+                        json_message = json.dumps(data) # TODO: Let's consider using mesgepack for efficiency
+                        print("Sending frame # ", next_frame_id, " to client ", sid)
+                        _client_sent_frame_id[sid] = next_frame_id
                         asyncio.run_coroutine_threadsafe(sio.emit("signal", json_message, to=sid), _shared_event_loop)
-
+                        
+                        
         except Exception as e:
             print(f"Error handling stream frame: {e}")
 
@@ -342,7 +350,8 @@ async def connect(sid, environ):
     """Handle client connection - mark as ready for frames"""
     print(f"SocketIO Client connected: {sid}")
     with _client_frame_lock:
-        _client_frame_ready[sid] = True
+        _client_sent_frame_id[sid] = None
+        _client_ack_frame_id[sid] = None
 
 
 @sio.event
@@ -350,14 +359,15 @@ async def disconnect(sid):
     """Handle client disconnection - cleanup state"""
     print(f"SocketIO Client disconnected: {sid}")
     with _client_frame_lock:
-        _client_frame_ready.pop(sid, None)
-
+        _client_sent_frame_id.pop(sid, None)
+        _client_ack_frame_id.pop(sid, None)
+        
 @sio.event
-async def frame_ack(sid):
+async def frame_ack(sid, data):
     """Client explicitly acknowledges frame processing complete"""
     with _client_frame_lock:
-        _client_frame_ready[sid] = True
-        #print(f"Client {sid} acknowledged frame")
+        _client_ack_frame_id[sid] = data.get('image_id', None)  # Mark client as ready for next frame
+        print(f"Client {sid} acknowledged frame", data)
 
 
 # Function to set the shared event loop (called by ImSwitchServer)

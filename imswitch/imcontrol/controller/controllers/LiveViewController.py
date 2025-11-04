@@ -129,7 +129,7 @@ class BinaryStreamWorker(StreamWorker):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._image_id = 0
+        self._image_id = 0 # TODO: Use the acutal frame id from detector
         # Import compression libraries on demand
         self._encoder = None
         
@@ -149,7 +149,7 @@ class BinaryStreamWorker(StreamWorker):
     def _captureAndEmit(self):
         """Capture frame from detector, compress it, and emit pre-formatted socket.io message."""
         try:
-            frame = self._detector.getLatestFrame()
+            frame, self._image_id = self._detector.getLatestFrame(returnFrameNumber=True)
             if frame is None:
                 return None  # No frame available, but not an error - keep running
             
@@ -184,7 +184,6 @@ class BinaryStreamWorker(StreamWorker):
             metadata['pixelsize'] = int(pixel_size)
             metadata['format'] = 'binary'
 
-            self._image_id += 1
             
             # Create pre-formatted message for socket.io
             message = {

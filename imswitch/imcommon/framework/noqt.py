@@ -149,7 +149,7 @@ class SignalInstance(psygnal.SignalInstance):
                             'data': data
                         }, use_bin_type=True)
                         
-                        print(f"Sending binary frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
+                        # print(f"Sending binary frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
                         _client_sent_frame_id[sid] = next_frame_id
                         
                         # Emit using socket.io's native binary support

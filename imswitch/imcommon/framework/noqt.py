@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 import imswitch
 from imswitch import __ssl__, __socketport__
 import logging
+import msgpack  # MessagePack for efficient binary serialization
 
 # Try to import config and binary streaming - handle gracefully if not available
 from imswitch.config import get_config
@@ -104,7 +105,7 @@ class SignalInstance(psygnal.SignalInstance):
         Thread-safe using asyncio.run_coroutine_threadsafe for cross-thread calls.
         
         UNIFIED HANDLING: Both binary and JPEG frames now use the same 'frame' event
-        and follow the same metadata structure for consistency.
+        with MessagePack-encoded metadata for efficiency and consistency.
         """
         try:
             msg_type = message.get('type')
@@ -128,7 +129,7 @@ class SignalInstance(psygnal.SignalInstance):
                 ready_clients = get_ready_clients(_client_ack_frame_id, _client_sent_frame_id)
 
                 if not ready_clients:
-                    print("No clients ready for new frame, dropping frame to avoid buildup")
+                    # print("No clients ready for new frame, dropping frame to avoid buildup")
                     return
 
                 # Thread-safe emission using the shared event loop
@@ -136,13 +137,19 @@ class SignalInstance(psygnal.SignalInstance):
                     print("Warning: Event loop not available for frame emission")
                     return
 
-                # Unified frame emission for both binary and JPEG
+                # Unified frame emission for both binary and JPEG using MessagePack
                 if msg_type == 'binary_frame':
-                    # Binary frame with metadata - Socket.IO supports sending binary + JSON together!
+                    # Binary frame: Send complete payload as MessagePack
                     for sid, next_frame_id in ready_clients.items():
                         metadata['frame_id'] = next_frame_id
-                        frame_payload = [metadata, data]  # First element: JSON metadata, Second: binary data
-                        print(f"Sending binary frame #{next_frame_id} to client {sid}")
+                        
+                        # Pack entire frame (metadata + data) with MessagePack
+                        frame_payload = msgpack.packb({
+                            'metadata': metadata,
+                            'data': data
+                        }, use_bin_type=True)
+                        
+                        print(f"Sending binary frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
                         _client_sent_frame_id[sid] = next_frame_id
                         
                         # Emit using socket.io's native binary support
@@ -152,15 +159,18 @@ class SignalInstance(psygnal.SignalInstance):
                         )
 
                 elif msg_type == 'jpeg_frame':
-                    # JPEG frame - also uses 'frame' event for unified handling
+                    # JPEG frame: Send complete payload as MessagePack
                     for sid, next_frame_id in ready_clients.items():
                         # Update metadata with client-specific frame ID
                         data['metadata']['frame_id'] = next_frame_id
                         
-                        # Create unified payload structure (consistent with binary)
-                        frame_payload = [data['metadata'], data['image']]
+                        # Pack entire frame (metadata + image) with MessagePack
+                        frame_payload = msgpack.packb({
+                            'metadata': data['metadata'],
+                            'image': data['image']
+                        }, use_bin_type=True)
                         
-                        print(f"Sending JPEG frame #{next_frame_id} to client {sid}")
+                        print(f"Sending JPEG frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
                         _client_sent_frame_id[sid] = next_frame_id
                         
                         # Emit on same 'frame' event as binary for unified frontend handling
@@ -173,14 +183,16 @@ class SignalInstance(psygnal.SignalInstance):
         except Exception as e:
             print(f"Error handling stream frame: {e}")
 
-    def _generate_json_message(self, args):  # Consider using msgpspec for efficiency
+    def _generate_json_message(self, args):
+        """Generate message dict from signal arguments (will be serialized with MessagePack or JSON)."""
         param_names = list(self.signature.parameters.keys())
         data = {"name": self.name, "args": {}}
 
         for i, arg in enumerate(args):
             param_name = param_names[i] if i < len(param_names) else f"arg{i}"
             if isinstance(arg, np.ndarray):
-                data["args"][param_name] = arg.tolist().copy()
+                # Convert numpy arrays to lists for serialization
+                data["args"][param_name] = arg.tolist()
             elif isinstance(arg, (str, int, float, bool)):
                 data["args"][param_name] = arg
             elif isinstance(arg, dict):
@@ -199,13 +211,14 @@ class SignalInstance(psygnal.SignalInstance):
         self.last_emit_time = now
 
         try:
-            # Create JSON string before async task to avoid closure issues
-            message_json = json.dumps(mMessage)
+            # Serialize message using MessagePack
+            message_bytes = msgpack.packb(mMessage, use_bin_type=True)
+            event_name = "signal_msgpack"
 
             # Thread-safe emission using call_soon_threadsafe
             if _shared_event_loop and _shared_event_loop.is_running():
                 async def emit_signal():
-                    await sio.emit("signal", message_json)
+                    await sio.emit(event_name, message_bytes)
                 
                 # Schedule the coroutine in the shared event loop from any thread
                 asyncio.run_coroutine_threadsafe(emit_signal(), _shared_event_loop)
@@ -358,11 +371,20 @@ class FrameworkUtils(abstract.FrameworkUtils):
 # Socket.IO event handlers for client connection management
 @sio.event
 async def connect(sid, environ):
-    """Handle client connection - mark as ready for frames"""
+    """Handle client connection - mark as ready for frames and send capabilities"""
     print(f"SocketIO Client connected: {sid}")
     with _client_frame_lock:
         _client_sent_frame_id[sid] = None
         _client_ack_frame_id[sid] = None
+    
+    # Send server capabilities to client
+    capabilities = {
+        "messagepack": True,
+        "binary_streaming": HAS_BINARY_STREAMING,
+        "protocol_version": "1.0"
+    }
+    await sio.emit("server_capabilities", capabilities, to=sid)
+    print(f"Sent capabilities to {sid}: {capabilities}")
 
 
 @sio.event

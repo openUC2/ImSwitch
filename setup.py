@@ -85,7 +85,8 @@ setup(
         "numba>=0.61.2", 
         "mikro-next>=0.18.0", 
         "arkitekt-next>=0.29.0", 
-        "koil>=2.0.5"
+        "koil>=2.0.5", 
+        "msgpack>=1.0.4"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

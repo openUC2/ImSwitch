@@ -129,7 +129,7 @@ class BinaryStreamWorker(StreamWorker):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._image_id = 0 # TODO: Use the acutal frame id from detector
+        self._frame_id = 0  # Unified frame counter (will sync with detector frame number)
         # Import compression libraries on demand
         self._encoder = None
         
@@ -149,9 +149,16 @@ class BinaryStreamWorker(StreamWorker):
     def _captureAndEmit(self):
         """Capture frame from detector, compress it, and emit pre-formatted socket.io message."""
         try:
-            frame, self._image_id = self._detector.getLatestFrame(returnFrameNumber=True)
+            # Get frame with actual detector frame number
+            frame, detector_frame_number = self._detector.getLatestFrame(returnFrameNumber=True)
             if frame is None:
                 return None  # No frame available, but not an error - keep running
+            
+            # Use detector frame number if available, otherwise use our counter
+            if detector_frame_number is not None:
+                self._frame_id = detector_frame_number
+            else:
+                self._frame_id = (self._frame_id + 1) % 65536  # Handle rollover at 16-bit boundary
             
             # Get detector info
             detector_name = self._detector.name
@@ -175,15 +182,19 @@ class BinaryStreamWorker(StreamWorker):
                 return False  # This is a real error
             
             # Encode frame
-            packet, metadata = encoder.encode_frame(frame)
+            packet, encoding_metadata = encoder.encode_frame(frame)
             
-            # Add metadata
-            metadata['server_timestamp'] = time.time()
-            metadata['image_id'] = self._image_id
-            metadata['detectorname'] = detector_name
-            metadata['pixelsize'] = int(pixel_size)
-            metadata['format'] = 'binary'
-
+            # Create unified metadata structure
+            metadata = {
+                'server_timestamp': time.time(),
+                'frame_id': self._frame_id,  # Unified field name
+                'detector_name': detector_name,
+                'pixel_size': float(pixel_size),
+                'format': 'binary',
+                'protocol': 'binary'
+            }
+            # Merge encoding metadata (compression info, etc.)
+            metadata.update(encoding_metadata)
             
             # Create pre-formatted message for socket.io
             message = {
@@ -208,7 +219,7 @@ class JPEGStreamWorker(StreamWorker):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._image_id = 0
+        self._frame_id = 0  # Unified frame counter (will sync with detector frame number)
         try:
             import cv2
             self._cv2 = cv2
@@ -222,10 +233,22 @@ class JPEGStreamWorker(StreamWorker):
             return False  # This is a configuration error
         
         try:
-            frame = self._detector.getLatestFrame()
+            # Get frame with actual detector frame number
+            result = self._detector.getLatestFrame(returnFrameNumber=True)
+            if isinstance(result, tuple) and len(result) == 2:
+                frame, detector_frame_number = result
+            else:
+                frame = result
+                detector_frame_number = None
+                
             if frame is None:
                 return None  # No frame available, but not an error - keep running
-
+            
+            # Use detector frame number if available, otherwise use our counter
+            if detector_frame_number is not None:
+                self._frame_id = detector_frame_number
+            else:
+                self._frame_id = (self._frame_id + 1) % 65536  # Handle rollover at 16-bit boundary
             
             # Get detector info
             detector_name = self._detector.name
@@ -252,34 +275,30 @@ class JPEGStreamWorker(StreamWorker):
             encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
             success, encoded = self._cv2.imencode('.jpg', frame, encode_params)
 
-            if success: # TODO: Eventually think about messagepack instead of base64
+            if success:
                 import base64
                 jpeg_bytes = encoded.tobytes()
                 encoded_image = base64.b64encode(jpeg_bytes).decode('utf-8')
                 
-                # Create metadata
+                # Create unified metadata structure
                 metadata = {
                     'server_timestamp': time.time(),
-                    'image_id': self._image_id,
-                    'detectorname': detector_name,
-                    'pixelsize': int(pixel_size),
-                    'format': 'jpeg'
+                    'frame_id': self._frame_id,  # Unified field name
+                    'detector_name': detector_name,
+                    'pixel_size': float(pixel_size),
+                    'format': 'jpeg',
+                    'protocol': 'jpeg',
+                    'jpeg_quality': self._params.jpeg_quality
                 }
                 
-                self._image_id += 1
-                
-                # Create pre-formatted message for socket.io (JSON signal format)
+                # Create pre-formatted message for socket.io
+                # Use unified 'frame' event for consistency with binary
                 message = {
                     'type': 'jpeg_frame',
-                    'event': 'signal',
+                    'event': 'frame',
                     'data': {
-                        'name': 'sigUpdateImage',
-                        'detectorname': detector_name,
-                        'pixelsize': int(pixel_size),
-                        'format': 'jpeg',
                         'image': encoded_image,
-                        'server_timestamp': metadata['server_timestamp'],
-                        'image_id': self._image_id
+                        'metadata': metadata
                     }
                 }
                 

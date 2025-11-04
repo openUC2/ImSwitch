@@ -104,7 +104,7 @@ class SignalInstance(psygnal.SignalInstance):
         Implements proper backpressure - only sends to clients that are ready.
         Thread-safe using asyncio.run_coroutine_threadsafe for cross-thread calls.
         
-        UNIFIED HANDLING: Both binary and JPEG frames now use the same 'frame' event
+        UNIFIED HANDLING: Both binary and JPEG frames use the same 'frame' event
         with MessagePack-encoded metadata for efficiency and consistency.
         """
         try:

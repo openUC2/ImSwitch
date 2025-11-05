@@ -192,7 +192,7 @@ class SignalInstance(psygnal.SignalInstance):
                             'image': data['image']
                         }, use_bin_type=True)
                         
-                        print(f"Sending JPEG frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
+                        #print(f"Sending JPEG frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
                         _client_sent_frame_id[sid] = next_frame_id
                         
                         # Emit on same 'frame' event as binary for unified frontend handling

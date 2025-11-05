@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 import imswitch
 from imswitch import __ssl__, __socketport__
 import logging
+import msgpack  # MessagePack for efficient binary serialization
 
 # Try to import config and binary streaming - handle gracefully if not available
 from imswitch.config import get_config
@@ -43,7 +44,8 @@ sio = AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 socket_app = ASGIApp(sio)  # Renamed to socket_app - will be mounted on FastAPI app
 
 # Per-client frame acknowledgement tracking
-_client_frame_ready = {}  # sid -> bool (True if client is ready for next frame)
+_client_sent_frame_id = {}  # sid -> last sent frame id (int or None)
+_client_ack_frame_id = {}  # sid -> last acked frame id
 _client_frame_lock = threading.Lock()
 _frame_drop_counter = 0  # Track how many frames we've dropped
 
@@ -59,8 +61,6 @@ class SignalInterface(abstract.SignalInterface):
 class SignalInstance(psygnal.SignalInstance):
     last_emit_time = 0
     emit_interval = 0.0  # Emit at most every 100ms
-    image_id = 0
-    _sending_image = False  # To avoid re-entrance
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -81,7 +81,11 @@ class SignalInstance(psygnal.SignalInstance):
             self._handle_stream_frame(args[0])
             return
         elif self.name in ["sigImageUpdated", "sigStreamFrame"]:
-            return # ignore for now TODO: This signal is mapped into sigImageUpdated of MasterController - we should think about a better way of handling this
+            # These signals are internal to the streaming pipeline:
+            # - sigStreamFrame: emitted by StreamWorkers (already handled by sigUpdateImage)
+            # - sigImageUpdated: legacy signal from MasterController (deprecated in favor of unified frame events)
+            # Skip broadcasting to avoid duplicate frame transmissions
+            return
 
         try:
             message = self._generate_json_message(args)
@@ -99,6 +103,9 @@ class SignalInstance(psygnal.SignalInstance):
         Uses explicit frame_ack event from frontend for flow control.
         Implements proper backpressure - only sends to clients that are ready.
         Thread-safe using asyncio.run_coroutine_threadsafe for cross-thread calls.
+        
+        UNIFIED HANDLING: Both binary and JPEG frames use the same 'frame' event
+        with MessagePack-encoded metadata for efficiency and consistency.
         """
         try:
             msg_type = message.get('type')
@@ -106,64 +113,108 @@ class SignalInstance(psygnal.SignalInstance):
             data = message.get('data')
             metadata = message.get('metadata', {})
 
+            def get_ready_clients(last_ack, last_sent):
+                """
+                Determine which clients are ready for the next frame.
+                Implements rollover-safe backpressure check.
+                """
+                FRAME_ID_MODULO = 256  # Small value to test rollover frequently
+                MAX_FRAME_LAG = 1  # Allow client to be 1 frame behind
+                
+                next_id = {}
+                for sid, sent_id in last_sent.items():
+                    # Initialize: client is ready for first frame
+                    if sent_id is None or last_ack[sid] is None:
+                        next_id[sid] = 0
+                        continue
+                    
+                    # Calculate distance between sent and ack with rollover awareness
+                    # Distance = (sent - ack) mod MODULO
+                    # If distance <= MAX_FRAME_LAG, client is ready
+                    distance = (sent_id - last_ack[sid]) % FRAME_ID_MODULO
+                    
+                    if distance <= MAX_FRAME_LAG:
+                        # Client is ready for next frame
+                        next_id[sid] = (sent_id + 1) % FRAME_ID_MODULO
+                    else:
+                        # Client is lagging too much - apply backpressure
+                        pass # print(f"Client {sid} not ready for new frame (last sent: {sent_id}, last ack: {last_ack[sid]}, distance: {distance})")
+                
+                return next_id
+
             # Get ready clients
             with _client_frame_lock:
-                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
+                ready_clients = get_ready_clients(_client_ack_frame_id, _client_sent_frame_id)
 
-            if not ready_clients:
-                # No clients ready - drop this frame (implements backpressure)
-                global _frame_drop_counter
-                _frame_drop_counter += 1
-                if _frame_drop_counter % 10 == 0:  # Log every 10 dropped frames
-                    # set all available clients to ready to avoid infinite dropping
-                    with _client_frame_lock:
-                        print(f"Dropped {_frame_drop_counter} frames due to client backpressure, try to send some frames anyway using the protocol {msg_type}")
-                        for sid in _client_frame_ready.keys():
-                            _client_frame_ready[sid] = True
-                            ready_clients.append(sid)
-                else:
+                if not ready_clients:
+                    # print("No clients ready for new frame, dropping frame to avoid buildup")
                     return
 
-            # Mark clients as NOT ready (waiting for acknowledgement via frame_ack event)
-            with _client_frame_lock:
-                for sid in ready_clients:
-                    _client_frame_ready[sid] = False  # Wait for frame_ack event!
+                # Thread-safe emission using the shared event loop
+                if not _shared_event_loop or not _shared_event_loop.is_running():
+                    print("Warning: Event loop not available for frame emission")
+                    return
 
-            # Thread-safe emission using the shared event loop
-            if not _shared_event_loop or not _shared_event_loop.is_running():
-                print("Warning: Event loop not available for frame emission")
-                return
+                # Unified frame emission for both binary and JPEG using MessagePack
+                if msg_type == 'binary_frame':
+                    # Binary frame: Send complete payload as MessagePack
+                    for sid, next_frame_id in ready_clients.items():
+                        # Create a copy of metadata for each client to avoid race conditions
+                        client_metadata = metadata.copy()
+                        client_metadata['frame_id'] = next_frame_id
+                        
+                        # Pack entire frame (metadata + data) with MessagePack
+                        frame_payload = msgpack.packb({
+                            'metadata': client_metadata,
+                            'data': data
+                        }, use_bin_type=True)
+                        
+                        # print(f"Sending binary frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
+                        _client_sent_frame_id[sid] = next_frame_id
+                        
+                        # Emit using socket.io's native binary support
+                        asyncio.run_coroutine_threadsafe(
+                            sio.emit(event, frame_payload, to=sid),
+                            _shared_event_loop
+                        )
 
-            # Unified frame emission for both binary and JPEG
-            if msg_type == 'binary_frame':
-                # Binary frame with metadata - Socket.IO supports sending binary + JSON together!
-                frame_payload = [metadata, data]  # First element: JSON metadata, Second: binary data
-
-                async def emit_binary_frame():
-                    for sid in ready_clients:
-                        await sio.emit(event, frame_payload, to=sid)
-                
-                # Schedule in the shared event loop from any thread
-                asyncio.run_coroutine_threadsafe(emit_binary_frame(), _shared_event_loop)
-
-            elif msg_type == 'jpeg_frame':
-                # JPEG frame - emit as JSON signal
-                json_message = json.dumps(data)
-                
-                for sid in ready_clients:
-                        asyncio.run_coroutine_threadsafe(sio.emit("signal", json_message, to=sid), _shared_event_loop)
-
+                elif msg_type == 'jpeg_frame':
+                    # JPEG frame: Send complete payload as MessagePack
+                    # Note: For JPEG, metadata is in data['metadata'], image is in data['image']
+                    for sid, next_frame_id in ready_clients.items():
+                        # Create a copy of metadata for each client to avoid race conditions
+                        client_metadata = data.get('metadata', {}).copy()
+                        client_metadata['frame_id'] = next_frame_id
+                        
+                        # Pack entire frame (metadata + image) with MessagePack
+                        frame_payload = msgpack.packb({
+                            'metadata': client_metadata,
+                            'image': data['image']
+                        }, use_bin_type=True)
+                        
+                        print(f"Sending JPEG frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
+                        _client_sent_frame_id[sid] = next_frame_id
+                        
+                        # Emit on same 'frame' event as binary for unified frontend handling
+                        asyncio.run_coroutine_threadsafe(
+                            sio.emit(event, frame_payload, to=sid),
+                            _shared_event_loop
+                        )
+                        
+                        
         except Exception as e:
             print(f"Error handling stream frame: {e}")
 
-    def _generate_json_message(self, args):  # Consider using msgpspec for efficiency
+    def _generate_json_message(self, args):
+        """Generate message dict from signal arguments (will be serialized with MessagePack or JSON)."""
         param_names = list(self.signature.parameters.keys())
         data = {"name": self.name, "args": {}}
 
         for i, arg in enumerate(args):
             param_name = param_names[i] if i < len(param_names) else f"arg{i}"
             if isinstance(arg, np.ndarray):
-                data["args"][param_name] = arg.tolist().copy()
+                # Convert numpy arrays to lists for serialization
+                data["args"][param_name] = arg.tolist()
             elif isinstance(arg, (str, int, float, bool)):
                 data["args"][param_name] = arg
             elif isinstance(arg, dict):
@@ -182,19 +233,22 @@ class SignalInstance(psygnal.SignalInstance):
         self.last_emit_time = now
 
         try:
-            # Create JSON string before async task to avoid closure issues
-            message_json = json.dumps(mMessage)
+            # Serialize message using MessagePack
+            message_bytes = msgpack.packb(mMessage, use_bin_type=True)
+            event_name = "signal_msgpack"
 
             # Thread-safe emission using call_soon_threadsafe
             if _shared_event_loop and _shared_event_loop.is_running():
                 async def emit_signal():
-                    await sio.emit("signal", message_json)
+                    await sio.emit(event_name, message_bytes)
                 
                 # Schedule the coroutine in the shared event loop from any thread
                 asyncio.run_coroutine_threadsafe(emit_signal(), _shared_event_loop)
             else:
-                # TODO: This is hit in the beginning When the app is starting and imswitchserver is not there yet 
-                print("Warning: Event loop not available for signal emission")
+                # Event loop not available yet - This happens during app startup
+                # before ImSwitchServer has initialized the shared event loop
+                # Signals emitted during this phase will be dropped (acceptable during init)
+                pass
         except Exception as e:
             print(f"Error in safe broadcast message: {e}")
 
@@ -339,10 +393,20 @@ class FrameworkUtils(abstract.FrameworkUtils):
 # Socket.IO event handlers for client connection management
 @sio.event
 async def connect(sid, environ):
-    """Handle client connection - mark as ready for frames"""
+    """Handle client connection - mark as ready for frames and send capabilities"""
     print(f"SocketIO Client connected: {sid}")
     with _client_frame_lock:
-        _client_frame_ready[sid] = True
+        _client_sent_frame_id[sid] = None
+        _client_ack_frame_id[sid] = None
+    
+    # Send server capabilities to client
+    capabilities = {
+        "messagepack": True,
+        "binary_streaming": HAS_BINARY_STREAMING,
+        "protocol_version": "1.0"
+    }
+    await sio.emit("server_capabilities", capabilities, to=sid)
+    print(f"Sent capabilities to {sid}: {capabilities}")
 
 
 @sio.event
@@ -350,14 +414,15 @@ async def disconnect(sid):
     """Handle client disconnection - cleanup state"""
     print(f"SocketIO Client disconnected: {sid}")
     with _client_frame_lock:
-        _client_frame_ready.pop(sid, None)
-
+        _client_sent_frame_id.pop(sid, None)
+        _client_ack_frame_id.pop(sid, None)
+        
 @sio.event
-async def frame_ack(sid):
+async def frame_ack(sid, data):
     """Client explicitly acknowledges frame processing complete"""
     with _client_frame_lock:
-        _client_frame_ready[sid] = True
-        #print(f"Client {sid} acknowledged frame")
+        _client_ack_frame_id[sid] = data.get('frame_id', None)  # Unified field name
+        # print(f"Client {sid} acknowledged frame", data)
 
 
 # Function to set the shared event loop (called by ImSwitchServer)

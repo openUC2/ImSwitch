@@ -44,7 +44,7 @@ sio = AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 socket_app = ASGIApp(sio)  # Renamed to socket_app - will be mounted on FastAPI app
 
 # Per-client frame acknowledgement tracking
-_client_sent_frame_id = {}  # sid -> bool (True if client is ready for next frame)
+_client_sent_frame_id = {}  # sid -> last sent frame id (int or None)
 _client_ack_frame_id = {}  # sid -> last acked frame id
 _client_frame_lock = threading.Lock()
 _frame_drop_counter = 0  # Track how many frames we've dropped

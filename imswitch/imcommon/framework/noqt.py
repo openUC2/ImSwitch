@@ -114,14 +114,32 @@ class SignalInstance(psygnal.SignalInstance):
             metadata = message.get('metadata', {})
 
             def get_ready_clients(last_ack, last_sent):
-                """Determine which clients are ready for the next frame."""
+                """
+                Determine which clients are ready for the next frame.
+                Implements rollover-safe backpressure check.
+                """
+                FRAME_ID_MODULO = 256  # Small value to test rollover frequently
+                MAX_FRAME_LAG = 1  # Allow client to be 1 frame behind
+                
                 next_id = {}
                 for sid, sent_id in last_sent.items():
-                    if sent_id is None or last_ack[sid] is None or sent_id <= last_ack[sid] + 1:
-                        # Handle rollover at 16-bit boundary
-                        next_id[sid] = (sent_id + 1) % 65536 if sent_id is not None else 0
+                    # Initialize: client is ready for first frame
+                    if sent_id is None or last_ack[sid] is None:
+                        next_id[sid] = 0
+                        continue
+                    
+                    # Calculate distance between sent and ack with rollover awareness
+                    # Distance = (sent - ack) mod MODULO
+                    # If distance <= MAX_FRAME_LAG, client is ready
+                    distance = (sent_id - last_ack[sid]) % FRAME_ID_MODULO
+                    
+                    if distance <= MAX_FRAME_LAG:
+                        # Client is ready for next frame
+                        next_id[sid] = (sent_id + 1) % FRAME_ID_MODULO
                     else:
-                        pass # print(f"Client {sid} not ready for new frame (last sent: {sent_id}, last ack: {last_ack[sid]})")
+                        # Client is lagging too much - apply backpressure
+                        pass # print(f"Client {sid} not ready for new frame (last sent: {sent_id}, last ack: {last_ack[sid]}, distance: {distance})")
+                
                 return next_id
 
             # Get ready clients
@@ -141,11 +159,13 @@ class SignalInstance(psygnal.SignalInstance):
                 if msg_type == 'binary_frame':
                     # Binary frame: Send complete payload as MessagePack
                     for sid, next_frame_id in ready_clients.items():
-                        metadata['frame_id'] = next_frame_id
+                        # Create a copy of metadata for each client to avoid race conditions
+                        client_metadata = metadata.copy()
+                        client_metadata['frame_id'] = next_frame_id
                         
                         # Pack entire frame (metadata + data) with MessagePack
                         frame_payload = msgpack.packb({
-                            'metadata': metadata,
+                            'metadata': client_metadata,
                             'data': data
                         }, use_bin_type=True)
                         
@@ -160,13 +180,15 @@ class SignalInstance(psygnal.SignalInstance):
 
                 elif msg_type == 'jpeg_frame':
                     # JPEG frame: Send complete payload as MessagePack
+                    # Note: For JPEG, metadata is in data['metadata'], image is in data['image']
                     for sid, next_frame_id in ready_clients.items():
-                        # Update metadata with client-specific frame ID
-                        data['metadata']['frame_id'] = next_frame_id
+                        # Create a copy of metadata for each client to avoid race conditions
+                        client_metadata = data.get('metadata', {}).copy()
+                        client_metadata['frame_id'] = next_frame_id
                         
                         # Pack entire frame (metadata + image) with MessagePack
                         frame_payload = msgpack.packb({
-                            'metadata': data['metadata'],
+                            'metadata': client_metadata,
                             'image': data['image']
                         }, use_bin_type=True)
                         

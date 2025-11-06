@@ -166,7 +166,7 @@ then
     params+=" --ext-data-folder ${DATA_PATH:-None}"
     if [[ $SCAN_EXT_DRIVE_MOUNT == "1" || $SCAN_EXT_DRIVE_MOUNT == "True" || $SCAN_EXT_DRIVE_MOUNT == "true" ]]
     then
-        params+=" --SCAN_EXT_DRIVE_MOUNT"
+        params+=" --scan-ext-drive-mount"
     fi;
     params+=" --ext-drive-mount ${EXT_DRIVE_MOUNT:-None}"
     echo 'Starting Imswitch with the following parameters:'

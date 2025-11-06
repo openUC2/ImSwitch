@@ -3,11 +3,8 @@ services:
     image: ghcr.io/openuc2/imswitch-noqt:latest
     privileged: true
     ports:
-      - "3000:3000"
-      - "8002:8002"
       - "8001:8001"
       - "8888:8888"
-      - "2222:22"
     volumes:
       - /Users/bene:/config
       - /Users/bene:/dataset
@@ -25,7 +22,6 @@ services:
       - SCAN_EXT_DATA_FOLDER=1
       - EXT_DRIVE_MOUNT=/media
       - SSL=1
-      - scan-ext-drive-mount=false
       - WIFI_MODE=host
 
     restart: always

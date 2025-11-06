@@ -7,7 +7,7 @@ import os
 import imswitch
 from imswitch.config import get_config, update_config
 
-# python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-drive-mount true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes
+# python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes
 # python -m imswitch --headless --http-port 8001 --socket-port 8002 --config-folder /Users/bene --config-file None 
 
 
@@ -29,7 +29,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
 
     To start imswitch in headless using the arguments, you can call the main file with the following arguments:
         python main.py --headless or
-        python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-drive-mount true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes --with-kernel
+        python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-drive-mount /Volumes --with-kernel
     '''
     try:
         # Get the global configuration instance
@@ -87,7 +87,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 parser.add_argument('--ext-data-folder', dest='data_folder', type=str, default=None,
                                     help='point to a folder to store the data. This is the default location for the data folder. If not specified, the default location will be used.')
 
-                parser.add_argument('--scan-ext-drive-mount', dest='scan_ext_data_folder', default=False, action='store_true',
+                parser.add_argument('--scan-ext-data-folder', dest='scan_ext_data_folder', default=False, action='store_true',
                                     help='scan the external mount (linux only) if we have a USB drive to save to')
 
                 parser.add_argument('--ext-drive-mount', dest='ext_drive_mount', type=str, default=None,

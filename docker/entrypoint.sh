@@ -18,7 +18,7 @@ UPDATE_CONFIG="${UPDATE_CONFIG:-false}"
 CONFIG_PATH="${CONFIG_PATH:-}"
 UPDATE_INSTALL_GIT="${UPDATE_INSTALL_GIT:-false}"
 SSL=${SSL:-false}
-SCAN_EXT_DRIVE_MOUNT=${SCAN_EXT_DRIVE_MOUNT:-false}
+SCAN_EXT_DATA_FOLDER=${SCAN_EXT_DATA_FOLDER:-false}
 
 start_container_nm() {
   log "WIFI_MODE=container → starting dbus-daemon and NetworkManager in container"
@@ -164,9 +164,9 @@ then
     params+=" --config-folder ${CONFIG_PATH:-None}"
     params+=" --config-file ${CONFIG_FILE:-None}"
     params+=" --ext-data-folder ${DATA_PATH:-None}"
-    if [[ $SCAN_EXT_DRIVE_MOUNT == "1" || $SCAN_EXT_DRIVE_MOUNT == "True" || $SCAN_EXT_DRIVE_MOUNT == "true" ]]
+    if [[ $SCAN_EXT_DATA_FOLDER == "1" || $SCAN_EXT_DATA_FOLDER == "True" || $SCAN_EXT_DATA_FOLDER == "true" ]]
     then
-        params+=" --scan-ext-drive-mount"
+        params+=" --scan-ext-data-folder"
     fi;
     params+=" --ext-drive-mount ${EXT_DRIVE_MOUNT:-None}"
     echo 'Starting Imswitch with the following parameters:'

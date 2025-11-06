@@ -206,22 +206,19 @@ class UC2ConfigController(ImConWidgetController):
     
     def _upload_firmware_to_device(self, can_id, ip_address):
         """
-        Upload firmware to a device via Arduino OTA protocol.
+        Upload firmware to a device via Arduino OTA using espota.py.
         
-        Implements the EXACT espota.py protocol used by PlatformIO and Arduino IDE.
-        Based on: https://github.com/esp8266/Arduino/blob/master/tools/espota.py
-        
-        Protocol:
-        1. Send UDP invitation: "0 <local_port> <file_size> <md5>\n"
-        2. Wait for device to connect via TCP
-        3. Send firmware data in 1KB chunks
-        4. Wait for "OK" response after each chunk (optional)
-        5. Wait for final "OK" response
+        Uses the official espota.py script from Arduino/PlatformIO framework.
+        This is the most reliable method as it uses the exact same tool
+        that PlatformIO and Arduino IDE use internally.
         
         :param can_id: CAN ID of the device
         :param ip_address: IP address of the device
         """
         try:
+            import subprocess
+            import sys
+            
             with self._ota_lock:
                 if can_id in self._ota_status:
                     self._ota_status[can_id]["upload_status"] = "downloading"
@@ -243,189 +240,135 @@ class UC2ConfigController(ImConWidgetController):
             
             self.__logger.info(f"Uploading firmware to device {can_id} at {ip_address}: {firmware_path.name}")
             
-            # Use EXACT espota.py protocol
-            import socket
-            import hashlib
-            import random
+            # Try to find espota.py in common locations
+            espota_locations = [
+                # PlatformIO locations
+                os.path.expanduser("~/.platformio/packages/framework-arduinoespressif32/tools/espota.py"),
+                os.path.expanduser("~/.platformio/packages/tool-espotapy/espota.py"),
+                # Arduino IDE locations (macOS)
+                "/Applications/Arduino.app/Contents/Java/hardware/espressif/esp32/tools/espota.py",
+                # System-wide
+                "/usr/local/bin/espota.py",
+                "/usr/bin/espota.py",
+            ]
             
-            # Arduino OTA parameters (from espota.py)
-            FLASH = 0  # Command for flashing firmware
-            remote_port = 3232  # ESP32 OTA port
-            local_port = random.randint(10000, 60000)  # Random local port for TCP server
-            timeout = 10  # Initial timeout for UDP invitation
+            espota_path = None
+            for location in espota_locations:
+                if os.path.exists(location):
+                    espota_path = location
+                    self.__logger.debug(f"Found espota.py at: {espota_path}")
+                    break
             
-            # Read firmware file and calculate MD5
-            with open(firmware_path, 'rb') as f:
-                firmware_data = f.read()
-            
-            file_size = len(firmware_data)
-            file_md5 = hashlib.md5(firmware_data).hexdigest()
-            
-            self.__logger.debug(f"Firmware size: {file_size} bytes, MD5: {file_md5}")
-            
-            # Step 1: Create TCP server to receive connection from device
-            tcp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            tcp_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            
-            try:
-                tcp_server.bind(('0.0.0.0', local_port))
-                tcp_server.listen(1)
-                self.__logger.debug(f"TCP server listening on port {local_port}")
-            except Exception as e:
-                self.__logger.error(f"Failed to bind TCP server: {e}")
-                tcp_server.close()
-                raise
-            
-            # Step 2: Send UDP invitation to device
-            # Format: "command local_port file_size md5\n"
-            invitation = f"{FLASH} {local_port} {file_size} {file_md5}\n"
-            
-            udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            udp_sock.settimeout(timeout)
-            remote_address = (ip_address, remote_port)
-            
-            self.__logger.debug(f"Sending invitation to {ip_address}:{remote_port}")
-            self.__logger.debug(f"Invitation: {invitation.strip()}")
-            
-            # Try to send invitation and get response (up to 10 attempts)
-            inv_success = False
-            for attempt in range(10):
+            if not espota_path:
+                # Try to find espota.py using which/where
                 try:
-                    udp_sock.sendto(invitation.encode(), remote_address)
-                    
-                    # Wait for response (device should respond with "OK" or "AUTH <nonce>")
-                    data = udp_sock.recv(1024).decode().strip()
-                    
-                    if data == "OK":
-                        self.__logger.debug("Device accepted invitation")
-                        inv_success = True
-                        break
-                    elif data.startswith("AUTH"):
-                        # Device requires authentication - not implemented yet
-                        self.__logger.error("Device requires authentication (not implemented)")
-                        udp_sock.close()
-                        tcp_server.close()
-                        raise Exception("Authentication required but not supported")
-                    else:
-                        self.__logger.warning(f"Unexpected response: {data}")
-                        
-                except socket.timeout:
-                    if attempt < 9:
-                        self.__logger.debug(f"Invitation attempt {attempt + 1}/10...")
-                        continue
-                    else:
-                        self.__logger.error("No response from device after 10 attempts")
-                        
-            udp_sock.close()
+                    result = subprocess.run(['which', 'espota.py'], 
+                                          capture_output=True, text=True, check=True)
+                    espota_path = result.stdout.strip()
+                except:
+                    pass
             
-            if not inv_success:
-                tcp_server.close()
-                raise Exception("Device did not accept invitation")
+            if not espota_path:
+                self.__logger.error("espota.py not found in common locations")
+                self.__logger.info("Searched locations: " + ", ".join(espota_locations))
+                raise Exception("espota.py not found. Please install PlatformIO or Arduino IDE with ESP32 support")
             
-            # Step 3: Wait for device to connect via TCP
-            self.__logger.debug("Waiting for device to connect...")
-            tcp_server.settimeout(10)
+            # Get firmware size for logging
+            firmware_size = os.path.getsize(firmware_path)
+            self.__logger.info(f"Firmware size: {firmware_size:,} bytes")
             
+            # Prepare espota.py command
+            # Use sys.executable to ensure we use the same Python interpreter
+            cmd = [
+                sys.executable,
+                espota_path,
+                "--debug",
+                "--progress",
+                "-i", ip_address,
+                "-p", "3232",  # Default ESP32 OTA port
+                "-f", str(firmware_path)
+            ]
+            
+            self.__logger.debug(f"Running: {' '.join(cmd)}")
+            
+            # Run espota.py as subprocess
             try:
-                connection, client_address = tcp_server.accept()
-                self.__logger.debug(f"Device connected from {client_address}")
-                connection.settimeout(None)  # No timeout during data transfer
-            except socket.timeout:
-                self.__logger.error("Device did not connect within timeout")
-                tcp_server.close()
-                raise Exception("Device connection timeout")
-            
-            # Step 4: Send firmware data in chunks
-            try:
-                chunk_size = 1024
-                sent = 0
+                # Run with real-time output capture
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1  # Line buffered
+                )
+                
+                # Track progress
                 last_progress = 0
-                last_response_contained_ok = False
                 
-                self.__logger.debug("Sending firmware data...")
+                # Read output in real-time
+                while True:
+                    output = process.stderr.readline()
+                    if output == '' and process.poll() is not None:
+                        break
+                    if output:
+                        line = output.strip()
+                        
+                        # Log important messages
+                        if "Uploading:" in line or "%" in line:
+                            # Extract progress percentage
+                            try:
+                                if "%" in line:
+                                    percent_str = line.split("%")[0].split()[-1]
+                                    progress = int(percent_str)
+                                    if progress >= last_progress + 10:
+                                        self.__logger.info(f"Upload progress: {progress}%")
+                                        last_progress = progress
+                            except:
+                                pass
+                        elif "Success" in line:
+                            self.__logger.info(f"✅ {line}")
+                        elif "Error" in line or "FAIL" in line:
+                            self.__logger.error(f"espota.py: {line}")
+                        else:
+                            self.__logger.debug(f"espota.py: {line}")
                 
-                while sent < file_size:
-                    chunk = firmware_data[sent:sent + chunk_size]
-                    connection.sendall(chunk)
-                    sent += len(chunk)
-                    
-                    # Try to receive response (optional in protocol)
-                    connection.settimeout(0.1)  # Very short timeout for optional responses
-                    try:
-                        res = connection.recv(10)
-                        if res:
-                            response_text = res.decode().strip()
-                            last_response_contained_ok = "OK" in response_text
-                    except socket.timeout:
-                        pass  # No response is OK
-                    except:
-                        pass  # Ignore other errors during optional receive
-                    
-                    # Log progress every 10%
-                    progress = int((sent / file_size) * 100)
-                    if progress >= last_progress + 10:
-                        self.__logger.info(f"Upload progress: {progress}%")
-                        last_progress = progress
+                # Get return code
+                return_code = process.poll()
                 
-                self.__logger.debug("All data sent, waiting for final confirmation...")
-                
-                # Step 5: Wait for final "OK" response
-                if not last_response_contained_ok:
-                    connection.settimeout(30)
-                    response_received = False
-                    
-                    for attempt in range(10):
-                        try:
-                            data = connection.recv(32).decode().strip()
-                            if data:
-                                response_received = True
-                                self.__logger.debug(f"Final response: {data}")
-                                
-                                if "OK" in data:
-                                    self.__logger.info(f"✅ Firmware uploaded successfully to device {can_id}")
-                                    with self._ota_lock:
-                                        if can_id in self._ota_status:
-                                            self._ota_status[can_id]["upload_status"] = "success"
-                                            self._ota_status[can_id]["upload_timestamp"] = datetime.datetime.now().isoformat()
-                                    connection.close()
-                                    tcp_server.close()
-                                    return
-                                    
-                        except socket.timeout:
-                            continue
-                        except:
-                            break
-                    
-                    # Upload completed but no explicit OK - might still be successful
-                    if response_received:
-                        self.__logger.warning("Upload completed with unexpected response - device may be rebooting")
-                    else:
-                        self.__logger.warning("Upload completed but no confirmation - device may be rebooting")
-                    
-                    # Consider it successful if all data was sent
-                    with self._ota_lock:
-                        if can_id in self._ota_status:
-                            self._ota_status[can_id]["upload_status"] = "success"
-                            self._ota_status[can_id]["upload_timestamp"] = datetime.datetime.now().isoformat()
-                else:
-                    # Already received OK during chunk sending
+                if return_code == 0:
                     self.__logger.info(f"✅ Firmware uploaded successfully to device {can_id}")
                     with self._ota_lock:
                         if can_id in self._ota_status:
                             self._ota_status[can_id]["upload_status"] = "success"
                             self._ota_status[can_id]["upload_timestamp"] = datetime.datetime.now().isoformat()
+                else:
+                    # Read any remaining error output
+                    _, stderr = process.communicate()
+                    error_msg = stderr.strip() if stderr else f"Exit code: {return_code}"
+                    
+                    self.__logger.error(f"espota.py failed: {error_msg}")
+                    with self._ota_lock:
+                        if can_id in self._ota_status:
+                            self._ota_status[can_id]["upload_status"] = "failed"
+                            self._ota_status[can_id]["upload_error"] = error_msg
                             
-            finally:
-                connection.close()
-                tcp_server.close()
+            except subprocess.CalledProcessError as e:
+                error_msg = f"espota.py failed with exit code {e.returncode}"
+                self.__logger.error(error_msg)
+                if e.stderr:
+                    self.__logger.error(f"Error output: {e.stderr}")
+                    
+                with self._ota_lock:
+                    if can_id in self._ota_status:
+                        self._ota_status[can_id]["upload_status"] = "failed"
+                        self._ota_status[can_id]["upload_error"] = error_msg
                         
-        except socket.timeout as e:
-            self.__logger.error(f"Timeout uploading firmware to device {can_id}: {e}")
-            self.__logger.info("Hint: Ensure ArduinoOTA is running on the device and device is reachable")
+        except FileNotFoundError as e:
+            self.__logger.error(f"File not found: {e}")
             with self._ota_lock:
                 if can_id in self._ota_status:
                     self._ota_status[can_id]["upload_status"] = "failed"
-                    self._ota_status[can_id]["upload_error"] = f"Timeout: {str(e)}"
+                    self._ota_status[can_id]["upload_error"] = str(e)
                     
         except Exception as e:
             self.__logger.error(f"Error uploading firmware to device {can_id}: {e}")
@@ -507,7 +450,7 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.info(f"Downloading firmware from {firmware_url}")
             
             # Check if already cached
-            if local_path.exists():
+            if False and local_path.exists():#TODO: Always redownload for now
                 self.__logger.debug(f"Using cached firmware: {local_path}")
                 return local_path
             

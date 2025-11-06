@@ -10,6 +10,10 @@ from mikro_next.api.schema import (
     PartialAffineTransformationViewInput,
 )
 from typing import Generator
+import os
+import datetime
+import tifffile as tif
+
 
 
 # =========================
@@ -55,10 +59,55 @@ class ArkitektController(ImConWidgetController):
             speed=speed, is_blocking=is_blocking
         )
     @APIExport(runOnUIThread=False)  
+    def runTileScanInThread(self,
+        center_x_micrometer: float | None = None,
+        center_y_micrometer: float | None = None,
+        range_x_micrometer: float = 100,
+        range_y_micrometer: float = 100,
+        step_x_micrometer: float | None = None,
+        step_y_micrometer: float | None = None,
+        overlap_percent: float = 10.0,
+        illumination_channel: str | None = None,
+        illumination_intensity: float = 100,
+        exposure_time: float | None = None,
+        gain: float | None = None,
+        speed: float = 10000,
+        positionerName: str | None = None,
+        performAutofocus: bool = False,
+        autofocus_range: float = 100,
+        autofocus_resolution: float = 10,
+        autofocus_illumination_channel: str | None = None,
+        objective_magnification: float | None = None):
+        """Run tile scan in a separate thread."""
+        import threading
+        
+        thread = threading.Thread(target=self.runTileScan, kwargs={
+            "center_x_micrometer": center_x_micrometer,
+            "center_y_micrometer": center_y_micrometer,
+            "range_x_micrometer": range_x_micrometer,
+            "range_y_micrometer": range_y_micrometer,
+            "step_x_micrometer": step_x_micrometer,
+            "step_y_micrometer": step_y_micrometer,
+            "overlap_percent": overlap_percent,
+            "illumination_channel": illumination_channel,
+            "illumination_intensity": illumination_intensity,
+            "exposure_time": exposure_time,
+            "gain": gain,
+            "speed": speed,
+            "positionerName": positionerName,
+            "performAutofocus": performAutofocus,
+            "autofocus_range": autofocus_range,
+            "autofocus_resolution": autofocus_resolution,
+            "autofocus_illumination_channel": autofocus_illumination_channel,
+            "objective_magnification": objective_magnification
+        })
+        thread.start()
+        return thread
+    
     def runTileScan(
         self,
-        center_x_micrometer: float = 0,
-        center_y_micrometer: float = 0,
+        center_x_micrometer: float | None = None,
+        center_y_micrometer: float | None = None,
         range_x_micrometer: float = 100,
         range_y_micrometer: float = 100,
         step_x_micrometer: float | None = None,
@@ -87,8 +136,10 @@ class ArkitektController(ImConWidgetController):
         field of view and the specified overlap percentage, unless explicitly provided.
 
         Args:
-            center_x_micrometer (float): Center position in the X direction (micrometers).
-            center_y_micrometer (float): Center position in the Y direction (micrometers).
+            center_x_micrometer (float | None): Center position in the X direction (micrometers).
+                If None, uses current X position.
+            center_y_micrometer (float | None): Center position in the Y direction (micrometers).
+                If None, uses current Y position.
             range_x_micrometer (float): Total range to scan in the X direction (micrometers).
             range_y_micrometer (float): Total range to scan in the Y direction (micrometers).
             step_x_micrometer (float | None): Step size in the X direction (micrometers).
@@ -187,6 +238,25 @@ class ArkitektController(ImConWidgetController):
             if objective_magnification is not None:
                 self._logger.debug(f"Using current objective magnification: {objective_magnification}x")
         
+        # Get positioner
+        if positionerName is None:
+            positionerNames = self._master.positionersManager.getAllDeviceNames()
+            if len(positionerNames) == 0:
+                self._logger.error("No positioners available for tile scan")
+                return
+            positionerName = positionerNames[0]
+        
+        mPositioner = self._master.positionersManager[positionerName]
+        
+        # Get current position and use as center if not provided
+        current_pos = mPositioner.getPosition()
+        if center_x_micrometer is None:
+            center_x_micrometer = current_pos.get("X", 0)
+            self._logger.debug(f"Using current X position as center: {center_x_micrometer}")
+        if center_y_micrometer is None:
+            center_y_micrometer = current_pos.get("Y", 0)
+            self._logger.debug(f"Using current Y position as center: {center_y_micrometer}")
+        
         # Calculate start positions from center and range
         xStart = center_x_micrometer - range_x_micrometer / 2
         yStart = center_y_micrometer - range_y_micrometer / 2
@@ -196,14 +266,6 @@ class ArkitektController(ImConWidgetController):
         yRange = int(range_y_micrometer)
         xStep = int(step_x_micrometer)
         yStep = int(step_y_micrometer)
-        
-        # Get positioner
-        if positionerName is None:
-            positionerNames = self._master.positionersManager.getAllDeviceNames()
-            if len(positionerNames) == 0:
-                self._logger.error("No positioners available for tile scan")
-                return
-            positionerName = positionerNames[0]
         
         self._logger.debug(f"Starting tile scan for positioner {positionerName}")
         self._logger.debug(f"Scan parameters: center=({center_x_micrometer}, {center_y_micrometer}), "
@@ -265,10 +327,22 @@ class ArkitektController(ImConWidgetController):
             stage = create_stage(name=f"Tile Scan Stage - {center_x_micrometer},{center_y_micrometer}")
         except Exception as e:
             self._logger.error(f"Failed to create stage for tile scan: {e}")
-            stage = None 
+            stage = None
+        
+        # Create directory for saving tiles if stage creation failed
+        save_dir = None
+        metadata_list = []
+        if stage is None:
+            # Get data storage path from ImSwitch config
+            data_path = dirtools.UserFileDirs.Data
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            scan_name = f"tilescan_{timestamp}_cx{center_x_micrometer:.0f}_cy{center_y_micrometer:.0f}"
+            save_dir = os.path.join(data_path, scan_name)
+            os.makedirs(save_dir, exist_ok=True)
+            self._logger.info(f"Saving tiles to: {save_dir}")
             
-        # Get positioner
-        mPositioner = self._master.positionersManager[positionerName]
+        # Get positioner (moved earlier to access before calculating center)
+        # Already retrieved above when checking center positions
         
         # Get current position
         current_pos = mPositioner.getPosition()
@@ -365,12 +439,81 @@ class ArkitektController(ImConWidgetController):
                         ],
                         name=image_name,
                     )
+                else:
+                    # Save as individual TIF files with JSON metadata
+                    
+                    # Create metadata dictionary
+                    tile_metadata = {
+                        "tile_index_x": actual_ix,
+                        "tile_index_y": iy,
+                        "position_x_um": actual_x,
+                        "position_y_um": actual_y,
+                        "center_x_um": center_x_micrometer,
+                        "center_y_um": center_y_micrometer,
+                        "illumination_channel": illumination_channel or "unknown",
+                        "illumination_intensity": illumination_intensity,
+                        "exposure_time_ms": exposure_time,
+                        "gain": gain,
+                        "objective_magnification": objective_magnification,
+                        "affine_matrix": affine_matrix_four_d,
+                        "image_shape": list(numpy_array.shape),
+                        "dtype": str(numpy_array.dtype),
+                    }
+                    
+                    # Add to metadata list
+                    metadata_list.append(tile_metadata)
+                    
+                    # Save TIF file
+                    tif_filename = f"{image_name}.tif"
+                    tif_path = os.path.join(save_dir, tif_filename)
+                    tif.imwrite(tif_path, numpy_array)
+                    
+                    self._logger.debug(f"Saved tile to {tif_path}")
+                    
+                    # Create a dummy image object for consistency (won't be yielded)
+                    image = None
                 
                 tile_count += 1
                 self._logger.debug(f"Captured tile {tile_count}/{total_tiles} at ({actual_x}, {actual_y})")
                 
-                if stage is not None:
+                if stage is not None and image is not None:
                     yield image
+        
+        # Save metadata JSON file if we were saving individual TIFs
+        if save_dir is not None and metadata_list:
+            import json
+            
+            # Create comprehensive scan metadata
+            scan_metadata = {
+                "scan_info": {
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "center_x_um": center_x_micrometer,
+                    "center_y_um": center_y_micrometer,
+                    "range_x_um": range_x_micrometer,
+                    "range_y_um": range_y_micrometer,
+                    "step_x_um": step_x_micrometer,
+                    "step_y_um": step_y_micrometer,
+                    "overlap_percent": overlap_percent,
+                    "num_tiles_x": num_tiles_x,
+                    "num_tiles_y": num_tiles_y,
+                    "total_tiles": total_tiles,
+                    "positioner": positionerName,
+                    "illumination_channel": illumination_channel,
+                    "illumination_intensity": illumination_intensity,
+                    "exposure_time_ms": exposure_time,
+                    "gain": gain,
+                    "objective_magnification": objective_magnification,
+                    "autofocus_enabled": performAutofocus,
+                },
+                "tiles": metadata_list
+            }
+            
+            # Save metadata JSON
+            metadata_path = os.path.join(save_dir, "scan_metadata.json")
+            with open(metadata_path, 'w') as f:
+                json.dump(scan_metadata, f, indent=2)
+            
+            self._logger.info(f"Saved scan metadata to {metadata_path}")
         
         # Restore original illumination state if it was changed
         if original_illumination_state is not None and illumination_channel is not None:

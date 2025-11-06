@@ -13,7 +13,7 @@ from typing import Generator
 import os
 import datetime
 import tifffile as tif
-
+import time
 
 
 # =========================
@@ -58,6 +58,7 @@ class ArkitektController(ImConWidgetController):
         self._master.positionersManager[positionerName].moveToSampleLoadingPosition(
             speed=speed, is_blocking=is_blocking
         )
+        
     @APIExport(runOnUIThread=False)  
     def runTileScanInThread(self,
         center_x_micrometer: float | None = None,
@@ -80,41 +81,69 @@ class ArkitektController(ImConWidgetController):
         objective_magnification: float | None = None):
         """Run tile scan in a separate thread."""
         import threading
-        
-        thread = threading.Thread(target=self.runTileScan, kwargs={
-            "center_x_micrometer": center_x_micrometer,
-            "center_y_micrometer": center_y_micrometer,
-            "range_x_micrometer": range_x_micrometer,
-            "range_y_micrometer": range_y_micrometer,
-            "step_x_micrometer": step_x_micrometer,
-            "step_y_micrometer": step_y_micrometer,
-            "overlap_percent": overlap_percent,
-            "illumination_channel": illumination_channel,
-            "illumination_intensity": illumination_intensity,
-            "exposure_time": exposure_time,
-            "gain": gain,
-            "speed": speed,
-            "positionerName": positionerName,
-            "performAutofocus": performAutofocus,
-            "autofocus_range": autofocus_range,
-            "autofocus_resolution": autofocus_resolution,
-            "autofocus_illumination_channel": autofocus_illumination_channel,
-            "objective_magnification": objective_magnification
-        })
-        thread.start()
-        return thread
+
+        mThread = threading.Thread(
+            target=self.runTileScan,
+            kwargs={
+                'center_x_micrometer': center_x_micrometer,
+                'center_y_micrometer': center_y_micrometer,
+                'range_x_micrometer': range_x_micrometer,
+                'range_y_micrometer': range_y_micrometer,
+                'step_x_micrometer': step_x_micrometer,
+                'step_y_micrometer': step_y_micrometer,
+                'overlap_percent': overlap_percent,
+                'illumination_channel': illumination_channel,
+                'illumination_intensity': illumination_intensity,
+                'exposure_time': exposure_time,
+                'gain': gain,
+                'speed': speed,
+                'positionerName': positionerName,
+                'performAutofocus': performAutofocus,
+                'autofocus_range': autofocus_range,
+                'autofocus_resolution': autofocus_resolution,
+                'autofocus_illumination_channel': autofocus_illumination_channel,
+                'objective_magnification': objective_magnification
+            }
+        )
+        mThread.start()
+        return 1
     
+    def acquire_frame(self, frameSync: int = 3):
+
+        # ensure we get a fresh frame
+        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        cTime = time.time()
+        
+        lastFrameNumber=-1
+        while(1):
+            # get frame and frame number to get one that is newer than the one with illumination off eventually
+            mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
+            if lastFrameNumber==-1:
+                # first round
+                lastFrameNumber = currentFrameNumber
+            if time.time()-cTime> timeoutFrameRequest:
+                # in case exposure time is too long we need break at one point
+                if mFrame is None: 
+                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False) 
+                break
+            if currentFrameNumber <= lastFrameNumber+frameSync:
+                time.sleep(0.01) # off-load CPU
+            else:
+                break
+        return mFrame
+    
+    @APIExport(runOnUIThread=False)
     def runTileScan(
         self,
         center_x_micrometer: float | None = None,
         center_y_micrometer: float | None = None,
-        range_x_micrometer: float = 100,
-        range_y_micrometer: float = 100,
+        range_x_micrometer: float = 5000,
+        range_y_micrometer: float = 5000,
         step_x_micrometer: float | None = None,
         step_y_micrometer: float | None = None,
         overlap_percent: float = 10.0,
-        illumination_channel: str | None = None,
-        illumination_intensity: float = 100,
+        illumination_channel: str | None = "LED",
+        illumination_intensity: float = 1024,
         exposure_time: float | None = None,
         gain: float | None = None,
         speed: float = 10000,
@@ -124,6 +153,7 @@ class ArkitektController(ImConWidgetController):
         autofocus_resolution: float = 10,
         autofocus_illumination_channel: str | None = None,
         objective_magnification: float | None = None,
+        t_settle: float = 0.2, 
     ) -> Generator[Image, None, None]:
         """Run a tile scan with enhanced control over imaging parameters.
 
@@ -384,6 +414,8 @@ class ArkitektController(ImConWidgetController):
                     is_absolute=True,
                     is_blocking=True
                 )
+                # Wait for settling
+                time.sleep(t_settle)
                 
                 # Perform autofocus at this position if requested
                 if performAutofocus and autofocusController is not None:
@@ -398,7 +430,7 @@ class ArkitektController(ImConWidgetController):
                         self._logger.error(f"Autofocus failed at tile ({actual_ix}, {iy}): {e}")
                 
                 # Capture image
-                numpy_array = self.mDetector.getLatestFrame()
+                numpy_array = self.acquire_frame(frameSync=2)
                 
                 # Create affine transformation matrix for stitching
                 affine_matrix_four_d = [

@@ -160,7 +160,7 @@ then
         params+=" --no-ssl"
     fi;
     params+=" --http-port ${HTTP_PORT:-8001}"
-    params+=" --socket-port ${SOCKET_PORT:-8002}"
+    params+=" --socket-port ${SOCKET_PORT:-8001}"
     params+=" --config-folder ${CONFIG_PATH:-None}"
     params+=" --config-file ${CONFIG_FILE:-None}"
     params+=" --ext-data-folder ${DATA_PATH:-None}"

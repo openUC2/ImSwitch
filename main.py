@@ -12,10 +12,6 @@ if __name__ == '__main__':
     - data_folder: path to the data folder
     example:
     main(is_headless=True, data_folder="/Users/bene/Downloads")
-    
-     sudo firewall-cmd --zone=public --add-port=8001/tcp; sudo firewall-cmd --zone=nm-shared --add-port=8001/tcp
-     sudo firewall-cmd --zone=public --add-port=8002/tcp; sudo firewall-cmd --zone=nm-shared --add-port=8002/tcp
-     sudo firewall-cmd --zone=public --add-port=8888/tcp; sudo firewall-cmd --zone=nm-shared --add-port=8888/tcp
     '''
     # DON'T CHANGE THIS!!!!
     # This has to be maintained for DOCKER!

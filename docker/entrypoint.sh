@@ -18,7 +18,7 @@ UPDATE_CONFIG="${UPDATE_CONFIG:-false}"
 CONFIG_PATH="${CONFIG_PATH:-}"
 UPDATE_INSTALL_GIT="${UPDATE_INSTALL_GIT:-false}"
 SSL=${SSL:-false}
-SCAN_EXT_DRIVE_MOUNT=${SCAN_EXT_DRIVE_MOUNT:-false}
+SCAN_EXT_DATA_PATH=${SCAN_EXT_DATA_PATH:-false}
 
 start_container_nm() {
   log "WIFI_MODE=container → starting dbus-daemon and NetworkManager in container"
@@ -160,15 +160,15 @@ then
         params+=" --no-ssl"
     fi;
     params+=" --http-port ${HTTP_PORT:-8001}"
-    params+=" --socket-port ${SOCKET_PORT:-8002}"
+    params+=" --socket-port ${SOCKET_PORT:-8001}"
     params+=" --config-folder ${CONFIG_PATH:-None}"
     params+=" --config-file ${CONFIG_FILE:-None}"
     params+=" --ext-data-folder ${DATA_PATH:-None}"
-    if [[ $SCAN_EXT_DRIVE_MOUNT == "1" || $SCAN_EXT_DRIVE_MOUNT == "True" || $SCAN_EXT_DRIVE_MOUNT == "true" ]]
+    if [[ $SCAN_EXT_DATA_PATH == "1" || $SCAN_EXT_DATA_PATH == "True" || $SCAN_EXT_DATA_PATH == "true" ]]
     then
-        params+=" --SCAN_EXT_DRIVE_MOUNT"
+        params+=" --scan-ext-data-folder"
     fi;
-    params+=" --ext-drive-mount ${EXT_DRIVE_MOUNT:-None}"
+    params+=" --ext-data-folder ${EXT_DATA_PATH:-None}"
     echo 'Starting Imswitch with the following parameters:'
     echo '/tmp/ImSwitch/main.py' "${params[@]}"
     python3 -m imswitch $params

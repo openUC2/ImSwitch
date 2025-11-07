@@ -28,7 +28,7 @@ class ImSwitchConfig:
     
     # External drive settings
     scan_ext_data_folder: bool = False
-    ext_drive_mount: Optional[str] = None
+    ext_data_folder: Optional[str] = None
     
     # Kernel settings
     with_kernel: bool = False
@@ -74,7 +74,7 @@ class ImSwitchConfig:
             'config_folder': 'config_folder',
             'data_folder': 'data_folder',
             'scan_ext_data_folder': 'scan_ext_data_folder',
-            'ext_drive_mount': 'ext_drive_mount',
+            'ext_data_folder': 'ext_data_folder',
             'with_kernel': 'with_kernel'
         }
         
@@ -94,8 +94,8 @@ class ImSwitchConfig:
         imswitch_module.DEFAULT_SETUP_FILE = self.default_config
         imswitch_module.DEFAULT_CONFIG_PATH = self.config_folder
         imswitch_module.DEFAULT_DATA_PATH = self.data_folder
-        imswitch_module.SCAN_EXT_DATA_FOLDER = self.scan_ext_data_folder
-        imswitch_module.EXT_DRIVE_MOUNT = self.ext_drive_mount
+        imswitch_module.SCAN_EXT_DATA_PATH = self.scan_ext_data_folder
+        imswitch_module.EXT_DATA_PATH = self.ext_data_folder
         imswitch_module.WITH_KERNEL = self.with_kernel
         imswitch_module.SOCKET_STREAM = self.socket_stream
         imswitch_module.jupyternotebookurl = self.jupyter_url

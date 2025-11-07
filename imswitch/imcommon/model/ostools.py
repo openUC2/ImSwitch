@@ -31,7 +31,7 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
         params+=" --config-folder ${CONFIG_PATH:-None}"
         params+=" --config-file ${CONFIG_FILE:-None}"
         params+=" --ext-data-folder ${DATA_PATH:-None}"
-        params+=" --scan-ext-data-folder $(SCAN_EXT_DATA_FOLDER:-false)"
+        params+=" --scan-ext-data-folder $(SCAN_EXT_DATA_PATH:-false)"
         python3 /tmp/ImSwitch/main.py $params
         '''
         headless = config.is_headless
@@ -41,7 +41,7 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
         config_file = str(config.default_config) if config.default_config else "None"
         is_ssl = config.ssl
         scan_ext_data_folder = config.scan_ext_data_folder
-        ext_drive_mount = config.ext_drive_mount
+        ext_data_folder = config.ext_data_folder
         
         # Erstellen der Argumentliste
         args = [
@@ -66,8 +66,8 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
         if scan_ext_data_folder:
             args.append('--scan-ext-data-folder')
             
-        if ext_drive_mount:
-            args.extend(['--ext-drive-mount', ext_drive_mount])
+        if ext_data_folder:
+            args.extend(['--ext-data-folder', ext_data_folder])
             
         if config.data_folder:
             args.extend(['--ext-data-folder', config.data_folder])

@@ -19,8 +19,8 @@ services:
       - UPDATE_CONFIG=0
       - DATA_PATH=/dataset
       - CONFIG_PATH=/config
-      - SCAN_EXT_DATA_FOLDER=1
-      - EXT_DRIVE_MOUNT=/media
+      - SCAN_EXT_DATA_PATH=1
+      - EXT_DATA_PATH=/media
       - SSL=1
       - WIFI_MODE=host
 

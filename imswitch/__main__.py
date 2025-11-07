@@ -84,7 +84,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 parser.add_argument('--config-folder', dest='config_folder', type=str, default=None,
                                     help='specify config folder')
 
-                parser.add_argument('--ext-data-folder', dest='data_folder', type=str, default=None,
+                parser.add_argument('--data-folder', dest='data_folder', type=str, default=None,
                                     help='point to a folder to store the data. This is the default location for the data folder. If not specified, the default location will be used.')
 
                 parser.add_argument('--scan-ext-data-folder', dest='scan_ext_data_folder', default=False, action='store_true',

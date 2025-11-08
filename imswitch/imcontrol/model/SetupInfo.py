@@ -334,6 +334,29 @@ class PixelCalibrationInfo:
     [[1, 0, 0], [0, 1, 0]] means 1:1 mapping with no rotation. """
 
     ObservationCamera: str = None
+    """ Name of the observation/overview camera used for calibration. """
+    
+    overviewCalibration: Dict[str, Any] = field(default_factory=dict)
+    """ Overview camera calibration data.
+    Format: {
+        "axes": {
+            "mapping": {"stageX_to_cam": "width"|"height", "stageY_to_cam": "width"|"height"},
+            "sign": {"X": +1|-1, "Y": +1|-1}
+        },
+        "homing": {
+            "X": {"inverted": bool, "lastCheck": "ISO8601"},
+            "Y": {"inverted": bool, "lastCheck": "ISO8601"}
+        },
+        "illuminationMap": [
+            {"channel": str, "wavelength_nm": float, "color": str},
+            ...
+        ],
+        "objectiveImages": {
+            "slot1": "path/to/image.png",
+            ...
+        }
+    }
+    """
 
 
 @dataclass(frozen=False)

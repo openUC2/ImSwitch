@@ -1,5 +1,5 @@
 import os
-
+import cv2
 import numpy as np
 import time
 import threading
@@ -7,15 +7,12 @@ from fastapi.responses import StreamingResponse
 from fastapi import FastAPI, Response, HTTPException
 from imswitch.imcommon.model import initLogger, dirtools, APIExport
 from imswitch.imcommon.framework import Signal
-import time
 from imswitch import IS_HEADLESS
-import time
-import numpy as np
 import NanoImagingPack as nip
-import os
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
     measure_pixel_shift, compute_affine_matrix, validate_calibration
 )
+from imswitch.imcontrol.controller.controllers.pixelcalibration.overview_calibrator import OverviewCalibrator
 from ..basecontrollers import LiveUpdatedController
 
 #import NanoImagingPack as nip
@@ -50,7 +47,12 @@ class PixelCalibrationController(LiveUpdatedController):
             else:
                 self.observationCamera = None
                 self._logger.warning(f"Observation camera '{self.observationCameraName}' not found among detectors")
+        else:
+            self.observationCamera = None
+            self.observationCameraName = None
         
+        # Initialize overview calibrator
+        self.overviewCalibrator = OverviewCalibrator(logger=self._logger)
 
     @APIExport() # return image via fastapi API
     def returnObservationCameraImage(self) -> Response:
@@ -825,6 +827,321 @@ class PixelCalibrationController(LiveUpdatedController):
             
         except Exception as e:
             self._logger.error(f"Failed to apply calibration results: {e}", exc_info=True)
+
+    # Overview Calibration API Endpoints
+    
+    @APIExport()
+    def overviewIsObservationCameraAvailable(self):
+        """
+        Check if observation camera is available.
+        
+        Returns:
+            Dictionary with:
+                - available: bool - whether camera is available
+                - name: str|null - camera name if available
+        """
+        return {
+            "available": self.observationCamera is not None,
+            "name": self.observationCameraName if self.observationCamera is not None else None
+        }
+    
+    @APIExport(runOnUIThread=False)
+    def overviewIdentifyAxes(self, stepUm: float = 2000.0):
+        """
+        Identify stage axis directions and signs using AprilTag tracking.
+        
+        Args:
+            stepUm: Step size in micrometers (default 2000)
+            
+        Returns:
+            Dictionary with mapping, sign, and samples or error
+        """
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        # Get positioner
+        positioner_names = self._master.positionersManager.getAllDeviceNames()
+        if not positioner_names:
+            raise HTTPException(status_code=409, detail="No positioner available")
+        
+        positioner = self._master.positionersManager[positioner_names[0]]
+        
+        # Run calibration
+        result = self.overviewCalibrator.identify_axes(
+            self.observationCamera, positioner, step_um=stepUm
+        )
+        
+        # Save to config if successful
+        if "error" not in result:
+            if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                self._setupInfo.PixelCalibration.overviewCalibration = {}
+            
+            self._setupInfo.PixelCalibration.overviewCalibration['axes'] = {
+                'mapping': result['mapping'],
+                'sign': result['sign']
+            }
+            
+            # Save to disk
+            try:
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                options, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                self._logger.info("Saved axis identification to config")
+            except Exception as e:
+                self._logger.warning(f"Could not save config: {e}")
+        
+        return result
+    
+    @APIExport(runOnUIThread=False)
+    def overviewMapIlluminationChannels(self):
+        """
+        Map illumination channels to colors/wavelengths using image differencing.
+        
+        Returns:
+            Dictionary with illuminationMap, darkStats, or error
+        """
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        # Get laser and LED managers
+        lasers_manager = getattr(self._master, 'lasersManager', None)
+        leds_manager = getattr(self._master, 'ledsManager', None)
+        
+        if lasers_manager is None and leds_manager is None:
+            raise HTTPException(status_code=409, detail="No illumination sources available")
+        
+        # Run calibration
+        result = self.overviewCalibrator.map_illumination_channels(
+            self.observationCamera, lasers_manager, leds_manager
+        )
+        
+        # Save to config if successful
+        if "error" not in result:
+            if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                self._setupInfo.PixelCalibration.overviewCalibration = {}
+            
+            self._setupInfo.PixelCalibration.overviewCalibration['illuminationMap'] = result['illuminationMap']
+            
+            # Save to disk
+            try:
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                options, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                self._logger.info("Saved illumination mapping to config")
+            except Exception as e:
+                self._logger.warning(f"Could not save config: {e}")
+        
+        return result
+    
+    @APIExport(runOnUIThread=False)
+    def overviewVerifyHoming(self, maxTimeS: float = 20.0):
+        """
+        Verify homing behavior and detect inverted motor directions.
+        
+        Args:
+            maxTimeS: Maximum time to wait for homing (seconds, default 20)
+            
+        Returns:
+            Dictionary with X and Y homing verification results
+        """
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        # Get positioner
+        positioner_names = self._master.positionersManager.getAllDeviceNames()
+        if not positioner_names:
+            raise HTTPException(status_code=409, detail="No positioner available")
+        
+        positioner = self._master.positionersManager[positioner_names[0]]
+        
+        # Run verification
+        result = self.overviewCalibrator.verify_homing(
+            self.observationCamera, positioner, max_time_s=maxTimeS
+        )
+        
+        # Save to config
+        if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+            self._setupInfo.PixelCalibration.overviewCalibration = {}
+        
+        self._setupInfo.PixelCalibration.overviewCalibration['homing'] = {
+            axis: {
+                'inverted': data.get('inverted', False),
+                'lastCheck': data.get('lastCheck', time.strftime("%Y-%m-%dT%H:%M:%S"))
+            }
+            for axis, data in result.items()
+            if 'error' not in data
+        }
+        
+        # Save to disk
+        try:
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            options, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(options, self._setupInfo)
+            self._logger.info("Saved homing verification to config")
+        except Exception as e:
+            self._logger.warning(f"Could not save config: {e}")
+        
+        return result
+    
+    @APIExport(runOnUIThread=False)
+    def overviewFixStepSign(self, rectSizeUm: float = 20000.0):
+        """
+        Determine and fix step size sign by visiting rectangle corners.
+        
+        Args:
+            rectSizeUm: Rectangle size in micrometers (default 20000)
+            
+        Returns:
+            Dictionary with sign corrections and samples or error
+        """
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        # Get positioner
+        positioner_names = self._master.positionersManager.getAllDeviceNames()
+        if not positioner_names:
+            raise HTTPException(status_code=409, detail="No positioner available")
+        
+        positioner = self._master.positionersManager[positioner_names[0]]
+        
+        # Run calibration
+        result = self.overviewCalibrator.fix_step_sign(
+            self.observationCamera, positioner, rect_size_um=rectSizeUm
+        )
+        
+        # Save to config if successful
+        if "error" not in result:
+            if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                self._setupInfo.PixelCalibration.overviewCalibration = {}
+            
+            if 'axes' not in self._setupInfo.PixelCalibration.overviewCalibration:
+                self._setupInfo.PixelCalibration.overviewCalibration['axes'] = {}
+            
+            self._setupInfo.PixelCalibration.overviewCalibration['axes']['sign'] = result['sign']
+            
+            # Save to disk
+            try:
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                options, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                self._logger.info("Saved step sign correction to config")
+            except Exception as e:
+                self._logger.warning(f"Could not save config: {e}")
+        
+        return result
+    
+    @APIExport(runOnUIThread=False)
+    def overviewCaptureObjectiveImage(self, slot: int):
+        """
+        Capture reference image for a specific objective slot.
+        
+        Args:
+            slot: Objective slot number
+            
+        Returns:
+            Dictionary with slot number, saved path, or error
+        """
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        # Get config directory
+        import imswitch.imcontrol.model.configfiletools as configfiletools
+        options, _ = configfiletools.loadOptions()
+        config_dir = os.path.dirname(options)
+        
+        # Run capture
+        result = self.overviewCalibrator.capture_objective_image(
+            self.observationCamera, slot, save_dir=config_dir
+        )
+        
+        # Save to config if successful
+        if "error" not in result:
+            if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                self._setupInfo.PixelCalibration.overviewCalibration = {}
+            
+            if 'objectiveImages' not in self._setupInfo.PixelCalibration.overviewCalibration:
+                self._setupInfo.PixelCalibration.overviewCalibration['objectiveImages'] = {}
+            
+            self._setupInfo.PixelCalibration.overviewCalibration['objectiveImages'][f'slot{slot}'] = result['path']
+            
+            # Save to disk
+            try:
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                self._logger.info(f"Saved objective {slot} image path to config")
+            except Exception as e:
+                self._logger.warning(f"Could not save config: {e}")
+        
+        return result
+    
+    @APIExport()
+    def overviewGetConfig(self):
+        """
+        Get current overview calibration configuration.
+        
+        Returns:
+            Dictionary with overview calibration data
+        """
+        if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+            return {}
+        
+        return self._setupInfo.PixelCalibration.overviewCalibration
+    
+    @APIExport()
+    def overviewStream(self, startStream: bool = True):
+        """
+        Get MJPEG stream from observation camera.
+        
+        Args:
+            startStream: Whether to start the stream (default True)
+            
+        Returns:
+            StreamingResponse with multipart/x-mixed-replace for MJPEG stream
+        """
+        if not startStream:
+            return {"status": "success", "message": "stream stopped"}
+        
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        def frame_generator():
+            """Generate MJPEG frames."""
+            import io
+            from PIL import Image
+            
+            while True:
+                try:
+                    # Get frame
+                    frame = self.observationCamera.getLatestFrame()
+                    
+                    # Convert to PNG
+                    if len(frame.shape) == 2:
+                        # Grayscale
+                        img = Image.fromarray(frame, mode='L')
+                    else:
+                        # Color (BGR to RGB)
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        img = Image.fromarray(frame_rgb)
+                    
+                    # Encode to PNG bytes
+                    buf = io.BytesIO()
+                    img.save(buf, format='PNG')
+                    png_bytes = buf.getvalue()
+                    
+                    # Yield frame in MJPEG format
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/png\r\n\r\n' + png_bytes + b'\r\n')
+                    
+                    # Small delay to limit frame rate
+                    time.sleep(0.033)  # ~30 FPS
+                    
+                except Exception as e:
+                    self._logger.error(f"Stream error: {e}")
+                    break
+        
+        return StreamingResponse(
+            frame_generator(),
+            media_type="multipart/x-mixed-replace;boundary=frame"
+        )
 
 
 

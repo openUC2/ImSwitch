@@ -105,6 +105,20 @@ class ImConMainController(MainController):
         except Exception as e:
             self.__logger.warning(f"Could not dynamically import {controller_name}: {e}")
         
+        # Add LiveViewController in case of IS_HEADLESS in anyway 
+        try: 
+            if IS_HEADLESS:
+                self.__logger.info(f'Creating controller for LiveView ')
+                controller_name = "LiveViewController"
+                module = importlib.import_module(f'imswitch.imcontrol.controller.controllers.LiveViewController')
+                controller_class = getattr(module, controller_name)
+                if controller_class is not None:
+                    self.controllers["LiveView"] = self.__factory.createController(controller_class, widget)
+                    # Register LiveViewController
+                    self.__masterController.registerController("LiveView", self.controllers["LiveView"])
+        except Exception as e:
+            self.__logger.warning(f"Could not dynamically import {controller_name}: {e}")
+        
         
         # Generate API
         self.__api = None

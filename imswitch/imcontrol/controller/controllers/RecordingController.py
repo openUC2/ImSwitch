@@ -111,8 +111,8 @@ class RecordingController(ImConWidgetController):
             else:
                 mSaveFormat = SaveFormat(1)  # TIFF
 
-        timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-        relativeFolder = os.path.join("recordings", timeStamp)
+        timeStampDay = datetime.datetime.now().strftime("%Y_%m_%d")
+        relativeFolder = os.path.join("recordings", timeStampDay)
         folder = os.path.join(dirtools.UserFileDirs.Data, relativeFolder)
         if not os.path.exists(folder):
             os.makedirs(folder)

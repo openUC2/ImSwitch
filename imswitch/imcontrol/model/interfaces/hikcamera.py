@@ -53,6 +53,9 @@ CALLBACK_SIG = CFUNCTYPE(
 # ----------------------------------------------------------------------------
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
+    
+    # Class-level tracking of opened cameras (serial checksums)
+    _opened_cameras = set()
 
     def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=2, flipImage=(False, False)):
         super().__init__()
@@ -118,7 +121,7 @@ class CameraHIK:
                 PixelType_Gvsp_BayerGB8,
                 PixelType_Gvsp_BayerGR8
             ]
-            
+
             format_set = False
             for pixel_format in formats_to_try:
                 ret = self.camera.MV_CC_SetEnumValue("PixelFormat", pixel_format)
@@ -189,13 +192,27 @@ class CameraHIK:
                     break
             
             if camera_index is None:
-                # List all available checksums for debugging
-                available_checksums = []
+                # Fallback: Find first unopened camera
+                self.__logger.warning(f"No camera found with serial checksum {number}, attempting fallback to first available unopened camera")
+                
+                # List all available cameras with their status
+                available_info = []
                 for i, info in enumerate(infos):
                     checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
-                    available_checksums.append(f"Index {i}: checksum {checksum}")
+                    is_opened = checksum in CameraHIK._opened_cameras
+                    status = "opened" if is_opened else "available"
+                    available_info.append(f"Index {i}: checksum {checksum} ({status})")
+                    
+                    # Select first available camera
+                    if camera_index is None and not is_opened:
+                        camera_index = i
+                        self.__logger.info(f"Fallback: Using first available camera at index {i} with checksum {checksum}")
                 
-                raise RuntimeError(f"No camera found with serial checksum {number}. Available cameras: {'; '.join(available_checksums)}")
+                # If still no camera found, all are opened
+                if camera_index is None:
+                    raise RuntimeError(f"No camera found with serial checksum {number} and all cameras are already opened. Available cameras: {'; '.join(available_info)}")
+                else:
+                    self.__logger.info(f"Available cameras: {'; '.join(available_info)}")
             
             number = camera_index  # Use the found index for the rest of the function
         else:
@@ -204,6 +221,10 @@ class CameraHIK:
                 raise RuntimeError(f"No suitable Hik camera found. Requested camera {number}, but only {len(infos)} cameras available.")
 
         self.__logger.info(f"Opening camera {number} out of {len(infos)} available cameras")
+        
+        # Track the serial checksum of the camera we're opening
+        self._serial_checksum = np.sum(infos[number].SpecialInfo.stUsb3VInfo.chSerialNumber)
+        
         self.camera = MvCamera()
         ret = self.camera.MV_CC_CreateHandle(infos[number])
         if ret != 0:
@@ -211,6 +232,10 @@ class CameraHIK:
         ret = self.camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
         if ret != 0:
             raise RuntimeError(f"OpenDevice failed 0x{ret:x}")
+        
+        # Add this camera to the opened cameras set
+        CameraHIK._opened_cameras.add(self._serial_checksum)
+        self.__logger.debug(f"Added camera with checksum {self._serial_checksum} to opened cameras list")
 
         # optimise packet size for GigE
         if infos[number].nTLayerType == MV_GIGE_DEVICE:
@@ -265,6 +290,9 @@ class CameraHIK:
     def reconnectCamera(self):
         # Safely close any existing handle
         
+        # Store the serial checksum before closing
+        old_checksum = getattr(self, '_serial_checksum', None)
+        
         # todo: Need to store the current camerano and other settings and open it in case it's the hash/referenc enumber 
         if self.camera is not None:
             try:
@@ -273,6 +301,11 @@ class CameraHIK:
                     self.camera.MV_CC_RegisterImageCallBackEx(None, None)
                     self._callback_registered = False
                     
+                # Remove from opened cameras list
+                if old_checksum is not None and old_checksum in CameraHIK._opened_cameras:
+                    CameraHIK._opened_cameras.discard(old_checksum)
+                    self.__logger.debug(f"Removed camera with checksum {old_checksum} from opened cameras list during reconnect")
+                
                 self.camera.MV_CC_CloseDevice()
                 self.camera.MV_CC_DestroyHandle()
             except Exception as e:
@@ -436,7 +469,7 @@ class CameraHIK:
                 param_dict["isRGB"] = True
         # if isRGB switch off AWB 
         if param_dict["isRGB"]:
-            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_OFF)
+            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS)
             if ret != 0:
                 print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
                 self.init_ok = False
@@ -559,6 +592,11 @@ class CameraHIK:
         if hasattr(self, '_callback_registered') and self._callback_registered:
             self.camera.MV_CC_RegisterImageCallBackEx(None, None)
             self._callback_registered = False
+        
+        # Remove this camera from the opened cameras set before closing
+        if hasattr(self, '_serial_checksum') and self._serial_checksum in CameraHIK._opened_cameras:
+            CameraHIK._opened_cameras.discard(self._serial_checksum)
+            self.__logger.debug(f"Removed camera with checksum {self._serial_checksum} from opened cameras list")
             
         self.camera.MV_CC_CloseDevice()
         self.camera.MV_CC_DestroyHandle()

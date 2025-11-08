@@ -365,7 +365,8 @@ class Camera:
             self._image /= np.max(self._image)
             self.SensorHeight = 300  # self._image.shape[1]
             self.SensorWidth = 400  # self._image.shape[0]
-            
+        elif self.filePath == "clock":
+            pass # TODO: IMPLEMENT
         elif self.filePath == "wellplatecalib":
             ''' load calibration_front.svg '''
             package_dir = os.path.dirname(os.path.abspath(__file__))

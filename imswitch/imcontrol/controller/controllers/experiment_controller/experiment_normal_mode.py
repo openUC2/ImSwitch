@@ -291,7 +291,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             # Iterate over Z positions
             for index_z, i_z in enumerate(z_positions):
                 # Move to Z position if we have more than one Z position
-                if (len(z_positions) > 1 or (len(z_positions) == 1 and m_index == 0)) and (i_z[0] != 0 and len(z_positions) == 1): # TODO: The latter case is just to ensure that we don't have false values coming from the hardware 
+                if (len(z_positions) > 1 or (len(z_positions) == 1 and m_index == 0)) and (i_z != 0 and len(z_positions) == 1): # TODO: The latter case is just to ensure that we don't have false values coming from the hardware 
                     workflow_steps.append(WorkflowStep(
                         name="Move to Z position",
                         step_id=step_id,

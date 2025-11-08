@@ -42,8 +42,8 @@ class PixelCalibrationController(LiveUpdatedController):
         self._loadAffineCalibrations()
         
         # Load the observation Camera 
-        if hasattr(self._setupInfo.PixelCalibration, 'observationCamera') and self._setupInfo.PixelCalibration.observationCamera is not None:
-            self.observationCameraName = self._setupInfo.PixelCalibration.observationCamera
+        if hasattr(self._setupInfo.PixelCalibration, 'ObservationCamera') and self._setupInfo.PixelCalibration.ObservationCamera is not None:
+            self.observationCameraName = self._setupInfo.PixelCalibration.ObservationCamera
             # load detector from name
             if self.observationCameraName in allDetectorNames:
                 self.observationCamera = self._master.detectorsManager[self.observationCameraName]

@@ -121,7 +121,7 @@ class CameraHIK:
                 PixelType_Gvsp_BayerGB8,
                 PixelType_Gvsp_BayerGR8
             ]
-            
+
             format_set = False
             for pixel_format in formats_to_try:
                 ret = self.camera.MV_CC_SetEnumValue("PixelFormat", pixel_format)
@@ -469,7 +469,7 @@ class CameraHIK:
                 param_dict["isRGB"] = True
         # if isRGB switch off AWB 
         if param_dict["isRGB"]:
-            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_OFF)
+            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS)
             if ret != 0:
                 print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
                 self.init_ok = False

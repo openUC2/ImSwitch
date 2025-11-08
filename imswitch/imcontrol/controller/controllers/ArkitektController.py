@@ -78,7 +78,7 @@ class ArkitektController(ImConWidgetController):
         autofocus_range: float = 100,
         autofocus_resolution: float = 10,
         autofocus_illumination_channel: str | None = None,
-        objective_magnification: float | None = None):
+        objective_id: int | None = None):
         """Run tile scan in a separate thread."""
         import threading
 
@@ -102,7 +102,7 @@ class ArkitektController(ImConWidgetController):
                 'autofocus_range': autofocus_range,
                 'autofocus_resolution': autofocus_resolution,
                 'autofocus_illumination_channel': autofocus_illumination_channel,
-                'objective_magnification': objective_magnification
+                'objective_id': objective_id
             }
         )
         mThread.start()
@@ -152,7 +152,7 @@ class ArkitektController(ImConWidgetController):
         autofocus_range: float = 100,
         autofocus_resolution: float = 10,
         autofocus_illumination_channel: str | None = None,
-        objective_magnification: float | None = None,
+        objective_id: int | None = None,
         t_settle: float = 0.2, 
     ) -> Generator[Image, None, None]:
         """Run a tile scan with enhanced control over imaging parameters.
@@ -191,14 +191,15 @@ class ArkitektController(ImConWidgetController):
             autofocus_resolution (float): Step size for autofocus scan (micrometers).
             autofocus_illumination_channel (str | None): Illumination channel to use for autofocus.
                 If None, uses the same as illumination_channel.
-            objective_magnification (float | None): Magnification of the objective lens.
-                If None, uses the current objective magnification from ObjectiveManager.
+            objective_id (int | None): ID of the objective to use (0 or 1).
+                If specified, the objective will be moved to this position before scanning
+                and magnification will be retrieved from ObjectiveManager. If None, uses current objective.
 
         Yields:
             Image: Captured image with affine transformation for stitching.
 
         Example:
-            >>> # Scan with automatic step size based on objective FOV
+            >>> # Scan with automatic step size and specific objective
             >>> for image in runTileScan(
             ...     center_x_micrometer=5000, 
             ...     center_y_micrometer=5000,
@@ -208,6 +209,7 @@ class ArkitektController(ImConWidgetController):
             ...     illumination_channel="LED",
             ...     illumination_intensity=50,
             ...     exposure_time=100,
+            ...     objective_id=1,  # Switch to objective 1 (0-based indexing)
             ...     performAutofocus=True
             ... ):
             ...     # Process each image
@@ -221,7 +223,8 @@ class ArkitektController(ImConWidgetController):
             ...     range_y_micrometer=1000,
             ...     step_x_micrometer=200,
             ...     step_y_micrometer=200,
-            ...     illumination_channel="LED"
+            ...     illumination_channel="LED",
+            ...     objective_id=0  # Switch to objective 0
             ... ):
             ...     pass
         """
@@ -229,6 +232,22 @@ class ArkitektController(ImConWidgetController):
         objective_manager = None
         if hasattr(self._master, 'objectiveManager'):
             objective_manager = self._master.objectiveManager
+        
+        # Handle objective switching if specified
+        objective_magnification = None
+        if objective_id is not None:
+            # Get objective controller for moving the objective
+            objective_controller = None
+            try:
+                objective_controller = self._master.getController('Objective')
+                if objective_controller is not None:
+                    self._logger.debug(f"Moving to objective ID: {objective_id}")
+                    objective_controller.moveToObjective(objective_id)  # This is a blocking operation
+                    self._logger.debug(f"Successfully moved to objective ID: {objective_id}")
+                else:
+                    self._logger.warning("ObjectiveController not available, cannot switch objective")
+            except Exception as e:
+                self._logger.error(f"Failed to move to objective ID {objective_id}: {e}")
         
         # Calculate step sizes based on objective FOV if not provided
         if step_x_micrometer is None or step_y_micrometer is None:
@@ -262,11 +281,12 @@ class ArkitektController(ImConWidgetController):
                 step_y_micrometer = 100.0
                 self._logger.warning(f"Using default step_y_micrometer: {step_y_micrometer} µm")
         
-        # Get objective magnification if not provided
-        if objective_magnification is None and objective_manager is not None:
+        # Get objective magnification from manager after potential switch
+        if objective_manager is not None:
             objective_magnification = objective_manager.getCurrentMagnification()
             if objective_magnification is not None:
-                self._logger.debug(f"Using current objective magnification: {objective_magnification}x")
+                current_objective_slot = objective_manager.getCurrentObjective()
+                self._logger.debug(f"Using objective slot {current_objective_slot} with magnification: {objective_magnification}x")
         
         # Get positioner
         if positionerName is None:
@@ -441,7 +461,8 @@ class ArkitektController(ImConWidgetController):
                 ]
                 
                 # Create image with metadata
-                image_name = f"Tile_{actual_ix:03d}_{iy:03d}_x{actual_x:.1f}_y{actual_y:.1f}"
+                actual_id = iy * num_tiles_x + ix
+                image_name = f"Tile_{actual_id}_{actual_ix:03d}_{iy:03d}_x{actual_x:.1f}_y{actual_y:.1f}"
                 if illumination_channel:
                     image_name += f"_{illumination_channel}"
                 
@@ -547,6 +568,13 @@ class ArkitektController(ImConWidgetController):
             
             self._logger.info(f"Saved scan metadata to {metadata_path}")
         
+        # move back to starting position
+        mPositioner.move(
+            value=(current_x, current_y),
+            axis="XY",
+            is_absolute=True,
+            is_blocking=False
+        )
         # Restore original illumination state if it was changed
         if original_illumination_state is not None and illumination_channel is not None:
             try:

@@ -73,7 +73,7 @@ class ESP32LEDLaserManager(LaserManager):
                 # ensure that in case it's not initialized yet, we display an all-on pattern
                 if self._led.ledpattern[0,0]==-1:
                     self._led.ledpattern[:]=1
-                self._led.setAll(state=1, intensity=(self.power, self.power, self.power), getReturn=getReturn)
+                self._led.setAll(state=1, intensity=(self.power*0, self.power, self.power*0), getReturn=getReturn)
                 #self._led.setAll(intensity=(self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
                 self.ledIntesity=self.power
                 #self._led.send_LEDMatrix_full(intensity = (self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)

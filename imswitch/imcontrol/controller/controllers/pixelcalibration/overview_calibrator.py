@@ -28,6 +28,7 @@ This module provides methods to:
 import time
 import numpy as np
 import cv2
+import threading
 from typing import Dict, List, Tuple, Optional, Any
 from imswitch.imcommon.model import initLogger
 
@@ -41,14 +42,18 @@ class OverviewCalibrator:
     All methods are stateless and return result dictionaries without performing disk I/O.
     """
     
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, flip_x: bool = False, flip_y: bool = False):
         """
         Initialize the calibrator.
         
         Args:
             logger: Optional logger instance. If None, creates a new logger.
+            flip_x: Whether to flip images horizontally (default False)
+            flip_y: Whether to flip images vertically (default False)
         """
         self._logger = logger if logger is not None else initLogger(self)
+        self._flip_x = flip_x
+        self._flip_y = flip_y
         
         # AprilTag detector setup
         self._aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
@@ -60,6 +65,38 @@ class OverviewCalibrator:
             # Legacy OpenCV
             self._aruco_params = cv2.aruco.DetectorParameters_create()
             self._aruco_detector = None
+        
+        # Live tracking state
+        self._tracking_thread = None
+        self._tracking_active = False
+        self._tracking_lock = threading.Lock()
+    
+    def _get_cleared_frame(self, observation_camera, num_clears: int = 5):
+        """
+        Get latest frame from observation camera with buffer clearing.
+        
+        Repeatedly calls getLatestFrame() to clear the camera buffer and ensure
+        we get the most recent frame, not a buffered one. Applies flip settings
+        configured at initialization.
+        
+        Args:
+            observation_camera: Camera detector instance with getLatestFrame() method
+            num_clears: Number of frames to retrieve (default 5)
+            
+        Returns:
+            Latest camera frame as numpy array with flips applied
+        """
+        frame = None
+        for _ in range(num_clears):
+            frame = observation_camera.getLatestFrame()
+        
+        # Apply flip settings
+        if self._flip_y:
+            frame = np.flip(frame, 0)
+        if self._flip_x:
+            frame = np.flip(frame, 1)
+        
+        return frame
     
     def detect_tag_centroid(self, img: np.ndarray) -> Optional[Tuple[float, float]]:
         """
@@ -110,8 +147,264 @@ class OverviewCalibrator:
         
         return (float(avg_u), float(avg_v))
     
+    def detect_tags_with_ids(self, img: np.ndarray, save_path: Optional[str] = None) -> Dict[int, Tuple[float, float]]:
+        """
+        Detect AprilTags and return dictionary mapping tag IDs to centroids.
+        
+        Args:
+            img: Image array (grayscale or BGR)
+            save_path: Optional path to save annotated image for debugging
+            
+        Returns:
+            Dictionary mapping tag_id -> (u, v) centroid coordinates
+        """
+        # Convert to grayscale if needed
+        if len(img.shape) == 3:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = img
+        
+        # Detect markers
+        if self._aruco_detector is not None:
+            # OpenCV >= 4.7
+            corners, ids, _ = self._aruco_detector.detectMarkers(gray)
+        else:
+            # Legacy OpenCV
+            corners, ids, _ = cv2.aruco.detectMarkers(gray, self._aruco_dict, 
+                                                       parameters=self._aruco_params)
+        
+        if ids is None or len(ids) == 0:
+            return {}
+        
+        # Build tag_id -> centroid mapping
+        tag_centroids = {}
+        for i, tag_id in enumerate(ids.flatten()):
+            pts = corners[i][0]
+            cx = np.mean(pts[:, 0])
+            cy = np.mean(pts[:, 1])
+            tag_centroids[int(tag_id)] = (float(cx), float(cy))
+        
+        # Optionally save annotated image for debugging
+        if save_path is not None:
+            self._save_annotated_image(img, corners, ids, save_path)
+        
+        return tag_centroids
+    
+    def _save_annotated_image(self, img: np.ndarray, corners, ids, save_path: str):
+        """Save image with detected tags annotated."""
+        import os
+        
+        try:
+            # Create directory if needed
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            
+            # Create color image for annotation
+            if len(img.shape) == 2:
+                annotated = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            else:
+                annotated = img.copy()
+            
+            # Draw detected markers
+            cv2.aruco.drawDetectedMarkers(annotated, corners, ids)
+            
+            # Save image
+            cv2.imwrite(save_path, annotated)
+            self._logger.debug(f"Saved annotated tag image to {save_path}")
+            
+        except Exception as e:
+            self._logger.warning(f"Failed to save annotated image: {e}")
+    
+    def _live_tracking_worker(self, observation_camera, positioner, update_interval: float):
+        """
+        Worker thread for continuous tag tracking.
+        
+        Continuously captures frames, detects tags, and prints movement information
+        relative to the initial position and tags.
+        
+        Args:
+            observation_camera: Camera detector instance
+            positioner: Stage positioner instance
+            update_interval: Time between updates in seconds
+        """
+        try:
+            # Get initial state
+            initial_frame = self._get_cleared_frame(observation_camera)
+            initial_tags = self.detect_tags_with_ids(initial_frame)
+            initial_pos = positioner.getPosition()
+            
+            if not initial_tags:
+                self._logger.warning("Live tracking: No tags detected in initial frame")
+                return
+            
+            self._logger.info(f"Live tracking started with {len(initial_tags)} tags")
+            self._logger.info(f"Initial stage position: X={initial_pos.get('X', 0):.1f}, Y={initial_pos.get('Y', 0):.1f}")
+            
+            # Print header
+            print("\n" + "="*80)
+            print("LIVE TAG TRACKING - Press stop_live_tracking() to end")
+            print("="*80)
+            print(f"{'Time(s)':<10} {'Stage X(um)':<15} {'Stage Y(um)':<15} {'Avg ΔU(px)':<15} {'Avg ΔV(px)':<15} {'Tags':<10}")
+            print("-"*80)
+            
+            start_time = time.time()
+            
+            while True:
+                with self._tracking_lock:
+                    if not self._tracking_active:
+                        break
+                
+                # Capture current frame
+                current_frame = self._get_cleared_frame(observation_camera, num_clears=1)
+                current_tags = self.detect_tags_with_ids(current_frame)
+                current_pos = positioner.getPosition()
+                
+                # Calculate stage displacement
+                stage_dx = current_pos.get("X", 0) - initial_pos.get("X", 0)
+                stage_dy = current_pos.get("Y", 0) - initial_pos.get("Y", 0)
+                
+                # Calculate average tag displacement
+                common_tags = set(initial_tags.keys()) & set(current_tags.keys())
+                
+                if common_tags:
+                    shifts = []
+                    for tag_id in common_tags:
+                        u0, v0 = initial_tags[tag_id]
+                        u1, v1 = current_tags[tag_id]
+                        shifts.append((u1 - u0, v1 - v0))
+                    
+                    avg_du = np.mean([s[0] for s in shifts])
+                    avg_dv = np.mean([s[1] for s in shifts])
+                    
+                    elapsed = time.time() - start_time
+                    
+                    # Print update
+                    print(f"{elapsed:<10.1f} {stage_dx:<15.1f} {stage_dy:<15.1f} {avg_du:<15.1f} {avg_dv:<15.1f} {len(common_tags):<10}")
+                else:
+                    elapsed = time.time() - start_time
+                    print(f"{elapsed:<10.1f} {stage_dx:<15.1f} {stage_dy:<15.1f} {'N/A':<15} {'N/A':<15} {0:<10}")
+                
+                time.sleep(update_interval)
+            
+            print("-"*80)
+            print("Live tracking stopped")
+            print("="*80 + "\n")
+            
+        except Exception as e:
+            self._logger.error(f"Live tracking error: {e}", exc_info=True)
+            with self._tracking_lock:
+                self._tracking_active = False
+    
+    def start_live_tracking(self, observation_camera, positioner, 
+                           update_interval: float = 0.5) -> Dict[str, Any]:
+        """
+        Start continuous live tracking of tags and stage position.
+        
+        Launches a background thread that continuously monitors tag positions
+        and prints movement information relative to the starting position.
+        
+        Args:
+            observation_camera: Camera detector instance with getLatestFrame() method
+            positioner: Stage positioner instance with getPosition() method
+            update_interval: Time between updates in seconds (default 0.5)
+            
+        Returns:
+            Dictionary with:
+                - status: "started" or "already_running"
+                - message: Status message
+                - error: Error message if startup failed
+        """
+        try:
+            with self._tracking_lock:
+                if self._tracking_active:
+                    return {
+                        "status": "already_running",
+                        "message": "Live tracking is already active"
+                    }
+                
+                self._tracking_active = True
+            
+            # Start tracking thread
+            self._tracking_thread = threading.Thread(
+                target=self._live_tracking_worker,
+                args=(observation_camera, positioner, update_interval),
+                daemon=True
+            )
+            self._tracking_thread.start()
+            
+            self._logger.info("Live tracking started")
+            
+            return {
+                "status": "started",
+                "message": f"Live tracking started with {update_interval}s update interval",
+                "updateInterval": update_interval
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to start live tracking: {e}", exc_info=True)
+            with self._tracking_lock:
+                self._tracking_active = False
+            return {"error": str(e), "status": "failed"}
+    
+    def stop_live_tracking(self) -> Dict[str, Any]:
+        """
+        Stop continuous live tracking.
+        
+        Signals the tracking thread to stop and waits for it to finish.
+        
+        Returns:
+            Dictionary with:
+                - status: "stopped" or "not_running"
+                - message: Status message
+        """
+        try:
+            with self._tracking_lock:
+                if not self._tracking_active:
+                    return {
+                        "status": "not_running",
+                        "message": "Live tracking is not currently active"
+                    }
+                
+                self._tracking_active = False
+            
+            # Wait for thread to finish
+            if self._tracking_thread is not None:
+                self._tracking_thread.join(timeout=2.0)
+                if self._tracking_thread.is_alive():
+                    self._logger.warning("Tracking thread did not stop cleanly")
+            
+            self._logger.info("Live tracking stopped")
+            
+            return {
+                "status": "stopped",
+                "message": "Live tracking stopped successfully"
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Error stopping live tracking: {e}", exc_info=True)
+            return {"error": str(e), "status": "error"}
+    
+    def get_live_tracking_status(self) -> Dict[str, Any]:
+        """
+        Get the current status of live tracking.
+        
+        Returns:
+            Dictionary with:
+                - active: Boolean indicating if tracking is active
+                - thread_alive: Boolean indicating if thread is running
+        """
+        with self._tracking_lock:
+            active = self._tracking_active
+        
+        thread_alive = self._tracking_thread is not None and self._tracking_thread.is_alive()
+        
+        return {
+            "active": active,
+            "thread_alive": thread_alive
+        }
+    
     def identify_axes(self, observation_camera, positioner, step_um: float = 2000.0,
-                     settle_time: float = 0.3) -> Dict[str, Any]:
+                     settle_time: float = 0.3, save_debug_images: bool = False,
+                     debug_dir: Optional[str] = None, speed:float = 15000.0) -> Dict[str, Any]:
         """
         Identify stage axis mapping and signs using AprilTag tracking.
         
@@ -120,85 +413,162 @@ class OverviewCalibrator:
         - Which camera axis (width/height) corresponds to stage X/Y
         - The sign of each axis (±1)
         
+        Uses multi-tag tracking: detects all tags in the initial frame, then tracks
+        individual tags across movements and averages their shifts for robustness.
+        
         Args:
             observation_camera: Camera detector instance with getLatestFrame() method
             positioner: Stage positioner instance with move() and getPosition() methods
             step_um: Step size in micrometers (default 2000)
             settle_time: Time to wait after movement for settling (seconds)
+            save_debug_images: If True, save annotated images for debugging
+            debug_dir: Directory for debug images (required if save_debug_images=True)
             
         Returns:
             Dictionary with:
                 - mapping: {stageX_to_cam: "width"|"height", stageY_to_cam: "width"|"height"}
                 - sign: {X: +1|-1, Y: +1|-1}
                 - samples: List of movement samples with stage_move and cam_shift
+                - tracked_tags: List of tag IDs that were successfully tracked
                 - error: Error message if detection failed
+                
+        response from http request (without the samples):
+        {
+        "mapping": {
+            "stageX_to_cam": "width",
+            "stageY_to_cam": "height"
+        },
+        "sign": {
+            "X": 1,
+            "Y": 1
+        }
+        }
         """
+        import os
+        
         try:
-            # Get initial position and centroid
+            # Get initial position
             initial_pos = positioner.getPosition()
             p0_x = initial_pos.get("X", 0)
             p0_y = initial_pos.get("Y", 0)
             
             time.sleep(settle_time)
-            frame0 = observation_camera.getLatestFrame()
-            c0 = self.detect_tag_centroid(frame0)
+            frame0 = self._get_cleared_frame(observation_camera)
             
-            if c0 is None:
-                return {"error": "No AprilTag detected in initial frame"}
+            # Detect all tags in initial frame
+            save_path_0 = None
+            if save_debug_images and debug_dir:
+                save_path_0 = os.path.join(debug_dir, "identify_axes_initial.png")
             
-            u0, v0 = c0
+            tags_initial = self.detect_tags_with_ids(frame0, save_path=save_path_0)
+            
+            if not tags_initial:
+                return {"error": "No AprilTags detected in initial frame"}
+            
+            self._logger.info(f"Detected {len(tags_initial)} tags in initial frame: {list(tags_initial.keys())}")
+            
             samples = []
             
             # Test +X movement
             self._logger.info(f"Moving +{step_um} µm in X direction")
-            positioner.move(value=p0_x + step_um, axis="X", is_absolute=True, is_blocking=True)
+            positioner.move(value=p0_x + step_um, axis="X", is_absolute=True, is_blocking=True, speed=speed)
             time.sleep(settle_time)
             
-            frame_x = observation_camera.getLatestFrame()
-            c_x = self.detect_tag_centroid(frame_x)
+            frame_x = self._get_cleared_frame(observation_camera)
+                
+            save_path_x = None
+            if save_debug_images and debug_dir:
+                save_path_x = os.path.join(debug_dir, "identify_axes_x_move.png")
             
-            if c_x is None:
-                # Try to return to start
-                positioner.move(value=p0_x, axis="X", is_absolute=True, is_blocking=True)
-                return {"error": "AprilTag lost after X movement"}
+            tags_after_x = self.detect_tags_with_ids(frame_x, save_path=save_path_x)
             
-            u_x, v_x = c_x
-            du_x = u_x - u0
-            dv_x = v_x - v0
+            if not tags_after_x:
+                positioner.move(value=p0_x, axis="X", is_absolute=True, is_blocking=True, speed=speed)
+                return {"error": "All AprilTags lost after X movement"}
+            self._logger.info(f"Detected {len(tags_after_x)} tags after X movement: {list(tags_after_x.keys())}")
+            # Track common tags between initial and post-X frames
+            common_tags_x = set(tags_initial.keys()) & set(tags_after_x.keys())
             
+            if not common_tags_x:
+                positioner.move(value=p0_x, axis="X", is_absolute=True, is_blocking=True, speed=speed)
+                return {"error": "No common tags found after X movement"}
+            
+            # Compute average shift for tracked tags
+            shifts_x = []
+            for tag_id in common_tags_x:
+                u0, v0 = tags_initial[tag_id]
+                u_x, v_x = tags_after_x[tag_id]
+                du_x = u_x - u0
+                dv_x = v_x - v0
+                shifts_x.append((du_x, dv_x))
+            
+            # Average shifts across all tracked tags
+            du_x = np.mean([s[0] for s in shifts_x])
+            dv_x = np.mean([s[1] for s in shifts_x])
+            
+            self._logger.info(f"X movement: tracked {len(common_tags_x)} tags, avg shift: ({du_x:.1f}, {dv_x:.1f}) px")
+            # e.g. 2025-11-09 13:07:16 INFO [PixelCalibrationController] X movement: tracked 17 tags, avg shift: (34.9, -0.8) px
             samples.append({
                 "stageMove": [step_um, 0],
-                "camShift": [float(du_x), float(dv_x)]
+                "camShift": [float(du_x), float(dv_x)],
+                "trackedTags": list(common_tags_x),
+                "individualShifts": [{"tag_id": int(tid), "du": float(s[0]), "dv": float(s[1])} 
+                                     for tid, s in zip(common_tags_x, shifts_x)]
             })
             
             # Return to origin
-            positioner.move(value=p0_x, axis="X", is_absolute=True, is_blocking=True)
+            positioner.move(value=p0_x, axis="X", is_absolute=True, is_blocking=True, speed=speed)
             time.sleep(settle_time)
             
             # Test +Y movement
             self._logger.info(f"Moving +{step_um} µm in Y direction")
-            positioner.move(value=p0_y + step_um, axis="Y", is_absolute=True, is_blocking=True)
+            positioner.move(value=p0_y + step_um, axis="Y", is_absolute=True, is_blocking=True, speed=speed)
             time.sleep(settle_time)
             
-            frame_y = observation_camera.getLatestFrame()
-            c_y = self.detect_tag_centroid(frame_y)
+            frame_y = self._get_cleared_frame(observation_camera)
             
-            if c_y is None:
-                # Try to return to start
-                positioner.move(value=p0_y, axis="Y", is_absolute=True, is_blocking=True)
-                return {"error": "AprilTag lost after Y movement"}
+            save_path_y = None
+            if save_debug_images and debug_dir:
+                save_path_y = os.path.join(debug_dir, "identify_axes_y_move.png")
             
-            u_y, v_y = c_y
-            du_y = u_y - u0
-            dv_y = v_y - v0
+            tags_after_y = self.detect_tags_with_ids(frame_y, save_path=save_path_y)
+            self._logger.info(f"Detected {len(tags_after_y)} tags after Y movement: {list(tags_after_y.keys())}")
+            if not tags_after_y:
+                positioner.move(value=p0_y, axis="Y", is_absolute=True, is_blocking=True, speed=speed)
+                return {"error": "All AprilTags lost after Y movement"}
             
+            # Track common tags between initial and post-Y frames
+            common_tags_y = set(tags_initial.keys()) & set(tags_after_y.keys())
+            
+            if not common_tags_y:
+                positioner.move(value=p0_y, axis="Y", is_absolute=True, is_blocking=True, speed=speed)
+                return {"error": "No common tags found after Y movement"}
+            
+            # Compute average shift for tracked tags
+            shifts_y = []
+            for tag_id in common_tags_y:
+                u0, v0 = tags_initial[tag_id]
+                u_y, v_y = tags_after_y[tag_id]
+                du_y = u_y - u0
+                dv_y = v_y - v0
+                shifts_y.append((du_y, dv_y))
+            
+            # Average shifts across all tracked tags
+            du_y = np.mean([s[0] for s in shifts_y])
+            dv_y = np.mean([s[1] for s in shifts_y])
+            
+            self._logger.info(f"Y movement: tracked {len(common_tags_y)} tags, avg shift: ({du_y:.1f}, {dv_y:.1f}) px")
+            # e.g. 2025-11-09 13:07:35 INFO [PixelCalibrationController] Y movement: tracked 16 tags, avg shift: (-0.0, 27.1) px
             samples.append({
                 "stageMove": [0, step_um],
-                "camShift": [float(du_y), float(dv_y)]
+                "camShift": [float(du_y), float(dv_y)],
+                "trackedTags": list(common_tags_y),
+                "individualShifts": [{"tag_id": int(tid), "du": float(s[0]), "dv": float(s[1])} 
+                                     for tid, s in zip(common_tags_y, shifts_y)]
             })
             
             # Return to origin
-            positioner.move(value=p0_y, axis="Y", is_absolute=True, is_blocking=True)
+            positioner.move(value=p0_y, axis="Y", is_absolute=True, is_blocking=True, speed=speed)
             
             # Determine axis mapping
             # X movement: if |du_x| > |dv_x| => X aligns with camera width (u)
@@ -217,6 +587,9 @@ class OverviewCalibrator:
                 stage_y_maps_to = "width"
                 sign_y = 1 if du_y > 0 else -1
             
+            # Collect all successfully tracked tags
+            all_tracked = list(set(common_tags_x) | set(common_tags_y))
+            
             result = {
                 "mapping": {
                     "stageX_to_cam": stage_x_maps_to,
@@ -226,10 +599,11 @@ class OverviewCalibrator:
                     "X": int(sign_x),
                     "Y": int(sign_y)
                 },
-                "samples": samples
+                "samples": samples,
+                "trackedTags": all_tracked
             }
             
-            self._logger.info(f"Axis identification complete: {result}")
+            self._logger.info(f"Axis identification complete: {result['mapping']}, signs: {result['sign']}")
             return result
             
         except Exception as e:
@@ -273,7 +647,7 @@ class OverviewCalibrator:
                     leds_manager[led_name].setValue(0)
             
             time.sleep(settle_time)
-            dark_frame = observation_camera.getLatestFrame()
+            dark_frame = self._get_cleared_frame(observation_camera)
             dark_mean = float(np.mean(dark_frame))
             dark_max = float(np.max(dark_frame))
             
@@ -301,7 +675,7 @@ class OverviewCalibrator:
                     time.sleep(settle_time)
                     
                     # Capture frame
-                    frame = observation_camera.getLatestFrame()
+                    frame = self._get_cleared_frame(observation_camera)
                     diff = frame.astype(np.float32) - dark_frame.astype(np.float32)
                     diff = np.clip(diff, 0, None)
                     
@@ -347,7 +721,7 @@ class OverviewCalibrator:
                     time.sleep(settle_time)
                     
                     # Capture frame
-                    frame = observation_camera.getLatestFrame()
+                    frame = self._get_cleared_frame(observation_camera)
                     diff = frame.astype(np.float32) - dark_frame.astype(np.float32)
                     diff = np.clip(diff, 0, None)
                     
@@ -465,7 +839,7 @@ class OverviewCalibrator:
                 self._logger.info(f"Verifying homing for axis {axis}")
                 
                 # Get initial centroid
-                frame0 = observation_camera.getLatestFrame()
+                frame0 = self._get_cleared_frame(observation_camera)
                 c0 = self.detect_tag_centroid(frame0)
                 
                 if c0 is None:
@@ -493,7 +867,7 @@ class OverviewCalibrator:
                     time.sleep(check_interval)
                     
                     # Check current position
-                    frame = observation_camera.getLatestFrame()
+                    frame = self._get_cleared_frame(observation_camera, num_clears=1)
                     centroid = self.detect_tag_centroid(frame)
                     
                     if centroid is None:
@@ -608,7 +982,7 @@ class OverviewCalibrator:
                 
                 # Get actual position and centroid
                 pos = positioner.getPosition()
-                frame = observation_camera.getLatestFrame()
+                frame = self._get_cleared_frame(observation_camera)
                 centroid = self.detect_tag_centroid(frame)
                 
                 if centroid is None:
@@ -694,7 +1068,7 @@ class OverviewCalibrator:
             os.makedirs(save_dir, exist_ok=True)
             
             # Capture frame
-            frame = observation_camera.getLatestFrame()
+            frame = self._get_cleared_frame(observation_camera)
             
             # Generate filename
             filename = f"objective{slot}_calibration.png"

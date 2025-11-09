@@ -51,13 +51,36 @@ class PixelCalibrationController(LiveUpdatedController):
             self.observationCamera = None
             self.observationCameraName = None
         
-        # Initialize overview calibrator
-        self.overviewCalibrator = OverviewCalibrator(logger=self._logger)
+        # Get flip settings for observation camera
+        self.observationFlipX = True
+        self.observationFlipY = True
+        if hasattr(self._setupInfo.PixelCalibration, 'ObservationCameraFlip'):
+            flip_settings = self._setupInfo.PixelCalibration.ObservationCameraFlip
+            if isinstance(flip_settings, dict):
+                self.observationFlipX = flip_settings.get('flipX', False)
+                self.observationFlipY = flip_settings.get('flipY', False)
+            elif isinstance(flip_settings, (list, tuple)) and len(flip_settings) >= 2:
+                self.observationFlipY = flip_settings[0]
+                self.observationFlipX = flip_settings[1]
+        
+        # Initialize overview calibrator with flip settings
+        self.overviewCalibrator = OverviewCalibrator(
+            logger=self._logger,
+            flip_x=self.observationFlipX,
+            flip_y=self.observationFlipY
+        )
 
     @APIExport() # return image via fastapi API
     def returnObservationCameraImage(self) -> Response:
         try:
             mFrame = self.observationCamera.getLatestFrame()
+            
+            # Apply flip settings
+            if self.observationFlipY:
+                mFrame = np.flip(mFrame, 0)
+            if self.observationFlipX:
+                mFrame = np.flip(mFrame, 1)
+            
             from PIL import Image
             import io
             # using an in-memory image
@@ -846,7 +869,7 @@ class PixelCalibrationController(LiveUpdatedController):
         }
     
     @APIExport(runOnUIThread=False)
-    def overviewIdentifyAxes(self, stepUm: float = 2000.0):
+    def overviewIdentifyAxes(self, stepUm: float = 2000.0, debug_dir: str = None):
         """
         Identify stage axis directions and signs using AprilTag tracking.
         
@@ -868,7 +891,7 @@ class PixelCalibrationController(LiveUpdatedController):
         
         # Run calibration
         result = self.overviewCalibrator.identify_axes(
-            self.observationCamera, positioner, step_um=stepUm
+            self.observationCamera, positioner, step_um=stepUm, save_debug_images=debug_dir is not None, debug_dir=debug_dir
         )
         
         # Save to config if successful
@@ -1112,6 +1135,12 @@ class PixelCalibrationController(LiveUpdatedController):
                 try:
                     # Get frame
                     frame = self.observationCamera.getLatestFrame()
+                    
+                    # Apply flip settings
+                    if self.observationFlipY:
+                        frame = np.flip(frame, 0)
+                    if self.observationFlipX:
+                        frame = np.flip(frame, 1)
                     
                     # Convert to PNG
                     if len(frame.shape) == 2:

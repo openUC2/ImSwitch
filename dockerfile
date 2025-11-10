@@ -67,7 +67,7 @@ ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
 # Larger slowly-changing dependencies are installed in a separate container image layer before the
 # rapidly-changing ImSwitch repository:
-RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=./pyproject.toml,target=/mnt/ImSwitch/pyproject.toml /mnt/build/build-imswitch-deps.sh
+RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=./pyproject.toml,target=/mnt/ImSwitch/pyproject.toml --mount=type=bind,source=./imswitch/__init__.py,target=/mnt/ImSwitch/imswitch/__init__.py /mnt/build/build-imswitch-deps.sh
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Question(ethanjli): if we're copying the ImSwitch & UC2-REST repositories from local files using

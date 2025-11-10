@@ -29,8 +29,8 @@ apt-get install -y \
 
 # install deps listed in pyproject.toml, but don't install ImSwitch yet:
 mkdir -p /tmp/ImSwitch/imswitch
-touch /tmp/ImSwitch/imswitch/__init__.py
 cp /mnt/ImSwitch/pyproject.toml /tmp/ImSwitch/pyproject.toml
+cp /mnt/ImSwitch/imswitch/__init__.py /tmp/ImSwitch/imswitch/__init__.py
 cd /tmp/ImSwitch
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
 

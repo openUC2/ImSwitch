@@ -10,7 +10,9 @@ apt-get install -y \
   mesa-utils \
   libhdf5-dev \
   usbutils \
-  libglib2.0-0
+  libglib2.0-0 \
+  git
+# TODO(ethanjli): find a way to not rely on git inside a container image
 
 /opt/conda/bin/conda install -n imswitch -y -c conda-forge \
   h5py
@@ -36,6 +38,10 @@ EOF
 cp /mnt/ImSwitch/pyproject.toml /tmp/ImSwitch/pyproject.toml
 cd /tmp/ImSwitch
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
+
+# install arkitekt
+# FIXME(ethanjli): why can't we just install arkitekt via pyproject.toml???
+/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip"
 
 # Clean up build-only tools
 

@@ -8,7 +8,7 @@ import imswitch
 from imswitch.config import get_config, update_config
 
 # python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes
-# python -m imswitch --headless --http-port 8001 --socket-port 8002 --config-folder /Users/bene --config-file None 
+# python -m imswitch --headless --http-port 8001 --socket-port 8001 --config-folder /Users/bene --config-file None 
 
 
 def main(is_headless:bool=None, default_config:str=None, http_port:int=None, socket_port:int=None, ssl:bool=None, config_folder:str=None,
@@ -17,7 +17,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
     is_headless: bool => start with or without qt
     default_config: str => path to the config file
     http_port: int => port number (default: 8001)
-    socket_port: int => port number (default: 8002)
+    socket_port: int => port number (default: 8001)
     ssl: bool => use ssl (default: True)
     config_folder: str => path to the config folder (default: None, pointing to Documents/ImSwitch)
     data_folder: str => path to the data folder (default: None, pointing to Documents/ImSwitchConfig)
@@ -74,7 +74,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                                     help='specify http port')
 
                 # specify socket port
-                parser.add_argument('--socket-port', dest='socket_port', type=int, default=8002,
+                parser.add_argument('--socket-port', dest='socket_port', type=int, default=8001,
                                     help='specify socket port')
                 # specify ssl
                 parser.add_argument('--no-ssl', dest='ssl', default=True, action='store_false',

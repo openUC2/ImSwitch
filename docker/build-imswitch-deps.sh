@@ -20,15 +20,6 @@ apt-get install -y \
 /bin/bash -c "source /opt/conda/bin/activate imswitch && \
   conda install -c conda-forge scikit-image=0.19.3"
 
-# Install nmcli
-# TODO(ethanjli): can we interact with the host's NetworkManager API without installing and running
-# nmcli in the container?
-apt-get install -y \
-  network-manager \
-  dbus \
-  systemd \
-  sudo
-
 # we want psygnal to be installed without binaries - so first remove it
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"

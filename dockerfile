@@ -76,13 +76,8 @@ RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-imswitch-
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
 RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=.,target=/mnt/ImSwitch /mnt/build/build-imswitch.sh
-ENV WIFI_MODE=host
 # Expose FTP port and HTTP port
 EXPOSE 8001 8002 8003 8888 8889 22
 
 COPY docker/entrypoint.sh /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
-
-# Optional: basic healthcheck for host-NM mode (noop if socket not mounted)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD [[ -S /run/dbus/system_bus_socket ]] && nmcli general status >/dev/null 2>&1 || exit 0

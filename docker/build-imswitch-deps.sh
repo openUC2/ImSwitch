@@ -27,6 +27,10 @@ apt-get install -y \
 # fix the version of OME-ZARR
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install zarr==2.11.3"
 
+# install deps listed in pyproject.toml, but don't install ImSwitch yet (because we've only mounted
+# pyproject.toml, not any ImSwitch source files, into the container when we run this build script)
+/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
+
 # Clean up build-only tools
 
 apt-get remove -y \

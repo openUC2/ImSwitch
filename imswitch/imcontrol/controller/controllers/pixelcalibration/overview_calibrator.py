@@ -663,7 +663,7 @@ class OverviewCalibrator:
                     laser = lasers_manager[laser_name]
                     
                     # Get nominal wavelength from laser info
-                    laser_info = lasers_manager._LaserManager__setupInfo.lasers.get(laser_name)
+                    laser_info = lasers_manager[laser_name]
                     nominal_wavelength = laser_info.wavelength if laser_info else None
                     
                     # Turn on laser at moderate power
@@ -708,7 +708,7 @@ class OverviewCalibrator:
                     led = leds_manager[led_name]
                     
                     # Get nominal wavelength from LED info if available
-                    led_info = leds_manager._LEDsManager__setupInfo.leds.get(led_name)
+                    led_info = leds_manager[led_name]
                     # LEDs might not have wavelength info
                     nominal_wavelength = None
                     
@@ -836,6 +836,7 @@ class OverviewCalibrator:
         
         for axis in ["X", "Y"]:
             try:
+                # TODO: Instead of 
                 self._logger.info(f"Verifying homing for axis {axis}")
                 
                 # Get initial centroid
@@ -854,7 +855,7 @@ class OverviewCalibrator:
                 # Trigger homing (non-blocking if possible)
                 try:
                     # Try non-blocking home
-                    positioner.home(axis=axis, is_blocking=False)
+                    positioner.home(axis=axis, is_blocking=False) # TODO: Need to do home_x, home_y 
                 except:
                     # Fallback to blocking home with timeout handling
                     pass

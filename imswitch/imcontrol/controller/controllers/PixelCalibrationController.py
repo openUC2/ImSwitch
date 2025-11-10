@@ -928,7 +928,7 @@ class PixelCalibrationController(LiveUpdatedController):
         
         # Get laser and LED managers
         lasers_manager = getattr(self._master, 'lasersManager', None)
-        leds_manager = getattr(self._master, 'ledsManager', None)
+        leds_manager = getattr(self._master, 'LEDsManager', None)
         
         if lasers_manager is None and leds_manager is None:
             raise HTTPException(status_code=409, detail="No illumination sources available")
@@ -1070,8 +1070,8 @@ class PixelCalibrationController(LiveUpdatedController):
         # Get config directory
         import imswitch.imcontrol.model.configfiletools as configfiletools
         options, _ = configfiletools.loadOptions()
-        config_dir = os.path.dirname(options)
-        
+        config_dir = os.path.dirname(options.setupFileName)
+        # TODO: we wuold need to move to the respective objective slot 
         # Run capture
         result = self.overviewCalibrator.capture_objective_image(
             self.observationCamera, slot, save_dir=config_dir

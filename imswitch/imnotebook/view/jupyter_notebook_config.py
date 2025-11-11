@@ -12,7 +12,7 @@ try:
     c.NotebookApp.allow_credentials = True
     c.NotebookApp.allow_origin = '*'
     c.NotebookApp.allow_remote_access = True
-    c.NotebookApp.token = ''
-    c.NotebookApp.password = ''
+    c.ServerApp.token = ''
+    c.ServerApp.password = ''
 except NameError:
     pass

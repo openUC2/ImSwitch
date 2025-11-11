@@ -39,10 +39,6 @@ cp /mnt/ImSwitch/pyproject.toml /tmp/ImSwitch/pyproject.toml
 cd /tmp/ImSwitch
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
 
-# install arkitekt
-# FIXME(ethanjli): why can't we just install arkitekt via pyproject.toml???
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip"
-
 # Clean up build-only tools
 
 apt-get remove -y \

@@ -349,8 +349,11 @@ class Timer(abstract.Timer):
     _timeout = Signal()
 
     def __init__(self, singleShot=False):
+        # Internal state
         self._task = None
-        self._singleShot = singleShot
+        self._singleShot = bool(singleShot)
+        self._interval = 0.0
+        # Async runner thread/loop
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -359,8 +362,13 @@ class Timer(abstract.Timer):
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
+    def setSingleShot(self, singleShot: bool) -> None:
+        # Set whether the timer should trigger only once per start()
+        self._singleShot = bool(singleShot)
+
     def start(self, millisecs):
-        self._interval = millisecs / 1000.0
+        # Start (or restart) the timer with given interval in milliseconds
+        self._interval = float(millisecs) / 1000.0
         if self._task:
             self._task.cancel()
         self._task = asyncio.run_coroutine_threadsafe(self._run(), self._loop)
@@ -372,9 +380,11 @@ class Timer(abstract.Timer):
             self._loop.stop()
 
     async def _run(self):
+        # Sleep for the interval, emit timeout, and reschedule if not single-shot
         await asyncio.sleep(self._interval)
         self.timeout.emit()
         if not self._singleShot:
+            # Recreate the future on the loop thread
             self._task = self._loop.create_task(self._run())
 
     @property

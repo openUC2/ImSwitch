@@ -20,7 +20,7 @@ import queue
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
 import imswitch
-from imswitch import __ssl__, __socketport__
+from imswitch import __ssl__
 import logging
 import msgpack  # MessagePack for efficient binary serialization
 

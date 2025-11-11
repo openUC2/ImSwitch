@@ -76,8 +76,8 @@ RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=.
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
 RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=.,target=/mnt/ImSwitch /mnt/build/build-imswitch.sh
-# Expose FTP port and HTTP port
-EXPOSE 8001 8002 8003 8888 8889 22
+# Expose HTTP port and Jupyter server port
+EXPOSE 8001 8888 8889
 
 COPY docker/entrypoint.sh /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]

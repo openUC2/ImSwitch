@@ -18,7 +18,6 @@ class ImSwitchConfig:
     
     # Network settings
     http_port: int = 8001
-    socket_port: int = 8001
     ssl: bool = True
     
     # File paths
@@ -69,7 +68,6 @@ class ImSwitchConfig:
             'headless': 'is_headless',
             'config_file': 'default_config',
             'http_port': 'http_port',
-            'socket_port': 'socket_port',
             'ssl': 'ssl',
             'config_folder': 'config_folder',
             'data_folder': 'data_folder',
@@ -89,7 +87,6 @@ class ImSwitchConfig:
         """Update legacy global variables for backward compatibility."""
         imswitch_module.IS_HEADLESS = self.is_headless
         imswitch_module.__httpport__ = self.http_port
-        imswitch_module.__socketport__ = self.socket_port
         imswitch_module.__ssl__ = self.ssl
         imswitch_module.DEFAULT_SETUP_FILE = self.default_config
         imswitch_module.DEFAULT_CONFIG_PATH = self.config_folder

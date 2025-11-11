@@ -281,7 +281,7 @@ def test_api_security_headers(api_server):
 
 
 def test_websocket_endpoints(api_server):
-    """Test WebSocket endpoints by checking if port 8002 is reachable."""
+    """Test WebSocket endpoints by checking if port 8001 is reachable."""
     import socket
     from urllib.parse import urlparse
     
@@ -290,8 +290,8 @@ def test_websocket_endpoints(api_server):
     parsed_url = urlparse(base_url)
     host = parsed_url.hostname or 'localhost'
     
-    # Test WebSocket port 8002
-    websocket_port = 8002
+    # Test WebSocket port 8001
+    websocket_port = 8001
     
     try:
         # Create a socket and try to connect

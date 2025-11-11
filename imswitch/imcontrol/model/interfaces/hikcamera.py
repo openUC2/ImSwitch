@@ -606,6 +606,7 @@ class CameraHIK:
         self.camera.MV_CC_SetFloatValue("ExposureTime", self.exposure_time * 1000)
 
     def set_exposure_mode(self, exposure_mode="manual"):
+        exposure_mode = exposure_mode.lower()
         if exposure_mode == "manual":
             self.camera.MV_CC_SetEnumValue("ExposureAuto", MV_EXPOSURE_AUTO_MODE_OFF)
         elif exposure_mode == "auto":
@@ -616,7 +617,7 @@ class CameraHIK:
             self.__logger.warning("Exposure mode not recognized")
 
     def set_camera_mode(self, isAutomatic):
-        self.set_exposure_mode("auto" if isAutomatic.lower() else "manual")
+        self.set_exposure_mode(isAutomatic)
 
     def set_gain(self, gain):
         self.gain = gain
@@ -772,7 +773,7 @@ class CameraHIK:
         elif property_name == "trigger_source":
             self.setTriggerSource(property_value)
         elif property_name == 'mode':
-            self.set_camera_mode(property_value)
+            self.set_camera_mode(isAutomatic=property_value)
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
             return False

@@ -20,8 +20,6 @@ git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST
 cd /tmp/UC2-REST
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
 
-# install arkitekt
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip"
 
 # Clean up build-only tools
 

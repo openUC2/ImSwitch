@@ -277,7 +277,7 @@ class UC2ConfigController(ImConWidgetController):
             detected_ids = [device["canId"] for device in scan_results.get("scan", [])]
             scan_results["detected_ids"] = detected_ids
             self.__logger.info(f"Detected CAN devices: {detected_ids}")
-            return scan_results["scan"]
+            return scan_results
 
         except Exception as e:
             self.__logger.error(f"Error scanning CAN bus: {e}")
@@ -863,8 +863,8 @@ class UC2ConfigController(ImConWidgetController):
                 "message": f"Failed to start OTA for device {can_id}: {str(e)}"
             }
     
-    @APIExport(runOnUIThread=False)
-    def startMultipleDeviceOTA(self, can_ids, ssid=None, password=None, timeout=300000, delay_between=2):
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def startMultipleDeviceOTA(self, can_ids:list[int]=[10,20], ssid=None, password=None, timeout=300000, delay_between:int=2):
         """
         Start OTA update for multiple CAN devices sequentially.
         

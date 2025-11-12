@@ -244,8 +244,14 @@ class StoragePathManager:
         if config_path:
             # Normalize and validate the path
             normalized_path = os.path.abspath(config_path)
+            
+            # Additional security: check path doesn't contain suspicious patterns
+            if '..' in os.path.normpath(config_path):
+                return False, "Invalid path: directory traversal detected"
+            
+            # Use the normalized path for all operations
             if not os.path.isdir(normalized_path):
-                return False, f"Configuration path does not exist: {config_path}"
+                return False, f"Configuration path does not exist: {normalized_path}"
             self.config.config_path = normalized_path
         
         if data_path:

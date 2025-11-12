@@ -8,16 +8,15 @@ import imswitch
 from imswitch.config import get_config, update_config
 
 # python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes
-# python -m imswitch --headless --http-port 8001 --socket-port 8002 --config-folder /Users/bene --config-file None 
+# python -m imswitch --headless --http-port 8001 --config-folder /Users/bene --config-file None 
 
 
-def main(is_headless:bool=None, default_config:str=None, http_port:int=None, socket_port:int=None, ssl:bool=None, config_folder:str=None,
+def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
          data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None):
     '''
     is_headless: bool => start with or without qt
     default_config: str => path to the config file
     http_port: int => port number (default: 8001)
-    socket_port: int => port number (default: 8002)
     ssl: bool => use ssl (default: True)
     config_folder: str => path to the config folder (default: None, pointing to Documents/ImSwitch)
     data_folder: str => path to the data folder (default: None, pointing to Documents/ImSwitchConfig)
@@ -40,7 +39,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
             is_headless=is_headless,
             default_config=default_config,
             http_port=http_port,
-            socket_port=socket_port,
             ssl=ssl,
             config_folder=config_folder,
             data_folder=data_folder,
@@ -54,7 +52,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         # Only parse command line arguments if no parameters were passed to main()
         # This prevents argparse conflicts when called from test threads
         if (is_headless is None and default_config is None and http_port is None and 
-            socket_port is None and ssl is None and config_folder is None and 
+            ssl is None and config_folder is None and 
             data_folder is None and scan_ext_data_folder is None and ext_data_folder is None and
             with_kernel is None):
             
@@ -73,9 +71,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 parser.add_argument('--http-port', dest='http_port', type=int, default=8001,
                                     help='specify http port')
 
-                # specify socket port
-                parser.add_argument('--socket-port', dest='socket_port', type=int, default=8002,
-                                    help='specify socket port')
                 # specify ssl
                 parser.add_argument('--no-ssl', dest='ssl', default=True, action='store_false',
                                     help='specify ssl')

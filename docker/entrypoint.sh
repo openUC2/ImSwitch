@@ -4,11 +4,6 @@
 
 log() { echo "[$(date +'%F %T')] $*"; }
 
-# ---- NetworkManager / D-Bus mode selection ----
-# WIFI_MODE=host      -> expect host NM; require /run/dbus and /etc/machine-id bind-mounts
-# WIFI_MODE=container -> run dbus-daemon + NetworkManager inside the container
-WIFI_MODE="${WIFI_MODE:-host}"
-
 # Provide safe default values for variables
 MODE="${MODE:-server}"
 PIP_PACKAGES="${PIP_PACKAGES:-}"
@@ -20,45 +15,6 @@ UPDATE_INSTALL_GIT="${UPDATE_INSTALL_GIT:-false}"
 SSL=${SSL:-false}
 SCAN_EXT_DATA_PATH=${SCAN_EXT_DATA_PATH:-false}
 
-start_container_nm() {
-  log "WIFI_MODE=container → starting dbus-daemon and NetworkManager in container"
-  mkdir -p /run/dbus
-  # Ensure machine-id exists (for dbus/NM)
-  [[ -s /etc/machine-id ]] || dbus-uuidgen --ensure=/etc/machine-id
-
-  dbus-daemon --system --fork || true
-  # Start NM (no systemd)
-  /usr/sbin/NetworkManager --no-daemon >/var/log/NetworkManager.log 2>&1 &
-  # Wait until NM is ready (max ~5s)
-  for i in {1..10}; do
-    if nmcli general status >/dev/null 2>&1; then
-      log "NetworkManager is up (container)"
-      return 0
-    fi
-    sleep 0.5
-  done
-  log "WARN: NetworkManager did not report ready; continuing"
-}
-
-setup_host_nm() {
-  log "WIFI_MODE=host → do not start NM in container"
-  if [[ ! -S /run/dbus/system_bus_socket ]]; then
-    log "WARN: /run/dbus/system_bus_socket not mounted; host nmcli calls will fail"
-  fi
-  if [[ ! -s /etc/machine-id ]]; then
-    log "WARN: /etc/machine-id not mounted; host nmcli may reject D-Bus"
-  fi
-}
-
-
-if [[ "$WIFI_MODE" == "container" ]]; then
-  start_container_nm
-else
-  setup_host_nm
-fi
-
-
-
 if [[ "${MODE}" != "terminal" ]];
 then
     echo 'Starting the container'
@@ -66,9 +22,6 @@ then
     lsusb
     echo 'Listing external storage devices'
     ls /media
-
-    # D-Bus/NetworkManager handling is done above via WIFI_MODE
-    echo 'Networking initialized (WIFI_MODE handled)'
 
     PATCH_DIR=/tmp/ImSwitch-changes
     PATCH_FILE=$PATCH_DIR/diff.patch 
@@ -160,7 +113,6 @@ then
         params+=" --no-ssl"
     fi;
     params+=" --http-port ${HTTP_PORT:-8001}"
-    params+=" --socket-port ${SOCKET_PORT:-8001}"
     params+=" --config-folder ${CONFIG_PATH:-None}"
     params+=" --config-file ${CONFIG_FILE:-None}"
     params+=" --ext-data-folder ${DATA_PATH:-None}"
@@ -175,6 +127,5 @@ then
 else
     source /opt/conda/bin/activate imswitch
     echo 'Starting the container in terminal mode'
-    # Networking is handled via WIFI_MODE at script start
     exec bash
 fi

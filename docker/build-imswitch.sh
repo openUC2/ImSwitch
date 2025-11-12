@@ -15,8 +15,6 @@ git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST
 cd /tmp/UC2-REST
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
 
-# Clean up all the package managers at the end
-
 apt -y autoremove
 apt-get clean
 rm -rf /var/lib/apt/lists/*

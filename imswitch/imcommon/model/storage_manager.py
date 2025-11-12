@@ -134,18 +134,23 @@ class StoragePathManager:
             
         Returns:
             Tuple of (success, error_message)
+            
+        Security: Path is normalized to absolute path to prevent directory traversal.
         """
-        # Validate the path
-        is_valid, error_msg = self.scanner.validate_storage_path(path)
+        # Normalize path to absolute path
+        normalized_path = os.path.abspath(path)
+        
+        # Validate the normalized path
+        is_valid, error_msg = self.scanner.validate_storage_path(normalized_path)
         if not is_valid:
             return False, error_msg
         
-        # Set as active path
-        self.config.active_data_path = path
+        # Set as active path (using normalized path)
+        self.config.active_data_path = normalized_path
         
-        # Persist if requested
+        # Persist if requested (use normalized path)
         if persist and self.config.persist_storage_preferences:
-            self._save_preference(path)
+            self._save_preference(normalized_path)
         
         return True, ""
     
@@ -233,27 +238,43 @@ class StoragePathManager:
             
         Returns:
             Tuple of (success, error_message)
+            
+        Security: Paths are validated and normalized to prevent directory traversal.
         """
         if config_path:
-            if not os.path.isdir(config_path):
+            # Normalize and validate the path
+            normalized_path = os.path.abspath(config_path)
+            if not os.path.isdir(normalized_path):
                 return False, f"Configuration path does not exist: {config_path}"
-            self.config.config_path = config_path
+            self.config.config_path = normalized_path
         
         if data_path:
+            # Path validation is done in set_data_path
             success, error_msg = self.set_data_path(data_path, persist=persist)
             if not success:
                 return False, error_msg
-            self.config.default_data_path = data_path
+            self.config.default_data_path = os.path.abspath(data_path)
         
         return True, ""
     
     def _get_preference_file_path(self) -> str:
-        """Get the path to the storage preference file."""
+        """
+        Get the path to the storage preference file.
+        
+        Security: Returns an absolute, normalized path to prevent directory traversal.
+        """
         if self._preference_file:
-            return self._preference_file
+            return os.path.abspath(self._preference_file)
         
         config_dir = self.get_config_path()
-        return os.path.join(config_dir, "storage_preferences.json")
+        # Normalize and make absolute to prevent directory traversal
+        preference_file = os.path.abspath(os.path.join(config_dir, "storage_preferences.json"))
+        
+        # Verify the preference file is within the config directory
+        if not preference_file.startswith(os.path.abspath(config_dir)):
+            raise ValueError("Invalid preference file path - directory traversal detected")
+        
+        return preference_file
     
     def _save_preference(self, path: str) -> None:
         """

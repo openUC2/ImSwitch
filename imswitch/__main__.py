@@ -128,6 +128,25 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         # Apply final configuration update to legacy globals (ensures consistency)
         config.to_legacy_globals(imswitch)
 
+        # Initialize storage manager from configuration
+        # This ensures the storage manager is ready before any modules start using it
+        try:
+            from imswitch.imcommon.model.storage_manager import get_storage_manager
+            storage_manager = get_storage_manager()
+            storage_manager.initialize_from_legacy_globals(
+                config.config_folder,
+                config.data_folder,
+                config.scan_ext_data_folder,
+                config.ext_data_folder
+            )
+            logger_early = initLogger('storage_init')
+            active_data_path = storage_manager.get_active_data_path()
+            logger_early.info(f'Storage manager initialized - active data path: {active_data_path}')
+        except Exception as e:
+            logger_early = initLogger('storage_init')
+            logger_early.warning(f'Failed to initialize storage manager: {e}')
+            logger_early.warning('Falling back to legacy storage path management')
+
         # FIXME: !!!! This is because the headless flag is loaded after commandline input
         from imswitch.imcommon import prepareApp, launchApp
         from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
@@ -140,6 +159,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         logger.info(f'Config file: {config.default_config}')
         logger.info(f'Config folder: {config.config_folder}')
         logger.info(f'Data folder: {config.data_folder}')
+        logger.info(f'External scanning: {config.scan_ext_data_folder}')
+        if config.scan_ext_data_folder:
+            logger.info(f'External mount paths: {config.ext_data_folder}')
 
         # TODO: check if port is already in use
         

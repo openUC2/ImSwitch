@@ -74,6 +74,9 @@ class UC2ConfigController(ImConWidgetController):
         
         # register OTA callback
         self.registerOTACallback()
+        
+        # register CAN callback
+        self.registerCANCallback()
 
         # register the callbacks for emitting serial-related signals
         if hasattr(self._master.UC2ConfigManager, "ESP32"):
@@ -204,14 +207,64 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Could not register OTA callback: {e}")
     
+    def registerCANCallback(self):
+        """Register callback for CAN device scan updates."""
+        def can_scan_callback(scan_results):
+            """
+            Handle CAN scan results from ESP32.
+            
+            :param scan_results: List of CAN devices with their information
+                                Example: [
+                                    {"canId": 20, "deviceType": 1, "status": 0, "deviceTypeStr": "laser", "statusStr": "idle"},
+                                    {"canId": 10, "deviceType": 0, "status": 0, "deviceTypeStr": "motor", "statusStr": "idle"}
+                                ]
+            """
+            try:
+                self.__logger.info(f"CAN scan callback received {len(scan_results)} devices")
+                for device in scan_results:
+                    self.__logger.debug(f"CAN Device: ID={device.get('canId')}, "
+                                      f"Type={device.get('deviceTypeStr')}, "
+                                      f"Status={device.get('statusStr')}")
+                
+                # Emit signal to update GUI or notify other components
+                self._commChannel.sigUpdateCANDevices.emit(scan_results)
+                
+            except Exception as e:
+                self.__logger.error(f"Error in CAN scan callback: {e}")
+        
+        try:
+            if hasattr(self._master.UC2ConfigManager, "ESP32") and hasattr(self._master.UC2ConfigManager.ESP32, "can"):
+                self._master.UC2ConfigManager.ESP32.can.register_callback(0, can_scan_callback)
+                self.__logger.debug("CAN scan callback registered successfully")
+            else:
+                self.__logger.warning("ESP32 CAN not available - CAN scan callbacks won't work")
+        except Exception as e:
+            self.__logger.error(f"Could not register CAN callback: {e}")
+    
     
     @APIExport(runOnUIThread=False)
-    def scan_canbus(self, timeout:int=5):
+    def scan_canbus(self, timeout:int=5) -> dict:
         """
         Scan the CAN bus for connected devices.
 
         :param timeout: Timeout for the scan in seconds (default: 5)
         :return: List of detected CAN IDs
+        
+        returns:
+        {
+            "scan": [
+                {
+                "canId": 20,
+                "deviceType": 1,
+                "status": 0,
+                "deviceTypeStr": "laser",
+                "statusStr": "idle"
+                }
+            ],
+            "detected_ids": [20],
+            "qid": 23,
+            "count": 1
+            }
         """
         try:
             if not hasattr(self._master.UC2ConfigManager, "ESP32") or not hasattr(self._master.UC2ConfigManager.ESP32, "can"):
@@ -219,15 +272,16 @@ class UC2ConfigController(ImConWidgetController):
                 return []
 
             self.__logger.debug("Starting CAN bus scan...")
-            scan_results = self._master.UC2ConfigManager.ESP32.can.scan(timeout=timeout)
+            return_message = self._master.UC2ConfigManager.ESP32.can.scan(timeout=timeout)
+            scan_results = return_message[-1]
             detected_ids = [device["canId"] for device in scan_results.get("scan", [])]
-
+            scan_results["detected_ids"] = detected_ids
             self.__logger.info(f"Detected CAN devices: {detected_ids}")
-            return detected_ids
+            return scan_results["scan"]
 
         except Exception as e:
             self.__logger.error(f"Error scanning CAN bus: {e}")
-            return []
+            return {}
         
     @APIExport(runOnUIThread=False)
     def get_canbus_devices(self, timeout:int=2):

@@ -6,10 +6,30 @@ from shutil import copy2, disk_usage
 from imswitch import IS_HEADLESS, __file__, DEFAULT_CONFIG_PATH, DEFAULT_DATA_PATH, SCAN_EXT_DATA_PATH, EXT_DATA_PATH
 import platform
 import subprocess
+from typing import Optional
+
+# Import storage manager for centralized path management
+try:
+    from .storage_manager import get_storage_manager, StoragePathManager, StorageConfiguration
+    _STORAGE_MANAGER_AVAILABLE = True
+except ImportError:
+    _STORAGE_MANAGER_AVAILABLE = False
 
 def getSystemUserDir():
     """ Returns the user's documents folder if they are using a Windows system,
-    or their home folder if they are using another operating system. """
+    or their home folder if they are using another operating system. 
+    
+    Now integrated with the storage manager for centralized configuration.
+    """
+    # Try to use storage manager if available
+    if _STORAGE_MANAGER_AVAILABLE:
+        try:
+            storage_manager = get_storage_manager()
+            config_path = storage_manager.get_config_path()
+            if config_path:
+                return config_path
+        except Exception:
+            pass  # Fall back to legacy behavior
 
     if DEFAULT_CONFIG_PATH is not None:
         print("We use the user-provided configuration path: " + DEFAULT_CONFIG_PATH)
@@ -27,7 +47,7 @@ def getSystemUserDir():
                 return buf.value
             except ImportError:
                 pass
-            #TOOD: How can we ensure that configuration files are updated automatically..
+            #TODO: How can we ensure that configuration files are updated automatically..
         return os.path.expanduser('~')  # Non-Windows system, return home directory
 
 
@@ -38,7 +58,21 @@ _baseUserFilesDir = os.path.join(getSystemUserDir(), 'ImSwitchConfig')
 
 
 def is_writable_directory(path: str) -> bool:
-    # Checks if 'path' is writable by attempting to create and remove a tiny file.
+    """
+    Checks if 'path' is writable by attempting to create and remove a tiny file.
+    
+    DEPRECATED: Use StorageScanner.is_writable_directory() instead.
+    This function is kept for backward compatibility.
+    """
+    # Use storage scanner if available
+    if _STORAGE_MANAGER_AVAILABLE:
+        try:
+            storage_manager = get_storage_manager()
+            return storage_manager.scanner.is_writable_directory(path)
+        except Exception:
+            pass  # Fall back to legacy implementation
+    
+    # Legacy implementation
     if not path or not os.path.isdir(path):
         return False
     try:
@@ -51,9 +85,23 @@ def is_writable_directory(path: str) -> bool:
         return False
 
 
-def pick_first_external_folder(default_data_path: str):
-    # This function picks the first subdirectory in 'default_data_path'
-    # that is not obviously a system volume and is writable.
+def pick_first_external_folder(default_data_path: str) -> Optional[str]:
+    """
+    This function picks the first subdirectory in 'default_data_path'
+    that is not obviously a system volume and is writable.
+    
+    DEPRECATED: Use StorageScanner.pick_first_external_folder() instead.
+    This function is kept for backward compatibility.
+    """
+    # Use storage scanner if available
+    if _STORAGE_MANAGER_AVAILABLE:
+        try:
+            storage_manager = get_storage_manager()
+            return storage_manager.scanner.pick_first_external_folder(default_data_path)
+        except Exception:
+            pass  # Fall back to legacy implementation
+    
+    # Legacy implementation
     if not default_data_path or not os.path.exists(default_data_path):
         return None
 
@@ -137,23 +185,56 @@ class DataFileDirs(FileDirs):
     UserDefaults = os.path.join(_baseDataFilesDir, 'user_defaults')
 
 #TODO: THIS IS A MESS! We need to find a better way to handle the default data path
+# NOTE: This is now being migrated to use the StoragePathManager for centralized management
 class UserFileDirs(FileDirs):
     """ Catalog of directories that contain user configuration files. """
     Root = _baseUserFilesDir
     Config = os.path.join(_baseUserFilesDir, 'config')
     Data = os.path.join(_baseUserFilesDir, 'data')
+    
+    # Override with user-provided paths if available
     if DEFAULT_DATA_PATH is not None:
         Data = DEFAULT_DATA_PATH
-    if SCAN_EXT_DATA_PATH and EXT_DATA_PATH is not None:
-        # TODO: This is a testing workaround
-        '''
-        Basic idea: We provide ImSwitch (most likely runing inside docker) with the path to the external mounts for external drives (e.g. /media or /Volumes)
-        ImSwitch now has to pick the external drive and check if it is mounted and use this as a data storage
-        '''
-        # If SCAN_EXT_DATA_PATH or user sets default_data_path, pick the subfolder
-        chosen_folder = pick_first_external_folder(EXT_DATA_PATH)
-        if chosen_folder:
-            Data = chosen_folder
+    
+    # Try to use storage manager for more intelligent path selection
+    if _STORAGE_MANAGER_AVAILABLE:
+        try:
+            storage_manager = get_storage_manager()
+            # Initialize from legacy globals
+            storage_manager.initialize_from_legacy_globals(
+                DEFAULT_CONFIG_PATH,
+                DEFAULT_DATA_PATH,
+                SCAN_EXT_DATA_PATH,
+                EXT_DATA_PATH
+            )
+            # Get the active data path from storage manager
+            Data = storage_manager.get_active_data_path()
+        except Exception as e:
+            # Fall back to legacy behavior if storage manager fails
+            print(f"Warning: Storage manager initialization failed: {e}")
+            if SCAN_EXT_DATA_PATH and EXT_DATA_PATH is not None:
+                # Legacy external scanning behavior
+                '''
+                Basic idea: We provide ImSwitch (most likely running inside docker) with the path 
+                to the external mounts for external drives (e.g. /media or /Volumes)
+                ImSwitch now has to pick the external drive and check if it is mounted and use 
+                this as a data storage
+                '''
+                chosen_folder = pick_first_external_folder(EXT_DATA_PATH)
+                if chosen_folder:
+                    Data = chosen_folder
+    else:
+        # Legacy behavior when storage manager is not available
+        if SCAN_EXT_DATA_PATH and EXT_DATA_PATH is not None:
+            '''
+            Basic idea: We provide ImSwitch (most likely running inside docker) with the path 
+            to the external mounts for external drives (e.g. /media or /Volumes)
+            ImSwitch now has to pick the external drive and check if it is mounted and use 
+            this as a data storage
+            '''
+            chosen_folder = pick_first_external_folder(EXT_DATA_PATH)
+            if chosen_folder:
+                Data = chosen_folder
 
 
 

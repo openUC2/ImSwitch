@@ -115,6 +115,87 @@ def get_version():
     """
     return {"version": VERSION}
 
+
+# Storage Management API Endpoints
+from imswitch.imcontrol.controller.controllers.StorageController import (
+    StorageController,
+    SetActivePathRequest,
+    UpdateConfigPathRequest
+)
+
+@app.get("/api/storage/status")
+def api_get_storage_status():
+    """
+    Get current storage status including active path and available drives.
+    
+    Returns storage information including:
+    - active_path: Currently active storage path
+    - fallback_path: Fallback storage location
+    - available_external_drives: List of detected external drives
+    - scan_enabled: Whether external scanning is enabled
+    - mount_paths: Mount points being monitored
+    - free_space_gb: Free space on active path
+    - total_space_gb: Total space on active path
+    - percent_used: Percentage of disk usage
+    """
+    return StorageController.get_storage_status()
+
+@app.get("/api/storage/external-drives")
+def api_list_external_drives():
+    """
+    List all detected external storage drives.
+    
+    Returns a list of external drives with information about:
+    - path: Mount path of the drive
+    - label: Volume label
+    - writable: Whether the drive is writable
+    - free_space_gb: Free space available
+    - total_space_gb: Total drive capacity
+    - filesystem: Filesystem type
+    - is_active: Whether this is the currently active storage
+    """
+    return StorageController.list_external_drives()
+
+@app.post("/api/storage/set-active-path")
+def api_set_active_path(request: SetActivePathRequest):
+    """
+    Set the active storage path.
+    
+    Request body:
+    - path (str): Path to set as active storage
+    - persist (bool): Whether to persist this preference (default: false)
+    
+    Returns success status and the new active path.
+    """
+    return StorageController.set_active_path(request)
+
+@app.get("/api/storage/config-paths")
+def api_get_config_paths():
+    """
+    Get all configuration-related paths.
+    
+    Returns:
+    - config_path: Configuration directory path
+    - data_path: Default data path
+    - active_data_path: Currently active data path
+    """
+    return StorageController.get_config_paths()
+
+@app.post("/api/storage/update-config-path")
+def api_update_config_paths(request: UpdateConfigPathRequest):
+    """
+    Update configuration paths.
+    
+    Request body:
+    - config_path (str, optional): New configuration path
+    - data_path (str, optional): New data path
+    - persist (bool): Whether to persist changes (default: false)
+    
+    Returns success status and updated paths.
+    """
+    return StorageController.update_config_paths(request)
+
+
 # Create a Folder
 @app.post("/folder")
 def create_folder(request: CreateFolderRequest):

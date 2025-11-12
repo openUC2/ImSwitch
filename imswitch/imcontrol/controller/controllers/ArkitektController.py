@@ -466,13 +466,16 @@ class ArkitektController(ImConWidgetController):
                 image_name = f"Tile_{actual_id}_{actual_ix:03d}_{iy:03d}_x{actual_x:.1f}_y{actual_y:.1f}"
                 if illumination_channel:
                     image_name += f"_{illumination_channel}"
-                
+                # ensure we have rgb frame
+                if numpy_array.ndim == 2:
+                    import numpy as np
+                    numpy_array = numpy_array[:, :, np.newaxis]
                 if stage is not None:
 
                     image = from_array_like(
                         xr.DataArray(
                             numpy_array,
-                            dims=["y", "x"],
+                            dims=["y", "x", "c"],
                             attrs={
                                 "tile_x": actual_ix,
                                 "tile_y": iy,

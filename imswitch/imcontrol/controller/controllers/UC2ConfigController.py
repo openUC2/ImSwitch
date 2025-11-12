@@ -19,7 +19,7 @@ import requests
 import shutil
 from pathlib import Path
 from serial.tools import list_ports
-import serial
+import socket
 
 try:
     import esptool
@@ -59,8 +59,8 @@ class UC2ConfigController(ImConWidgetController):
         self._firmware_cache_dir.mkdir(parents=True, exist_ok=True)
         
         # WiFi credentials for OTA (can be overridden via API)
-        self._ota_wifi_ssid = None
-        self._ota_wifi_password = None
+        self._ota_wifi_ssid = socket.gethostname().split(".local")[0]
+        self._ota_wifi_password = "youseetoo" # this is the default password for forklifted UC2 firmwares
 
         try:
             self.stages = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
@@ -633,6 +633,18 @@ class UC2ConfigController(ImConWidgetController):
         return {"status": "success", "message": f"WiFi credentials set for SSID: {ssid}"}
     
     @APIExport(runOnUIThread=False)
+    def getOTAWiFiCredentials(self):
+        """
+        Get current WiFi credentials for OTA updates.
+        
+        :return: Dictionary with SSID and password
+        """
+        return {
+            "ssid": self._ota_wifi_ssid,
+            "password": self._ota_wifi_password
+        }
+        
+    @APIExport(runOnUIThread=False)
     def setOTAFirmwareServer(self, server_url="http://localhost:9000"):
         """
         Set the firmware server URL for OTA updates.
@@ -693,18 +705,18 @@ class UC2ConfigController(ImConWidgetController):
                 "message": f"Failed to connect to firmware server: {str(e)}",
                 "server_url": server_url
             }
-    
+
     @APIExport(runOnUIThread=False)
-    def setOTAFirmwareDirectory(self, directory):
+    def getOTAFirmwareServer(self):
         """
-        DEPRECATED: Use setOTAFirmwareServer instead.
+        Get the current firmware server URL for OTA updates.
         
-        This method is kept for backward compatibility but now configures
-        the firmware server URL based on a local directory assumption.
+        :return: Current firmware server URL
         """
-        self.__logger.warning("setOTAFirmwareDirectory is deprecated. Use setOTAFirmwareServer instead.")
-        return self.setOTAFirmwareServer()
-    
+        return {
+            "firmware_server_url": self._firmware_server_url
+        }
+
     @APIExport(runOnUIThread=False)
     def listAvailableFirmware(self):
         """

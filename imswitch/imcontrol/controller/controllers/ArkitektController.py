@@ -432,7 +432,8 @@ class ArkitektController(ImConWidgetController):
                     value=(actual_x, actual_y),
                     axis="XY",
                     is_absolute=True,
-                    is_blocking=True
+                    is_blocking=True, 
+                    speed=(speed, speed)
                 )
                 # Wait for settling
                 time.sleep(t_settle)
@@ -573,7 +574,8 @@ class ArkitektController(ImConWidgetController):
             value=(current_x, current_y),
             axis="XY",
             is_absolute=True,
-            is_blocking=False
+            is_blocking=False,
+            speed=(speed, speed)
         )
         # Restore original illumination state if it was changed
         if original_illumination_state is not None and illumination_channel is not None:

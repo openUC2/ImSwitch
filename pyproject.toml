@@ -65,7 +65,7 @@ dependencies = [
     "aiohttp>=3.9.4",
     "numba>=0.61.2", 
     "mikro-next>=0.18.0", 
-    "arkitekt-next>=0.29.0", 
+    "arkitekt-next["all"]==0.30.1", 
     "koil>=2.0.5"    
 ]
 
@@ -91,7 +91,7 @@ Ashlar = [
     "ashlarUC2",
 ]
 arkitekt = [
-    "arkitekt-next>=0.26.0",
+    "arkitekt-next["all"]==0.30.1",
 ]
 imjoy = [
     "imjoy-rpc==0.5.59",
@@ -120,7 +120,7 @@ include = ["imswitch*"]
 
 [dependency-groups]
 dev = [
-    "arkitekt-next[all]>=0.26",
+    "arkitekt-next["all"]==0.30.1",
 ]
 
 [project.entry-points."imswitch.implugins.detectors"]

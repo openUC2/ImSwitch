@@ -130,6 +130,10 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
 
         # Initialize storage manager from configuration
         # This ensures the storage manager is ready before any modules start using it
+        # FIXME: !!!! This is because the headless flag is loaded after commandline input
+        from imswitch.imcommon import prepareApp, launchApp
+        from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
+        from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
         try:
             from imswitch.imcommon.model.storage_manager import get_storage_manager
             storage_manager = get_storage_manager()
@@ -147,10 +151,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
             logger_early.warning(f'Failed to initialize storage manager: {e}')
             logger_early.warning('Falling back to legacy storage path management')
 
-        # FIXME: !!!! This is because the headless flag is loaded after commandline input
-        from imswitch.imcommon import prepareApp, launchApp
-        from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
-        from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
 
         logger = initLogger('main')
         logger.info(f'Starting ImSwitch {config.version}')

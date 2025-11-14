@@ -199,16 +199,16 @@ class UserFileDirs(FileDirs):
     # Try to use storage manager for more intelligent path selection
     if _STORAGE_MANAGER_AVAILABLE:
         try:
-            storage_manager = get_storage_manager()
+            _storage_manager = get_storage_manager()
             # Initialize from legacy globals
-            storage_manager.initialize_from_legacy_globals(
+            _storage_manager.initialize_from_legacy_globals(
                 DEFAULT_CONFIG_PATH,
                 DEFAULT_DATA_PATH,
                 SCAN_EXT_DATA_PATH,
                 EXT_DATA_PATH
             )
             # Get the active data path from storage manager
-            Data = storage_manager.get_active_data_path()
+            Data = _storage_manager.get_active_data_path()
         except Exception as e:
             # Fall back to legacy behavior if storage manager fails
             print(f"Warning: Storage manager initialization failed: {e}")

@@ -13,6 +13,8 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport, initLogger
 from imswitch.imcontrol.view import guitools
 from ..basecontrollers import ImConWidgetController
+import os
+import time
 
 from imswitch.imcommon.model.storage_paths import (
     get_data_path,
@@ -27,7 +29,6 @@ from imswitch.imcommon.model.storage_monitor import (
     start_storage_monitoring
 )
 from imswitch.config import get_config
-import time
 
 
 class SetActivePathRequest(BaseModel):
@@ -86,6 +87,42 @@ class StorageController(ImConWidgetController):
         except Exception as e:
             self._logger.warning(f"Error loading persisted storage path: {e}")
     
+    def get_validated_data_path(self) -> str:
+        """
+        Get the current data path after validating it exists and is writable.
+        
+        If the current path is invalid, falls back to the default path and emits
+        a warning signal via the communication channel.
+        
+        Returns:
+            str: Valid data path (either current or fallback)
+        """
+        current_path = get_data_path()
+        is_valid, error_msg = validate_path(current_path)
+        
+        if not is_valid:
+            # Path is no longer valid, use default fallback
+            fallback_path = os.path.join(os.path.expanduser('~'), 'ImSwitchConfig', 'data')
+            os.makedirs(fallback_path, exist_ok=True)
+            
+            self._logger.warning(
+                f"Current data path invalid ({error_msg}). "
+                f"Falling back to: {fallback_path}"
+            )
+            
+            # Emit signal to notify about path change
+            if hasattr(self, '_commChannel'):
+                self._commChannel.sigStoragePathInvalid.emit(current_path, fallback_path)
+            
+            # Update to fallback path
+            set_data_path(fallback_path)
+            from imswitch.imcommon.model.dirtools import UserFileDirs
+            UserFileDirs.refresh_paths()
+            
+            return fallback_path
+        
+        return current_path
+    
     def _start_monitoring(self):
         """
         Start USB storage monitoring and setup WebSocket event callbacks.
@@ -126,7 +163,7 @@ class StorageController(ImConWidgetController):
         self._logger.info(f"Storage monitoring started with mount paths: {mount_paths}")
     
     @APIExport(runOnUIThread=False)
-    def get_storage_status(self) -> Dict[str, Any]:
+    def get_storage_status(self) -> Dict:
         """
         Get current storage status including active path and available drives.
         
@@ -291,7 +328,7 @@ class StorageController(ImConWidgetController):
             raise HTTPException(status_code=500, detail=str(e))
     
     @APIExport(runOnUIThread=False)
-    def get_config_paths(self) -> Dict[str, str]:
+    def get_config_paths(self) -> Dict:
         """
         Get all configuration-related paths.
         

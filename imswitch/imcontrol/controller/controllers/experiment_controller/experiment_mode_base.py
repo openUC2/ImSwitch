@@ -156,7 +156,7 @@ class ExperimentModeBase(ABC):
             Tuple of (timeStamp, dirPath, mFileName)
         """
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.Data
+        drivePath = dirtools.UserFileDirs.getValidatedDataPath()
         dirPath = os.path.join(drivePath, 'ExperimentController', timeStamp)
         if not os.path.exists(dirPath):
             os.makedirs(dirPath)

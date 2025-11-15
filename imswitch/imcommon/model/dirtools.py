@@ -150,6 +150,30 @@ class UserFileDirs(FileDirs):
         cls.Root = get_config_path()
         cls.Config = os.path.join(cls.Root, 'config')
         cls.Data = get_data_path()
+    
+    @classmethod
+    def getValidatedDataPath(cls) -> str:
+        """
+        Get validated data path with automatic fallback if path is invalid.
+        
+        Validates the current data path and returns a valid fallback if needed.
+        Does NOT modify the global path configuration.
+        
+        Returns:
+            str: Valid data path
+        """
+        from imswitch.imcommon.model.storage_paths import validate_path
+        
+        current_path = get_data_path()
+        is_valid, _ = validate_path(current_path)
+        
+        if is_valid:
+            return current_path
+        
+        # Use default fallback if current path is invalid
+        fallback_path = os.path.join(os.path.expanduser('~'), 'ImSwitchConfig', 'data')
+        os.makedirs(fallback_path, exist_ok=True)
+        return fallback_path
 
 
 

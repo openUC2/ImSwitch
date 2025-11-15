@@ -84,7 +84,7 @@ class ImSwitchConfig:
     
         
     def to_legacy_globals(self, imswitch_module) -> None:
-        """Update legacy global variables for backward compatibility."""
+        """Update legacy global variables for backward compatibility.""" # @ethanjli this also needs a review as this is sharing global variables 
         imswitch_module.IS_HEADLESS = self.is_headless
         imswitch_module.__httpport__ = self.http_port
         imswitch_module.__ssl__ = self.ssl

@@ -3,42 +3,33 @@ import os
 from abc import ABC
 from pathlib import Path
 from shutil import copy2, disk_usage
-from imswitch import IS_HEADLESS, __file__, DEFAULT_CONFIG_PATH, DEFAULT_DATA_PATH, SCAN_EXT_DATA_PATH, EXT_DATA_PATH
-import platform
-import subprocess
+from typing import Optional
+
+# Import simplified storage path utilities
+from .storage_paths import get_data_path, get_config_path
+
 
 def getSystemUserDir():
-    """ Returns the user's documents folder if they are using a Windows system,
-    or their home folder if they are using another operating system. """
-
-    if DEFAULT_CONFIG_PATH is not None:
-        print("We use the user-provided configuration path: " + DEFAULT_CONFIG_PATH)
-        return os.path.join(DEFAULT_CONFIG_PATH)
-    else:
-        if os.name == 'nt':  # Windows system, try to return documents directory
-            try:
-                import ctypes.wintypes
-                CSIDL_PERSONAL = 5  # Documents
-                SHGFP_TYPE_CURRENT = 0  # Current value
-
-                buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
-                ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_PERSONAL, 0, SHGFP_TYPE_CURRENT, buf)
-
-                return buf.value
-            except ImportError:
-                pass
-            #TOOD: How can we ensure that configuration files are updated automatically..
-        return os.path.expanduser('~')  # Non-Windows system, return home directory
+    """ 
+    Returns the configuration directory for ImSwitch.
+    
+    This is now a simple wrapper around get_config_path() for backward compatibility.
+    """
+    return get_config_path()
 
 
+# Base directory for program data files (templates, defaults, etc.)
 _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)), '_data')
-_baseUserFilesDir = os.path.join(getSystemUserDir(), 'ImSwitchConfig')
+# Base directory for user configuration files
+_baseUserFilesDir = getSystemUserDir()
 
 
 
 
 def is_writable_directory(path: str) -> bool:
-    # Checks if 'path' is writable by attempting to create and remove a tiny file.
+    """
+    Checks if 'path' is writable by attempting to create and remove a tiny file.
+    """
     if not path or not os.path.isdir(path):
         return False
     try:
@@ -51,21 +42,26 @@ def is_writable_directory(path: str) -> bool:
         return False
 
 
-def pick_first_external_folder(default_data_path: str):
-    # This function picks the first subdirectory in 'default_data_path'
-    # that is not obviously a system volume and is writable.
+def pick_first_external_folder(default_data_path: str) -> Optional[str]:
+    """
+    Picks the first subdirectory in 'default_data_path' that is not a system volume and is writable.
+    
+    Used for external drive detection in Docker environments.
+    """
     if not default_data_path or not os.path.exists(default_data_path):
         return None
 
+    SYSTEM_VOLUMES = {"Macintosh HD", "System Volume Information", "Recovery", "Preboot", "VM"}
+    
     for d in sorted(os.listdir(default_data_path)):
         full_path = os.path.join(default_data_path, d)
         if not os.path.isdir(full_path):
             continue
-        # Exclude common system volumes
-        if d not in ("Macintosh HD", "System Volume Information"):
-            # Exclude hidden directories
-            if not d.startswith('.') and is_writable_directory(full_path):
-                return full_path
+        
+        # Exclude system volumes and hidden directories
+        if d not in SYSTEM_VOLUMES and not d.startswith('.') and is_writable_directory(full_path):
+            return full_path
+    
     return None
 
 
@@ -128,7 +124,6 @@ class FileDirs(ABC):
         return [cls.__dict__.get(name) for name in dir(cls)
                 if not callable(getattr(cls, name)) and not name.startswith('_')]
 
-
 class DataFileDirs(FileDirs):
     """ Catalog of directories that contain program data/library/resource
     files. """
@@ -136,24 +131,24 @@ class DataFileDirs(FileDirs):
     Libs = os.path.join(_baseDataFilesDir, 'libs')
     UserDefaults = os.path.join(_baseDataFilesDir, 'user_defaults')
 
-#TODO: THIS IS A MESS! We need to find a better way to handle the default data path
 class UserFileDirs(FileDirs):
-    """ Catalog of directories that contain user configuration files. """
+    """ 
+    Catalog of directories that contain user configuration and data files.
+    
+    This class now uses the simplified storage_paths module for path resolution.
+    Paths are resolved dynamically to support runtime changes via API.
+    """
+    
     Root = _baseUserFilesDir
     Config = os.path.join(_baseUserFilesDir, 'config')
-    Data = os.path.join(_baseUserFilesDir, 'data')
-    if DEFAULT_DATA_PATH is not None:
-        Data = DEFAULT_DATA_PATH
-    if SCAN_EXT_DATA_PATH and EXT_DATA_PATH is not None:
-        # TODO: This is a testing workaround
-        '''
-        Basic idea: We provide ImSwitch (most likely runing inside docker) with the path to the external mounts for external drives (e.g. /media or /Volumes)
-        ImSwitch now has to pick the external drive and check if it is mounted and use this as a data storage
-        '''
-        # If SCAN_EXT_DATA_PATH or user sets default_data_path, pick the subfolder
-        chosen_folder = pick_first_external_folder(EXT_DATA_PATH)
-        if chosen_folder:
-            Data = chosen_folder
+    Data = get_data_path()  # Dynamic resolution using storage_paths
+    
+    @classmethod
+    def refresh_paths(cls):
+        """Refresh paths from current configuration. Call this after runtime path changes."""
+        cls.Root = get_config_path()
+        cls.Config = os.path.join(cls.Root, 'config')
+        cls.Data = get_data_path()
 
 
 

@@ -115,6 +115,11 @@ def get_version():
     """
     return {"version": VERSION}
 
+
+# Storage Management API Endpoints are now handled via APIExport in StorageController
+# The controller is automatically initialized by MasterController
+
+
 # Create a Folder
 @app.post("/folder")
 def create_folder(request: CreateFolderRequest):

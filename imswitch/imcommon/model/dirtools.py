@@ -3,56 +3,25 @@ import os
 from abc import ABC
 from pathlib import Path
 from shutil import copy2, disk_usage
-from imswitch import IS_HEADLESS, __file__, DEFAULT_CONFIG_PATH, DEFAULT_DATA_PATH, SCAN_EXT_DATA_PATH, EXT_DATA_PATH
-import platform
-import subprocess
 from typing import Optional
 
-# Import storage manager for centralized path management
-try:
-    from .storage_manager import get_storage_manager, StoragePathManager, StorageConfiguration
-    _STORAGE_MANAGER_AVAILABLE = True
-except ImportError:
-    _STORAGE_MANAGER_AVAILABLE = False
+# Import simplified storage path utilities
+from .storage_paths import get_data_path, get_config_path
+
 
 def getSystemUserDir():
-    """ Returns the user's documents folder if they are using a Windows system,
-    or their home folder if they are using another operating system. 
+    """ 
+    Returns the configuration directory for ImSwitch.
     
-    Now integrated with the storage manager for centralized configuration.
+    This is now a simple wrapper around get_config_path() for backward compatibility.
     """
-    # Try to use storage manager if available
-    if _STORAGE_MANAGER_AVAILABLE:
-        try:
-            storage_manager = get_storage_manager()
-            config_path = storage_manager.get_config_path()
-            if config_path:
-                return config_path
-        except Exception:
-            pass  # Fall back to legacy behavior
-
-    if DEFAULT_CONFIG_PATH is not None:
-        print("We use the user-provided configuration path: " + DEFAULT_CONFIG_PATH)
-        return os.path.join(DEFAULT_CONFIG_PATH)
-    else:
-        if os.name == 'nt':  # Windows system, try to return documents directory
-            try:
-                import ctypes.wintypes
-                CSIDL_PERSONAL = 5  # Documents
-                SHGFP_TYPE_CURRENT = 0  # Current value
-
-                buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
-                ctypes.windll.shell32.SHGetFolderPathW(0, CSIDL_PERSONAL, 0, SHGFP_TYPE_CURRENT, buf)
-
-                return buf.value
-            except ImportError:
-                pass
-            #TODO: How can we ensure that configuration files are updated automatically..
-        return os.path.expanduser('~')  # Non-Windows system, return home directory
+    return get_config_path()
 
 
+# Base directory for program data files (templates, defaults, etc.)
 _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)), '_data')
-_baseUserFilesDir = os.path.join(getSystemUserDir(), 'ImSwitchConfig')
+# Base directory for user configuration files
+_baseUserFilesDir = getSystemUserDir()
 
 
 
@@ -60,19 +29,7 @@ _baseUserFilesDir = os.path.join(getSystemUserDir(), 'ImSwitchConfig')
 def is_writable_directory(path: str) -> bool:
     """
     Checks if 'path' is writable by attempting to create and remove a tiny file.
-    
-    DEPRECATED: Use StorageScanner.is_writable_directory() instead.
-    This function is kept for backward compatibility.
     """
-    # Use storage scanner if available
-    if _STORAGE_MANAGER_AVAILABLE:
-        try:
-            storage_manager = get_storage_manager()
-            return storage_manager.scanner.is_writable_directory(path)
-        except Exception:
-            pass  # Fall back to legacy implementation
-    
-    # Legacy implementation
     if not path or not os.path.isdir(path):
         return False
     try:
@@ -87,33 +44,24 @@ def is_writable_directory(path: str) -> bool:
 
 def pick_first_external_folder(default_data_path: str) -> Optional[str]:
     """
-    This function picks the first subdirectory in 'default_data_path'
-    that is not obviously a system volume and is writable.
+    Picks the first subdirectory in 'default_data_path' that is not a system volume and is writable.
     
-    DEPRECATED: Use StorageScanner.pick_first_external_folder() instead.
-    This function is kept for backward compatibility.
+    Used for external drive detection in Docker environments.
     """
-    # Use storage scanner if available
-    if _STORAGE_MANAGER_AVAILABLE:
-        try:
-            storage_manager = get_storage_manager()
-            return storage_manager.scanner.pick_first_external_folder(default_data_path)
-        except Exception:
-            pass  # Fall back to legacy implementation
-    
-    # Legacy implementation
     if not default_data_path or not os.path.exists(default_data_path):
         return None
 
+    SYSTEM_VOLUMES = {"Macintosh HD", "System Volume Information", "Recovery", "Preboot", "VM"}
+    
     for d in sorted(os.listdir(default_data_path)):
         full_path = os.path.join(default_data_path, d)
         if not os.path.isdir(full_path):
             continue
-        # Exclude common system volumes
-        if d not in ("Macintosh HD", "System Volume Information"):
-            # Exclude hidden directories
-            if not d.startswith('.') and is_writable_directory(full_path):
-                return full_path
+        
+        # Exclude system volumes and hidden directories
+        if d not in SYSTEM_VOLUMES and not d.startswith('.') and is_writable_directory(full_path):
+            return full_path
+    
     return None
 
 
@@ -176,7 +124,6 @@ class FileDirs(ABC):
         return [cls.__dict__.get(name) for name in dir(cls)
                 if not callable(getattr(cls, name)) and not name.startswith('_')]
 
-
 class DataFileDirs(FileDirs):
     """ Catalog of directories that contain program data/library/resource
     files. """
@@ -184,57 +131,24 @@ class DataFileDirs(FileDirs):
     Libs = os.path.join(_baseDataFilesDir, 'libs')
     UserDefaults = os.path.join(_baseDataFilesDir, 'user_defaults')
 
-#TODO: THIS IS A MESS! We need to find a better way to handle the default data path
-# NOTE: This is now being migrated to use the StoragePathManager for centralized management
 class UserFileDirs(FileDirs):
-    """ Catalog of directories that contain user configuration files. """
+    """ 
+    Catalog of directories that contain user configuration and data files.
+    
+    This class now uses the simplified storage_paths module for path resolution.
+    Paths are resolved dynamically to support runtime changes via API.
+    """
+    
     Root = _baseUserFilesDir
     Config = os.path.join(_baseUserFilesDir, 'config')
-    Data = os.path.join(_baseUserFilesDir, 'data')
+    Data = get_data_path()  # Dynamic resolution using storage_paths
     
-    # Override with user-provided paths if available
-    if DEFAULT_DATA_PATH is not None:
-        Data = DEFAULT_DATA_PATH
-    
-    # Try to use storage manager for more intelligent path selection
-    if _STORAGE_MANAGER_AVAILABLE:
-        try:
-            _storage_manager = get_storage_manager()
-            # Initialize from legacy globals
-            _storage_manager.initialize_from_legacy_globals(
-                DEFAULT_CONFIG_PATH,
-                DEFAULT_DATA_PATH,
-                SCAN_EXT_DATA_PATH,
-                EXT_DATA_PATH
-            )
-            # Get the active data path from storage manager
-            Data = _storage_manager.get_active_data_path()
-        except Exception as e:
-            # Fall back to legacy behavior if storage manager fails
-            print(f"Warning: Storage manager initialization failed: {e}")
-            if SCAN_EXT_DATA_PATH and EXT_DATA_PATH is not None:
-                # Legacy external scanning behavior
-                '''
-                Basic idea: We provide ImSwitch (most likely running inside docker) with the path 
-                to the external mounts for external drives (e.g. /media or /Volumes)
-                ImSwitch now has to pick the external drive and check if it is mounted and use 
-                this as a data storage
-                '''
-                chosen_folder = pick_first_external_folder(EXT_DATA_PATH)
-                if chosen_folder:
-                    Data = chosen_folder
-    else:
-        # Legacy behavior when storage manager is not available
-        if SCAN_EXT_DATA_PATH and EXT_DATA_PATH is not None:
-            '''
-            Basic idea: We provide ImSwitch (most likely running inside docker) with the path 
-            to the external mounts for external drives (e.g. /media or /Volumes)
-            ImSwitch now has to pick the external drive and check if it is mounted and use 
-            this as a data storage
-            '''
-            chosen_folder = pick_first_external_folder(EXT_DATA_PATH)
-            if chosen_folder:
-                Data = chosen_folder
+    @classmethod
+    def refresh_paths(cls):
+        """Refresh paths from current configuration. Call this after runtime path changes."""
+        cls.Root = get_config_path()
+        cls.Config = os.path.join(cls.Root, 'config')
+        cls.Data = get_data_path()
 
 
 

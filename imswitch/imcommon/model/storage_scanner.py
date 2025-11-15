@@ -167,8 +167,8 @@ class StorageScanner:
                         filesystem=filesystem,
                         is_active=False
                     )
-                    
-                    detected_drives.append(storage)
+                    if writable:
+                        detected_drives.append(storage)
                     
             except Exception as e:
                 print(f"Error scanning {base_path}: {e}")

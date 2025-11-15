@@ -2,15 +2,32 @@
 Storage Controller - REST API endpoints for storage management.
 
 This controller provides API endpoints for querying storage status,
-listing external drives, and managing storage paths.
+listing external drives, managing storage paths, and monitoring USB drives
+using the simplified storage_paths module.
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from pydantic import BaseModel
 from fastapi import HTTPException
+from imswitch.imcommon.framework import Signal
+from imswitch.imcommon.model import APIExport, initLogger
+from imswitch.imcontrol.view import guitools
+from ..basecontrollers import ImConWidgetController
 
-from imswitch.imcommon.model.storage_manager import get_storage_manager
-from imswitch.imcommon.model import initLogger
+from imswitch.imcommon.model.storage_paths import (
+    get_data_path,
+    get_config_path,
+    set_data_path,
+    get_storage_info,
+    scan_external_drives,
+    validate_path
+)
+from imswitch.imcommon.model.storage_monitor import (
+    get_storage_monitor,
+    start_storage_monitoring
+)
+from imswitch.config import get_config
+import time
 
 
 class SetActivePathRequest(BaseModel):
@@ -26,219 +43,285 @@ class UpdateConfigPathRequest(BaseModel):
     persist: bool = False
 
 
-class StorageController:
+class StorageController(ImConWidgetController):
     """
     Controller for storage management API endpoints.
     
-    This controller is not a traditional ImSwitch controller but provides
-    static methods to be registered with the FastAPI server.
+    Provides API endpoints for storage path management, external drive detection,
+    and USB drive monitoring with Signal-based notifications.
     """
     
-    _logger = None
+    sigStorageDeviceChanged = Signal(dict)  # Emits: {'event': 'mounted'/'unmounted', 'timestamp': str, 'data': drive_info}
     
-    @classmethod
-    def _get_logger(cls):
-        """Get or create logger instance."""
-        if cls._logger is None:
-            cls._logger = initLogger('StorageController')
-        return cls._logger
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._logger = initLogger(self, tryInheritParent=False)
+        self._monitor_started = False
+        
+        # Start USB monitoring automatically on initialization
+        self._start_monitoring()
     
-    @staticmethod
-    def get_storage_status() -> Dict[str, Any]:
+    def _start_monitoring(self):
+        """
+        Start USB storage monitoring and setup WebSocket event callbacks.
+        
+        Called automatically during controller initialization.
+        """
+        if self._monitor_started:
+            return
+        
+        config = get_config()
+        
+        # Get mount paths from config or use defaults
+        if config.ext_data_folder:
+            mount_paths = [p.strip() for p in config.ext_data_folder.split(',')]
+        else:
+            mount_paths = None  # Will use platform defaults
+        
+        # Start monitoring
+        monitor = start_storage_monitoring(mount_paths=mount_paths, poll_interval=5)
+        
+        # Add callback to emit Signal when storage changes
+        def on_storage_change(event_type: str, drive_info: Dict[str, Any]):
+            """Emit Signal when storage changes."""
+            try:
+                event_data = {
+                    'event': f'storage:device-{event_type}',
+                    'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                    'data': drive_info
+                }
+                self.sigStorageDeviceChanged.emit(event_data)
+                self._logger.info(f"Emitted storage event: {event_type} - {drive_info.get('path', 'unknown')}")
+            except Exception as e:
+                self._logger.error(f"Error emitting storage event: {e}")
+        
+        monitor.add_callback(on_storage_change)
+        
+        self._monitor_started = True
+        self._logger.info(f"Storage monitoring started with mount paths: {mount_paths}")
+    
+    @APIExport(runOnUIThread=False)
+    def get_storage_status(self) -> Dict[str, Any]:
         """
         Get current storage status including active path and available drives.
         
         Returns:
             Dictionary with storage status information
-            
-        Example response:
-        {
-            "active_path": "/media/usb-drive-1/datasets",
-            "fallback_path": "/datasets",
-            "available_external_drives": [...],
-            "scan_enabled": true,
-            "mount_paths": ["/media", "/Volumes"],
-            "free_space_gb": 128.5,
-            "total_space_gb": 256.0,
-            "percent_used": 49.8
-        }
         """
         try:
-            storage_manager = get_storage_manager()
-            status = storage_manager.get_storage_status()
+            config = get_config()
+            data_path = get_data_path()
+            config_path = get_config_path()
             
-            StorageController._get_logger().info(
-                f"Storage status requested - active path: {status['active_path']}"
+            # Get storage info for current data path
+            storage_info = get_storage_info(data_path)
+            
+            # Build response
+            status = {
+                "active_path": data_path,
+                "config_path": config_path,
+                "fallback_path": config.data_folder if config.data_folder else None,
+                "scan_enabled": config.scan_ext_data_folder,
+                "mount_paths": config.ext_data_folder.split(',') if config.ext_data_folder else [],
+                "exists": storage_info["exists"],
+                "writable": storage_info["writable"],
+                "free_space_gb": storage_info["free_space_gb"],
+                "total_space_gb": storage_info["total_space_gb"],
+                "percent_used": storage_info["percent_used"]
+            }
+            
+            self._logger.info(
+                f"Storage status requested - active path: {data_path}"
             )
             
             return status
         except Exception as e:
-            StorageController._get_logger().error(f"Error getting storage status: {e}")
+            self._logger.error(f"Error getting storage status: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
-    @staticmethod
-    def list_external_drives() -> Dict[str, List[Dict[str, Any]]]:
+    @APIExport(runOnUIThread=False)
+    def list_external_drives(self) -> Dict[str, Any]:
         """
         List all detected external storage drives.
         
+        Scans configured mount paths for external drives. In Docker, this typically
+        scans /media or /datasets. In native environments, scans OS-level mount points.
+        
         Returns:
             Dictionary with list of external drives
-            
-        Example response:
-        {
-            "drives": [
-                {
-                    "path": "/media/usb-drive-1",
-                    "label": "USB_DRIVE",
-                    "writable": true,
-                    "free_space_gb": 128.5,
-                    "total_space_gb": 256.0,
-                    "filesystem": "ext4",
-                    "is_active": true
-                }
-            ]
-        }
         """
         try:
-            storage_manager = get_storage_manager()
-            drives = storage_manager.scan_external_drives()
+            config = get_config()
             
-            StorageController._get_logger().info(
+            # Get mount paths - use ext_data_folder if configured, otherwise use sensible defaults
+            if config.ext_data_folder:
+                mount_paths = [p.strip() for p in config.ext_data_folder.split(',')]
+            else:
+                # Default mount points for Docker and native environments
+                mount_paths = ['/media', '/Volumes', '/datasets']
+            
+            # Scan for external drives
+            drives = scan_external_drives(mount_paths)
+            
+            # Mark active drive
+            active_path = get_data_path()
+            for drive in drives:
+                drive["is_active"] = (drive["path"] == active_path)
+            
+            self._logger.info(
                 f"External drives listed - found {len(drives)} drive(s)"
             )
             
-            return {
-                "drives": [drive.to_dict() for drive in drives]
-            }
+            return {"drives": drives}
         except Exception as e:
-            StorageController._get_logger().error(f"Error listing external drives: {e}")
+            self._logger.error(f"Error listing external drives: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
-    @staticmethod
-    def set_active_path(request: SetActivePathRequest) -> Dict[str, Any]:
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def set_active_path(self, path: str, persist: bool = False) -> Dict[str, Any]:
         """
         Set the active storage path.
         
+        Creates an 'ImSwitchData' subfolder within the selected path where all
+        ImSwitch data will be stored.
+        
         Args:
-            request: Request with path and persist flag
+            path: Base path to set as active storage location (e.g., USB drive path)
+            persist: Whether to persist this setting to configuration
             
         Returns:
             Dictionary with success status and active path
-            
-        Example response:
-        {
-            "success": true,
-            "active_path": "/media/usb-drive-1/datasets",
-            "persisted": true,
-            "message": "Storage path updated successfully"
-        }
         """
         try:
-            storage_manager = get_storage_manager()
-            success, error_msg = storage_manager.set_data_path(
-                request.path,
-                persist=request.persist
-            )
+            import os
             
-            if not success:
-                StorageController._get_logger().warning(
-                    f"Failed to set active path to {request.path}: {error_msg}"
+            # Validate the base path first
+            is_valid, error_msg = validate_path(path)
+            if not is_valid:
+                self._logger.warning(
+                    f"Invalid path {path}: {error_msg}"
                 )
                 raise HTTPException(status_code=400, detail=error_msg)
             
-            StorageController._get_logger().info(
-                f"Active storage path set to: {request.path} (persist={request.persist})"
+            # Create ImSwitchData subfolder within the selected path
+            imswitch_data_path = os.path.join(path, "ImSwitchData")
+            
+            try:
+                os.makedirs(imswitch_data_path, exist_ok=True)
+                self._logger.info(f"Created/verified ImSwitchData folder at: {imswitch_data_path}")
+            except Exception as e:
+                error_msg = f"Failed to create ImSwitchData folder: {str(e)}"
+                self._logger.error(error_msg)
+                raise HTTPException(status_code=500, detail=error_msg)
+            
+            # Set the data path to the ImSwitchData subfolder
+            success, error_msg = set_data_path(imswitch_data_path)
+            
+            if not success:
+                self._logger.warning(
+                    f"Failed to set active path to {imswitch_data_path}: {error_msg}"
+                )
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            # Refresh UserFileDirs paths
+            from imswitch.imcommon.model.dirtools import UserFileDirs
+            UserFileDirs.refresh_paths()
+            
+            self._logger.info(
+                f"Active storage path set to: {imswitch_data_path} (base: {path}, persist={persist})"
             )
             
             return {
                 "success": True,
-                "active_path": storage_manager.get_active_data_path(),
-                "persisted": request.persist,
-                "message": "Storage path updated successfully"
+                "active_path": get_data_path(),
+                "base_path": path,
+                "persisted": persist,
+                "message": "Storage path updated successfully (ImSwitchData folder created)"
             }
         except HTTPException:
             raise
         except Exception as e:
-            StorageController._get_logger().error(f"Error setting active path: {e}")
+            self._logger.error(f"Error setting active path: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
-    @staticmethod
-    def get_config_paths() -> Dict[str, str]:
+    @APIExport(runOnUIThread=False)
+    def get_config_paths(self) -> Dict[str, str]:
         """
         Get all configuration-related paths.
         
         Returns:
-            Dictionary with configuration paths
-            
-        Example response:
-        {
-            "config_path": "/home/user/ImSwitchConfig",
-            "data_path": "/datasets",
-            "active_data_path": "/media/usb-drive-1/datasets"
-        }
+            Dictionary with configuration paths:
+            - config_path: Where ImSwitch configuration files are stored
+            - data_path: Configured fallback data path from config file (may be None)
+            - active_data_path: Currently active runtime data path (may differ from config)
         """
         try:
-            storage_manager = get_storage_manager()
-            paths = storage_manager.get_config_paths()
+            paths = {
+                "config_path": get_config_path(),
+                "data_path": get_config().data_folder if get_config().data_folder else None,
+                "active_data_path": get_data_path()
+            }
             
-            StorageController._get_logger().info("Configuration paths requested")
+            self._logger.info("Configuration paths requested")
             
             return paths
         except Exception as e:
-            StorageController._get_logger().error(f"Error getting config paths: {e}")
+            self._logger.error(f"Error getting config paths: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
-    @staticmethod
-    def update_config_paths(request: UpdateConfigPathRequest) -> Dict[str, Any]:
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def update_config_paths(self, config_path: Optional[str] = None, 
+                           data_path: Optional[str] = None, 
+                           persist: bool = False) -> Dict[str, Any]:
         """
         Update configuration paths.
         
         Args:
-            request: Request with config_path and/or data_path
+            config_path: Optional path to configuration directory
+            data_path: Optional path to data directory
+            persist: Whether to persist changes to configuration
             
         Returns:
             Dictionary with success status and updated paths
-            
-        Example response:
-        {
-            "success": true,
-            "message": "Configuration paths updated successfully",
-            "config_path": "/custom/config/path",
-            "data_path": "/custom/data/path"
-        }
         """
         try:
-            storage_manager = get_storage_manager()
-            success, error_msg = storage_manager.update_config_paths(
-                config_path=request.config_path,
-                data_path=request.data_path,
-                persist=request.persist
+            config = get_config()
+            
+            # Update configuration
+            if config_path:
+                config.config_folder = config_path
+            
+            if data_path:
+                config.data_folder = data_path
+                # Also set as runtime override
+                success, error_msg = set_data_path(data_path)
+                if not success:
+                    raise HTTPException(status_code=400, detail=error_msg)
+            
+            # Refresh paths
+            from imswitch.imcommon.model.dirtools import UserFileDirs
+            UserFileDirs.refresh_paths()
+            
+            self._logger.info(
+                f"Configuration paths updated - config: {config_path}, "
+                f"data: {data_path}"
             )
             
-            if not success:
-                StorageController._get_logger().warning(
-                    f"Failed to update config paths: {error_msg}"
-                )
-                raise HTTPException(status_code=400, detail=error_msg)
-            
-            StorageController._get_logger().info(
-                f"Configuration paths updated - config: {request.config_path}, "
-                f"data: {request.data_path}"
-            )
-            
-            paths = storage_manager.get_config_paths()
+            paths = {
+                "config_path": get_config_path(),
+                "data_path": config.data_folder,
+                "active_data_path": get_data_path()
+            }
             
             return {
                 "success": True,
                 "message": "Configuration paths updated successfully",
-                "config_path": paths["config_path"],
-                "data_path": paths["data_path"],
-                "active_data_path": paths["active_data_path"]
+                **paths
             }
         except HTTPException:
             raise
         except Exception as e:
-            StorageController._get_logger().error(f"Error updating config paths: {e}")
+            self._logger.error(f"Error updating config paths: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
 

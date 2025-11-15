@@ -11,13 +11,13 @@ The storage management API provides 5 endpoints for managing data storage paths:
 const API_BASE = 'http://localhost:8001';
 
 // Get current storage status
-const status = await fetch(`${API_BASE}/api/storage/status`).then(r => r.json());
+const status = await fetch(`${API_BASE}/storageManager/status`).then(r => r.json());
 
 // List external drives  
-const drives = await fetch(`${API_BASE}/api/storage/external-drives`).then(r => r.json());
+const drives = await fetch(`${API_BASE}/storageManager/external-drives`).then(r => r.json());
 
 // Switch to external drive
-await fetch(`${API_BASE}/api/storage/set-active-path`, {
+await fetch(`${API_BASE}/storageManager/set-active-path`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ path: '/media/usb-drive', persist: true })
@@ -26,7 +26,7 @@ await fetch(`${API_BASE}/api/storage/set-active-path`, {
 
 ## API Reference
 
-### GET /api/storage/status
+### GET /storageManager/status
 
 Get comprehensive storage information.
 
@@ -44,7 +44,7 @@ interface StorageStatus {
 }
 ```
 
-### GET /api/storage/external-drives
+### GET /storageManager/external-drives
 
 List all detected external storage devices.
 
@@ -65,7 +65,7 @@ interface ExternalDrive {
 }
 ```
 
-### POST /api/storage/set-active-path
+### POST /storageManager/set-active-path
 
 Set the active storage path.
 
@@ -94,7 +94,7 @@ interface ErrorResponse {
 }
 ```
 
-### GET /api/storage/config-paths
+### GET /storageManager/config-paths
 
 Get all configuration-related paths.
 
@@ -107,7 +107,7 @@ interface ConfigPaths {
 }
 ```
 
-### POST /api/storage/update-config-path
+### POST /storageManager/update-config-path
 
 Update configuration paths (advanced usage).
 
@@ -158,13 +158,13 @@ function StorageManager() {
   }, []);
 
   const loadDrives = async () => {
-    const response = await fetch('/api/storage/external-drives');
+    const response = await fetch('/storageManager/external-drives');
     const data = await response.json();
     setDrives(data.drives);
   };
 
   const loadStatus = async () => {
-    const response = await fetch('/api/storage/status');
+    const response = await fetch('/storageManager/status');
     const data = await response.json();
     setActivePath(data.active_path);
   };
@@ -172,7 +172,7 @@ function StorageManager() {
   const switchDrive = async (path: string) => {
     setLoading(true);
     try {
-      const response = await fetch('/api/storage/set-active-path', {
+      const response = await fetch('/storageManager/set-active-path', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, persist: true })
@@ -234,7 +234,7 @@ interface StorageState {
 export const fetchDrives = createAsyncThunk(
   'storage/fetchDrives',
   async () => {
-    const response = await fetch('/api/storage/external-drives');
+    const response = await fetch('/storageManager/external-drives');
     return response.json();
   }
 );
@@ -242,7 +242,7 @@ export const fetchDrives = createAsyncThunk(
 export const setActivePath = createAsyncThunk(
   'storage/setActivePath',
   async ({ path, persist }: { path: string; persist: boolean }) => {
-    const response = await fetch('/api/storage/set-active-path', {
+    const response = await fetch('/storageManager/set-active-path', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path, persist })
@@ -279,7 +279,7 @@ export default storageSlice.reducer;
 ### Recommended UX Flow
 
 1. **Initial State**: Show current active storage path
-2. **Scan for Drives**: Call `/api/storage/external-drives` on mount
+2. **Scan for Drives**: Call `/storageManager/external-drives` on mount
 3. **Display Options**: Show list of available drives with capacity
 4. **User Selection**: Allow user to click on a drive to switch
 5. **Confirmation**: Show success/error message after switching
@@ -308,7 +308,7 @@ For real-time updates, poll the status endpoint:
 ```typescript
 useEffect(() => {
   const interval = setInterval(() => {
-    fetch('/api/storage/status')
+    fetch('/storageManager/status')
       .then(r => r.json())
       .then(updateStatus);
   }, 10000); // Poll every 10 seconds
@@ -324,7 +324,7 @@ useEffect(() => {
 ```typescript
 async function switchDrive(path: string) {
   try {
-    const response = await fetch('/api/storage/set-active-path', {
+    const response = await fetch('/storageManager/set-active-path', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path, persist: true })

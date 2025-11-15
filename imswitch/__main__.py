@@ -34,7 +34,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         # Get the global configuration instance
         config = get_config()
         
-        # Update configuration immediately with any provided parameters
+        # Update configuration immediately with any provided parameters # @ethanjli this needs a review since we load this from docker - is there a better way to load from the compose file?
         config.update_from_args(
             is_headless=is_headless,
             default_config=default_config,
@@ -55,8 +55,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
             ssl is None and config_folder is None and 
             data_folder is None and scan_ext_data_folder is None and ext_data_folder is None and
             with_kernel is None):
-            
-            try: # Google Colab does not support argparse
+            # @ethanjli this is the actual code that parses the variables from commandline - needs a review probably?
+            try: # TODO: Google Colab does not support argparse
                 parser = argparse.ArgumentParser(description='Process some integers.')
 
                 # specify if run in headless mode
@@ -119,7 +119,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
                     config.data_folder = args.data_folder
                 
                 # Update legacy globals
-                config.to_legacy_globals(imswitch)
+                config.to_legacy_globals(imswitch) # TODO @ethanjli review if this is necessary here?
 
             except Exception as e:
                 print(f"Argparse error: {e}")
@@ -128,29 +128,10 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         # Apply final configuration update to legacy globals (ensures consistency)
         config.to_legacy_globals(imswitch)
 
-        # Initialize storage manager from configuration
-        # This ensures the storage manager is ready before any modules start using it
         # FIXME: !!!! This is because the headless flag is loaded after commandline input
         from imswitch.imcommon import prepareApp, launchApp
         from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
         from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
-        try:
-            from imswitch.imcommon.model.storage_manager import get_storage_manager
-            storage_manager = get_storage_manager()
-            storage_manager.initialize_from_legacy_globals(
-                config.config_folder,
-                config.data_folder,
-                config.scan_ext_data_folder,
-                config.ext_data_folder
-            )
-            logger_early = initLogger('storage_init')
-            active_data_path = storage_manager.get_active_data_path()
-            logger_early.info(f'Storage manager initialized - active data path: {active_data_path}')
-        except Exception as e:
-            logger_early = initLogger('storage_init')
-            logger_early.warning(f'Failed to initialize storage manager: {e}')
-            logger_early.warning('Falling back to legacy storage path management')
-
 
         logger = initLogger('main')
         logger.info(f'Starting ImSwitch {config.version}')

@@ -94,7 +94,7 @@ Located in `imswitch/imcontrol/controller/controllers/StorageController.py`
 
 ## REST API Endpoints
 
-### GET /api/storage/status
+### GET /storageManager/status
 
 Get comprehensive storage status.
 
@@ -122,7 +122,7 @@ Get comprehensive storage status.
 }
 ```
 
-### GET /api/storage/external-drives
+### GET /storageManager/external-drives
 
 List detected external storage devices.
 
@@ -143,7 +143,7 @@ List detected external storage devices.
 }
 ```
 
-### POST /api/storage/set-active-path
+### POST /storageManager/set-active-path
 
 Set the active storage path.
 
@@ -165,7 +165,7 @@ Set the active storage path.
 }
 ```
 
-### GET /api/storage/config-paths
+### GET /storageManager/config-paths
 
 Get all configuration paths.
 
@@ -178,7 +178,7 @@ Get all configuration paths.
 }
 ```
 
-### POST /api/storage/update-config-path
+### POST /storageManager/update-config-path
 
 Update configuration paths.
 
@@ -292,10 +292,10 @@ storage_manager.initialize_from_legacy_globals(
 ### Runtime Path Switching
 
 1. User inserts USB drive
-2. Frontend calls `GET /api/storage/external-drives`
+2. Frontend calls `GET /storageManager/external-drives`
 3. User sees available drives in UI
 4. User clicks "Switch to USB"
-5. Frontend calls `POST /api/storage/set-active-path`
+5. Frontend calls `POST /storageManager/set-active-path`
 6. New data saves to USB drive
 7. With `persist=true`, preference saved for next session
 
@@ -344,10 +344,10 @@ docker run -e SCAN_EXT_DATA_PATH=true -e EXT_DATA_PATH=/media ...
 ### For Frontend Integration
 
 Use the REST API endpoints to:
-1. Query available storage: `GET /api/storage/external-drives`
+1. Query available storage: `GET /storageManager/external-drives`
 2. Display to user with current selection
-3. Allow user to switch: `POST /api/storage/set-active-path`
-4. Show storage status: `GET /api/storage/status`
+3. Allow user to switch: `POST /storageManager/set-active-path`
+4. Show storage status: `GET /storageManager/status`
 
 ## Troubleshooting
 
@@ -369,7 +369,7 @@ Use the REST API endpoints to:
 
 1. Verify ImSwitch started successfully
 2. Check OpenAPI docs: `http://localhost:8001/docs`
-3. Look for storage endpoints in `/api/storage/*`
+3. Look for storage endpoints in `/storageManager/*`
 4. Check server logs for errors
 
 ## Future Enhancements

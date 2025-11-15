@@ -109,7 +109,7 @@ class StoragePathManager:
         
         # Last resort: return default data path even if not validated
         # This maintains backward compatibility
-        return self.config.default_data_path or os.path.expanduser("~/ImSwitchConfig/data")
+        return self.config.default_data_path or os.path.expanduser("~/ImSwitchConfig/data") # TODO: We should not have the datastorage inside imswitchconfig?
     
     def get_config_path(self) -> str:
         """
@@ -122,7 +122,16 @@ class StoragePathManager:
             return self.config.config_path
         
         # Default to user's config directory
-        return os.path.expanduser("~/ImSwitchConfig")
+        '''
+        TODO: This is probably wrong as we also set it in the dirtools 
+        we probably need to merge it 
+        # TODO: Is this actually needed at all? The _baseDataFilesDir should point to the dataset directoy, right now it doesn't 
+        _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)), '_data') # User defaults
+        _baseUserFilesDir = os.path.join(getSystemUserDir()) # User configuration files
+        # TODO: Shall we have global a dataset directory here too?
+        ''' 
+        return os.path.expanduser("~/ImSwitchConfig") 
+    
     
     def set_data_path(self, path: str, persist: bool = False) -> tuple[bool, str]:
         """
@@ -140,7 +149,7 @@ class StoragePathManager:
         # Normalize path to absolute path
         normalized_path = os.path.abspath(path)
         
-        # Validate the normalized path
+        # Validate the normalized path # TODO: If it does not exist, we should create it if possible 
         is_valid, error_msg = self.scanner.validate_storage_path(normalized_path)
         if not is_valid:
             return False, error_msg
@@ -161,10 +170,10 @@ class StoragePathManager:
         Returns:
             List of detected external storage devices
         """
-        if not self.config.enable_external_scanning:
+        if not self.config.enable_external_scanning: # TODO: We should scan for external drives in any way (either natively on OS level or on the dedicated volume mount provided by docker); Also why not enable => should rather be enable? 
             return []
         
-        drives = self.scanner.scan_external_mounts(self.config.external_mount_paths)
+        drives = self.scanner.scan_external_mounts(self.config.external_mount_paths) # TODO: this should depend on OS configuration (e.g. /media in case of linux, etc. ); for the docker case we should mount that under a new volume that is available under root e.g. /datasets - if this folder exists we should scan this 
         
         # Mark the active drive if it matches
         active_path = self.config.active_data_path

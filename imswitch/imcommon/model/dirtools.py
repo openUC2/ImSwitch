@@ -89,6 +89,7 @@ def initUserFilesIfNeeded():
     # Initialize directories
     for userFileDir in UserFileDirs.list():
         if userFileDir is not None:
+            print(f"Initializing user directory: {userFileDir} by making it if not available already")
             os.makedirs(userFileDir, exist_ok=True)
 
     # Copy default user files

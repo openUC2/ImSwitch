@@ -58,8 +58,33 @@ class StorageController(ImConWidgetController):
         self._logger = initLogger(self, tryInheritParent=False)
         self._monitor_started = False
         
+        # Check if there's a saved storage path in setup config and use it
+        self._load_persisted_path()
+        
         # Start USB monitoring automatically on initialization
         self._start_monitoring()
+    
+    def _load_persisted_path(self):
+        """Load persisted storage path from setup config on startup."""
+        try:
+            if hasattr(self._setupInfo, 'storage') and self._setupInfo.storage:
+                saved_path = self._setupInfo.storage.activeDataPath
+                if saved_path:
+                    # Validate and set the saved path
+                    is_valid, error_msg = validate_path(saved_path)
+                    if is_valid:
+                        success, error_msg = set_data_path(saved_path)
+                        if success:
+                            self._logger.info(f"Loaded persisted storage path: {saved_path}")
+                            # Refresh UserFileDirs with the loaded path
+                            from imswitch.imcommon.model.dirtools import UserFileDirs
+                            UserFileDirs.refresh_paths()
+                        else:
+                            self._logger.warning(f"Failed to set persisted path: {error_msg}")
+                    else:
+                        self._logger.warning(f"Persisted path no longer valid: {error_msg}")
+        except Exception as e:
+            self._logger.warning(f"Error loading persisted storage path: {e}")
     
     def _start_monitoring(self):
         """
@@ -78,7 +103,7 @@ class StorageController(ImConWidgetController):
         else:
             mount_paths = None  # Will use platform defaults
         
-        # Start monitoring
+        # Start monitoring # TODO: @ethanjli maybe it's not necesaary as we explicitly call it from the API? 
         monitor = start_storage_monitoring(mount_paths=mount_paths, poll_interval=5)
         
         # Add callback to emit Signal when storage changes
@@ -226,6 +251,27 @@ class StorageController(ImConWidgetController):
             # Refresh UserFileDirs paths
             from imswitch.imcommon.model.dirtools import UserFileDirs
             UserFileDirs.refresh_paths()
+            
+            # Persist to setup config if requested
+            if persist:
+                try:
+                    # Ensure storage section exists in setup config
+                    from imswitch.imcontrol.model.SetupInfo import StorageInfo
+                    if not hasattr(self._setupInfo, 'storage') or self._setupInfo.storage is None:
+                        self._setupInfo.storage = StorageInfo()
+                    
+                    # Save the ImSwitchData path (not the base path)
+                    self._setupInfo.storage.activeDataPath = imswitch_data_path
+                    
+                    # Save setup config to disk
+                    from imswitch.imcontrol.model import configfiletools
+                    options, _ = configfiletools.loadOptions()
+                    configfiletools.saveSetupInfo(options, self._setupInfo)
+                    
+                    self._logger.info(f"Persisted storage path to setup config: {imswitch_data_path}")
+                except Exception as e:
+                    self._logger.error(f"Failed to persist storage path: {e}")
+                    # Don't fail the whole operation if persist fails
             
             self._logger.info(
                 f"Active storage path set to: {imswitch_data_path} (base: {path}, persist={persist})"

@@ -1096,7 +1096,7 @@ class PixelCalibrationController(LiveUpdatedController):
                     try:
                         positioner = self._master.positionersManager[positioner_name]
                         if hasattr(positioner, 'stepsizeX'):
-                            positioner.stepsizesX = corrected_stepsize_x
+                            positioner.stepsizeX = corrected_stepsize_x
                         if hasattr(positioner, 'stepsizeY'):
                             positioner.stepsizeY = corrected_stepsize_y
                             self._logger.info("Applied stepsize correction to live positioner manager")

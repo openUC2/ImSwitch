@@ -1045,111 +1045,184 @@ class OverviewCalibrator:
         return result
     
     def fix_step_sign(self, observation_camera, positioner, rect_size_um: float = 20000.0,
-                     settle_time: float = 0.3) -> Dict[str, Any]:
+                     settle_time: float = 0.3, speed: float = 15000.0) -> Dict[str, Any]:
         """
         Determine and fix step size sign by visiting rectangle corners.
         
-        Moves to 4 corners of a rectangle and compares stage displacement with
-        camera displacement using AprilTag tracking. Detects if the sign needs
-        to be inverted.
+        Moves to 4 corners of a rectangle and tracks individual AprilTags across frames,
+        comparing their pixel displacement with stage movement. Uses multi-tag tracking
+        for robustness.
         
         Args:
             observation_camera: Camera detector with getLatestFrame() method
             positioner: Stage positioner with move() and getPosition() methods
             rect_size_um: Rectangle size in micrometers (default 20000)
             settle_time: Time to wait after movement (seconds)
+            speed: Movement speed in µm/s (default 15000)
             
         Returns:
             Dictionary with:
                 - sign: {X: ±1, Y: ±1}
-                - samples: List of position samples with stage_pos and cam_centroid
+                - samples: List of position samples with stage_pos, tags, and displacements
+                - tracked_tags: List of tag IDs successfully tracked across all positions
                 - error: Error message if detection failed
         """
         try:
-            # Get initial position
+            # Get initial position and frame
             initial_pos = positioner.getPosition()
             x0 = initial_pos.get("X", 0)
             y0 = initial_pos.get("Y", 0)
             
+            time.sleep(settle_time)
+            frame0 = self._get_cleared_frame(observation_camera)
+            
+            # Detect all tags in initial frame
+            tags_initial = self.detect_tags_with_ids(frame0)
+            
+            if not tags_initial:
+                return {"error": "No AprilTags detected in initial frame"}
+            
+            self._logger.info(f"Detected {len(tags_initial)} tags at origin: {list(tags_initial.keys())}")
+            
             # Define rectangle corners relative to start
             corners = [
-                (0, 0),                          # Origin
-                (rect_size_um, 0),              # Right
-                (rect_size_um, rect_size_um),   # Top-right
-                (0, rect_size_um)               # Top
+                (0, 0),                          # Origin (reference)
+                (rect_size_um, 0),              # Right (+X movement)
+                (rect_size_um, rect_size_um),   # Top-right (+X and +Y)
+                (0, rect_size_um)               # Top (+Y movement)
             ]
             
             samples = []
+            all_tags_at_positions = [tags_initial]  # Store tags at each position
             
-            for i, (dx, dy) in enumerate(corners):
+            # Visit each corner (starting from index 1, since 0 is origin)
+            for i, (dx, dy) in enumerate(corners[1:], start=1):
                 # Move to corner
                 target_x = x0 + dx
                 target_y = y0 + dy
                 
-                self._logger.info(f"Moving to corner {i+1}/4: ({dx}, {dy}) µm offset")
-                positioner.move(value=target_x, axis="X", is_absolute=True, is_blocking=True)
-                positioner.move(value=target_y, axis="Y", is_absolute=True, is_blocking=True)
+                self._logger.info(f"Moving to corner {i+1}/4: offset=({dx}, {dy}) µm")
+                positioner.move(value=target_x, axis="X", is_absolute=True, is_blocking=True, speed=speed)
+                positioner.move(value=target_y, axis="Y", is_absolute=True, is_blocking=True, speed=speed)
                 time.sleep(settle_time)
                 
-                # Get actual position and centroid
+                # Get actual position and detect tags
                 pos = positioner.getPosition()
                 frame = self._get_cleared_frame(observation_camera)
-                centroid = self.detect_tag_centroid(frame)
+                tags_current = self.detect_tags_with_ids(frame)
                 
-                if centroid is None:
+                if not tags_current:
                     # Try to return to start
-                    positioner.move(value=x0, axis="X", is_absolute=True, is_blocking=True)
-                    positioner.move(value=y0, axis="Y", is_absolute=True, is_blocking=True)
-                    return {"error": f"AprilTag lost at corner {i+1}"}
+                    positioner.move(value=x0, axis="X", is_absolute=True, is_blocking=True, speed=speed)
+                    positioner.move(value=y0, axis="Y", is_absolute=True, is_blocking=True, speed=speed)
+                    return {"error": f"All AprilTags lost at corner {i+1}"}
+                
+                self._logger.info(f"Detected {len(tags_current)} tags at corner {i+1}: {list(tags_current.keys())}")
+                
+                all_tags_at_positions.append(tags_current)
+                
+                # Track common tags and compute displacements
+                common_tags = set(tags_initial.keys()) & set(tags_current.keys())
+                
+                if not common_tags:
+                    positioner.move(value=x0, axis="X", is_absolute=True, is_blocking=True, speed=speed)
+                    positioner.move(value=y0, axis="Y", is_absolute=True, is_blocking=True, speed=speed)
+                    return {"error": f"No common tags found at corner {i+1}"}
+                
+                # Compute pixel shifts for each tracked tag
+                tag_shifts = []
+                for tag_id in common_tags:
+                    u0, v0 = tags_initial[tag_id]
+                    u_curr, v_curr = tags_current[tag_id]
+                    du = u_curr - u0
+                    dv = v_curr - v0
+                    tag_shifts.append({
+                        "tag_id": int(tag_id),
+                        "du": float(du),
+                        "dv": float(dv)
+                    })
+                
+                # Average shifts across all tracked tags
+                avg_du = np.mean([s["du"] for s in tag_shifts])
+                avg_dv = np.mean([s["dv"] for s in tag_shifts])
                 
                 samples.append({
+                    "corner_index": i,
                     "stage_pos": [float(pos.get("X", 0)), float(pos.get("Y", 0))],
-                    "cam_centroid": [float(centroid[0]), float(centroid[1])],
-                    "target": [dx, dy]
+                    "stage_offset": [dx, dy],
+                    "num_tags_tracked": len(common_tags),
+                    "tracked_tag_ids": list(common_tags),
+                    "avg_pixel_shift": [float(avg_du), float(avg_dv)],
+                    "individual_tag_shifts": tag_shifts
                 })
             
             # Return to origin
-            positioner.move(value=x0, axis="X", is_absolute=True, is_blocking=True)
-            positioner.move(value=y0, axis="Y", is_absolute=True, is_blocking=True)
+            positioner.move(value=x0, axis="X", is_absolute=True, is_blocking=True, speed=speed)
+            positioner.move(value=y0, axis="Y", is_absolute=True, is_blocking=True, speed=speed)
             
             # Analyze displacement patterns
-            # Compare stage movement with camera movement
-            stage_dx = samples[1]["stage_pos"][0] - samples[0]["stage_pos"][0]
-            cam_du = samples[1]["cam_centroid"][0] - samples[0]["cam_centroid"][0]
-            cam_dv = samples[1]["cam_centroid"][1] - samples[0]["cam_centroid"][1]
+            # Sample 0: Right movement (+X only)
+            # Sample 2: Top movement (+Y only, from origin)
             
-            stage_dy = samples[3]["stage_pos"][1] - samples[0]["stage_pos"][1]
-            cam_du_y = samples[3]["cam_centroid"][0] - samples[0]["cam_centroid"][0]
-            cam_dv_y = samples[3]["cam_centroid"][1] - samples[0]["cam_centroid"][1]
+            # X movement analysis (corner 1: right)
+            stage_dx = samples[0]["stage_offset"][0]  # Should be rect_size_um
+            cam_du_x = samples[0]["avg_pixel_shift"][0]
+            cam_dv_x = samples[0]["avg_pixel_shift"][1]
+            
+            # Y movement analysis (corner 3: top)
+            stage_dy = samples[2]["stage_offset"][1]  # Should be rect_size_um
+            cam_du_y = samples[2]["avg_pixel_shift"][0]
+            cam_dv_y = samples[2]["avg_pixel_shift"][1]
+            
+            self._logger.info(f"X movement: stage={stage_dx:.1f} µm, camera shift=({cam_du_x:.1f}, {cam_dv_x:.1f}) px")
+            self._logger.info(f"Y movement: stage={stage_dy:.1f} µm, camera shift=({cam_du_y:.1f}, {cam_dv_y:.1f}) px")
             
             # Determine which camera axis aligns with which stage axis
             # and check sign consistency
             
             # For X: check if camera displacement is consistent with stage X
-            if abs(cam_du) > abs(cam_dv):
+            if abs(cam_du_x) > abs(cam_dv_x):
                 # X aligns with camera u (width)
-                sign_x = 1 if (stage_dx * cam_du) > 0 else -1
+                sign_x = 1 if (stage_dx * cam_du_x) < 0 else -1
+                x_axis_alignment = "width"
             else:
                 # X aligns with camera v (height)
-                sign_x = 1 if (stage_dx * cam_dv) > 0 else -1
+                sign_x = 1 if (stage_dx * cam_dv_x) < 0 else -1
+                x_axis_alignment = "height"
             
             # For Y: check if camera displacement is consistent with stage Y
             if abs(cam_dv_y) > abs(cam_du_y):
                 # Y aligns with camera v (height)
-                sign_y = 1 if (stage_dy * cam_dv_y) > 0 else -1
+                sign_y = 1 if (stage_dy * cam_dv_y) < 0 else -1
+                y_axis_alignment = "height"
             else:
                 # Y aligns with camera u (width)
-                sign_y = 1 if (stage_dy * cam_du_y) > 0 else -1
+                sign_y = 1 if (stage_dy * cam_du_y) < 0 else -1
+                y_axis_alignment = "width"
+            
+            # Find tags tracked at all positions
+            all_tracked = set(tags_initial.keys())
+            for tags_dict in all_tags_at_positions[1:]:
+                all_tracked &= set(tags_dict.keys())
             
             result = {
                 "sign": {
                     "X": int(sign_x),
                     "Y": int(sign_y)
                 },
-                "samples": samples
+                "mapping": {
+                    "stageX_to_cam": x_axis_alignment,
+                    "stageY_to_cam": y_axis_alignment
+                },
+                "samples": samples,
+                "tracked_tags": list(all_tracked),
+                "num_tags_tracked": len(all_tracked)
             }
             
-            self._logger.info(f"Step sign determination complete: {result['sign']}")
+            self._logger.info(
+                f"Step sign determination complete: signs={result['sign']}, "
+                f"mapping={result['mapping']}, tracked {len(all_tracked)} tags"
+            )
             return result
             
         except Exception as e:

@@ -117,11 +117,16 @@ class OverviewCalibrator:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         else:
             gray = img
-        
+        # if not uint 8, convert and normalize
+        if gray.dtype != np.uint8:
+            gray = cv2.normalize(gray, None, 20, 200, cv2.NORM_MINMAX).astype(np.uint8)
         # Detect markers
         if self._aruco_detector is not None:
             # OpenCV >= 4.7
             corners, ids, _ = self._aruco_detector.detectMarkers(gray)
+            if ids is None:
+                # try inverting image contrast
+                corners, ids, _ = self._aruco_detector.detectMarkers(255-gray)
         else:
             # Legacy OpenCV
             corners, ids, _ = cv2.aruco.detectMarkers(gray, self._aruco_dict, 
@@ -164,10 +169,17 @@ class OverviewCalibrator:
         else:
             gray = img
         
+        # if not uint 8, convert and normalize
+        if gray.dtype != np.uint8:
+            gray = cv2.normalize(gray, None, 20, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        
         # Detect markers
         if self._aruco_detector is not None:
             # OpenCV >= 4.7
             corners, ids, _ = self._aruco_detector.detectMarkers(gray)
+            if ids is None:
+                # try inverting image contrast
+                corners, ids, _ = self._aruco_detector.detectMarkers(255-gray)
         else:
             # Legacy OpenCV
             corners, ids, _ = cv2.aruco.detectMarkers(gray, self._aruco_dict, 

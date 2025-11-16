@@ -1059,12 +1059,56 @@ class PixelCalibrationController(LiveUpdatedController):
             
             self._setupInfo.PixelCalibration.overviewCalibration['axes']['sign'] = result['sign']
             
+            # Apply sign correction to positioner stepsize
+            # Get positioner name
+            positioner_names = self._master.positionersManager.getAllDeviceNames()
+            if positioner_names:
+                positioner_name = positioner_names[0]
+                
+                # Get sign corrections from result
+                sign_x = result['sign'].get('X', 1)
+                sign_y = result['sign'].get('Y', 1)
+                
+                self._logger.info(f"Applying sign correction to positioner '{positioner_name}': X={sign_x}, Y={sign_y}")
+                
+                # Update stepsize in setupInfo by multiplying with sign
+                if hasattr(self._setupInfo, 'positioners') and positioner_name in self._setupInfo.positioners:
+                    positioner_info = self._setupInfo.positioners[positioner_name]
+                    
+                    # Get current stepsizes
+                    current_stepsize_x = positioner_info.managerProperties.get('stepsizeX', 1)
+                    current_stepsize_y = positioner_info.managerProperties.get('stepsizeY', 1)
+                    
+                    # Apply sign correction by multiplying
+                    corrected_stepsize_x = current_stepsize_x * sign_x
+                    corrected_stepsize_y = current_stepsize_y * sign_y
+                    
+                    # Update in setupInfo
+                    positioner_info.managerProperties['stepsizeX'] = corrected_stepsize_x
+                    positioner_info.managerProperties['stepsizeY'] = corrected_stepsize_y
+                    
+                    self._logger.info(
+                        f"Updated stepsize: X: {current_stepsize_x} -> {corrected_stepsize_x}, "
+                        f"Y: {current_stepsize_y} -> {corrected_stepsize_y}"
+                    )
+                    
+                    # Also update the live positioner manager if it has stepSizes attribute
+                    try:
+                        positioner = self._master.positionersManager[positioner_name]
+                        if hasattr(positioner, 'stepsizeX'):
+                            positioner.stepsizesX = corrected_stepsize_x
+                        if hasattr(positioner, 'stepsizeY'):
+                            positioner.stepsizeY = corrected_stepsize_y
+                            self._logger.info("Applied stepsize correction to live positioner manager")
+                    except Exception as e:
+                        self._logger.warning(f"Could not update live positioner: {e}")
+            
             # Save to disk
             try:
                 import imswitch.imcontrol.model.configfiletools as configfiletools
                 options, _ = configfiletools.loadOptions()
                 configfiletools.saveSetupInfo(options, self._setupInfo)
-                self._logger.info("Saved step sign correction to config")
+                self._logger.info("Saved step sign correction and updated stepsizes to config")
             except Exception as e:
                 self._logger.warning(f"Could not save config: {e}")
         
@@ -1340,9 +1384,12 @@ class PixelCalibrationController(LiveUpdatedController):
                 frame_color = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
             else:
                 frame_color = frame.copy()
-            
+            # convert to uint8
+            if frame_color.dtype != np.uint8:
+                frame_color = cv2.normalize(frame_color, None, 10, 200, cv2.NORM_MINMAX).astype(np.uint8)
+                
             # Detect tags
-            tags = self.gridCalibrator.detect_tags(frame)
+            tags = self.gridCalibrator.detect_tags(np.mean(frame_color, axis=2).astype(np.uint8))
             
             if not tags:
                 return frame_color
@@ -1799,41 +1846,31 @@ class PixelCalibrationController(LiveUpdatedController):
     def gridMoveToTag(self, target_id: int, 
                      roi_tolerance_px: float = 8.0,
                      max_iterations: int = 30,
-                     step_fraction: float = 0.7,
-                     settle_time: float = 0.3,
-                     pixel_to_um_estimate: float = 0.65):
+                     max_step_um: float = 1000.0,
+                     settle_time: float = 0.3):
         """
-        Navigate stage to center a specific AprilTag ID using iterative neighbor-based hopping.
+        Navigate stage to center a specific AprilTag ID using grid-aware iterative navigation.
         
-        This method uses continuous feedback from detected neighboring tags, validating each
-        step against known grid topology. It does NOT require precise affine calibration -
-        only approximate pixel-to-stage scaling.
+        This method uses axis calibration data from overviewIdentifyAxes to correctly map
+        movements. It compares detected tag grid positions with the stored grid topology
+        to decide movement direction. Runs in a background thread to avoid blocking the server.
         
         Algorithm:
-        1. Detect all visible tags in current frame
-        2. Find best neighbor tag moving toward target (validated by grid structure)
-        3. Compute pixel displacement and convert to stage movement
-        4. Move by fraction of displacement
+        1. Check if axis calibration is available, run overviewIdentifyAxes if needed
+        2. Detect all visible tags in current frame
+        3. Compare detected tag grid positions with target position
+        4. Move by max_step_um in the computed direction (X or Y)
         5. Repeat until target is visible and centered
-        
-        This is more robust than direct navigation because:
-        - Validates direction using known grid neighbors at each step
-        - Adapts to local geometry variations
-        - Works even with imprecise/missing affine calibration
-        - Self-corrects from detection errors
         
         Args:
             target_id: Tag ID to navigate to (must be within grid range)
             roi_tolerance_px: Acceptable pixel offset for convergence (default 8.0)
-            max_iterations: Maximum iteration count (default 30, increased for hopping)
-            step_fraction: Fraction of displacement to apply per step (default 0.7, conservative)
+            max_iterations: Maximum iteration count (default 30)
+            max_step_um: Maximum step size per iteration in micrometers (default 1000.0)
             settle_time: Wait time after movement in seconds (default 0.3)
-            pixel_to_um_estimate: Rough pixel-to-micrometer conversion (default 0.65 um/px)
-                                  Used only if affine transform unavailable
             
         Returns:
-            Dictionary with navigation results including success status and detailed trajectory
-            showing neighbor validation at each step
+            Dictionary with status message - actual navigation runs in background thread
         """
         try:
             if self.observationCamera is None:
@@ -1842,8 +1879,6 @@ class PixelCalibrationController(LiveUpdatedController):
             if self.gridCalibrator is None:
                 self._loadGridCalibration()
             
-            # Note: No longer requires affine transform! Will use pixel_to_um_estimate if not available
-            
             # Get positioner
             positioner_names = self._master.positionersManager.getAllDeviceNames()
             if not positioner_names:
@@ -1851,20 +1886,80 @@ class PixelCalibrationController(LiveUpdatedController):
             
             positioner = self._master.positionersManager[positioner_names[0]]
             
-            # Perform iterative neighbor-based navigation (synchronous)
-            result = self.gridCalibrator.move_to_tag(
-                target_id=target_id,
-                observation_camera=self.observationCamera,
-                positioner=positioner,
-                roi_center=None,  # Use image center
-                roi_tolerance_px=roi_tolerance_px,
-                max_iterations=max_iterations,
-                step_fraction=step_fraction,
-                settle_time=settle_time,
-                pixel_to_um_estimate=pixel_to_um_estimate
-            )
+            # Check for axis calibration data
+            axis_calibration = None
+            if hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                overview_cal = self._setupInfo.PixelCalibration.overviewCalibration
+                if 'axes' in overview_cal:
+                    axis_calibration = overview_cal['axes']
             
-            return result
+            # Run axis calibration if not available
+            if axis_calibration is None:
+                self._logger.info("No axis calibration found, running overviewIdentifyAxes...")
+                cal_result = self.overviewCalibrator.identify_axes(
+                    self.observationCamera, positioner, step_um=max_step_um
+                )
+                
+                if "error" in cal_result:
+                    return {
+                        "error": f"Axis calibration failed: {cal_result['error']}",
+                        "success": False
+                    }
+                
+                # Save calibration
+                if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                    self._setupInfo.PixelCalibration.overviewCalibration = {}
+                
+                self._setupInfo.PixelCalibration.overviewCalibration['axes'] = {
+                    'mapping': cal_result['mapping'],
+                    'sign': cal_result['sign']
+                }
+                
+                # Save to disk
+                try:
+                    import imswitch.imcontrol.model.configfiletools as configfiletools
+                    options, _ = configfiletools.loadOptions()
+                    configfiletools.saveSetupInfo(options, self._setupInfo)
+                    self._logger.info("Saved axis calibration to config")
+                except Exception as e:
+                    self._logger.warning(f"Could not save config: {e}")
+                
+                axis_calibration = self._setupInfo.PixelCalibration.overviewCalibration['axes']
+            
+            # Start navigation in background thread
+            def navigation_worker():
+                result = self.gridCalibrator.move_to_tag(
+                    target_id=target_id,
+                    observation_camera=self.observationCamera,
+                    positioner=positioner,
+                    axis_calibration=axis_calibration,
+                    roi_center=None,  # Use image center
+                    roi_tolerance_px=roi_tolerance_px,
+                    max_iterations=max_iterations,
+                    max_step_um=max_step_um,
+                    settle_time=settle_time
+                )
+                
+                if result.get('success'):
+                    self._logger.info(
+                        f"Navigation to tag {target_id} completed successfully in "
+                        f"{result['iterations']} iterations"
+                    )
+                else:
+                    self._logger.error(
+                        f"Navigation to tag {target_id} failed: {result.get('error', 'Unknown error')}"
+                    )
+            
+            import threading
+            nav_thread = threading.Thread(target=navigation_worker, daemon=True)
+            nav_thread.start()
+            
+            return {
+                "success": True,
+                "message": f"Navigation to tag {target_id} started in background",
+                "target_id": target_id,
+                "axis_calibration": axis_calibration
+            }
             
         except Exception as e:
             self._logger.error(f"Grid navigation failed: {e}", exc_info=True)

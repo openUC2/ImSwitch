@@ -193,16 +193,23 @@ class AprilTagGridCalibrator:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         else:
             gray = img
-        
-        # Detect markers
-        if self._aruco_detector is not None:
-            # OpenCV >= 4.7
-            corners, ids, _ = self._aruco_detector.detectMarkers(gray)
-        else:
-            # Legacy OpenCV
-            corners, ids, _ = cv2.aruco.detectMarkers(gray, self._aruco_dict, 
-                                                       parameters=self._aruco_params)
-        
+            
+        if gray.dtype != np.uint8:
+            gray = cv2.normalize(gray, None, 20, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        try:
+            # Detect markers
+            if self._aruco_detector is not None:
+                # OpenCV >= 4.7
+                corners, ids, _ = self._aruco_detector.detectMarkers(gray)
+                if ids is None: # inverted image
+                    corners, ids, _ = self._aruco_detector.detectMarkers(255 - gray)
+            else:
+                # Legacy OpenCV
+                corners, ids, _ = cv2.aruco.detectMarkers(gray, self._aruco_dict, 
+                                                        parameters=self._aruco_params)
+        except Exception as e:
+            self._logger.error(f"AprilTag detection failed: {e}")
+            return {}        
         if ids is None or len(ids) == 0:
             return {}
         
@@ -421,37 +428,39 @@ class AprilTagGridCalibrator:
         return (dx_um, dy_um)
     
     def move_to_tag(self, target_id: int, observation_camera, positioner,
+                   axis_calibration: Dict[str, Any],
                    roi_center: Optional[Tuple[float, float]] = None,
                    roi_tolerance_px: float = 8.0,
                    max_iterations: int = 30,
-                   step_fraction: float = 0.7,
-                   settle_time: float = 0.3,
-                   pixel_to_um_estimate: float = 0.65) -> Dict[str, Any]:
+                   max_step_um: float = 1000.0,
+                   settle_time: float = 0.3) -> Dict[str, Any]:
         """
-        Navigate to a specific tag ID using iterative neighbor-based hopping.
+        Navigate to a specific tag ID using iterative grid-aware navigation.
         
-        This method uses continuous feedback from detected neighboring tags to navigate,
-        validating each step against known grid topology. It does NOT require a precise
-        affine transformation - only approximate pixel-to-stage scaling.
+        This method uses continuous feedback from detected tags, comparing current tag
+        positions with stored grid topology to decide movement direction. It uses axis
+        calibration data from overviewIdentifyAxes to correctly map pixel movements to
+        stage movements.
         
         Algorithm:
         1. Detect all visible tags in current frame
-        2. Find best neighbor tag that moves us toward target (validated by grid topology)
-        3. Compute pixel displacement to that neighbor
-        4. Convert to stage movement using approximate scaling
-        5. Move stage by fraction of computed displacement
-        6. Repeat until target is visible and centered
+        2. Determine which direction (X/Y) to move based on target grid position
+        3. Move by max_step_um in the computed direction
+        4. Detect tags again and validate we're moving toward target
+        5. Repeat until target is visible and centered
         
         Args:
             target_id: Desired tag ID to center
             observation_camera: Camera with getLatestFrame() method
             positioner: Stage with move() and getPosition() methods
+            axis_calibration: Axis calibration data from overviewIdentifyAxes with:
+                - mapping: {stageX_to_cam: "width"|"height", stageY_to_cam: "width"|"height"}
+                - sign: {X: +1|-1, Y: +1|-1}
             roi_center: (cx, cy) ROI center in pixels. If None, uses image center.
             roi_tolerance_px: Acceptable pixel offset for convergence (default 8.0)
             max_iterations: Maximum iteration count (default 30)
-            step_fraction: Fraction of computed displacement to apply per step (0-1, default 0.7)
+            max_step_um: Maximum step size per iteration in micrometers (default 1000.0)
             settle_time: Wait time after movement (seconds, default 0.3)
-            pixel_to_um_estimate: Rough pixel-to-micrometer conversion (default 0.65 um/px)
             
         Returns:
             Dictionary with:
@@ -464,20 +473,34 @@ class AprilTagGridCalibrator:
         """
         try:
             # Validate target ID
-            if self._grid.id_to_rowcol(target_id) is None:
+            target_pos = self._grid.id_to_rowcol(target_id)
+            if target_pos is None:
                 return {"error": f"Target ID {target_id} is outside grid range", "success": False}
             
+            target_row, target_col = target_pos
             trajectory = []
+            
+            # Extract axis calibration data
+            mapping = axis_calibration.get('mapping', {})
+            sign = axis_calibration.get('sign', {})
+            
+            if not mapping or not sign:
+                return {
+                    "error": "Invalid axis calibration data. Run overviewIdentifyAxes first.",
+                    "success": False
+                }
             
             # Determine ROI center
             frame = observation_camera.getLatestFrame()
             h, w = frame.shape[:2]
             if roi_center is None:
                 roi_center = (w / 2.0, h / 2.0)
-            current_tags = self.detect_tags(frame)
-            self._logger.info(f"Starting iterative navigation to tag {target_id} from current tags: {list(current_tags.keys())}")
             
-            # Iterative navigation with neighbor feedback
+            self._logger.info(
+                f"Starting navigation to tag {target_id} (grid row={target_row}, col={target_col})"
+            )
+            
+            # Iterative navigation comparing grid positions
             for iteration in range(max_iterations):
                 # Detect all tags in current frame
                 frame = observation_camera.getLatestFrame()
@@ -490,25 +513,15 @@ class AprilTagGridCalibrator:
                         "trajectory": trajectory
                     }
                 
-                self._logger.info(f"Iteration {iteration}: Detected {len(current_tags)} tags: {list(current_tags.keys())}")
+                self._logger.info(
+                    f"Iteration {iteration}: Detected {len(current_tags)} tags: {list(current_tags.keys())}"
+                )
                 
-                # Find best next tag toward target using grid topology
-                next_tag_info = self._find_best_neighbor_toward_target(current_tags, target_id)
-                
-                if next_tag_info is None:
-                    return {
-                        "error": f"Cannot find valid path to target at iteration {iteration}",
-                        "success": False,
-                        "trajectory": trajectory,
-                        "detected_tags": list(current_tags.keys())
-                    }
-                
-                next_id, next_cx, next_cy, nav_info = next_tag_info
-                
-                # Check if target is reached and centered
-                if next_id == target_id:
-                    offset_x = next_cx - roi_center[0]
-                    offset_y = next_cy - roi_center[1]
+                # Check if target is visible
+                if target_id in current_tags:
+                    cx, cy = current_tags[target_id]
+                    offset_x = cx - roi_center[0]
+                    offset_y = cy - roi_center[1]
                     offset_mag = np.sqrt(offset_x**2 + offset_y**2)
                     
                     if offset_mag <= roi_tolerance_px:
@@ -521,49 +534,50 @@ class AprilTagGridCalibrator:
                             "success": True,
                             "final_offset_px": float(offset_mag),
                             "iterations": iteration,
-                            "final_tag_id": next_id,
+                            "final_tag_id": target_id,
                             "trajectory": trajectory
                         }
                     
                     # Micro-centering: move to center the target tag
-                    dx_um = -offset_x * pixel_to_um_estimate
-                    dy_um = -offset_y * pixel_to_um_estimate
+                    dx_um, dy_um = self._pixel_offset_to_stage_move(
+                        offset_x, offset_y, mapping, sign
+                    )
                     
-                    # Use affine transform if available for better accuracy
-                    if self._T_cam2stage is not None:
-                        dx_um, dy_um = self.pixel_to_stage_delta(offset_x, offset_y)
+                    # Limit movement to max_step_um
+                    move_mag = np.sqrt(dx_um**2 + dy_um**2)
+                    if move_mag > max_step_um:
+                        scale = max_step_um / move_mag
+                        dx_um *= scale
+                        dy_um *= scale
                     
-                    # Move to center
-                    positioner.move(value=dx_um, axis="X", is_absolute=False, is_blocking=True)
-                    positioner.move(value=dy_um, axis="Y", is_absolute=False, is_blocking=True)
+                    # Move to center (invert signs because we want to move stage opposite to pixel offset)
+                    positioner.move(value=-dx_um, axis="X", is_absolute=False, is_blocking=True)
+                    positioner.move(value=-dy_um, axis="Y", is_absolute=False, is_blocking=True)
                     time.sleep(settle_time)
                     
                     trajectory.append({
                         "iteration": iteration,
-                        "mode": "micro_centering",
-                        "current_tag": next_id,
+                        "mode": "centering",
+                        "current_tag": target_id,
                         "offset_px": float(offset_mag),
-                        "move_um": [float(dx_um), float(dy_um)],
-                        "navigation_info": nav_info
+                        "move_um": [float(-dx_um), float(-dy_um)]
                     })
                     
                 else:
-                    # Coarse navigation: move toward next tag
-                    # Compute pixel displacement to next tag
-                    offset_x = next_cx - roi_center[0]
-                    offset_y = next_cy - roi_center[1]
+                    # Target not visible - compute direction based on detected tag grid positions
+                    move_decision = self._compute_grid_based_movement(
+                        current_tags, target_row, target_col, max_step_um, sign
+                    )
                     
-                    # Convert to stage movement (approximate)
-                    dx_um = -offset_x * pixel_to_um_estimate * step_fraction
-                    dy_um = -offset_y * pixel_to_um_estimate * step_fraction
+                    if move_decision is None:
+                        return {
+                            "error": f"Cannot determine movement direction at iteration {iteration}",
+                            "success": False,
+                            "trajectory": trajectory,
+                            "detected_tags": list(current_tags.keys())
+                        }
                     
-                    # Use affine transform if available for better accuracy
-                    if self._T_cam2stage is not None:
-                        dx_full, dy_full = self.pixel_to_stage_delta(offset_x, offset_y)
-                        dx_um = dx_full * step_fraction
-                        dy_um = dy_full * step_fraction
-                    
-                    offset_mag = np.sqrt(offset_x**2 + offset_y**2)
+                    dx_um, dy_um, decision_info = move_decision
                     
                     # Move stage
                     positioner.move(value=dx_um, axis="X", is_absolute=False, is_blocking=True)
@@ -571,19 +585,16 @@ class AprilTagGridCalibrator:
                     time.sleep(settle_time)
                     
                     self._logger.debug(
-                        f"Iteration {iteration}: Moving toward tag {next_id} "
-                        f"(grid_dist={nav_info.get('grid_distance', '?')}, "
-                        f"neighbors={len(nav_info.get('actual_neighbors', []))}/{len(nav_info.get('expected_neighbors', []))})"
+                        f"Iteration {iteration}: Moving toward target "
+                        f"(grid_offset: row={decision_info['row_offset']}, col={decision_info['col_offset']})"
                     )
                     
                     trajectory.append({
                         "iteration": iteration,
-                        "mode": "tag_hopping",
-                        "current_tag": next_id,
+                        "mode": "grid_navigation",
                         "target_tag": target_id,
-                        "offset_px": float(offset_mag),
                         "move_um": [float(dx_um), float(dy_um)],
-                        "navigation_info": nav_info
+                        "decision_info": decision_info
                     })
             
             # Max iterations reached
@@ -601,6 +612,118 @@ class AprilTagGridCalibrator:
                 "success": False,
                 "trajectory": trajectory if 'trajectory' in locals() else []
             }
+    
+    def _pixel_offset_to_stage_move(self, pixel_dx: float, pixel_dy: float,
+                                    mapping: Dict[str, str], sign: Dict[str, int]) -> Tuple[float, float]:
+        """
+        Convert pixel offset to stage movement using axis calibration.
+        
+        Uses affine transform if available, otherwise uses axis calibration mapping.
+        
+        Args:
+            pixel_dx: Pixel offset in width direction
+            pixel_dy: Pixel offset in height direction
+            mapping: Axis mapping from calibration {stageX_to_cam: "width"|"height", stageY_to_cam: "width"|"height"}
+            sign: Axis sign from calibration {X: +1|-1, Y: +1|-1}
+            
+        Returns:
+            (dx_um, dy_um) stage movement in micrometers
+        """
+        # Use affine transform if available
+        if self._T_cam2stage is not None:
+            return self.pixel_to_stage_delta(pixel_dx, pixel_dy)
+        
+        # Otherwise use axis calibration with pitch-based scaling
+        # Assume pixel-to-mm ratio from grid pitch (rough estimate)
+        # This will be refined by the iterative feedback loop
+        pixel_to_mm = self._grid.pitch_mm / 100.0  # Rough estimate: ~40mm pitch / ~100px
+        
+        # Map camera axes to stage axes
+        stage_x_um = 0.0
+        stage_y_um = 0.0
+        
+        if mapping.get('stageX_to_cam') == 'width':
+            stage_x_um = pixel_dx * pixel_to_mm * 1000.0 * sign.get('X', 1)
+        elif mapping.get('stageX_to_cam') == 'height':
+            stage_x_um = pixel_dy * pixel_to_mm * 1000.0 * sign.get('X', 1)
+        
+        if mapping.get('stageY_to_cam') == 'width':
+            stage_y_um = pixel_dx * pixel_to_mm * 1000.0 * sign.get('Y', 1)
+        elif mapping.get('stageY_to_cam') == 'height':
+            stage_y_um = pixel_dy * pixel_to_mm * 1000.0 * sign.get('Y', 1)
+        
+        return (stage_x_um, stage_y_um)
+    
+    def _compute_grid_based_movement(self, detected_tags: Dict[int, Tuple[float, float]],
+                                    target_row: int, target_col: int,
+                                    max_step_um: float,
+                                    sign: Dict[str, int]) -> Optional[Tuple[float, float, Dict[str, Any]]]:
+        """
+        Compute stage movement direction based on detected tag grid positions vs target.
+        
+        Compares current tag positions in the grid to target position and decides
+        which direction to move on the stage.
+        
+        Args:
+            detected_tags: Dictionary mapping tag_id -> (cx, cy) for detected tags
+            target_row: Target tag grid row
+            target_col: Target tag grid column
+            max_step_um: Maximum step size in micrometers
+            sign: Axis sign from calibration {X: +1|-1, Y: +1|-1}
+            
+        Returns:
+            (dx_um, dy_um, decision_info) or None if cannot determine direction
+        """
+        # Compute average grid position of detected tags
+        total_row = 0
+        total_col = 0
+        valid_count = 0
+        
+        for tag_id in detected_tags.keys():
+            pos = self._grid.id_to_rowcol(tag_id)
+            if pos is not None:
+                row, col = pos
+                total_row += row
+                total_col += col
+                valid_count += 1
+        
+        if valid_count == 0:
+            return None
+        
+        avg_row = total_row / valid_count
+        avg_col = total_col / valid_count
+        
+        # Compute offset to target in grid coordinates
+        row_offset = target_row - avg_row
+        col_offset = target_col - avg_col
+        
+        # Decide primary direction: move in dimension with larger offset
+        move_in_rows = abs(row_offset) > abs(col_offset)
+        
+        dx_um = 0.0
+        dy_um = 0.0
+        
+        if move_in_rows:
+            # Move in Y direction (rows)
+            # Positive row offset means move down (+Y on stage)
+            dy_um = max_step_um * np.sign(row_offset) * sign.get('Y', 1)
+        else:
+            # Move in X direction (cols)
+            # Positive col offset means move right (+X on stage)
+            dx_um = max_step_um * np.sign(col_offset) * sign.get('X', 1)
+        
+        decision_info = {
+            "avg_detected_row": float(avg_row),
+            "avg_detected_col": float(avg_col),
+            "target_row": target_row,
+            "target_col": target_col,
+            "row_offset": float(row_offset),
+            "col_offset": float(col_offset),
+            "move_direction": "rows" if move_in_rows else "cols",
+            "num_detected_tags": valid_count
+        }
+        
+        return (dx_um, dy_um, decision_info)
     
     def _find_best_neighbor_toward_target(self, detected_tags: Dict[int, Tuple[float, float]], 
                                          target_id: int) -> Optional[Tuple[int, float, float, Dict[str, Any]]]:

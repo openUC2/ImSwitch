@@ -357,6 +357,7 @@ class PixelCalibrationInfo:
         }
     }
     """
+    ObservationCameraFlip: Dict[str, bool] = field(default_factory=lambda: {"flipX": True, "flipY": True}) # should be True for the ESP32 Xiao camera used as overview camera in FRAME
 
 
 @dataclass(frozen=False)

@@ -79,7 +79,7 @@ class PixelCalibrationController(LiveUpdatedController):
         self._loadGridCalibration()
         
         # AprilTag overlay flag for MJPEG stream
-        self._aprilTagOverlayEnabled = False
+        self._aprilTagOverlayEnabled = True
         self._overlay_lock = threading.Lock()
         
         # Stream state for overview camera
@@ -1602,7 +1602,9 @@ class PixelCalibrationController(LiveUpdatedController):
             self._setupInfo.PixelCalibration.aprilTagGrid = grid_dict
             
             # Save to file
-            configfiletools.saveSetupInfo(self._setupInfo)
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            options, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(options, self._setupInfo)
             self._logger.info("Saved AprilTag grid calibration to config")
             
         except Exception as e:
@@ -1803,8 +1805,9 @@ class PixelCalibrationController(LiveUpdatedController):
         """
         Navigate stage to center a specific AprilTag ID in the observation camera ROI.
         
+        Runs in a background thread to avoid blocking the server.
         Uses closed-loop feedback with the calibrated camera-to-stage transformation.
-        
+        IMPORTANT: Ensure the gridCalibrateTransform has been run successfully before using this.
         Args:
             target_id: Tag ID to navigate to (must be within grid range)
             roi_tolerance_px: Acceptable pixel offset for convergence (default 8.0)
@@ -1814,7 +1817,7 @@ class PixelCalibrationController(LiveUpdatedController):
             search_enabled: Enable coarse search if target not initially visible (default True)
             
         Returns:
-            Dictionary with navigation results including success status and trajectory
+            Dictionary with status message indicating navigation has started
         """
         try:
             if self.observationCamera is None:
@@ -1825,10 +1828,8 @@ class PixelCalibrationController(LiveUpdatedController):
             
             # Check if transform is calibrated
             if self.gridCalibrator.get_transform() is None:
-                return {
-                    "error": "Camera-to-stage transformation not calibrated. Run gridCalibrateTransform first.",
-                    "success": False
-                }
+                # do the gridCalibrateTransform first
+                self.gridCalibrateTransform()
             
             # Get positioner
             positioner_names = self._master.positionersManager.getAllDeviceNames()
@@ -1837,23 +1838,40 @@ class PixelCalibrationController(LiveUpdatedController):
             
             positioner = self._master.positionersManager[positioner_names[0]]
             
-            # Perform navigation
-            result = self.gridCalibrator.move_to_tag(
-                target_id=target_id,
-                observation_camera=self.observationCamera,
-                positioner=positioner,
-                roi_center=None,  # Use image center
-                roi_tolerance_px=roi_tolerance_px,
-                max_iterations=max_iterations,
-                step_fraction=step_fraction,
-                settle_time=settle_time,
-                search_enabled=search_enabled
-            )
+            # Run navigation in background thread
+            def _navigate():
+                try:
+                    result = self.gridCalibrator.move_to_tag(
+                        target_id=target_id,
+                        observation_camera=self.observationCamera,
+                        positioner=positioner,
+                        roi_center=None,  # Use image center
+                        roi_tolerance_px=roi_tolerance_px,
+                        max_iterations=max_iterations,
+                        step_fraction=step_fraction,
+                        settle_time=settle_time,
+                        search_enabled=search_enabled
+                    )
+                    
+                    if result.get("success", False):
+                        self._logger.info(f"Successfully navigated to tag {target_id} in {result.get('iterations', 0)} iterations")
+                    else:
+                        self._logger.warning(f"Navigation to tag {target_id} failed: {result.get('error', 'Unknown error')}")
+                        
+                except Exception as e:
+                    self._logger.error(f"Grid navigation thread failed: {e}", exc_info=True)
             
-            return result
+            # Start background thread
+            nav_thread = threading.Thread(target=_navigate, daemon=True)
+            nav_thread.start()
+            
+            return {
+                "success": True,
+                "message": f"Navigation to tag {target_id} started in background"
+            }
             
         except Exception as e:
-            self._logger.error(f"Grid navigation failed: {e}", exc_info=True)
+            self._logger.error(f"Failed to start grid navigation: {e}", exc_info=True)
             return {"error": str(e), "success": False}
     
     @APIExport()

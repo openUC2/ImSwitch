@@ -528,12 +528,9 @@ class AprilTagGridCalibrator:
                     dx_um, dy_um = self.pixel_to_stage_delta(offset_x, offset_y)
                     
                     # Move to center
-                    current_pos = positioner.getPosition()
-                    new_x = current_pos.get("X", 0) + dx_um
-                    new_y = current_pos.get("Y", 0) + dy_um
-                    
-                    positioner.move(value=new_x, axis="X", is_absolute=True, is_blocking=True)
-                    positioner.move(value=new_y, axis="Y", is_absolute=True, is_blocking=True)
+                    positioner.move(value=dx_um, axis="X", is_absolute=False, is_blocking=True)
+                    positioner.move(value=dy_um, axis="Y", is_absolute=False, is_blocking=True)
+
                     time.sleep(settle_time)
                     
                     trajectory.append({
@@ -575,12 +572,8 @@ class AprilTagGridCalibrator:
                     dy_um *= step_fraction
                     
                     # Move stage
-                    current_pos = positioner.getPosition()
-                    new_x = current_pos.get("X", 0) + dx_um
-                    new_y = current_pos.get("Y", 0) + dy_um
-                    
-                    positioner.move(value=new_x, axis="X", is_absolute=True, is_blocking=True)
-                    positioner.move(value=new_y, axis="Y", is_absolute=True, is_blocking=True)
+                    positioner.move(value=dx_um, axis="X", is_absolute=False, is_blocking=True)
+                    positioner.move(value=dy_um, axis="Y", is_absolute=False, is_blocking=True)
                     time.sleep(settle_time)
                     
                     offset_x = cx - roi_center[0]

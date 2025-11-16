@@ -1547,8 +1547,8 @@ class PixelCalibrationController(LiveUpdatedController):
         """
         if not hasattr(self._setupInfo.PixelCalibration, 'aprilTagGrid'):
             self._logger.info("No AprilTag grid configuration found, using defaults")
-            # Create default grid: 17 rows x 25 cols, 40mm pitch
-            grid_config = GridConfig(rows=17, cols=25, start_id=0, pitch_mm=40.0)
+            # Create default grid: 17 rows x 25 cols, 4mm pitch
+            grid_config = GridConfig(rows=17, cols=25, start_id=0, pitch_mm=4.0)
             self.gridCalibrator = AprilTagGridCalibrator(grid_config, logger=self._logger)
             return
         
@@ -1576,7 +1576,7 @@ class PixelCalibrationController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Failed to load grid configuration: {e}", exc_info=True)
             # Fallback to default
-            grid_config = GridConfig(rows=17, cols=25, start_id=0, pitch_mm=40.0)
+            grid_config = GridConfig(rows=17, cols=25, start_id=0, pitch_mm=4.0)
             self.gridCalibrator = AprilTagGridCalibrator(grid_config, logger=self._logger)
     
     def _saveGridCalibration(self):
@@ -1611,7 +1611,7 @@ class PixelCalibrationController(LiveUpdatedController):
             self._logger.error(f"Failed to save grid calibration: {e}", exc_info=True)
     
     @APIExport()
-    def gridSetConfig(self, rows: int, cols: int, start_id: int = 0, pitch_mm: float = 40.0):
+    def gridSetConfig(self, rows: int, cols: int, start_id: int = 0, pitch_mm: float = 4.0):
         """
         Configure the AprilTag grid layout.
         

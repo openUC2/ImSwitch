@@ -115,6 +115,7 @@ class AprilTagGridCalibrator:
         
         self._grid = grid_config
         self._logger = logger if logger is not None else initLogger(self)
+        self._rotated_180 = False  # Flag for 180° rotated calibration sample
         
         # Camera-to-stage affine transform (2x3 matrix: [R|t])
         # Maps camera pixel coordinates to stage micrometers
@@ -131,6 +132,51 @@ class AprilTagGridCalibrator:
             # Legacy OpenCV
             self._aruco_params = cv2.aruco.DetectorParameters_create()
             self._aruco_detector = None
+    
+    def set_rotation_180(self, rotated: bool):
+        """
+        Set whether the calibration sample is rotated 180 degrees.
+        
+        When rotated, tag IDs are mapped in reverse:
+        - Normal: tag 0 = (row 0, col 0), tag 424 = (row 16, col 24)
+        - Rotated: tag 0 = (row 16, col 24), tag 424 = (row 0, col 0)
+        
+        Args:
+            rotated: True if sample is rotated 180°
+        """
+        self._rotated_180 = rotated
+        self._logger.info(f"Grid rotation set to: {'180°' if rotated else 'normal'}")
+    
+    def get_rotation_180(self) -> bool:
+        """
+        Get current rotation state.
+        
+        Returns:
+            True if grid is rotated 180°, False otherwise
+        """
+        return self._rotated_180
+    
+    def _map_tag_id(self, tag_id: int) -> int:
+        """
+        Map detected tag ID to logical ID based on rotation state.
+        
+        If rotated 180°, reverses the ID numbering:
+        - detected_id -> (max_id - detected_id + min_id)
+        
+        Args:
+            tag_id: Detected physical tag ID
+            
+        Returns:
+            Logical tag ID for grid lookup
+        """
+        if not self._rotated_180:
+            return tag_id
+        
+        # Calculate max possible ID
+        max_id = self._grid.start_id + (self._grid.rows * self._grid.cols) - 1
+        
+        # Reverse the ID: 0->424, 1->423, etc.
+        return max_id - tag_id + self._grid.start_id
     
     def detect_tags(self, img: np.ndarray) -> Dict[int, Tuple[float, float]]:
         """
@@ -166,7 +212,10 @@ class AprilTagGridCalibrator:
             pts = corners[i][0]
             cx = np.mean(pts[:, 0])
             cy = np.mean(pts[:, 1])
-            tag_centroids[int(tag_id)] = (float(cx), float(cy))
+            
+            # Apply ID mapping if grid is rotated 180°
+            logical_id = self._map_tag_id(int(tag_id))
+            tag_centroids[logical_id] = (float(cx), float(cy))
         
         return tag_centroids
     

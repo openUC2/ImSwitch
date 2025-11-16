@@ -12,6 +12,16 @@ curl "http://localhost:8001/api/pixelcalibration/gridSetConfig?rows=17&cols=25&s
 
 # Get current configuration
 curl "http://localhost:8001/api/pixelcalibration/gridGetConfig"
+
+# Handle rotated calibration sample (180° rotation)
+# If you accidentally inserted the grid upside down (numbering 424→0 instead of 0→424):
+curl "http://localhost:8001/api/pixelcalibration/gridSetRotation180?rotated=true"
+
+# Check rotation state
+curl "http://localhost:8001/api/pixelcalibration/gridGetRotation180"
+
+# Return to normal orientation
+curl "http://localhost:8001/api/pixelcalibration/gridSetRotation180?rotated=false"
 ```
 
 ### Detection & Calibration
@@ -341,7 +351,7 @@ async function detectTags() {
 // Toggle AprilTag overlay on/off
 async function toggleOverlay(enabled) {
     const response = await fetch(
-        `/api/pixelcalibration/gridSetOverlay?enabled=${enabled}`
+        `/api/pixelcalibration/gridSetStreamOverlay?enabled=${enabled}`
     );
     const result = await response.json();
     
@@ -351,11 +361,32 @@ async function toggleOverlay(enabled) {
     return result.overlay_enabled;
 }
 
+// Set grid rotation state (for rotated calibration sample)
+async function setGridRotation(rotated) {
+    const response = await fetch(
+        `/api/pixelcalibration/gridSetRotation180?rotated=${rotated}`
+    );
+    const result = await response.json();
+    
+    if (result.success) {
+        const orientation = rotated ? 'rotated 180°' : 'normal';
+        console.log(`Grid orientation: ${orientation}`);
+    }
+    return result.rotated_180;
+}
+
 // Get overlay status
 async function getOverlayStatus() {
     const response = await fetch('/api/pixelcalibration/gridGetOverlay');
     const data = await response.json();
     return data.overlay_enabled;
+}
+
+// Get rotation status
+async function getRotationStatus() {
+    const response = await fetch('/api/pixelcalibration/gridGetRotation180');
+    const data = await response.json();
+    return data.rotated_180;
 }
 
 // Navigate to tag with progress updates

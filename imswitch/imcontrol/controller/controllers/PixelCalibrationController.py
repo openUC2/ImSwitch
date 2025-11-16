@@ -75,6 +75,7 @@ class PixelCalibrationController(LiveUpdatedController):
         
         # Initialize AprilTag grid calibrator
         self.gridCalibrator = None
+        self._gridRotated180 = False  # Flag for 180° rotated calibration sample
         self._loadGridCalibration()
         
         # AprilTag overlay flag for MJPEG stream
@@ -1467,6 +1468,66 @@ class PixelCalibrationController(LiveUpdatedController):
             "overlay_enabled": enabled
         }
     
+    @APIExport()
+    def gridSetRotation180(self, rotated: bool = False):
+        """
+        Set whether the calibration sample is rotated 180 degrees.
+        
+        When rotated, the tag numbering is reversed:
+        - Normal: 0, 1, 2, ... 424
+        - Rotated 180°: 424, 423, 422, ... 0
+        
+        This is useful when the calibration grid is accidentally inserted upside down.
+        The grid layout adjusts automatically:
+        - Row/column positions are flipped
+        - Tag ID mapping is reversed
+        
+        Args:
+            rotated: True if calibration sample is rotated 180°, False for normal orientation
+            
+        Returns:
+            Dictionary with status and current rotation state
+        """
+        try:
+            self._gridRotated180 = rotated
+            
+            # Update the grid calibrator if it exists
+            if self.gridCalibrator is not None:
+                self.gridCalibrator.set_rotation_180(rotated)
+            
+            # Save to config
+            self._saveGridCalibration()
+            
+            orientation = "rotated 180°" if rotated else "normal"
+            self._logger.info(f"Grid orientation set to: {orientation}")
+            
+            return {
+                "success": True,
+                "rotated_180": rotated,
+                "message": f"Grid orientation: {orientation}"
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to set grid rotation: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
+    
+    @APIExport()
+    def gridGetRotation180(self):
+        """
+        Get current 180° rotation state of the calibration grid.
+        
+        Returns:
+            Dictionary with rotation status
+        """
+        try:
+            return {
+                "success": True,
+                "rotated_180": self._gridRotated180,
+                "message": "Rotated 180°" if self._gridRotated180 else "Normal orientation"
+            }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+    
     def _loadGridCalibration(self):
         """
         Load AprilTag grid configuration from setup info.
@@ -1503,6 +1564,13 @@ class PixelCalibrationController(LiveUpdatedController):
                     self.gridCalibrator.set_transform(T)
                     self._logger.info(f"Loaded saved grid calibration transform")
             
+            # Load rotation state if available
+            if 'rotated_180' in grid_data:
+                self._gridRotated180 = grid_data['rotated_180']
+                self.gridCalibrator.set_rotation_180(self._gridRotated180)
+                orientation = "rotated 180°" if self._gridRotated180 else "normal"
+                self._logger.info(f"Grid orientation: {orientation}")
+            
             self._logger.info(f"Loaded AprilTag grid: {grid_config.rows}x{grid_config.cols}, pitch={grid_config.pitch_mm}mm")
             
         except Exception as e:
@@ -1523,6 +1591,9 @@ class PixelCalibrationController(LiveUpdatedController):
             T = self.gridCalibrator.get_transform()
             if T is not None:
                 grid_dict['transform'] = T.tolist()
+            
+            # Add rotation state
+            grid_dict['rotated_180'] = self._gridRotated180
             
             # Update setup info in memory
             if not hasattr(self._setupInfo, 'PixelCalibration'):

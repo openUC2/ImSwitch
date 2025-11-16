@@ -474,8 +474,8 @@ class AprilTagGridCalibrator:
             h, w = frame.shape[:2]
             if roi_center is None:
                 roi_center = (w / 2.0, h / 2.0)
-            
-            self._logger.info(f"Starting iterative navigation to tag {target_id}")
+            current_tags = self.detect_tags(frame)
+            self._logger.info(f"Starting iterative navigation to tag {target_id} from current tags: {list(current_tags.keys())}")
             
             # Iterative navigation with neighbor feedback
             for iteration in range(max_iterations):
@@ -490,7 +490,7 @@ class AprilTagGridCalibrator:
                         "trajectory": trajectory
                     }
                 
-                self._logger.debug(f"Iteration {iteration}: Detected {len(current_tags)} tags: {list(current_tags.keys())}")
+                self._logger.info(f"Iteration {iteration}: Detected {len(current_tags)} tags: {list(current_tags.keys())}")
                 
                 # Find best next tag toward target using grid topology
                 next_tag_info = self._find_best_neighbor_toward_target(current_tags, target_id)

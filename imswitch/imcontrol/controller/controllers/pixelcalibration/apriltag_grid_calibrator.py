@@ -602,6 +602,113 @@ class AprilTagGridCalibrator:
                 "trajectory": trajectory if 'trajectory' in locals() else []
             }
     
+    def _find_best_neighbor_toward_target(self, detected_tags: Dict[int, Tuple[float, float]], 
+                                         target_id: int) -> Optional[Tuple[int, float, float, Dict[str, Any]]]:
+        """
+        Find the best tag among detected tags that moves us toward the target.
+        
+        Uses grid topology to validate neighbors and compute grid distance.
+        Prefers tags that are:
+        1. Closer to target in grid coordinates
+        2. Have more expected neighbors visible (indicates good position)
+        3. Target itself if visible
+        
+        Args:
+            detected_tags: Dictionary mapping tag_id -> (cx, cy) for detected tags
+            target_id: Target tag ID we want to reach
+            
+        Returns:
+            (tag_id, cx, cy, nav_info) for best next tag, or None if no valid path
+            nav_info contains: grid_distance, expected_neighbors, actual_neighbors
+        """
+        if target_id in detected_tags:
+            # Target is visible, return it directly
+            cx, cy = detected_tags[target_id]
+            return (target_id, cx, cy, {
+                "grid_distance": 0,
+                "expected_neighbors": [],
+                "actual_neighbors": []
+            })
+        
+        target_pos = self._grid.id_to_rowcol(target_id)
+        if target_pos is None:
+            return None
+        
+        target_row, target_col = target_pos
+        
+        # Score each detected tag
+        best_tag = None
+        best_score = float('inf')
+        best_info = None
+        
+        for tag_id, (cx, cy) in detected_tags.items():
+            tag_pos = self._grid.id_to_rowcol(tag_id)
+            if tag_pos is None:
+                continue
+            
+            tag_row, tag_col = tag_pos
+            
+            # Compute grid distance to target (Manhattan distance)
+            grid_dist = abs(target_row - tag_row) + abs(target_col - tag_col)
+            
+            # Get expected neighbors based on grid topology
+            expected_neighbors = self._get_expected_neighbors(tag_id)
+            
+            # Count how many expected neighbors are actually detected
+            actual_neighbors = [n for n in expected_neighbors if n in detected_tags]
+            neighbor_coverage = len(actual_neighbors) / max(len(expected_neighbors), 1)
+            
+            # Score: prioritize smaller grid distance and better neighbor coverage
+            # Weight grid distance more heavily
+            score = grid_dist * 10.0 - neighbor_coverage * 2.0
+            
+            if score < best_score:
+                best_score = score
+                best_tag = tag_id
+                best_info = {
+                    "grid_distance": grid_dist,
+                    "expected_neighbors": expected_neighbors,
+                    "actual_neighbors": actual_neighbors,
+                    "neighbor_coverage": neighbor_coverage,
+                    "score": score
+                }
+        
+        if best_tag is None:
+            return None
+        
+        cx, cy = detected_tags[best_tag]
+        return (best_tag, cx, cy, best_info)
+    
+    def _get_expected_neighbors(self, tag_id: int) -> List[int]:
+        """
+        Get list of expected neighbor tag IDs based on grid topology.
+        
+        A neighbor is defined as an adjacent tag in the grid (up, down, left, right).
+        
+        Args:
+            tag_id: Tag ID to get neighbors for
+            
+        Returns:
+            List of neighbor tag IDs (may be empty if tag is at grid edge)
+        """
+        pos = self._grid.id_to_rowcol(tag_id)
+        if pos is None:
+            return []
+        
+        row, col = pos
+        neighbors = []
+        
+        # Check all 4 cardinal directions
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            neighbor_row = row + dr
+            neighbor_col = col + dc
+            
+            neighbor_id = self._grid.rowcol_to_id(neighbor_row, neighbor_col)
+            if neighbor_id is not None:
+                neighbors.append(neighbor_id)
+        
+        return neighbors
+    
     def _search_for_tags(self, observation_camera, positioner,
                         step_um: float, pattern_size: int,
                         settle_time: float) -> Dict[str, Any]:

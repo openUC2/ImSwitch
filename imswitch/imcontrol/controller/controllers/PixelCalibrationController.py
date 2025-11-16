@@ -1798,26 +1798,42 @@ class PixelCalibrationController(LiveUpdatedController):
     @APIExport(runOnUIThread=False)
     def gridMoveToTag(self, target_id: int, 
                      roi_tolerance_px: float = 8.0,
-                     max_iterations: int = 20,
-                     step_fraction: float = 0.8,
+                     max_iterations: int = 30,
+                     step_fraction: float = 0.7,
                      settle_time: float = 0.3,
-                     search_enabled: bool = True):
+                     pixel_to_um_estimate: float = 0.65):
         """
-        Navigate stage to center a specific AprilTag ID in the observation camera ROI.
+        Navigate stage to center a specific AprilTag ID using iterative neighbor-based hopping.
         
-        Runs in a background thread to avoid blocking the server.
-        Uses closed-loop feedback with the calibrated camera-to-stage transformation.
-        IMPORTANT: Ensure the gridCalibrateTransform has been run successfully before using this.
+        This method uses continuous feedback from detected neighboring tags, validating each
+        step against known grid topology. It does NOT require precise affine calibration -
+        only approximate pixel-to-stage scaling.
+        
+        Algorithm:
+        1. Detect all visible tags in current frame
+        2. Find best neighbor tag moving toward target (validated by grid structure)
+        3. Compute pixel displacement and convert to stage movement
+        4. Move by fraction of displacement
+        5. Repeat until target is visible and centered
+        
+        This is more robust than direct navigation because:
+        - Validates direction using known grid neighbors at each step
+        - Adapts to local geometry variations
+        - Works even with imprecise/missing affine calibration
+        - Self-corrects from detection errors
+        
         Args:
             target_id: Tag ID to navigate to (must be within grid range)
             roi_tolerance_px: Acceptable pixel offset for convergence (default 8.0)
-            max_iterations: Maximum iteration count (default 20)
-            step_fraction: Fraction of displacement to apply per step (default 0.8)
+            max_iterations: Maximum iteration count (default 30, increased for hopping)
+            step_fraction: Fraction of displacement to apply per step (default 0.7, conservative)
             settle_time: Wait time after movement in seconds (default 0.3)
-            search_enabled: Enable coarse search if target not initially visible (default True)
+            pixel_to_um_estimate: Rough pixel-to-micrometer conversion (default 0.65 um/px)
+                                  Used only if affine transform unavailable
             
         Returns:
-            Dictionary with status message indicating navigation has started
+            Dictionary with navigation results including success status and detailed trajectory
+            showing neighbor validation at each step
         """
         try:
             if self.observationCamera is None:
@@ -1826,10 +1842,7 @@ class PixelCalibrationController(LiveUpdatedController):
             if self.gridCalibrator is None:
                 self._loadGridCalibration()
             
-            # Check if transform is calibrated
-            if self.gridCalibrator.get_transform() is None:
-                # do the gridCalibrateTransform first
-                self.gridCalibrateTransform()
+            # Note: No longer requires affine transform! Will use pixel_to_um_estimate if not available
             
             # Get positioner
             positioner_names = self._master.positionersManager.getAllDeviceNames()
@@ -1838,40 +1851,23 @@ class PixelCalibrationController(LiveUpdatedController):
             
             positioner = self._master.positionersManager[positioner_names[0]]
             
-            # Run navigation in background thread
-            def _navigate():
-                try:
-                    result = self.gridCalibrator.move_to_tag(
-                        target_id=target_id,
-                        observation_camera=self.observationCamera,
-                        positioner=positioner,
-                        roi_center=None,  # Use image center
-                        roi_tolerance_px=roi_tolerance_px,
-                        max_iterations=max_iterations,
-                        step_fraction=step_fraction,
-                        settle_time=settle_time,
-                        search_enabled=search_enabled
-                    )
-                    
-                    if result.get("success", False):
-                        self._logger.info(f"Successfully navigated to tag {target_id} in {result.get('iterations', 0)} iterations")
-                    else:
-                        self._logger.warning(f"Navigation to tag {target_id} failed: {result.get('error', 'Unknown error')}")
-                        
-                except Exception as e:
-                    self._logger.error(f"Grid navigation thread failed: {e}", exc_info=True)
+            # Perform iterative neighbor-based navigation (synchronous)
+            result = self.gridCalibrator.move_to_tag(
+                target_id=target_id,
+                observation_camera=self.observationCamera,
+                positioner=positioner,
+                roi_center=None,  # Use image center
+                roi_tolerance_px=roi_tolerance_px,
+                max_iterations=max_iterations,
+                step_fraction=step_fraction,
+                settle_time=settle_time,
+                pixel_to_um_estimate=pixel_to_um_estimate
+            )
             
-            # Start background thread
-            nav_thread = threading.Thread(target=_navigate, daemon=True)
-            nav_thread.start()
-            
-            return {
-                "success": True,
-                "message": f"Navigation to tag {target_id} started in background"
-            }
+            return result
             
         except Exception as e:
-            self._logger.error(f"Failed to start grid navigation: {e}", exc_info=True)
+            self._logger.error(f"Grid navigation failed: {e}", exc_info=True)
             return {"error": str(e), "success": False}
     
     @APIExport()

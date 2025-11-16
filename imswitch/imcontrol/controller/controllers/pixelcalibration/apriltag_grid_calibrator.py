@@ -423,22 +423,24 @@ class AprilTagGridCalibrator:
     def move_to_tag(self, target_id: int, observation_camera, positioner,
                    roi_center: Optional[Tuple[float, float]] = None,
                    roi_tolerance_px: float = 8.0,
-                   max_iterations: int = 20,
-                   step_fraction: float = 0.8,
+                   max_iterations: int = 30,
+                   step_fraction: float = 0.7,
                    settle_time: float = 0.3,
-                   search_enabled: bool = True,
-                   search_step_um: float = 5000.0,
-                   search_pattern_size: int = 3) -> Dict[str, Any]:
+                   pixel_to_um_estimate: float = 0.65) -> Dict[str, Any]:
         """
-        Navigate to a specific tag ID using closed-loop feedback.
+        Navigate to a specific tag ID using iterative neighbor-based hopping.
+        
+        This method uses continuous feedback from detected neighboring tags to navigate,
+        validating each step against known grid topology. It does NOT require a precise
+        affine transformation - only approximate pixel-to-stage scaling.
         
         Algorithm:
-        1. Detect current tag closest to ROI center
-        2. If target not visible, perform coarse search pattern
-        3. Compute displacement from current tag to target using grid geometry
-        4. Move stage by fraction of computed displacement
-        5. Re-detect and iterate until target is centered within tolerance
-        6. Final micro-centering based on pixel offset
+        1. Detect all visible tags in current frame
+        2. Find best neighbor tag that moves us toward target (validated by grid topology)
+        3. Compute pixel displacement to that neighbor
+        4. Convert to stage movement using approximate scaling
+        5. Move stage by fraction of computed displacement
+        6. Repeat until target is visible and centered
         
         Args:
             target_id: Desired tag ID to center
@@ -446,12 +448,10 @@ class AprilTagGridCalibrator:
             positioner: Stage with move() and getPosition() methods
             roi_center: (cx, cy) ROI center in pixels. If None, uses image center.
             roi_tolerance_px: Acceptable pixel offset for convergence (default 8.0)
-            max_iterations: Maximum iteration count (default 20)
-            step_fraction: Fraction of computed displacement to apply per step (0-1, default 0.8)
+            max_iterations: Maximum iteration count (default 30)
+            step_fraction: Fraction of computed displacement to apply per step (0-1, default 0.7)
             settle_time: Wait time after movement (seconds, default 0.3)
-            search_enabled: Enable coarse search if target not initially visible
-            search_step_um: Step size for search pattern (micrometers, default 5000)
-            search_pattern_size: Search pattern grid size (default 3x3)
+            pixel_to_um_estimate: Rough pixel-to-micrometer conversion (default 0.65 um/px)
             
         Returns:
             Dictionary with:
@@ -459,13 +459,10 @@ class AprilTagGridCalibrator:
                 - final_offset_px: Final pixel offset from ROI center
                 - iterations: Number of iterations used
                 - final_tag_id: Tag ID at final position
-                - trajectory: List of iteration data (tag_id, offset_px, stage_move_um)
+                - trajectory: List of iteration data
                 - error: Error message if navigation failed
         """
         try:
-            if self._T_cam2stage is None:
-                return {"error": "Camera-to-stage transformation not calibrated", "success": False}
-            
             # Validate target ID
             if self._grid.id_to_rowcol(target_id) is None:
                 return {"error": f"Target ID {target_id} is outside grid range", "success": False}
@@ -478,148 +475,132 @@ class AprilTagGridCalibrator:
             if roi_center is None:
                 roi_center = (w / 2.0, h / 2.0)
             
-            # Initial detection
-            current_tag_info = self.get_current_tag(frame, roi_center)
+            self._logger.info(f"Starting iterative navigation to tag {target_id}")
             
-            # Search if target not visible
-            if current_tag_info is None and search_enabled:
-                self._logger.info(f"No tags detected, starting search pattern")
-                search_result = self._search_for_tags(observation_camera, positioner, 
-                                                      search_step_um, search_pattern_size,
-                                                      settle_time)
-                if not search_result.get("success", False):
+            # Iterative navigation with neighbor feedback
+            for iteration in range(max_iterations):
+                # Detect all tags in current frame
+                frame = observation_camera.getLatestFrame()
+                current_tags = self.detect_tags(frame)
+                
+                if not current_tags:
                     return {
-                        "error": "Search failed to find any tags",
+                        "error": f"No tags detected at iteration {iteration}",
                         "success": False,
-                        "search_trajectory": search_result.get("trajectory", [])
+                        "trajectory": trajectory
                     }
                 
-                # Re-detect after search
-                frame = observation_camera.getLatestFrame()
-                current_tag_info = self.get_current_tag(frame, roi_center)
-            
-            if current_tag_info is None:
-                return {"error": "No tags detected and search disabled", "success": False}
-            
-            current_id, cx, cy = current_tag_info
-            self._logger.info(f"Starting navigation from tag {current_id} to tag {target_id}")
-            
-            # Iterative navigation
-            for iteration in range(max_iterations):
-                # Check if we've reached the target
-                if current_id == target_id:
-                    # Micro-centering: use pixel offset
-                    offset_x = cx - roi_center[0]
-                    offset_y = cy - roi_center[1]
+                self._logger.debug(f"Iteration {iteration}: Detected {len(current_tags)} tags: {list(current_tags.keys())}")
+                
+                # Find best next tag toward target using grid topology
+                next_tag_info = self._find_best_neighbor_toward_target(current_tags, target_id)
+                
+                if next_tag_info is None:
+                    return {
+                        "error": f"Cannot find valid path to target at iteration {iteration}",
+                        "success": False,
+                        "trajectory": trajectory,
+                        "detected_tags": list(current_tags.keys())
+                    }
+                
+                next_id, next_cx, next_cy, nav_info = next_tag_info
+                
+                # Check if target is reached and centered
+                if next_id == target_id:
+                    offset_x = next_cx - roi_center[0]
+                    offset_y = next_cy - roi_center[1]
                     offset_mag = np.sqrt(offset_x**2 + offset_y**2)
                     
                     if offset_mag <= roi_tolerance_px:
                         # Success!
-                        self._logger.info(f"Target {target_id} centered in {iteration} iterations, offset={offset_mag:.1f}px")
+                        self._logger.info(
+                            f"Target {target_id} centered in {iteration} iterations, "
+                            f"offset={offset_mag:.1f}px"
+                        )
                         return {
                             "success": True,
                             "final_offset_px": float(offset_mag),
                             "iterations": iteration,
-                            "final_tag_id": current_id,
+                            "final_tag_id": next_id,
                             "trajectory": trajectory
                         }
                     
-                    # Micro-centering move based on pixel offset
-                    dx_um, dy_um = self.pixel_to_stage_delta(offset_x, offset_y)
+                    # Micro-centering: move to center the target tag
+                    dx_um = -offset_x * pixel_to_um_estimate
+                    dy_um = -offset_y * pixel_to_um_estimate
+                    
+                    # Use affine transform if available for better accuracy
+                    if self._T_cam2stage is not None:
+                        dx_um, dy_um = self.pixel_to_stage_delta(offset_x, offset_y)
                     
                     # Move to center
                     positioner.move(value=dx_um, axis="X", is_absolute=False, is_blocking=True)
                     positioner.move(value=dy_um, axis="Y", is_absolute=False, is_blocking=True)
-
                     time.sleep(settle_time)
                     
                     trajectory.append({
                         "iteration": iteration,
                         "mode": "micro_centering",
-                        "current_tag": current_id,
+                        "current_tag": next_id,
                         "offset_px": float(offset_mag),
-                        "move_um": [float(dx_um), float(dy_um)]
+                        "move_um": [float(dx_um), float(dy_um)],
+                        "navigation_info": nav_info
                     })
                     
-                    # Re-detect
-                    frame = observation_camera.getLatestFrame()
-                    current_tag_info = self.get_current_tag(frame, roi_center)
-                    
-                    if current_tag_info is None:
-                        return {
-                            "error": f"Lost tag during micro-centering at iteration {iteration}",
-                            "success": False,
-                            "trajectory": trajectory
-                        }
-                    
-                    current_id, cx, cy = current_tag_info
-                    
                 else:
-                    # Coarse navigation: move toward target using grid geometry
-                    delta = self.grid_to_stage_delta(current_id, target_id)
+                    # Coarse navigation: move toward next tag
+                    # Compute pixel displacement to next tag
+                    offset_x = next_cx - roi_center[0]
+                    offset_y = next_cy - roi_center[1]
                     
-                    if delta is None:
-                        return {
-                            "error": f"Failed to compute grid displacement at iteration {iteration}",
-                            "success": False,
-                            "trajectory": trajectory
-                        }
+                    # Convert to stage movement (approximate)
+                    dx_um = -offset_x * pixel_to_um_estimate * step_fraction
+                    dy_um = -offset_y * pixel_to_um_estimate * step_fraction
                     
-                    dx_um, dy_um = delta
+                    # Use affine transform if available for better accuracy
+                    if self._T_cam2stage is not None:
+                        dx_full, dy_full = self.pixel_to_stage_delta(offset_x, offset_y)
+                        dx_um = dx_full * step_fraction
+                        dy_um = dy_full * step_fraction
                     
-                    # Apply step fraction to avoid overshooting
-                    dx_um *= step_fraction
-                    dy_um *= step_fraction
+                    offset_mag = np.sqrt(offset_x**2 + offset_y**2)
                     
                     # Move stage
                     positioner.move(value=dx_um, axis="X", is_absolute=False, is_blocking=True)
                     positioner.move(value=dy_um, axis="Y", is_absolute=False, is_blocking=True)
                     time.sleep(settle_time)
                     
-                    offset_x = cx - roi_center[0]
-                    offset_y = cy - roi_center[1]
-                    offset_mag = np.sqrt(offset_x**2 + offset_y**2)
+                    self._logger.debug(
+                        f"Iteration {iteration}: Moving toward tag {next_id} "
+                        f"(grid_dist={nav_info.get('grid_distance', '?')}, "
+                        f"neighbors={len(nav_info.get('actual_neighbors', []))}/{len(nav_info.get('expected_neighbors', []))})"
+                    )
                     
                     trajectory.append({
                         "iteration": iteration,
-                        "mode": "coarse_navigation",
-                        "current_tag": current_id,
+                        "mode": "tag_hopping",
+                        "current_tag": next_id,
                         "target_tag": target_id,
                         "offset_px": float(offset_mag),
-                        "move_um": [float(dx_um), float(dy_um)]
+                        "move_um": [float(dx_um), float(dy_um)],
+                        "navigation_info": nav_info
                     })
-                    
-                    # Re-detect
-                    frame = observation_camera.getLatestFrame()
-                    current_tag_info = self.get_current_tag(frame, roi_center)
-                    
-                    if current_tag_info is None:
-                        return {
-                            "error": f"Lost all tags during navigation at iteration {iteration}",
-                            "success": False,
-                            "trajectory": trajectory
-                        }
-                    
-                    current_id, cx, cy = current_tag_info
-                    self._logger.debug(f"Iteration {iteration}: moved to tag {current_id}")
             
             # Max iterations reached
-            offset_x = cx - roi_center[0]
-            offset_y = cy - roi_center[1]
-            offset_mag = np.sqrt(offset_x**2 + offset_y**2)
-            
             return {
-                "error": f"Max iterations ({max_iterations}) reached",
+                "error": f"Max iterations ({max_iterations}) reached without centering target",
                 "success": False,
-                "final_offset_px": float(offset_mag),
                 "iterations": max_iterations,
-                "final_tag_id": current_id,
                 "trajectory": trajectory
             }
             
         except Exception as e:
             self._logger.error(f"Navigation failed: {e}", exc_info=True)
-            return {"error": str(e), "success": False}
+            return {
+                "error": str(e),
+                "success": False,
+                "trajectory": trajectory if 'trajectory' in locals() else []
+            }
     
     def _search_for_tags(self, observation_camera, positioner,
                         step_um: float, pattern_size: int,

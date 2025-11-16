@@ -814,38 +814,124 @@ class OverviewCalibrator:
             else:
                 return "unknown"
     
-    def verify_homing(self, observation_camera, positioner, max_time_s: float = 20.0,
-                     check_interval: float = 0.5) -> Dict[str, Any]:
+    def _compute_frame_motion(self, frame1: np.ndarray, frame2: np.ndarray, 
+                             method: str = "mad") -> float:
         """
-        Verify homing behavior and detect inverted motor directions.
+        Compute motion between two consecutive frames.
         
-        Attempts to home each axis and monitors AprilTag motion. If homing times out
-        but the tag motion stops near field edge, recommends inverting the motor direction.
+        Args:
+            frame1: First frame (grayscale or color)
+            frame2: Second frame (grayscale or color)
+            method: Motion detection method - "mad" (mean absolute difference), 
+                   "correlation", or "mse" (mean squared error)
+            
+        Returns:
+            Motion metric value (higher = more motion)
+        """
+        # Convert to grayscale if needed
+        if len(frame1.shape) == 3:
+            gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        else:
+            gray1 = frame1
+            
+        if len(frame2.shape) == 3:
+            gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        else:
+            gray2 = frame2
+        
+        # Ensure same size
+        if gray1.shape != gray2.shape:
+            self._logger.warning(f"Frame size mismatch: {gray1.shape} vs {gray2.shape}")
+            return 0.0
+        
+        if method == "mad":
+            # Mean Absolute Difference
+            diff = np.abs(gray1.astype(np.float32) - gray2.astype(np.float32))
+            motion = np.mean(diff)
+            
+        elif method == "mse":
+            # Mean Squared Error
+            diff = (gray1.astype(np.float32) - gray2.astype(np.float32)) ** 2
+            motion = np.mean(diff)
+            
+        elif method == "correlation":
+            # Normalized Cross-Correlation (inverse - lower correlation = more motion)
+            # Normalize frames
+            gray1_norm = (gray1 - np.mean(gray1)) / (np.std(gray1) + 1e-8)
+            gray2_norm = (gray2 - np.mean(gray2)) / (np.std(gray2) + 1e-8)
+            
+            # Compute correlation
+            correlation = np.mean(gray1_norm * gray2_norm)
+            
+            # Convert to motion metric (1 - correlation)
+            # correlation=1 means identical, correlation=-1 means inverted
+            motion = 1.0 - correlation
+            
+        else:
+            raise ValueError(f"Unknown motion detection method: {method}")
+        
+        return float(motion)
+    
+    def verify_homing(self, observation_camera, positioner, max_time_s: float = 20.0,
+                     check_interval: float = 0.5, motion_method: str = "mad",
+                     motion_threshold: float = None) -> Dict[str, Any]:
+        """
+        Verify homing behavior and detect inverted motor directions using motion detection.
+        
+        Monitors frame-to-frame motion during homing using threshold-based detection.
+        This is more robust than AprilTag tracking and works without markers.
         
         Args:
             observation_camera: Camera detector with getLatestFrame() method
             positioner: Stage positioner with home() and getPosition() methods
             max_time_s: Maximum time to wait for homing (seconds)
             check_interval: Time between motion checks (seconds)
+            motion_method: Motion detection method - "mad" (mean absolute difference),
+                          "correlation", or "mse" (mean squared error)
+            motion_threshold: Motion threshold for detecting movement stopped.
+                            If None, auto-calibrated from initial frames.
             
         Returns:
             Dictionary with X and Y results:
-                {axis: {inverted: bool, evidence: samples, error: str}}
+                {axis: {inverted: bool, evidence: samples, error: str, 
+                        motion_threshold: float, baseline_noise: float}}
         """
         result = {}
         
         for axis in ["X", "Y"]:
             try:
-                # TODO: Instead of 
-                self._logger.info(f"Verifying homing for axis {axis}")
+                self._logger.info(f"Verifying homing for axis {axis} using {motion_method} motion detection")
                 
-                # Get initial centroid
-                frame0 = self._get_cleared_frame(observation_camera)
-                c0 = self.detect_tag_centroid(frame0)
+                # Get initial frame and calibrate motion threshold if needed
+                frame_prev = self._get_cleared_frame(observation_camera)
                 
-                if c0 is None:
-                    result[axis] = {"error": "No AprilTag detected", "inverted": False}
-                    continue
+                # Auto-calibrate motion threshold from static camera
+                if motion_threshold is None:
+                    self._logger.info("Auto-calibrating motion threshold from static frames...")
+                    noise_samples = []
+                    
+                    for _ in range(5):
+                        time.sleep(0.1)
+                        frame_curr = self._get_cleared_frame(observation_camera, num_clears=1)
+                        noise = self._compute_frame_motion(frame_prev, frame_curr, method=motion_method)
+                        noise_samples.append(noise)
+                        frame_prev = frame_curr
+                    
+                    baseline_noise = np.mean(noise_samples)
+                    noise_std = np.std(noise_samples)
+                    
+                    # Set threshold to 3 sigma above baseline noise
+                    calibrated_threshold = baseline_noise + 3 * noise_std
+                    
+                    self._logger.info(f"Baseline noise: {baseline_noise:.3f} ± {noise_std:.3f}, "
+                                    f"threshold: {calibrated_threshold:.3f}")
+                else:
+                    baseline_noise = 0.0
+                    calibrated_threshold = motion_threshold
+                    self._logger.info(f"Using manual threshold: {calibrated_threshold:.3f}")
+                
+                # Get fresh reference frame before homing
+                frame_prev = self._get_cleared_frame(observation_camera)
                 
                 # Start homing
                 start_time = time.time()
@@ -855,78 +941,90 @@ class OverviewCalibrator:
                 # Trigger homing (non-blocking if possible)
                 try:
                     # Try non-blocking home
-                    positioner.home(axis=axis, is_blocking=False) # TODO: Need to do home_x, home_y 
-                except:
-                    # Fallback to blocking home with timeout handling
-                    pass
+                    positioner.home(axis=axis, is_blocking=False)
+                except Exception as e:
+                    self._logger.warning(f"Non-blocking home failed, using blocking: {e}")
+                    # Note: blocking home will prevent motion monitoring
                 
                 # Monitor motion
-                last_centroid = c0
                 motion_stopped_time = None
+                max_motion_seen = 0.0
                 
                 while (time.time() - start_time) < max_time_s:
                     time.sleep(check_interval)
                     
-                    # Check current position
-                    frame = self._get_cleared_frame(observation_camera, num_clears=1)
-                    centroid = self.detect_tag_centroid(frame)
-                    
-                    if centroid is None:
-                        # Tag lost - might have moved out of frame
-                        motion_samples.append({
-                            "time": time.time() - start_time,
-                            "centroid": None,
-                            "note": "tag_lost"
-                        })
-                        break
+                    # Capture current frame
+                    frame_curr = self._get_cleared_frame(observation_camera, num_clears=1)
                     
                     # Compute motion
-                    du = centroid[0] - last_centroid[0]
-                    dv = centroid[1] - last_centroid[1]
-                    motion = np.sqrt(du**2 + dv**2)
+                    motion = self._compute_frame_motion(frame_prev, frame_curr, method=motion_method)
+                    max_motion_seen = max(max_motion_seen, motion)
+                    
+                    elapsed = time.time() - start_time
                     
                     motion_samples.append({
-                        "time": time.time() - start_time,
-                        "centroid": [float(centroid[0]), float(centroid[1])],
-                        "motion": float(motion)
+                        "time": float(elapsed),
+                        "motion": float(motion),
+                        "threshold": float(calibrated_threshold),
+                        "is_moving": motion > calibrated_threshold
                     })
                     
+                    self._logger.debug(f"t={elapsed:.1f}s, motion={motion:.3f}, "
+                                      f"threshold={calibrated_threshold:.3f}, "
+                                      f"moving={motion > calibrated_threshold}")
+                    
                     # Check if motion stopped
-                    if motion < 2.0:  # pixels
+                    if motion <= calibrated_threshold:
                         if motion_stopped_time is None:
                             motion_stopped_time = time.time()
                         elif (time.time() - motion_stopped_time) > 1.0:
                             # Motion stopped for >1 second
                             homing_complete = True
+                            self._logger.info(f"Motion stopped after {elapsed:.1f}s")
                             break
                     else:
+                        # Motion detected, reset timer
                         motion_stopped_time = None
                     
-                    last_centroid = centroid
+                    # Update reference frame for next iteration
+                    frame_prev = frame_curr
                 
                 # Analyze results
                 if homing_complete:
                     result[axis] = {
                         "inverted": False,
                         "evidence": motion_samples,
-                        "lastCheck": time.strftime("%Y-%m-%dT%H:%M:%S")
+                        "lastCheck": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "motion_threshold": float(calibrated_threshold),
+                        "baseline_noise": float(baseline_noise),
+                        "max_motion_seen": float(max_motion_seen),
+                        "method": motion_method
                     }
-                    self._logger.info(f"Axis {axis} homing completed normally")
+                    self._logger.info(f"Axis {axis} homing completed normally "
+                                    f"(max motion: {max_motion_seen:.3f})")
                 else:
-                    # Check if tag was lost (possible sign of reaching edge)
-                    tag_lost = any(s.get("note") == "tag_lost" for s in motion_samples)
+                    # Homing timed out
+                    # Check if we saw significant motion (indicates homing attempted)
+                    motion_detected = max_motion_seen > calibrated_threshold * 2
                     
                     result[axis] = {
-                        "inverted": tag_lost,
+                        "inverted": motion_detected,  # If motion seen but didn't stop, might be inverted
                         "evidence": motion_samples,
                         "lastCheck": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                        "recommendation": "Invert motor direction" if tag_lost else "Check homing setup"
+                        "motion_threshold": float(calibrated_threshold),
+                        "baseline_noise": float(baseline_noise),
+                        "max_motion_seen": float(max_motion_seen),
+                        "method": motion_method,
+                        "recommendation": "Invert motor direction - motion detected but homing didn't complete" 
+                                        if motion_detected 
+                                        else "Check homing setup - no motion detected"
                     }
                     
-                    if tag_lost:
-                        self._logger.warning(f"Axis {axis} homing may need inversion (tag lost)")
+                    if motion_detected:
+                        self._logger.warning(f"Axis {axis} homing may need inversion "
+                                           f"(motion seen but didn't complete)")
                     else:
-                        self._logger.warning(f"Axis {axis} homing timed out")
+                        self._logger.warning(f"Axis {axis} homing timed out with no motion detected")
                 
             except Exception as e:
                 self._logger.error(f"Homing verification failed for {axis}: {e}", exc_info=True)

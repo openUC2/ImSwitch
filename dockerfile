@@ -12,17 +12,17 @@
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -e CONFIG_FILE=example_virtual_microscope.json -e UPDATE_GIT=0 -e UPDATE_CONFIG=0 --privileged ghcr.io/openuc2/imswitch-noqt-x64:latest
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -e CONFIG_FILE=example_uc2_hik_flowstop.json -e UPDATE_GIT=1 -e UPDATE_CONFIG=0 --privileged imswitch_hik
 # performs python3 /opt/MVS/Samples/aarch64/Python/MvImport/GrabImage.py
-#  sudo docker run -it -e MODE=terminal imswitch_hik
+#  sudo docker run -it --entrypoint=/venv-shell.sh imswitch_hik
 # docker build --build-arg ARCH=linux/arm64  -t imswitch_hik_arm64 .
 # docker build --build-arg ARCH=linux/amd64  -t imswitch_hik_amd64 .
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -e CONFIG_FILE=example_virtual_microscope.json -e UPDATE_GIT=0 -e UPDATE_CONFIG=0 --privileged imswitch_hik
 #
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -e CONFIG_FILE=example_uc2_hik_flowstop.json -e UPDATE_GIT=1 -e UPDATE_CONFIG=0 --privileged ghcr.io/openuc2/imswitch-noqt-x64:latest
 # For loading external configs and store data externally
-# sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -e HEADLESS=1  -e HTTP_PORT=8001    -e UPDATE_GIT=1  -e UPDATE_CONFIG=0  -e CONFIG_PATH=/config  --privileged  -v ~/Downloads:/config  imswitch_hik_arm64
-# sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -e HEADLESS=1  -e HTTP_PORT=8001  -e UPDATE_GIT=1  -e UPDATE_CONFIG=0  --privileged -e DATA_PATH=/dataset  -v /media/uc2/SD2/:/dataset -e CONFIG_FILE=example_uc2_hik_flowstop.json ghcr.io/openuc2/imswitch-noqt-x64:latest
-# docker run -it -e MODE=terminal ghcr.io/openuc2/imswitch-noqt-arm64:latest
-# sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22  -e UPDATE_INSTALL_GIT=1  -e PIP_PACKAGES="arkitekt UC2-REST"  -e CONFIG_PATH=/Users/bene/Downloads  -e DATA_PATH=/Users/bene/Downloads  -v ~/Documents/imswitch_docker/imswitch_git:/tmp/ImSwitch-changes  -v ~/Documents/imswitch_docker/imswitch_pip:/persistent_pip_packages  -v /media/uc2/SD2/:/dataset  -v ~/Downloads:/config  --privileged imswitch_hik
+# sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -e HEADLESS=1  -e HTTP_PORT=8001 -e UPDATE_GIT=1 -e UPDATE_CONFIG=0 -e CONFIG_PATH=/config  --privileged  -v ~/Downloads:/config  imswitch_hik_arm64
+# sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -e HEADLESS=1  -e HTTP_PORT=8001 -e UPDATE_GIT=1 -e UPDATE_CONFIG=0 --privileged -e DATA_PATH=/dataset  -v /media/uc2/SD2/:/dataset -e CONFIG_FILE=example_uc2_hik_flowstop.json ghcr.io/openuc2/imswitch-noqt-x64:latest
+# docker run -it --entrypoint=/venv-shell.sh ghcr.io/openuc2/imswitch-noqt-arm64:latest
+# sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22  -e UPDATE_INSTALL_GIT=1  UC2-REST"  -e CONFIG_PATH=/Users/bene/Downloads  -e DATA_PATH=/Users/bene/Downloads  -v ~/Documents/imswitch_docker/imswitch_git:/tmp/ImSwitch-changes  -v ~/Documents/imswitch_docker/imswitch_pip:/persistent_pip_packages  -v /media/uc2/SD2/:/dataset  -v ~/Downloads:/config  --privileged imswitch_hik
 # sudo docker pull docker pull ghcr.io/openuc2/imswitch-noqt-arm64:latest
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -e CONFIG_FILE=example_uc2_vimba.json -e UPDATE_GIT=0 -e UPDATE_CONFIG=0 --privileged imswitch_hik_arm64
 # docker build -t ghcr.io/openuc2/imswitch-noqt-arm64:latest .
@@ -33,10 +33,8 @@
 # both of which are mounted to the host machine directories
 # 2. Use a ImSwitchConfig folder that is mounted to the host machine directory /root/ImSwitchConfig
 # 3. Use a dataset folder that is mounted to the host machine directory /media/uc2/SD2
-# 4. Install additional pip packages by setting the PIP_PACKAGES environment variable to a space separated list of packages and make them persistent by mounting a volume to /persistent_pip_packages
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 \
 # -e UPDATE_INSTALL_GIT=1 \
-# -e PIP_PACKAGES="arkitekt UC2-REST" imswitch_hik \
 # -e DATA_PATH=/dataset \
 # -e CONFIG_PATH=/config \
 # -v ~/Documents/imswitch_docker/imswitch_git:/tmp/ImSwitch-changes \
@@ -80,4 +78,7 @@ RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=.
 EXPOSE 8001 8888 8889
 
 COPY docker/entrypoint.sh /entrypoint.sh
+COPY docker/venv-shell.sh /venv-shell.sh
+RUN chmod +x /entrypoint.sh /venv-shell.sh
+
 ENTRYPOINT ["/entrypoint.sh"]

@@ -45,6 +45,16 @@ apt-get remove -y \
   build-essential \
   libhdf5-dev
 
+# install raspberry pi camera dependencies
+# https://github.com/hyzhak/pi-camera-in-docker/blob/main/Dockerfile
+apt update && apt install -y --no-install-recommends gnupg
+echo "deb http://archive.raspberrypi.org/debian/ bookworm main" > /etc/apt/sources.list.d/raspi.list \
+  && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E
+apt update && apt install -y python3-picamera2
+# needs
+#    volumes:
+#      - /run/udev:/run/udev:ro
+
 # Clean up all the package managers at the end
 
 apt -y autoremove

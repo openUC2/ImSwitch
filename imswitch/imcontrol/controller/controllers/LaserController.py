@@ -1,7 +1,7 @@
 from typing import List, Union
 from imswitch.imcommon.framework import Signal
 from imswitch import IS_HEADLESS
-from imswitch.imcommon.model import APIExport
+from imswitch.imcommon.model import APIExport, initLogger
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view import guitools
 from ..basecontrollers import ImConWidgetController
@@ -12,7 +12,8 @@ class LaserController(ImConWidgetController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
+        
+        self._logger = initLogger(self)
         self.settingAttr = False
         self.presetBeforeScan = None
 
@@ -300,6 +301,84 @@ class LaserController(ImConWidgetController):
     def changeScanPower(self, laserName, laserValue):
         defaultPreset = self._setupInfo.laserPresets[self._setupInfo.defaultLaserPresetForScan]
         defaultPreset[laserName] = guitools.LaserPresetInfo(value=laserValue)
+
+    @APIExport()
+    def setLaserChannelIndex(self, laserName: str, channelIndex: Union[int, str]) -> bool:
+        """ Sets the channel_index for a specific laser in managerProperties 
+        and saves it persistently to the configuration file.
+        
+        Args:
+            laserName: The name of the laser to modify (e.g., '635', '488', 'LED Array', 'LED')
+            channelIndex: The new channel index value (can be int or string like "LED")
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Check if laser exists in setup
+            if laserName not in self._setupInfo.lasers:
+                self._logger.error(f"Laser '{laserName}' not found in setup")
+                return False
+            
+            # Get the laser info
+            laserInfo = self._setupInfo.lasers[laserName]
+            
+            # Check if managerProperties exists and has channel_index
+            if 'channel_index' not in laserInfo.managerProperties and channelIndex == "LED":
+                self._logger.warning(f"Laser '{laserName}' does not have 'channel_index' in managerProperties")
+                return False
+            
+            # Store old value for logging
+            oldChannelIndex = laserInfo.managerProperties['channel_index']
+            
+            # update internal state
+            self._master.lasersManager[laserName].channel_index = int(channelIndex)
+            
+            # Update the channel index
+            laserInfo.managerProperties['channel_index'] = int(channelIndex)
+            
+            # Save to configuration file
+            configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
+            
+            self._logger.info(f"Successfully changed laser '{laserName}' channel_index from {oldChannelIndex} to {channelIndex}")
+            
+            # Update the laser manager's channel_index if it has this attribute
+            if hasattr(self._master.lasersManager[laserName], 'channel_index'):
+                self._master.lasersManager[laserName].channel_index = channelIndex
+                self._logger.info(f"Updated runtime channel_index for laser '{laserName}'")
+            
+            return True
+            
+        except Exception as e:
+            self._logger.error(f"Error setting channel_index for laser '{laserName}': {str(e)}")
+            return False
+
+    @APIExport()
+    def getLaserChannelIndex(self, laserName: str) -> Union[int, str, None]:
+        """ Gets the current channel_index for a specific laser.
+        
+        Args:
+            laserName: The name of the laser
+            
+        Returns:
+            The channel_index value, or None if not found
+        """
+        try:
+            if laserName not in self._setupInfo.lasers:
+                self._logger.error(f"Laser '{laserName}' not found in setup")
+                return None
+            
+            laserInfo = self._setupInfo.lasers[laserName]
+            
+            if 'channel_index' in laserInfo.managerProperties:
+                return laserInfo.managerProperties['channel_index']
+            else:
+                self._logger.warning(f"Laser '{laserName}' does not have 'channel_index' in managerProperties")
+                return None
+                
+        except Exception as e:
+            self._logger.error(f"Error getting channel_index for laser '{laserName}': {str(e)}")
+            return None
 
     def addLaser(self, laserName, valueUnits, valueDecimals, wavelength, valueRange=None,
                 valueRangeStep=1, frequencyRange=(0, 0, 0)):

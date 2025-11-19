@@ -46,7 +46,8 @@
 
 
 # Use an appropriate base image for multi-arch support
-FROM ubuntu:22.04
+# Note: Ubuntu 24.04 (Noble) has Python 3.12 which is required for picamera2 compatibility
+FROM ubuntu:24.04
 
 ARG TARGETPLATFORM
 ENV DEBIAN_FRONTEND=noninteractive

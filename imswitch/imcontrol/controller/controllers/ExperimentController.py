@@ -334,6 +334,25 @@ class ExperimentController(ImConWidgetController):
         }
 
 
+    def set_led_status(self, status: str = "idle"):
+        """
+        Set LED matrix status if available.
+        
+        Args:
+            status: Status string - "idle", "rainbow" (busy), "error", etc.
+        """
+        try:
+            # Check if LED matrix manager is available
+            if hasattr(self._master, 'LEDMatrixsManager'):
+                led_names = self._master.LEDMatrixsManager.getAllDeviceNames()
+                if led_names and len(led_names) > 0:
+                    # Set status on first LED matrix
+                    led_matrix = self._master.LEDMatrixsManager[led_names[0]]
+                    led_matrix.setStatus(status=status)
+                    self._logger.debug(f"LED status set to: {status}")
+        except Exception as e:
+            self._logger.debug(f"Could not set LED status: {e}")
+
     def get_num_xy_steps(self, pointList):
         # we don't consider the center point as this .. well in the center
         if len(pointList) == 0:
@@ -582,6 +601,9 @@ class ExperimentController(ImConWidgetController):
         # Check if another workflow is running
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
             raise HTTPException(status_code=400, detail="Another workflow is already running.")
+
+        # Set LED status to rainbow (busy)
+        self.set_led_status("rainbow")
 
         # Start the detector if not already running
         if not self.mDetector._running:
@@ -1062,6 +1084,9 @@ class ExperimentController(ImConWidgetController):
         if performance_status["running"]:
             results["performance"] = self.performance_mode.stop_scan()
 
+        # Set LED status to idle
+        self.set_led_status("idle")
+
         # If nothing was running, return appropriate message
         if not results:
             return "No experiments are currently running"
@@ -1082,12 +1107,18 @@ class ExperimentController(ImConWidgetController):
             results["workflow"] = {"status": "force_stopped", "message": "Workflow force stopped"}
         except Exception as e:
             results["workflow"] = {"status": "error", "message": f"Error force stopping workflow: {e}"}
+            self.set_led_status("error")
 
         # Force stop performance mode
         try:
             results["performance"] = self.performance_mode.force_stop_scan()
         except Exception as e:
             results["performance"] = {"status": "error", "message": f"Error force stopping performance mode: {e}"}
+            self.set_led_status("error")
+
+        # Set LED status to idle if no errors
+        if all(r.get("status") != "error" for r in results.values()):
+            self.set_led_status("idle")
 
         return results
 

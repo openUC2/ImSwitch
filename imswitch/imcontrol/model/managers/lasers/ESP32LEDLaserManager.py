@@ -133,6 +133,19 @@ class ESP32LEDLaserManager(LaserManager):
         self._rs232manager._esp32.galvo.set_dac(
             channel=channel, frequency=frequency, offset=offset, amplitude=amplitude, clk_div=clk_div,
             phase=phase, invert=invert, timeout=timeout)
+    
+    def setLEDStatus(self, status: str = "idle"):
+        """
+        Set the LED matrix status to indicate system state.
+        
+        Args:
+            status: Status string - "idle", "rainbow" (busy), "error", etc.
+        """
+        try:
+            self._led.send_LEDMatrix_status(status=status)
+            self.__logger.debug(f"LED status set to: {status}")
+        except Exception as e:
+            self.__logger.error(f"Failed to set LED status: {e}")
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

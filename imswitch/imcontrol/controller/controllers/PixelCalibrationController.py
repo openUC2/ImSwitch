@@ -1872,6 +1872,8 @@ class PixelCalibrationController(LiveUpdatedController):
         Returns:
             Dictionary with status message - actual navigation runs in background thread
         """
+        
+        return
         try:
             if self.observationCamera is None:
                 return {"error": "Observation camera not available", "success": False}

@@ -421,7 +421,7 @@ async def disconnect(sid):
 async def frame_ack(sid, data):
     """Client explicitly acknowledges frame processing complete"""
     with _client_frame_lock:
-        _client_ack_frame_id[sid] = data.get('frame_id', None)  # Unified field name
+        _client_ack_frame_id[sid] = xfx.get('frame_id', None)  # Unified field name
         # print(f"Client {sid} acknowledged frame", data)
 
 

@@ -96,7 +96,7 @@ class ESP32LEDLaserManager(LaserManager):
         if self.channel_index == "LED":
             #self._led.send_LEDMatrix_full(intensity = (self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
             #self._led.setIntensity(intensity=(self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
-            self._led.setAll(state=self.enabled, intensity=(self.power, self.power, self.power), getReturn=getReturn)
+            self._led.setAll(state=self.enabled, intensity=(0, self.power, 0), getReturn=getReturn)
         else:
             self._laser.set_laser(self.channel_index,
                                                 int(self.power*self.enabled),

@@ -285,6 +285,16 @@ class LaserController(ImConWidgetController):
                 return 0
 
     @APIExport(runOnUIThread=True)
+    def getLaserActive(self, laserName: str) -> bool:
+        """ Returns whether the specified laser is powered on. """
+        if not IS_HEADLESS: return self._widget.isLaserActive(laserName)
+        else:
+            try:
+                return self._master.lasersManager[laserName].enabled
+            except Exception as e:
+                return False
+            
+    @APIExport(runOnUIThread=True)
     def setLaserActive(self, laserName: str, active: bool) -> None:
         """ Sets whether the specified laser is powered on. """
         if not IS_HEADLESS: self._widget.setLaserActive(laserName, active)

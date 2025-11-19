@@ -245,11 +245,64 @@ class CameraOpenCV:
 
                     self.__logger.debug(f"Attempt {attempt + 1}/{max_retries}: Opening Linux device: {dev_path}")
                     
-                    # Open with V4L2 backend and configure buffer settings
-                    self.camera = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
+                    # Try multiple capture methods for UVC cameras
+                    camera_opened = False
                     
-                    if not self.camera.isOpened():
-                        raise RuntimeError(f"Failed to open camera at {dev_path}")
+                    # Method 1: V4L2 with MJPG (preferred for most cameras)
+                    try:
+                        self.camera = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
+                        if self.camera.isOpened():
+                            self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
+                            # Test if we can actually read a frame
+                            ret, test_frame = self.camera.read()
+                            if ret and test_frame is not None:
+                                self.__logger.debug(f"Successfully opened with V4L2+MJPG")
+                                camera_opened = True
+                            else:
+                                self.__logger.warning("V4L2+MJPG opened but cannot read frames")
+                                self.camera.release()
+                    except Exception as e:
+                        self.__logger.debug(f"V4L2+MJPG failed: {e}")
+                        if self.camera is not None:
+                            self.camera.release()
+                    
+                    # Method 2: V4L2 with YUYV (fallback for UVC cameras)
+                    if not camera_opened:
+                        try:
+                            self.camera = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
+                            if self.camera.isOpened():
+                                self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('Y','U','Y','V'))
+                                ret, test_frame = self.camera.read()
+                                if ret and test_frame is not None:
+                                    self.__logger.debug(f"Successfully opened with V4L2+YUYV")
+                                    camera_opened = True
+                                else:
+                                    self.__logger.warning("V4L2+YUYV opened but cannot read frames")
+                                    self.camera.release()
+                        except Exception as e:
+                            self.__logger.debug(f"V4L2+YUYV failed: {e}")
+                            if self.camera is not None:
+                                self.camera.release()
+                    
+                    # Method 3: Default OpenCV (no specific backend)
+                    if not camera_opened:
+                        try:
+                            self.camera = cv2.VideoCapture(cameraindex)
+                            if self.camera.isOpened():
+                                ret, test_frame = self.camera.read()
+                                if ret and test_frame is not None:
+                                    self.__logger.debug(f"Successfully opened with default backend")
+                                    camera_opened = True
+                                else:
+                                    self.__logger.warning("Default backend opened but cannot read frames")
+                                    self.camera.release()
+                        except Exception as e:
+                            self.__logger.debug(f"Default backend failed: {e}")
+                            if self.camera is not None:
+                                self.camera.release()
+                    
+                    if not camera_opened:
+                        raise RuntimeError(f"Failed to open camera at {dev_path} - tried V4L2+MJPG, V4L2+YUYV, and default backend")
                     
                     # Configure V4L2 buffer to reduce timeout issues
                     # Set buffer size to minimum to reduce latency and timeout issues
@@ -276,8 +329,8 @@ class CameraOpenCV:
                 self.__logger.debug("Camera opened successfully")
                 
                 # Set resolution
-                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920.0)  # 4k/high_res
-                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080.0) # 4k/high_res
+                #self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920.0)  # 4k/high_res
+                #self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080.0) # 4k/high_res
                 
                 # Flush initial frames and verify camera is working
                 successful_reads = 0
@@ -344,35 +397,50 @@ class CameraOpenCV:
         consecutive_failures = 0
         max_consecutive_failures = 10
         
+        # Give camera time to initialize
+        time.sleep(0.5)
+        
         while self.camera_is_open:
             try:
-                # Use grab() + retrieve() for better control
-                # grab() is faster and allows checking if frame is available
-                if not self.camera.grab():
+                # For problematic UVC cameras, use read() directly instead of grab()+retrieve()
+                # This can help with cameras that report True but return None frames
+                ret, frame = self.camera.read()
+                
+                if not ret:
                     consecutive_failures += 1
-                    self.__logger.warning(f"Failed to grab frame (attempt {consecutive_failures}/{max_consecutive_failures})")
+                    self.__logger.warning(f"Failed to read frame - ret=False (attempt {consecutive_failures}/{max_consecutive_failures})")
                     
                     if consecutive_failures >= max_consecutive_failures:
-                        self.__logger.error("Too many consecutive frame grab failures - stopping capture")
+                        self.__logger.error("Too many consecutive frame read failures - stopping capture")
                         self.camera_is_open = False
                         break
                     
                     time.sleep(0.1)  # Brief pause before retry
                     continue
                 
-                # Retrieve the grabbed frame
-                ret, frame = self.camera.retrieve()
-                
-                if not ret or frame is None:
+                if frame is None:
                     consecutive_failures += 1
-                    self.__logger.warning(f"Failed to retrieve frame (attempt {consecutive_failures}/{max_consecutive_failures})")
+                    self.__logger.warning(f"Failed to read frame - frame is None (attempt {consecutive_failures}/{max_consecutive_failures})")
                     
                     if consecutive_failures >= max_consecutive_failures:
-                        self.__logger.error("Too many consecutive frame retrieve failures - stopping capture")
+                        self.__logger.error("Too many consecutive None frames - stopping capture")
                         self.camera_is_open = False
                         break
                     
                     time.sleep(0.1)  # Brief pause before retry
+                    continue
+                
+                # Validate frame has proper dimensions
+                if frame.size == 0 or len(frame.shape) < 2:
+                    consecutive_failures += 1
+                    self.__logger.warning(f"Invalid frame dimensions: {frame.shape} (attempt {consecutive_failures}/{max_consecutive_failures})")
+                    
+                    if consecutive_failures >= max_consecutive_failures:
+                        self.__logger.error("Too many consecutive invalid frames - stopping capture")
+                        self.camera_is_open = False
+                        break
+                    
+                    time.sleep(0.1)
                     continue
                 
                 # Success - reset failure counter

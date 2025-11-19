@@ -291,6 +291,16 @@ class LaserController(ImConWidgetController):
         else: self.toggleLaser(laserName, active) #TODO: !!! self.laserModules[laserName].sigEnableChanged.emit(laserName, active)
 
     @APIExport(runOnUIThread=True)
+    def getLaserActive(self, laserName: str) -> bool:
+        """ Returns whether the specified laser is powered on. """
+        if not IS_HEADLESS: return self._widget.isLaserActive(laserName)
+        else:
+            try:
+                return self._master.lasersManager[laserName].enabled
+            except Exception as e:
+                return False
+            
+    @APIExport(runOnUIThread=True)
     def setLaserValue(self, laserName: str, value: Union[int, float]) -> None:
         """ Sets the value of the specified laser, in the units that the laser
         uses. """

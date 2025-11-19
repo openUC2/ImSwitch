@@ -47,14 +47,28 @@ apt-get remove -y \
 
 # Install raspberry pi camera dependencies (only on ARM platforms)
 # https://github.com/hyzhak/pi-camera-in-docker/blob/main/Dockerfile
-# Note: Requires Ubuntu 24.04+ or Debian Bookworm for Python 3.11+ compatibility
+# Note: Requires Debian Bookworm for Python 3.11 compatibility
 if [[ "$TARGETPLATFORM" == "linux/arm64" ]] || [[ "$TARGETPLATFORM" == "linux/arm/v7" ]]; then
   echo "Installing picamera2 dependencies for ARM platform..."
   apt update && apt install -y --no-install-recommends gnupg
   echo "deb http://archive.raspberrypi.org/debian/ bookworm main" > /etc/apt/sources.list.d/raspi.list
   apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E
   apt update
-  apt install -y python3-picamera2
+  # Install picamera2 and handle configuration errors from GTK/systemd dependencies
+  # Temporarily disable exit-on-error for dpkg configuration issues
+  set +e
+  apt install -y --no-install-recommends python3-picamera2
+  # Try to fix any partial configuration issues
+  dpkg --configure -a
+  # Verify picamera2 was installed successfully
+  if dpkg -l | grep -q python3-picamera2; then
+    echo "python3-picamera2 installed successfully"
+    set -e
+  else
+    echo "ERROR: python3-picamera2 installation failed"
+    set -e
+    exit 1
+  fi
   # needs:
   #    volumes:
   #      - /run/udev:/run/udev:ro

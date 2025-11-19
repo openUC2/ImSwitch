@@ -22,6 +22,11 @@ cd /tmp/UC2-REST
     echo '/usr/lib/python3/dist-packages' > \$CONDA_SITE_PACKAGES/system-packages.pth && \
     python -c 'import sys; print(\"Python paths:\"); [print(p) for p in sys.path]'"
 
+# Install simplejpeg in conda environment to avoid NumPy ABI compatibility issues
+# The system python3-simplejpeg is compiled against system NumPy, but we need it for conda NumPy
+/bin/bash -c "source /opt/conda/bin/activate imswitch && \
+    pip install --no-cache-dir simplejpeg --forece-reinstall"
+
 # Clean up all the package managers at the end
 
 apt -y autoremove

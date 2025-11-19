@@ -50,6 +50,10 @@ apt-get remove -y \
 # Note: Requires Debian Bookworm for Python 3.11 compatibility
 if [[ "$TARGETPLATFORM" == "linux/arm64" ]] || [[ "$TARGETPLATFORM" == "linux/arm/v7" ]]; then
   echo "Installing picamera2 dependencies for ARM platform..."
+  
+  # Install libturbojpeg for simplejpeg (will be installed via pip in conda env)
+  apt-get install -y --no-install-recommends libturbojpeg0-dev
+  
   apt update && apt install -y --no-install-recommends gnupg
   echo "deb http://archive.raspberrypi.org/debian/ bookworm main" > /etc/apt/sources.list.d/raspi.list
   apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E

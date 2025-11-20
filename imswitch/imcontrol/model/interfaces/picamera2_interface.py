@@ -117,14 +117,93 @@ class CameraPicamera2:
         
         self.__logger.info(f"Camera initialized: model={self.model}, RGB={self.isRGB}, resolution={self.SensorWidth}x{self.SensorHeight}")
 
+    def _release_camera_from_other_processes(self, camera_index: int):
+        """
+        Attempt to release camera from other processes.
+        This uses fuser to find and optionally kill processes holding the camera.
+        """
+        import subprocess
+        import os
+        
+        # Camera device paths that might be locked
+        device_paths = [
+            f"/dev/video{camera_index}",
+            "/dev/media0",
+            "/dev/media1",
+            "/dev/media2",
+        ]
+        
+        for device_path in device_paths:
+            if not os.path.exists(device_path):
+                continue
+            
+            try:
+                # Find processes using the device
+                result = subprocess.run(
+                    ["fuser", device_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    pids = result.stdout.strip().split()
+                    self.__logger.warning(f"Device {device_path} is being used by PIDs: {pids}")
+                    
+                    # Get process info
+                    for pid in pids:
+                        try:
+                            ps_result = subprocess.run(
+                                ["ps", "-p", pid, "-o", "comm="],
+                                capture_output=True,
+                                text=True,
+                                timeout=1
+                            )
+                            process_name = ps_result.stdout.strip()
+                            self.__logger.warning(f"  PID {pid}: {process_name}")
+                            
+                            # Kill the process if it's not our own process
+                            current_pid = os.getpid()
+                            if int(pid) != current_pid:
+                                self.__logger.warning(f"Attempting to kill PID {pid} ({process_name})")
+                                subprocess.run(["kill", "-9", pid], timeout=1)
+                                import time
+                                time.sleep(0.5)  # Give it time to release
+                        except Exception as e:
+                            self.__logger.debug(f"Could not process PID {pid}: {e}")
+                
+            except subprocess.TimeoutExpired:
+                self.__logger.debug(f"Timeout checking {device_path}")
+            except FileNotFoundError:
+                self.__logger.debug("fuser command not found, skipping process check")
+                break
+            except Exception as e:
+                self.__logger.debug(f"Error checking {device_path}: {e}")
+        
+        # Alternative: try to close all Picamera2 instances
+        try:
+            from picamera2 import Picamera2
+            # This will close all global instances
+            Picamera2.close_all_cameras()
+            import time
+            time.sleep(0.5)
+        except Exception as e:
+            self.__logger.debug(f"Could not close all cameras: {e}")
+
     def _open_camera(self, camera_index: int):
         """Open and configure the camera"""
         if not PICAMERA2_AVAILABLE:
             raise RuntimeError("Picamera2 not available")
         
+        # Initialize camera to None first to avoid issues in close()
+        self.camera = None
+        
         try:
+            # Try to release camera from other processes
+            self._release_camera_from_other_processes(camera_index)
+            
             # Create camera instance
-            self.camera = Picamera2(camera_index)
+            self.camera = Picamera2() # sudo fuser -k /dev/video0 /dev/media0 /dev/media1 /dev/media2
             
             # Get sensor resolution
             sensor_modes = self.camera.sensor_modes
@@ -174,6 +253,19 @@ class CameraPicamera2:
             
         except Exception as e:
             self.__logger.error(f"Failed to open camera {camera_index}: {e}")
+            # Clean up partial initialization
+            if self.camera is not None:
+                try:
+                    # Don't call camera.close() as it might fail with AttributeError
+                    # Just release the underlying camera object if possible
+                    if hasattr(self.camera, 'camera') and self.camera.camera is not None:
+                        try:
+                            self.camera.camera.release()
+                        except:
+                            pass
+                    self.camera = None
+                except:
+                    pass
             raise
 
     def _apply_camera_controls(self):
@@ -433,7 +525,20 @@ class CameraPicamera2:
         # Close camera
         if self.camera is not None:
             try:
-                self.camera.close()
+                # Safely close the camera
+                # Check if camera is properly initialized before closing
+                if hasattr(self.camera, '_preview'):
+                    self.camera.close()
+                else:
+                    # Camera didn't initialize properly, try to clean up manually
+                    self.__logger.warning("Camera not fully initialized, attempting manual cleanup")
+                    try:
+                        if hasattr(self.camera, 'camera') and self.camera.camera is not None:
+                            self.camera.camera.release()
+                    except Exception as cleanup_error:
+                        self.__logger.debug(f"Manual cleanup failed: {cleanup_error}")
+            except AttributeError as e:
+                self.__logger.warning(f"Camera close skipped due to incomplete initialization: {e}")
             except Exception as e:
                 self.__logger.error(f"Error closing camera: {e}")
             

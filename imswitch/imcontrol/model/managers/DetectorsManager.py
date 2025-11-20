@@ -181,13 +181,13 @@ class DetectorsManager(MultiManager, SignalInterface):
             self._activeAcqsMutex.unlock()
 
         # Do actual disabling
-        self._thread.finished.emit()
         if disableLV:
             self._thread.quit()
             self._thread.wait()
         if disableAcq:
             self.execOnAll(lambda c: c.stopAcquisition(), condition=lambda c: c.forAcquisition)
             self.sigAcquisitionStopped.emit()
+        self._thread.finished.emit()
 
     def getAcquistionHandles(self):
         """ Returns the list of active acquisition handles. """

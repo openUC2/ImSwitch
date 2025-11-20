@@ -56,7 +56,8 @@
 
 
 # Use an appropriate base image for multi-arch support
-FROM ubuntu:22.04
+# Note: Debian Bookworm has Python 3.11 which is required for picamera2 compatibility
+FROM debian:bookworm
 
 ARG TARGETPLATFORM
 ENV DEBIAN_FRONTEND=noninteractive

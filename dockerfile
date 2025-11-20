@@ -9,6 +9,16 @@
 # docker stop imswitch_hik
 # sudo docker inspect imswitch_hik
 # docker run --privileged -it imswitch_hik
+# For Raspberry Pi with Picamera2:
+# docker run -it --privileged \
+#   -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket \
+#   -v /dev/dma_heap:/dev/dma_heap \
+#   --device /dev/video0:/dev/video0 \
+#   --device /dev/video10:/dev/video10 \
+#   --device /dev/video11:/dev/video11 \
+#   --device /dev/video12:/dev/video12 \
+#   -e MODE=terminal \
+#   ghcr.io/openuc2/imswitch-noqt:sha-5d54391
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -e CONFIG_FILE=example_virtual_microscope.json -e UPDATE_GIT=0 -e UPDATE_CONFIG=0 --privileged ghcr.io/openuc2/imswitch-noqt-x64:latest
 # sudo docker run -it --rm -p 8001:8001 -p 8002:8002 -p 2222:22 -e HEADLESS=1 -e HTTP_PORT=8001 -e CONFIG_FILE=example_uc2_hik_flowstop.json -e UPDATE_GIT=1 -e UPDATE_CONFIG=0 --privileged imswitch_hik
 # performs python3 /opt/MVS/Samples/aarch64/Python/MvImport/GrabImage.py
@@ -46,7 +56,8 @@
 
 
 # Use an appropriate base image for multi-arch support
-FROM ubuntu:22.04
+# Note: Debian Bookworm has Python 3.11 which is required for picamera2 compatibility
+FROM debian:bookworm
 
 ARG TARGETPLATFORM
 ENV DEBIAN_FRONTEND=noninteractive

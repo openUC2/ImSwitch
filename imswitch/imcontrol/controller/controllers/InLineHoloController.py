@@ -451,7 +451,7 @@ class InLineHoloController(LiveUpdatedController):
         """
         return self._params.to_dict()
 
-    @APIExport(runOnUIThread=True)
+    @APIExport(runOnUIThread=True, requestType="POST")
     def set_parameters_inlineholo(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update hologram processing parameters
@@ -488,17 +488,17 @@ class InLineHoloController(LiveUpdatedController):
     @APIExport(runOnUIThread=True)
     def set_pixelsize_inlineholo(self, pixelsize: float) -> Dict[str, Any]:
         """Set pixel size in meters"""
-        return self.set_parameters({"pixelsize": pixelsize})
+        return self.set_parameters_inlineholo({"pixelsize": pixelsize})
 
     @APIExport(runOnUIThread=True)
     def set_wavelength_inlineholo(self, wavelength: float) -> Dict[str, Any]:
         """Set wavelength in meters"""
-        return self.set_parameters({"wavelength": wavelength})
+        return self.set_parameters_inlineholo({"wavelength": wavelength})
 
     @APIExport(runOnUIThread=True)
     def set_dz_inlineholo(self, dz: float) -> Dict[str, Any]:
         """Set propagation distance in meters"""
-        return self.set_parameters({"dz": dz})
+        return self.set_parameters_inlineholo({"dz": dz})
 
     @APIExport(runOnUIThread=True)
     def set_roi_inlineholo(self, center_x: int=None, center_y: int=None, size: int=256) -> Dict[str, Any]:
@@ -508,7 +508,7 @@ class InLineHoloController(LiveUpdatedController):
             {"center": [512, 512], "size": 256}
         """ 
         center = [center_x, center_y] if center_x is not None and center_y is not None else None
-        return self.set_parameters({"roi_center": center, "roi_size": size})
+        return self.set_parameters_inlineholo({"roi_center": center, "roi_size": size})
     
     @APIExport(runOnUIThread=True)
     def set_binning_inlineholo(self, binning: int) -> Dict[str, Any]:
@@ -516,7 +516,7 @@ class InLineHoloController(LiveUpdatedController):
         Set binning factor (1, 2, 4, etc.)
         Note: Pixel size in reconstruction kernel is automatically adjusted
         """
-        return self.set_parameters({"binning": binning})
+        return self.set_parameters_inlineholo({"binning": binning})
 
     # =========================
     # API: Processing Control
@@ -756,7 +756,7 @@ class InLineHoloController(LiveUpdatedController):
         """Legacy: Change update rate"""
         if updateRate == "" or updateRate <= 0:
             updateRate = 1
-        self.set_parameters({"update_freq": updateRate})
+        self.set_parameters_inlineholo({"update_freq": updateRate})
 
     def inLineValueChanged(self, magnitude):
         """Legacy: Change inline propagation distance"""

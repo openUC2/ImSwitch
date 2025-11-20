@@ -975,7 +975,7 @@ class LiveViewController(LiveUpdatedController):
             for key, value in params.items():
                 if hasattr(stream_params, key):
                     setattr(stream_params, key, value)
-            
+                    print(f"Set {protocol} param {key} to {value}")
             # Check if any detector is currently streaming with this protocol
             # and restart it if necessary to apply the new parameters
             detectors_to_restart = []

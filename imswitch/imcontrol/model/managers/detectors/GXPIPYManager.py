@@ -213,25 +213,7 @@ class GXPIPYManager(DetectorManager):
         self._camera.flushBuffer()
 
     def startAcquisition(self, liveView=False):
-        if self._camera.model == "mock":
-
-            # reconnect? Not sure if this is smart..
-            del self._camera
-            self._camera = self._getGXObj(self.cameraId, self.binningValue)
-
-            for propertyName, propertyValue in self.detectorInfo.managerProperties['gxipycam'].items():
-                self._camera.setPropertyValue(propertyName, propertyValue)
-
-            fullShape = (self._camera.SensorWidth,
-                        self._camera.SensorHeight)
-
-            model = self._camera.model
-            self._running = False
-            self._adjustingParameters = False
-
-            # TODO: Not implemented yet
-            self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
-
+        # Camera is already initialized, just start streaming
         if not self._running:
             self._camera.start_live()
             self._running = True

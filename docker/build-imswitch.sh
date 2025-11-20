@@ -1,10 +1,5 @@
 #!/usr/bin/env -S bash -eux
 
-# TODO(ethanjli): find a way to not rely on git inside a container image
-apt-get update
-apt-get install -y \
-  git
-
 # Install ImSwitch from our local copy of the repo
 cp -r /mnt/ImSwitch /tmp/ImSwitch
 cd /tmp/ImSwitch
@@ -19,14 +14,6 @@ rm -rf /opt/conda/envs/imswitch/lib/*/*/imswitch/**/*.dll
 git clone https://github.com/openUC2/UC2-REST /tmp/UC2-REST
 cd /tmp/UC2-REST
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/UC2-REST"
-
-# install arkitekt
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install https://github.com/openUC2/imswitch-arkitekt-next/archive/refs/heads/master.zip"
-
-# Clean up build-only tools
-
-apt-get remove -y \
-  git
 
 # Clean up all the package managers at the end
 

@@ -22,6 +22,5 @@ services:
       - SCAN_EXT_DATA_PATH=1
       - EXT_DATA_PATH=/media
       - SSL=1
-      - WIFI_MODE=host
 
     restart: always

@@ -27,7 +27,6 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
         '''
         in docker:
         params+=" --http-port ${HTTP_PORT:-8001}"
-        params+=" --socket-port ${SOCKET_PORT:-8002}"
         params+=" --config-folder ${CONFIG_PATH:-None}"
         params+=" --config-file ${CONFIG_FILE:-None}"
         params+=" --ext-data-folder ${DATA_PATH:-None}"
@@ -36,7 +35,6 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
         '''
         headless = config.is_headless
         http_port = str(config.http_port)
-        socket_port = str(config.socket_port)
         config_folder = str(config.config_folder) if config.config_folder else "None"
         config_file = str(config.default_config) if config.default_config else "None"
         is_ssl = config.ssl
@@ -48,7 +46,6 @@ def restartSoftware(module='imswitch', forceConfigFile=False):
             sys.executable,
             os.path.abspath(sys.argv[0]),
             '--http-port', http_port,
-            '--socket-port', socket_port,
         ]
         
         if config_folder != "None":

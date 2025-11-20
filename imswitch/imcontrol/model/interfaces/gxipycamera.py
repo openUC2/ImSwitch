@@ -103,13 +103,14 @@ class CameraGXIPY:
         # set camera to mono12 mode
         availablePixelFormats = self.camera.PixelFormat.get_range()
         
-        # Improve RGB detection logic
-        self.isRGB = self._detect_rgb_camera()
-        
         try:
             self.set_pixel_format(list(availablePixelFormats)[-1]) # last one is at highest bitrate
         except Exception as e:
             self.__logger.error(e)
+        
+        # Detect RGB after pixel format is set
+        self.isRGB = self._detect_rgb_camera()
+        self.__logger.debug(f"RGB camera detected: {self.isRGB}")
 
         # get framesize
         self.SensorHeight = self.camera.HeightMax.get()//self.binning
@@ -123,9 +124,11 @@ class CameraGXIPY:
         # Register callback for frame capture
         try:
             self.camera.register_capture_callback(user_param, callback_fct)
+            self._callback_registered = True
         except Exception as e:
             self.__logger.warning(f"Failed to register capture callback: {e}")
             # Fall back to polling mode if callback fails
+            self._callback_registered = False
 
         # set things if RGB camera is used
         # get param of improving image quality
@@ -139,35 +142,67 @@ class CameraGXIPY:
             self.color_correction_param = self.camera.ColorCorrectionParam.get()
 
     def start_live(self):
-        if not self.is_streaming:
-            # start data acquisition
-            self.camera.stream_on()
-            self.is_streaming = True
+        if self.is_streaming:
+            return
+        self.flushBuffer()
+        
+        # Re-register callback if needed (in case it was deregistered during stop)
+        if hasattr(self, '_callback_registered') and not self._callback_registered:
+            try:
+                user_param = None
+                self.camera.register_capture_callback(user_param, self.set_frame)
+                self._callback_registered = True
+                self.__logger.debug("Callback re-registered successfully")
+            except Exception as e:
+                self.__logger.warning(f"Failed to re-register capture callback: {e}")
+        
+        # start data acquisition
+        self.camera.stream_on()
+        self.is_streaming = True
 
     def stop_live(self):
-        if self.is_streaming:
-            # start data acquisition
+        if not self.is_streaming:
+            return
+        
+        # Stop stream first
+        try:
             self.camera.stream_off()
-            self.is_streaming = False
+        except Exception as e:
+            self.__logger.warning(f"Failed to stop stream: {e}")
+        
+        # Deregister callback to ensure clean state for next start
+        if hasattr(self, '_callback_registered') and self._callback_registered:
+            try:
+                self.camera.unregister_capture_callback()
+                self._callback_registered = False
+                self.__logger.debug("Callback deregistered successfully")
+            except Exception as e:
+                self.__logger.warning(f"Failed to deregister callback: {e}")
+        
+        self.is_streaming = False
 
     def suspend_live(self):
-        if self.is_streaming:
-        # start data acquisition
-            try:
-                self.camera.stream_off()
-            except:
-                # camera was disconnected?
-                self.camera.unregister_capture_callback()
-                self.camera.close_device()
-                self._init_cam(cameraNo=self.cameraNo, binning=self.binning, callback_fct=self.set_frame)
-
-            self.is_streaming = False
+        self.stop_live()
 
     def prepare_live(self):
         pass
 
     def close(self):
-        self.camera.close_device()
+        if self.is_streaming:
+            self.stop_live()
+        
+        # Ensure callback is deregistered before closing
+        if hasattr(self, '_callback_registered') and self._callback_registered:
+            try:
+                self.camera.unregister_capture_callback()
+                self._callback_registered = False
+            except Exception as e:
+                self.__logger.warning(f"Failed to deregister callback during close: {e}")
+        
+        try:
+            self.camera.close_device()
+        except Exception as e:
+            self.__logger.warning(f"Failed to close device: {e}")
 
     def set_flatfielding(self, is_flatfielding):
         self.isFlatfielding = is_flatfielding
@@ -224,22 +259,33 @@ class CameraGXIPY:
     def set_pixel_format(self,format):
         format = format.upper()
         if self.camera.PixelFormat.is_implemented() and self.camera.PixelFormat.is_writable():
+            # Determine if format is RGB/Bayer
+            is_rgb_format = 'BAYER' in format or 'RGB' in format or 'BGR' in format
+            
             if format == 'MONO8':
-                return self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO8)
-            if format == 'MONO10':
-                return self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO10)
-            if format == 'MONO12':
-                return self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO12)
-            if format == 'MONO14':
-                return self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO14)
-            if format == 'MONO16':
-                return self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO16)
-            if format == 'BAYER_RG8':
-                return self.camera.PixelFormat.set(gx.GxPixelFormatEntry.BAYER_RG8)
-            if format == 'BAYER_RG10':
-                return self.camera.PixelFormat.set(gx.GxPixelFormatEntry.BAYER_RG10)
-            if format == 'BAYER_RG12':
-                return self.camera.PixelFormat.set(gx.GxPixelFormatEntry.BAYER_RG12)
+                result = self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO8)
+            elif format == 'MONO10':
+                result = self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO10)
+            elif format == 'MONO12':
+                result = self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO12)
+            elif format == 'MONO14':
+                result = self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO14)
+            elif format == 'MONO16':
+                result = self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO16)
+            elif format == 'BAYER_RG8':
+                result = self.camera.PixelFormat.set(gx.GxPixelFormatEntry.BAYER_RG8)
+            elif format == 'BAYER_RG10':
+                result = self.camera.PixelFormat.set(gx.GxPixelFormatEntry.BAYER_RG10)
+            elif format == 'BAYER_RG12':
+                result = self.camera.PixelFormat.set(gx.GxPixelFormatEntry.BAYER_RG12)
+            else:
+                self.__logger.warning(f"Unknown pixel format: {format}")
+                return -1
+            
+            # Update RGB flag based on format
+            self.isRGB = is_rgb_format
+            self.__logger.debug(f"Pixel format set to {format}, isRGB={self.isRGB}")
+            return result
         else:
             self.__logger.debug("pixel format is not implemented or not writable")
             return -1
@@ -565,34 +611,49 @@ class CameraGXIPY:
             return
 
         try:
-            # if RGB camera
-            if self.isRGB:
+            numpy_image = None
+            
+            # Check if frame has RGB/Bayer data by checking if convert method works
+            # This is more robust than relying on isRGB flag
+            try:
                 rgb_image = frame.convert("RGB")
-                if rgb_image is None:
-                    return
+                if rgb_image is not None:
+                    # This is an RGB/Bayer frame
+                    # improve image quality if parameters are available
+                    if self.contrast_lut is not None or self.gamma_lut is not None:
+                        try:
+                            rgb_image.image_improvement(self.color_correction_param, self.contrast_lut, self.gamma_lut)
+                        except Exception as e:
+                            self.__logger.debug(f"Image improvement failed: {e}")
 
-                # improve image quality
-                try:
-                    rgb_image.image_improvement(self.color_correction_param, self.contrast_lut, self.gamma_lut)
-                except Exception as e:
-                    self.__logger.debug(f"Image improvement failed: {e}")
-
-                # create numpy array with data from raw image
-                numpy_image = rgb_image.get_numpy_array()
-                if numpy_image is None:
-                    return
-
-            else:
+                    # create numpy array with data from RGB image
+                    numpy_image = rgb_image.get_numpy_array()
+                    
+                    if numpy_image is not None and not self.isRGB:
+                        # Update flag if we detected RGB capability
+                        self.isRGB = True
+                        self.__logger.info("RGB capability detected from frame conversion")
+            except Exception as e:
+                # convert() failed, likely a mono camera
+                self.__logger.debug(f"RGB conversion not available: {e}")
+            
+            # Fallback to mono if RGB conversion failed
+            if numpy_image is None:
                 numpy_image = frame.get_numpy_array()
+                if self.isRGB:
+                    # Update flag if RGB conversion failed
+                    self.isRGB = False
+                    self.__logger.info("Switching to mono mode - RGB conversion unavailable")
+            
+            if numpy_image is None:
+                self.__logger.error("Failed to get numpy array from frame")
+                return
 
             # flip image if needed
             if self.flipImage[0]: # Y
                 numpy_image = np.flip(numpy_image, axis=0)
             if self.flipImage[1]: # X
                 numpy_image = np.flip(numpy_image, axis=1)
-            if numpy_image is None:
-                self.__logger.error("Got a None frame")
-                return
                 
             self.frame = numpy_image.copy()
             self.frameNumber = frame.get_frame_id()

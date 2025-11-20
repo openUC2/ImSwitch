@@ -67,7 +67,7 @@ ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
 # Larger slowly-changing dependencies are installed in a separate container image layer before the
 # rapidly-changing ImSwitch repository:
-RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-imswitch-deps.sh
+RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=./pyproject.toml,target=/mnt/ImSwitch/pyproject.toml /mnt/build/build-imswitch-deps.sh
 
 # Always pull the latest version of ImSwitch and UC2-REST repositories
 # Question(ethanjli): if we're copying the ImSwitch & UC2-REST repositories from local files using
@@ -76,13 +76,8 @@ RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-imswitch-
 # Adding a dynamic build argument to prevent caching
 ARG BUILD_DATE
 RUN --mount=type=bind,source=docker,target=/mnt/build --mount=type=bind,source=.,target=/mnt/ImSwitch /mnt/build/build-imswitch.sh
-ENV WIFI_MODE=host
-# Expose FTP port and HTTP port
-EXPOSE 8001 8002 8003 8888 8889 22
+# Expose HTTP port and Jupyter server port
+EXPOSE 8001 8888 8889
 
 COPY docker/entrypoint.sh /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
-
-# Optional: basic healthcheck for host-NM mode (noop if socket not mounted)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD [[ -S /run/dbus/system_bus_socket ]] && nmcli general status >/dev/null 2>&1 || exit 0

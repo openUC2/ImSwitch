@@ -14,13 +14,20 @@ apt-get install -y \
   git
 # TODO(ethanjli): find a way to not rely on git inside a container image
 
+# Install system picamera2 which pulls in compatible libcamera dependencies
+# Note: python3-picamera2 will automatically install the correct libcamera version
+apt-get update && apt install -y --no-install-recommends \
+         python3-picamera2 \
+     && apt-get clean \
+     && apt-get autoremove \
+     && rm -rf /var/cache/apt/archives/* \
+     && rm -rf /var/lib/apt/lists/*
+
+# Install conda packages
 /opt/conda/bin/conda install -n imswitch -y -c conda-forge \
-  h5py
-/opt/conda/bin/conda install \
-  numcodecs=0.15.0 \
-  numpy=2.1.2
-/bin/bash -c "source /opt/conda/bin/activate imswitch && \
-  conda install -c conda-forge scikit-image=0.19.3"
+  h5py \
+  numpy \
+  scikit-image
 
 # we want psygnal to be installed without binaries - so first remove it
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
@@ -44,16 +51,6 @@ cd /tmp/ImSwitch
 apt-get remove -y \
   build-essential \
   libhdf5-dev
-
-# install raspberry pi camera dependencies
-# https://github.com/hyzhak/pi-camera-in-docker/blob/main/Dockerfile
-apt update && apt install -y --no-install-recommends gnupg
-echo "deb http://archive.raspberrypi.org/debian/ bookworm main" > /etc/apt/sources.list.d/raspi.list \
-  && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E
-apt update && apt install -y python3-picamera2
-# needs
-#    volumes:
-#      - /run/udev:/run/udev:ro
 
 # Clean up all the package managers at the end
 

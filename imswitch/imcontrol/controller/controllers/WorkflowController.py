@@ -285,14 +285,14 @@ class WorkflowController(LiveUpdatedController):
         self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
         self.mStage.move(value=(posX, posY), axis="XY", is_absolute=not relative, is_blocking=True)
         newPosition = self.mStage.getPosition()
-        self._commChannel.sigUpdateMotorPosition.emit([newPosition["X"], newPosition["Y"]])
+        #self._commChannel.sigUpdateMotorPosition.emit([newPosition["X"], newPosition["Y"]])
         return (newPosition["X"], newPosition["Y"])
 
     def move_stage_z(self, posZ: float, relative: bool = False):
         self._logger.debug(f"Moving stage to Z={posZ}")
         self.mStage.move(value=posZ, axis="Z", is_absolute=not relative, is_blocking=True)
         newPosition = self.mStage.getPosition()
-        self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
+        #self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
         return newPosition["Z"]
 
     def autofocus(self, context: WorkflowContext, metadata: Dict[str, Any]):

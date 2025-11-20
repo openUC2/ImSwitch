@@ -14,7 +14,7 @@ import os
 import datetime
 import tifffile as tif
 import time
-
+import numpy as np
 
 # =========================
 # Controller
@@ -466,12 +466,16 @@ class ArkitektController(ImConWidgetController):
                 if illumination_channel:
                     image_name += f"_{illumination_channel}"
                 
+                # ensure we have a channel axis 
+                if len(numpy_array.shape) == 2:
+                    numpy_array = np.expand_dims(numpy_array, axis=-1)
+                
                 if stage is not None:
-
+                    print("Image has the following properties: ", numpy_array.shape)
                     image = from_array_like(
                         xr.DataArray(
                             numpy_array,
-                            dims=["y", "x"],
+                            dims=["y", "x", "c"],
                             attrs={
                                 "tile_x": actual_ix,
                                 "tile_y": iy,

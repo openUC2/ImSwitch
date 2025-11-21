@@ -56,6 +56,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_max = kwargs.get('autofocus_max', 0)
         autofocus_step_size = kwargs.get('autofocus_step_size', 1)
         autofocus_illumination_channel = kwargs.get('autofocus_illumination_channel', '')
+        autofocus_mode = kwargs.get('autofocus_mode', 'software')  # 'hardware' or 'software'
         t_period = kwargs.get('t_period', 1)
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
@@ -77,7 +78,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 tiles, position_center_index, step_id, workflow_steps,
                 z_positions, illumination_sources, illumination_intensities,
                 exposures, gains, t, is_auto_focus, autofocus_min, 
-                autofocus_max, autofocus_step_size, autofocus_illumination_channel, n_times
+                autofocus_max, autofocus_step_size, autofocus_illumination_channel, 
+                autofocus_mode, n_times
             )
         
         # Add finalization steps
@@ -224,6 +226,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   autofocus_max: float,
                                   autofocus_step_size: float,
                                   autofocus_illumination_channel: str,
+                                  autofocus_mode: str,
                                   n_times: int) -> int:
         """
         Create workflow steps for a single tile.
@@ -244,6 +247,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             autofocus_max: Maximum autofocus position
             autofocus_step_size: Autofocus step size
             autofocus_illumination_channel: Selected illumination channel for autofocus
+            autofocus_mode: Autofocus mode ('hardware' or 'software')
             
         Returns:
             Updated step ID
@@ -386,7 +390,13 @@ class ExperimentNormalMode(ExperimentModeBase):
                     name="Autofocus",
                     step_id=step_id,
                     main_func=self.controller.autofocus,
-                    main_params={"minZ": autofocus_min, "maxZ": autofocus_max, "stepSize": autofocus_step_size, "illuminationChannel": autofocus_illumination_channel},
+                    main_params={
+                        "minZ": autofocus_min, 
+                        "maxZ": autofocus_max, 
+                        "stepSize": autofocus_step_size, 
+                        "illuminationChannel": autofocus_illumination_channel,
+                        "mode": autofocus_mode
+                    },
                 ))
                 step_id += 1
 

@@ -84,6 +84,7 @@ class ParameterValue(BaseModel):
     autoFocusMax: float
     autoFocusStepSize: float
     autoFocusIlluminationChannel: str = "" # Selected illumination channel for autofocus
+    autoFocusMode: str = "software" # "software" (Z-sweep) or "hardware" (one-shot using FocusLock)
     zStack: bool
     zStackMin: float
     zStackMax: float
@@ -571,6 +572,7 @@ class ExperimentController(ImConWidgetController):
         autofocusMin = p.autoFocusMin
         autofocusStepSize = p.autoFocusStepSize
         autofocusIlluminationChannel = getattr(p, 'autoFocusIlluminationChannel', "") or ""
+        autofocusMode = getattr(p, 'autoFocusMode', 'software')  # Default to software if not specified
 
         # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
         if type(gains) is not List and type(gains) is not list: gains = [gains]
@@ -672,6 +674,7 @@ class ExperimentController(ImConWidgetController):
                     autofocus_max=autofocusMax,
                     autofocus_step_size=autofocusStepSize,
                     autofocus_illumination_channel=autofocusIlluminationChannel,
+                    autofocus_mode=autofocusMode,  # Pass autofocus mode
                     t_period=tPeriod, 
                     isRGB=self.mDetector._isRGB
                 )
@@ -759,8 +762,102 @@ class ExperimentController(ImConWidgetController):
         self._logger.debug("Dummy main function called")
         return True
 
-    def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0, illuminationChannel: str=""):
-        """Perform autofocus using the AutofocusController if available.
+    def autofocus_hardware(self, illuminationChannel: str = "") -> Optional[float]:
+        """Perform hardware-based one-shot autofocus using FocusLockController.
+        
+        This is significantly faster than software autofocus because it:
+        - Captures only ONE frame from dedicated autofocus camera
+        - Uses pre-calibrated linear relationship (focus metric → Z position)
+        - No Z-sweep required
+        
+        Similar to Seafront laser autofocus approach.
+        
+        Args:
+            illuminationChannel: Selected illumination channel for autofocus (currently unused)
+            
+        Returns:
+            float: Best focus Z position in µm, or None if autofocus failed
+        """
+        self._logger.debug("Performing hardware-based one-shot autofocus...")
+        
+        # Get the focus lock controller
+        try:
+            focusLockController = self._master.getController('FocusLock')
+        except Exception as e:
+            self._logger.warning(f"FocusLockController not available: {e}")
+            return None
+        
+        if focusLockController is None:
+            self._logger.warning("FocusLockController not available - skipping hardware autofocus")
+            return None
+        
+        # Check if calibration exists
+        try:
+            calib_status = focusLockController.getCalibrationStatus()
+            if not calib_status.get('calibrated', False):
+                self._logger.error("Hardware autofocus requires calibration. Please run focus calibration first.")
+                return None
+        except Exception as e:
+            self._logger.error(f"Failed to check calibration status: {e}")
+            return None
+        
+        # Perform one-shot autofocus
+        try:
+            result = focusLockController.performOneStepAutofocus(
+                move_to_focus=True,
+                max_attempts=3,
+                threshold_um=0.5
+            )
+            
+            if result.get('success', False):
+                target_z = result.get('target_z_position')
+                self._logger.info(
+                    f"Hardware autofocus successful: "
+                    f"Z={target_z:.2f}µm, error={result.get('final_error_um', 0):.3f}µm, "
+                    f"attempts={result.get('num_attempts', 0)}"
+                )
+                return target_z
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                self._logger.error(f"Hardware autofocus failed: {error_msg}")
+                return None
+                
+        except Exception as e:
+            self._logger.error(f"Hardware autofocus exception: {e}")
+            return None
+
+    def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0, 
+                  illuminationChannel: str="", mode: str="software"):
+        """Perform autofocus using either hardware or software method.
+        
+        Args:
+            minZ: Minimum Z position for autofocus (software mode only)
+            maxZ: Maximum Z position for autofocus (software mode only)
+            stepSize: Step size for autofocus scan (software mode only)
+            illuminationChannel: Selected illumination channel for autofocus
+            mode: "hardware" (fast, one-shot) or "software" (slow, Z-sweep)
+            
+        Returns:
+            float: Best focus Z position, or None if autofocus failed
+        """
+        self._logger.debug(
+            f"Performing autofocus (mode={mode}) with parameters "
+            f"minZ={minZ}, maxZ={maxZ}, stepSize={stepSize}, channel={illuminationChannel}"
+        )
+        
+        # Route to appropriate autofocus method
+        if mode == "hardware":
+            return self.autofocus_hardware(illuminationChannel=illuminationChannel)
+        else:
+            return self.autofocus_software(
+                minZ=minZ, 
+                maxZ=maxZ, 
+                stepSize=stepSize, 
+                illuminationChannel=illuminationChannel
+            )
+
+    def autofocus_software(self, minZ: float=0, maxZ: float=0, stepSize: float=0, illuminationChannel: str=""):
+        """Perform software-based autofocus using AutofocusController (Z-sweep).
         
         Args:
             minZ: Minimum Z position for autofocus (not used - uses rangez instead)
@@ -771,7 +868,7 @@ class ExperimentController(ImConWidgetController):
         Returns:
             float: Best focus Z position, or None if autofocus failed
         """
-        self._logger.debug("Performing autofocus... with parameters minZ, maxZ, stepSize, illuminationChannel: %s, %s, %s, %s", minZ, maxZ, stepSize, illuminationChannel)
+        self._logger.debug("Performing software autofocus (Z-sweep)... with parameters minZ, maxZ, stepSize, illuminationChannel: %s, %s, %s, %s", minZ, maxZ, stepSize, illuminationChannel)
         
         # Get the autofocus controller
         autofocusController = self._master.getController('Autofocus')

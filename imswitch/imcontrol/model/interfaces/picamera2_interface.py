@@ -850,6 +850,9 @@ class MockCameraPicamera2:
         self._grab_thread = None
         self._stop_event = threading.Event()
         
+        # get last frame lock
+        self._get_last_frame_lock = threading.Lock()
+        
         print(f"Mock Picamera2 initialized: {self.SensorWidth}x{self.SensorHeight}, RGB={self.isRGB}")
     
     def _generate_frame(self):
@@ -905,17 +908,18 @@ class MockCameraPicamera2:
         self.stop_live()
     
     def getLast(self, returnFrameNumber=False, timeout=1.0, auto_trigger=True):
-        """Get latest mock frame"""
-        if not self.frame_buffer:
-            frame = self._generate_frame()
-            frame_id = self.frameNumber
-        else:
-            frame = self.frame_buffer.pop()
-            frame_id = self.frameid_buffer.pop()
-        
-        if returnFrameNumber:
-            return frame, frame_id
-        return frame
+        with self._get_last_frame_lock:
+            """Get latest mock frame"""
+            if not self.frame_buffer:
+                frame = self._generate_frame()
+                frame_id = self.frameNumber
+            else:
+                frame = self.frame_buffer.pop()
+                frame_id = self.frameid_buffer.pop()
+            
+            if returnFrameNumber:
+                return frame, frame_id
+            return frame
     
     def flushBuffer(self):
         self.frame_buffer.clear()

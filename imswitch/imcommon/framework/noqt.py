@@ -5,27 +5,17 @@ from psygnal import emit_queued
 import psygnal
 import asyncio
 import threading
-import os
-import json
 from functools import lru_cache
 import numpy as np
 from socketio import AsyncServer, ASGIApp
-import uvicorn
 import imswitch.imcommon.framework.base as abstract
-import cv2
-import base64
-from imswitch import SOCKET_STREAM
 import time
-import queue
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
-import imswitch
 from imswitch import __ssl__
-import logging
 import msgpack  # MessagePack for efficient binary serialization
 
-# Try to import config and binary streaming - handle gracefully if not available
-from imswitch.config import get_config
+
 HAS_BINARY_STREAMING = True
 class Mutex(abstract.Mutex):
     """Wrapper around the `threading.Lock` class."""
@@ -47,7 +37,6 @@ socket_app = ASGIApp(sio)  # Renamed to socket_app - will be mounted on FastAPI 
 _client_sent_frame_id = {}  # sid -> last sent frame id (int or None)
 _client_ack_frame_id = {}  # sid -> last acked frame id
 _client_frame_lock = threading.Lock()
-_frame_drop_counter = 0  # Track how many frames we've dropped
 
 # Event loop reference - will be set by ImSwitchServer
 _shared_event_loop = None
@@ -78,6 +67,9 @@ class SignalInstance(psygnal.SignalInstance):
 
         # Handle pre-formatted stream messages from LiveViewController
         if self.name == "sigUpdateImage":
+            pass
+        elif self.name == "sigUpdateStreamFrame":
+            # this can be binary or jpeg frame
             self._handle_stream_frame(args[0])
             return
         elif self.name in ["sigImageUpdated", "sigStreamFrame"]:

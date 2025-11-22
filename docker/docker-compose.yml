@@ -15,8 +15,6 @@ services:
       - HTTP_PORT=8001
       - HTTP_PORT=8005
       #- CONFIG_FILE=example_virtual_microscope.json
-      - UPDATE_GIT=0
-      - UPDATE_CONFIG=0
       - DATA_PATH=/dataset
       - CONFIG_PATH=/config
       - SCAN_EXT_DATA_PATH=1

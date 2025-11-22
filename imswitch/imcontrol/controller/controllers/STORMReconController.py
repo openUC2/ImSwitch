@@ -1367,7 +1367,7 @@ class STORMReconController(LiveUpdatedController):
     def _setupLocalDataDirectory(self):
         """Setup local data directory following experimentcontroller pattern."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_path = dirtools.UserFileDirs.Data
+        base_path = dirtools.UserFileDirs.getValidatedDataPath()
 
         # Create STORM-specific directory structure similar to experimentcontroller
         storm_base = Path(base_path) / "STORMController"
@@ -1573,7 +1573,7 @@ class STORMReconController(LiveUpdatedController):
         try:
             # Use standard data directory structure
             timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            drivePath = dirtools.UserFileDirs.Data
+            drivePath = dirtools.UserFileDirs.getValidatedDataPath()
             dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
             saveDirectory = os.path.join(dirPath, saveDirectory)
 
@@ -1640,7 +1640,7 @@ class STORMReconController(LiveUpdatedController):
         """Initialize single TIFF saving following ExperimentController pattern."""
         # Use standard data directory structure
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.Data
+        drivePath = dirtools.UserFileDirs.getValidatedDataPath()
         dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
 
         # Ensure directory exists
@@ -1866,7 +1866,7 @@ class STORMReconImageComputationWorker:
     def getSaveFilePath(self, date, filename, extension):
         """Get save file path following data directory structure."""
         mFilename = f"{date}_{filename}.{extension}"
-        dirPath = os.path.join(dirtools.UserFileDirs.Data, 'STORMController', 'reconstructions', date)
+        dirPath = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'STORMController', 'reconstructions', date)
 
         if not os.path.exists(dirPath):
             os.makedirs(dirPath)

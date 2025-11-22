@@ -72,7 +72,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")  # serve 
 app.mount("/imswitch", StaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
 app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
 # provide data path via static files
-app.mount("/data", StaticFiles(directory=dirtools.UserFileDirs.Data), name="data")  # serve user data files
+app.mount("/data", StaticFiles(directory=dirtools.UserFileDirs.getValidatedDataPath()), name="data")  # serve user data files
 # manifests for the react app
 _ui_manifests = []
 
@@ -99,7 +99,7 @@ app.add_middleware(
 '''Add Endpoints for Filemanager'''
 
 # Base upload directory
-BASE_DIR = dirtools.UserFileDirs.Data
+BASE_DIR = dirtools.UserFileDirs.getValidatedDataPath()
 if not os.path.exists(BASE_DIR):
     os.makedirs(BASE_DIR)
 
@@ -114,6 +114,11 @@ def get_version():
     Returns the current version of the ImSwitch server.
     """
     return {"version": VERSION}
+
+
+# Storage Management API Endpoints are now handled via APIExport in StorageController
+# The controller is automatically initialized by MasterController
+
 
 # Create a Folder
 @app.post("/folder")

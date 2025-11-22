@@ -296,6 +296,14 @@ class FlatfieldInfo:
     pass
 
 @dataclass(frozen=False)
+class StorageInfo:
+    """Storage configuration for data paths."""
+    
+    activeDataPath: Optional[str] = None
+    """ Active data storage path. If set, ImSwitch will use this path for saving data. 
+    This is typically set via the Storage API when user selects external drives. """
+
+@dataclass(frozen=False)
 class PixelCalibrationInfo:
     """
     Configuration for stage-to-camera affine calibration.
@@ -707,6 +715,9 @@ class SetupInfo:
 
     microscopeStand: Optional[MicroscopeStandInfo] = field(default_factory=lambda: None)
     """ Microscope stand settings. Required to be defined to use MotCorr widget. """
+
+    storage: Optional[StorageInfo] = field(default_factory=lambda: None)
+    """ Storage configuration for data paths. Contains persistent storage settings. """
 
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """

@@ -384,7 +384,7 @@ class ArkitektController(ImConWidgetController):
         metadata_list = []
         if stage is None:
             # Get data storage path from ImSwitch config
-            data_path = dirtools.UserFileDirs.Data
+            data_path = dirtools.UserFileDirs.getValidatedDataPath()
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             scan_name = f"tilescan_{timestamp}_cx{center_x_micrometer:.0f}_cy{center_y_micrometer:.0f}"
             save_dir = os.path.join(data_path, scan_name)

@@ -325,7 +325,7 @@ class TimelapseController(ImConWidgetController):
         else:
             # Insert the tiff writer object into context so `save_frame` can use it
             timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            drivePath = dirtools.UserFileDirs.Data
+            drivePath = dirtools.UserFileDirs.getValidatedDataPath()
             dirPath = os.path.join(drivePath, 'recordings', timeStamp)
             if not os.path.exists(dirPath):
                 os.makedirs(dirPath)

@@ -113,7 +113,7 @@ class RecordingController(ImConWidgetController):
 
         timeStampDay = datetime.datetime.now().strftime("%Y_%m_%d")
         relativeFolder = os.path.join("recordings", timeStampDay)
-        folder = os.path.join(dirtools.UserFileDirs.Data, relativeFolder)
+        folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), relativeFolder)
         if not os.path.exists(folder):
             os.makedirs(folder)
             time.sleep(0.01)
@@ -753,7 +753,7 @@ class RecordingController(ImConWidgetController):
                 return
 
             timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-            folder = os.path.join(dirtools.UserFileDirs.Data, "recordings", timeStamp)
+            folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "recordings", timeStamp)
             if not os.path.exists(folder):
                 os.makedirs(folder)
             time.sleep(0.01)

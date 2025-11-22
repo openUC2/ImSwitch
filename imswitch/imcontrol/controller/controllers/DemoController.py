@@ -501,6 +501,10 @@ class DemoController(ImConWidgetController):
 
         try:
             self.shouldStop = True
+            
+            # immediately send stop to motors 
+            if self.stages:
+                self.stages.stopAll()
 
             # Wait for thread to complete
             if self.demo_thread and self.demo_thread.is_alive():

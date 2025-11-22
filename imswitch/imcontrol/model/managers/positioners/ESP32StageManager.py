@@ -427,17 +427,17 @@ class ESP32StageManager(PositionerManager):
     def stopAll(self):
         self._motor.stop()
 
-    def doHome(self, axis, isBlocking=False):
+    def doHome(self, axis, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         if axis == "X" and (self.homeXenabled or abs(self.homeStepsX)>0):
-            self.home_x(isBlocking)
+            self.home_x(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
         if axis == "Y" and (self.homeYenabled or abs(self.homeStepsY)>0):
-            self.home_y(isBlocking)
+            self.home_y(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
         if axis == "Z" and (self.homeZenabled or abs(self.homeStepsZ)>0):
-            self.home_z(isBlocking)
+            self.home_z(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
         if axis == "A" and (self.homeAenabled or abs(self.homeStepsA)>0):
-            self.home_a(isBlocking)
-
-    def home_x(self, isBlocking=False):
+            self.home_a(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
+            
+    def home_x(self, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         # move z prior to homing?
         if self._safeDistanceZHoming !=0:
             self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
@@ -453,7 +453,7 @@ class ESP32StageManager(PositionerManager):
             return
         self.setPosition(axis="X", value=0)
 
-    def home_y(self,isBlocking=False):
+    def home_y(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         if self._safeDistanceZHoming !=0:
             self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
         # TODO: Wehave to go back after we are done with the homing        
@@ -469,7 +469,7 @@ class ESP32StageManager(PositionerManager):
             return
         self.setPosition(axis="Y", value=0)
 
-    def home_z(self,isBlocking=False):
+    def home_z(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         if abs(self.homeStepsZ)>0:
             self.move(value=self.homeStepsZ, speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsZ)*np.abs(self.homeEndposReleaseZ), speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
@@ -482,7 +482,7 @@ class ESP32StageManager(PositionerManager):
             return
         self.setPosition(axis="Z", value=0)
 
-    def home_a(self,isBlocking=False):
+    def home_a(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         if abs(self.homeStepsA)>0:
             self.move(value=self.homeStepsA, speed=self.homeSpeedA, axis="A", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsA)*np.abs(self.homeEndposReleaseA), speed=self.homeSpeedA, axis="A", is_absolute=False, is_blocking=True)

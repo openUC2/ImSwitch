@@ -72,7 +72,9 @@ class StreamWorker(Worker):
     """
     
     sigStreamFrame = Signal(dict)  # Emits pre-formatted message dict ready for socket.io emission
-    
+    sigUpdateFrame = Signal(
+        str, np.ndarray, bool, list, bool
+    )  # (detectorName, image, init, scale, isCurrentDetector)
     def __init__(self, detectorManager, updatePeriodMs: int, streamParams: StreamParams):
         super().__init__()
         self._detector = detectorManager
@@ -94,7 +96,24 @@ class StreamWorker(Worker):
                 # Check if enough time has passed since last frame
                 if (time.time() - self._last_frame_time) >= self._updatePeriod:  # TODO: and  imswitch.__is_stream_ready_for_sending__
                     # Capture and emit frame
-                    frameResult = self._captureAndEmit()
+
+                    # Get frame with actual detector frame number
+                    result = self._detector.getLatestFrame(returnFrameNumber=True)
+                    if isinstance(result, tuple) and len(result) == 2:
+                        frame, detector_frame_number = result
+                    else:
+                        frame = result
+                        detector_frame_number = None
+                    
+                    # keep other controllers happy (i.e. def update()), not so good idea, consumes a lot of CPU/copy time?!
+                    # self.sigUpdateFrame.emit(self._detector.name, frame, False, [], True)
+
+                    if frame is None:
+                        self._logger.warning("Frame capture failed, stopping worker (Frame none)")
+                        self._running = False                        
+                        break  # No frame available, but not an error - keep running
+
+                    frameResult = self._captureAndEmit(frame, detector_frame_number)
                     self._last_frame_time = time.time()
                     
                     # Only stop on explicit failure, not on None frames
@@ -119,7 +138,7 @@ class StreamWorker(Worker):
         self._logger.info("StreamWorker stopped")
     
     @abstractmethod
-    def _captureAndEmit(self):
+    def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame from detector, encode it, and emit processed data."""
         pass
 
@@ -146,14 +165,10 @@ class BinaryStreamWorker(StreamWorker):
             self._logger.error("BinaryFrameEncoder not available")
             return None
     
-    def _captureAndEmit(self):
+    def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame from detector, compress it, and emit pre-formatted socket.io message."""
         try:
-            # Get frame with actual detector frame number
-            frame, detector_frame_number = self._detector.getLatestFrame(returnFrameNumber=True)
-            if frame is None:
-                return None  # No frame available, but not an error - keep running
-            
+
             # Use detector frame number if available, otherwise use our counter
             if detector_frame_number is not None:
                 self._frame_id = detector_frame_number
@@ -227,23 +242,12 @@ class JPEGStreamWorker(StreamWorker):
             self._logger.error("opencv-python required for JPEG streaming")
             self._cv2 = None
     
-    def _captureAndEmit(self):
+    def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame from detector, encode as JPEG, and emit pre-formatted socket.io message."""
         if self._cv2 is None:
             return False  # This is a configuration error
         
         try:
-            # Get frame with actual detector frame number
-            result = self._detector.getLatestFrame(returnFrameNumber=True)
-            if isinstance(result, tuple) and len(result) == 2:
-                frame, detector_frame_number = result
-            else:
-                frame = result
-                detector_frame_number = None
-                
-            if frame is None:
-                return None  # No frame available, but not an error - keep running
-            
             # Use detector frame number if available, otherwise use our counter
             if detector_frame_number is not None:
                 self._frame_id = detector_frame_number
@@ -331,15 +335,13 @@ class MJPEGStreamWorker(StreamWorker):
             self._logger.error("opencv-python required for MJPEG streaming")
             self._cv2 = None
     
-    def _captureAndEmit(self):
+    def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame and put in queue for MJPEG streaming."""
         if self._cv2 is None:
             return False  # This is a configuration error
         
         try:
-            frame = self._detector.getLatestFrame()
-            if frame is None:
-                return None  # No frame available, but not an error - keep running
+            
             
             # Normalize to uint8 if needed
             if frame.dtype != np.uint8:
@@ -407,16 +409,12 @@ class WebRTCStreamWorker(StreamWorker):
             self._logger.error("aiortc and av required for WebRTC streaming")
             self._has_webrtc = False
     
-    def _captureAndEmit(self):
+    def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame and put in queue for WebRTC streaming."""
         if not self._has_webrtc:
             return False  # This is a configuration error
         
-        try:
-            frame = np.array(self._detector.getLatestFrame())
-            if frame is None:
-                return None  # No frame available, but not an error - keep running
-            
+        try:            
             # Apply basic preprocessing based on throttle setting
             # For WebRTC, we want to minimize processing latency
             throttle_ms = getattr(self._params, 'throttle_ms', 50)
@@ -826,8 +824,8 @@ class LiveViewController(LiveUpdatedController):
             
             # Connect worker signal to controller's signal, which is then handled by noqt
             # The worker emits pre-formatted messages ready for socket.io emission
-            worker.sigStreamFrame.connect(self._commChannel.sigUpdateImage)
-            
+            worker.sigStreamFrame.connect(self._commChannel.sigUpdateStreamFrame)
+            #worker.sigUpdateFrame.connect(self._commChannel.sigUpdateImage)
             # Start worker in thread
             # mThread = Thread
             # worker.moveToThread()

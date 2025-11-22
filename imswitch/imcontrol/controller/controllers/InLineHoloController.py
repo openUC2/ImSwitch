@@ -47,7 +47,7 @@ class InLineHoloParams:
     binning: int = 1  # binning factor (1, 2, 4, etc.)
     use_scipy_fft: bool = True  # Use scipy.fft for multi-core FFT if available
     fft_workers: int = 4  # Number of workers for scipy FFT (Pi 5 has 4 cores)
-    use_multiprocessing: bool = False  # Use separate process for processing (bypass GIL)
+    use_multiprocessing: bool = True  # Use separate process for processing (bypass GIL)
     use_float32: bool = True  # Use float32 instead of float64 for speed
     enable_benchmarking: bool = False  # Enable performance logging
     
@@ -162,7 +162,7 @@ class InLineHoloController(LiveUpdatedController):
         self._last_frame = None
         
         # MJPEG streaming
-        self._mjpeg_queue = queue.Queue(maxsize=10)
+        self._mjpeg_queue = queue.Queue(maxsize=2)
         self._jpeg_quality = 85
         
         # Producer-consumer pipeline (small queue, drops old frames)
@@ -368,10 +368,10 @@ class InLineHoloController(LiveUpdatedController):
         """Extract specified color channel from RGB image"""
         if len(image.shape) == 2:
             return image  # Already grayscale
-        
         channel_map = {"red": 0, "green": 1, "blue": 2}
-        channel_idx = channel_map.get(self._params.color_channel, 1)
-        
+        channel_idx = channel_map.get(self._params.color_channel, 3)
+        if channel_idx not in [0, 1, 2]:
+            return np.mean(image, axis=2)  # Return original if invalid channel
         return image[:, :, channel_idx]
 
     def _apply_transforms(self, image):
@@ -454,6 +454,7 @@ class InLineHoloController(LiveUpdatedController):
         try:
             # Normalize to uint8
             frame = np.array(image)
+            self._logger.debug(f"Adding frame to MJPEG stream, shape={frame.shape}, dtype={frame.dtype}")
             if frame.dtype != np.uint8:
                 vmin = float(np.min(frame))
                 vmax = float(np.max(frame))

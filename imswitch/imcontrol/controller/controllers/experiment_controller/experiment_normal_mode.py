@@ -421,7 +421,7 @@ class ExperimentNormalMode(ExperimentModeBase):
     def _add_finalization_steps(self,
                               workflow_steps: List[WorkflowStep],
                               step_id: int,
-                              snake_tiles: List[List[Dict]],
+                              snake_tiles: List[List[Dict]], # TODO: not needed
                               illumination_sources: List[str],
                               illumination_intensities: List[float],
                               t_period: float,

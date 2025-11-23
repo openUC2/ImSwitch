@@ -137,7 +137,6 @@ class ParameterValue(BaseModel):
     zStackStepSize: Union[List[float], float] = 1.
     exposureTimes: Union[List[float], float] = None
     gains: Union[List[float], float] = None
-    resortPointListToSnakeCoordinates: bool = True
     speed: float = 20000.0
     performanceMode: bool = False
     ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
@@ -468,24 +467,6 @@ class ExperimentController(ImConWidgetController):
             "write_individual_tiffs": getattr(self, '_ome_write_individual_tiffs', False)
         }
 
-
-    def get_num_xy_steps(self, pointList):
-        # we don't consider the center point as this .. well in the center
-        if len(pointList) == 0:
-            return 1,1
-        all_iX = []
-        all_iY = []
-        for point in pointList:
-            all_iX.append(point.iX)
-            all_iY.append(point.iY)
-        min_iX, max_iX = min(all_iX), max(all_iX)
-        min_iY, max_iY = min(all_iY), max(all_iY)
-
-        num_x_steps = (max_iX - min_iX) + 1
-        num_y_steps = (max_iY - min_iY) + 1
-
-        return num_x_steps, num_y_steps
-
     def generate_snake_tiles(self, mExperiment):
         """
         Generate tiles from experiment with pre-calculated coordinates.
@@ -680,10 +661,8 @@ class ExperimentController(ImConWidgetController):
         if not self.mDetector._running:
             self.mDetector.startAcquisition()
 
-        # Generate the list of points to scan based on snake scan
-        if p.resortPointListToSnakeCoordinates:
-            pass # TODO: we need an alternative case
-        snake_tiles = self.generate_snake_tiles(mExperiment)
+        # Generate the list of points to scan from pre-calculated coordinates
+        snake_tiles = self.generate_snake_tiles(mExperiment) # TODO: Is this still needed?
         # remove none values from all_points list
         snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
 

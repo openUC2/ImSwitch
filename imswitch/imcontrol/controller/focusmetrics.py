@@ -262,126 +262,380 @@ class AstigmatismFocusMetric(FocusMetricBase):
             logger.error(f"Focus computation failed: {e}")
             return {"t": timestamp, "focus": self.config.max_focus_value, "error": str(e)}, None
 
+import time
+import numpy as np
+from typing import Optional, Dict, Any, Tuple, List
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
+
 class PeakMetric(FocusMetricBase):
     """
-    X-only peak finder.
-    Returns integer peak positions along X and their distance. No PID, no Y-fit.
-    Computes rolling average of peak distances over 5 values and detects outliers.
+    Robust two-peak finder on X projection.
+    Returns left peak position (float, subpixel) and inter-peak distance (float).
     """
 
     def __init__(self, config: Optional[FocusConfig] = None):
         super().__init__(config)
-        self.peak_distances = []  # Store last 5 peak distances
+        self.peak_distances: List[float] = []
         self.max_history = 5
-        self.outlier_threshold = 50.0  # Standard deviations for outlier detection
+        self.outlier_threshold = 6.0  # z-score in MAD units (more sensible than 50 std)
 
+    # -----------------------------
+    # 1D utilities
+    # -----------------------------
     @staticmethod
-    def _projection_x(im: np.ndarray) -> np.ndarray:
-        return np.mean(im, axis=0)
+    def _projection_x(im: np.ndarray, mode: str = "max") -> np.ndarray:
+        if mode == "mean":
+            return np.mean(im, axis=0)
+        return np.max(im, axis=0)
 
     @staticmethod
     def _smooth_1d(x: np.ndarray, sigma: float) -> np.ndarray:
         return gaussian_filter1d(x, sigma) if sigma and sigma > 0 else x
 
+    @staticmethod
+    def _robust_baseline(x: np.ndarray, p: float = 20.0) -> np.ndarray:
+        """Subtract a robust baseline and clip."""
+        base = np.percentile(x, p)
+        return np.clip(x - base, 0, None)
+
+    @staticmethod
+    def _mad(x: np.ndarray) -> float:
+        med = np.median(x)
+        return float(np.median(np.abs(x - med)) + 1e-9)
+
+    @staticmethod
+    def _parabolic_subpixel(y: np.ndarray, i: int) -> float:
+        """3-point quadratic interpolation around index i."""
+        if i <= 0 or i >= len(y) - 1:
+            return float(i)
+        y0, y1, y2 = float(y[i-1]), float(y[i]), float(y[i+1])
+        denom = (y0 - 2*y1 + y2)
+        if abs(denom) < 1e-9:
+            return float(i)
+        delta = 0.5 * (y0 - y2) / denom
+        return float(i) + delta
+
+    # -----------------------------
+    # History / outlier (optional)
+    # -----------------------------
     def _is_outlier(self, distance: float) -> bool:
-        """Check if current distance is an outlier based on rolling history."""
-        if len(self.peak_distances) < 3:  # Need at least 3 values for outlier detection
+        if len(self.peak_distances) < 3:
             return False
-        
-        mean_dist = np.mean(self.peak_distances)
-        std_dist = np.std(self.peak_distances)
-        
-        # Avoid division by zero
-        if std_dist < 1e-6:
-            return False
-            
-        z_score = abs(distance - mean_dist) / std_dist
-        if z_score > self.outlier_threshold:
-            return True
-        return False
+        hist = np.asarray(self.peak_distances, dtype=float)
+        med = np.median(hist)
+        mad = self._mad(hist)
+        z = abs(distance - med) / mad
+        return z > self.outlier_threshold
 
     def _update_history(self, distance: float) -> None:
-        """Update the rolling history of peak distances."""
-        self.peak_distances.append(distance)
+        self.peak_distances.append(float(distance))
         if len(self.peak_distances) > self.max_history:
             self.peak_distances.pop(0)
 
     def _get_average_distance(self) -> Optional[float]:
-        """Get the rolling average of peak distances."""
-        if len(self.peak_distances) == 0:
-            return None
-        return float(np.mean(self.peak_distances))
+        return float(np.mean(self.peak_distances)) if self.peak_distances else None
 
     def reset_history(self):
-        """Reset the history of peak distances."""
         self.peak_distances = []
-        
-    def compute(self, frame: np.ndarray, n_supersample: int=2) -> Dict[str, Any]:
+
+    # -----------------------------
+    # Main compute
+    # -----------------------------
+    def compute(self, frame: np.ndarray, n_supersample: int = 1) -> Dict[str, Any]:
         ts = time.time()
-        # X projection and optional 1D smoothing
-        # remove background 
-        # supersample to get subpixel accuracy?
-        projx = self._projection_x(np.asarray(frame))
-        time0 = time.time()
-        projx_superpixel = resample(projx, num=projx.shape[0]*n_supersample, t=None, axis=0, window=None, domain='time')
-        projx_thresh = np.maximum(projx_superpixel-self.config.background_threshold,0)
-        projx_s = self._smooth_1d(projx_thresh, self.config.gaussian_sigma*n_supersample if self.config.enable_gaussian_blur else 0.0)
-        projx_s = projx_s - np.min(projx_s)
-        #projx_s = np.exp(1+projx_s)
-        projx_s = projx_s / np.max(projx_s)*255
-        # peak detection (keep the strongest two if more found)
-        peaks, props = find_peaks(
-            projx_s**2,
-            distance=self.config.peak_distance*n_supersample,
-            height=self.config.peak_height # TODO: These values have to be adapted to objectives - larger magnification => larger
-        )
-        
-        # Only process measurements with exactly 2 peaks
-        if len(peaks) == 2:
-           
-            # Calculate distance between the two peaks
-            peak_distance = abs(peaks[1] - peaks[0])/n_supersample
-            
-            # Check for outliers - if outlier, skip this measurement entirely
-            if False and self._is_outlier(peak_distance):
-                logger.debug(f"Peak distance {peak_distance:.1f} detected as outlier - skipping measurement")
-                # Return None for focus to indicate skipped measurement
-                focus_value = None
-                x_peak_distance = None
-            else:
-                # Valid measurement: update history and calculate focus value
-                self._update_history(peak_distance)
-                # avg_distance = self._get_average_distance() # TODO: we would need to reset the averagge if we restart the scan
-                focus_value = np.mean(peaks)
-                x_peak_distance = peak_distance
+        t0 = time.time()
+
+        im = np.asarray(frame)
+
+        proj_mode = getattr(self.config, "projection_mode", "max")  # "max" default
+        projx = self._projection_x(im, mode=proj_mode)
+
+        # robust baseline remove instead of fixed threshold if not present
+        if hasattr(self.config, "background_threshold"):
+            projx = np.clip(projx - float(self.config.background_threshold), 0, None)
         else:
-            # Skip measurements without exactly 2 peaks
-            logger.debug(f"Found {len(peaks)} peaks, need exactly 2 - skipping measurement")
-            # Return None for focus to indicate skipped measurement
-            focus_value = None
-            x_peak_distance = None
-        if 1:
-            print("Time for peak detection:", time.time()-time0)
+            projx = self._robust_baseline(projx, p=20.0)
+
+        # smooth
+        sigma = float(getattr(self.config, "gaussian_sigma", 2.0))
+        if getattr(self.config, "enable_gaussian_blur", True):
+            projx_s = self._smooth_1d(projx, sigma)
+        else:
+            projx_s = projx.copy()
+
+        # robust scaling to estimate noise floor
+        mad = self._mad(projx_s)
+        med = float(np.median(projx_s))
+        zsig = (projx_s - med) / mad
+        zsig = np.clip(zsig, 0, None)
+
+        # peak params
+        min_dist = int(getattr(self.config, "peak_distance", 150))
+        # prominence: either config or derived from noise
+        prom = float(getattr(self.config, "peak_prominence", 3.0))  # in MAD units
+        height = float(getattr(self.config, "peak_height", prom))   # fallback
+
+        peaks, props = find_peaks(
+            zsig,
+            distance=min_dist,
+            prominence=prom,
+            height=np.mean(zsig)
+        )
+
+        # choose best two peaks by prominence (robust to extra small bumps)
+        left_peak = None
+        right_peak = None
+        x_peak_distance = None
+
+        if len(peaks) >= 1:
+            prominences = props.get("prominences", zsig[peaks])
+            order = np.argsort(prominences)  # ascending
+            best = peaks[order][-2:] if len(peaks) >= 2 else peaks[order][-1:]
+            best = np.sort(best)
+
+            # if more than 2 and you know a max separation, enforce it
+            max_sep = getattr(self.config, "peak_max_distance", None)
+            if max_sep is not None and len(best) == 2:
+                if (best[1] - best[0]) > int(max_sep):
+                    # fall back to just strongest peak
+                    best = best[-1:]
+
+            if len(best) == 2:
+                left_i, right_i = int(best[0]), int(best[1])
+                left_peak = self._parabolic_subpixel(projx_s, left_i)
+                right_peak = self._parabolic_subpixel(projx_s, right_i)
+                x_peak_distance = float(right_peak - left_peak)
+
+                if not self._is_outlier(x_peak_distance):
+                    self._update_history(x_peak_distance)
+                else:
+                    # keep left peak, but don't update distance history
+                    pass
+            else:
+                left_i = int(best[0])
+                left_peak = self._parabolic_subpixel(projx_s, left_i)
+
+        # focus is the left peak only (your stated need)
+        focus_value = left_peak
+
+        if getattr(self.config, "debug_plot", False):
             import matplotlib
-            matplotlib.use('Agg')
+            matplotlib.use("Agg")
             import matplotlib.pyplot as plt
             plt.figure()
-            plt.plot(projx_s)
-            plt.plot(peaks, projx_s[peaks], "x")
-            plt.title(f"Found {len(peaks)} peaks")
+            plt.plot(zsig, label="zsig")
+            if len(peaks):
+                plt.plot(peaks, zsig[peaks], "x")
+            plt.title(f"Found {len(peaks)} peaks; left={left_peak}")
+            plt.legend()
             plt.savefig("test.png")
-            
-        # outputs
+
         result: Dict[str, Any] = {
             "t": ts,
             "x_peak_distance": x_peak_distance,
             "proj_x": projx_s.astype(float),
             "focus": focus_value,
+            "left_peak_x": left_peak,
+            "right_peak_x": right_peak,
             "avg_peak_distance": self._get_average_distance(),
-            "peak_history_length": len(self.peak_distances)
+            "peak_history_length": len(self.peak_distances),
+            "compute_ms": (time.time() - t0) * 1000.0,
         }
-
         return result
+
+
+import time
+import numpy as np
+from typing import Optional, Dict, Any, List, Tuple
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
+
+
+class PeakMetric(FocusMetricBase):
+    """
+    Robust X-only peak finder for 2 laser dots.
+    - Uses max-projection by default (better for bright dots)
+    - Robust baseline removal + Gaussian smoothing
+    - Adaptive peak thresholds via MAD (noise units)
+    - Always returns left-most strong peak; right peak optional
+    """
+
+    def __init__(self, config: Optional[FocusConfig] = None):
+        super().__init__(config)
+        self.peak_distances: List[float] = []
+        self.max_history = 5
+        self.outlier_threshold_mad = 6.0  # z-score in MAD units for distance history
+
+    # -----------------------------
+    # 1D helpers
+    # -----------------------------
+    @staticmethod
+    def _projection_x(im: np.ndarray, mode: str = "max") -> np.ndarray:
+        if mode == "mean":
+            return np.mean(im, axis=0)
+        return np.max(im, axis=0)
+
+    @staticmethod
+    def _smooth_1d(x: np.ndarray, sigma: float) -> np.ndarray:
+        return gaussian_filter1d(x, sigma) if sigma and sigma > 0 else x
+
+    @staticmethod
+    def _robust_baseline(x: np.ndarray, p: float = 20.0) -> np.ndarray:
+        base = np.percentile(x, p)
+        return np.clip(x - base, 0, None)
+
+    @staticmethod
+    def _mad(x: np.ndarray) -> float:
+        med = np.median(x)
+        return float(np.median(np.abs(x - med)) + 1e-9)
+
+    @staticmethod
+    def _parabolic_subpixel(y: np.ndarray, i: int) -> float:
+        """3-point quadratic interpolation for subpixel peak position."""
+        if i <= 0 or i >= len(y) - 1:
+            return float(i)
+        y0, y1, y2 = float(y[i - 1]), float(y[i]), float(y[i + 1])
+        denom = (y0 - 2 * y1 + y2)
+        if abs(denom) < 1e-9:
+            return float(i)
+        delta = 0.5 * (y0 - y2) / denom
+        return float(i) + delta
+
+    # -----------------------------
+    # Distance history / outlier
+    # -----------------------------
+    def _is_outlier(self, distance: float) -> bool:
+        if len(self.peak_distances) < 3:
+            return False
+        hist = np.asarray(self.peak_distances, dtype=float)
+        med = float(np.median(hist))
+        mad = self._mad(hist)
+        z = abs(distance - med) / mad
+        return z > self.outlier_threshold_mad
+
+    def _update_history(self, distance: float) -> None:
+        self.peak_distances.append(float(distance))
+        if len(self.peak_distances) > self.max_history:
+            self.peak_distances.pop(0)
+
+    def _get_average_distance(self) -> Optional[float]:
+        return float(np.mean(self.peak_distances)) if self.peak_distances else None
+
+    def reset_history(self):
+        self.peak_distances = []
+
+    # -----------------------------
+    # Main compute
+    # -----------------------------
+    def compute(self, frame: np.ndarray, n_supersample: int = 1) -> Dict[str, Any]:
+        """
+        n_supersample kept for API compatibility; not needed because we do subpixel fit.
+        """
+        ts = time.time()
+        t0 = time.time()
+
+        im = np.asarray(frame)
+
+        # 1) projection
+        proj_mode = getattr(self.config, "projection_mode", "max")  # "max" default
+        projx = self._projection_x(im, mode=proj_mode)
+
+        # 2) baseline remove
+        if hasattr(self.config, "background_threshold"):
+            bt = float(getattr(self.config, "background_threshold", 0.0))
+            projx = np.clip(projx - bt, 0, None)
+        else:
+            p = float(getattr(self.config, "baseline_percentile", 20.0))
+            projx = self._robust_baseline(projx, p=p)
+
+        # 3) smoothing
+        enable_blur = bool(getattr(self.config, "enable_gaussian_blur", True))
+        sigma = float(getattr(self.config, "gaussian_sigma", 2.0))  # <- explicit sigma default
+        projx_s = self._smooth_1d(projx, sigma) if enable_blur else projx
+
+        # 4) adaptive scaling to noise units
+        med = float(np.median(projx_s))
+        mad = self._mad(projx_s)
+        zsig = (projx_s - med) / mad
+        zsig = np.clip(zsig, 0, None)
+
+        # 5) peak detection in noise units
+        min_dist = int(getattr(self.config, "peak_distance", 200))
+        prom_mad = float(getattr(self.config, "auto_peak_prom_mad", 4.0))
+        height_mad = float(getattr(self.config, "auto_peak_height_mad", 3.0))
+
+        peaks, props = find_peaks(
+            zsig,
+            distance=min_dist,
+            prominence=prom_mad,
+            height=height_mad
+        )
+
+        # optional ROI for left dot (xmin, xmax)
+        left_roi: Optional[Tuple[int, int]] = getattr(self.config, "left_peak_roi", None)
+        if left_roi is not None and len(peaks):
+            xmin, xmax = left_roi
+            mask = (peaks >= xmin) & (peaks <= xmax)
+            peaks = peaks[mask]
+            if "prominences" in props:
+                props["prominences"] = np.asarray(props["prominences"])[mask]
+            if "peak_heights" in props:
+                props["peak_heights"] = np.asarray(props["peak_heights"])[mask]
+
+        left_peak = None
+        right_peak = None
+        x_peak_distance = None
+
+        if len(peaks) >= 1:
+            prominences = props.get("prominences", zsig[peaks])
+            order = np.argsort(prominences)
+            best = peaks[order][-2:] if len(peaks) >= 2 else peaks[order][-1:]
+            best = np.sort(best)
+
+            # optional max distance guard
+            max_sep = getattr(self.config, "peak_max_distance", None)
+            if max_sep is not None and len(best) == 2:
+                if (best[1] - best[0]) > int(max_sep):
+                    best = best[-1:]  # keep only strongest
+
+            # leftmost always returned
+            left_i = int(best[0])
+            left_peak = self._parabolic_subpixel(projx_s, left_i)
+
+            if len(best) == 2:
+                right_i = int(best[1])
+                right_peak = self._parabolic_subpixel(projx_s, right_i)
+                x_peak_distance = float(right_peak - left_peak)
+
+                if not self._is_outlier(x_peak_distance):
+                    self._update_history(x_peak_distance)
+
+        focus_value = left_peak  # <- what you care about
+
+        if 1 or bool(getattr(self.config, "debug_plot", False)):
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            plt.figure()
+            plt.plot(zsig, label="zsig(MAD units)")
+            if len(peaks):
+                plt.plot(peaks, zsig[peaks], "x")
+            plt.title(f"peaks={len(peaks)} left={left_peak} right={right_peak}")
+            plt.legend()
+            plt.savefig("test.png")
+
+        return {
+            "t": ts,
+            "focus": focus_value,
+            "left_peak_x": left_peak,
+            "right_peak_x": right_peak,
+            "x_peak_distance": x_peak_distance,
+            "proj_x": projx_s.astype(float),
+            "avg_peak_distance": self._get_average_distance(),
+            "peak_history_length": len(self.peak_distances),
+            "compute_ms": (time.time() - t0) * 1000.0,
+        }
 
 
 class CenterOfMassFocusMetric(FocusMetricBase):

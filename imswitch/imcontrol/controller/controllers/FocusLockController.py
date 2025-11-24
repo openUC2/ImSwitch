@@ -805,76 +805,23 @@ class FocusLockController(ImConWidgetController):
             # Fall back to configured scale factor if no calibration available
             return self._pi_params.scale_um_per_unit
 
-    def _calculate_z_position_from_focus_value(self, focus_value: float) -> Optional[float]:
-        """Calculate absolute Z position from focus metric using calibration data.
+    @APIExport(runOnUIThread=True)
+    def getCurrentFocusValue(self) -> Dict[str, Any]:
+        """Get the current focus value and metadata.
         
-        This implements the core algorithm for one-shot autofocus:
-        laser AF: offset_mm = (measured_x - reference_x) * um_per_px / 1000
-        
-        Args:
-            focus_value: Current focus metric value (e.g., peak position in pixels)
-            
         Returns:
-            Target Z position in µm (absolute), or None if calibration unavailable
+            Dict containing:
+            - focus_value: float - current focus metric value
+            - timestamp: float - measurement timestamp
+            - is_measuring: bool - whether continuous measurement is active
+            - is_locked: bool - whether focus lock is engaged
         """
-        if not self._current_calibration:
-            self._logger.warning("No calibration data available for Z position calculation")
-            return None
-        
-        calib = self._current_calibration
-        
-        # Method 1: Use lookup table if available (more accurate for non-linear responses)
-        if calib.lookup_table:
-            # Find closest focus value in lookup table
-            focus_values = sorted(calib.lookup_table.keys())
-            closest_focus = min(focus_values, key=lambda x: abs(x - focus_value))
-            
-            # Linear interpolation between nearest neighbors
-            if len(focus_values) >= 2:
-                # Find two nearest neighbors
-                idx = focus_values.index(closest_focus)
-                if focus_value > closest_focus and idx < len(focus_values) - 1:
-                    # Interpolate between closest and next
-                    f1, f2 = focus_values[idx], focus_values[idx + 1]
-                    z1, z2 = calib.lookup_table[f1], calib.lookup_table[f2]
-                elif focus_value < closest_focus and idx > 0:
-                    # Interpolate between previous and closest
-                    f1, f2 = focus_values[idx - 1], focus_values[idx]
-                    z1, z2 = calib.lookup_table[f1], calib.lookup_table[f2]
-                else:
-                    # Edge case: use closest value
-                    return calib.lookup_table[closest_focus]
-                
-                # Linear interpolation
-                if abs(f2 - f1) > 1e-9:  # Avoid division by zero
-                    z_target = z1 + (focus_value - f1) * (z2 - z1) / (f2 - f1)
-                    return z_target
-            
-            # Fallback: use closest value
-            return calib.lookup_table[closest_focus]
-        
-        # Method 2: Use polynomial fit if available (good for well-characterized systems)
-        if calib.polynomial_coeffs and len(calib.polynomial_coeffs) >= 2:
-            # Use polynomial fit (coeffs are [intercept, slope, ...])
-            z_target = calib.polynomial_coeffs[0]  # intercept
-            for i, coeff in enumerate(calib.polynomial_coeffs[1:], start=1):
-                z_target += coeff * (focus_value ** i)
-            return z_target
-        
-        # Method 3: Simple linear offset from setpoint (least accurate)
-        # Assumes calibration was done around current position
-        if calib.sensitivity_nm_per_unit > 0:
-            # Calculate offset from set point
-            focus_offset = focus_value - self._pi_params.set_point
-            z_offset_um = focus_offset * (calib.sensitivity_nm_per_unit / 1000.0)
-            
-            # Current position + offset
-            current_z = self.currentZPosition
-            z_target = current_z + z_offset_um
-            return z_target
-        
-        self._logger.warning("Could not calculate Z position: insufficient calibration data")
-        return None
+        return {
+            "focus_value": float(self.current_focus_value),
+            "timestamp": time.time(),
+            "is_measuring": self._state.is_measuring,
+            "is_locked": self.locked,
+        }
 
     def lockFocus(self, zpos):
         if self.locked:
@@ -1021,22 +968,49 @@ class FocusLockController(ImConWidgetController):
 
 
     @APIExport(runOnUIThread=True)
-    def performOneStepAutofocus(self, move_to_focus: bool = True, 
+    def getCurrentFocusValue(self) -> Dict[str, Any]:
+        """Get the current focus value and metadata.
+        
+        Returns:
+            Dict containing:
+            - focus_value: float - current focus metric value
+            - timestamp: float - measurement timestamp
+            - is_measuring: bool - whether continuous measurement is active
+            - is_locked: bool - whether focus lock is engaged
+        """
+        return {
+            "focus_value": float(self.current_focus_value),
+            "timestamp": time.time(),
+            "is_measuring": self._state.is_measuring,
+            "is_locked": self.locked,
+        }
+
+    @APIExport(runOnUIThread=True)
+    def performOneStepAutofocus(self, target_focus_setpoint: Optional[float] = None,
+                                move_to_focus: bool = True, 
                                 max_attempts: int = 3,
                                 threshold_um: float = 0.5) -> Dict[str, Any]:
         """Perform one-shot hardware-based autofocus using calibration data.
         
         This is designed for wellplate scanning where we need fast, accurate focusing
-        at each XY position without a full Z-sweep. 
+        at each XY position without a full Z-sweep. Instead of doing a full Z-sweep,
+        we:
+        1. Measure the current focus value (e.g., laser spot position)
+        2. Calculate the offset from target setpoint (from previous focused position)
+        3. Convert the offset to Z movement using calibration scale factor
+        4. Move to correct Z position
         
         Workflow:
         1. Capture single frame from focus camera
-        2. Calculate focus metric (e.g., laser peak position)
-        3. Use calibration to determine target Z position
-        4. Move to target (if move_to_focus=True)
-        5. Optionally iterate if offset too large
+        2. Calculate focus metric (e.g., laser peak position in pixels)
+        3. Calculate offset from target setpoint: delta_focus = current - target
+        4. Convert to Z offset: delta_z = delta_focus * scale_factor (µm/unit)
+        5. Move Z stage by delta_z (if move_to_focus=True)
+        6. Optionally iterate if offset too large
         
         Args:
+            target_focus_setpoint: Target focus value to reach (e.g., from previous 
+                                  focused position). If None, uses self._pi_params.set_point
             move_to_focus: If True, move Z stage to calculated focus position
             max_attempts: Maximum number of correction iterations (default 3)
             threshold_um: Success threshold in µm (default 0.5µm)
@@ -1045,8 +1019,9 @@ class FocusLockController(ImConWidgetController):
             Dict containing:
             - success: bool - whether autofocus succeeded
             - current_focus_value: float - measured focus metric
-            - target_z_position: float - calculated Z position (µm)
-            - z_offset: float - offset from current position (µm)
+            - target_focus_setpoint: float - target focus value used
+            - focus_offset: float - offset from setpoint (focus units)
+            - z_offset: float - calculated Z offset (µm)
             - moved: bool - whether stage was moved
             - num_attempts: int - number of iterations performed
             - final_error_um: float - final positioning error
@@ -1057,23 +1032,39 @@ class FocusLockController(ImConWidgetController):
                 "success": False,
                 "error": "No calibration data available",
                 "current_focus_value": 0.0,
-                "target_z_position": None,
+                "target_focus_setpoint": None,
+                "focus_offset": None,
                 "z_offset": None,
                 "moved": False,
                 "num_attempts": 0,
                 "final_error_um": None
             }
         
+        # Use provided setpoint or fall back to stored setpoint
+        if target_focus_setpoint is None:
+            target_focus_setpoint = self._pi_params.set_point
+            if target_focus_setpoint == 0.0:
+                self._logger.warning(
+                    "No target setpoint provided and no stored setpoint. "
+                    "Please provide target_focus_setpoint or run focus lock first."
+                )
+        
         # Ensure laser is on if configured
-        if hasattr(self, 'laserName') and self.laserName:
+        laserName = getattr(self._setupInfo.focusLock, "laserName", None)
+        laserValue = getattr(self._setupInfo.focusLock, "laserValue", None)
+        if laserName and laserValue is not None:
             try:
-                self._master.lasersManager[self.laserName].setValue(self.laserValue)
+                self._master.lasersManager[laserName].setValue(laserValue)
+                self._master.lasersManager[laserName].setEnabled(True)
             except Exception as e:
                 self._logger.warning(f"Could not enable focus laser: {e}")
         
         success = False
         num_attempts = 0
         final_error_um = None
+        current_focus_value = 0.0
+        focus_offset = 0.0
+        z_offset = 0.0
         
         for attempt in range(max_attempts):
             num_attempts += 1
@@ -1087,46 +1078,53 @@ class FocusLockController(ImConWidgetController):
                     "success": False,
                     "error": f"Frame capture failed: {e}",
                     "current_focus_value": 0.0,
-                    "target_z_position": None,
+                    "target_focus_setpoint": float(target_focus_setpoint),
+                    "focus_offset": None,
                     "z_offset": None,
                     "moved": False,
                     "num_attempts": num_attempts,
                     "final_error_um": None
                 }
             
-            # Step 2: Calculate focus metric
+            # Step 2: Calculate focus metric (same processing as polling thread)
             cropped_image = self.extract(
                 latest_image,
                 crop_size=self._focus_params.crop_size,
                 crop_center=self._focus_params.crop_center
             )
             
-            focus_value = self._focus_metric.compute(cropped_image)
+            # Compute returns a dict with 'focus' key
+            focus_result = self._focus_metric.compute(cropped_image)
+            current_focus_value = focus_result.get("focus", None)
             
-            # Step 3: Calculate target Z position from calibration
-            target_z = self._calculate_z_position_from_focus_value(focus_value)
-            
-            if target_z is None:
+            if current_focus_value is None or np.isnan(current_focus_value):
+                self._logger.error("Invalid focus value computed")
                 return {
                     "success": False,
-                    "error": "Could not calculate target Z position",
-                    "current_focus_value": float(focus_value),
-                    "target_z_position": None,
+                    "error": "Invalid focus value (None or NaN)",
+                    "current_focus_value": 0.0,
+                    "target_focus_setpoint": float(target_focus_setpoint),
+                    "focus_offset": None,
                     "z_offset": None,
                     "moved": False,
                     "num_attempts": num_attempts,
                     "final_error_um": None
                 }
             
-            # Calculate offset from current position
-            current_z = self.currentZPosition # TODO: Double-check if we need to read from hardware
-            z_offset = target_z - current_z
+            # Step 3: Calculate focus offset from target setpoint
+            focus_offset = current_focus_value - target_focus_setpoint
+            
+            # Step 4: Convert focus offset to Z offset using calibration scale factor
+            # Scale factor is in µm per focus unit (e.g., µm per pixel)
+            scale_factor = self._getCalibrationBasedScale()
+            z_offset = focus_offset * scale_factor
             final_error_um = abs(z_offset)
             
             self._logger.debug(
                 f"One-step AF attempt {attempt + 1}/{max_attempts}: "
-                f"focus_value={focus_value:.2f}, current_z={current_z:.2f}µm, "
-                f"target_z={target_z:.2f}µm, offset={z_offset:.2f}µm"
+                    f"current_focus={current_focus_value:.2f}, target={target_focus_setpoint:.2f}, "
+                f"focus_offset={focus_offset:.2f}, scale={scale_factor:.3f}µm/unit, "
+                f"z_offset={z_offset:.2f}µm"
             )
             
             # Check if we're within threshold
@@ -1138,20 +1136,19 @@ class FocusLockController(ImConWidgetController):
                 )
                 break
             
-            # Step 4: Move to target position (if requested)
+            # Step 5: Move to target position (if requested)
             if move_to_focus:
                 try:
                     # Safety check: limit single move
-                    max_single_move_um = 1000.0  # 1mm safety limit
+                    max_single_move_um = 1000.0  # 1mm safety limit # TODO: this should depend on the scan range; we should store that and not use outside knowledge here
                     if abs(z_offset) > max_single_move_um:
                         self._logger.warning(
                             f"Calculated Z offset ({z_offset:.2f}µm) exceeds safety limit "
                             f"({max_single_move_um}µm). Clamping move."
                         )
                         z_offset = np.sign(z_offset) * max_single_move_um
-                        target_z = current_z + z_offset
                     
-                    # Move stage
+                    # Move stage (relative movement)
                     self.stage.move(value=z_offset, axis="Z", is_absolute=False, is_blocking=True)
                     time.sleep(0.1)  # Small settle time
                     
@@ -1160,8 +1157,9 @@ class FocusLockController(ImConWidgetController):
                     return {
                         "success": False,
                         "error": f"Stage movement failed: {e}",
-                        "current_focus_value": float(focus_value),
-                        "target_z_position": float(target_z),
+                        "current_focus_value": float(current_focus_value),
+                        "target_focus_setpoint": float(target_focus_setpoint),
+                        "focus_offset": float(focus_offset),
                         "z_offset": float(z_offset),
                         "moved": False,
                         "num_attempts": num_attempts,
@@ -1173,13 +1171,15 @@ class FocusLockController(ImConWidgetController):
         
         return {
             "success": success,
-            "current_focus_value": float(focus_value),
-            "target_z_position": float(target_z),
+            "current_focus_value": float(current_focus_value),
+            "target_focus_setpoint": float(target_focus_setpoint),
+            "focus_offset": float(focus_offset),
             "z_offset": float(z_offset),
             "moved": move_to_focus,
             "num_attempts": num_attempts,
             "final_error_um": float(final_error_um)
         }
+
 
 
     @APIExport(runOnUIThread=True, requestType="POST")

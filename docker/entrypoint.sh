@@ -54,30 +54,61 @@ ls /media 2>/dev/null || log 'No /media directory'
 # ============================================================================
 # Configuration Path Setup
 # ============================================================================
-CONFIG_PATH="${CONFIG_PATH:-/tmp/ImSwitchConfig}"
 log "Using CONFIG_PATH: $CONFIG_PATH"
 
-# Set default config file if not specified
+# in case the user doesn'T provide the CONFIG_PATH, quit with an error 
+if [[ -z "$CONFIG_PATH" ]]; then
+    log "Error: Configuration path '$CONFIG_PATH' not provided."
+    exit 1
+fi
+if [[ ! -d "$CONFIG_PATH" ]]; then
+    log "Error: Configuration path '$CONFIG_PATH' does not exist."
+    exit 1
+fi
+
+# in case the user doesn'T provide the CONFIG_PATH, quit with an error 
 if [[ -z "$CONFIG_FILE" ]]; then
-    CONFIG_FILE="${CONFIG_PATH}/imcontrol_setups/example_virtual_microscope.json"
-    log "No CONFIG_FILE set, using default: $CONFIG_FILE"
-else
-    log "Using CONFIG_FILE: $CONFIG_FILE"
+    log "Error: Configuration file '$CONFIG_FILE' not provided."
+    exit 1
+fi
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    log "Error: Configuration file '$CONFIG_FILE' does not exist."
+    exit 1
 fi
 
-# Display available configuration files if using custom config path
-if [[ "$CONFIG_PATH" != "/tmp/ImSwitchConfig" ]]; then
-    log 'Available configuration files:'
-    ls "${CONFIG_PATH}/imcontrol_setups" 2>/dev/null || log 'Config directory not found'
-    
-    # Display current options if available
-    if [[ -f "${CONFIG_PATH}/config/imcontrol_options.json" ]]; then
-        log 'Current imcontrol_options.json:'
-        cat "${CONFIG_PATH}/config/imcontrol_options.json"
-    fi
+# List available configuration files
+log 'Available configuration files:'
+ls "${CONFIG_PATH}/imcontrol_setups" 2>/dev/null || log 'Config directory not found'
+
+# Display current options if available
+if [[ -f "${CONFIG_PATH}/config/imcontrol_options.json" ]]; then
+    log 'Current imcontrol_options.json:'
+    cat "${CONFIG_PATH}/config/imcontrol_options.json"
 fi
 
+# ============================================================================
+# Data Paths Setup
+# ============================================================================
 
+# in case the user doesn'T provide the DATA_PATH, quit with an error 
+if [[ -z "$DATA_PATH" ]]; then
+    log "Error: Data path '$DATA_PATH' not provided."
+    exit 1
+fi
+if [[ ! -d "$DATA_PATH" ]]; then
+    log "Error: Data path '$DATA_PATH' does not exist."
+    exit 1
+fi
+
+# in case the user doesn'T provide the EXT_DATA_PATH, quit with an error 
+if [[ -z "$EXT_DATA_PATH" ]]; then
+    log "Error: External data path '$EXT_DATA_PATH' not provided."
+    exit 1
+fi
+if [[ ! -d "$EXT_DATA_PATH" ]]; then
+    log "Error: External data path '$EXT_DATA_PATH' does not exist."
+    exit 1
+fi
 
 # ============================================================================
 # Activate Python Environment
@@ -107,9 +138,9 @@ params+=" --http-port ${HTTP_PORT:-8001}"
 
 # Path configuration
 # The storage manager will handle path resolution and validation
-params+=" --config-folder ${CONFIG_PATH:-None}"
-params+=" --config-file ${CONFIG_FILE:-None}"
-params+=" --data-folder ${DATA_PATH:-None}"
+params+=" --config-folder ${CONFIG_PATH}"
+params+=" --config-file ${CONFIG_FILE}"
+params+=" --data-folder ${DATA_PATH}"
 
 # External storage scanning
 # When enabled, ImSwitch will automatically detect and use external drives
@@ -119,7 +150,7 @@ fi
 
 # External mount point directory
 # Typically /media (Linux) or /Volumes (macOS)
-params+=" --ext-data-folder ${EXT_DATA_PATH:-None}"
+params+=" --ext-data-folder ${EXT_DATA_PATH}"
 
 # ============================================================================
 # Start ImSwitch

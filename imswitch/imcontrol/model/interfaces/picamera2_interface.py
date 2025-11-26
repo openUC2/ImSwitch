@@ -217,6 +217,7 @@ class CameraPicamera2:
                 # RGB mode - use RGB888 format (3 channels, 8-bit each)
                 config = self.camera.create_video_configuration(
                     main={"size": (self.SensorWidth, self.SensorHeight), "format": "RGB888"},
+                    buffer_count=1,
                     controls={
                         "FrameRate": self.frame_rate,
                     }

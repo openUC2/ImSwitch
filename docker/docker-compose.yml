@@ -1,6 +1,6 @@
 services:
   imswitch-docker-noqt:
-    image: imswitch-holo
+    image: ghcr.io/openuc2/imswitch-noqt:sha-907555f
     privileged: true
     ports:
       - "8001:8001" # frontend, HTTP API, WebSockets API

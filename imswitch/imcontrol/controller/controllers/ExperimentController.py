@@ -281,7 +281,7 @@ class ExperimentController(ImConWidgetController):
         requires hardware triggering
         '''
         # where to dump the TIFFs ----------------------------------------------
-        save_dir = dirtools.UserFileDirs.Data
+        save_dir = dirtools.UserFileDirs.getValidatedDataPath()
         self.save_dir  = os.path.join(save_dir, "ExperimentController")
         # ensure all subfolders are generated:
         os.makedirs(self.save_dir) if not os.path.exists(self.save_dir) else None
@@ -676,7 +676,7 @@ class ExperimentController(ImConWidgetController):
 
         # Prepare directory and filename for saving
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.Data
+        drivePath = dirtools.UserFileDirs.getValidatedDataPath()
         dirPath = os.path.join(drivePath, 'ExperimentController', timeStamp)
         if not os.path.exists(dirPath):
             os.makedirs(dirPath)
@@ -1070,7 +1070,9 @@ class ExperimentController(ImConWidgetController):
             # Write frame using the specific OME writer from the list
             ome_writer = file_writers[position_center_index]
             chunk_info = ome_writer.write_frame(img, ome_metadata)
-            if ome_writer.store: self.setOmeZarrUrl(ome_writer.store.split(dirtools.UserFileDirs.Data)[-1])  # Update OME-Zarr URL in context
+            if ome_writer.store:
+                data_path = dirtools.UserFileDirs.getValidatedDataPath()
+                self.setOmeZarrUrl(ome_writer.store.split(data_path)[-1])  # Update OME-Zarr URL in context
             # Emit signal for frontend updates if Zarr chunk was written
             if chunk_info and "rel_chunk" in chunk_info:
                 sigZarrDict = {
@@ -1370,7 +1372,8 @@ class ExperimentController(ImConWidgetController):
                 self.mFilePath = os.path.join(self.save_dir,  f"{timeStamp}_FastStageScan")
                 # create directory if it does not exist and file paths
                 omezarr_store = OMEFileStorePaths(self.mFilePath)
-                self.setOmeZarrUrl(self.mFilePath.split(dirtools.UserFileDirs.Data)[-1]+".ome.zarr")
+                data_path = dirtools.UserFileDirs.getValidatedDataPath()
+                self.setOmeZarrUrl(self.mFilePath.split(data_path)[-1]+".ome.zarr")
                 self._writer_thread_ome = threading.Thread(
                     target=self._writer_loop_ome, args=(omezarr_store, total_frames, metadataList, xstart, ystart, xstep, ystep, nx, ny, 0, nTimePoints, nZPlanes, nIlluminations),
                     daemon=True)

@@ -285,6 +285,37 @@ class HikCamManager(DetectorManager):
         '''
         self._camera.recordFlatfieldImage()
 
+    def getCameraStatus(self):
+        """ Returns comprehensive HIK camera status information. """
+        # Get base status from parent class
+        status = super().getCameraStatus()
+        
+        # Add HIK-specific information
+        status['cameraType'] = 'HIK'
+        status['isMock'] = self._mocktype != "normal" if hasattr(self, '_mocktype') else False
+        status['isConnected'] = self._camera is not None and hasattr(self._camera, 'cam')
+        
+        # Add acquisition status
+        status['isAcquiring'] = self._running
+        status['isAdjustingParameters'] = self._adjustingParameters
+        
+        # Try to get additional camera parameters if available
+        try:
+            camera_params = self._camera.get_camera_parameters()
+            if camera_params:
+                status['hardwareParameters'] = camera_params
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve hardware parameters: {e}")
+        
+        # Add current trigger source if available
+        try:
+            status['currentTriggerSource'] = self._camera.getTriggerSource()
+            status['availableTriggerTypes'] = self._camera.getTriggerTypes()
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve trigger information: {e}")
+        
+        return status
+
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.
 #

@@ -137,6 +137,22 @@ class ImConMainController(MainController):
             self.__logger.warning(
                 f"Could not dynamically import {controller_name}: {e}"
             )
+        
+        # Add StorageController for file storage management (no widget required)
+        try:
+            self.__logger.info("Creating StorageController for storage management")
+            from .controllers.StorageController import StorageController
+            self.controllers["Storage"] = self.__factory.createController(
+                StorageController, None
+            )
+            # Register StorageController
+            self.__masterController.registerController(
+                "Storage", self.controllers["Storage"]
+            )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not create StorageController: {e}"
+            )
 
         # Generate API
         self.__api = None

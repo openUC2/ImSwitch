@@ -2,6 +2,50 @@
 
 #set -euo pipefail
 
+# For Picamera2 support on Raspberry Pi, run with:
+# docker run -it --privileged \
+#   -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket \
+#   -v /dev/dma_heap:/dev/dma_heap \
+#   --device /dev/video0:/dev/video0 \
+#   --device /dev/video10:/dev/video10 \
+#   --device /dev/video11:/dev/video11 \
+#   --device /dev/video12:/dev/video12 \
+#   -e MODE=terminal \
+#   ghcr.io/openuc2/imswitch-noqt:sha-5d54391
+
+
+check_pi_camera() {
+        log "Running libcamera-probe"
+        if command -v libcamera-probe >/dev/null 2>&1; then
+            libcamera-probe --verbose 2>&1 | tee /tmp/libcamera-probe.log
+            if grep -q "Found.*imx" /tmp/libcamera-probe.log; then
+                log "Pi camera detected via libcamera-probe"
+                return 0
+            else
+                log "libcamera-probe did not detect a Pi camera"
+            fi
+        else
+            log "libcamera-probe not installed"
+        fi
+
+        log "Checking dmesg for camera sensors"
+        if dmesg | grep -E "imx[0-9]{3}|ov5647|arducam|rpi_cam" >/dev/null 2>&1; then
+            log "Camera sensor driver detected in kernel logs"
+            return 0
+        else
+            log "No camera-related kernel messages found"
+        fi
+
+        log "Checking for /dev/video* devices"
+        if ls /dev/video* >/dev/null 2>&1; then
+            log "Video devices present: $(ls /dev/video*)"
+            return 0
+        else
+            log "No /dev/video* devices found"
+        fi
+
+        return 1
+        
 log() { echo "[$(date +'%F %T')] $*"; }
 
 # Provide safe default values for variables
@@ -22,6 +66,16 @@ then
     lsusb
     echo 'Listing external storage devices'
     ls /media
+
+    log 'Checking Raspberry Pi camera availability'
+
+
+    if check_pi_camera; then
+        log "Raspberry Pi camera: AVAILABLE"
+    else
+        log "Raspberry Pi camera: NOT AVAILABLE"
+    fi
+
 
     PATCH_DIR=/tmp/ImSwitch-changes
     PATCH_FILE=$PATCH_DIR/diff.patch 

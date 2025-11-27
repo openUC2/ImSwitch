@@ -23,6 +23,7 @@ from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
 from pydantic import BaseModel
 import numpy as np
+from .wellplate_layouts import get_predefined_layouts, get_layout_by_name, WellplateLayout
 
 try:
     from ashlarUC2 import utils
@@ -63,13 +64,58 @@ class NeighborPoint(BaseModel):
     iY: int
 
 class Point(BaseModel):
-    id: uuid.UUID
+    id: Optional[str] = None  # Allow string IDs from frontend
     name: str
     x: float
     y: float
     iX: int = 0
     iY: int = 0
-    neighborPointList: List[NeighborPoint]
+    neighborPointList: List[NeighborPoint] = Field(default_factory=list)
+    wellId: Optional[str] = None  # NEW: Well association
+    areaType: Optional[str] = None  # NEW: Area type (well, free_scan, etc.)
+
+# NEW: Models for pre-calculated scan coordinates
+class ScanPosition(BaseModel):
+    """Single position in a scan area"""
+    index: int
+    x: float
+    y: float
+    iX: int
+    iY: int
+
+class ScanBounds(BaseModel):
+    """Bounding box for a scan area"""
+    minX: float
+    maxX: float
+    minY: float
+    maxY: float
+    width: float
+    height: float
+
+class CenterPosition(BaseModel):
+    """Center position of a scan area"""
+    x: float
+    y: float
+
+class ScanArea(BaseModel):
+    """Pre-calculated scan area with ordered positions"""
+    areaId: str
+    areaName: str
+    areaType: str = "free_scan"  # well, free_scan, etc.
+    wellId: Optional[str] = None
+    centerPosition: CenterPosition
+    bounds: ScanBounds
+    scanPattern: str = "raster"  # snake or raster
+    positions: List[ScanPosition]
+
+class ScanMetadata(BaseModel):
+    """Metadata for the entire scan"""
+    totalPositions: int
+    fovX: float
+    fovY: float
+    overlapWidth: float = 0.0
+    overlapHeight: float = 0.0
+    scanPattern: str = "raster"
 
 class ParameterValue(BaseModel):
     illumination: Union[List[str], str] = None # X, Y, nX, nY
@@ -84,13 +130,13 @@ class ParameterValue(BaseModel):
     autoFocusMax: float
     autoFocusStepSize: float
     autoFocusIlluminationChannel: str = "" # Selected illumination channel for autofocus
+    autoFocusMode: str = "software" # "software" (Z-sweep) or "hardware" (one-shot using FocusLock)
     zStack: bool
     zStackMin: float
     zStackMax: float
     zStackStepSize: Union[List[float], float] = 1.
     exposureTimes: Union[List[float], float] = None
     gains: Union[List[float], float] = None
-    resortPointListToSnakeCoordinates: bool = True
     speed: float = 20000.0
     performanceMode: bool = False
     ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
@@ -102,12 +148,16 @@ class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
     name: str
     parameterValue: ParameterValue
-    pointList: List[Point]
+    pointList: List[Point] = Field(default_factory=list)
+
+    # NEW: Pre-calculated scan data from frontend
+    scanAreas: Optional[List[ScanArea]] = None
+    scanMetadata: Optional[ScanMetadata] = None
 
     # From your old "ExperimentModel":
     number_z_steps: int = Field(0, description="Number of Z slices")
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
-    
+
     # -----------------------------------------------------------
     # A helper to produce the "configuration" dict
     # -----------------------------------------------------------
@@ -255,7 +305,7 @@ class ExperimentController(ImConWidgetController):
         # Initialize experiment execution modes
         self.performance_mode = ExperimentPerformanceMode(self)
         self.normal_mode = ExperimentNormalMode(self)
-        
+
         # Initialize omero  parameters  # TODO: Maybe not needed!
         self.omero_url = self._master.experimentManager.omeroServerUrl
         self.omero_username = self._master.experimentManager.omeroUsername
@@ -265,6 +315,90 @@ class ExperimentController(ImConWidgetController):
     @APIExport(requestType="GET")
     def getHardwareParameters(self):
         return self.ExperimentParams
+
+    @APIExport(requestType="GET")
+    def getAvailableWellplateLayouts(self):
+        """
+        Get list of available pre-defined wellplate layouts.
+
+        Returns:
+            Dict with layout names as keys and layout metadata as values
+        """
+        try:
+            layouts = get_predefined_layouts()
+            return {
+                name: {
+                    "name": layout.name,
+                    "description": layout.description,
+                    "rows": layout.rows,
+                    "cols": layout.cols,
+                    "well_count": len(layout.wells),
+                    "well_spacing_x": layout.well_spacing_x,
+                    "well_spacing_y": layout.well_spacing_y
+                }
+                for name, layout in layouts.items()
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to get wellplate layouts: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @APIExport(requestType="GET")
+    def getWellplateLayout(self, layout_name: str, offset_x: float = 0, offset_y: float = 0):
+        """
+        Get a specific wellplate layout with optional offset parameters.
+
+        Args:
+            layout_name: Name of the layout (e.g., '96-well-standard', '384-well-standard')
+            offset_x: X offset in micrometers (default: 0)
+            offset_y: Y offset in micrometers (default: 0)
+
+        Returns:
+            Complete wellplate layout definition including all wells
+        """
+        try:
+            layout = get_layout_by_name(layout_name, offset_x=offset_x, offset_y=offset_y)
+            if not layout:
+                raise HTTPException(status_code=404, detail=f"Layout '{layout_name}' not found")
+            return layout.dict()
+        except HTTPException:
+            raise
+        except Exception as e:
+            self._logger.error(f"Failed to get wellplate layout '{layout_name}': {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @APIExport(requestType="POST")
+    def generateCustomWellplateLayout(self, layout_params: dict):
+        """
+        Generate a custom wellplate layout with specified parameters.
+
+        Args:
+            layout_params: Dictionary with layout parameters:
+                - name: str (required)
+                - rows: int (required)
+                - cols: int (required)
+                - well_spacing_x: float (required, micrometers)
+                - well_spacing_y: float (required, micrometers)
+                - well_shape: str ('circle' or 'rectangle', default: 'circle')
+                - well_radius: float (micrometers, for circular wells)
+                - well_width: float (micrometers, for rectangular wells)
+                - well_height: float (micrometers, for rectangular wells)
+                - offset_x: float (default: 0)
+                - offset_y: float (default: 0)
+                - description: str (default: '')
+
+        Returns:
+            Complete wellplate layout definition
+        """
+        try:
+            layout = get_layout_by_name("custom", **layout_params)
+            if not layout:
+                raise HTTPException(status_code=400, detail="Invalid layout parameters")
+            return layout.dict()
+        except HTTPException:
+            raise
+        except Exception as e:
+            self._logger.error(f"Failed to generate custom wellplate layout: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
     @APIExport(requestType="GET")
     def getOMEROConfig(self):
@@ -278,7 +412,7 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Failed to get OMERO config: {e}")
             return {"error": str(e)}
 
-    @APIExport(requestType="POST")  
+    @APIExport(requestType="POST")
     def setOMEROConfig(self, config: dict):
         """Set OMERO configuration via the experiment manager."""
         try:
@@ -337,7 +471,7 @@ class ExperimentController(ImConWidgetController):
     def set_led_status(self, status: str = "idle"):
         """
         Set LED matrix status if available.
-        
+
         Args:
             status: Status string - "idle", "rainbow" (busy), "error", etc.
         """
@@ -371,19 +505,95 @@ class ExperimentController(ImConWidgetController):
         return num_x_steps, num_y_steps
 
     def generate_snake_tiles(self, mExperiment):
+        """
+        Generate tiles from experiment with pre-calculated coordinates.
+
+        The frontend now calculates ALL coordinates including scan order.
+        This method simply converts the scanAreas format to the internal tiles format.
+
+        Args:
+            mExperiment: Experiment object containing scanAreas with pre-calculated positions
+
+        Returns:
+            List of tiles, where each tile is a list of coordinate dictionaries
+        """
         tiles = []
-        
-        # Handle case where no XY coordinates are provided but z-stack is enabled
-        # In this case, we want to scan at the current position
-        if len(mExperiment.pointList) == 0 and (mExperiment.parameterValue.zStack or (mExperiment.parameterValue.zStackStepSize > 0 and mExperiment.parameterValue.zStackMax > mExperiment.parameterValue.zStackMin)):
-            self._logger.info("No XY coordinates provided but z-stack enabled. Creating fallback point at current position.")
-            
+
+        # New workflow: Use pre-calculated coordinates from scanAreas
+        if mExperiment.scanAreas:
+            self._logger.info("Using pre-calculated coordinates from frontend scanAreas")
+
+            # Convert scanAreas to tiles format
+            for area in mExperiment.scanAreas:
+                # Extract positions from scan area - already ordered by frontend
+                tile_positions = []
+                for pos in area.positions:
+                    tile_positions.append({
+                        "iterator": pos.index,
+                        "centerIndex": area.areaId,
+                        "iX": pos.iX,
+                        "iY": pos.iY,
+                        "x": pos.x,
+                        "y": pos.y,
+                        "wellId": area.wellId,
+                        "areaName": area.areaName,
+                        "areaType": area.areaType
+                    })
+
+                if tile_positions:
+                    tiles.append(tile_positions)
+
+            self._logger.info(f"Loaded {len(tiles)} scan areas with {sum(len(t) for t in tiles)} total positions")
+            return tiles
+
+        # Fallback: Use pointList with pre-ordered neighborPointList
+        elif mExperiment.pointList:
+            self._logger.info("Using coordinates from pointList")
+
+            for iCenter, centerPoint in enumerate(mExperiment.pointList):
+                if not centerPoint.neighborPointList:
+                    # Single point - no neighbors
+                    tile_positions = [{
+                        "iterator": 0,
+                        "centerIndex": iCenter,
+                        "iX": 0,
+                        "iY": 0,
+                        "x": centerPoint.x,
+                        "y": centerPoint.y,
+                        "wellId": centerPoint.wellId,
+                        "areaName": centerPoint.name,
+                        "areaType": centerPoint.areaType or 'free_scan'
+                    }]
+                else:
+                    # Use pre-ordered neighbor list (no sorting!)
+                    tile_positions = []
+                    for idx, neighbor in enumerate(centerPoint.neighborPointList):
+                        tile_positions.append({
+                            "iterator": idx,
+                            "centerIndex": iCenter,
+                            "iX": neighbor.iX,
+                            "iY": neighbor.iY,
+                            "x": neighbor.x,
+                            "y": neighbor.y,
+                            "wellId": centerPoint.wellId,
+                            "areaName": centerPoint.name,
+                            "areaType": centerPoint.areaType or 'free_scan'
+                        })
+
+                tiles.append(tile_positions)
+
+            self._logger.info(f"Loaded {len(tiles)} tiles from pointList")
+            return tiles
+
+        # No coordinates provided - create single point at current position
+        else:
+            self._logger.warning("No scan coordinates provided. Using current stage position.")
+
             # Get current stage position
             current_position = self.mStage.getPosition()
             current_x = current_position.get("X", 0)
             current_y = current_position.get("Y", 0)
-            
-            # Create a fallback point at current position
+
             fallback_tile = [{
                 "iterator": 0,
                 "centerIndex": 0,
@@ -391,130 +601,11 @@ class ExperimentController(ImConWidgetController):
                 "iY": 0,
                 "x": current_x,
                 "y": current_y,
+                "wellId": None,
+                "areaName": "Current Position",
+                "areaType": "free_scan"
             }]
             tiles.append(fallback_tile)
-            return tiles
-        
-        # Special case: If each point has only one neighbor (itself), merge them into a single grid
-        # This happens when multiple separate points are selected but no grid is defined for each
-        elif len(mExperiment.pointList) > 1 and all(len(point.neighborPointList) == 1 for point in mExperiment.pointList):
-            self._logger.info(f"Detected {len(mExperiment.pointList)} single-point tiles. Merging into a single grid.")
-            
-            # Collect all single points as neighbor points
-            merged_neighbor_list = []
-            for idx, point in enumerate(mExperiment.pointList):
-                # Use the point's own coordinates and indices
-                neighbor = NeighborPoint(
-                    x=point.x,
-                    y=point.y,
-                    iX=point.iX,
-                    iY=point.iY
-                )
-                merged_neighbor_list.append(neighbor)
-            
-            # Sort by y then by x (raster order)
-            merged_neighbor_list.sort(key=lambda n: (n.y, n.x))
-            
-            # Recalculate iX and iY based on the sorted positions
-            # Determine grid dimensions
-            unique_x = sorted(set(n.x for n in merged_neighbor_list))
-            unique_y = sorted(set(n.y for n in merged_neighbor_list))
-            
-            # Create mapping from position to grid indices
-            x_to_ix = {x: i for i, x in enumerate(unique_x)}
-            y_to_iy = {y: i for i, y in enumerate(unique_y)}
-            
-            # Update iX and iY based on sorted positions
-            for neighbor in merged_neighbor_list:
-                neighbor.iX = x_to_ix[neighbor.x]
-                neighbor.iY = y_to_iy[neighbor.y]
-            
-            # Create snake scan order
-            num_x_steps = len(unique_x)
-            num_y_steps = len(unique_y)
-            allPointsSnake = [None] * (num_x_steps * num_y_steps)
-            
-            iTile = 0
-            for iY in range(num_y_steps):
-                for iX in range(num_x_steps):
-                    # Snake pattern: reverse x direction on odd rows
-                    if iY % 2 == 1 and num_x_steps != 1:
-                        mIdex = iY * num_x_steps + num_x_steps - 1 - iX
-                    else:
-                        mIdex = iTile
-                    
-                    # Find the neighbor point with matching grid indices
-                    matching_neighbor = None
-                    for neighbor in merged_neighbor_list:
-                        if neighbor.iX == iX and neighbor.iY == iY:
-                            matching_neighbor = neighbor
-                            break
-                    
-                    if matching_neighbor and mIdex < len(allPointsSnake):
-                        allPointsSnake[mIdex] = {
-                            "iterator": iTile,
-                            "centerIndex": 0,  # All belong to the merged grid
-                            "iX": iX,
-                            "iY": iY,
-                            "x": matching_neighbor.x,
-                            "y": matching_neighbor.y,
-                        }
-                    iTile += 1
-            
-            # Remove None values
-            allPointsSnake = [pt for pt in allPointsSnake if pt is not None]
-            tiles.append(allPointsSnake)
-            return tiles
-        
-        else:
-        
-            # Original logic: Process each point with its neighbor list as a separate tile
-            # Original logic for when pointList is provided
-            for iCenter, centerPoint in enumerate(mExperiment.pointList):
-                # Collect central and neighbour points (without duplicating the center)
-                allPoints = [(n.x, n.y) for n in centerPoint.neighborPointList]
-                
-                # Handle case where neighborPointList is empty but centerPoint is provided
-                # This means scan at the center point position only (useful for z-stack-only)
-                if len(allPoints) == 0:
-                    self._logger.info(f"Empty neighborPointList for center point {iCenter}. Using center point position for z-stack scanning.")
-                    fallback_tile = [{
-                        "iterator": 0,
-                        "centerIndex": iCenter,
-                        "iX": 0,
-                        "iY": 0,
-                        "x": centerPoint.x,
-                        "y": centerPoint.y,
-                    }]
-                    tiles.append(fallback_tile)
-                    continue
-                
-                # Sort by y then by x (i.e., raster order)
-                allPoints.sort(key=lambda coords: (coords[1], coords[0]))
-
-                num_x_steps, num_y_steps = self.get_num_xy_steps(centerPoint.neighborPointList)
-                allPointsSnake = [0] * (num_x_steps * num_y_steps)
-                iTile = 0
-                for iY in range(num_y_steps):
-                    for iX in range(num_x_steps):
-                        if iY % 2 == 1 and num_x_steps != 1:
-                            mIdex = iY * num_x_steps + num_x_steps - 1 - iX
-                        else:
-                            mIdex = iTile
-                        if len(allPointsSnake) <= mIdex or len(allPoints) <= iTile:
-                            # remove that index from allPointsSnake
-                            allPointsSnake[mIdex] = None
-                            continue
-                        allPointsSnake[mIdex] = {
-                            "iterator": iTile,
-                            "centerIndex": iCenter,
-                            "iX": iX,
-                            "iY": iY,
-                            "x": allPoints[iTile][0],
-                            "y": allPoints[iTile][1],
-                        }
-                        iTile += 1
-                tiles.append(allPointsSnake)
             return tiles
 
     @APIExport()
@@ -560,10 +651,10 @@ class ExperimentController(ImConWidgetController):
         illuminationIntensities = p.illuIntensities
         if type(illuminationIntensities) is not List  and type(illuminationIntensities) is not list: illuminationIntensities = [p.illuIntensities]
         if type(illuSources) is not List  and type(illuSources) is not list: illuSources = [p.illumination]
-        isDarkfield = p.darkfield # TODO: Needs to be implemented 
+        isDarkfield = p.darkfield # TODO: Needs to be implemented
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
-        
+
         # check if any of the illumination sources is turned on, if not, return error
         if not any(illuminationIntensities):
             return HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
@@ -590,6 +681,7 @@ class ExperimentController(ImConWidgetController):
         autofocusMin = p.autoFocusMin
         autofocusStepSize = p.autoFocusStepSize
         autofocusIlluminationChannel = getattr(p, 'autoFocusIlluminationChannel', "") or ""
+        autofocusMode = getattr(p, 'autoFocusMode', 'software')  # Default to software if not specified
 
         # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
         if type(gains) is not List and type(gains) is not list: gains = [gains]
@@ -609,10 +701,8 @@ class ExperimentController(ImConWidgetController):
         if not self.mDetector._running:
             self.mDetector.startAcquisition()
 
-        # Generate the list of points to scan based on snake scan
-        if p.resortPointListToSnakeCoordinates:
-            pass # TODO: we need an alternative case
-        snake_tiles = self.generate_snake_tiles(mExperiment)
+        # Generate the list of points to scan from pre-calculated coordinates
+        snake_tiles = self.generate_snake_tiles(mExperiment) # TODO: Is this still needed?
         # remove none values from all_points list
         snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
 
@@ -634,7 +724,7 @@ class ExperimentController(ImConWidgetController):
 
         workflowSteps = []
         file_writers = []  # Initialize outside the loop for context storage
-        
+
         # OME writer-related
         self._ome_write_tiff = p.ome_write_tiff
         self._ome_write_zarr = p.ome_write_zarr
@@ -649,8 +739,8 @@ class ExperimentController(ImConWidgetController):
             self._ome_write_single_tiff = True   # Enable single TIFF writing
         else:
             self._ome_write_single_tiff = False
-            
-            
+
+
         # Decide which execution mode to use
         if performanceMode and self.performance_mode.is_hardware_capable():
             # Execute in performance mode
@@ -694,7 +784,8 @@ class ExperimentController(ImConWidgetController):
                     autofocus_max=autofocusMax,
                     autofocus_step_size=autofocusStepSize,
                     autofocus_illumination_channel=autofocusIlluminationChannel,
-                    t_period=tPeriod, 
+                    autofocus_mode=autofocusMode,  # Pass autofocus mode
+                    t_period=tPeriod,
                     isRGB=self.mDetector._isRGB
                 )
 
@@ -744,13 +835,13 @@ class ExperimentController(ImConWidgetController):
     ########################################
     # Hardware-related functions
     ########################################
-    def acquire_frame(self, channel: str, frameSync: int = 3):
+    def acquire_frame(self, channel: str, frameSync: int = 2):
         self._logger.debug(f"Acquiring frame on channel {channel}")
 
         # ensure we get a fresh frame
         timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
         cTime = time.time()
-        
+
         lastFrameNumber=-1
         while(1):
             # get frame and frame number to get one that is newer than the one with illumination off eventually
@@ -760,8 +851,8 @@ class ExperimentController(ImConWidgetController):
                 lastFrameNumber = currentFrameNumber
             if time.time()-cTime> timeoutFrameRequest:
                 # in case exposure time is too long we need break at one point
-                if mFrame is None: 
-                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False) 
+                if mFrame is None:
+                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
                 break
             if currentFrameNumber <= lastFrameNumber+frameSync:
                 time.sleep(0.01) # off-load CPU
@@ -781,27 +872,121 @@ class ExperimentController(ImConWidgetController):
         self._logger.debug("Dummy main function called")
         return True
 
-    def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0, illuminationChannel: str=""):
-        """Perform autofocus using the AutofocusController if available.
-        
+    def autofocus_hardware(self, illuminationChannel: str = "") -> Optional[float]:
+        """Perform hardware-based one-shot autofocus using FocusLockController.
+
+        This is significantly faster than software autofocus because it:
+        - Captures only ONE frame from dedicated autofocus camera
+        - Uses pre-calibrated linear relationship (focus metric → Z position)
+        - No Z-sweep required
+
+        Similar to Seafront laser autofocus approach.
+
+        Args:
+            illuminationChannel: Selected illumination channel for autofocus (currently unused)
+
+        Returns:
+            float: Best focus Z position in µm, or None if autofocus failed
+        """
+        self._logger.debug("Performing hardware-based one-shot autofocus...")
+
+        # Get the focus lock controller
+        try:
+            focusLockController = self._master.getController('FocusLock')
+        except Exception as e:
+            self._logger.warning(f"FocusLockController not available: {e}")
+            return None
+
+        if focusLockController is None:
+            self._logger.warning("FocusLockController not available - skipping hardware autofocus")
+            return None
+
+        # Check if calibration exists
+        try:
+            calib_status = focusLockController.getCalibrationStatus()
+            if not calib_status.get('calibrated', False):
+                self._logger.error("Hardware autofocus requires calibration. Please run focus calibration first.")
+                return None
+        except Exception as e:
+            self._logger.error(f"Failed to check calibration status: {e}")
+            return None
+
+        # Perform one-shot autofocus
+        try:
+            result = focusLockController.performOneStepAutofocus(
+                move_to_focus=True,
+                max_attempts=3,
+                threshold_um=0.5
+            )
+
+            if result.get('success', False):
+                target_z = result.get('target_z_position')
+                self._logger.info(
+                    f"Hardware autofocus successful: "
+                    f"Z={target_z:.2f}µm, error={result.get('final_error_um', 0):.3f}µm, "
+                    f"attempts={result.get('num_attempts', 0)}"
+                )
+                return target_z
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                self._logger.error(f"Hardware autofocus failed: {error_msg}")
+                return None
+
+        except Exception as e:
+            self._logger.error(f"Hardware autofocus exception: {e}")
+            return None
+
+    def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0,
+                  illuminationChannel: str="", mode: str="software"):
+        """Perform autofocus using either hardware or software method.
+
+        Args:
+            minZ: Minimum Z position for autofocus (software mode only)
+            maxZ: Maximum Z position for autofocus (software mode only)
+            stepSize: Step size for autofocus scan (software mode only)
+            illuminationChannel: Selected illumination channel for autofocus
+            mode: "hardware" (fast, one-shot) or "software" (slow, Z-sweep)
+
+        Returns:
+            float: Best focus Z position, or None if autofocus failed
+        """
+        self._logger.debug(
+            f"Performing autofocus (mode={mode}) with parameters "
+            f"minZ={minZ}, maxZ={maxZ}, stepSize={stepSize}, channel={illuminationChannel}"
+        )
+
+        # Route to appropriate autofocus method
+        if mode == "hardware":
+            return self.autofocus_hardware(illuminationChannel=illuminationChannel)
+        else:
+            return self.autofocus_software(
+                minZ=minZ,
+                maxZ=maxZ,
+                stepSize=stepSize,
+                illuminationChannel=illuminationChannel
+            )
+
+    def autofocus_software(self, minZ: float=0, maxZ: float=0, stepSize: float=0, illuminationChannel: str=""):
+        """Perform software-based autofocus using AutofocusController (Z-sweep).
+
         Args:
             minZ: Minimum Z position for autofocus (not used - uses rangez instead)
             maxZ: Maximum Z position for autofocus (not used - uses rangez instead)
             stepSize: Step size for autofocus scan
             illuminationChannel: Selected illumination channel for autofocus
-            
+
         Returns:
             float: Best focus Z position, or None if autofocus failed
         """
-        self._logger.debug("Performing autofocus... with parameters minZ, maxZ, stepSize, illuminationChannel: %s, %s, %s, %s", minZ, maxZ, stepSize, illuminationChannel)
-        
+        self._logger.debug("Performing software autofocus (Z-sweep)... with parameters minZ, maxZ, stepSize, illuminationChannel: %s, %s, %s, %s", minZ, maxZ, stepSize, illuminationChannel)
+
         # Get the autofocus controller
         autofocusController = self._master.getController('Autofocus')
-        
+
         if autofocusController is None:
             self._logger.warning("AutofocusController not available - skipping autofocus")
             return None
-        
+
         # Set illumination if specified
         if illuminationChannel and hasattr(self, '_master') and hasattr(self._master, 'lasersManager'):
             try:
@@ -811,12 +996,12 @@ class ExperimentController(ImConWidgetController):
                 # For now, we'll let the autofocus controller handle illumination
             except Exception as e:
                 self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
-        
+
         try:
             # Calculate range from min/max
             rangez = abs(maxZ - minZ) / 2.0 if maxZ > minZ else 50.0
             resolutionz = stepSize if stepSize > 0 else 10.0
-            
+
             # Call autofocus directly - the method is already decorated with @APIExport
             #     def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=7, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
             result = autofocusController.doAutofocusBackground(
@@ -832,10 +1017,10 @@ class ExperimentController(ImConWidgetController):
                 static_offset=0.0,
                 twoStage=False
             )
-            
+
             self._logger.debug(f"Autofocus completed successfully")
             return result
-            
+
         except Exception as e:
             self._logger.error(f"Autofocus failed: {e}")
             return None
@@ -847,7 +1032,7 @@ class ExperimentController(ImConWidgetController):
     def wait_for_next_timepoint(self, timepoint: int, t_period: float, context: WorkflowContext, metadata: Dict[str, Any]):
         """
         Wait for the proper time interval between timepoints, accounting for measurement time.
-        
+
         Args:
             timepoint: Current timepoint index
             t_period: Target period between timepoints in seconds
@@ -855,21 +1040,21 @@ class ExperimentController(ImConWidgetController):
             metadata: Metadata dictionary
         """
         import time
-        
+
         current_time = time.time()
         experiment_start_time = context.get_metadata("experiment_start_time", current_time)
         timepoint_times = context.get_metadata("timepoint_times", {})
-        
+
         # Calculate expected time for this timepoint
         expected_time = experiment_start_time + (timepoint + 1) * t_period
-        
+
         # Store timing information for this timepoint
         timepoint_times[str(timepoint)] = current_time
         context.set_metadata("timepoint_times", timepoint_times)
-        
+
         # Calculate how long to wait
         wait_time = max(0, expected_time - current_time)
-        
+
         if wait_time > 0:
             self._logger.info(f"Waiting {wait_time:.2f}s for next timepoint (timepoint {timepoint})")
             time.sleep(wait_time)

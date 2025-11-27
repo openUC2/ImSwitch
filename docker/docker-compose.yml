@@ -1,19 +1,19 @@
 services:
   imswitch-docker-noqt:
-    image: ghcr.io/openuc2/imswitch-noqt:latest
+    image: imswitch-holo
     privileged: true
     ports:
       - "8001:8001"
       - "8888:8888"
     volumes:
-      - /Users/bene:/config
-      - /Users/bene:/dataset
+      - /home/pi/ImSwitchConfig:/config
+      - /home/pi/ImSwitchConfig:/dataset
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
       - /etc/machine-id:/etc/machine-id:ro
+      - /run/udev:/run/udev:ro
     environment:
       - HEADLESS=1
       - HTTP_PORT=8001
-      - HTTP_PORT=8005
       #- CONFIG_FILE=example_virtual_microscope.json
       - UPDATE_GIT=0
       - UPDATE_CONFIG=0
@@ -21,6 +21,6 @@ services:
       - CONFIG_PATH=/config
       - SCAN_EXT_DATA_PATH=1
       - EXT_DATA_PATH=/media
-      - SSL=1
+      - SSL=0
 
     restart: always

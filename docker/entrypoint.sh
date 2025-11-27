@@ -28,6 +28,17 @@
 
 #set -euo pipefail
 
+# For Picamera2 support on Raspberry Pi, run with:
+# docker run -it --privileged \
+#   -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket \
+#   -v /dev/dma_heap:/dev/dma_heap \
+#   --device /dev/video0:/dev/video0 \
+#   --device /dev/video10:/dev/video10 \
+#   --device /dev/video11:/dev/video11 \
+#   --device /dev/video12:/dev/video12 \
+#   -e MODE=terminal \
+#   ghcr.io/openuc2/imswitch-noqt:sha-5d54391
+
 log() { echo "[$(date +'%F %T')] $*"; }
 
 # ============================================================================

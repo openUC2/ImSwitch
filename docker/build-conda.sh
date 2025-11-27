@@ -4,7 +4,14 @@
 
 apt-get update
 apt-get install -y \
-  wget
+  wget \
+  gnupg
+
+# Add Raspberry Pi repository for proper picamera2 dependencies
+echo "deb http://archive.raspberrypi.org/debian/ bookworm main" > /etc/apt/sources.list.d/raspi.list \
+  && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 82B129927FA3303E
+
+apt-get update && apt -y upgrade
 
 # Install Miniforge based on architecture
 case "$TARGETPLATFORM" in

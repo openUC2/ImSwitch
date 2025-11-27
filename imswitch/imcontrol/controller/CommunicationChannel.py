@@ -19,6 +19,8 @@ class CommunicationChannel(SignalInterface):
     and Widgets, or between Widgets.
     """
 
+    sigUpdateStreamFrame = Signal()
+    
     sigUpdateImage = Signal(
         str, np.ndarray, bool, list, bool
     )  # (detectorName, image, init, scale, isCurrentDetector)

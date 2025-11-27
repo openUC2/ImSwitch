@@ -805,6 +805,24 @@ class FocusLockController(ImConWidgetController):
             # Fall back to configured scale factor if no calibration available
             return self._pi_params.scale_um_per_unit
 
+    @APIExport(runOnUIThread=True)
+    def getCurrentFocusValue(self) -> Dict[str, Any]:
+        """Get the current focus value and metadata.
+        
+        Returns:
+            Dict containing:
+            - focus_value: float - current focus metric value
+            - timestamp: float - measurement timestamp
+            - is_measuring: bool - whether continuous measurement is active
+            - is_locked: bool - whether focus lock is engaged
+        """
+        return {
+            "focus_value": float(self.current_focus_value),
+            "timestamp": time.time(),
+            "is_measuring": self._state.is_measuring,
+            "is_locked": self.locked,
+        }
+
     def lockFocus(self, zpos):
         if self.locked:
             return
@@ -947,6 +965,221 @@ class FocusLockController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Could not save crop parameters: {e}")
             return
+
+
+    @APIExport(runOnUIThread=True)
+    def getCurrentFocusValue(self) -> Dict[str, Any]:
+        """Get the current focus value and metadata.
+        
+        Returns:
+            Dict containing:
+            - focus_value: float - current focus metric value
+            - timestamp: float - measurement timestamp
+            - is_measuring: bool - whether continuous measurement is active
+            - is_locked: bool - whether focus lock is engaged
+        """
+        return {
+            "focus_value": float(self.current_focus_value),
+            "timestamp": time.time(),
+            "is_measuring": self._state.is_measuring,
+            "is_locked": self.locked,
+        }
+
+    @APIExport(runOnUIThread=True)
+    def performOneStepAutofocus(self, target_focus_setpoint: Optional[float] = None,
+                                move_to_focus: bool = True, 
+                                max_attempts: int = 3,
+                                threshold_um: float = 0.5) -> Dict[str, Any]:
+        """Perform one-shot hardware-based autofocus using calibration data.
+        
+        This is designed for wellplate scanning where we need fast, accurate focusing
+        at each XY position without a full Z-sweep. Instead of doing a full Z-sweep,
+        we:
+        1. Measure the current focus value (e.g., laser spot position)
+        2. Calculate the offset from target setpoint (from previous focused position)
+        3. Convert the offset to Z movement using calibration scale factor
+        4. Move to correct Z position
+        
+        Workflow:
+        1. Capture single frame from focus camera
+        2. Calculate focus metric (e.g., laser peak position in pixels)
+        3. Calculate offset from target setpoint: delta_focus = current - target
+        4. Convert to Z offset: delta_z = delta_focus * scale_factor (µm/unit)
+        5. Move Z stage by delta_z (if move_to_focus=True)
+        6. Optionally iterate if offset too large
+        
+        Args:
+            target_focus_setpoint: Target focus value to reach (e.g., from previous 
+                                  focused position). If None, uses self._pi_params.set_point
+            move_to_focus: If True, move Z stage to calculated focus position
+            max_attempts: Maximum number of correction iterations (default 3)
+            threshold_um: Success threshold in µm (default 0.5µm)
+            
+        Returns:
+            Dict containing:
+            - success: bool - whether autofocus succeeded
+            - current_focus_value: float - measured focus metric
+            - target_focus_setpoint: float - target focus value used
+            - focus_offset: float - offset from setpoint (focus units)
+            - z_offset: float - calculated Z offset (µm)
+            - moved: bool - whether stage was moved
+            - num_attempts: int - number of iterations performed
+            - final_error_um: float - final positioning error
+        """
+        if not self._current_calibration:
+            self._logger.error("One-step autofocus requires calibration. Run calibration first.")
+            return {
+                "success": False,
+                "error": "No calibration data available",
+                "current_focus_value": 0.0,
+                "target_focus_setpoint": None,
+                "focus_offset": None,
+                "z_offset": None,
+                "moved": False,
+                "num_attempts": 0,
+                "final_error_um": None
+            }
+        
+        # Use provided setpoint or fall back to stored setpoint
+        if target_focus_setpoint is None:
+            target_focus_setpoint = self._pi_params.set_point
+            if target_focus_setpoint == 0.0:
+                self._logger.warning(
+                    "No target setpoint provided and no stored setpoint. "
+                    "Please provide target_focus_setpoint or run focus lock first."
+                )
+        
+        # Ensure laser is on if configured
+        laserName = getattr(self._setupInfo.focusLock, "laserName", None)
+        laserValue = getattr(self._setupInfo.focusLock, "laserValue", None)
+        if laserName and laserValue is not None:
+            try:
+                self._master.lasersManager[laserName].setValue(laserValue)
+                self._master.lasersManager[laserName].setEnabled(True)
+            except Exception as e:
+                self._logger.warning(f"Could not enable focus laser: {e}")
+        
+        success = False
+        num_attempts = 0
+        final_error_um = None
+        current_focus_value = 0.0
+        focus_offset = 0.0
+        z_offset = 0.0
+        
+        for attempt in range(max_attempts):
+            num_attempts += 1
+            
+            # Step 1: Capture single frame
+            try:
+                latest_image = self._master.detectorsManager[self.camera].getLatestFrame()
+            except Exception as e:
+                self._logger.error(f"Failed to capture focus frame: {e}")
+                return {
+                    "success": False,
+                    "error": f"Frame capture failed: {e}",
+                    "current_focus_value": 0.0,
+                    "target_focus_setpoint": float(target_focus_setpoint),
+                    "focus_offset": None,
+                    "z_offset": None,
+                    "moved": False,
+                    "num_attempts": num_attempts,
+                    "final_error_um": None
+                }
+            
+            # Step 2: Calculate focus metric (same processing as polling thread)
+            cropped_image = self.extract(
+                latest_image,
+                crop_size=self._focus_params.crop_size,
+                crop_center=self._focus_params.crop_center
+            )
+            
+            # Compute returns a dict with 'focus' key
+            focus_result = self._focus_metric.compute(cropped_image)
+            current_focus_value = focus_result.get("focus", None)
+            
+            if current_focus_value is None or np.isnan(current_focus_value):
+                self._logger.error("Invalid focus value computed")
+                return {
+                    "success": False,
+                    "error": "Invalid focus value (None or NaN)",
+                    "current_focus_value": 0.0,
+                    "target_focus_setpoint": float(target_focus_setpoint),
+                    "focus_offset": None,
+                    "z_offset": None,
+                    "moved": False,
+                    "num_attempts": num_attempts,
+                    "final_error_um": None
+                }
+            
+            # Step 3: Calculate focus offset from target setpoint
+            focus_offset = current_focus_value - target_focus_setpoint
+            
+            # Step 4: Convert focus offset to Z offset using calibration scale factor
+            # Scale factor is in µm per focus unit (e.g., µm per pixel)
+            scale_factor = self._getCalibrationBasedScale()
+            z_offset = focus_offset * scale_factor
+            final_error_um = abs(z_offset)
+            
+            self._logger.debug(
+                f"One-step AF attempt {attempt + 1}/{max_attempts}: "
+                    f"current_focus={current_focus_value:.2f}, target={target_focus_setpoint:.2f}, "
+                f"focus_offset={focus_offset:.2f}, scale={scale_factor:.3f}µm/unit, "
+                f"z_offset={z_offset:.2f}µm"
+            )
+            
+            # Check if we're within threshold
+            if final_error_um < threshold_um:
+                success = True
+                self._logger.info(
+                    f"One-step autofocus successful after {num_attempts} attempts. "
+                    f"Error: {final_error_um:.3f}µm"
+                )
+                break
+            
+            # Step 5: Move to target position (if requested)
+            if move_to_focus:
+                try:
+                    # Safety check: limit single move
+                    max_single_move_um = 1000.0  # 1mm safety limit # TODO: this should depend on the scan range; we should store that and not use outside knowledge here
+                    if abs(z_offset) > max_single_move_um:
+                        self._logger.warning(
+                            f"Calculated Z offset ({z_offset:.2f}µm) exceeds safety limit "
+                            f"({max_single_move_um}µm). Clamping move."
+                        )
+                        z_offset = np.sign(z_offset) * max_single_move_um
+                    
+                    # Move stage (relative movement)
+                    self.stage.move(value=z_offset, axis="Z", is_absolute=False, is_blocking=True)
+                    time.sleep(0.1)  # Small settle time
+                    
+                except Exception as e:
+                    self._logger.error(f"Failed to move Z stage: {e}")
+                    return {
+                        "success": False,
+                        "error": f"Stage movement failed: {e}",
+                        "current_focus_value": float(current_focus_value),
+                        "target_focus_setpoint": float(target_focus_setpoint),
+                        "focus_offset": float(focus_offset),
+                        "z_offset": float(z_offset),
+                        "moved": False,
+                        "num_attempts": num_attempts,
+                        "final_error_um": float(final_error_um)
+                    }
+            else:
+                # Not moving, so we're done after first measurement
+                break
+        
+        return {
+            "success": success,
+            "current_focus_value": float(current_focus_value),
+            "target_focus_setpoint": float(target_focus_setpoint),
+            "focus_offset": float(focus_offset),
+            "z_offset": float(z_offset),
+            "moved": move_to_focus,
+            "num_attempts": num_attempts,
+            "final_error_um": float(final_error_um)
+        }
+
 
 
     @APIExport(runOnUIThread=True, requestType="POST")

@@ -1,7 +1,6 @@
 services:
-
-  imswitch-noqt:
-    image: ghcr.io/openuc2/imswitch-noqt
+  imswitch-docker-noqt:
+    image: imswitch-holo
     privileged: true
     ports:
       - "8001:8001" # frontend, HTTP API, WebSockets API
@@ -11,7 +10,8 @@ services:
       - /home/pi/ImSwitchConfig:/home/pi/ImSwitchConfig
       - /home/pi/Datasets:/home/pi/Datasets
       - /media:/media
-      - /run/udev:/run/udev:ro      
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket      
+      - /run/udev:/run/udev:ro
 
     environment:
       - HEADLESS=1

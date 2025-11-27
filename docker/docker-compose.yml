@@ -17,7 +17,7 @@ services:
       - HEADLESS=1
       - HTTP_PORT=8001
       - CONFIG_PATH=/home/pi/ImSwitchConfig
-      # - CONFIG_FILE=example_virtual_microscope.json
+      # - CONFIG_FILE=example_virtual_microscope.json  # Optional: If not set, uses imcontrol_options.json
       - UPDATE_GIT=0
       - UPDATE_CONFIG=0
       - DATA_PATH=/home/pi/Datasets

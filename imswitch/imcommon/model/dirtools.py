@@ -156,22 +156,48 @@ class UserFileDirs(FileDirs):
         """
         Get validated data path with automatic fallback if path is invalid.
         
-        Validates the current data path and returns a valid fallback if needed.
-        Does NOT modify the global path configuration.
+        This is the central source of truth for data path resolution.
+        
+        Resolution order:
+        1. Current data path (if valid)
+        2. External drives (if scanning enabled)
+        3. Config path + '/data' as fallback (creates if needed)
         
         Returns:
-            str: Valid data path
+            str: Valid data path (guaranteed to exist)
         """
         from imswitch.imcommon.model.storage_paths import validate_path
+        from imswitch.imcommon.model.storage_scanner import StorageScanner
+        from imswitch.config import get_config
         
+        # 1. Try current configured data path
         current_path = get_data_path()
         is_valid, _ = validate_path(current_path)
-        
         if is_valid:
             return current_path
         
-        # Use default fallback if current path is invalid
-        fallback_path = os.path.join(os.path.expanduser('~'), 'ImSwitchConfig', 'data')
+        # 2. Try to create current path if it doesn't exist
+        if current_path:
+            try:
+                os.makedirs(current_path, exist_ok=True)
+                is_valid, _ = validate_path(current_path)
+                if is_valid:
+                    return current_path
+            except (OSError, PermissionError):
+                pass  # Fall through to next option
+        
+        # 3. If external scanning is enabled, try external drives
+        config = get_config()
+        if config.scan_ext_data_folder and config.ext_data_folder:
+            scanner = StorageScanner()
+            # ext_data_folder can be a string or list
+            mount_paths = config.ext_data_folder if isinstance(config.ext_data_folder, list) else [config.ext_data_folder]
+            external_path = scanner.pick_first_external_folder(mount_paths[0] if mount_paths else None)
+            if external_path:
+                return external_path
+        
+        # 4. Last resort: use config_path/data (always create)
+        fallback_path = os.path.join(get_config_path(), 'data')
         os.makedirs(fallback_path, exist_ok=True)
         return fallback_path
 

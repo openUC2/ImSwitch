@@ -305,7 +305,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(
         status_code=422,
         content={
-            "detail": "Parsing of mExperiment failed. Please check your submission format.",
+            "detail": "Parsing of Request failed. Please check your submission format.",
             "errors": exc.errors()
         },
     )

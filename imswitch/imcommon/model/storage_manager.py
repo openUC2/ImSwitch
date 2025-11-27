@@ -75,41 +75,21 @@ class StoragePathManager:
         """
         Get the current active data storage path.
         
+        This method delegates to UserFileDirs.getValidatedDataPath() which is
+        the central source of truth for data path resolution.
+        
         Returns:
-            Current active data storage path
+            Current active data storage path (guaranteed to exist)
         """
-        # If active path is set and valid, use it
-        if self.config.active_data_path:
-            is_valid, _ = self.scanner.validate_storage_path(self.config.active_data_path)
-            if is_valid:
-                return self.config.active_data_path
+        from imswitch.imcommon.model.dirtools import UserFileDirs
         
-        # If external scanning is enabled, try to find external storage
-        if self.config.enable_external_scanning and self.config.external_mount_paths:
-            external_path = self.scanner.pick_first_external_folder(
-                self.config.external_mount_paths[0] if self.config.external_mount_paths else None
-            )
-            if external_path:
-                self.config.active_data_path = external_path
-                return external_path
+        # Delegate to dirtools as the source of truth
+        validated_path = UserFileDirs.getValidatedDataPath()
         
-        # Use default data path if set and valid
-        if self.config.default_data_path:
-            is_valid, _ = self.scanner.validate_storage_path(self.config.default_data_path)
-            if is_valid:
-                self.config.active_data_path = self.config.default_data_path
-                return self.config.default_data_path
+        # Update our internal state to match
+        self.config.active_data_path = validated_path
         
-        # Fallback to fallback path
-        if self.config.fallback_data_path:
-            # Ensure fallback path exists
-            os.makedirs(self.config.fallback_data_path, exist_ok=True)
-            self.config.active_data_path = self.config.fallback_data_path
-            return self.config.fallback_data_path
-        
-        # Last resort: return default data path even if not validated
-        # This maintains backward compatibility
-        return self.config.default_data_path or os.path.expanduser("~/ImSwitchConfig/data") # TODO: We should not have the datastorage inside imswitchconfig?
+        return validated_path
     
     def get_config_path(self) -> str:
         """

@@ -634,8 +634,14 @@ class RecordingController(ImConWidgetController):
             return HTTPException(detail="Variable not found", status_code=404)
 
     @APIExport(runOnUIThread=True)
-    def snapImageToPath(self, fileName: str = ".", saveFormat:SaveFormat = SaveFormat.TIFF) -> dict:
-        """Take a snap and save it to a .tiff file at the given fileName."""
+    def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: SaveFormat = SaveFormat.TIFF) -> dict:
+        """Take a snap and save it to a file at the given fileName.
+
+        Parameters:
+        - fileName: Optional suffix or filename to append to the generated name. If None,
+            the default naming used by `snap()` will be applied.
+        - saveFormat: Desired `SaveFormat` enum value (default: `SaveFormat.TIFF`).
+        """
         '''
         numpy_array = list(self.snapNumpy().values())[0]
         deconvoled_image = self._master.arkitekt_controller.upload_and_deconvolve_image(

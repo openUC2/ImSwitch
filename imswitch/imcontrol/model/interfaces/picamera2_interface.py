@@ -228,6 +228,7 @@ class CameraPicamera2:
                 try:
                     config = self.camera.create_video_configuration(
                         main={"size": (self.SensorWidth, self.SensorHeight), "format": "Y8"},
+                        buffer_count=1,
                         controls={
                             "FrameRate": self.frame_rate,
                         }
@@ -236,6 +237,7 @@ class CameraPicamera2:
                     self.__logger.warning(f"Y8 format not supported, using RGB888: {e}")
                     config = self.camera.create_video_configuration(
                         main={"size": (self.SensorWidth, self.SensorHeight), "format": "RGB888"},
+                        buffer_count=1,
                         controls={
                             "FrameRate": self.frame_rate,
                         }

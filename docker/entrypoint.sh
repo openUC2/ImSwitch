@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ImSwitch Docker Container Entry Point
-# 
+#
 # This script handles the initialization and startup of ImSwitch in a Docker container.
 # It supports both server and terminal modes, configuration management, and external storage detection.
 #
@@ -39,6 +39,39 @@
 #   -e MODE=terminal \
 #   ghcr.io/openuc2/imswitch-noqt:sha-5d54391
 
+
+check_pi_camera() {
+        log "Running libcamera-probe"
+        if command -v libcamera-probe >/dev/null 2>&1; then
+            libcamera-probe --verbose 2>&1 | tee /tmp/libcamera-probe.log
+            if grep -q "Found.*imx" /tmp/libcamera-probe.log; then
+                log "Pi camera detected via libcamera-probe"
+                return 0
+            else
+                log "libcamera-probe did not detect a Pi camera"
+            fi
+        else
+            log "libcamera-probe not installed"
+        fi
+
+        log "Checking dmesg for camera sensors"
+        if dmesg | grep -E "imx[0-9]{3}|ov5647|arducam|rpi_cam" >/dev/null 2>&1; then
+            log "Camera sensor driver detected in kernel logs"
+            return 0
+        else
+            log "No camera-related kernel messages found"
+        fi
+
+        log "Checking for /dev/video* devices"
+        if ls /dev/video* >/dev/null 2>&1; then
+            log "Video devices present: $(ls /dev/video*)"
+            return 0
+        else
+            log "No /dev/video* devices found"
+        fi
+
+        return 1
+
 log() { echo "[$(date +'%F %T')] $*"; }
 
 # ============================================================================
@@ -53,9 +86,18 @@ SCAN_EXT_DATA_PATH=${SCAN_EXT_DATA_PATH:-false}
 # ============================================================================
 log 'Starting ImSwitch container in server mode'
 
-# Display system information
+
 log 'Listing USB devices'
 lsusb || log 'lsusb not available'
+log 'Checking Raspberry Pi camera availability'
+
+
+if check_pi_camera; then
+    log "Raspberry Pi camera: AVAILABLE"
+else
+    log "Raspberry Pi camera: NOT AVAILABLE"
+fi
+
 
 log 'Checking external storage mount points'
 ls /media 2>/dev/null || log 'No /media directory'
@@ -67,7 +109,7 @@ ls /media 2>/dev/null || log 'No /media directory'
 # ============================================================================
 log "Using CONFIG_PATH: $CONFIG_PATH"
 
-# in case the user doesn'T provide the CONFIG_PATH, quit with an error 
+# in case the user doesn'T provide the CONFIG_PATH, quit with an error
 if [[ -z "$CONFIG_PATH" ]]; then
     log "Error: Configuration path '$CONFIG_PATH' not provided."
     exit 1
@@ -77,7 +119,7 @@ if [[ ! -d "$CONFIG_PATH" ]]; then
     exit 1
 fi
 
-# in case the user doesn'T provide the CONFIG_PATH, quit with an error 
+# in case the user doesn'T provide the CONFIG_PATH, quit with an error
 if [[ -z "$CONFIG_FILE" ]]; then
     log "Error: Configuration file '$CONFIG_FILE' not provided."
     exit 1
@@ -101,7 +143,7 @@ fi
 # Data Paths Setup
 # ============================================================================
 
-# in case the user doesn'T provide the DATA_PATH, quit with an error 
+# in case the user doesn'T provide the DATA_PATH, quit with an error
 if [[ -z "$DATA_PATH" ]]; then
     log "Error: Data path '$DATA_PATH' not provided."
     exit 1
@@ -111,7 +153,7 @@ if [[ ! -d "$DATA_PATH" ]]; then
     exit 1
 fi
 
-# in case the user doesn'T provide the EXT_DATA_PATH, quit with an error 
+# in case the user doesn'T provide the EXT_DATA_PATH, quit with an error
 if [[ -z "$EXT_DATA_PATH" ]]; then
     log "Error: External data path '$EXT_DATA_PATH' not provided."
     exit 1

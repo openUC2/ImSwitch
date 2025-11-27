@@ -10,14 +10,14 @@ services:
       - /home/pi/ImSwitchConfig:/home/pi/ImSwitchConfig
       - /home/pi/Datasets:/home/pi/Datasets
       - /media:/media
-      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket      
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
       - /run/udev:/run/udev:ro
 
     environment:
       - HEADLESS=1
       - HTTP_PORT=8001
       - CONFIG_PATH=/home/pi/ImSwitchConfig
-      - CONFIG_FILE=example_virtual_microscope.json
+      # - CONFIG_FILE=example_virtual_microscope.json
       - UPDATE_GIT=0
       - UPDATE_CONFIG=0
       - DATA_PATH=/home/pi/Datasets

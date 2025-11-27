@@ -71,6 +71,7 @@ check_pi_camera() {
         fi
 
         return 1
+}
 
 log() { echo "[$(date +'%F %T')] $*"; }
 

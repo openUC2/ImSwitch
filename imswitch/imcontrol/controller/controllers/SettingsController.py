@@ -706,8 +706,37 @@ class SettingsController(ImConWidgetController):
         except Exception as e:
             pass
 
+    @APIExport()
+    def getCameraStatus(self, detectorName: str = None) -> dict:
+        """ Returns comprehensive camera status information for the specified detector.
+        If no detector name is provided, returns status for the current detector.
+        
+        Args:
+            detectorName: Optional detector name. If None, uses current detector.
+            
+        Returns:
+            Dictionary containing comprehensive camera status including:
+            - Hardware specifications (model, sensor size, pixel size)
+            - Connection and operational status
+            - Current settings (exposure, gain, binning, ROI, etc.)
+            - Supported features and capabilities
+        """
+        try:
+            if detectorName is None:
+                detector = self._master.detectorsManager.getCurrentDetector()
+            else:
+                detector = self._master.detectorsManager[detectorName]
+            
+            return detector.getCameraStatus()
+        except Exception as e:
+            return {
+                'error': str(e),
+                'detectorName': detectorName,
+                'status': 'error'
+            }
+
     @APIExport(runOnUIThread=True)
-    def setDetectorExposureTime(self, detectorName: str=None, exposureTime: float=1) -> None:
+    def setDetectorExposureTime(self, detectorName: str, exposureTime: float) -> None:
         """ Sets the exposure time for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()

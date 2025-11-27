@@ -110,9 +110,9 @@ ls /media 2>/dev/null || log 'No /media directory'
 # ============================================================================
 log "Using CONFIG_PATH: $CONFIG_PATH"
 
-# in case the user doesn'T provide the CONFIG_PATH, quit with an error
+# Validate CONFIG_PATH is provided and exists
 if [[ -z "$CONFIG_PATH" ]]; then
-    log "Error: Configuration path '$CONFIG_PATH' not provided."
+    log "Error: Configuration path (CONFIG_PATH) not provided."
     exit 1
 fi
 if [[ ! -d "$CONFIG_PATH" ]]; then
@@ -120,14 +120,14 @@ if [[ ! -d "$CONFIG_PATH" ]]; then
     exit 1
 fi
 
-# in case the user doesn'T provide the CONFIG_PATH, quit with an error
-if [[ -z "$CONFIG_FILE" ]]; then
-    log "Error: Configuration file '$CONFIG_FILE' not provided."
-    exit 1
-fi
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    log "Error: Configuration file '$CONFIG_FILE' does not exist."
-    exit 1
+# CONFIG_FILE is optional - if not provided, ImSwitch will use imcontrol_options.json
+if [[ -n "$CONFIG_FILE" ]]; then
+    log "Using CONFIG_FILE: $CONFIG_FILE"
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        log "Warning: Configuration file '$CONFIG_FILE' does not exist. Will try to use filename from CONFIG_PATH."
+    fi
+else
+    log "CONFIG_FILE not provided - will use default from imcontrol_options.json"
 fi
 
 # List available configuration files
@@ -144,24 +144,22 @@ fi
 # Data Paths Setup
 # ============================================================================
 
-# in case the user doesn'T provide the DATA_PATH, quit with an error
+# Validate DATA_PATH is provided and exists
 if [[ -z "$DATA_PATH" ]]; then
-    log "Error: Data path '$DATA_PATH' not provided."
+    log "Error: Data path (DATA_PATH) not provided."
     exit 1
 fi
 if [[ ! -d "$DATA_PATH" ]]; then
-    log "Error: Data path '$DATA_PATH' does not exist."
-    exit 1
+    log "Warning: Data path '$DATA_PATH' does not exist yet. Will be created by Docker volume mount."
 fi
 
-# in case the user doesn'T provide the EXT_DATA_PATH, quit with an error
-if [[ -z "$EXT_DATA_PATH" ]]; then
-    log "Error: External data path '$EXT_DATA_PATH' not provided."
-    exit 1
-fi
-if [[ ! -d "$EXT_DATA_PATH" ]]; then
-    log "Error: External data path '$EXT_DATA_PATH' does not exist."
-    exit 1
+# Validate EXT_DATA_PATH if external scanning is enabled
+if [[ $SCAN_EXT_DATA_PATH == "1" || $SCAN_EXT_DATA_PATH == "True" || $SCAN_EXT_DATA_PATH == "true" ]]; then
+    if [[ -z "$EXT_DATA_PATH" ]]; then
+        log "Warning: External data scanning enabled but EXT_DATA_PATH not provided."
+    elif [[ ! -d "$EXT_DATA_PATH" ]]; then
+        log "Warning: External data path '$EXT_DATA_PATH' does not exist yet."
+    fi
 fi
 
 # ============================================================================
@@ -193,7 +191,12 @@ params+=" --http-port ${HTTP_PORT:-8001}"
 # Path configuration
 # The storage manager will handle path resolution and validation
 params+=" --config-folder ${CONFIG_PATH}"
-params+=" --config-file ${CONFIG_FILE}"
+
+# Only pass --config-file if CONFIG_FILE is set
+if [[ -n "$CONFIG_FILE" ]]; then
+    params+=" --config-file ${CONFIG_FILE}"
+fi
+
 params+=" --data-folder ${DATA_PATH}"
 
 # External storage scanning

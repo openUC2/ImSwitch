@@ -63,7 +63,8 @@ class StorageController(ImConWidgetController):
         self._load_persisted_path()
         
         # Start USB monitoring automatically on initialization
-        self._start_monitoring()
+        if False: # TODO: We should have this enablable through the config?
+            self._start_monitoring()
     
     def _load_persisted_path(self):
         """Load persisted storage path from setup config on startup."""
@@ -141,7 +142,8 @@ class StorageController(ImConWidgetController):
             mount_paths = None  # Will use platform defaults
         
         # Start monitoring # TODO: @ethanjli maybe it's not necesaary as we explicitly call it from the API? 
-        monitor = start_storage_monitoring(mount_paths=mount_paths, poll_interval=5)
+        if get_storage_monitor() is None:
+            monitor = start_storage_monitoring(mount_paths=mount_paths, poll_interval=5)
         
         # Add callback to emit Signal when storage changes
         def on_storage_change(event_type: str, drive_info: Dict[str, Any]):

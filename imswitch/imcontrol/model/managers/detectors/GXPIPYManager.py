@@ -334,6 +334,36 @@ class GXPIPYManager(DetectorManager):
         '''
         self._camera.recordFlatfieldImage()
 
+    def getCameraStatus(self):
+        """ Returns comprehensive GXIPY camera status information. """
+        # Get base status from parent class
+        status = super().getCameraStatus()
+        
+        # Add GXIPY-specific information
+        status['cameraType'] = 'GXIPY'
+        status['isMock'] = False  # GXIPY cameras are always real hardware
+        status['isConnected'] = self._camera is not None and hasattr(self._camera, 'camera')
+        
+        # Add acquisition status
+        status['isAcquiring'] = self._running
+        status['isAdjustingParameters'] = self._adjustingParameters
+        
+        # Try to get additional camera information
+        try:
+            if hasattr(self._camera, 'camera') and self._camera.camera is not None:
+                status['isStreaming'] = self._camera.camera.is_streaming()
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve streaming status: {e}")
+        
+        # Add current trigger source if available
+        try:
+            status['currentTriggerSource'] = self._camera.getTriggerSource()
+            status['availableTriggerTypes'] = self._camera.getTriggerTypes()
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve trigger information: {e}")
+        
+        return status
+
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.
 #

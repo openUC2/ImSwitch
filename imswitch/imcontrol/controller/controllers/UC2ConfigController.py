@@ -116,7 +116,7 @@ class UC2ConfigController(ImConWidgetController):
             self.detector = self._master.detectorsManager[self.detector_names[0]]
             mImage = self.detector.getLatestFrame()
             # save image
-            drivePath = dirtools.UserFileDirs.Data
+            drivePath = dirtools.UserFileDirs.getValidatedDataPath()
             timeStamp = datetime.datetime.now().strftime("%Y_%m_%d")
             dirPath = os.path.join(drivePath, 'recordings', timeStamp)
             fileName  = "Snapshot_"+datetime.datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
@@ -566,7 +566,7 @@ class UC2ConfigController(ImConWidgetController):
 
     @APIExport(runOnUIThread=False)
     def getDataPath(self):
-        return dirtools.UserFileDirs.Data
+        return dirtools.UserFileDirs.getValidatedDataPath()
 
     @APIExport(runOnUIThread=False)
     def setDataPathFolder(self, path):

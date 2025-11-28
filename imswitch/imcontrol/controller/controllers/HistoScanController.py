@@ -1257,7 +1257,7 @@ class HistoScanController(LiveUpdatedController):
 
     def getSaveFilePath(self, date, filename, extension):
         mFilename =  f"{date}_{filename}.{extension}"
-        dirPath  = os.path.join(dirtools.UserFileDirs.Data, 'recordings', date)
+        dirPath  = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'recordings', date)
         newPath = os.path.join(dirPath,mFilename)
 
         if not os.path.exists(dirPath):

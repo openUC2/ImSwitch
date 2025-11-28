@@ -72,7 +72,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")  # serve 
 app.mount("/imswitch", StaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
 app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
 # provide data path via static files
-app.mount("/data", StaticFiles(directory=dirtools.UserFileDirs.Data), name="data")  # serve user data files
+app.mount("/data", StaticFiles(directory=dirtools.UserFileDirs.getValidatedDataPath()), name="data")  # serve user data files
 # manifests for the react app
 _ui_manifests = []
 
@@ -98,11 +98,6 @@ app.add_middleware(
 
 '''Add Endpoints for Filemanager'''
 
-# Base upload directory
-BASE_DIR = dirtools.UserFileDirs.Data
-if not os.path.exists(BASE_DIR):
-    os.makedirs(BASE_DIR)
-
 # Pydantic Model for folder creation
 class CreateFolderRequest(BaseModel):
     name: str
@@ -115,6 +110,11 @@ def get_version():
     """
     return {"version": VERSION}
 
+
+# Storage Management API Endpoints are now handled via APIExport in StorageController
+# The controller is automatically initialized by MasterController
+
+
 # Create a Folder
 @app.post("/folder")
 def create_folder(request: CreateFolderRequest):
@@ -123,7 +123,7 @@ def create_folder(request: CreateFolderRequest):
     """
     # Resolve folder path
     parent_path = request.parentId or ""
-    folder_path = os.path.join(BASE_DIR, parent_path, request.name)
+    folder_path = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), parent_path, request.name)
 
     # Check if folder already exists
     if os.path.exists(folder_path):
@@ -153,7 +153,7 @@ def list_items(base_path: str) -> List[Dict]:
             for entry in it:
                 try:
                     full_path = entry.path
-                    rel_path = f"/{os.path.relpath(full_path, BASE_DIR).replace(os.path.sep, '/')}"
+                    rel_path = f"/{os.path.relpath(full_path, dirtools.UserFileDirs.getValidatedDataPath()).replace(os.path.sep, '/')}"
                     preview_url = f"/preview{rel_path}" if entry.is_file() else None
                     stat_info = entry.stat()
                     items.append({
@@ -180,10 +180,10 @@ def list_items(base_path: str) -> List[Dict]:
 def preview_file(file_path: str):
     """
     Provides file previews by serving the file from disk.
-    - `file_path` is the relative path to the file within BASE_DIR.
+    - `file_path` is the relative path to the file within dirtools.UserFileDirs.getValidatedDataPath().
     """
     # Resolve the absolute file path 
-    absolute_path = BASE_DIR / file_path
+    absolute_path = dirtools.UserFileDirs.getValidatedDataPath() / file_path
 
     # Check if the file exists and is a file
     if not absolute_path.exists() or not absolute_path.is_file():
@@ -199,7 +199,7 @@ def preview_file(file_path: str):
 
 @app.get("/FileManager/")
 def get_items(path: str = ""):
-    directory = os.path.join(BASE_DIR, path)
+    directory = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), path)
     if not os.path.exists(directory):
         raise HTTPException(status_code=404, detail="Path not found")
     return list_items(directory)
@@ -212,7 +212,7 @@ def upload_file(file: UploadFile = File(...), target_path: Optional[str] = Form(
     - `target_path`: The relative path where the file should be uploaded.
     """
     # Resolve target directory
-    upload_dir = BASE_DIR / target_path
+    upload_dir = dirtools.UserFileDirs.getValidatedDataPath() / target_path
     upload_dir.mkdir(parents=True, exist_ok=True)  # Create directory if it doesn't exist
 
     # Save the uploaded file
@@ -225,8 +225,8 @@ def upload_file(file: UploadFile = File(...), target_path: Optional[str] = Form(
 # 📋 Copy File(s) or Folder(s)
 @app.post("/FileManager/copy")
 def copy_item(source: str = Form(...), destination: str = Form(...)):
-    src = BASE_DIR / source
-    dest = BASE_DIR / destination / src.name
+    src = dirtools.UserFileDirs.getValidatedDataPath() / source
+    dest = dirtools.UserFileDirs.getValidatedDataPath() / destination / src.name
     if not src.exists():
         raise HTTPException(status_code=404, detail="Source not found")
     if dest.exists():
@@ -241,8 +241,8 @@ def copy_item(source: str = Form(...), destination: str = Form(...)):
 # 📤 Move File(s) or Folder(s)
 @app.put("/FileManager/move")
 def move_item(source: str = Form(...), destination: str = Form(...)):
-    src = BASE_DIR / source
-    dest = BASE_DIR / destination / src.name
+    src = dirtools.UserFileDirs.getValidatedDataPath() / source
+    dest = dirtools.UserFileDirs.getValidatedDataPath() / destination / src.name
     if not src.exists():
         raise HTTPException(status_code=404, detail="Source not found")
     shutil.move(src, dest)
@@ -252,7 +252,7 @@ def move_item(source: str = Form(...), destination: str = Form(...)):
 # ✏️ Rename a File or Folder
 @app.patch("/FileManager/rename")
 def rename_item(source: str = Form(...), new_name: str = Form(...)):
-    src = BASE_DIR / source
+    src = dirtools.UserFileDirs.getValidatedDataPath() / source
     new_path = src.parent / new_name
     if not src.exists():
         raise HTTPException(status_code=404, detail="Source not found")
@@ -264,7 +264,7 @@ def rename_item(source: str = Form(...), new_name: str = Form(...)):
 @app.delete("/FileManager")
 def delete_item(paths: List[str]):
     for path in paths:
-        target = BASE_DIR / path
+        target = dirtools.UserFileDirs.getValidatedDataPath() / path
         if not target.exists():
             raise HTTPException(status_code=404, detail=f"Path '{path}' not found")
         if target.is_dir():
@@ -277,7 +277,7 @@ def delete_item(paths: List[str]):
 # ⬇️ Download File(s) or Folder(s)
 @app.get("/FileManager/download/{path:path}")
 def download_file(path: str):
-    target = os.path.join(BASE_DIR, path.lstrip("/"))
+    target = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), path.lstrip("/"))
     if not os.path.exists(target):
         raise HTTPException(status_code=404, detail="File/Folder not found")
     if os.path.isfile(target):
@@ -300,7 +300,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(
         status_code=422,
         content={
-            "detail": "Parsing of mExperiment failed. Please check your submission format.",
+            "detail": "Parsing of Request failed. Please check your submission format.",
             "errors": exc.errors()
         },
     )

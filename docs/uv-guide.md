@@ -113,8 +113,6 @@ source .venv/bin/activate  # On Windows: .venv\\Scripts\\activate
 # 3. Install ImSwitch with UV
 uv pip install -e .
 
-# Optional: Install NanoImagingPack
-uv pip install git+https://gitlab.com/bionanoimaging/nanoimagingpack
 ```
 
 **Why migrate?**

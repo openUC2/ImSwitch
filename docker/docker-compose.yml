@@ -9,6 +9,9 @@ services:
       - /etc/machine-id:/etc/machine-id:ro
       - /home/pi/ImSwitchConfig:/home/pi/ImSwitchConfig
       - /home/pi/Datasets:/home/pi/Datasets
+      #- /Users/bene/ImSwitchConfig:/home/pi/ImSwitchConfig      
+      #- /Users/bene/ImSwitchConfig/Datasets:/home/pi/Datasets
+      #- /Volumes:/media
       - /media:/media
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
       - /run/udev:/run/udev:ro
@@ -32,5 +35,6 @@ services:
     # with root ownership.
     image: docker.io/library/alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412
     volumes:
-      - /home/pi/Datasets:/home/pi/Datasets
+      #- /Users/bene/ImSwitchConfig/Datasets:/home/pi/Datasets
+      - /home/pi/ImSwitchConfig/Datasets:/home/pi/Datasets
     command: 'sh -c "chown -R 1000:1000 /home/pi/Datasets; sleep 60"'

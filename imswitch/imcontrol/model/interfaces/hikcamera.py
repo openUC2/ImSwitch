@@ -473,6 +473,12 @@ class CameraHIK:
             if ret != 0:
                 print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
                 self.init_ok = False
+            else:
+                # 2) Set color temperature mode to Wide
+                ret = self.camera.MV_CC_SetEnumValueByString("BalanceColorTempMode", "WideMode")
+                if ret != 0:
+                    print("set BalanceColorTempMode failed! ret [0x%x]" % ret)
+                    # optional: self.init_ok = False                
 
 
         # Image Width

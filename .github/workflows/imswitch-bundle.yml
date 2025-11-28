@@ -21,17 +21,18 @@ jobs:
     - uses: actions/checkout@v2
       with:
         ref: ${{ github.ref }}
-    - name: Set up Python 3.9
-      uses: actions/setup-python@v2
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
       with:
-        python-version: 3.9
+        python-version: '3.11'
+    
+    - name: Install UV
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+    
     - name: Install dependencies
       run: |
-        # Install UV
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        source $HOME/.local/bin/uv
-        export PATH="$HOME/.local/bin:$PATH"
-        
         # Install with UV
         uv pip install --system .
         uv pip install --system pyinstaller==5.4.1

@@ -5,7 +5,10 @@
 apt-get update
 apt-get install -y \
   wget \
-  gnupg
+  gnupg \
+  python3.11 \
+  python3.11-venv \
+  python3-pip
 
 # Add Raspberry Pi repository for proper picamera2 dependencies
 echo "deb http://archive.raspberrypi.org/debian/ bookworm main" > /etc/apt/sources.list.d/raspi.list \
@@ -13,26 +16,17 @@ echo "deb http://archive.raspberrypi.org/debian/ bookworm main" > /etc/apt/sourc
 
 apt-get update && apt -y upgrade
 
-# Install Miniforge based on architecture
-case "$TARGETPLATFORM" in
-"linux/arm64")
-  cpu=aarch64
-  ;;
-"linux/amd64")
-  cpu=x86_64
-  ;;
-*)
-  echo "Unknown target platform $TARGETPLATFORM!"
-  exit 1
-  ;;
-esac
-wget --quiet \
-  "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-$cpu.sh" \
-  -O /tmp/miniforge.sh
-/bin/bash /tmp/miniforge.sh -b -p /opt/conda
+# Install UV package manager (fast Rust-based pip replacement)
+wget --quiet -O /tmp/uv-installer.sh https://astral.sh/uv/install.sh
+bash /tmp/uv-installer.sh
 
-# Create conda environment and install packages
-/opt/conda/bin/conda create -y --name imswitch python=3.11
+# Source UV environment to add to PATH (installs to /root/.local/bin)
+source /root/.local/bin/env
+
+# Create UV virtual environment for ImSwitch
+mkdir -p /opt/imswitch
+cd /opt/imswitch
+uv venv --python 3.11 .venv
 
 # Clean up build-only tools
 
@@ -44,8 +38,6 @@ apt-get remove -y \
 apt -y autoremove
 apt-get clean
 rm -rf /var/lib/apt/lists/*
-/opt/conda/bin/conda clean --all -f -y
-rm -rf /opt/conda/pkgs/*
-pip3 cache purge || true
+rm -rf /root/.cache/uv
 rm -rf /root/.cache/pip
 rm -rf /tmp/*

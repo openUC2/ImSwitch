@@ -71,8 +71,8 @@ ENV TZ=Etc/UTC
 # We split up the work into different scripts run at different stages to facilitate correct
 # container image caching.
 
-RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-conda.sh
-ENV PATH=/opt/conda/bin:$PATH
+RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-uv.sh
+ENV PATH=/root/.local/bin:/opt/imswitch/.venv/bin:$PATH
 
 RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-drivers.sh
 ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32:"$LD_LIBRARY_PATH"

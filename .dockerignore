@@ -1,0 +1,62 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Test files
+tests/
+test_*/
+*_test.py
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Data and configs (should be mounted as volumes)
+ImSwitchConfig/
+Datasets/
+recordings/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Docker files (not needed inside container)
+.dockerignore
+docker-compose*.yml
+
+# Temporary files
+tmp/
+temp/
+*.log
+*.tmp

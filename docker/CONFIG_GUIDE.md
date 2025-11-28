@@ -172,10 +172,10 @@ environment:
 
 ## ⚙️ Build Optimization Details
 
-The new build process uses Docker BuildKit with layer caching:
+The new build process uses Docker BuildKit with layer caching and UV package manager:
 
-1. **Base layers** (OS, conda, drivers) - Rarely change, cached
-2. **Dependencies** (Python packages) - Change occasionally, cached unless pyproject.toml changes
+1. **Base layers** (OS, Python 3.11, UV, drivers) - Rarely change, cached
+2. **Dependencies** (Python packages via UV) - Change occasionally, cached unless pyproject.toml changes
 3. **Application code** (ImSwitch) - Changes frequently, rebuilt only when needed
 
 **Speed improvements:**

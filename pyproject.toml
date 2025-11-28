@@ -63,10 +63,10 @@ dependencies = [
     "zarr>=3.0.0",
     "numcodecs>=0.13.1",
     "aiohttp>=3.9.4",
-    "numba>=0.61.2", 
-    "mikro-next>=0.18.0", 
-    "arkitekt-next>=0.29.0", 
-    "koil>=2.0.5"    
+    "numba>=0.61.2",
+    "mikro-next>=0.18.0",
+    "arkitekt-next>=0.29.0",
+    "koil>=2.0.5",
 ]
 
 [project.optional-dependencies]

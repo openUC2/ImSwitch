@@ -46,7 +46,7 @@ ImSwitch provides comprehensive Docker support for containerized deployments, en
 
 Windows users can download ImSwitch in standalone format from the [releases page on GitHub](https://github.com/openUC2/ImSwitch/releases). Further information is available there. An existing Python installation is *not* required.
 
-In order to tart do the following:
+In order to start, do the following:
 Download the latest Artifact: https://github.com/openUC2/ImSwitch/actions/workflows/imswitch-bundle.yml
 ```
 set SETUPTOOLS_USE_DISTUTILS=stdlib
@@ -55,7 +55,7 @@ ImSwitch.exe
 
 ### Option B: Install using UV (Recommended)
 
-ImSwitch can be installed using UV, a fast Python package installer written in Rust that's significantly faster than pip. Python 3.9 or later is required. Additionally, certain components (the image reconstruction module and support for TIS cameras) require the software to be running on Windows, but most of the functionality is available on other operating systems as well.
+ImSwitch can be installed using UV, a fast Python package installer written in Rust that's significantly faster than pip. **Python 3.11 or later is required**. Additionally, certain components (the image reconstruction module and support for TIS cameras) require the software to be running on Windows, but most of the functionality is available on other operating systems as well.
 
 **Why UV?**
 - **~10-100x faster** package installation and dependency resolution
@@ -109,7 +109,7 @@ imswitch
 
 ### Option C: Install using pip
 
-ImSwitch is also published on PyPI and can be installed using pip. Python 3.9 or later is required.
+ImSwitch is also published on PyPI and can be installed using pip. **Python 3.11 or later is required**.
 
 To install ImSwitch from PyPI, run the following command:
 
@@ -142,7 +142,6 @@ curl -LsSf https://astral.sh/uv/install.sh | sh  # On macOS/Linux
 # Install dependencies with UV (faster and more reliable)
 uv pip install -r requirements.txt
 uv pip install -e .
-uv pip install git+https://gitlab.com/bionanoimaging/nanoimagingpack
 
 cd ~/Documents/
 # if there is a folder called ImSwitchConfig => rename it!
@@ -150,7 +149,16 @@ git clone https://github.com/beniroquai/ImSwitchConfig
 # Alternatively download the repository as a zip, unzip the file into the folder Documents/ImSwitchConfig
 ```
 
-#### On Mac with ARM
+#### Launch ImSwitch using UV 
+
+```
+cd ~/ImSwitchInstallationFolder 
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+imswitch
+```
+
+
+#### On Mac with ARM (deprecated)
 
 On Mac (with M1 chip and on) open a terminal and enter `arch` to verify that your system-architecture is `arm64`. Now you have two options:
 

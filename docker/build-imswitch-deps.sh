@@ -23,20 +23,23 @@ apt-get update && apt install -y --no-install-recommends \
      && rm -rf /var/cache/apt/archives/* \
      && rm -rf /var/lib/apt/lists/*
 
-# Install conda packages
-/opt/conda/bin/conda install -n imswitch -y -c conda-forge \
+# Activate UV environment and install dependencies
+export PATH="/root/.local/bin:$PATH"
+source /opt/imswitch/.venv/bin/activate
+
+# Install core scientific packages using UV # TODO: probably not necessary
+uv pip install \
   h5py \
   numpy \
   scikit-image
 
-# we want psygnal to be installed without binaries - so first remove it
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"
+# Install psygnal without binaries
+uv pip install psygnal --no-binary :all:
 
-# fix the version of OME-ZARR
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install zarr==2.11.3"
+# Fix the version of OME-ZARR
+uv pip install zarr==2.11.3
 
-# install deps listed in pyproject.toml, but don't install ImSwitch yet:
+# Install deps listed in pyproject.toml, but don't install ImSwitch yet:
 mkdir -p /tmp/ImSwitch/imswitch
 cat >/tmp/ImSwitch/imswitch/__init__.py <<EOF
 # temporary placeholder to be overwritten
@@ -44,7 +47,7 @@ __version__ = "0.0.0"
 EOF
 cp /mnt/ImSwitch/pyproject.toml /tmp/ImSwitch/pyproject.toml
 cd /tmp/ImSwitch
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
+uv pip install /tmp/ImSwitch
 
 # Clean up build-only tools
 
@@ -57,8 +60,6 @@ apt-get remove -y \
 apt -y autoremove
 apt-get clean
 rm -rf /var/lib/apt/lists/*
-/opt/conda/bin/conda clean --all -f -y
-rm -rf /opt/conda/pkgs/*
-pip3 cache purge || true
+rm -rf /root/.cache/uv
 rm -rf /root/.cache/pip
 rm -rf /tmp/*

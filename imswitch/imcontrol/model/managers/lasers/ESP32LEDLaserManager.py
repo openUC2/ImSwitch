@@ -21,6 +21,11 @@ class ESP32LEDLaserManager(LaserManager):
         ]
         self.__logger = initLogger(self, instanceName=name)
 
+        # Try to get commChannel if available (for emitting signals)
+        self._commChannel = lowLevelManagers.get('commChannel', None)
+        if self._commChannel is None:
+            self.__logger.warning("Communication channel not available - laser status updates won't emit signals")
+
         self._esp32 = self._rs232manager._esp32
         self._laser = self._rs232manager._esp32.laser
         self._motor = self._rs232manager._esp32.motor
@@ -48,13 +53,50 @@ class ESP32LEDLaserManager(LaserManager):
         self.enabled = False
         self.setEnabled(self.enabled)
 
+        # Register callback for laser status updates
+        try:
+            # Register callback with key 0 (similar to motor callback registration)
+            self._laser.register_callback(0, callbackfct=self._callback_laser_status)
+            self.__logger.debug(f"Laser status callback registered for channel {self.channel_index}")
+        except Exception as e:
+            self.__logger.error(f"Could not register laser status callback: {e}")
+            
+    def _callback_laser_status(self, laserValues):
+        """ Callback function to handle laser status updates from the ESP32.
+        Updates the internal state of the laser manager based on the received laser values array.
+        
+        Args:
+            laserValues: numpy array containing the laser values for all channels
+                         [laser0, laser1, laser2, laser3]
+        """
+        try:
+            self.__logger.debug(f"Received laser status update: {laserValues}")
+            
+            # Update power for this specific laser channel
+            if self.channel_index != "LED" and isinstance(self.channel_index, int):
+                if 0 <= self.channel_index < len(laserValues):
+                    new_power = laserValues[self.channel_index]
+                    if new_power != self.power:
+                        self.power = new_power
+                        self.__logger.info(f"Laser channel {self.channel_index} power updated to {self.power} mW")
+                        # Update enabled state based on power value
+                        self.enabled = (self.power > 0)
+                        
+                        # Emit signal to update GUI if commChannel is available
+                        if self._commChannel is not None:
+                            laserDict = {self.name: {"power": self.power, "enabled": self.enabled}}
+                            self._commChannel.sigUpdateLaserPower.emit(laserDict)
+            
+        except Exception as e:
+            self.__logger.error(f"Error in _callback_laser_status: {e}")
+            
     def setEnabled(self, enabled,  getReturn=False):
         """Turn on (N) or off (F) laser emission"""
         self.enabled = enabled
         if self.channel_index == "LED":
             #self._led.send_LEDMatrix_full(intensity = (self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
             #self._led.setIntensity(intensity=(self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
-            self._led.setAll(state=self.enabled, intensity=(self.power, self.power, self.power), getReturn=getReturn)
+            self._led.setAll(state=self.enabled, intensity=(0, self.power, 0), getReturn=getReturn)
         else:
             self._laser.set_laser(self.channel_index,
                                                 int(self.power*self.enabled),
@@ -91,6 +133,19 @@ class ESP32LEDLaserManager(LaserManager):
         self._rs232manager._esp32.galvo.set_dac(
             channel=channel, frequency=frequency, offset=offset, amplitude=amplitude, clk_div=clk_div,
             phase=phase, invert=invert, timeout=timeout)
+    
+    def setLEDStatus(self, status: str = "idle"):
+        """
+        Set the LED matrix status to indicate system state.
+        
+        Args:
+            status: Status string - "idle", "rainbow" (busy), "error", etc.
+        """
+        try:
+            self._led.send_LEDMatrix_status(status=status)
+            self.__logger.debug(f"LED status set to: {status}")
+        except Exception as e:
+            self.__logger.error(f"Failed to set LED status: {e}")
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

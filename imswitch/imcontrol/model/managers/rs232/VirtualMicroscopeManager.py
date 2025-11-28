@@ -127,7 +127,7 @@ class VirtualMicroscopeManager:
 
         try:
             self._imagePath = rs232Info.managerProperties["imagePath"]
-            if self._imagePath not in ["simplant", "smlm", "astigmatism", "wellplatecalib"]:
+            if self._imagePath not in ["simplant", "smlm", "astigmatism", "wellplatecalib", "april_tag"]:
                 raise NameError
         except:
             package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -363,6 +363,23 @@ class Camera:
         if self.filePath == "simplant":
             self._image = createBranchingTree(width=5000, height=5000)
             self._image /= np.max(self._image)
+            self.SensorHeight = 300  # self._image.shape[1]
+            self.SensorWidth = 400  # self._image.shape[0]
+        elif self.filePath == "april_tag":
+            ''' load april_tag_36h11_01.svg '''
+            package_dir = os.path.dirname(os.path.abspath(__file__))
+            self._imagePath = os.path.join(
+                package_dir, "_data/images/april_tag_fromscreen.jpg" # apriltag_grid.png"
+            )
+            self._image = cv2.imread(self._imagePath, cv2.IMREAD_GRAYSCALE)
+            # downscale for performance
+            subsamplingfactor = 3
+            self._image = cv2.resize(self._image, (self._image.shape[1]//subsamplingfactor, self._image.shape[0]//subsamplingfactor), interpolation=cv2.INTER_AREA)
+            # flip top/bottom
+            #self._image = cv2.flip(self._image, 0)
+            # invert image
+            self._image = 255 - self._image
+            self._image = self._image / np.max(self._image)
             self.SensorHeight = 300  # self._image.shape[1]
             self.SensorWidth = 400  # self._image.shape[0]
         elif self.filePath == "clock":

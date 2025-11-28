@@ -88,6 +88,15 @@ class ExperimentNormalMode(ExperimentModeBase):
             illumination_intensities, t_period, t
         )
         
+        # Add step to set LED status to idle when done
+        workflow_steps.append(WorkflowStep(
+            step_id=step_id,
+            name="Set LED status to idle",
+            main_func=self.controller.set_led_status,
+            main_params={"status": "idle"})
+        )
+        step_id += 1
+        
         return {
             "status": "workflow_created",
             "mode": "normal",

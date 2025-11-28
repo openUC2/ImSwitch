@@ -157,7 +157,7 @@ class Experiment(BaseModel):
     # From your old "ExperimentModel":
     number_z_steps: int = Field(0, description="Number of Z slices")
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
-    
+
     # -----------------------------------------------------------
     # A helper to produce the "configuration" dict
     # -----------------------------------------------------------
@@ -305,7 +305,7 @@ class ExperimentController(ImConWidgetController):
         # Initialize experiment execution modes
         self.performance_mode = ExperimentPerformanceMode(self)
         self.normal_mode = ExperimentNormalMode(self)
-        
+
         # Initialize omero  parameters  # TODO: Maybe not needed!
         self.omero_url = self._master.experimentManager.omeroServerUrl
         self.omero_username = self._master.experimentManager.omeroUsername
@@ -320,7 +320,7 @@ class ExperimentController(ImConWidgetController):
     def getAvailableWellplateLayouts(self):
         """
         Get list of available pre-defined wellplate layouts.
-        
+
         Returns:
             Dict with layout names as keys and layout metadata as values
         """
@@ -346,12 +346,12 @@ class ExperimentController(ImConWidgetController):
     def getWellplateLayout(self, layout_name: str, offset_x: float = 0, offset_y: float = 0):
         """
         Get a specific wellplate layout with optional offset parameters.
-        
+
         Args:
             layout_name: Name of the layout (e.g., '96-well-standard', '384-well-standard')
             offset_x: X offset in micrometers (default: 0)
             offset_y: Y offset in micrometers (default: 0)
-            
+
         Returns:
             Complete wellplate layout definition including all wells
         """
@@ -370,7 +370,7 @@ class ExperimentController(ImConWidgetController):
     def generateCustomWellplateLayout(self, layout_params: dict):
         """
         Generate a custom wellplate layout with specified parameters.
-        
+
         Args:
             layout_params: Dictionary with layout parameters:
                 - name: str (required)
@@ -385,7 +385,7 @@ class ExperimentController(ImConWidgetController):
                 - offset_x: float (default: 0)
                 - offset_y: float (default: 0)
                 - description: str (default: '')
-                
+
         Returns:
             Complete wellplate layout definition
         """
@@ -412,7 +412,7 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Failed to get OMERO config: {e}")
             return {"error": str(e)}
 
-    @APIExport(requestType="POST")  
+    @APIExport(requestType="POST")
     def setOMEROConfig(self, config: dict):
         """Set OMERO configuration via the experiment manager."""
         try:
@@ -467,25 +467,62 @@ class ExperimentController(ImConWidgetController):
             "write_individual_tiffs": getattr(self, '_ome_write_individual_tiffs', False)
         }
 
+
+    def set_led_status(self, status: str = "idle"):
+        """
+        Set LED matrix status if available.
+
+        Args:
+            status: Status string - "idle", "rainbow" (busy), "error", etc.
+        """
+        try:
+            # Check if LED matrix manager is available
+            if hasattr(self._master, 'LEDMatrixsManager'):
+                led_names = self._master.LEDMatrixsManager.getAllDeviceNames()
+                if led_names and len(led_names) > 0:
+                    # Set status on first LED matrix
+                    led_matrix = self._master.LEDMatrixsManager[led_names[0]]
+                    led_matrix.setStatus(status=status)
+                    self._logger.debug(f"LED status set to: {status}")
+        except Exception as e:
+            self._logger.debug(f"Could not set LED status: {e}")
+
+    def get_num_xy_steps(self, pointList):
+        # we don't consider the center point as this .. well in the center
+        if len(pointList) == 0:
+            return 1,1
+        all_iX = []
+        all_iY = []
+        for point in pointList:
+            all_iX.append(point.iX)
+            all_iY.append(point.iY)
+        min_iX, max_iX = min(all_iX), max(all_iX)
+        min_iY, max_iY = min(all_iY), max(all_iY)
+
+        num_x_steps = (max_iX - min_iX) + 1
+        num_y_steps = (max_iY - min_iY) + 1
+
+        return num_x_steps, num_y_steps
+
     def generate_snake_tiles(self, mExperiment):
         """
         Generate tiles from experiment with pre-calculated coordinates.
-        
+
         The frontend now calculates ALL coordinates including scan order.
         This method simply converts the scanAreas format to the internal tiles format.
-        
+
         Args:
             mExperiment: Experiment object containing scanAreas with pre-calculated positions
-            
+
         Returns:
             List of tiles, where each tile is a list of coordinate dictionaries
         """
         tiles = []
-        
+
         # New workflow: Use pre-calculated coordinates from scanAreas
         if mExperiment.scanAreas:
             self._logger.info("Using pre-calculated coordinates from frontend scanAreas")
-            
+
             # Convert scanAreas to tiles format
             for area in mExperiment.scanAreas:
                 # Extract positions from scan area - already ordered by frontend
@@ -502,17 +539,17 @@ class ExperimentController(ImConWidgetController):
                         "areaName": area.areaName,
                         "areaType": area.areaType
                     })
-                
+
                 if tile_positions:
                     tiles.append(tile_positions)
-            
+
             self._logger.info(f"Loaded {len(tiles)} scan areas with {sum(len(t) for t in tiles)} total positions")
             return tiles
-        
+
         # Fallback: Use pointList with pre-ordered neighborPointList
         elif mExperiment.pointList:
             self._logger.info("Using coordinates from pointList")
-            
+
             for iCenter, centerPoint in enumerate(mExperiment.pointList):
                 if not centerPoint.neighborPointList:
                     # Single point - no neighbors
@@ -542,21 +579,21 @@ class ExperimentController(ImConWidgetController):
                             "areaName": centerPoint.name,
                             "areaType": centerPoint.areaType or 'free_scan'
                         })
-                
+
                 tiles.append(tile_positions)
-            
+
             self._logger.info(f"Loaded {len(tiles)} tiles from pointList")
             return tiles
-        
+
         # No coordinates provided - create single point at current position
         else:
             self._logger.warning("No scan coordinates provided. Using current stage position.")
-            
+
             # Get current stage position
             current_position = self.mStage.getPosition()
             current_x = current_position.get("X", 0)
             current_y = current_position.get("Y", 0)
-            
+
             fallback_tile = [{
                 "iterator": 0,
                 "centerIndex": 0,
@@ -614,10 +651,10 @@ class ExperimentController(ImConWidgetController):
         illuminationIntensities = p.illuIntensities
         if type(illuminationIntensities) is not List  and type(illuminationIntensities) is not list: illuminationIntensities = [p.illuIntensities]
         if type(illuSources) is not List  and type(illuSources) is not list: illuSources = [p.illumination]
-        isDarkfield = p.darkfield # TODO: Needs to be implemented 
+        isDarkfield = p.darkfield # TODO: Needs to be implemented
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
-        
+
         # check if any of the illumination sources is turned on, if not, return error
         if not any(illuminationIntensities):
             return HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
@@ -657,6 +694,9 @@ class ExperimentController(ImConWidgetController):
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
             raise HTTPException(status_code=400, detail="Another workflow is already running.")
 
+        # Set LED status to rainbow (busy)
+        self.set_led_status("rainbow")
+
         # Start the detector if not already running
         if not self.mDetector._running:
             self.mDetector.startAcquisition()
@@ -684,7 +724,7 @@ class ExperimentController(ImConWidgetController):
 
         workflowSteps = []
         file_writers = []  # Initialize outside the loop for context storage
-        
+
         # OME writer-related
         self._ome_write_tiff = p.ome_write_tiff
         self._ome_write_zarr = p.ome_write_zarr
@@ -699,8 +739,8 @@ class ExperimentController(ImConWidgetController):
             self._ome_write_single_tiff = True   # Enable single TIFF writing
         else:
             self._ome_write_single_tiff = False
-            
-            
+
+
         # Decide which execution mode to use
         if performanceMode and self.performance_mode.is_hardware_capable():
             # Execute in performance mode
@@ -745,7 +785,7 @@ class ExperimentController(ImConWidgetController):
                     autofocus_step_size=autofocusStepSize,
                     autofocus_illumination_channel=autofocusIlluminationChannel,
                     autofocus_mode=autofocusMode,  # Pass autofocus mode
-                    t_period=tPeriod, 
+                    t_period=tPeriod,
                     isRGB=self.mDetector._isRGB
                 )
 
@@ -801,7 +841,7 @@ class ExperimentController(ImConWidgetController):
         # ensure we get a fresh frame
         timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
         cTime = time.time()
-        
+
         lastFrameNumber=-1
         while(1):
             # get frame and frame number to get one that is newer than the one with illumination off eventually
@@ -811,8 +851,8 @@ class ExperimentController(ImConWidgetController):
                 lastFrameNumber = currentFrameNumber
             if time.time()-cTime> timeoutFrameRequest:
                 # in case exposure time is too long we need break at one point
-                if mFrame is None: 
-                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False) 
+                if mFrame is None:
+                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
                 break
             if currentFrameNumber <= lastFrameNumber+frameSync:
                 time.sleep(0.01) # off-load CPU
@@ -834,33 +874,33 @@ class ExperimentController(ImConWidgetController):
 
     def autofocus_hardware(self, illuminationChannel: str = "") -> Optional[float]:
         """Perform hardware-based one-shot autofocus using FocusLockController.
-        
+
         This is significantly faster than software autofocus because it:
         - Captures only ONE frame from dedicated autofocus camera
         - Uses pre-calibrated linear relationship (focus metric → Z position)
         - No Z-sweep required
-        
+
         Similar to Seafront laser autofocus approach.
-        
+
         Args:
             illuminationChannel: Selected illumination channel for autofocus (currently unused)
-            
+
         Returns:
             float: Best focus Z position in µm, or None if autofocus failed
         """
         self._logger.debug("Performing hardware-based one-shot autofocus...")
-        
+
         # Get the focus lock controller
         try:
             focusLockController = self._master.getController('FocusLock')
         except Exception as e:
             self._logger.warning(f"FocusLockController not available: {e}")
             return None
-        
+
         if focusLockController is None:
             self._logger.warning("FocusLockController not available - skipping hardware autofocus")
             return None
-        
+
         # Check if calibration exists
         try:
             calib_status = focusLockController.getCalibrationStatus()
@@ -870,7 +910,7 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Failed to check calibration status: {e}")
             return None
-        
+
         # Perform one-shot autofocus
         try:
             result = focusLockController.performOneStepAutofocus(
@@ -878,7 +918,7 @@ class ExperimentController(ImConWidgetController):
                 max_attempts=3,
                 threshold_um=0.5
             )
-            
+
             if result.get('success', False):
                 target_z = result.get('target_z_position')
                 self._logger.info(
@@ -891,22 +931,22 @@ class ExperimentController(ImConWidgetController):
                 error_msg = result.get('error', 'Unknown error')
                 self._logger.error(f"Hardware autofocus failed: {error_msg}")
                 return None
-                
+
         except Exception as e:
             self._logger.error(f"Hardware autofocus exception: {e}")
             return None
 
-    def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0, 
+    def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0,
                   illuminationChannel: str="", mode: str="software"):
         """Perform autofocus using either hardware or software method.
-        
+
         Args:
             minZ: Minimum Z position for autofocus (software mode only)
             maxZ: Maximum Z position for autofocus (software mode only)
             stepSize: Step size for autofocus scan (software mode only)
             illuminationChannel: Selected illumination channel for autofocus
             mode: "hardware" (fast, one-shot) or "software" (slow, Z-sweep)
-            
+
         Returns:
             float: Best focus Z position, or None if autofocus failed
         """
@@ -914,39 +954,39 @@ class ExperimentController(ImConWidgetController):
             f"Performing autofocus (mode={mode}) with parameters "
             f"minZ={minZ}, maxZ={maxZ}, stepSize={stepSize}, channel={illuminationChannel}"
         )
-        
+
         # Route to appropriate autofocus method
         if mode == "hardware":
             return self.autofocus_hardware(illuminationChannel=illuminationChannel)
         else:
             return self.autofocus_software(
-                minZ=minZ, 
-                maxZ=maxZ, 
-                stepSize=stepSize, 
+                minZ=minZ,
+                maxZ=maxZ,
+                stepSize=stepSize,
                 illuminationChannel=illuminationChannel
             )
 
     def autofocus_software(self, minZ: float=0, maxZ: float=0, stepSize: float=0, illuminationChannel: str=""):
         """Perform software-based autofocus using AutofocusController (Z-sweep).
-        
+
         Args:
             minZ: Minimum Z position for autofocus (not used - uses rangez instead)
             maxZ: Maximum Z position for autofocus (not used - uses rangez instead)
             stepSize: Step size for autofocus scan
             illuminationChannel: Selected illumination channel for autofocus
-            
+
         Returns:
             float: Best focus Z position, or None if autofocus failed
         """
         self._logger.debug("Performing software autofocus (Z-sweep)... with parameters minZ, maxZ, stepSize, illuminationChannel: %s, %s, %s, %s", minZ, maxZ, stepSize, illuminationChannel)
-        
+
         # Get the autofocus controller
         autofocusController = self._master.getController('Autofocus')
-        
+
         if autofocusController is None:
             self._logger.warning("AutofocusController not available - skipping autofocus")
             return None
-        
+
         # Set illumination if specified
         if illuminationChannel and hasattr(self, '_master') and hasattr(self._master, 'lasersManager'):
             try:
@@ -956,12 +996,12 @@ class ExperimentController(ImConWidgetController):
                 # For now, we'll let the autofocus controller handle illumination
             except Exception as e:
                 self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
-        
+
         try:
             # Calculate range from min/max
             rangez = abs(maxZ - minZ) / 2.0 if maxZ > minZ else 50.0
             resolutionz = stepSize if stepSize > 0 else 10.0
-            
+
             # Call autofocus directly - the method is already decorated with @APIExport
             #     def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=7, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
             result = autofocusController.doAutofocusBackground(
@@ -977,10 +1017,10 @@ class ExperimentController(ImConWidgetController):
                 static_offset=0.0,
                 twoStage=False
             )
-            
+
             self._logger.debug(f"Autofocus completed successfully")
             return result
-            
+
         except Exception as e:
             self._logger.error(f"Autofocus failed: {e}")
             return None
@@ -992,7 +1032,7 @@ class ExperimentController(ImConWidgetController):
     def wait_for_next_timepoint(self, timepoint: int, t_period: float, context: WorkflowContext, metadata: Dict[str, Any]):
         """
         Wait for the proper time interval between timepoints, accounting for measurement time.
-        
+
         Args:
             timepoint: Current timepoint index
             t_period: Target period between timepoints in seconds
@@ -1000,21 +1040,21 @@ class ExperimentController(ImConWidgetController):
             metadata: Metadata dictionary
         """
         import time
-        
+
         current_time = time.time()
         experiment_start_time = context.get_metadata("experiment_start_time", current_time)
         timepoint_times = context.get_metadata("timepoint_times", {})
-        
+
         # Calculate expected time for this timepoint
         expected_time = experiment_start_time + (timepoint + 1) * t_period
-        
+
         # Store timing information for this timepoint
         timepoint_times[str(timepoint)] = current_time
         context.set_metadata("timepoint_times", timepoint_times)
-        
+
         # Calculate how long to wait
         wait_time = max(0, expected_time - current_time)
-        
+
         if wait_time > 0:
             self._logger.info(f"Waiting {wait_time:.2f}s for next timepoint (timepoint {timepoint})")
             time.sleep(wait_time)
@@ -1231,6 +1271,9 @@ class ExperimentController(ImConWidgetController):
         if performance_status["running"]:
             results["performance"] = self.performance_mode.stop_scan()
 
+        # Set LED status to idle
+        self.set_led_status("idle")
+
         # If nothing was running, return appropriate message
         if not results:
             return "No experiments are currently running"
@@ -1251,12 +1294,18 @@ class ExperimentController(ImConWidgetController):
             results["workflow"] = {"status": "force_stopped", "message": "Workflow force stopped"}
         except Exception as e:
             results["workflow"] = {"status": "error", "message": f"Error force stopping workflow: {e}"}
+            self.set_led_status("error")
 
         # Force stop performance mode
         try:
             results["performance"] = self.performance_mode.force_stop_scan()
         except Exception as e:
             results["performance"] = {"status": "error", "message": f"Error force stopping performance mode: {e}"}
+            self.set_led_status("error")
+
+        # Set LED status to idle if no errors
+        if all(r.get("status") != "error" for r in results.values()):
+            self.set_led_status("idle")
 
         return results
 

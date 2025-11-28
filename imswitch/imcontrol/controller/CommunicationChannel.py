@@ -122,6 +122,10 @@ class CommunicationChannel(SignalInterface):
 
     sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI
 
+    sigUpdateLaserPower = Signal(dict)  # (laserPowerDict) - updates laser power values from device callbacks
+
+    sigUpdateCANDevices = Signal(list)  # (canDevicesList) - updates CAN device scan results from callbacks
+
     sigSetSyncInMovementSettings = Signal(str, float)  # (rotatorName, position)
 
     sigNewFrame = Signal()

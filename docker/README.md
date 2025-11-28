@@ -1,6 +1,6 @@
 ## ImSwitch in Docker
 
-ImSwitch provides comprehensive Docker support for easy deployment and cross-platform compatibility. The Docker implementation offers:
+ImSwitch provides comprehensive Docker support for easy deployment and cross-platform compatibility. The Docker implementation uses UV (fast Rust-based package manager) for improved build times and dependency management.
 
 ### Features
 - **Headless Operation**: Run ImSwitch without GUI for automated systems and remote control
@@ -8,6 +8,7 @@ ImSwitch provides comprehensive Docker support for easy deployment and cross-pla
 - **Hardware Access**: Direct USB and serial device access for camera and stage control
 - **Persistent Storage**: Configurable data and configuration persistence
 - **Multi-architecture Support**: Compatible with ARM64 (Raspberry Pi, Jetson) and x86_64 systems
+- **Fast Package Management**: Uses UV for 10-100x faster package installation compared to pip
 
 ### Key Capabilities
 - HTTP/HTTPS REST API server for remote control

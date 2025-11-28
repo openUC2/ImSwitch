@@ -90,6 +90,7 @@ class StreamWorker(Worker):
         """Start polling frames without timer - wait and push immediately."""
         self._running = True
         self._logger.info(f"StreamWorker started with update period {self._updatePeriod}s")
+        frameReadAttempts = 0
         while self._running:
             try:
                 self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it 
@@ -108,7 +109,7 @@ class StreamWorker(Worker):
                     # keep other controllers happy (i.e. def update()), not so good idea, consumes a lot of CPU/copy time?!
                     # self.sigUpdateFrame.emit(self._detector.name, frame, False, [], True)
 
-                    if frame is None:
+                    if frame is None and frameReadAttempts > 3:
                         self._logger.warning("Frame capture failed, stopping worker (Frame none)")
                         self._running = False                        
                         break  # No frame available, but not an error - keep running
@@ -117,10 +118,11 @@ class StreamWorker(Worker):
                     self._last_frame_time = time.time()
                     
                     # Only stop on explicit failure, not on None frames
-                    if frameResult is False:  # Explicitly check for False, not None
+                    if frameResult is False and frameReadAttempts > 3:  # Explicitly check for False, not None
                         self._logger.warning("Frame capture failed, stopping worker")
                         self._running = False
                         break
+                    frameReadAttempts += 1
                 else:
                     # Sleep for a small amount to avoid busy waiting
                     time.sleep(0.01)

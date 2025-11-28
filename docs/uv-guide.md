@@ -37,15 +37,17 @@ uv pip install -e .[PyQt5,dev]
 
 ### Lock Files for Reproducible Builds
 
-UV supports lock files for ensuring reproducible builds across different environments:
+ImSwitch includes a `uv.lock` file for reproducible builds. To use it:
 
 ```bash
-# Generate a lock file (when available in future UV versions)
-uv lock
-
-# Install from lock file
+# Install from lock file (ensures exact versions)
 uv sync
+
+# Update lock file after changing dependencies
+uv lock
 ```
+
+**Note**: When contributing code, commit the `uv.lock` file to ensure all developers use identical dependency versions.
 
 ## Performance Benefits
 
@@ -94,6 +96,32 @@ For GitHub Actions and CI systems, UV installation is straightforward:
 1. **UV not found**: Ensure UV is in your PATH after installation
 2. **Package conflicts**: UV's resolver is more strict than pip - this usually indicates real dependency issues
 3. **Cache issues**: Clear UV cache with `uv cache clean` if needed
+
+### Migrating from Conda/Mamba
+
+If you're currently using conda/mamba (Option D from README):
+
+```bash
+# 1. Deactivate conda environment
+conda deactivate
+
+# 2. Create new UV-based environment
+cd ~/Documents/ImSwitch
+uv venv
+source .venv/bin/activate  # On Windows: .venv\\Scripts\\activate
+
+# 3. Install ImSwitch with UV
+uv pip install -e .
+
+# Optional: Install NanoImagingPack
+uv pip install git+https://gitlab.com/bionanoimaging/nanoimagingpack
+```
+
+**Why migrate?**
+- 10-100x faster package installation
+- Better dependency resolution
+- No need for conda/mamba overhead
+- Native Python ecosystem tooling
 
 ### Getting Help
 

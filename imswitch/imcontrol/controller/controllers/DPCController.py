@@ -41,8 +41,11 @@ class DPCParams:
     na: float = 0.3
     nai: float = 0.3
     n: float = 1.0
-    led_intensity: int = 255
+    led_intensity_r: int = 0  # Red channel intensity
+    led_intensity_g: int = 255  # Green channel intensity (default)
+    led_intensity_b: int = 0  # Blue channel intensity
     wait_time: float = 0.2  # seconds between LED changes
+    frame_sync: int = 2  # number of frames to wait for fresh frame
     save_images: bool = False
     save_directory: str = ""
     reg_u: float = 1e-1  # Tikhonov regularization for absorption
@@ -108,24 +111,23 @@ class DPCController(ImConWidgetController):
             na=na,
             nai=nai,
             n=n,
-            led_intensity=255,
+            led_intensity_r=0,
+            led_intensity_g=255,
+            led_intensity_b=0,
             wait_time=0.2,
+            frame_sync=2,
             save_images=False,
             save_directory=str(os.path.join(dirtools.UserFileDirs.Data, "DPC"))
         )
         self._state = DPCState()
         self._processing_lock = threading.Lock()
 
-        # Get LEDMatrix controller (not manager!)
-        try:
-            self.ledMatrixController = self._master.LEDMatrixController
-        except AttributeError:
-            self._logger.warning("LEDMatrixController not found, falling back to manager")
-            allLEDMatrixNames = self._master.LEDMatrixsManager.getAllDeviceNames()
-            if len(allLEDMatrixNames) == 0:
-                return
-            self.ledMatrix = self._master.LEDMatrixsManager[allLEDMatrixNames[0]]
-            self.ledMatrixController = None
+        # Get LEDMatrix manager
+        allLEDMatrixNames = self._master.LEDMatrixsManager.getAllDeviceNames()
+        if len(allLEDMatrixNames) == 0:
+            self._logger.error("No LEDMatrix found in setup")
+            return
+        self.ledMatrix = self._master.LEDMatrixsManager[allLEDMatrixNames[0]]
 
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
@@ -140,8 +142,12 @@ class DPCController(ImConWidgetController):
         self._mjpeg_queue = queue.Queue(maxsize=2)
         self._jpeg_quality = 85
         
-        # Processing thread
-        self._processing_thread = None
+        # Processing queue - decouples capture from reconstruction
+        self._processing_queue = queue.Queue(maxsize=2)
+        
+        # Processing threads
+        self._capture_thread = None
+        self._reconstruction_thread = None
         self._stop_processing_event = threading.Event()
         
         # Performance monitoring
@@ -155,28 +161,52 @@ class DPCController(ImConWidgetController):
         """Cleanup on deletion"""
         self.stop_dpc_processing()
         
-        if self._processing_thread is not None:
+        if self._capture_thread is not None:
             self._stop_processing_event.set()
-            self._processing_thread.join(timeout=2.0)
+            self._capture_thread.join(timeout=2.0)
+        
+        if self._reconstruction_thread is not None:
+            self._stop_processing_event.set()
+            self._reconstruction_thread.join(timeout=2.0)
     
     # =========================
     # Core Processing Methods
     # =========================
     def _set_led_pattern(self, pattern_name: str):
-        """Set LED pattern using LEDMatrixController setHalves method"""
-        if self.ledMatrixController is not None:
-            # Use controller's setHalves method
-            self.ledMatrixController.setHalves(
-                intensity=self._params.led_intensity,
-                direction=pattern_name
-            )
-        else:
-            # Fallback to direct LED matrix control (legacy)
-            self._logger.warning("Using legacy LED control - consider using LEDMatrixController")
-            self.ledMatrix.setHalves(
-                intensity=(0, self._params.led_intensity, 0),  # Green channel
-                region=pattern_name
-            )
+        """Set LED pattern using LEDMatrix manager setHalves method"""
+        intensity = (self._params.led_intensity_r, 
+                    self._params.led_intensity_g, 
+                    self._params.led_intensity_b)
+        self.ledMatrix.setHalves(
+            intensity=intensity,
+            region=pattern_name
+        )
+    
+    def _get_fresh_frame(self, timeout: float = 1.0):
+        """Get a fresh frame with frame sync (like ExperimentController)"""
+        cTime = time.time()
+        lastFrameNumber = -1
+        
+        while True:
+            # Get frame and frame number to ensure fresh frame
+            mFrame, currentFrameNumber = self.detector.getLatestFrame(returnFrameNumber=True)
+            
+            if lastFrameNumber == -1:
+                # First round
+                lastFrameNumber = currentFrameNumber
+            
+            if time.time() - cTime > timeout:
+                # Timeout - use whatever we have
+                if mFrame is None:
+                    mFrame = self.detector.getLatestFrame(returnFrameNumber=False)
+                break
+            
+            if currentFrameNumber <= lastFrameNumber + self._params.frame_sync:
+                time.sleep(0.01)  # Off-load CPU
+            else:
+                break
+        
+        return mFrame
     
     def _capture_dpc_stack(self):
         """Capture 4 images with different LED patterns"""
@@ -185,6 +215,7 @@ class DPCController(ImConWidgetController):
         # Turn off all LEDs first
         self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
         time.sleep(self._params.wait_time / 2)
+        
         for pattern_name in self.allDPCPatternNames:
             if self._stop_processing_event.is_set():
                 return None
@@ -196,29 +227,69 @@ class DPCController(ImConWidgetController):
             # Wait for LED to stabilize
             time.sleep(self._params.wait_time)
             
-            # Capture frame
-            frame = self.detector.getLatestFrame()
+            # Capture fresh frame with sync
+            frame = self._get_fresh_frame()
+            if frame is None:
+                self._logger.warning(f"Failed to get frame for pattern {pattern_name}")
+                continue
+            
             if len(frame.shape) > 2:
                 frame = np.mean(frame, axis=2)
             stack.append(frame)
             
             self._state.frame_count += 1
         
-        return np.array(stack)
+        # Turn off LEDs after capture
+        self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
+        
+        return np.array(stack) if len(stack) == 4 else None
     
-    def _processing_loop(self):
-        """Main processing loop - captures and processes DPC images"""
-        self._logger.info("DPC processing loop started")
+    def _capture_loop(self):
+        """Capture loop - captures DPC stacks and adds to processing queue"""
+        self._logger.info("DPC capture loop started")
         
         while not self._stop_processing_event.is_set():
             try:
-                t_start = time.time()
-                
                 # Capture 4-image stack
                 stack = self._capture_dpc_stack()
                 
                 if stack is None:
-                    break
+                    if self._stop_processing_event.is_set():
+                        break
+                    continue
+                
+                # Add to processing queue (non-blocking, drop old if full)
+                try:
+                    self._processing_queue.put_nowait(stack)
+                except queue.Full:
+                    # Drop oldest stack and add new one
+                    try:
+                        self._processing_queue.get_nowait()
+                        self._processing_queue.put_nowait(stack)
+                    except:
+                        pass
+                
+            except Exception as e:
+                self._logger.error(f"Error in DPC capture loop: {e}", exc_info=True)
+                time.sleep(0.1)
+        
+        # Turn off LEDs when done
+        self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
+        self._logger.info("DPC capture loop stopped")
+    
+    def _reconstruction_loop(self):
+        """Reconstruction loop - processes stacks from queue"""
+        self._logger.info("DPC reconstruction loop started")
+        
+        while not self._stop_processing_event.is_set():
+            try:
+                # Get stack from queue with timeout
+                try:
+                    stack = self._processing_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                
+                t_start = time.time()
                 
                 # Process stack
                 result = self.DPCProcessor.process_stack(stack, save=self._params.save_images)
@@ -231,8 +302,8 @@ class DPCController(ImConWidgetController):
                     self.sigDPCProcessorImageComputed.emit(dpc_tb, "DPC top/bottom")
                     
                     # Add to MJPEG stream (use phase or combined image)
-                    if qdpc is not None:
-                        phase_image = np.angle(qdpc)
+                    if qdpc is not None and len(qdpc) > 0:
+                        phase_image = np.angle(qdpc[0])
                         self._add_to_mjpeg_stream(phase_image)
                     else:
                         # Fallback to gradient image
@@ -256,28 +327,29 @@ class DPCController(ImConWidgetController):
                 self._emit_state_changed()
                 
             except Exception as e:
-                self._logger.error(f"Error in DPC processing loop: {e}", exc_info=True)
+                self._logger.error(f"Error in DPC reconstruction loop: {e}", exc_info=True)
                 time.sleep(0.1)
         
-        # Turn off LEDs when done
-        if self.ledMatrixController is not None:
-            self.ledMatrixController.setAllLEDOff(getReturn=False)
-        else:
-            self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
-        
-        self._logger.info("DPC processing loop stopped")
+        self._logger.info("DPC reconstruction loop stopped")
     
     def _add_to_mjpeg_stream(self, image):
         """Add processed image to MJPEG stream"""
-
-        
         try:
-            # Normalize to 0-255
+            # Normalize to 0-255 with NaN handling
             img_normalized = image.copy()
+            
+            # Replace NaN and inf with 0
+            img_normalized = np.nan_to_num(img_normalized, nan=0.0, posinf=0.0, neginf=0.0)
+            
             img_min, img_max = img_normalized.min(), img_normalized.max()
-            if img_max > img_min:
-                img_normalized = (img_normalized - img_min) / (img_max - img_min) * 255
-            img_normalized = img_normalized.astype(np.uint8)
+            if img_max > img_min and np.isfinite(img_max) and np.isfinite(img_min):
+                img_normalized = (img_normalized - img_min) / (img_max - img_min) * 255.0
+            else:
+                # If min == max or invalid, just clip to 0-255
+                img_normalized = np.clip(img_normalized, 0, 255)
+            
+            # Safely convert to uint8
+            img_normalized = np.clip(img_normalized, 0, 255).astype(np.uint8)
             
             # Convert to BGR for JPEG encoding
             if len(img_normalized.shape) == 2:
@@ -361,13 +433,29 @@ class DPCController(ImConWidgetController):
             # Ensure camera is running
             self._ensure_camera_running()
             
-            # Start processing thread
+            # Clear processing queue
+            while not self._processing_queue.empty():
+                try:
+                    self._processing_queue.get_nowait()
+                except queue.Empty:
+                    break
+            
+            # Start capture and reconstruction threads
             self._stop_processing_event.clear()
-            self._processing_thread = threading.Thread(
-                target=self._processing_loop,
-                daemon=True
+            
+            self._capture_thread = threading.Thread(
+                target=self._capture_loop,
+                daemon=True,
+                name="DPC-Capture"
             )
-            self._processing_thread.start()
+            self._capture_thread.start()
+            
+            self._reconstruction_thread = threading.Thread(
+                target=self._reconstruction_loop,
+                daemon=True,
+                name="DPC-Reconstruction"
+            )
+            self._reconstruction_thread.start()
             
             self._emit_state_changed()
             self._logger.info("DPC processing started")
@@ -384,9 +472,13 @@ class DPCController(ImConWidgetController):
             # Stop processing
             self._stop_processing_event.set()
             
-            if self._processing_thread is not None:
-                self._processing_thread.join(timeout=2.0)
-                self._processing_thread = None
+            if self._capture_thread is not None:
+                self._capture_thread.join(timeout=2.0)
+                self._capture_thread = None
+            
+            if self._reconstruction_thread is not None:
+                self._reconstruction_thread.join(timeout=2.0)
+                self._reconstruction_thread = None
             
             self._state.is_processing = False
             self._state.is_paused = False
@@ -637,11 +729,23 @@ class DPCSolver:
         AHA         = [(self.Hu.conj()*self.Hu).sum(axis=0)+self.reg_u,            (self.Hu.conj()*self.Hp).sum(axis=0),\
                        (self.Hp.conj()*self.Hu).sum(axis=0)           , (self.Hp.conj()*self.Hp).sum(axis=0)+self.reg_p]
         determinant = AHA[0]*AHA[3]-AHA[1]*AHA[2]
+        
+        # Avoid division by zero - add small epsilon where determinant is zero
+        determinant = np.where(np.abs(determinant) < 1e-10, 1e-10, determinant)
+        
         for frame_index in range(self.dpc_imgs.shape[0]//self.dpc_num):
             fIntensity = np.asarray([F(self.dpc_imgs[frame_index*self.dpc_num+image_index]) for image_index in range(self.dpc_num)])
             AHy        = np.asarray([(self.Hu.conj()*fIntensity).sum(axis=0), (self.Hp.conj()*fIntensity).sum(axis=0)])
-            absorption = IF((AHA[3]*AHy[0]-AHA[1]*AHy[1])/determinant).real
-            phase      = IF((AHA[0]*AHy[1]-AHA[2]*AHy[0])/determinant).real
+            
+            # Compute with safe division
+            with np.errstate(divide='ignore', invalid='ignore'):
+                absorption = IF((AHA[3]*AHy[0]-AHA[1]*AHy[1])/determinant).real
+                phase      = IF((AHA[0]*AHy[1]-AHA[2]*AHy[0])/determinant).real
+            
+            # Replace NaN/inf with 0
+            absorption = np.nan_to_num(absorption, nan=0.0, posinf=0.0, neginf=0.0)
+            phase = np.nan_to_num(phase, nan=0.0, posinf=0.0, neginf=0.0)
+            
             dpc_result.append(absorption+1.0j*phase)
 
         return np.asarray(dpc_result)

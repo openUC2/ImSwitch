@@ -118,10 +118,15 @@ class PixelCalibrationController(LiveUpdatedController):
     
     def _getCurrentObjectiveId(self) -> str:
         """
-        Get the current objective ID from ObjectiveManager.
+        Get the current objective ID (name) from ObjectiveManager.
         
         The ObjectiveManager maintains the authoritative state for the current
         objective slot, which is synchronized by the ObjectiveController.
+        
+        INDEXING CONVENTION:
+        - ObjectiveManager._currentObjective: 0-based (0 or 1)
+        - objectiveNames array: 0-indexed
+        - Return value: objective name string (e.g., "10x", "20x")
         
         Returns:
             Objective ID string (e.g., "10x", "20x") or "default" if not available
@@ -129,21 +134,23 @@ class PixelCalibrationController(LiveUpdatedController):
         try:
             obj_mgr = self._master.objectiveManager
             
-            # Use the manager's built-in method if available
-            if hasattr(obj_mgr, 'getCurrentObjectiveID'):
-                return obj_mgr.getCurrentObjectiveID()
+            # Use the manager's built-in method for getting objective name
+            if hasattr(obj_mgr, 'getCurrentObjectiveName'):
+                name = obj_mgr.getCurrentObjectiveName()
+                if name and name != "default":
+                    return name
             
-            # Fallback: manual lookup
+            # Fallback: manual lookup using 0-based index
             if hasattr(obj_mgr, 'objectiveNames') and obj_mgr.objectiveNames:
-                current_slot = getattr(obj_mgr, '_currentObjective', None)
+                current_slot_0based = getattr(obj_mgr, '_currentObjective', None)
                 
-                if current_slot is not None and current_slot > 0:
-                    idx = current_slot - 1  # 1-based to 0-based
-                    if idx < len(obj_mgr.objectiveNames):
-                        return obj_mgr.objectiveNames[idx]
+                if current_slot_0based is not None and 0 <= current_slot_0based < len(obj_mgr.objectiveNames):
+                    return obj_mgr.objectiveNames[current_slot_0based]
                 
                 # Return first objective as default
                 return obj_mgr.objectiveNames[0]
+        
+            return "default"
         
         except Exception as e:
             self._logger.debug(f"Could not read current objective: {e}")
@@ -398,15 +405,19 @@ class PixelCalibrationController(LiveUpdatedController):
             # Return default if no calibration
             return (1.0, 1.0)
     
-    def setCurrentObjective(self, objective_id: str):
+    def setCurrentObjective(self, objective_id: int):
         """
         Set the current active objective for calibration.
         
         This method:
         1. Updates the internal tracking of current objective
-        2. Attempts to physically move the objective turret if ObjectiveController is available
-        3. Updates the ObjectiveManager state if available
-        4. Applies the corresponding calibration data (pixel size, flip settings)
+        2. Uses ObjectiveController directly to physically move the objective turret
+        3. Applies the corresponding calibration data (pixel size, flip settings)
+        
+        INDEXING CONVENTION:
+        - objective_id: objective id int (e.g. 0,1)
+        - ObjectiveController.moveToObjective: expects 1-based slot (1 or 2)
+        - ObjectiveManager._currentObjective: 0-based (0 or 1)
         
         Args:
             objective_id: Identifier for the objective to activate (e.g., "10x", "20x")
@@ -416,14 +427,15 @@ class PixelCalibrationController(LiveUpdatedController):
         self.currentObjective = objective_id
         self._logger.info(f"Switched to objective '{objective_id}' (was '{old_objective}')")
         
-        # Request objective change via communication channel
-        # This allows decoupled communication between controllers
+        # Use ObjectiveController directly instead of signals for more reliable communication
         try:
-            #self._commChannel.sigSetObjectiveByName.emit(objective_id)
-            self._commChannel.sigSetObjectiveByID.emit(objective_id)
-            self._logger.debug(f"Emitted signal to change objective to '{objective_id}'")
+            # Get ObjectiveController from main controllers
+            obj_ctrl = self._master._controllersRegistry["Objective"]
+            self._logger.debug(f"Moving to objective '{objective_id}' (slot {objective_id })")
+            obj_ctrl.moveToObjective(objective_id )
+            
         except Exception as e:
-            self._logger.warning(f"Could not emit objective change signal: {e}")
+            self._logger.warning(f"Could not switch objective via controller: {e}")
         
         # Apply calibration data for this objective if available
         if objective_id in self.affineCalibrations:
@@ -445,16 +457,19 @@ class PixelCalibrationController(LiveUpdatedController):
 
 
     # API Methods for web interface
-    @APIExport(runOnUIThread=False)  # Run in background thread
-    def calibrateStageAffine(self, objectiveId: int = 0, stepSizeUm: float = 100.0, 
-                             pattern: str = "cross", nSteps: int = 4, validate: bool = False):
+    @APIExport(runOnUIThread=True)  # Run in background thread
+    def calibrateStageAffine(self, objectiveId: int = 1, stepSizeUm: float = 100.0, 
+                             pattern: str = "cross", nSteps: int = 1, validate: bool = False):
         """
         Perform affine stage-to-camera calibration via API.
         
         This runs in a background thread and can be monitored via signals.
         
+        INDEXING CONVENTION:
+        - objectiveId: 1-based slot number (1 or 2) for API consistency
+        
         Args:
-            objectiveId: Identifier for the objective being calibrated
+            objectiveId: Objective slot number (1 or 2, 1-based)
             stepSizeUm: Step size in microns (50-200 recommended)
             pattern: Movement pattern - "cross" or "grid"
             nSteps: Number of steps in each direction
@@ -462,6 +477,27 @@ class PixelCalibrationController(LiveUpdatedController):
             
         Returns:
             Dictionary with calibration results including metrics
+        """
+        
+        # Validate 1-based slot input
+        if objectiveId not in [0, 1]:
+            self._logger.error("Invalid objective slot: %s", objectiveId)
+            return {"error": "Invalid objective slot", "success": False}
+        
+        mThread = threading.Thread(target=self.calibrateStageAffineInThread, args=(
+            objectiveId, # TODO: change to objective ids to make it unifeid around 0 or 1
+            stepSizeUm,
+            pattern,
+            nSteps,
+            validate)
+        )
+        mThread.start()
+        return {"success": True, "message": "Calibration started in background thread"}
+
+    def calibrateStageAffineInThread(self, objectiveId: int = 1, stepSizeUm: float = 100.0, 
+                             pattern: str = "cross", nSteps: int = 4, validate: bool = False):
+        """
+        Perform affine stage-to-camera calibration in a separate thread.
         """
         try:
             
@@ -471,7 +507,7 @@ class PixelCalibrationController(LiveUpdatedController):
                     "error": "Camera intensity out of range (saturated or too dark). Adjust exposure or lighting before calibration.",
                     "success": False
                 }
-            # TODO: I think we should put this into a seperate thread, otherwise it may block the API
+
             pixelcalibration_helper = PixelCalibrationClass(self)
 
             # Perform the calibration
@@ -852,16 +888,20 @@ class PixelCalibrationController(LiveUpdatedController):
                         self._logger.info(f"Applied flip to detector: Y={flipY}, X={flipX}")
             
             # Update objective pixel size if this is the current objective
+            # INDEXING CONVENTION:
+            # - obj_manager.getCurrentObjective(): 0-based (0 or 1)
+            # - setObjectiveParameters: expects 1-based slot (1 or 2)
             if hasattr(self._master, 'objectiveManager'):
                 obj_manager = self._master.objectiveManager
-                current_objective_name = obj_manager.getCurrentObjectiveID()
+                current_objective_name = obj_manager.getCurrentObjectiveName()
                 
                 # If calibrated objective matches current objective, update immediately
                 if objective_id == current_objective_name or objective_id == "default":
-                    current_slot = obj_manager.getCurrentObjective()
-                    if current_slot is not None:
-                        obj_manager.setObjectiveParameters(current_slot, pixelsize=pixel_size, emitSignal=True)
-                        self._logger.info(f"Updated objective slot {current_slot} pixelsize to {pixel_size:.3f} µm/px")
+                    current_slot_0based = obj_manager.getCurrentObjective()
+                    if current_slot_0based is not None:
+                        slot_1based = current_slot_0based + 1  # Convert to 1-based for API
+                        obj_manager.setObjectiveParameters(slot_1based, pixelsize=pixel_size, emitSignal=True)
+                        self._logger.info(f"Updated objective slot {slot_1based} pixelsize to {pixel_size:.3f} µm/px")
             
             self._logger.info(f"Successfully applied calibration results for '{objective_id}'")
             
@@ -2028,14 +2068,34 @@ class PixelCalibrationClass(object):
         # Use setup info for storage (not separate JSON file)
         # Calibration data is stored in self._parent._setupInfo.PixelCalibration
 
+    def _grab_image(self, crop_size:int=512, frameSync: int = 2, returnFrameNumber: bool = False):
+        # ensure we get a fresh frame
+        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        cTime = time.time()
+        
+        lastFrameNumber=-1
+        currentFrameNumber = None
+        while True:
+            # get frame and frame number to get one that is newer than the one with illumination off eventually
+            mFrame, currentFrameNumber = self._parent.detector.getLatestFrame(returnFrameNumber=True)
+            if lastFrameNumber==-1:
+                # first round
+                lastFrameNumber = currentFrameNumber
+            if time.time()-cTime> timeoutFrameRequest:
+                # in case exposure time is too long we need break at one point
+                if mFrame is None: 
+                    mFrame = self._parent.detector.getLatestFrame(returnFrameNumber=False) 
+                break
+            if currentFrameNumber <= lastFrameNumber+frameSync:
+                time.sleep(0.01) # off-load CPU
+            else:
+                break
+        
+        if len(mFrame) > 2: mFrame = np.mean(mFrame, axis=2)  # convert to grayscale
+        if returnFrameNumber:
+            return np.array(nip.extract(mFrame, (crop_size, crop_size))), currentFrameNumber
+        return np.array(nip.extract(mFrame, (crop_size, crop_size)))
 
-    def _grab_image(self, crop_size=512):
-        """Capture a cropped image from the detector."""
-        for i in range(3): 
-            marray = self._parent.detector.getLatestFrame()
-        crop_size = min(crop_size, marray.shape[0], marray.shape[1])
-        # Crop the center region
-        return np.array(nip.extract(marray, crop_size))
 
     def _get_stage_position(self):
         """Get current stage position in microns [X, Y, Z]."""

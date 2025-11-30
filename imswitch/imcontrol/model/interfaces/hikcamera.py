@@ -70,13 +70,11 @@ class CameraHIK:
         self.blacklevel = blacklevel
         self.exposure_time = exposure_time
         self.gain = gain
-        self.preview_width = 600
-        self.preview_height = 600
         self.frame_rate = frame_rate
         self.cameraNo = cameraNo
         self.flipImage = flipImage  # (flipY, flipX)
 
-        self.NBuffer = 5
+        self.NBuffer = 3
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.flatfieldImage = None
@@ -468,7 +466,7 @@ class CameraHIK:
             if param_dict["model_name"].find("UC")>0:
                 param_dict["isRGB"] = True
         # if isRGB switch off AWB 
-        if param_dict["isRGB"]:
+        if param_dict["isRGB"] and False:
             ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS)
             if ret != 0:
                 print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
@@ -478,7 +476,10 @@ class CameraHIK:
                 ret = self.camera.MV_CC_SetEnumValueByString("BalanceColorTempMode", "WideMode")
                 if ret != 0:
                     print("set BalanceColorTempMode failed! ret [0x%x]" % ret)
-                    # optional: self.init_ok = False                
+        else:
+            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_OFF)
+            if ret != 0:
+                print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
 
 
         # Image Width

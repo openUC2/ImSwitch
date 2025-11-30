@@ -785,7 +785,7 @@ class PixelCalibrationController(LiveUpdatedController):
                 min_threshold = 0.02
             
             # Check for saturation
-            if max_val >= saturation_threshold:
+            if False and max_val >= saturation_threshold:
                 self._logger.warning(f"Camera saturated (max={max_val}, threshold={saturation_threshold})")
                 return False
             

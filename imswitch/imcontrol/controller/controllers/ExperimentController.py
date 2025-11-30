@@ -229,10 +229,10 @@ class ExperimentController(ImConWidgetController):
         self.workflow_manager = WorkflowsManager()
 
         # set default values
-        self.SPEED_Y_default = 20000
-        self.SPEED_X_default = 20000
+        self.SPEED_Y_default = 25000
+        self.SPEED_X_default = 25000
         self.SPEED_Z_default = 10000
-        self.ACCELERATION = 500000
+        self.ACCELERATION = 1000000
 
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()

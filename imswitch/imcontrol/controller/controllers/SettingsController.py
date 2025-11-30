@@ -736,7 +736,7 @@ class SettingsController(ImConWidgetController):
             }
 
     @APIExport(runOnUIThread=True)
-    def setDetectorExposureTime(self, detectorName: str, exposureTime: float) -> None:
+    def setDetectorExposureTime(self, detectorName: str=None, exposureTime: float=None) -> None:
         """ Sets the exposure time for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()

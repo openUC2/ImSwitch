@@ -13,10 +13,10 @@ from pydantic import BaseModel
 from typing import Tuple
 # TODO: we have to take into account that the ps4 controller can trigger a switch of the lenses, hence we should have a callback on that 
 class ObjectiveStatusModel(BaseModel):
+    x0: float
     x1: float
-    x2: float
+    z0: float
     z1: float
-    z2: float
     pos: float
     isHomed: bool
     state: int
@@ -69,12 +69,12 @@ class ObjectiveController(LiveUpdatedController):
                     self._manager = manager
                     self.move = lambda slot, isBlocking: None
                     self.home = lambda direction, endstoppolarity, isBlocking: None
+                    self.x0 = 0
                     self.x1 = 0
-                    self.x2 = 0
                     self.slot = 0
                     self.isHomed = 0
+                    self.z0 = 0
                     self.z1 = 0
-                    self.z2 = 0
 
                 def home(self, direction, endstoppolarity, isBlocking):
                     if direction is not None:
@@ -82,8 +82,8 @@ class ObjectiveController(LiveUpdatedController):
                     if endstoppolarity is not None:
                         self.homePolarity = endstoppolarity
                     # Simulate homing process
+                    self.x0 = 0
                     self.x1 = 0
-                    self.x2 = 0
                     self.slot = 0
                     self.isHomed = 1
                     # Simulate a delay for homing
@@ -95,42 +95,42 @@ class ObjectiveController(LiveUpdatedController):
 
                 def getstatus(self):
                     return {
+                        "x0": self.x0,
                         "x1": self.x1,
-                        "x2": self.x2,
+                        "z0": self.z0,
                         "z1": self.z1,
-                        "z2": self.z2,
                         "pos": 0,
                         "isHomed": self.isHomed,
                         "state": self.slot,
                         "isRunning": 0
                     }
 
-                def setPositions(self, x1, x2, z1, z2, isBlocking):
+                def setPositions(self, x0, x1, z0, z1, isBlocking):
+                    if x0 is not None:
+                        self.x0 = x0
                     if x1 is not None:
                         self.x1 = x1
-                    if x2 is not None:
-                        self.x2 = x2
+                    if z0 is not None:
+                        self.z0 = z0
                     if z1 is not None:
                         self.z1 = z1
-                    if z2 is not None:
-                        self.z2 = z2
 
             self._objective = dummyObjective(manager=self._manager)
 
         # Initialize objective state
         # INDEXING CONVENTION:
-        # - Hardware returns 1-based slot (1 or 2)
+        # - Hardware returns 1-based slot (0 or 1)
         # - Manager stores 0-based index (0 or 1)
         if self._manager.calibrateOnStart:
             self.calibrateObjective()
-            # After calibration, move to the first objective position (hardware slot 1)
-            self._objective.move(slot=1, isBlocking=True)
+            # After calibration, move to the first objective position (hardware slot 0)
+            self._objective.move(slot=0, isBlocking=True)
             self._manager.setCurrentObjective(0)  # Store as 0-based index
         else:
             status = self._objective.getstatus()
             # Hardware returns 1-based slot, convert to 0-based for manager
-            hardwareSlot = status.get("state", 1)  # Default to slot 1 if not available
-            internalIndex = hardwareSlot - 1 if hardwareSlot >= 1 else 0  # Convert to 0-based
+            hardwareSlot = status.get("state", 0)  # Default to slot 0 if not available
+            internalIndex = hardwareSlot if hardwareSlot >= 0 else 0  # Convert to 0-based
             self._manager.setCurrentObjective(internalIndex)
             isHomed = status.get("isHomed", 0) == 1
             self._manager.setHomedState(isHomed)
@@ -166,16 +166,16 @@ class ObjectiveController(LiveUpdatedController):
         self._manager.setHomedState(True)
         
         # Get current state from hardware
-        # INDEXING: Hardware returns 1-based slot, convert to 0-based for manager
+        # INDEXING: Hardware returns 0-based slot, convert to 0-based for manager
         status = self._objective.getstatus()
         # Assume status is structured as: {"objective": {"state": 1, ...}}
         try:
-            hardware_slot = status.get("objective", {}).get("state", 1)  # 1-based from hardware
+            hardware_slot = status.get("objective", {}).get("state", 0)  # 0-based from hardware
         except:
-            hardware_slot = 1  # Default to slot 1 if status unavailable
+            hardware_slot = 0  # Default to slot 0 if status unavailable
         
-        # Convert hardware's 1-based slot to 0-based index for internal state
-        internal_index = hardware_slot - 1 if hardware_slot >= 1 else 0
+        # Convert hardware's 0-based slot to 0-based index for internal state
+        internal_index = hardware_slot if hardware_slot >= 0 else 0
         # Clamp to valid range [0, 1]
         internal_index = max(0, min(1, internal_index))
         
@@ -192,20 +192,20 @@ class ObjectiveController(LiveUpdatedController):
         Move to a specific objective slot.
         
         INDEXING CONVENTION:
-        - API/external: 1-based slot numbers (1 or 2) for user-facing interfaces
+        - API/external: 1-based slot numbers (0 or 1) for user-facing interfaces
         - Internal state (_manager.setCurrentObjective): 0-based (0 or 1)
-        - Hardware (ESP32): 1-based (slot 1, 2)
+        - Hardware (ESP32): 1-based (slot 0, 1)
         
         Args:
-            slot: Objective slot number (1 or 2) - 1-based for API consistency
+            slot: Objective slot number (0 or 1) - 1-based for API consistency
         """
         # Validate 1-based slot input
-        if slot not in [1, 2]:
-            self._logger.error("Invalid objective slot: %s (must be 1 or 2)", slot)
+        if slot not in [0, 1]:
+            self._logger.error("Invalid objective slot: %s (must be 0 or 1  )", slot)
             return
         
         # Convert to 0-based index for internal state
-        internal_slot = slot - 1  # 1 -> 0, 2 -> 1
+        internal_slot = slot  # 0 -> 0, 1 -> 1
         
         # Move hardware (hardware uses 1-based indexing, so pass slot directly)
         self._objective.move(slot=slot, isBlocking=True)
@@ -239,7 +239,7 @@ class ObjectiveController(LiveUpdatedController):
         Internal method called after objective changes.
         """
         currentObjective = self._manager.getCurrentObjective()
-        if currentObjective is None or currentObjective not in [0, 1, 2]:
+        if currentObjective is None or currentObjective not in [0, 1]:
             return
 
         # Get status from manager
@@ -285,21 +285,21 @@ class ObjectiveController(LiveUpdatedController):
         direct coupling.
         
         INDEXING CONVENTION:
-        - objective_id uses 1-based numbering (1 or 2) for API consistency
+        - objective_id uses 0-based numbering (0 or 1) for API consistency
         - Signal type is str but we accept both str and int for flexibility
         
         Args:
-            objective_id: ID of objective to switch to (1 or 2, as int or str)
+            objective_id: ID of objective to switch to (0 or 1, as int or str)
         """
         try:
             # Convert to int if string
             if isinstance(objective_id, str):
                 objective_id = int(objective_id)
             
-            if objective_id in [1, 2]:
+            if objective_id in [0, 1]:
                 # Get current slot (0-based from manager) and convert to 1-based for comparison
                 current_slot_0based = self._manager.getCurrentObjective()
-                current_slot_1based = current_slot_0based + 1 if current_slot_0based is not None else None
+                current_slot_1based = current_slot_0based  if current_slot_0based is not None else None
                 
                 if current_slot_1based != objective_id:
                     self._logger.info(f"Received request to move to objective ID {objective_id}")
@@ -307,7 +307,7 @@ class ObjectiveController(LiveUpdatedController):
                 else:
                     self._logger.debug(f"Already on objective ID {objective_id}, no movement needed")
             else:
-                self._logger.warning(f"Invalid objective ID {objective_id} received (must be 1 or 2)")
+                self._logger.warning(f"Invalid objective ID {objective_id} received (must be 0 or 1)")
         except ValueError:
             self._logger.error(f"Invalid objective ID format: {objective_id} (must be convertible to int)")
         except Exception as e:
@@ -322,8 +322,8 @@ class ObjectiveController(LiveUpdatedController):
         
         INDEXING CONVENTION:
         - objective_names array is 0-indexed
-        - API/external uses 1-based slot numbers
-        - moveToObjective expects 1-based slot
+        - API/external uses 0-based slot numbers
+        - moveToObjective expects 0-based slot
         
         Args:
             objective_name: Name of objective to switch to (e.g., "10x", "20x")
@@ -333,17 +333,17 @@ class ObjectiveController(LiveUpdatedController):
             objective_names = self._manager.objectiveNames
             if objective_name in objective_names:
                 idx = objective_names.index(objective_name)  # 0-based index in array
-                slot_1based = idx + 1  # Convert to 1-based slot for API
+                slot_0based = idx  # Convert to 0-based slot for API
                 
-                # Get current slot (0-based from manager) and convert to 1-based for comparison
+                # Get current slot (0-based from manager) and convert to 0-based for comparison
                 current_slot_0based = self._manager.getCurrentObjective()
-                current_slot_1based = current_slot_0based + 1 if current_slot_0based is not None else None
+                current_slot_0based = current_slot_0based if current_slot_0based is not None else None
                 
-                if current_slot_1based != slot_1based:
-                    self._logger.info(f"Received request to move to objective '{objective_name}' (slot {slot_1based})")
-                    self.moveToObjective(slot_1based)  # moveToObjective expects 1-based
+                if current_slot_0based != slot_0based:
+                    self._logger.info(f"Received request to move to objective '{objective_name}' (slot {slot_0based})")
+                    self.moveToObjective(slot_0based)  # moveToObjective expects 0-based
                 else:
-                    self._logger.debug(f"Already on objective '{objective_name}' (slot {slot_1based}), no movement needed")
+                    self._logger.debug(f"Already on objective '{objective_name}' (slot {slot_0based}), no movement needed")
             else:
                 self._logger.warning(f"Objective '{objective_name}' not found in ObjectiveManager. Available: {objective_names}")
         except Exception as e:
@@ -353,31 +353,31 @@ class ObjectiveController(LiveUpdatedController):
         """Handle UI button click for objective 1 (slot 1)"""
         # getCurrentObjective returns 0-based, we need to compare with 0 (slot 1 = index 0)
         if self._manager.getCurrentObjective() != 0:
-            self.moveToObjective(1)  # moveToObjective expects 1-based
+            self.moveToObjective(0)  # moveToObjective expects 0-based
 
     def onObj2Clicked(self):
         """Handle UI button click for objective 2 (slot 2)"""
         # getCurrentObjective returns 0-based, we need to compare with 1 (slot 2 = index 1)
         if self._manager.getCurrentObjective() != 1:
-            self.moveToObjective(2)  # moveToObjective expects 1-based
+            self.moveToObjective(1)  # moveToObjective expects 0-based
 
     def onCalibrateClicked(self):
         """Handle UI button click for calibration"""
         self.calibrateObjective()
 
     @APIExport(runOnUIThread=True)
-    def setPositions(self, x1:float=None, x2:float=None, z1:float=None, z2:float=None, isBlocking:bool=False):
+    def setPositions(self, x0:float=None, x1:float=None, z0:float=None, z1:float=None, isBlocking:bool=False):
         """
         Overwrite the positions for objective 1 and 2 in the EEPROM of the ESP32.
         
         Args:
-            x1: Position for objective 1 in X
-            x2: Position for objective 2 in X
-            z1: Position for objective 1 in Z
-            z2: Position for objective 2 in Z
+            x0: Position for objective 1 in X
+            x1: Position for objective 2 in X
+            z0: Position for objective 1 in Z
+            z1: Position for objective 2 in Z
             isBlocking: Whether to block until complete
         """
-        return self._objective.setPositions(x1, x2, z1, z2, isBlocking)
+        return self._objective.setPositions(x0, x1, z0, z1, isBlocking)
 
     @APIExport(runOnUIThread=True)
     def setObjectiveParameters(self, objectiveSlot: int, pixelsize: float = None, 
@@ -388,7 +388,7 @@ class ObjectiveController(LiveUpdatedController):
         This updates the manager state and propagates changes to the detector.
         
         Args:
-            objectiveSlot: Objective slot number (1 or 2)
+            objectiveSlot: Objective slot number (0 or 1)
             pixelsize: Pixel size in micrometers
             objectiveName: Name of the objective
             NA: Numerical aperture
@@ -397,8 +397,8 @@ class ObjectiveController(LiveUpdatedController):
         Returns:
             Dictionary with updated parameters
         """
-        if objectiveSlot not in [1, 2]:
-            raise ValueError("Objective slot must be 1 or 2")
+        if objectiveSlot not in [0, 1]:
+            raise ValueError("Objective slot must be 0 or 1")
         
         # Update manager state (will emit signal)
         self._manager.setObjectiveParameters(
@@ -422,7 +422,7 @@ class ObjectiveController(LiveUpdatedController):
         
         INDEXING CONVENTION in returned status:
         - currentObjective: 0-based index from manager (0 or 1)
-        - state: 1-based slot from hardware (1 or 2)
+        - state: 0-based slot from hardware (0 or 1)
         
         Returns:
             Dictionary with complete objective status

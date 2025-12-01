@@ -239,13 +239,12 @@ class ObjectiveManager(SignalInterface):
         
         INDEXING CONVENTION:
         - Internal _currentObjective: 0-based (0 or 1)
-        - This method returns: 1-based (1 or 2) for API/external use
         
         Returns:
-            Current objective slot (1 or 2) or None if not set
+            Current objective slot (0 or 1) or None if not set
         """
         if self._currentObjective is not None:
-            return self._currentObjective + 1  # Convert 0-based to 1-based
+            return self._currentObjective  # Convert 0-based to 1-based
         return None
     
     def getCurrentPixelSize(self) -> float:
@@ -321,10 +320,10 @@ class ObjectiveManager(SignalInterface):
         Raises:
             ValueError: If slot is not 1 or 2
         """
-        if slot not in [1, 2]:
-            raise ValueError(f"Objective slot must be 1 or 2, got {slot}")
+        if slot not in [0, 1]:
+            raise ValueError(f"Objective slot must be 0 or 1, got {slot}")
         
-        idx = slot - 1  # Convert 1-based slot to 0-based array index
+        idx = slot  # Internal indexing is already 0-based
         changes = {}
         
         if pixelsize is not None:
@@ -358,27 +357,28 @@ class ObjectiveManager(SignalInterface):
                 # If this is the current objective, also emit state changed
                 if self._currentObjective == slot:
                     self.sigObjectiveStateChanged.emit(self.getFullStatus())
+                    
     def getObjectiveParameters(self, slot: int) -> dict:
         """
         Get parameters for a specific objective slot.
         
         INDEXING CONVENTION:
-        - API/external: 1-based slot numbers (1 or 2)
+        - API/external: 0-based slot numbers (0 or 1)
         - Internal: 0-based array indexing
         
         Args:
-            slot: Objective slot number (1 or 2) - 1-based for API consistency
+            slot: Objective slot number (0 or 1) - 0-based for API consistency
             
         Returns:
             Dictionary with objective parameters
             
         Raises:
-            ValueError: If slot is not 1 or 2
+            ValueError: If slot is not 0 or 1
         """
-        if slot not in [1, 2]:
-            raise ValueError(f"Objective slot must be 1 or 2, got {slot}")
+        if slot not in [0, 1]:
+            raise ValueError(f"Objective slot must be 0 or 1, got {slot}")
         
-        idx = slot - 1  # Convert 1-based slot to 0-based array index
+        idx = slot  # Internal indexing is already 0-based
         return {
             "objectiveSlot": slot,
             "pixelsize": self._pixelsizes[idx],
@@ -398,7 +398,7 @@ class ObjectiveManager(SignalInterface):
         status = {
             "currentObjective": self._currentObjective,
             "isHomed": self._isHomed,
-            "availableObjectives": [1, 2],
+            "availableObjectives": [0, 1],
             "availableObjectivesNames": list(self._objectiveNames),
             "availableObjectivesPositions": list(self._objectivePositions),
             "availableObjectiveMagnifications": list(self._magnifications),

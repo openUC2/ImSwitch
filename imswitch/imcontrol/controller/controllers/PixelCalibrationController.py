@@ -458,7 +458,7 @@ class PixelCalibrationController(LiveUpdatedController):
 
     # API Methods for web interface
     @APIExport(runOnUIThread=True)  # Run in background thread
-    def calibrateStageAffine(self, objectiveId: int = 1, stepSizeUm: float = 100.0, 
+    def calibrateStageAffine(self, objectiveId: int = None, stepSizeUm: float = 100.0, 
                              pattern: str = "cross", nSteps: int = 1, validate: bool = False):
         """
         Perform affine stage-to-camera calibration via API.
@@ -2162,10 +2162,11 @@ class PixelCalibrationClass(object):
                 # Cross pattern: center + 4 cardinal + 4 diagonal = 9 positions
                 offsets = [
                     (0, 0),
-                    (step_size_um, 0), (0, step_size_um), (-step_size_um, 0), (0, -step_size_um),
-                    (step_size_um, step_size_um), (step_size_um, -step_size_um),
-                    (-step_size_um, step_size_um), (-step_size_um, -step_size_um)
-                ]
+                    (step_size_um, 0), (0, step_size_um), (-step_size_um, 0), (0, -step_size_um)]
+                #,
+                #    (step_size_um, step_size_um), (step_size_um, -step_size_um),
+                #    (-step_size_um, step_size_um), (-step_size_um, -step_size_um)
+                #]
             elif pattern == "grid":
                 # Grid pattern: n_steps x n_steps
                 offsets = []

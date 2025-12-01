@@ -267,10 +267,10 @@ class PixelCalibrationController(LiveUpdatedController):
             try:
                 if objective_id in objective_names:
                     idx = objective_names.index(objective_id)
-                    slot = idx + 1  # Convert to 1-based slot
+                    slot = idx  # Use 0-based index (0 or 1)
                     old_value = current_pixelsizes[idx]
                     
-                    # Update through manager method
+                    # Update through manager method (expects 0-based index)
                     obj_mgr.setObjectiveParameters(slot, pixelsize=pixel_size, emitSignal=True)
                     
                     self._logger.info(f"Updated ObjectiveManager pixelsize for '{objective_id}' (slot {slot}): "
@@ -278,7 +278,7 @@ class PixelCalibrationController(LiveUpdatedController):
                     updated_count += 1
                 elif objective_id == "default" and len(objective_names) > 0:
                     # Apply to first objective
-                    slot = 1
+                    slot = 0
                     old_value = current_pixelsizes[0]
                     
                     # Update through manager method
@@ -415,12 +415,12 @@ class PixelCalibrationController(LiveUpdatedController):
         3. Applies the corresponding calibration data (pixel size, flip settings)
         
         INDEXING CONVENTION:
-        - objective_id: objective id int (e.g. 0,1)
-        - ObjectiveController.moveToObjective: expects 1-based slot (1 or 2)
+        - objective_id: 0-based index (0 or 1)
+        - ObjectiveController.moveToObjective: expects 0-based slot (0 or 1)
         - ObjectiveManager._currentObjective: 0-based (0 or 1)
         
         Args:
-            objective_id: Identifier for the objective to activate (e.g., "10x", "20x")
+            objective_id: Identifier for the objective to activate (0 or 1)
         """
         # Update local tracking
         old_objective = self.currentObjective
@@ -431,8 +431,8 @@ class PixelCalibrationController(LiveUpdatedController):
         try:
             # Get ObjectiveController from main controllers
             obj_ctrl = self._master._controllersRegistry["Objective"]
-            self._logger.debug(f"Moving to objective '{objective_id}' (slot {objective_id })")
-            obj_ctrl.moveToObjective(objective_id )
+            self._logger.debug(f"Moving to objective '{objective_id}' (slot {objective_id})")
+            obj_ctrl.moveToObjective(objective_id)
             
         except Exception as e:
             self._logger.warning(f"Could not switch objective via controller: {e}")
@@ -458,7 +458,7 @@ class PixelCalibrationController(LiveUpdatedController):
 
     # API Methods for web interface
     @APIExport(runOnUIThread=True)  # Run in background thread
-    def calibrateStageAffine(self, objectiveId: int = 1, stepSizeUm: float = 100.0, 
+    def calibrateStageAffine(self, objectiveId: int = 0, stepSizeUm: float = 100.0, 
                              pattern: str = "cross", nSteps: int = 1, validate: bool = False):
         """
         Perform affine stage-to-camera calibration via API.
@@ -466,10 +466,10 @@ class PixelCalibrationController(LiveUpdatedController):
         This runs in a background thread and can be monitored via signals.
         
         INDEXING CONVENTION:
-        - objectiveId: 1-based slot number (1 or 2) for API consistency
+        - objectiveId: 0-based slot number (0 or 1) for API consistency
         
         Args:
-            objectiveId: Objective slot number (1 or 2, 1-based)
+            objectiveId: Objective slot number (0 or 1, 0-based)
             stepSizeUm: Step size in microns (50-200 recommended)
             pattern: Movement pattern - "cross" or "grid"
             nSteps: Number of steps in each direction
@@ -479,13 +479,13 @@ class PixelCalibrationController(LiveUpdatedController):
             Dictionary with calibration results including metrics
         """
         
-        # Validate 1-based slot input
+        # Validate 0-based slot input
         if objectiveId not in [0, 1]:
             self._logger.error("Invalid objective slot: %s", objectiveId)
             return {"error": "Invalid objective slot", "success": False}
         
         mThread = threading.Thread(target=self.calibrateStageAffineInThread, args=(
-            objectiveId, # TODO: change to objective ids to make it unifeid around 0 or 1
+            objectiveId,
             stepSizeUm,
             pattern,
             nSteps,
@@ -494,10 +494,13 @@ class PixelCalibrationController(LiveUpdatedController):
         mThread.start()
         return {"success": True, "message": "Calibration started in background thread"}
 
-    def calibrateStageAffineInThread(self, objectiveId: int = 1, stepSizeUm: float = 100.0, 
+    def calibrateStageAffineInThread(self, objectiveId: int = 0, stepSizeUm: float = 100.0, 
                              pattern: str = "cross", nSteps: int = 4, validate: bool = False):
         """
         Perform affine stage-to-camera calibration in a separate thread.
+        
+        INDEXING CONVENTION:
+        - objectiveId: 0-based slot number (0 or 1)
         """
         try:
             
@@ -890,7 +893,7 @@ class PixelCalibrationController(LiveUpdatedController):
             # Update objective pixel size if this is the current objective
             # INDEXING CONVENTION:
             # - obj_manager.getCurrentObjective(): 0-based (0 or 1)
-            # - setObjectiveParameters: expects 1-based slot (1 or 2)
+            # - setObjectiveParameters: expects 0-based slot (0 or 1)
             if hasattr(self._master, 'objectiveManager'):
                 obj_manager = self._master.objectiveManager
                 current_objective_name = obj_manager.getCurrentObjectiveName()
@@ -899,9 +902,9 @@ class PixelCalibrationController(LiveUpdatedController):
                 if objective_id == current_objective_name or objective_id == "default":
                     current_slot_0based = obj_manager.getCurrentObjective()
                     if current_slot_0based is not None:
-                        slot_1based = current_slot_0based + 1  # Convert to 1-based for API
-                        obj_manager.setObjectiveParameters(slot_1based, pixelsize=pixel_size, emitSignal=True)
-                        self._logger.info(f"Updated objective slot {slot_1based} pixelsize to {pixel_size:.3f} µm/px")
+                        # Use 0-based index directly
+                        obj_manager.setObjectiveParameters(current_slot_0based, pixelsize=pixel_size, emitSignal=True)
+                        self._logger.info(f"Updated objective slot {current_slot_0based} pixelsize to {pixel_size:.3f} µm/px")
             
             self._logger.info(f"Successfully applied calibration results for '{objective_id}'")
             

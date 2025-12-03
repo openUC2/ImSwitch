@@ -282,7 +282,7 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].resetStageOffsetAxis(axis=axis)
 
-    @APIExport(runOnUIThread=True)
+    @APIExport(runOnUIThread=False)
     def setStageOffsetAxis(self, positionerName: Optional[str]=None, knownPosition:float=0, currentPosition:Optional[float]=None, knownOffset:Optional[float]=None,  axis:str="X"):
         """
         Sets the stage to a known offset aside from the home position.
@@ -293,7 +293,7 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].setStageOffsetAxis(knownPosition=knownPosition, currentPosition=currentPosition, knownOffset=knownOffset, axis=axis)
 
-    @APIExport(runOnUIThread=True)
+    @APIExport(runOnUIThread=False)
     def getStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
         """
         Returns the stage offset for the given axis.
@@ -303,7 +303,7 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         return self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)
 
-    @APIExport(runOnUIThread=True)
+    @APIExport(runOnUIThread=False)
     def getTruePositionerPositionWithoutOffset(self, positionerName: Optional[str]=None, axis:str="X"):
         """
         Returns the true position of the positioner without the stage offset for the given axis.

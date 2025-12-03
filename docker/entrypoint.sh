@@ -195,4 +195,4 @@ log "python3 -m imswitch $params"
 # params is a single string, so we use eval to properly pass it as multiple arguments
 # example: eval python3 -m imswitch --headless --http-port 8001 --no-ssl --config-folder /Users/bene/ImSwitchConfig --config-file example_virtual_microscope.json --data-folder /Users/bene/ImSwitchConfig  --scan-ext-data-folder --ext-data-folder /Volumes
 
-python3 -m imswitch "$params"
+python3 -m imswitch $params

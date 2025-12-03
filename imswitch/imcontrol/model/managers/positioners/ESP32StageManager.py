@@ -158,10 +158,10 @@ class ESP32StageManager(PositionerManager):
         self._motor.setIsCoreXY(isCoreXY=self.isCoreXY)
 
         # Setup motors
-        self.setupMotor(self.minX, self.maxX, self.stepSizes["X"], self.backlashX, self.stageOffsetPositions["X"], "X")
-        self.setupMotor(self.minY, self.maxY, self.stepSizes["Y"], self.backlashY, self.stageOffsetPositions["Y"], "Y")
-        self.setupMotor(self.minZ, self.maxZ, self.stepSizes["Z"], self.backlashZ, self.stageOffsetPositions["Z"], "Z")
-        self.setupMotor(self.minA, self.maxA, self.stepSizes["A"], self.backlashA, self.stageOffsetPositions["A"], "A")
+        self.setupMotor(self.minX, self.maxX, self.stepSizes["X"], self.backlashX, "X")
+        self.setupMotor(self.minY, self.maxY, self.stepSizes["Y"], self.backlashY, "Y")
+        self.setupMotor(self.minZ, self.maxZ, self.stepSizes["Z"], self.backlashZ, "Z")
+        self.setupMotor(self.minA, self.maxA, self.stepSizes["A"], self.backlashA, "A")
 
         # Setup Motor drivers (TMC - if available)
         #    def set_tmc_parameters(self, axis=0, msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
@@ -244,8 +244,8 @@ class ESP32StageManager(PositionerManager):
         """
         self._motor.set_motor_enable(enable=enable, enableauto=enableauto)
 
-    def setupMotor(self, minPos, maxPos, stepSize, backlash, offset, axis):
-        self._motor.setup_motor(axis=axis, minPos=minPos, maxPos=maxPos, stepSize=stepSize, backlash=backlash, offset=offset)
+    def setupMotor(self, minPos, maxPos, stepSize, backlash, axis):
+        self._motor.setup_motor(axis=axis, minPos=minPos, maxPos=maxPos, stepSize=stepSize, backlash=backlash)
 
     def setupMotorDriver(self, axis="X", msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
         self._motor.set_tmc_parameters(axis=axis, msteps=msteps, rms_current=rms_current, stall_value=stall_value, sgthrs=sgthrs, semin=semin, semax=semax, blank_time=blank_time, toff=toff, timeout=timeout)
@@ -285,7 +285,9 @@ class ESP32StageManager(PositionerManager):
             if not is_absolute and value == 0: return
             if self.limitXenabled and is_absolute and value < 0: return
             elif self.limitXenabled and not is_absolute and self._position[axis] + value < 0: return
-            self._motor.move_x(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value + self.stageOffsetPositions["X"] if is_absolute else value
+            self._motor.move_x(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
         elif axis == 'Y' and speed >0:
@@ -293,7 +295,9 @@ class ESP32StageManager(PositionerManager):
             if not is_absolute and value == 0: return
             if self.limitYenabled and is_absolute and value < 0: return
             elif self.limitYenabled and not is_absolute and self._position[axis] + value < 0: return
-            self._motor.move_y(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value + self.stageOffsetPositions["Y"] if is_absolute else value
+            self._motor.move_y(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
         elif axis == 'Z' and speed >0:
@@ -301,7 +305,9 @@ class ESP32StageManager(PositionerManager):
             if not is_absolute and value == 0: return
             if self.limitZenabled and is_absolute and value < 0: return
             elif self.limitZenabled and not is_absolute and self._position[axis] + value < 0: return
-            self._motor.move_z(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, is_dualaxis=self.isDualAxis, timeout=timeout, is_reduced=is_reduced)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value + self.stageOffsetPositions["Z"] if is_absolute else value
+            self._motor.move_z(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, is_dualaxis=self.isDualAxis, timeout=timeout, is_reduced=is_reduced)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
         elif axis == 'A' and speed >0:
@@ -309,21 +315,33 @@ class ESP32StageManager(PositionerManager):
             #if is_absolute and value < 0: return
             #elif not is_absolute and self._position[axis] + value < 0: return
             if not is_absolute and value == 0: return
-            self._motor.move_a(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value + self.stageOffsetPositions["A"] if is_absolute else value
+            self._motor.move_a(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
         elif axis == 'XY':
             # don't move to negative positions
             if (self.limitXenabled and self.limitYenabled) and is_absolute and (value[0] < 0 or value[1] < 0): return
             elif (self.limitXenabled and self.limitYenabled) and not is_absolute and (self._position["X"] + value[0] < 0 or self._position["Y"] + value[1] < 0): return
-            self._motor.move_xy(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value
+            if is_absolute:
+                deviceValue = (value[0] + self.stageOffsetPositions["X"], value[1] + self.stageOffsetPositions["Y"])
+            self._motor.move_xy(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
             for i, iaxis in enumerate(("X", "Y")):
                 if not is_absolute:
                     self._position[iaxis] = self._position[iaxis] + value[i]
                 else:
                     self._position[iaxis] = value[i]
         elif axis == 'XYZ':
-            self._motor.move_xyz(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value
+            if is_absolute:
+                deviceValue = (value[0] + self.stageOffsetPositions["X"], 
+                               value[1] + self.stageOffsetPositions["Y"], 
+                               value[2] + self.stageOffsetPositions["Z"])
+            self._motor.move_xyz(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
             for i, iaxis in enumerate(("X", "Y", "Z")):
                 if not is_absolute: self._position[iaxis] = self._position[iaxis] + value[i]
                 else: self._position[iaxis] = value[i]
@@ -512,13 +530,33 @@ class ESP32StageManager(PositionerManager):
         value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
 
-    def setStageOffsetAxis(self, knownOffset:float=None, axis="X"):
-        try:
-            self.stageOffsetPositions[axis] = knownOffset
-        except KeyError:
-            self.__logger.error(f"Axis {axis} not found in stageOffsetPositions.")
-        self.__logger.info(f"Set offset for {axis} axis to {knownOffset} mum.")
-        self._motor.set_offset(axis=axis, offset=knownOffset)
+    def setStageOffsetAxis(self, knownPosition=0, currentPosition=None, knownOffset=None, axis="X"):
+        """
+        Sets the stage offset for calibration purposes.
+        knownPosition and currentPosition are in physical (user) coordinates.
+        """
+        if currentPosition is None:
+            currentPosition = self._position[axis]
+        if knownOffset is None:
+            # Calculate offset: offset = current_device_pos - known_user_pos
+            # Get raw device position
+            devicePositions = self._motor.get_position()
+            axisIndex = {"A": 0, "X": 1, "Y": 2, "Z": 3}[axis]
+            currentDevicePosition = devicePositions[axisIndex]
+            offset = currentDevicePosition - knownPosition
+        else:
+            offset = knownOffset
+        
+        self.stageOffsetPositions[axis] = offset
+        self.__logger.info(f"Set offset for {axis} axis to {offset} µm.")
+        self.saveStageOffset(offsetValue=offset, axis=axis)
+
+    def resetStageOffsetAxis(self, axis="X"):
+        """
+        Resets the stage offset for the given axis to 0.
+        """
+        self.__logger.info(f"Resetting stage offset for {axis} axis.")
+        self.setStageOffsetAxis(knownOffset=0, axis=axis)
 
     def getStageOffsetAxis(self, axis:str="X"):
         """ Get the current stage offset for a given axis.

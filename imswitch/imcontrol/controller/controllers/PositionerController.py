@@ -58,9 +58,12 @@ class PositionerController(ImConWidgetController):
             condition = lambda p: p.resetOnClose
         )
 
-    def getPos(self):
-        return self._master.positionersManager.execOnAll(lambda p: p.position)
-
+    def getPos(self, positionerName:str=None) -> Dict[str, Dict[str, float]]:
+        if positionerName is None:
+            return self._master.positionersManager.execOnAll(lambda p: p.getPosition())
+        else:
+            return {positionerName: self._master.positionersManager[positionerName].getPosition()}
+    
     def getSpeed(self):
         return self._master.positionersManager.execOnAll(lambda p: p.speed)
 
@@ -300,6 +303,18 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         return self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)
 
+    @APIExport(runOnUIThread=True)
+    def getTruePositionerPositionWithoutOffset(self, positionerName: Optional[str]=None, axis:str="X"):
+        """
+        Returns the true position of the positioner without the stage offset for the given axis.
+        """
+        self._logger.debug(f'Getting true position without offset for {axis} axis.')
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        currentPositionWithOffset = self.getPos(positionerName)[positionerName][axis]
+        currentOffset = self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)   
+        return currentPositionWithOffset - currentOffset
+    
     def saveStageOffset(self, positionerName=None, offsetValue=None, axis="X"):
         """ Save the current stage offset to the config file. """
         # This logic is now handled in the manager.

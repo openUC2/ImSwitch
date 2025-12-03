@@ -19,12 +19,9 @@ def getSystemUserDir():
 
 
 # Base directory for program data files (templates, defaults, etc.)
-_baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)), '_data')
+_baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(__file__)).split("imcommon")[0], '_data') # TODO: WEIRD!!
 # Base directory for user configuration files
 _baseUserFilesDir = getSystemUserDir()
-
-
-
 
 def is_writable_directory(path: str) -> bool:
     """

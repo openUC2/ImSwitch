@@ -123,7 +123,10 @@ class PositionerManager(ABC):
         """
         # result_pos = self._set_position(position, axis)
         # self._position[axis] = result_pos
-
+        pass
+    
+    def getPosition(self, axis: str) -> float:
+        """ Returns the current position of the specified axis. """
         pass
 
     def finalize(self) -> None:

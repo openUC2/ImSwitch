@@ -761,14 +761,16 @@ class SettingsController(ImConWidgetController):
         """ Returns the available trigger types for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
-        return self._master.detectorsManager[detectorName].getTriggerTypes()
+        triggerTypes = self._master.detectorsManager[detectorName].getTriggerTypes()
+        return triggerTypes if triggerTypes is not None else []
 
     @APIExport(runOnUIThread=True)
     def getDetectorCurrentTriggerType(self, detectorName: str=None) -> str:
         """ Returns the current trigger type for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
-        return self._master.detectorsManager[detectorName].getCurrentTriggerType()
+        currentTrigger = self._master.detectorsManager[detectorName].getCurrentTriggerType()
+        return currentTrigger if currentTrigger is not None else "Software"
 
     @APIExport(runOnUIThread=True)
     def setDetectorPreviewMinMaxValue(self, detectorName: str=None, minValue: int=0, maxValue: int = 1024) -> None:

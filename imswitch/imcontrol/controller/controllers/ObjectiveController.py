@@ -121,19 +121,25 @@ class ObjectiveController(LiveUpdatedController):
         # INDEXING CONVENTION:
         # - Hardware returns 1-based slot (0 or 1)
         # - Manager stores 0-based index (0 or 1)
-        if self._manager.calibrateOnStart:
+        status = self._objective.getstatus()
+        # Hardware returns 1-based slot, convert to 0-based for manager
+        hardwareSlot = status.get("state", 0)  # Default to slot 0 if not available
+        calibrateOnStart = self._manager.calibrateOnStart
+        if hardwareSlot == 2:
+            self._logger.warning("Objective hardware returned slot 2, which is out of range. Needs calibration.")
+            calibrateOnStart = True
+            
+        if calibrateOnStart:
             self.calibrateObjective()
             # After calibration, move to the first objective position (hardware slot 0)
             self._objective.move(slot=0, isBlocking=True)
             self._manager.setCurrentObjective(0)  # Store as 0-based index
-        else:
             status = self._objective.getstatus()
-            # Hardware returns 1-based slot, convert to 0-based for manager
             hardwareSlot = status.get("state", 0)  # Default to slot 0 if not available
-            internalIndex = hardwareSlot if hardwareSlot >= 0 else 0  # Convert to 0-based
-            self._manager.setCurrentObjective(internalIndex)
-            isHomed = status.get("isHomed", 0) == 1
-            self._manager.setHomedState(isHomed)
+
+        self._manager.setCurrentObjective(hardwareSlot)
+        isHomed = status.get("isHomed", 0) == 1
+        self._manager.setHomedState(isHomed)
         
         # Update detector with current pixel size
         self._updatePixelSize()

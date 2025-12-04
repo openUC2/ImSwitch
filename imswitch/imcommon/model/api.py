@@ -98,7 +98,7 @@ def generateAPI(objs, *, missingAttributeErrorMsg=None):
 
             runOnUIThread = hasattr(subObj, '_APIRunOnUIThread') and subObj._APIRunOnUIThread
 
-            if runOnUIThread:
+            if runOnUIThread and not IS_HEADLESS: # TODO: I think we could make use of it, but not as of now
                 wrapper = _UIThreadExecWrapper(subObj)
                 exportedFuncs[subObjName] = wrapper
                 wrapper.module = subObj.__module__.split('.')[-1]

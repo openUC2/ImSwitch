@@ -196,8 +196,7 @@ class PositionerManager(ABC):
                 import configfiletools
                 configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
         except Exception as e:
-            if hasattr(self, '_logger'):
-                self._logger.error(f"Could not save stage offset: {e}")
+            print(f"Could not save stage offset: {e}")
             return
 
     def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):

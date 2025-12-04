@@ -69,7 +69,7 @@ class ESP32StageManager(PositionerManager):
         self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
 
         # move z before homing? 
-        self._safeDistanceZHoming = positionerInfo.stageOffsets.get('safeDistanceZHoming',0)
+        self._safeDistanceZHoming = positionerInfo.managerProperties.get('safeDistanceZHoming',0)
         
         self.stageOffsetPositions = {}
         self.stageOffsetPositions["X"] = positionerInfo.stageOffsets.get('stageOffsetPositionX',0)
@@ -397,8 +397,9 @@ class ESP32StageManager(PositionerManager):
         If new positions are coming from the device they will be updated in ImSwitch too'''
         posDict = {"ESP32Stage": {}}
         for iAxis, axisName in enumerate(["A", "X", "Y", "Z"]):
-            self.setPosition(positionArray[iAxis] , axisName)
-            posDict["ESP32Stage"][axisName] = positionArray[iAxis]
+            positionOffsetCorrected = positionArray[iAxis] - self.getStageOffsetAxis(axisName)
+            self.setPosition(positionOffsetCorrected, axisName)
+            posDict["ESP32Stage"][axisName] = positionOffsetCorrected
         self._commChannel.sigUpdateMotorPosition.emit(posDict)
 
     def closeEvent(self):
@@ -499,6 +500,7 @@ class ESP32StageManager(PositionerManager):
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
         self.setPosition(axis="Z", value=0)
+        self._zPositionPriorHoming = 0
 
     def home_a(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         if abs(self.homeStepsA)>0:

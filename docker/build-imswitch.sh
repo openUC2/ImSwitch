@@ -7,7 +7,6 @@ cd /tmp/ImSwitch
 # Note(ethanjli): we delete DLL files because they take up a significant amount of space, and
 # they should be useless in Linux anyways (as they're Windows-specific)
 shopt -s globstar
-ls /opt/conda/envs/imswitch/lib/*/*/imswitch/**/*.dll
 rm -rf /opt/conda/envs/imswitch/lib/*/*/imswitch/**/*.dll
 
 # Install UC2-REST

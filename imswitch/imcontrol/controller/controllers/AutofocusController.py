@@ -424,7 +424,7 @@ class AutofocusController(ImConWidgetController):
             
             # Move to start position
             self.stages.move(value=absolute_positions[0], axis=axis, is_absolute=True, is_blocking=True)
-            time.sleep(tSettle * 3)  # allow some settling time
+            time.sleep(tSettle )  # allow some settling time
             
             # Scan through positions
             for iz in range(Nz):
@@ -432,20 +432,26 @@ class AutofocusController(ImConWidgetController):
                     break
                 if iz != 0:
                     self.stages.move(value=absolute_positions[iz], axis=axis, is_absolute=True, is_blocking=True)
-                time.sleep(tSettle)
+                    time.sleep(tSettle)
                 frame = self.grabCameraFrame()
                 if isDebug:
                     import tifffile as tif
-                    tif.imwrite(f"autofocus_frame_z.tif", frame, append=True)
+                    # Save raw frames as-is (preserve original datatype)
+                    if frame.dtype == np.uint8 or frame.dtype == np.uint16:
+                        tif.imwrite(f"autofocus_frame_z.tif", frame, append=True)
+                    else:
+                        # For float or other types, convert to float32
+                        tif.imwrite(f"autofocus_frame_z.tif", frame.astype(np.float32), append=True)
                 mProcessor.add_frame(frame, iz)
             
             allfocusvals = np.array(mProcessor.getFocusValueList(Nz))
             mProcessor.stop()
             
             # Move back to center before fitting
-            self.stages.move(value=center_position, axis=axis, is_absolute=True, is_blocking=True)
+            self.stages.move(value=absolute_positions[0], axis=axis, is_absolute=True, is_blocking=True)
             
             if not self.isAutofusRunning:
+                self.stages.move(value=center_position, axis=axis, is_absolute=True, is_blocking=True)
                 return center_position
             
             # Plot data
@@ -586,7 +592,7 @@ class AutofocusController(ImConWidgetController):
 
 
 class FrameProcessor:
-    def __init__(self, nGauss=7, nCropsize=2048, isDebug=False, focusMethod="LAPE"):
+    def __init__(self, nGauss=7, nCropsize=2048, isDebug=True, focusMethod="LAPE", binning=3):
         self.isRunning = True
         self.frame_queue = queue.Queue()
         self.allfocusvals = []
@@ -597,6 +603,7 @@ class FrameProcessor:
         self.nCropsize = nCropsize
         self.isDebug = isDebug
         self.focusMethod = focusMethod
+        self.binning = binning
 
     def setFlatfieldFrame(self, flatfieldFrame):
         self.flatFieldFrame = flatfieldFrame
@@ -613,6 +620,19 @@ class FrameProcessor:
             self.process_frame(img, iz)
 
     def process_frame(self, img, iz):
+        # Ensure img is float for processing to avoid overflow issues
+        if img.dtype == np.uint8:
+            img = img.astype(np.float32) / 255.0
+        elif img.dtype == np.uint16:
+            img = img.astype(np.float32) / 65535.0
+        elif img.dtype not in [np.float32, np.float64]:
+            img = img.astype(np.float32)
+        
+        # bin image prior to processing using imresize
+        if self.binning > 1:
+            import skimage.transform
+            img = skimage.transform.resize(img, (img.shape[0] // self.binning, img.shape[1] // self.binning), anti_aliasing=True)
+        
         if self.flatFieldFrame is not None:
             img = img / (self.flatFieldFrame + 1e-12)
         img = self.extract(img, self.nCropsize)
@@ -621,37 +641,51 @@ class FrameProcessor:
         # gauss filter? 
         if self.nGauss > 0:
             img = gaussian(img, sigma=self.nGauss)
-            # convert to int again, but don't scale min/max
-            img = np.int16(img*2**16 )
+        
+        # Normalize for debug TIFF saving to prevent wraparound
         if self.isDebug:
             import tifffile as tif
-            tif.imwrite(f"autofocus_proc_frame.tif", img, append=True)
+            # Save as float32 to preserve full dynamic range without wraparound
+            img_save = np.clip(img, 0, None).astype(np.float32)
+            tif.imwrite(f"autofocus_proc_frame.tif", img_save, append=True)
+        
         focusquality = self.calculate_focus_measure(img, method=self.focusMethod)
         self.allfocusvals.append(focusquality)
 
     @staticmethod
     def calculate_focus_measure_static(image, method="LAPE"):
+        # Ensure image is 2D grayscale
         if image.ndim == 3:
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            image = cv2.cvtColor(image.astype(np.uint8) if image.dtype != np.uint8 else image, cv2.COLOR_RGB2GRAY)
+        
+        # Normalize image to appropriate range for processing
+        if image.dtype == np.float32 or image.dtype == np.float64:
+            # Float images should be in [0, 1] range, convert to uint8 for OpenCV
+            image_norm = np.clip(image * 255, 0, 255).astype(np.uint8)
+        elif image.dtype == np.uint16:
+            # Convert uint16 to uint8 for consistent processing
+            image_norm = (image / 256).astype(np.uint8)
+        else:
+            # Assume uint8 or convert to uint8
+            image_norm = image.astype(np.uint8)
+        
         if method == "LAPE":
-            if image.dtype == np.uint16:
-                lap = cv2.Laplacian(image, cv2.CV_32F)
-            else:
-                lap = cv2.Laplacian(image, cv2.CV_16S)
+            # Use CV_64F for output to avoid overflow and ensure compatibility
+            lap = cv2.Laplacian(image_norm, cv2.CV_64F)
             return float(np.mean(np.square(lap))), lap
         elif method == "GLVA":
-            std_image = np.std(image, axis=None)
+            std_image = np.std(image_norm, axis=None)
             return float(std_image), std_image
         elif method == "JPEG":
             # compute the JPEG file size as focus measure
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
-            result, encimg = cv2.imencode('.jpg', image, encode_param)
+            result, encimg = cv2.imencode('.jpg', image_norm, encode_param)
             if result:
                 return float(len(encimg)), encimg
             else:
-                return 0.0, image
+                return 0.0, image_norm
         else:
-            return float(np.std(image, axis=None)), image
+            return float(np.std(image_norm, axis=None)), image_norm
         
 
     def calculate_focus_measure(self, image, method="LAPE"):

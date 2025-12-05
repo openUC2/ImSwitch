@@ -408,9 +408,13 @@ class ESP32StageManager(PositionerManager):
     def getPosition(self):
         # load position from device
         # t,x,y,z
+        posDict = {}
         try:
             allPositions = 1.*self._motor.get_position()
-            return {"X": allPositions[1], "Y": allPositions[2], "Z": allPositions[3], "A": allPositions[0]}
+            for i, iaxis in enumerate(("A","X","Y","Z")):
+                positionOffsetCorrected = allPositions[i] - self.getStageOffsetAxis(iaxis)
+                posDict[iaxis] = positionOffsetCorrected
+            return posDict
         except Exception as e:
             self.__logger.error(e)
             return self._position

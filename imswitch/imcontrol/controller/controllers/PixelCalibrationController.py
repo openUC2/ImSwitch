@@ -480,10 +480,17 @@ class PixelCalibrationController(LiveUpdatedController):
         """
         
         # Validate 0-based slot input
-        if objectiveId not in [0, 1]:
+        if objectiveId not in [0, 1, None]:
             self._logger.error("Invalid objective slot: %s", objectiveId)
             return {"error": "Invalid objective slot", "success": False}
         
+        # Validate camera intensity before calibration
+        if not self._validateCameraIntensity():
+            return {
+                "error": "Camera intensity out of range (saturated or too dark). Adjust exposure or lighting before calibration.",
+                "success": False
+            }
+
         mThread = threading.Thread(target=self.calibrateStageAffineInThread, args=(
             objectiveId,
             stepSizeUm,
@@ -504,12 +511,6 @@ class PixelCalibrationController(LiveUpdatedController):
         """
         try:
             
-            # Validate camera intensity before calibration
-            if not self._validateCameraIntensity():
-                return {
-                    "error": "Camera intensity out of range (saturated or too dark). Adjust exposure or lighting before calibration.",
-                    "success": False
-                }
 
             pixelcalibration_helper = PixelCalibrationClass(self)
 
@@ -2094,7 +2095,7 @@ class PixelCalibrationClass(object):
             else:
                 break
         
-        if len(mFrame) > 2: mFrame = np.mean(mFrame, axis=2)  # convert to grayscale
+        if len(mFrame.shape) > 2: mFrame = np.mean(mFrame, axis=2)  # convert to grayscale
         if returnFrameNumber:
             return np.array(nip.extract(mFrame, (crop_size, crop_size))), currentFrameNumber
         return np.array(nip.extract(mFrame, (crop_size, crop_size)))

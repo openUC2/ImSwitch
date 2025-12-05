@@ -43,7 +43,7 @@ def measure_pixel_shift(image1: np.ndarray, image2: np.ndarray) -> tuple:
     # Compute shift using phase correlation (sub-pixel accuracy)
     shift, error, phase_diff = phase_cross_correlation(
         image1, image2, 
-        upsample_factor=10  # 0.01 pixel accuracy
+        upsample_factor=3  # 0.01 pixel accuracy
     )
     
     # shift is [dy, dx], convert to [dx, dy]
@@ -126,6 +126,10 @@ def compute_affine_matrix(pixel_shifts: np.ndarray, stage_shifts: np.ndarray) ->
     rotation_deg = np.arctan2(U[1, 0], U[0, 0]) * 180 / np.pi
     scale_x = singular_values[0]
     scale_y = singular_values[1]
+    
+    
+    # store all information in metrics to disk 
+    
     
     metrics = {
         "rmse_um": rmse,

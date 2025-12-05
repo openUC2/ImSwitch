@@ -747,7 +747,8 @@ class LiveViewController(LiveUpdatedController):
     @APIExport()
     def getLiveViewActive(self) -> bool:
         """Check if any live view stream is currently active."""
-        return len(self._activeStreams) > 0
+        
+        return bool(len(self._activeStreams) > 0)
     
     @APIExport(requestType="POST") 
     def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "jpeg",

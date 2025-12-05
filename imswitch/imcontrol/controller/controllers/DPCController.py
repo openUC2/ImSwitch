@@ -179,10 +179,12 @@ class DPCController(ImConWidgetController):
                     self._params.led_intensity_b)
         self.ledMatrix.setHalves(
             intensity=intensity,
-            region=pattern_name
+            region=pattern_name, 
+            getReturn=True,
+            timeout=.2
         )
     
-    def _get_fresh_frame(self, timeout: float = 1.0):
+    def _get_fresh_frame(self, timeout: float = 1.0, nFrameSync: int = 2) -> Optional[np.ndarray]:
         """Get a fresh frame with frame sync (like ExperimentController)"""
         cTime = time.time()
         lastFrameNumber = -1
@@ -201,7 +203,7 @@ class DPCController(ImConWidgetController):
                     mFrame = self.detector.getLatestFrame(returnFrameNumber=False)
                 break
             
-            if currentFrameNumber <= lastFrameNumber + self._params.frame_sync:
+            if currentFrameNumber <= lastFrameNumber + nFrameSync:
                 time.sleep(0.01)  # Off-load CPU
             else:
                 break
@@ -213,8 +215,7 @@ class DPCController(ImConWidgetController):
         stack = []
         
         # Turn off all LEDs first
-        self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
-        time.sleep(self._params.wait_time / 2)
+        #self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
         
         for pattern_name in self.allDPCPatternNames:
             if self._stop_processing_event.is_set():
@@ -223,12 +224,10 @@ class DPCController(ImConWidgetController):
             # Set pattern
             self._set_led_pattern(pattern_name)
             self._logger.debug(f"Showing pattern: {pattern_name}")
-            
-            # Wait for LED to stabilize
-            time.sleep(self._params.wait_time)
-            
+            time.sleep(self._params.wait_time / 2)
+                        
             # Capture fresh frame with sync
-            frame = self._get_fresh_frame()
+            frame = self._get_fresh_frame(timeout=1.0, nFrameSync=self._params.frame_sync)
             if frame is None:
                 self._logger.warning(f"Failed to get frame for pattern {pattern_name}")
                 continue
@@ -239,8 +238,6 @@ class DPCController(ImConWidgetController):
             
             self._state.frame_count += 1
         
-        # Turn off LEDs after capture
-        self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
         
         return np.array(stack) if len(stack) == 4 else None
     

@@ -66,7 +66,9 @@ class MasterController:
         self.detectorsManager = DetectorsManager(
             self.__setupInfo.detectors, updatePeriod=100, **lowLevelManagers
         )
-        self.lasersManager = LasersManager(self.__setupInfo.lasers, **lowLevelManagers)
+        self.lasersManager = LasersManager(
+            self.__setupInfo.lasers, self.__commChannel, **lowLevelManagers
+        )
         self.positionersManager = PositionersManager(
             self.__setupInfo.positioners, self.__commChannel, **lowLevelManagers
         )

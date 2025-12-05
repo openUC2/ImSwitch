@@ -65,7 +65,7 @@ class UC2ConfigController(ImConWidgetController):
         try:
             self.stages = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
         except Exception as e:
-            self.__logger.error("No Stages found in the config file? " +e )
+            self.__logger.error("No Stages found in the config file? ", e )
             self.stages = None
 
         #

@@ -47,9 +47,9 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
                                     "--config=%s" % configfile,
                                     "--notebook-dir=%s" % directory,
                                     ], bufsize=1, stderr=subprocess.PIPE)
-            
+
         print("Starting jupyter with: %s" % " ".join(notebookp.args))
-        # concat the string to have the full terminal command 
+        # concat the string to have the full terminal command
         print("Waiting for server to start...")
         webaddr = None
         time0 = time.time()
@@ -131,4 +131,3 @@ def stopnotebook():
     _process = None
     _monitor = None
     _webaddr = None
-

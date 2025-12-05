@@ -120,7 +120,7 @@ class CalibrationData:
     linear_range: Tuple[float, float]  # valid focus range for linear approximation
     timestamp: float
     lookup_table: Optional[Dict[float, float]] = None  # focus_value -> z_position
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "position_data": self.position_data,
@@ -180,8 +180,8 @@ class FocusLockController(ImConWidgetController):
             self._logger.error(f"Positioner '{self.positioner}' not found using first in list.")
             self.positioner = self._master.positionersManager.getAllDeviceNames()[0]
             self.stage = self._master.positionersManager[self.positioner]
-        
-        
+
+
         # Internal Z position tracking
         self.currentZPosition = self.stage.getPosition()["Z"]
         self._commChannel.sigUpdateMotorPosition.connect(self._onMotorPositionUpdate)
@@ -189,8 +189,8 @@ class FocusLockController(ImConWidgetController):
         # Params - Consolidated focus parameters
         self._focus_params = FocusLockParams(
             focus_metric=getattr(self._setupInfo.focusLock, "focusLockMetric", "peak"),
-            crop_center=getattr(self._setupInfo.focusLock, "crop_center", None),
-            crop_size=getattr(self._setupInfo.focusLock, "crop_size", None),
+            crop_center=getattr(self._setupInfo.focusLock, "cropCenter", None),
+            crop_size=getattr(self._setupInfo.focusLock, "cropSize", None),
             update_freq=self._setupInfo.focusLock.updateFreq or 10,
         )
         # TODO: if there are no crop settings, we should find them automatically by detecing the maximum intensity spot in the image and crop 300 x/y around it, but only if the laser is on
@@ -212,13 +212,13 @@ class FocusLockController(ImConWidgetController):
             cam = self._master.detectorsManager[self.camera]
             imageWidth, imageHeight = cam.fullShape[0], cam.fullShape[1]
             fovCenter = [imageWidth // 2, imageHeight // 2]
-        # set up the FOV on the camera side 
+        # set up the FOV on the camera side
         try:
             cam = self._master.detectorsManager[self.camera]
             # def setROI(self,hpos=None,vpos=None,hsize=None,vsize=None):
             # computing coordinates for cropping the image
             imageWidth, imageHeight = cam.fullShape[0], cam.fullShape[1]
-            hpos = imageWidth//2 - fovWidth//2 
+            hpos = imageWidth//2 - fovWidth//2
             vpos = imageHeight//2 - fovHeight//2
             cam.crop(hpos = hpos, vpos = vpos, hsize = fovWidth, vsize = fovHeight)
         except Exception as e:
@@ -243,7 +243,7 @@ class FocusLockController(ImConWidgetController):
         safetyMoveLimit = getattr(self._setupInfo.focusLock, "safetyMoveLimit", 50.0)
         minStepThreshold = getattr(self._setupInfo.focusLock, "minStepThreshold", 2)
         safety_motion_active = getattr(self._setupInfo.focusLock, "safetyMotionActive", False)
-        scale_um_per_unit = getattr(self._setupInfo.focusLock, "scaleUmPerUnit", 100.0) # scale that translates focus units to microns 
+        scale_um_per_unit = getattr(self._setupInfo.focusLock, "scaleUmPerUnit", 100.0) # scale that translates focus units to microns
         output_lowpass_alpha = getattr(self._setupInfo.focusLock, "outputLowpassAlpha", 0.0)
         integral_limit = getattr(self._setupInfo.focusLock, "integralLimit", 100.0)
         meas_lowpass_alpha = getattr(self._setupInfo.focusLock, "measLowpassAlpha", 0.0)
@@ -263,29 +263,29 @@ class FocusLockController(ImConWidgetController):
 
         self._calib_params = CalibrationParams()
         self._state = FocusLockState()
-        
+
         # Calibration data storage - this is the key integration point for PID controller
         self._current_calibration: Optional[CalibrationData] = None
 
         # Current focus value (renamed from setPointSignal for clarity)
         self.current_focus_value = 0.0
-        
+
         # Lock state variables (cleaned up)
         self.locked = False
         self.aboutToLock = False
-        
+
         # Legacy compatibility variables (TODO: remove these gradually)
         self.setPointSignal = 0.0  # Mirrors current_focus_value for compatibility
         self.twoFociVar = self._focus_params.two_foci_enabled
         self.zStackVar = self._focus_params.z_stack_enabled
-        
+
         # Thread control
         self.__isPollingFramesActive = False
         self.pollingFrameUpdatePeriode = 1.0 / self._focus_params.update_freq
-        
+
         # About-to-lock logic
         self.aboutToLockDiffMax = 0.4
-        
+
         # Data buffers for plotting
         self.buffer = 40
         self.currPoint = 0
@@ -347,7 +347,7 @@ class FocusLockController(ImConWidgetController):
     def _onMotorPositionUpdate(self, pos: Dict[str, float]):
         if type(pos) != list and "Z" in pos[self.positioner]: # TODO: Seems like the signal is not unified
             self.currentZPosition = pos[self.positioner]["Z"]
-            
+
     # =========================
     # API: Params/state
     # =========================
@@ -440,7 +440,7 @@ class FocusLockController(ImConWidgetController):
         )
         self._focus_metric = FocusMetricFactory.create(self._focus_params.focus_metric, focus_config)
 
-        self.updateThread() # TODO: Shall we do that from the beginning? 
+        self.updateThread() # TODO: Shall we do that from the beginning?
         # Camera acquisition
         try:
             self._master.detectorsManager[self.camera].startAcquisition()
@@ -450,7 +450,7 @@ class FocusLockController(ImConWidgetController):
         try:
             if not self._state.is_measuring:
                 self._state.is_measuring = True
-                self._emitStateChangedSignal() # TODO: What is this good for? Actually needed?  
+                self._emitStateChangedSignal() # TODO: What is this good for? Actually needed?
                 self._logger.info("Focus measurement started")
                 return True
             return False
@@ -485,7 +485,7 @@ class FocusLockController(ImConWidgetController):
     def enableFocusLock(self, enable: bool = True) -> bool:
         try:
             if enable and not self.locked:
-                if not self._state.is_measuring: 
+                if not self._state.is_measuring:
                     self.startFocusMeasurement()
                 # Use internal Z position or fallback to hardware query
                 self.lockFocus(self.currentZPosition)
@@ -539,7 +539,7 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def getCalibrationResults(self) -> Dict[str, Any]:
-        # TODO: This interface has changed ? 
+        # TODO: This interface has changed ?
         self._focusCalibThread.getData()
 
     @APIExport(runOnUIThread=True)
@@ -580,7 +580,7 @@ class FocusLockController(ImConWidgetController):
         # store a history of the last 5 values and filter out outliers
         self._focus_metric.reset_history()
         try:
-            nFreeBufferFrames = 2   
+            nFreeBufferFrames = 2
             while self.__isPollingFramesActive:
                 if (time.time() - tLast) < self.pollingFrameUpdatePeriode:
                     time.sleep(0.001)
@@ -589,7 +589,7 @@ class FocusLockController(ImConWidgetController):
                 if not self._state.is_measuring and not self.locked and not self.aboutToLock:
                     continue
                 frameAverrage = []
-                for i in range(nFreeBufferFrames): # Kinda clear buffer and wait a bit? 
+                for i in range(nFreeBufferFrames): # Kinda clear buffer and wait a bit?
                     frame = self._master.detectorsManager[self.camera].getLatestFrame()
                     frameAverrage.append(frame)
                 im = np.mean(np.array(frameAverrage), axis=0)
@@ -607,7 +607,7 @@ class FocusLockController(ImConWidgetController):
                                                 crop_center=self._focus_params.crop_center)
 
 
-                
+
                 # Compute focus value using extracted focus metrics module
                 focus_result = self._focus_metric.compute(self.cropped_im)
                 self.current_focus_value = focus_result.get("focus", 0.0)
@@ -615,7 +615,7 @@ class FocusLockController(ImConWidgetController):
                 # TODO: Remove outliers in PID loop
 
                 # Legacy compatibility # TODO: remove all legacy vars
-                self.setPointSignal = self._pi_params.set_point if self.pi else 0 # TODO: This should be the user-set set point, not current focus value 
+                self.setPointSignal = self._pi_params.set_point if self.pi else 0 # TODO: This should be the user-set set point, not current focus value
 
                 # Get current timestamp for logging
                 current_timestamp = focus_result.get("t", time.time())
@@ -630,8 +630,8 @@ class FocusLockController(ImConWidgetController):
                     # "focus_result": focus_result,  # Include full result for debugging
                     "focus_setpoint": self._pi_params.set_point if self.pi else 0,
                 }
-                try:    
-                    if self.current_focus_value is None or np.isnan(focus_result['focus']): 
+                try:
+                    if self.current_focus_value is None or np.isnan(focus_result['focus']):
                         continue
                 except Exception as e:
                     self._logger.error(f"Error processing focus result: {e}")
@@ -640,7 +640,7 @@ class FocusLockController(ImConWidgetController):
 
                 # Initialize variables for CSV logging
                 pi_output = None
-                
+
                 # === Control action (relative moves only) ===
                 if self.locked and self.pi is not None:
                     meas = float(self.current_focus_value)
@@ -669,7 +669,7 @@ class FocusLockController(ImConWidgetController):
                     if step_um != 0.0:
                         # Use relative movement
                         self.stage.move(value=step_um, axis="Z", speed=MAX_SPEED, is_blocking=False, is_absolute=False)
-                        self._travel_used_um += abs(step_um) # TODO: Still not sure if we need to use this! 
+                        self._travel_used_um += abs(step_um) # TODO: Still not sure if we need to use this!
                         # travel budget acts like safety_distance_limit
                         if self._pi_params.safety_motion_active and self._travel_used_um > self._pi_params.safety_distance_limit:
                             self._logger.warning("Travel budget exceeded; unlocking focus.")
@@ -684,7 +684,7 @@ class FocusLockController(ImConWidgetController):
 
                 # Log focus measurement to CSV using extracted logging module
                 if (self._state.is_measuring or self.locked or self.aboutToLock) and self._csv_logger:
-                
+
                     try:
                         self._csv_logger.log_focus_lock_data(
                             focus_value=float(self.current_focus_value),
@@ -706,7 +706,7 @@ class FocusLockController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error in frame polling thread: {e}")
             self.__isPollingFramesActive = False
-        
+
     @APIExport(runOnUIThread=True)
     def setParamsAstigmatism(self, gaussian_sigma: float, background_threshold: float,
                         crop_size: int, crop_center: Optional[List[int]] = None):
@@ -715,10 +715,10 @@ class FocusLockController(ImConWidgetController):
         self._focus_params.crop_size = int(crop_size)
         if crop_center is not None:
             self._focus_params.crop_center = crop_center
-        
+
         # Update focus metric config
         self.setFocusLockParams(**self.getParamsAstigmatism())
-        
+
 
     @APIExport(runOnUIThread=True)
     def getParamsAstigmatism(self):
@@ -808,7 +808,7 @@ class FocusLockController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def getCurrentFocusValue(self) -> Dict[str, Any]:
         """Get the current focus value and metadata.
-        
+
         Returns:
             Dict containing:
             - focus_value: float - current focus metric value
@@ -929,7 +929,7 @@ class FocusLockController(ImConWidgetController):
     @APIExport(runOnUIThread=True, requestType="POST")
     def setCropFrameParameters(self, crop_size: int, crop_center: List[int] = None, frameSize: List[int] = None):
         detectorSize = self._master.detectorsManager[self.camera].shape
-        
+
         self._focus_params.crop_size = int(crop_size * self.reduceImageScaleFactor)
         if crop_center is None:
             _crop_center = [detectorSize[1] // 2, detectorSize[0] // 2]
@@ -944,7 +944,7 @@ class FocusLockController(ImConWidgetController):
             crop_center = [self._focus_params.crop_size // 2, self._focus_params.crop_size // 2]
         self._focus_params.crop_center = crop_center
         self._logger.info(f"Set crop parameters: size={self._focus_params.crop_size}, center={self._focus_params.crop_center}")
-        
+
         # Save the crop parameters to config file
         self.saveCropParameters()
 
@@ -956,11 +956,11 @@ class FocusLockController(ImConWidgetController):
                 # Set the crop parameters in the setup info
                 self._setupInfo.focusLock.crop_size = self._focus_params.crop_size
                 self._setupInfo.focusLock.crop_center = self._focus_params.crop_center
-                
+
                 # Save the updated setup info to config file
                 from imswitch.imcontrol.model import configfiletools
                 configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
-                
+
                 self._logger.info(f"Saved crop parameters to config: size={self._focus_params.crop_size}, center={self._focus_params.crop_center}")
         except Exception as e:
             self._logger.error(f"Could not save crop parameters: {e}")
@@ -970,7 +970,7 @@ class FocusLockController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def getCurrentFocusValue(self) -> Dict[str, Any]:
         """Get the current focus value and metadata.
-        
+
         Returns:
             Dict containing:
             - focus_value: float - current focus metric value
@@ -987,11 +987,11 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def performOneStepAutofocus(self, target_focus_setpoint: Optional[float] = None,
-                                move_to_focus: bool = True, 
+                                move_to_focus: bool = True,
                                 max_attempts: int = 3,
                                 threshold_um: float = 0.5) -> Dict[str, Any]:
         """Perform one-shot hardware-based autofocus using calibration data.
-        
+
         This is designed for wellplate scanning where we need fast, accurate focusing
         at each XY position without a full Z-sweep. Instead of doing a full Z-sweep,
         we:
@@ -999,7 +999,7 @@ class FocusLockController(ImConWidgetController):
         2. Calculate the offset from target setpoint (from previous focused position)
         3. Convert the offset to Z movement using calibration scale factor
         4. Move to correct Z position
-        
+
         Workflow:
         1. Capture single frame from focus camera
         2. Calculate focus metric (e.g., laser peak position in pixels)
@@ -1007,14 +1007,14 @@ class FocusLockController(ImConWidgetController):
         4. Convert to Z offset: delta_z = delta_focus * scale_factor (µm/unit)
         5. Move Z stage by delta_z (if move_to_focus=True)
         6. Optionally iterate if offset too large
-        
+
         Args:
-            target_focus_setpoint: Target focus value to reach (e.g., from previous 
+            target_focus_setpoint: Target focus value to reach (e.g., from previous
                                   focused position). If None, uses self._pi_params.set_point
             move_to_focus: If True, move Z stage to calculated focus position
             max_attempts: Maximum number of correction iterations (default 3)
             threshold_um: Success threshold in µm (default 0.5µm)
-            
+
         Returns:
             Dict containing:
             - success: bool - whether autofocus succeeded
@@ -1039,7 +1039,7 @@ class FocusLockController(ImConWidgetController):
                 "num_attempts": 0,
                 "final_error_um": None
             }
-        
+
         # Use provided setpoint or fall back to stored setpoint
         if target_focus_setpoint is None:
             target_focus_setpoint = self._pi_params.set_point
@@ -1048,7 +1048,7 @@ class FocusLockController(ImConWidgetController):
                     "No target setpoint provided and no stored setpoint. "
                     "Please provide target_focus_setpoint or run focus lock first."
                 )
-        
+
         # Ensure laser is on if configured
         laserName = getattr(self._setupInfo.focusLock, "laserName", None)
         laserValue = getattr(self._setupInfo.focusLock, "laserValue", None)
@@ -1058,17 +1058,17 @@ class FocusLockController(ImConWidgetController):
                 self._master.lasersManager[laserName].setEnabled(True)
             except Exception as e:
                 self._logger.warning(f"Could not enable focus laser: {e}")
-        
+
         success = False
         num_attempts = 0
         final_error_um = None
         current_focus_value = 0.0
         focus_offset = 0.0
         z_offset = 0.0
-        
+
         for attempt in range(max_attempts):
             num_attempts += 1
-            
+
             # Step 1: Capture single frame
             try:
                 latest_image = self._master.detectorsManager[self.camera].getLatestFrame()
@@ -1085,18 +1085,18 @@ class FocusLockController(ImConWidgetController):
                     "num_attempts": num_attempts,
                     "final_error_um": None
                 }
-            
+
             # Step 2: Calculate focus metric (same processing as polling thread)
             cropped_image = self.extract(
                 latest_image,
                 crop_size=self._focus_params.crop_size,
                 crop_center=self._focus_params.crop_center
             )
-            
+
             # Compute returns a dict with 'focus' key
             focus_result = self._focus_metric.compute(cropped_image)
             current_focus_value = focus_result.get("focus", None)
-            
+
             if current_focus_value is None or np.isnan(current_focus_value):
                 self._logger.error("Invalid focus value computed")
                 return {
@@ -1110,23 +1110,23 @@ class FocusLockController(ImConWidgetController):
                     "num_attempts": num_attempts,
                     "final_error_um": None
                 }
-            
+
             # Step 3: Calculate focus offset from target setpoint
             focus_offset = current_focus_value - target_focus_setpoint
-            
+
             # Step 4: Convert focus offset to Z offset using calibration scale factor
             # Scale factor is in µm per focus unit (e.g., µm per pixel)
             scale_factor = self._getCalibrationBasedScale()
             z_offset = focus_offset * scale_factor
             final_error_um = abs(z_offset)
-            
+
             self._logger.debug(
                 f"One-step AF attempt {attempt + 1}/{max_attempts}: "
                     f"current_focus={current_focus_value:.2f}, target={target_focus_setpoint:.2f}, "
                 f"focus_offset={focus_offset:.2f}, scale={scale_factor:.3f}µm/unit, "
                 f"z_offset={z_offset:.2f}µm"
             )
-            
+
             # Check if we're within threshold
             if final_error_um < threshold_um:
                 success = True
@@ -1135,7 +1135,7 @@ class FocusLockController(ImConWidgetController):
                     f"Error: {final_error_um:.3f}µm"
                 )
                 break
-            
+
             # Step 5: Move to target position (if requested)
             if move_to_focus:
                 try:
@@ -1147,11 +1147,11 @@ class FocusLockController(ImConWidgetController):
                             f"({max_single_move_um}µm). Clamping move."
                         )
                         z_offset = np.sign(z_offset) * max_single_move_um
-                    
+
                     # Move stage (relative movement)
                     self.stage.move(value=z_offset, axis="Z", is_absolute=False, is_blocking=True)
                     time.sleep(0.1)  # Small settle time
-                    
+
                 except Exception as e:
                     self._logger.error(f"Failed to move Z stage: {e}")
                     return {
@@ -1168,7 +1168,7 @@ class FocusLockController(ImConWidgetController):
             else:
                 # Not moving, so we're done after first measurement
                 break
-        
+
         return {
             "success": success,
             "current_focus_value": float(current_focus_value),
@@ -1224,14 +1224,14 @@ class FocusLockController(ImConWidgetController):
         self._calib_params.scan_range_um = scan_range_um
         self._calib_params.num_steps = num_steps
         self._calib_params.settle_time = settle_time
-        
+
         # Start calibration (uses dynamic range automatically now)
         if hasattr(self, '_focusCalibThread') and self._focusCalibThread.isRunning():
             return {"error": "Calibration already running"}
 
         self._focusCalibThread = FocusCalibThread(self, initial_z_position=initial_z_position)  # Pass initial_z_position to thread
         self._focusCalibThread.runThread()
-        
+
         return {
             "message": "Dynamic calibration started",
             "scan_range_um": scan_range_um,
@@ -1254,7 +1254,7 @@ class FocusCalibThread(object):
         self.calibrationResult = None
         self._isRunning = False
         self.initial_z_position = initial_z_position
-        
+
     def isRunning(self) -> bool:
         return self._isRunning
 
@@ -1267,7 +1267,7 @@ class FocusCalibThread(object):
         thread = threading.Thread(target=self.run, daemon=True)
         thread.start()
         self._thread = thread
-        
+
     def run(self):
         try:
             self.signalData = []
@@ -1281,7 +1281,7 @@ class FocusCalibThread(object):
                     self._focusValueComputeController._logger.info(f"Moved to initial Z position: {self.initial_z_position}µm")
                 except Exception as e:
                     self._focusValueComputeController._logger.error(f"Failed to move to initial Z position {self.initial_z_position}µm: {e}")
-            
+
             calib_params = self._focusValueComputeController._calib_params
 
             # IMPROVEMENT #1: Scan around the current position instead of always from->to
@@ -1314,12 +1314,12 @@ class FocusCalibThread(object):
                 if not self._isRunning:
                     self._focusValueComputeController._logger.info("Calibration thread stopped.")
                     break
-                
+
                 # Move to position (fix bug: was using 'z' instead of 'zpos')
                 self._focusValueComputeController._master.positionersManager[self._focusValueComputeController.positioner].move(value=zpos, axis="Z", speed=MAX_SPEED, is_blocking=True, is_absolute=True)
                 time.sleep(calib_params.settle_time)
-                # TODO: If the computing thread is not running, we have to start it 
-                # TODO: We should implement a callback on the signal update instead of polling twice here - connect() to the focus value update signal # 
+                # TODO: If the computing thread is not running, we have to start it
+                # TODO: We should implement a callback on the signal update instead of polling twice here - connect() to the focus value update signal #
                 focus_signal = float(self._focusValueComputeController.current_focus_value) # TODO: This interface seems odd, we have to improve this I guess since we cannot guarantee that setPointSignal is updated after we move the step - but when we explicitly grab a frame, we can guarantee that but compute twice - so rather wait for the next updated value or poll actively from the _controller ?  - we could have a counter in the focus computation thread that returns the id - we would need to wait for the next frame id (i.e. we can actually use the frame id as a return from the camera )
                 self._focusValueComputeController._logger.warning(f"Frame acquisition failed at Z={zpos:.3f}, using cached signal")
                 self.signalData.append(focus_signal)
@@ -1337,21 +1337,21 @@ class FocusCalibThread(object):
             # IMPROVEMENT #3: Enhanced calibration data structure and PID integration
             self.poly = np.polyfit(self.positionData, self.signalData, 1)
             self.calibrationResult = np.around(self.poly, 4)
-            
+
             # Calculate enhanced calibration metrics
             r_squared = self._calculate_r_squared()
             sensitivity_nm_per_unit = self._get_sensitivity_nm_per_px()
-            
+
             # Determine linear range (where polynomial fits well)
             focus_min, focus_max = min(self.signalData), max(self.signalData)
             linear_range = (focus_min, focus_max)
-            
+
             # Create lookup table for focus value -> z position conversion
             lookup_table = {}
             if len(self.positionData) > 1:
                 for focus_val, z_pos in zip(self.signalData, self.positionData):
                     lookup_table[float(focus_val)] = float(z_pos)
-            
+
             # CRITICAL: Create and store calibration data for PID controller integration
             calibration_data = CalibrationData(
                 position_data=list(self.positionData),
@@ -1363,7 +1363,7 @@ class FocusCalibThread(object):
                 timestamp=time.time(),
                 lookup_table=lookup_table,
             )
-            
+
             # Store calibration data in controller for PID integration
             self._focusValueComputeController._current_calibration = calibration_data
             self._focusValueComputeController._logger.info(f"Calibration completed: sensitivity={sensitivity_nm_per_unit:.1f} nm/unit, R²={r_squared:.4f}")
@@ -1378,7 +1378,7 @@ class FocusCalibThread(object):
                 plt.close()
             except Exception as e:
                 pass
-            
+
             self._focusValueComputeController.sigCalibrationProgress.emit({
                 "event": "calibration_completed",
                 "coefficients": self.poly.tolist(),
@@ -1388,13 +1388,13 @@ class FocusCalibThread(object):
             })
 
             self.show()
-            # move back to initial position 
+            # move back to initial position
             self._focusValueComputeController._master.positionersManager[self._focusValueComputeController.positioner].move(value=initialZPosition, axis="Z", speed=MAX_SPEED, is_blocking=True, is_absolute=True)
             self._isRunning = False
         except Exception as e:
             self._focusValueComputeController._logger.error(f"Error in calibration thread: {e}")
             self._isRunning = False
-            
+
     def _calculate_r_squared(self) -> float:
         if self.poly is None or len(self.signalData) == 0:
             return 0.0
@@ -1427,7 +1427,7 @@ class FocusCalibThread(object):
             else:
                 # Send invalid calibration signal
                 headless_signal_data = {
-                    "event": "calibration_display_update", 
+                    "event": "calibration_display_update",
                     "calibration_text": "Calibration invalid",
                     "calibration_data": None,
                     "pid_integration_active": False,
@@ -1435,7 +1435,7 @@ class FocusCalibThread(object):
                 }
                 self._focusValueComputeController.sigCalibrationProgress.emit(headless_signal_data)
             return
-            
+
         # GUI mode - update widget display
         if self.poly is None or self.poly[0] == 0:
             cal_text = "Calibration invalid"
@@ -1458,12 +1458,12 @@ class FocusCalibThread(object):
             "r_squared": self._calculate_r_squared(),
             "sensitivity_nm_per_px": self._get_sensitivity_nm_per_px(),
         }
-        
-        # Add enhanced calibration data if available  
+
+        # Add enhanced calibration data if available
         if hasattr(self._focusValueComputeController, '_current_calibration') and self._focusValueComputeController._current_calibration:
             enhanced_data["calibration_data"] = self._focusValueComputeController._current_calibration.to_dict()
             enhanced_data["pid_integration_active"] = True
         else:
             enhanced_data["pid_integration_active"] = False
-            
+
         return enhanced_data

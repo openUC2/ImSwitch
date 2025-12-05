@@ -70,13 +70,11 @@ class CameraHIK:
         self.blacklevel = blacklevel
         self.exposure_time = exposure_time
         self.gain = gain
-        self.preview_width = 600
-        self.preview_height = 600
         self.frame_rate = frame_rate
         self.cameraNo = cameraNo
         self.flipImage = flipImage  # (flipY, flipX)
 
-        self.NBuffer = 5
+        self.NBuffer = 3
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.flatfieldImage = None
@@ -187,32 +185,27 @@ class CameraHIK:
                 serial_checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
                 self.__logger.debug(f"Camera {i} serial checksum: {serial_checksum}")
                 if serial_checksum == number:
+                    # Check if this camera is already opened
+                    if serial_checksum in CameraHIK._opened_cameras:
+                        raise RuntimeError(f"Camera with serial checksum {number} is already opened by another detector")
                     camera_index = i
                     self.__logger.info(f"Found camera with matching serial checksum {number} at index {i}")
                     break
             
             if camera_index is None:
-                # Fallback: Find first unopened camera
-                self.__logger.warning(f"No camera found with serial checksum {number}, attempting fallback to first available unopened camera")
-                
-                # List all available cameras with their status
+                # No fallback - if the requested camera is not found, fail explicitly
+                # List all available cameras with their status for diagnostic purposes
                 available_info = []
                 for i, info in enumerate(infos):
                     checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
                     is_opened = checksum in CameraHIK._opened_cameras
                     status = "opened" if is_opened else "available"
                     available_info.append(f"Index {i}: checksum {checksum} ({status})")
-                    
-                    # Select first available camera
-                    if camera_index is None and not is_opened:
-                        camera_index = i
-                        self.__logger.info(f"Fallback: Using first available camera at index {i} with checksum {checksum}")
                 
-                # If still no camera found, all are opened
-                if camera_index is None:
-                    raise RuntimeError(f"No camera found with serial checksum {number} and all cameras are already opened. Available cameras: {'; '.join(available_info)}")
-                else:
-                    self.__logger.info(f"Available cameras: {'; '.join(available_info)}")
+                raise RuntimeError(
+                    f"No camera found with serial checksum {number}. "
+                    f"Please check your configuration. Available cameras: {'; '.join(available_info)}"
+                )
             
             number = camera_index  # Use the found index for the rest of the function
         else:
@@ -468,7 +461,7 @@ class CameraHIK:
             if param_dict["model_name"].find("UC")>0:
                 param_dict["isRGB"] = True
         # if isRGB switch off AWB 
-        if param_dict["isRGB"]:
+        if param_dict["isRGB"] and False:
             ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS)
             if ret != 0:
                 print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
@@ -478,7 +471,10 @@ class CameraHIK:
                 ret = self.camera.MV_CC_SetEnumValueByString("BalanceColorTempMode", "WideMode")
                 if ret != 0:
                     print("set BalanceColorTempMode failed! ret [0x%x]" % ret)
-                    # optional: self.init_ok = False                
+        elif param_dict["isRGB"]:
+            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_OFF)
+            if ret != 0:
+                print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
 
 
         # Image Width

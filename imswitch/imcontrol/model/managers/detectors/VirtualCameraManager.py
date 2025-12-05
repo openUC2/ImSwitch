@@ -92,10 +92,10 @@ class VirtualCameraManager(DetectorManager):
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         if returnFrameNumber:
             frame, frameNumber = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame, frameNumber
+            return np.array(frame), frameNumber
         else:
             frame = self._camera.getLast()
-            return frame
+            return np.array(frame)
 
 
     def setParameter(self, name, value):

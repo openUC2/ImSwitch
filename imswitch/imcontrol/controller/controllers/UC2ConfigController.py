@@ -19,7 +19,7 @@ import requests
 import shutil
 from pathlib import Path
 from serial.tools import list_ports
-import serial
+import socket
 
 try:
     import esptool
@@ -59,13 +59,13 @@ class UC2ConfigController(ImConWidgetController):
         self._firmware_cache_dir.mkdir(parents=True, exist_ok=True)
         
         # WiFi credentials for OTA (can be overridden via API)
-        self._ota_wifi_ssid = None
-        self._ota_wifi_password = None
+        self._ota_wifi_ssid = socket.gethostname().split(".local")[0]
+        self._ota_wifi_password = "youseetoo" # this is the default password for forklifted UC2 firmwares
 
         try:
             self.stages = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
         except Exception as e:
-            self.__logger.error("No Stages found in the config file? " +e )
+            self.__logger.error("No Stages found in the config file? ", e )
             self.stages = None
 
         #
@@ -74,6 +74,9 @@ class UC2ConfigController(ImConWidgetController):
         
         # register OTA callback
         self.registerOTACallback()
+        
+        # register CAN callback
+        self.registerCANCallback()
 
         # register the callbacks for emitting serial-related signals
         if hasattr(self._master.UC2ConfigManager, "ESP32"):
@@ -204,20 +207,119 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Could not register OTA callback: {e}")
     
+    def registerCANCallback(self):
+        """Register callback for CAN device scan updates."""
+        def can_scan_callback(scan_results):
+            """
+            Handle CAN scan results from ESP32.
+            
+            :param scan_results: List of CAN devices with their information
+                                Example: [
+                                    {"canId": 20, "deviceType": 1, "status": 0, "deviceTypeStr": "laser", "statusStr": "idle"},
+                                    {"canId": 10, "deviceType": 0, "status": 0, "deviceTypeStr": "motor", "statusStr": "idle"}
+                                ]
+            """
+            try:
+                self.__logger.info(f"CAN scan callback received {len(scan_results)} devices")
+                for device in scan_results:
+                    self.__logger.debug(f"CAN Device: ID={device.get('canId')}, "
+                                      f"Type={device.get('deviceTypeStr')}, "
+                                      f"Status={device.get('statusStr')}")
+                
+                # Emit signal to update GUI or notify other components
+                self._commChannel.sigUpdateCANDevices.emit(scan_results)
+                
+            except Exception as e:
+                self.__logger.error(f"Error in CAN scan callback: {e}")
+        
+        try:
+            if hasattr(self._master.UC2ConfigManager, "ESP32") and hasattr(self._master.UC2ConfigManager.ESP32, "can"):
+                self._master.UC2ConfigManager.ESP32.can.register_callback(0, can_scan_callback)
+                self.__logger.debug("CAN scan callback registered successfully")
+            else:
+                self.__logger.warning("ESP32 CAN not available - CAN scan callbacks won't work")
+        except Exception as e:
+            self.__logger.error(f"Could not register CAN callback: {e}")
+    
+    
+    @APIExport(runOnUIThread=False)
+    def scan_canbus(self, timeout:int=5) -> dict:
+        """
+        Scan the CAN bus for connected devices.
+
+        :param timeout: Timeout for the scan in seconds (default: 5)
+        :return: List of detected CAN IDs
+        
+        returns:
+        {
+            "scan": [
+                {
+                "canId": 20,
+                "deviceType": 1,
+                "status": 0,
+                "deviceTypeStr": "laser",
+                "statusStr": "idle"
+                }
+            ],
+            "detected_ids": [20],
+            "qid": 23,
+            "count": 1
+            }
+        """
+        try:
+            if not hasattr(self._master.UC2ConfigManager, "ESP32") or not hasattr(self._master.UC2ConfigManager.ESP32, "can"):
+                self.__logger.error("CAN bus module not available in UC2 client")
+                return []
+
+            self.__logger.debug("Starting CAN bus scan...")
+            return_message = self._master.UC2ConfigManager.ESP32.can.scan(timeout=timeout)
+            scan_results = return_message[-1]
+            detected_ids = [device["canId"] for device in scan_results.get("scan", [])]
+            scan_results["detected_ids"] = detected_ids
+            self.__logger.info(f"Detected CAN devices: {detected_ids}")
+            return scan_results
+
+        except Exception as e:
+            self.__logger.error(f"Error scanning CAN bus: {e}")
+            return {}
+        
+    @APIExport(runOnUIThread=False)
+    def get_canbus_devices(self, timeout:int=2):
+        """
+        Get list of available CAN devices.
+
+        :param timeout: Timeout for the command in seconds (default: 2)
+        :return: List of available CAN IDs
+        """
+        try:
+            if not hasattr(self._master.UC2ConfigManager, "ESP32") or not hasattr(self._master.UC2ConfigManager.ESP32, "can"):
+                self.__logger.error("CAN bus module not available in UC2 client")
+                return []
+
+            self.__logger.debug("Fetching available CAN devices...")
+            response = self._master.UC2ConfigManager.ESP32.can.get_available_devices(timeout=timeout)
+            available_ids = [can_id for can_id in response.get("available", []) if can_id != 0]
+
+            self.__logger.info(f"Available CAN devices: {available_ids}")
+            return available_ids
+
+        except Exception as e:
+            self.__logger.error(f"Error fetching CAN devices: {e}")
+            return []
+        
     def _upload_firmware_to_device(self, can_id, ip_address):
         """
-        Upload firmware to a device via Arduino OTA using espota.py.
+        Upload firmware to a device via Arduino OTA.
         
-        Uses the official espota.py script from Arduino/PlatformIO framework.
-        This is the most reliable method as it uses the exact same tool
-        that PlatformIO and Arduino IDE use internally.
+        Uses the integrated espota module for OTA updates.
+        This is a Python implementation of the standard ESP32 OTA protocol
+        used by Arduino IDE and PlatformIO.
         
         :param can_id: CAN ID of the device
         :param ip_address: IP address of the device
         """
         try:
-            import subprocess
-            import sys
+            from . import espota
             
             with self._ota_lock:
                 if can_id in self._ota_status:
@@ -240,124 +342,37 @@ class UC2ConfigController(ImConWidgetController):
             
             self.__logger.info(f"Uploading firmware to device {can_id} at {ip_address}: {firmware_path.name}")
             
-            # Try to find espota.py in common locations
-            espota_locations = [
-                # PlatformIO locations
-                os.path.expanduser("~/.platformio/packages/framework-arduinoespressif32/tools/espota.py"),
-                os.path.expanduser("~/.platformio/packages/tool-espotapy/espota.py"),
-                # Arduino IDE locations (macOS)
-                "/Applications/Arduino.app/Contents/Java/hardware/espressif/esp32/tools/espota.py",
-                # System-wide
-                "/usr/local/bin/espota.py",
-                "/usr/bin/espota.py",
-            ]
-            
-            espota_path = None
-            for location in espota_locations:
-                if os.path.exists(location):
-                    espota_path = location
-                    self.__logger.debug(f"Found espota.py at: {espota_path}")
-                    break
-            
-            if not espota_path:
-                # Try to find espota.py using which/where
-                try:
-                    result = subprocess.run(['which', 'espota.py'], 
-                                          capture_output=True, text=True, check=True)
-                    espota_path = result.stdout.strip()
-                except:
-                    pass
-            
-            if not espota_path:
-                self.__logger.error("espota.py not found in common locations")
-                self.__logger.info("Searched locations: " + ", ".join(espota_locations))
-                raise Exception("espota.py not found. Please install PlatformIO or Arduino IDE with ESP32 support")
-            
             # Get firmware size for logging
             firmware_size = os.path.getsize(firmware_path)
             self.__logger.info(f"Firmware size: {firmware_size:,} bytes")
             
-            # Prepare espota.py command
-            # Use sys.executable to ensure we use the same Python interpreter
-            cmd = [
-                sys.executable,
-                espota_path,
-                "--debug",
-                "--progress",
-                "-i", ip_address,
-                "-p", "3232",  # Default ESP32 OTA port
-                "-f", str(firmware_path)
-            ]
+            # Define progress callback
+            def progress_callback(percent):
+                self.__logger.info(f"Upload progress: {percent}%")
             
-            self.__logger.debug(f"Running: {' '.join(cmd)}")
+            # Upload firmware using integrated espota module
+            result = espota.upload_ota(
+                esp_ip=ip_address,
+                firmware_path=str(firmware_path),
+                esp_port=3232,  # Default ESP32 OTA port
+                host_ip="0.0.0.0",
+                password="",  # No password by default
+                timeout=10,
+                show_progress=True,
+                logger=self.__logger,
+                progress_callback=progress_callback
+            )
             
-            # Run espota.py as subprocess
-            try:
-                # Run with real-time output capture
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1  # Line buffered
-                )
-                
-                # Track progress
-                last_progress = 0
-                
-                # Read output in real-time
-                while True:
-                    output = process.stderr.readline()
-                    if output == '' and process.poll() is not None:
-                        break
-                    if output:
-                        line = output.strip()
-                        
-                        # Log important messages
-                        if "Uploading:" in line or "%" in line:
-                            # Extract progress percentage
-                            try:
-                                if "%" in line:
-                                    percent_str = line.split("%")[0].split()[-1]
-                                    progress = int(percent_str)
-                                    if progress >= last_progress + 10:
-                                        self.__logger.info(f"Upload progress: {progress}%")
-                                        last_progress = progress
-                            except:
-                                pass
-                        elif "Success" in line:
-                            self.__logger.info(f"✅ {line}")
-                        elif "Error" in line or "FAIL" in line:
-                            self.__logger.error(f"espota.py: {line}")
-                        else:
-                            self.__logger.debug(f"espota.py: {line}")
-                
-                # Get return code
-                return_code = process.poll()
-                
-                if return_code == 0:
-                    self.__logger.info(f"✅ Firmware uploaded successfully to device {can_id}")
-                    with self._ota_lock:
-                        if can_id in self._ota_status:
-                            self._ota_status[can_id]["upload_status"] = "success"
-                            self._ota_status[can_id]["upload_timestamp"] = datetime.datetime.now().isoformat()
-                else:
-                    # Read any remaining error output
-                    _, stderr = process.communicate()
-                    error_msg = stderr.strip() if stderr else f"Exit code: {return_code}"
-                    
-                    self.__logger.error(f"espota.py failed: {error_msg}")
-                    with self._ota_lock:
-                        if can_id in self._ota_status:
-                            self._ota_status[can_id]["upload_status"] = "failed"
-                            self._ota_status[can_id]["upload_error"] = error_msg
-                            
-            except subprocess.CalledProcessError as e:
-                error_msg = f"espota.py failed with exit code {e.returncode}"
+
+            if result == 0:
+                self.__logger.info(f"Firmware uploaded successfully to device {can_id}")
+                with self._ota_lock:
+                    if can_id in self._ota_status:
+                        self._ota_status[can_id]["upload_status"] = "success"
+                        self._ota_status[can_id]["upload_timestamp"] = datetime.datetime.now().isoformat()
+            else:
+                error_msg = f"OTA upload failed with code {result}"
                 self.__logger.error(error_msg)
-                if e.stderr:
-                    self.__logger.error(f"Error output: {e.stderr}")
-                    
                 with self._ota_lock:
                     if can_id in self._ota_status:
                         self._ota_status[can_id]["upload_status"] = "failed"
@@ -377,6 +392,9 @@ class UC2ConfigController(ImConWidgetController):
                     self._ota_status[can_id]["upload_status"] = "failed"
                     self._ota_status[can_id]["upload_error"] = str(e)
     
+        # we need to send out the final response via socket 
+        self.sigOTAStatusUpdate.emit(self._ota_status.get(can_id, {}))
+        
     def _download_firmware_for_device(self, can_id):
         """
         Download firmware for a specific CAN ID from the firmware server.
@@ -615,6 +633,18 @@ class UC2ConfigController(ImConWidgetController):
         return {"status": "success", "message": f"WiFi credentials set for SSID: {ssid}"}
     
     @APIExport(runOnUIThread=False)
+    def getOTAWiFiCredentials(self):
+        """
+        Get current WiFi credentials for OTA updates.
+        
+        :return: Dictionary with SSID and password
+        """
+        return {
+            "ssid": self._ota_wifi_ssid,
+            "password": self._ota_wifi_password
+        }
+        
+    @APIExport(runOnUIThread=False)
     def setOTAFirmwareServer(self, server_url="http://localhost:9000"):
         """
         Set the firmware server URL for OTA updates.
@@ -675,18 +705,18 @@ class UC2ConfigController(ImConWidgetController):
                 "message": f"Failed to connect to firmware server: {str(e)}",
                 "server_url": server_url
             }
-    
+
     @APIExport(runOnUIThread=False)
-    def setOTAFirmwareDirectory(self, directory):
+    def getOTAFirmwareServer(self):
         """
-        DEPRECATED: Use setOTAFirmwareServer instead.
+        Get the current firmware server URL for OTA updates.
         
-        This method is kept for backward compatibility but now configures
-        the firmware server URL based on a local directory assumption.
+        :return: Current firmware server URL
         """
-        self.__logger.warning("setOTAFirmwareDirectory is deprecated. Use setOTAFirmwareServer instead.")
-        return self.setOTAFirmwareServer()
-    
+        return {
+            "firmware_server_url": self._firmware_server_url
+        }
+
     @APIExport(runOnUIThread=False)
     def listAvailableFirmware(self):
         """
@@ -833,8 +863,8 @@ class UC2ConfigController(ImConWidgetController):
                 "message": f"Failed to start OTA for device {can_id}: {str(e)}"
             }
     
-    @APIExport(runOnUIThread=False)
-    def startMultipleDeviceOTA(self, can_ids, ssid=None, password=None, timeout=300000, delay_between=2):
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def startMultipleDeviceOTA(self, can_ids:list[int]=[10,20], ssid=None, password=None, timeout=300000, delay_between:int=2):
         """
         Start OTA update for multiple CAN devices sequentially.
         

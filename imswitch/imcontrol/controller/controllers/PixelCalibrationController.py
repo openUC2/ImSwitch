@@ -459,7 +459,8 @@ class PixelCalibrationController(LiveUpdatedController):
     # API Methods for web interface
     @APIExport(runOnUIThread=True)  # Run in background thread
     def calibrateStageAffine(self, objectiveId: int = None, stepSizeUm: float = 100.0, 
-                             pattern: str = "cross", nSteps: int = 1, validate: bool = False):
+                             pattern: str = "cross", nSteps: int = 1, validate: bool = False, 
+                             crop_size: int = 1024, isDEBUG: bool = False):
         """
         Perform affine stage-to-camera calibration via API.
         
@@ -496,13 +497,17 @@ class PixelCalibrationController(LiveUpdatedController):
             stepSizeUm,
             pattern,
             nSteps,
-            validate)
+            validate, 
+            crop_size,
+            isDEBUG)
         )
         mThread.start()
         return {"success": True, "message": "Calibration started in background thread"}
 
     def calibrateStageAffineInThread(self, objectiveId: int = 0, stepSizeUm: float = 100.0, 
-                             pattern: str = "cross", nSteps: int = 4, validate: bool = False):
+                             pattern: str = "cross", nSteps: int = 4, validate: bool = False, 
+                             crop_size: int = 1024,
+                             isDEBUG: bool = False):
         """
         Perform affine stage-to-camera calibration in a separate thread.
         
@@ -520,7 +525,9 @@ class PixelCalibrationController(LiveUpdatedController):
                 step_size_um=stepSizeUm,
                 pattern=pattern,
                 n_steps=nSteps,
-                validate=validate
+                validate=validate, 
+                crop_size=crop_size,
+                isDEBUG=isDEBUG
             )
             
             # Convert all numpy types to Python native types for JSON serialization
@@ -2072,7 +2079,7 @@ class PixelCalibrationClass(object):
         # Use setup info for storage (not separate JSON file)
         # Calibration data is stored in self._parent._setupInfo.PixelCalibration
 
-    def _grab_image(self, crop_size:int=512, frameSync: int = 2, returnFrameNumber: bool = False):
+    def _grab_image(self, crop_size:int=1024, frameSync: int = 3, returnFrameNumber: bool = False):
         # ensure we get a fresh frame
         timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
         cTime = time.time()
@@ -2110,8 +2117,9 @@ class PixelCalibrationClass(object):
     def _move_stage(self, position_um):
         """Move stage to absolute position in microns [X, Y, Z]."""
         stage = self._parent._master.positionersManager[self._parent._master.positionersManager.getAllDeviceNames()[0]]
-        stage.move(value=position_um[0], axis="X", is_absolute=True, is_blocking=True)
-        stage.move(value=position_um[1], axis="Y", is_absolute=True, is_blocking=True)
+        #stage.move(value=position_um[0], axis="X", is_absolute=True, is_blocking=True)
+        #stage.move(value=position_um[1], axis="Y", is_absolute=True, is_blocking=True)
+        stage.move(value=position_um, axis="XY", is_absolute=True, is_blocking=True)
         if len(position_um) > 2:
             stage.move(value=position_um[2], axis="Z", is_absolute=True, is_blocking=True)
 
@@ -2122,7 +2130,9 @@ class PixelCalibrationClass(object):
         pattern: str = "cross",
         n_steps: int = 4,
         validate: bool = False,
-        settle_time: float = 0.2
+        settle_time: float = 0.2, 
+        crop_size: int = 1024,
+        isDEBUG: bool = False
     ):
         """
         Perform robust affine calibration using direct method calls.
@@ -2148,7 +2158,7 @@ class PixelCalibrationClass(object):
         self._parent._logger.info(f"Starting affine calibration for objective '{objective_id}'")
         
         if objective_id is None:
-            objective_id = self._parent.currentObjective
+            objective_id = self._parent.currentObjective # TODO: This is a string of the objective name but perhaps we need the ID?
         else:
             # move to specified objective if possible
             self._parent.setCurrentObjective(objective_id)
@@ -2158,7 +2168,7 @@ class PixelCalibrationClass(object):
             self._parent._logger.info(f"Starting position: {start_position[:2]} µm")
             
             time.sleep(settle_time)
-            ref_image = self._grab_image()
+            ref_image = self._grab_image(crop_size=crop_size)
             self._parent._logger.info(f"Reference image captured: {ref_image.shape}")
             
             # 2. Generate movement pattern
@@ -2166,11 +2176,12 @@ class PixelCalibrationClass(object):
                 # Cross pattern: center + 4 cardinal + 4 diagonal = 9 positions
                 offsets = [
                     (0, 0),
-                    (step_size_um, 0), (0, step_size_um), (-step_size_um, 0), (0, -step_size_um)]
-                #,
-                #    (step_size_um, step_size_um), (step_size_um, -step_size_um),
-                #    (-step_size_um, step_size_um), (-step_size_um, -step_size_um)
-                #]
+                    (step_size_um, 0),
+                    (-step_size_um, 0), 
+                    (0, 0),                     
+                    (0, step_size_um),
+                    (0, -step_size_um),
+                    (0, 0)]
             elif pattern == "grid":
                 # Grid pattern: n_steps x n_steps
                 offsets = []
@@ -2197,7 +2208,7 @@ class PixelCalibrationClass(object):
                 time.sleep(settle_time)
                 
                 # Capture image
-                image = self._grab_image()
+                image = self._grab_image(crop_size=crop_size)
                 
                 # Measure pixel shift using phase correlation
                 shift, correlation = measure_pixel_shift(np.array(ref_image), np.array(image))
@@ -2208,7 +2219,10 @@ class PixelCalibrationClass(object):
                 
                 self._parent._logger.debug(f"Position {i+1}/{len(offsets)}: stage=({dx:.1f}, {dy:.1f}), "
                                           f"pixels=({shift[0]:.2f}, {shift[1]:.2f}), corr={correlation:.3f}")
-            
+                # save images if debugging
+                if isDEBUG:
+                    import tifffile
+                    tifffile.imwrite("affine_calib_image_.tif", image.astype(np.float32), append=True)
             # 4. Return to starting position
             self._move_stage(start_position)
             self._parent._logger.info("Returned to starting position")
@@ -2229,6 +2243,12 @@ class PixelCalibrationClass(object):
             self._parent._logger.info(f"Calibration quality: {metrics.get('quality', 'unknown')}")
             self._parent._logger.info(f"RMSE: {metrics.get('rmse_um', 0):.3f} µm")
             self._parent._logger.info(f"Rotation: {metrics.get('rotation_deg', 0):.2f}°")
+            self._parent._logger.info(f"Scale: X={metrics.get('scale_x_um_per_pixel', 0):.3f} µm/px, "
+                                      f"Y={metrics.get('scale_y_um_per_pixel', 0):.3f} µm/px")
+            self._parent._logger.info(f"Shear: {metrics.get('shear_xy', 0):.4f}, {metrics.get('shear_yx', 0):.4f}")
+            # print Stage Shift and pixelshifts 
+            self._parent._logger.info(f"Stage shifts (µm): {stage_shifts}")
+            self._parent._logger.info(f"Pixel shifts (px): {pixel_shifts}")
             
             # 6. Validate calibration if requested
             result = {

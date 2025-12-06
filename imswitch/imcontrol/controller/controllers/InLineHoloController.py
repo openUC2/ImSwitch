@@ -9,7 +9,7 @@ import queue
 
 try:
     from scipy import fft as scipy_fft
-    hasSciPyFFT = True
+    hasSciPyFFT = False
 except:
     hasSciPyFFT = False
 
@@ -236,21 +236,13 @@ class InLineHoloController(LiveUpdatedController):
         if self._params.binning <= 1:
             return image
         
-        b = self._params.binning
-        h, w = image.shape[:2]
-        
-        # Crop to multiple of binning
-        new_h = (h // b) * b
-        new_w = (w // b) * b
-        image = image[:new_h, :new_w]
-        
-        # Reshape and average
+        # subsakmple
         if len(image.shape) == 2:
             # Grayscale
-            return image.reshape(new_h // b, b, new_w // b, b).mean(axis=(1, 3))
+            return image[::2, ::2]
         else:
             # Color
-            return image.reshape(new_h // b, b, new_w // b, b, -1).mean(axis=(1, 3))
+            return image[::2, ::2, :]
 
     def _extract_roi(self, image):
         """Extract ROI from image based on current parameters"""

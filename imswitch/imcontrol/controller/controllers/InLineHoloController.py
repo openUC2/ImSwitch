@@ -176,18 +176,18 @@ class InLineHoloController(LiveUpdatedController):
 
 
     @staticmethod
-    def _FT(self, x):
+    def _FT(x):
         """Forward Fourier transform with proper frequency shift"""
-        if self._params.use_scipy_fft and hasSciPyFFT:
+        if hasSciPyFFT:
             return scipy_fft.fftshift(
                 scipy_fft.fft2(x, workers=4)
             )
         return np.fft.fftshift(np.fft.fft2(x))
     
     @staticmethod
-    def _iFT(self, x):
+    def _iFT(x):
         """Inverse Fourier transform with proper frequency shift"""
-        if self._params.use_scipy_fft and hasSciPyFFT:
+        if hasSciPyFFT:
             return scipy_fft.ifft2(
                 scipy_fft.ifftshift(x), workers=4
             )

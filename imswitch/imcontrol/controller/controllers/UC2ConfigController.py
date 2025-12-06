@@ -54,7 +54,7 @@ class UC2ConfigController(ImConWidgetController):
         # OTA update tracking
         self._ota_status = {}  # Dictionary to track OTA status by CAN ID
         self._ota_lock = threading.Lock()
-        self._firmware_server_url = "http://localhost:9000"  # Default firmware server URL
+        self._firmware_server_url = "http://localhost/firmware"  # Default Caddy firmware server URL
         self._firmware_cache_dir = Path(tempfile.gettempdir()) / "uc2_ota_firmware_cache"
         self._firmware_cache_dir.mkdir(parents=True, exist_ok=True)
         
@@ -406,33 +406,21 @@ class UC2ConfigController(ImConWidgetController):
         :return: Path to downloaded firmware file or None
         """
         try:
-            # First, get list of available firmware files from server
-            firmware_list_url = f"{self._firmware_server_url}/latest/"
+            # Get list of available firmware files from Caddy server (JSON API)
+            firmware_list_url = self._firmware_server_url
             
             self.__logger.debug(f"Fetching firmware list from {firmware_list_url}")
-            response = requests.get(firmware_list_url, timeout=10)
+            headers = {'Accept': 'application/json'}
+            response = requests.get(firmware_list_url, headers=headers, timeout=10)
             response.raise_for_status()
             
-            # Parse HTML directory listing to find matching firmware
-            from html.parser import HTMLParser
-            
-            class FirmwareLinkParser(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.firmware_files = []
-                
-                def handle_starttag(self, tag, attrs):
-                    if tag == 'a':
-                        for attr, value in attrs:
-                            if attr == 'href' and value.endswith('.bin'):
-                                self.firmware_files.append(value)
-            
-            parser = FirmwareLinkParser()
-            parser.feed(response.text)
+            # Parse JSON response from Caddy server
+            firmware_data = response.json()
+            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
             
             # Find firmware file matching the CAN ID pattern: id_<CANID>_*.bin
             target_pattern = f"id_{can_id}_"
-            matching_files = [f for f in parser.firmware_files if f.startswith(target_pattern)]
+            matching_files = [f for f in firmware_files if f.startswith(target_pattern)]
             
             if not matching_files:
                 # Try to find generic firmware based on device type
@@ -450,7 +438,7 @@ class UC2ConfigController(ImConWidgetController):
                 
                 if device_type:
                     # Look for any firmware containing the device type
-                    matching_files = [f for f in parser.firmware_files if device_type in f]
+                    matching_files = [f for f in firmware_files if device_type in f]
                     if matching_files:
                         self.__logger.warning(f"Using generic {device_type} firmware for device {can_id}: {matching_files[0]}")
             
@@ -462,16 +450,12 @@ class UC2ConfigController(ImConWidgetController):
             firmware_filename = matching_files[0]
             
             # Download the firmware file
-            firmware_url = f"{self._firmware_server_url}/latest/{firmware_filename}" # TODO: We should make this adaptable 
+            firmware_url = f"{self._firmware_server_url}/{firmware_filename}"
             local_path = self._firmware_cache_dir / firmware_filename
             
             self.__logger.info(f"Downloading firmware from {firmware_url}")
             
-            # Check if already cached
-            if False and local_path.exists():#TODO: Always redownload for now
-                self.__logger.debug(f"Using cached firmware: {local_path}")
-                return local_path
-            
+            # Always download fresh firmware (no caching)
             # Download firmware
             with requests.get(firmware_url, stream=True, timeout=60) as r:
                 r.raise_for_status()
@@ -645,58 +629,47 @@ class UC2ConfigController(ImConWidgetController):
         }
         
     @APIExport(runOnUIThread=False)
-    def setOTAFirmwareServer(self, server_url="http://localhost:9000"):
+    def setOTAFirmwareServer(self, server_url="http://localhost/firmware"):
         """
         Set the firmware server URL for OTA updates.
         
-        The server should serve firmware files at <server_url>/latest/ with the naming convention:
+        The server should be a Caddy server serving firmware files with JSON directory listing.
+        Firmware files should follow the naming convention:
         - id_10_esp32_seeed_xiao_esp32s3_can_slave_motor.bin
         - id_11_esp32_seeed_xiao_esp32s3_can_slave_motor.bin
         - id_20_esp32_seeed_xiao_esp32s3_can_slave_laser_debug.bin
         - id_21_esp32_seeed_xiao_esp32s3_can_slave_led_debug.bin
         
-        :param server_url: URL of the firmware server (default: http://localhost:9000)
+        :param server_url: URL of the firmware server (default: http://localhost/firmware)
         :return: Status message with list of available firmware files
         """
         # Remove trailing slash if present
         server_url = server_url.rstrip('/')
         
         try:
-            # Test server connectivity
-            test_url = f"{server_url}/latest/"
+            # Test server connectivity using Caddy JSON API
+            test_url = server_url
             self.__logger.debug(f"Testing firmware server: {test_url}")
             
-            response = requests.get(test_url, timeout=5)
+            headers = {'Accept': 'application/json'}
+            response = requests.get(test_url, headers=headers, timeout=5)
             response.raise_for_status()
             
-            # Parse available firmware files
-            from html.parser import HTMLParser
-            
-            class FirmwareLinkParser(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.firmware_files = []
-                
-                def handle_starttag(self, tag, attrs):
-                    if tag == 'a':
-                        for attr, value in attrs:
-                            if attr == 'href' and value.endswith('.bin'):
-                                self.firmware_files.append(value)
-            
-            parser = FirmwareLinkParser()
-            parser.feed(response.text)
+            # Parse available firmware files from JSON response
+            firmware_data = response.json()
+            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
             
             self._firmware_server_url = server_url
             
             self.__logger.info(f"OTA firmware server set: {server_url}")
-            self.__logger.info(f"Found {len(parser.firmware_files)} firmware files")
+            self.__logger.info(f"Found {len(firmware_files)} firmware files")
             
             return {
                 "status": "success",
                 "message": f"Firmware server set: {server_url}",
                 "server_url": server_url,
-                "firmware_files": parser.firmware_files,
-                "count": len(parser.firmware_files)
+                "firmware_files": firmware_files,
+                "count": len(firmware_files)
             }
             
         except requests.exceptions.RequestException as e:
@@ -734,39 +707,27 @@ class UC2ConfigController(ImConWidgetController):
             }
         
         try:
-            # Fetch firmware list from server
-            list_url = f"{self._firmware_server_url}/latest/"
+            # Fetch firmware list from Caddy server (JSON API)
+            list_url = self._firmware_server_url
             self.__logger.debug(f"Fetching firmware list from {list_url}")
             
-            response = requests.get(list_url, timeout=10)
+            headers = {'Accept': 'application/json'}
+            response = requests.get(list_url, headers=headers, timeout=10)
             response.raise_for_status()
             
-            # Parse HTML directory listing
-            from html.parser import HTMLParser
-            
-            class FirmwareLinkParser(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.firmware_files = []
-                
-                def handle_starttag(self, tag, attrs):
-                    if tag == 'a':
-                        for attr, value in attrs:
-                            if attr == 'href' and value.endswith('.bin'):
-                                self.firmware_files.append(value)
-            
-            parser = FirmwareLinkParser()
-            parser.feed(response.text)
+            # Parse JSON response
+            firmware_data = response.json()
+            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
             
             # Organize by device ID
             firmware_by_id = {}
-            for fw_file in parser.firmware_files:
+            for fw_file in firmware_files:
                 # Extract CAN ID from filename (e.g., "id_20_..." -> 20)
                 try:
                     parts = fw_file.split('_')
                     if len(parts) >= 2 and parts[0] == 'id':
                         can_id = int(parts[1])
-                        firmware_url = f"{self._firmware_server_url}/latest/{fw_file}"
+                        firmware_url = f"{self._firmware_server_url}/{fw_file}"
                         
                         firmware_by_id[can_id] = {
                             "filename": fw_file,

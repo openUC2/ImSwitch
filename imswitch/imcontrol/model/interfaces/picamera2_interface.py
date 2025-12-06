@@ -727,7 +727,7 @@ class CameraPicamera2:
         self.__logger.warning("ROI setting requires camera restart - not implemented yet")
 
     def setPropertyValue(self, property_name: str, property_value):
-        """Set camera property by name"""
+        """Set camera property by name and apply to camera hardware."""
         property_map = {
             "exposure": self.set_exposure_time,
             "gain": self.set_gain,
@@ -735,21 +735,44 @@ class CameraPicamera2:
             "blacklevel": self.set_blacklevel,
             "exposure_mode": self.set_exposure_mode,
             "flat_fielding": self.set_flatfielding,
+            "trigger_source": self.setTriggerSource,
+            "mode": lambda v: self.set_camera_mode(isAutomatic=v),
         }
         
         if property_name in property_map:
             try:
                 property_map[property_name](property_value)
+                self.__logger.debug(f"Property '{property_name}' set to {property_value}")
                 return property_value
             except Exception as e:
                 self.__logger.error(f"Failed to set {property_name}: {e}")
                 return None
         else:
             self.__logger.warning(f"Unknown property: {property_name}")
-            return None
+            return None 
 
     def getPropertyValue(self, property_name: str):
-        """Get camera property by name"""
+        """Get camera property by name, reading actual values from camera when possible."""
+        # Try to read actual values from camera metadata if streaming
+        if self.camera is not None and self.is_streaming:
+            try:
+                metadata = self.camera.capture_metadata()
+                if property_name == "exposure":
+                    # Return exposure time in milliseconds
+                    return metadata.get("ExposureTime", self.exposure_time) / 1000
+                elif property_name == "gain":
+                    return metadata.get("AnalogueGain", self.gain)
+                elif property_name == "frame_rate":
+                    # FrameDuration is in microseconds, convert to fps
+                    frame_duration = metadata.get("FrameDuration", 0)
+                    if frame_duration > 0:
+                        return 1000000 / frame_duration
+                    return self.frame_rate
+            except Exception as e:
+                self.__logger.debug(f"Could not read metadata for {property_name}: {e}")
+                # Fall back to stored values
+        
+        # Property map for stored values (fallback or non-metadata properties)
         property_map = {
             "exposure": lambda: self.exposure_time / 1000,  # Convert to ms
             "gain": lambda: self.gain,
@@ -758,6 +781,8 @@ class CameraPicamera2:
             "exposure_mode": lambda: "auto" if self.exposure_auto else "manual",
             "flat_fielding": lambda: self.isFlatfielding,
             "frame_number": lambda: self.frameNumber,
+            "trigger_source": lambda: self.trigger_source,
+            "mode": lambda: self.exposure_auto,
         }
         
         if property_name in property_map:
@@ -949,8 +974,47 @@ class MockCameraPicamera2:
     def setBinning(self, binning): pass
     def getLastChunk(self): return None
     def setROI(self, *args, **kwargs): pass
-    def setPropertyValue(self, name, value): return value
-    def getPropertyValue(self, name): return 0
+    
+    def setPropertyValue(self, property_name, property_value):
+        """Set camera property by name and apply to mock camera."""
+        property_map = {
+            "exposure": self.set_exposure_time,
+            "gain": self.set_gain,
+            "frame_rate": self.set_frame_rate,
+            "blacklevel": self.set_blacklevel,
+            "exposure_mode": self.set_exposure_mode,
+            "flat_fielding": self.set_flatfielding,
+            "trigger_source": self.setTriggerSource,
+            "mode": lambda v: self.set_camera_mode(auto=v),
+        }
+        if property_name in property_map:
+            try:
+                property_map[property_name](property_value)
+                return property_value
+            except Exception:
+                return None
+        return None
+    
+    def getPropertyValue(self, property_name):
+        """Get camera property by name."""
+        property_map = {
+            "exposure": lambda: self.exposure_time / 1000,  # Convert to ms
+            "gain": lambda: self.gain,
+            "frame_rate": lambda: self.frame_rate,
+            "blacklevel": lambda: 0,
+            "exposure_mode": lambda: "manual",
+            "flat_fielding": lambda: self.isFlatfielding,
+            "frame_number": lambda: self.frameNumber,
+            "trigger_source": lambda: self.trigger_source,
+            "mode": lambda: False,
+        }
+        if property_name in property_map:
+            try:
+                return property_map[property_name]()
+            except Exception:
+                return None
+        return None
+    
     def send_trigger(self): return True
     def openPropertiesGUI(self): pass
     def recordFlatfieldImage(self, *args, **kwargs): pass

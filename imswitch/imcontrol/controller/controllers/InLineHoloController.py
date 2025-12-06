@@ -616,47 +616,53 @@ class InLineHoloController(LiveUpdatedController):
         self._logger.info("Processing loop stopped")
 
     @staticmethod
-    def _multiprocessing_worker(input_queue, output_queue, stop_event, params_dict, logger_name):
+    def _multiprocessing_worker(input_queue, output_queue, stop_event, initial_params_dict, logger_name):
         """
         Separate process worker for hologram processing (bypasses GIL).
         
         This runs in a separate process to avoid Python GIL limitations.
-        Receives frames via input_queue, processes them, sends results to output_queue.
+        Receives (frame, params_dict) tuples via input_queue, processes them, 
+        sends results to output_queue.
         
         Args:
-            input_queue: multiprocessing.Queue for receiving frames
+            input_queue: multiprocessing.Queue for receiving (frame, params_dict) tuples
             output_queue: multiprocessing.Queue for sending results
             stop_event: multiprocessing.Event for shutdown signal
-            params_dict: Dictionary of processing parameters
+            initial_params_dict: Initial parameters (for FFT worker config)
             logger_name: Name for logger in this process
         """
         import logging
         logger = logging.getLogger(logger_name)
         logger.info("Multiprocessing worker started")
         
-        # Reconstruct parameters from dict
-        params = InLineHoloParams(**params_dict)
+        # Get initial params for FFT configuration
+        initial_params = InLineHoloParams(**initial_params_dict)
         
-        # Choose FFT implementation
-        if params.use_scipy_fft and hasSciPyFFT:
-            def FT(x):
-                return scipy_fft.fftshift(scipy_fft.fft2(x, workers=params.fft_workers))
-            def iFT(x):
-                return scipy_fft.ifft2(scipy_fft.ifftshift(x), workers=params.fft_workers)
+        # Choose FFT implementation (fixed at startup based on initial config)
+        if initial_params.use_scipy_fft and hasSciPyFFT:
+            def FT(x, workers):
+                return scipy_fft.fftshift(scipy_fft.fft2(x, workers=workers))
+            def iFT(x, workers):
+                return scipy_fft.ifft2(scipy_fft.ifftshift(x), workers=workers)
+            use_scipy = True
         else:
-            def FT(x):
+            def FT(x, workers):
                 return np.fft.fftshift(np.fft.fft2(x))
-            def iFT(x):
+            def iFT(x, workers):
                 return np.fft.ifft2(np.fft.ifftshift(x))
+            use_scipy = False
         
-        # Kernel cache for this process
+        logger.debug(f"Worker initialized with scipy_fft={use_scipy}")
+        
+        # Kernel cache for this process - keys include all relevant parameters
         kernel_cache = {}
         
         def get_fresnel_kernel(shape, params):
-            """Local kernel cache function"""
+            """Local kernel cache function with full parameter key"""
             nx, ny = shape[1], shape[0]
             ps = params.pixelsize * params.binning
-            cache_key = (nx, ny, ps, params.wavelength, params.dz)
+            # Cache key includes all kernel-affecting parameters
+            cache_key = (nx, ny, ps, params.wavelength, params.dz, params.use_float32)
             
             if cache_key in kernel_cache:
                 return kernel_cache[cache_key]
@@ -673,21 +679,29 @@ class InLineHoloController(LiveUpdatedController):
             hfy = np.exp(phase * fy**2)
             
             kernel_cache[cache_key] = (hfx, hfy)
+            
+            # Limit cache size to prevent memory issues
+            if len(kernel_cache) > 10:
+                # Remove oldest entries
+                keys_to_remove = list(kernel_cache.keys())[:-5]
+                for key in keys_to_remove:
+                    del kernel_cache[key]
+            
             return hfx, hfy
         
         def process_hologram(gray_roi, params):
-            """Process hologram in worker process"""
+            """Process hologram in worker process with current parameters"""
             dtype = np.float32 if params.use_float32 else np.float64
             E0 = np.sqrt(gray_roi.astype(dtype))
             
-            # Get kernel
+            # Get kernel (uses current params for cache key)
             hfx, hfy = get_fresnel_kernel(E0.shape, params)
             
             # Propagate
-            E0fft = FT(E0)
+            E0fft = FT(E0, params.fft_workers)
             G = E0fft * hfx
             G *= hfy[:, None]
-            Ef = iFT(G)
+            Ef = iFT(G, params.fft_workers)
             
             # Return intensity
             return np.real(Ef * np.conj(Ef))
@@ -695,12 +709,18 @@ class InLineHoloController(LiveUpdatedController):
         # Processing loop
         while not stop_event.is_set():
             try:
-                # Get frame from queue with timeout
-                frame_data = input_queue.get(timeout=0.1)
-                if frame_data is None:
+                # Get (frame, params_dict) tuple from queue with timeout
+                data = input_queue.get(timeout=0.1)
+                if data is None:
                     continue
                 
-                # Process
+                # Unpack frame and current parameters
+                frame_data, params_dict = data
+                
+                # Reconstruct params from dict (gets current values from main process)
+                params = InLineHoloParams(**params_dict)
+                
+                # Process with current parameters
                 result = process_hologram(frame_data, params)
                 
                 # Send result
@@ -720,7 +740,8 @@ class InLineHoloController(LiveUpdatedController):
     def _processing_loop_with_mp(self):
         """
         Processing loop variant that uses multiprocessing worker.
-        Pulls frames from queue, preprocesses, sends to worker process, receives results.
+        Pulls frames from queue, preprocesses, sends (frame, params) to worker process, receives results.
+        Parameters are sent with each frame to ensure API changes take effect immediately.
         """
         self._logger.info("Processing loop (multiprocessing mode) started")
         process_count = 0
@@ -736,15 +757,18 @@ class InLineHoloController(LiveUpdatedController):
                     time.sleep(min_interval * 0.1)
                     continue
                 
+                # Get current parameters snapshot for worker
+                current_params_dict = self._params.to_dict()
+                
                 if self._state.is_paused:
-                    # Pause mode - send last preprocessed frame
+                    # Pause mode - send last preprocessed frame with current params
                     if self._last_frame is not None:
                         # Preprocess
                         gray_roi = self._preprocess_frame_for_worker(self._last_frame)
                         
-                        # Send to worker
+                        # Send (frame, params) tuple to worker
                         try:
-                            self._mp_input_queue.put_nowait(gray_roi)
+                            self._mp_input_queue.put_nowait((gray_roi, current_params_dict))
                         except:
                             pass
                         
@@ -770,9 +794,9 @@ class InLineHoloController(LiveUpdatedController):
                         # Preprocess (ROI extraction, etc.)
                         gray_roi = self._preprocess_frame_for_worker(frame)
                         
-                        # Send to worker process
+                        # Send (frame, params) tuple to worker process
                         try:
-                            self._mp_input_queue.put_nowait(gray_roi)
+                            self._mp_input_queue.put_nowait((gray_roi, current_params_dict))
                         except:
                             pass  # Drop if queue full
                         
@@ -901,7 +925,7 @@ class InLineHoloController(LiveUpdatedController):
         # Invalidate kernel cache if needed
         if needs_cache_invalidation:
             self._invalidate_kernel_cache()
-            self._logger.debug("Kernel cache invalidated due to parameter change")
+            self._logger.info("Kernel cache invalidated due to parameter change")
         
         self._emit_state_changed()
         return self._params.to_dict()

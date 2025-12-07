@@ -323,6 +323,11 @@ class CameraPicamera2:
                     self.frame_buffer.append(frame)
                     self.frameid_buffer.append(frame_id)
                     
+                    # Always keep latest frame cached (not consumed by getLast)
+                    # This allows multiple consumers to access the same frame
+                    self.lastFrameFromBuffer = frame
+                    self.lastFrameId = frame_id
+                    
                     if self.DEBUG:
                         self.__logger.debug(f"Frame {frame_id} captured, buffer size: {len(self.frame_buffer)}")
                 
@@ -697,7 +702,7 @@ class CameraPicamera2:
         latest_frame = self.frame_buffer.pop()
         latest_frame_id = self.frameid_buffer.pop()
         
-        # Store as last frame
+        # Store as last frame (also updated in _grab_frames, but ensure consistency)
         self.lastFrameFromBuffer = latest_frame
         self.lastFrameId = latest_frame_id
         

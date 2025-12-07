@@ -90,14 +90,21 @@ class InLineHoloController(LiveUpdatedController):
     
     Features:
     - Fresnel propagation for inline holograms
-    - Frame queue with configurable processing rate
+    - Frame queue with configurable processing rate (via update_freq)
+    - Rate-limited frame reception via update() callback
     - Pause/resume mechanism
     - Binning support with automatic pixel size adjustment
     - API control via RESTful endpoints
+    
+    Architecture:
+    - update() is called for every frame via sigUpdateImage
+    - Rate limiting is done via counter (like FFTController)
+    - Frames are queued and processed by background thread
     """
 
     sigHoloImageComputed = Signal(np.ndarray, str)  # (image, name)
     sigHoloStateChanged = Signal(object)  # state_dict
+    sigImageReceived = Signal()  # Signal to trigger processing worker
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -140,16 +147,33 @@ class InLineHoloController(LiveUpdatedController):
         self._state = InLineHoloState()
         self._processing_lock = threading.Lock()
         
-        # Store last frame for pause mode
+        # Rate limiting counter (like FFTController pattern)
+        # updateRate = number of frames to skip between processing
+        # Calculated from update_freq relative to assumed ~30fps camera rate
+        self._update_rate = 3  # Default: process every 3rd frame
+        self._frame_counter = 0
+        
+        # Store last frame for pause mode and on-demand processing
         self._last_frame = None
         
         # MJPEG streaming
         self._mjpeg_queue = queue.Queue(maxsize=10)
         self._jpeg_quality = 85
         
-        # Processing thread
-        self._processing_thread = None
-        self._stop_processing_event = threading.Event()
+        # Frame queue for decoupled processing (small queue, drop frames if full)
+        self._frame_queue = queue.Queue(maxsize=3)
+        
+        # Processing worker and thread
+        self._processing_worker = self.HoloProcessingWorker(self)
+        self._processing_worker.sigHoloProcessed.connect(self._on_holo_processed)
+        self._processing_thread = Thread()
+        self._processing_worker.moveToThread(self._processing_thread)
+        self.sigImageReceived.connect(self._processing_worker.processHologram)
+        self._processing_thread.start()
+        
+        # Connect to CommunicationChannel signal for frame updates
+        # This is the standard pattern used by HistogrammController, FFTController, etc.
+        self._commChannel.sigUpdateImage.connect(self.update)
         
         # Legacy GUI setup
         if not IS_HEADLESS:
@@ -159,13 +183,94 @@ class InLineHoloController(LiveUpdatedController):
 
     def __del__(self):
         """Cleanup on deletion"""
-        self.stop_processing()
-        if self._processing_thread is not None:
-            self._stop_processing_event.set()
-            self._processing_thread.join(timeout=2.0)
+        # Stop processing thread
+        self._processing_thread.quit()
+        self._processing_thread.wait()
+        
         if hasattr(super(), '__del__'):
             super().__del__()
 
+    def update(self, detectorName, image, init, scale, isCurrentDetector):
+        """
+        Periodic update called for every frame via sigUpdateImage.
+        
+        This follows the FFTController pattern:
+        - Rate limiting via counter
+        - Frames are queued for background processing
+        - Dropped if queue is full (to prevent memory buildup)
+        
+        Args:
+            detectorName: Name of the detector
+            image: The frame data
+            init: Whether this is an initialization frame
+            scale: Scale information
+            isCurrentDetector: Whether this is the currently selected detector
+        """
+        # Only process frames from our target camera
+        if detectorName != self.camera:
+            return
+        
+        # Skip if processing is not enabled
+        if not self._state.is_processing:
+            return
+        
+        # Skip if image is None
+        if image is None:
+            return
+        
+        # Store last frame (always, for pause mode)
+        self._last_frame = image
+        self._state.frame_count += 1
+        
+        # Rate limiting: process every N-th frame
+        if self._frame_counter >= self._update_rate:
+            self._frame_counter = 0
+            
+            # Queue frame for processing (or reprocess last frame if paused)
+            frame_to_process = self._last_frame if self._state.is_paused else image
+            
+            # Prepare worker and emit signal to trigger processing
+            self._processing_worker.prepareForNewImage(frame_to_process)
+            self.sigImageReceived.emit()
+        else:
+            self._frame_counter += 1
+
+    def _on_holo_processed(self, result):
+        """
+        Callback when hologram processing is complete.
+        
+        Args:
+            result: The processed hologram image
+        """
+        if result is not None:
+            self.sigHoloImageComputed.emit(result, "inline_holo")
+            self._state.processed_count += 1
+            self._state.last_process_time = time.time()
+            
+            # Add to MJPEG stream if active
+            if self._state.is_streaming:
+                self._add_to_mjpeg_stream(result)
+
+    def set_update_rate(self, update_freq: float):
+        """
+        Set the processing rate.
+        
+        Args:
+            update_freq: Desired processing frequency in Hz
+        """
+        # Assume camera runs at ~30fps, calculate skip rate
+        # update_rate = frames to skip = (camera_fps / update_freq) - 1
+        # For update_freq=10Hz at 30fps: skip every 2 frames (process every 3rd)
+        # For update_freq=30Hz at 30fps: skip 0 frames (process every frame)
+        assumed_camera_fps = 30.0
+        if update_freq <= 0:
+            update_freq = 1.0
+        skip_rate = max(0, int(assumed_camera_fps / update_freq) - 1)
+        self._update_rate = skip_rate
+        self._frame_counter = 0
+        self._params.update_freq = update_freq
+        self._logger.info(f"Set update rate: {update_freq} Hz (skip every {skip_rate} frames)")
+    
     # =========================
     # Hologram Processing Core
     # =========================
@@ -312,16 +417,9 @@ class InLineHoloController(LiveUpdatedController):
         return self._abssqr(Ef)
 
     def _process_frame(self, image):
-        """Process a single frame"""
+        """Process a single frame and return result"""
         try:
             result = self._process_inline(image)
-            if result is not None:
-                self.sigHoloImageComputed.emit(result, "inline_holo")
-                self._state.processed_count += 1
-                
-                # Add to MJPEG stream if active
-                if self._state.is_streaming:
-                    self._add_to_mjpeg_stream(result)
             return result
         except Exception as e:
             self._logger.error(f"Error processing hologram: {e}")
@@ -330,15 +428,16 @@ class InLineHoloController(LiveUpdatedController):
 
     def _get_latest_frame(self):
         """
-        Fetch latest frame from camera detector.
-        Returns None if camera not available or no frame ready.
+        Get the last received frame (for manual/on-demand processing).
+        
+        This returns the most recently received frame from the signal callback.
+        For continuous processing, use start_processing() which handles frames
+        automatically via the sigUpdateImage signal.
+        
+        Returns:
+            The last received frame, or None if no frame has been received yet.
         """
-        try:
-            detector = self._master.detectorsManager[self.camera]
-            return detector.getLatestFrame()
-        except Exception as e:
-            self._logger.debug(f"Failed to get frame: {e}")
-            return None
+        return self._last_frame
 
     def _add_to_mjpeg_stream(self, image):
         """
@@ -383,52 +482,61 @@ class InLineHoloController(LiveUpdatedController):
         except Exception as e:
             self._logger.debug(f"Error encoding MJPEG frame: {e}")
 
-    def _processing_loop(self):
+    def _reprocess_last_frame(self):
         """
-        Background processing loop that actively fetches frames from camera.
-        Respects the update_freq parameter.
+        Reprocess the last received frame (used for manual reprocessing).
+        Called when parameters change while paused to show updated results.
         """
-        self._logger.info("Processing loop started")
+        if self._last_frame is not None:
+            self._processing_worker.prepareForNewImage(self._last_frame)
+            self.sigImageReceived.emit()
+
+    # =========================
+    # Processing Worker (like FFTController pattern)
+    # =========================
+    class HoloProcessingWorker(Worker):
+        """
+        Worker that processes hologram frames in a separate thread.
         
-        while not self._stop_processing_event.is_set():
+        This follows the FFTController pattern where:
+        - prepareForNewImage() stores the image to process
+        - processHologram() is triggered via signal and does the actual work
+        - sigHoloProcessed emits the result when done
+        """
+        sigHoloProcessed = Signal(np.ndarray)
+        
+        def __init__(self, controller):
+            super().__init__()
+            self._controller = controller
+            self._image = None
+            self._numQueuedImages = 0
+            self._numQueuedImagesMutex = Mutex()
+        
+        def prepareForNewImage(self, image):
+            """Must always be called before the worker receives a new image."""
+            self._image = image
+            self._numQueuedImagesMutex.lock()
+            self._numQueuedImages += 1
+            self._numQueuedImagesMutex.unlock()
+        
+        def processHologram(self):
+            """Process the hologram image."""
             try:
-                # Calculate minimum interval between processing
-                min_interval = 1.0 / self._params.update_freq if self._params.update_freq > 0 else 0.0
+                if self._numQueuedImages > 1:
+                    # Skip this frame to catch up
+                    return
                 
-                current_time = time.time()
+                if self._image is None:
+                    return
                 
-                # Check if enough time has passed
-                if current_time - self._state.last_process_time < min_interval:
-                    time.sleep(min_interval * 0.1)  # Short sleep to prevent CPU spinning
-                    continue
-                
-                # Check if paused
-                if self._state.is_paused:
-                    # In pause mode, process last frame continuously at update rate
-                    if self._last_frame is not None:
-                        with self._processing_lock:
-                            self._process_frame(self._last_frame)
-                            self._state.last_process_time = current_time
-                else:
-                    # Normal processing mode - fetch latest frame from camera
-                    frame = self._get_latest_frame()
-                    if frame is not None:
-                        self._state.frame_count += 1
-                        self._last_frame = frame.copy()  # Store for pause mode
-                        
-                        with self._processing_lock:
-                            self._process_frame(frame)
-                            self._state.last_process_time = current_time
-                    else:
-                        # No frame available, wait a bit
-                        time.sleep(0.01)
-                    
-            except Exception as e:
-                self._logger.error(f"Error in processing loop: {e}")
-                self._logger.debug(traceback.format_exc())
-                time.sleep(0.1)
-        
-        self._logger.info("Processing loop stopped")
+                # Use the controller's processing method
+                result = self._controller._process_frame(self._image)
+                if result is not None:
+                    self.sigHoloProcessed.emit(result)
+            finally:
+                self._numQueuedImagesMutex.lock()
+                self._numQueuedImages -= 1
+                self._numQueuedImagesMutex.unlock()
 
     # =========================
     # API: Parameter Control
@@ -526,6 +634,24 @@ class InLineHoloController(LiveUpdatedController):
         """
         return self.set_parameters_inlineholo({"binning": binning})
 
+    @APIExport(runOnUIThread=True)
+    def set_update_freq_inlineholo(self, update_freq: float) -> Dict[str, Any]:
+        """
+        Set the processing frame rate in Hz.
+        
+        This controls how many frames are skipped between processing.
+        Higher values = faster processing but more CPU usage.
+        Lower values = slower processing but lower CPU usage.
+        
+        Args:
+            update_freq: Processing rate in Hz (default: 10.0)
+            
+        Returns:
+            Updated parameters dictionary
+        """
+        self.set_update_rate(update_freq)
+        return self._params.to_dict()
+
     # =========================
     # API: Processing Control
     # =========================
@@ -537,7 +663,12 @@ class InLineHoloController(LiveUpdatedController):
     @APIExport(runOnUIThread=True)
     def start_processing_inlineholo(self) -> Dict[str, Any]:
         """
-        Start hologram processing
+        Start hologram processing.
+        
+        Processing uses the update() callback pattern (like FFTController):
+        - Frames are received via sigUpdateImage at camera rate
+        - Rate limiting is done via counter (skip N frames)
+        - Frames are processed by worker thread
         
         Returns:
             Current state dictionary
@@ -547,18 +678,17 @@ class InLineHoloController(LiveUpdatedController):
             self._state.is_paused = False
             self._state.frame_count = 0
             self._state.processed_count = 0
-            self._state.last_process_time = 0.0
+        
+        # Reset frame counter
+        self._frame_counter = 0
         
         # Ensure camera is running
         self._ensure_camera_running()
         
-        # Start processing thread if not already running
-        if self._processing_thread is None or not self._processing_thread.is_alive():
-            self._stop_processing_event.clear()
-            self._processing_thread = threading.Thread(target=self._processing_loop, daemon=True)
-            self._processing_thread.start()
+        # Set update rate from params
+        self.set_update_rate(self._params.update_freq)
         
-        self._logger.info("Started inline hologram processing")
+        self._logger.info(f"Started inline hologram processing ({self._params.update_freq} Hz)")
         self._emit_state_changed()
         
         return self._state.to_dict()
@@ -566,7 +696,7 @@ class InLineHoloController(LiveUpdatedController):
     @APIExport(runOnUIThread=True)
     def stop_processing_inlineholo(self) -> Dict[str, Any]:
         """
-        Stop hologram processing
+        Stop hologram processing.
         
         Returns:
             Current state dictionary
@@ -574,9 +704,6 @@ class InLineHoloController(LiveUpdatedController):
         with self._processing_lock:
             self._state.is_processing = False
             self._state.is_paused = False
-        
-        # Stop processing thread
-        self._stop_processing_event.set()
         
         self._logger.info("Stopped hologram processing")
         self._emit_state_changed()

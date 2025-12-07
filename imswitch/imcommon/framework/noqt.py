@@ -66,8 +66,8 @@ class SignalInstance(psygnal.SignalInstance):
             return
 
         # Handle pre-formatted stream messages from LiveViewController
-        if self.name == "sigUpdateImage":
-            pass
+        if self.name == "sigUpdateImage" or self.name == "sigUpdateFrame": # both stemp from the liveviewcontroller
+            return
         elif self.name == "sigUpdateStreamFrame":
             # this can be binary or jpeg frame
             self._handle_stream_frame(args[0])

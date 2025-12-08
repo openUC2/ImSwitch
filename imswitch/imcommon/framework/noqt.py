@@ -65,11 +65,12 @@ class SignalInstance(psygnal.SignalInstance):
         if not args:
             return
         # Handle pre-formatted stream messages from LiveViewController
-        if self.name == "sigUpdateImage" or self.name == "sigUpdateFrame" or self.name == "sigImageReceived": # both stemp from the liveviewcontroller
+        if self.name == "sigUpdateImage" or self.name == "sigUpdateFrame" or self.name == "sigImageReceived" or self.name == "sigHoloImageComputed" or self.name == "sigHoloProcessed": # both stemp from the liveviewcontroller
             return
         elif self.name == "sigUpdateStreamFrame":
             # this can be binary or jpeg frame
             self._handle_stream_frame(args[0])
+            
             return
         elif self.name in ["sigImageUpdated", "sigStreamFrame"]:
             # These signals are internal to the streaming pipeline:
@@ -183,7 +184,6 @@ class SignalInstance(psygnal.SignalInstance):
                             'image': data['image']
                         }, use_bin_type=True)
                         
-                        #print(f"Sending JPEG frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
                         _client_sent_frame_id[sid] = next_frame_id
                         
                         # Emit on same 'frame' event as binary for unified frontend handling

@@ -431,12 +431,7 @@ class CameraHIK:
                 frame = np.flip(frame, axis=0)
             if self.flipImage[1]:  # flipX
                 frame = np.flip(frame, axis=1)
-
-            # push into ring buffers for later use
-            #self.frame_buffer.append(frame)
-            #self.frameid_buffer.append(fid)
-            #self.frameNumber = fid
-            #self.timestamp   = ts
+                
 
             # pass to user callback
             user_cb(frame, fid, ts)

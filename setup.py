@@ -84,7 +84,7 @@ setup(
         "aiohttp>=3.9.4",
         "numba>=0.61.2", 
         "mikro-next>=0.18.0", 
-        "arkitekt-next[all]==0.30.1", 
+        "arkitekt-next[all]==0.35.0", 
         "koil>=2.0.5", 
         "msgpack>=1.0.4"
         ],
@@ -113,7 +113,7 @@ setup(
         'arkitekt':
             [
             "arkitekt==0.7.8",
-            "arkitekt_next>=0.8.6"
+            "arkitekt_next>=0.35.0"
         ],
         'imjoy':[
             "imjoy-rpc==0.5.59",

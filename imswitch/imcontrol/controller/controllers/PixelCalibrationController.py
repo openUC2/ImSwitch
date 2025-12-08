@@ -882,9 +882,9 @@ class PixelCalibrationController(LiveUpdatedController):
             scale_x = metrics.get('scale_x_um_per_pixel', 1.0)
             scale_y = metrics.get('scale_y_um_per_pixel', 1.0)
             pixel_size = (abs(scale_x) + abs(scale_y)) / 2.0
-            
-            flipY = scale_y < 0
-            flipX = scale_x < 0
+            # TODO: Is this the corrected way to determine flip from scale signs? 
+            flipY = scale_y > 0
+            flipX = scale_x > 0
             
             self._logger.info(f"Applying calibration results for '{objective_id}': "
                             f"pixelsize={pixel_size:.3f} µm/px, flip=(Y:{flipY}, X:{flipX})")

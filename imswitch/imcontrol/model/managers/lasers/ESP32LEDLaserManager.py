@@ -84,7 +84,7 @@ class ESP32LEDLaserManager(LaserManager):
                         
                         # Emit signal to update GUI if commChannel is available
                         if self._commChannel is not None:
-                            laserDict = {self.name: {"power": self.power, "enabled": self.enabled}}
+                            laserDict = {self.name: {"power": self.power, "enabled": bool(self.enabled)}}
                             self._commChannel.sigUpdateLaserPower.emit(laserDict)
             
         except Exception as e:

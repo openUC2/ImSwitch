@@ -64,7 +64,6 @@ class SignalInstance(psygnal.SignalInstance):
 
         if not args:
             return
-
         # Handle pre-formatted stream messages from LiveViewController
         if self.name == "sigUpdateImage" or self.name == "sigUpdateFrame" or self.name == "sigImageReceived": # both stemp from the liveviewcontroller
             return

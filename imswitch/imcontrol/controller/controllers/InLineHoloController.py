@@ -150,7 +150,7 @@ class InLineHoloController(LiveUpdatedController):
         # Rate limiting counter (like FFTController pattern)
         # updateRate = number of frames to skip between processing
         # Calculated from update_freq relative to assumed ~30fps camera rate
-        self._update_rate = 3  # Default: process every 3rd frame
+        self._update_rate = 8  # Default: process every 3rd frame
         self._frame_counter = 0
         
         # Store last frame for pause mode and on-demand processing
@@ -223,7 +223,7 @@ class InLineHoloController(LiveUpdatedController):
         self._state.frame_count += 1
         
         # Rate limiting: process every N-th frame
-        if self._frame_counter >= self._update_rate:
+        if self._frame_counter >= max(5,self._update_rate):
             self._frame_counter = 0
             
             # Queue frame for processing (or reprocess last frame if paused)

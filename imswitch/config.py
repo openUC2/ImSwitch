@@ -50,7 +50,7 @@ class ImSwitchConfig:
     
     # Jupyter settings
     jupyter_port: int = 8888
-    jupyter_url: str = ""
+    jupyter_url: str = "localhost"
     
     # Version info
     version: str = "2.1.41"

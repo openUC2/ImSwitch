@@ -1,6 +1,6 @@
 services:
   imswitch-docker-noqt:
-    image: ghcr.io/openuc2/imswitch-noqt:sha-907555f
+    image: ghcr.io/openuc2/imswitch-noqt:sha-540a0a6
     privileged: true
     ports:
       - "8001:8001" # frontend, HTTP API, WebSockets API
@@ -12,6 +12,7 @@ services:
       - /media:/media
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
       - /run/udev:/run/udev:ro
+      - /dev/dma_heap:/dev/dma_heap
 
     environment:
       - HEADLESS=1

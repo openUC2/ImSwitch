@@ -2235,7 +2235,7 @@ class PixelCalibrationClass(object):
             affine_matrix, inlier_mask, metrics = compute_affine_matrix(
                 pixel_shifts, stage_shifts
             )
-            
+            # TODO: We need to check if the affine_matrix makes sense if not discard and inform the user! 
             # Add correlation info to metrics
             metrics["mean_correlation"] = float(np.mean(correlation_values))
             metrics["min_correlation"] = float(np.min(correlation_values))

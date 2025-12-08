@@ -69,12 +69,13 @@ class StreamWorker(Worker):
     Each worker runs in its own thread and waits for new frames without using a timer.
     This avoids skipping frames and ensures consistent frame rate.
     Workers do the actual encoding and emit encoded bytes that match socket.io message format.
+    
+    In headless mode, this worker is responsible for broadcasting frames to other controllers
+    via sigUpdateFrame, which should be connected to CommunicationChannel.sigUpdateImage.
     """
     
     sigStreamFrame = Signal(dict)  # Emits pre-formatted message dict ready for socket.io emission
-    sigUpdateFrame = Signal(
-        str, np.ndarray, bool, list, bool
-    )  # (detectorName, image, init, scale, isCurrentDetector)
+    sigUpdateFrame = Signal(str, np.ndarray, bool, bool, float, bool)  # (detectorName, image, init, scale, isCurrentDetector) - for broadcasting to other controllers
     def __init__(self, detectorManager, updatePeriodMs: int, streamParams: StreamParams):
         super().__init__()
         self._detector = detectorManager
@@ -85,6 +86,10 @@ class StreamWorker(Worker):
         self._logger = initLogger(self)
         self._last_frame_time = 0
         self._was_running = False
+        
+        # Frame broadcasting is disabled by default to avoid performance issues
+        # Enable via enableFrameBroadcast() if controllers need frame updates
+        self._broadcast_frames = True
     
     def run(self):
         """Start polling frames without timer - wait and push immediately."""
@@ -105,8 +110,11 @@ class StreamWorker(Worker):
                         frame = result
                         detector_frame_number = None
                     
-                    # keep other controllers happy (i.e. def update()), not so good idea, consumes a lot of CPU/copy time?!
-                    # self.sigUpdateFrame.emit(self._detector.name, frame, False, [], True)
+                    # Broadcast frame to other controllers (HistogrammController, InLineHoloController, etc.)
+                    # This is DISABLED by default for performance - enable via enableFrameBroadcast()
+                    # Controllers that need frames should use getCachedFrame() or subscribe explicitly
+                    if frame is not None and self._broadcast_frames:
+                        self.sigUpdateFrame.emit(self._detector.name, frame, False, False, self._detector.pixelSizeUm, True) # (str, np.ndarray, bool, bool, float, bool)
 
                     if frame is None:
                         self._logger.warning("Frame capture failed, stopping worker (Frame none)")
@@ -136,6 +144,22 @@ class StreamWorker(Worker):
         """Stop polling frames."""
         self._running = False
         self._logger.info("StreamWorker stopped")
+    
+    def enableFrameBroadcast(self, enable: bool = True):
+        """
+        Enable or disable frame broadcasting to other controllers.
+        
+        When enabled, sigUpdateFrame is emitted for each captured frame,
+        allowing controllers like HistogrammController to receive updates.
+        
+        WARNING: This can significantly impact performance if many controllers
+        are connected. Consider using getCachedFrame() instead for on-demand access.
+        
+        Args:
+            enable: True to enable broadcasting, False to disable
+        """
+        self._broadcast_frames = enable
+        self._logger.info(f"Frame broadcasting {'enabled' if enable else 'disabled'}")
     
     @abstractmethod
     def _captureAndEmit(self, frame, detector_frame_number=None):
@@ -826,7 +850,13 @@ class LiveViewController(LiveUpdatedController):
             # Connect worker signal to controller's signal, which is then handled by noqt
             # The worker emits pre-formatted messages ready for socket.io emission
             worker.sigStreamFrame.connect(self._commChannel.sigUpdateStreamFrame)
-            #worker.sigUpdateFrame.connect(self._commChannel.sigUpdateImage)
+            
+            # Frame broadcasting to other controllers is DISABLED by default for performance
+            # Controllers should use getCachedFrame() for on-demand frame access
+            # Uncomment below if you need real-time frame updates to all controllers:
+            worker.sigUpdateFrame.connect(self._commChannel.sigUpdateImage)
+            worker.enableFrameBroadcast(True)
+            
             # Start worker in thread
             # mThread = Thread
             # worker.moveToThread()

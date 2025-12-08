@@ -217,7 +217,6 @@ class CameraPicamera2:
                 # RGB mode - use RGB888 format (3 channels, 8-bit each)
                 config = self.camera.create_video_configuration(
                     main={"size": (self.SensorWidth, self.SensorHeight), "format": "RGB888"},
-                    buffer_count=1,
                     controls={
                         "FrameRate": self.frame_rate,
                     }
@@ -228,7 +227,6 @@ class CameraPicamera2:
                 try:
                     config = self.camera.create_video_configuration(
                         main={"size": (self.SensorWidth, self.SensorHeight), "format": "Y8"},
-                        buffer_count=1,
                         controls={
                             "FrameRate": self.frame_rate,
                         }
@@ -237,7 +235,6 @@ class CameraPicamera2:
                     self.__logger.warning(f"Y8 format not supported, using RGB888: {e}")
                     config = self.camera.create_video_configuration(
                         main={"size": (self.SensorWidth, self.SensorHeight), "format": "RGB888"},
-                        buffer_count=1,
                         controls={
                             "FrameRate": self.frame_rate,
                         }
@@ -325,6 +322,11 @@ class CameraPicamera2:
                     # Add to buffer
                     self.frame_buffer.append(frame)
                     self.frameid_buffer.append(frame_id)
+                    
+                    # Always keep latest frame cached (not consumed by getLast)
+                    # This allows multiple consumers to access the same frame
+                    self.lastFrameFromBuffer = frame
+                    self.lastFrameId = frame_id
                     
                     if self.DEBUG:
                         self.__logger.debug(f"Frame {frame_id} captured, buffer size: {len(self.frame_buffer)}")
@@ -700,7 +702,7 @@ class CameraPicamera2:
         latest_frame = self.frame_buffer.pop()
         latest_frame_id = self.frameid_buffer.pop()
         
-        # Store as last frame
+        # Store as last frame (also updated in _grab_frames, but ensure consistency)
         self.lastFrameFromBuffer = latest_frame
         self.lastFrameId = latest_frame_id
         
@@ -853,9 +855,6 @@ class MockCameraPicamera2:
         self._grab_thread = None
         self._stop_event = threading.Event()
         
-        # get last frame lock
-        self._get_last_frame_lock = threading.Lock()
-        
         print(f"Mock Picamera2 initialized: {self.SensorWidth}x{self.SensorHeight}, RGB={self.isRGB}")
     
     def _generate_frame(self):
@@ -911,18 +910,17 @@ class MockCameraPicamera2:
         self.stop_live()
     
     def getLast(self, returnFrameNumber=False, timeout=1.0, auto_trigger=True):
-        with self._get_last_frame_lock:
-            """Get latest mock frame"""
-            if not self.frame_buffer:
-                frame = self._generate_frame()
-                frame_id = self.frameNumber
-            else:
-                frame = self.frame_buffer.pop()
-                frame_id = self.frameid_buffer.pop()
-            
-            if returnFrameNumber:
-                return frame, frame_id
-            return frame
+        """Get latest mock frame"""
+        if not self.frame_buffer:
+            frame = self._generate_frame()
+            frame_id = self.frameNumber
+        else:
+            frame = self.frame_buffer.pop()
+            frame_id = self.frameid_buffer.pop()
+        
+        if returnFrameNumber:
+            return frame, frame_id
+        return frame
     
     def flushBuffer(self):
         self.frame_buffer.clear()

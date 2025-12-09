@@ -163,6 +163,7 @@ class DetectorManager(SignalInterface):
             return
         if name not in self.__parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
+        if name.find("posure")>0:name = "exposure" # TODO: Hacky fix for inconsistent naming
         self.__parameters[name].value = value
         return self.parameters
 

@@ -123,7 +123,10 @@ class PositionerManager(ABC):
         """
         # result_pos = self._set_position(position, axis)
         # self._position[axis] = result_pos
-
+        pass
+    
+    def getPosition(self, axis: str) -> float:
+        """ Returns the current position of the specified axis. """
         pass
 
     def finalize(self) -> None:
@@ -193,10 +196,13 @@ class PositionerManager(ABC):
                 import configfiletools
                 configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
         except Exception as e:
-            if hasattr(self, '_logger'):
-                self._logger.error(f"Could not save stage offset: {e}")
+            print(f"Could not save stage offset: {e}")
             return
 
+    def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):
+        """ Move to sample loading position. """
+        pass
+   
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

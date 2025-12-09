@@ -29,6 +29,7 @@ class OMEWriterConfig:
     write_zarr: bool = True
     write_stitched_tiff: bool = False  # New option for stitched TIFF
     write_tiff_single: bool = False  # Append images in a single TIFF file
+    write_individual_tiffs: bool = False  # Write individual TIFF files with position-based naming
     min_period: float = 0.2
     compression: str = "zlib"
     zarr_compressor = None
@@ -66,7 +67,7 @@ class OMEWriter:
     both fast stage scan and normal stage scan writing operations.
     """
     
-    def __init__(self, file_paths, tile_shape, grid_shape, grid_geometry, config: OMEWriterConfig, logger=None):
+    def __init__(self, file_paths, tile_shape, grid_shape, grid_geometry, config: OMEWriterConfig, logger=None, isRGB=False):
         """
         Initialize the OME writer.
         
@@ -84,6 +85,7 @@ class OMEWriter:
         self.x_start, self.y_start, self.x_step, self.y_step = grid_geometry # TODO: this should be set per each grid 
         self.config = config
         self.logger = logger
+        self.isRGB = isRGB
         
         # Zarr components
         self.store = None
@@ -152,7 +154,7 @@ class OMEWriter:
     def _setup_tiff_stitcher(self):
         """Set up the TIFF stitcher for creating stitched OME-TIFF files."""
         stitched_tiff_path = os.path.join(self.file_paths.base_dir, "stitched.ome.tif")
-        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True)
+        self.tiff_stitcher = OmeTiffStitcher(stitched_tiff_path, bigtiff=True, isRGB=self.isRGB)
         self.tiff_stitcher.start()
         if self.logger:
             self.logger.debug(f"TIFF stitcher initialized: {stitched_tiff_path}")
@@ -194,6 +196,10 @@ class OMEWriter:
         # Write to single TIFF if requested
         if self.config.write_tiff_single and self.single_tiff_writer is not None:
             self._write_single_tiff_tile(frame, metadata)
+        
+        # Write individual TIFF files with position-based naming if requested
+        if self.config.write_individual_tiffs:
+            self._write_individual_tiff(frame, metadata)
         
         # Throttle writes if needed
         self._throttle_writes()
@@ -275,6 +281,45 @@ class OMEWriter:
             image=frame,
             metadata=metadata_with_pixel_size
         )
+    
+    def _write_individual_tiff(self, frame, metadata: Dict[str, Any]):
+        """
+        Write individual TIFF file with position-based naming.
+        
+        Files are organized in folders by timepoint, with filenames indicating:
+        - Position in XYZ (in microns, without decimal points)
+        - Channel name
+        - Iterator (running number)
+        - Laser power
+        
+        Example filename: x5000_y3000_z1500_c0_i0042_p80.tif
+        """
+        # Extract metadata
+        t_idx = metadata.get("time_index", 0)
+        z_idx = metadata.get("z_index", 0)
+        c_idx = metadata.get("channel_index", 0)
+        
+        # Get position in microns (convert float to int by multiplying by 1000 to preserve sub-micron precision)
+        x_microns = int(metadata.get("x", 0) * 1000)
+        y_microns = int(metadata.get("y", 0) * 1000)
+        z_microns = int(metadata.get("z", 0) * 1000)
+        
+        # Get channel and laser power
+        channel = metadata.get("illuminationChannel", "unknown")
+        laser_power = int(metadata.get("illuminationValue", 0))
+        
+        # Get running number (iterator)
+        iterator = metadata.get("runningNumber", 0)
+        
+        # Get timepoint directory
+        timepoint_dir = self.file_paths.get_timepoint_dir(t_idx)
+        
+        # Create filename: x{x}_y{y}_z{z}_c{channel}_i{iterator}_p{power}.tif
+        filename = f"x{x_microns}_y{y_microns}_z{z_microns}_c{c_idx}_{channel}_i{iterator:04d}_p{laser_power}.tif"
+        filepath = os.path.join(timepoint_dir, filename)
+        
+        # Write TIFF file
+        tif.imwrite(filepath, frame, compression=self.config.compression)
     
     def _throttle_writes(self):
         """Throttle disk writes if needed."""

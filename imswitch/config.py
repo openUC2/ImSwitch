@@ -18,7 +18,6 @@ class ImSwitchConfig:
     
     # Network settings
     http_port: int = 8001
-    socket_port: int = 8002
     ssl: bool = True
     
     # File paths
@@ -28,14 +27,30 @@ class ImSwitchConfig:
     
     # External drive settings
     scan_ext_data_folder: bool = False
-    ext_drive_mount: Optional[str] = None
+    ext_data_folder: Optional[str] = None
+    
+    # Kernel settings
+    with_kernel: bool = False
     
     # Streaming settings
     socket_stream: bool = True
     
+    # Binary streaming configuration
+    stream_binary_enabled: bool = True
+    stream_binary_websocket_path: str = "/ws/frames"
+    stream_binary_bitdepth_in: int = 12
+    stream_binary_pixfmt: str = "GRAY16"
+    stream_binary_compression_algorithm: str = "lz4"
+    stream_binary_compression_level: int = 0
+    stream_binary_subsampling_factor: int = 1
+    stream_binary_throttle_ms: int = 50
+    
+    # Legacy JPEG streaming
+    stream_jpeg_enabled: bool = False
+    
     # Jupyter settings
     jupyter_port: int = 8888
-    jupyter_url: str = ""
+    jupyter_url: str = "localhost"
     
     # Version info
     version: str = "2.1.41"
@@ -53,12 +68,12 @@ class ImSwitchConfig:
             'headless': 'is_headless',
             'config_file': 'default_config',
             'http_port': 'http_port',
-            'socket_port': 'socket_port',
             'ssl': 'ssl',
             'config_folder': 'config_folder',
             'data_folder': 'data_folder',
             'scan_ext_data_folder': 'scan_ext_data_folder',
-            'ext_drive_mount': 'ext_drive_mount'
+            'ext_data_folder': 'ext_data_folder',
+            'with_kernel': 'with_kernel'
         }
         
         for arg_name, config_attr in arg_mapping.items():
@@ -67,17 +82,18 @@ class ImSwitchConfig:
                 if value is not None:
                     setattr(self, config_attr, value)
     
+        
     def to_legacy_globals(self, imswitch_module) -> None:
-        """Update legacy global variables for backward compatibility."""
+        """Update legacy global variables for backward compatibility.""" # @ethanjli this also needs a review as this is sharing global variables 
         imswitch_module.IS_HEADLESS = self.is_headless
         imswitch_module.__httpport__ = self.http_port
-        imswitch_module.__socketport__ = self.socket_port
         imswitch_module.__ssl__ = self.ssl
         imswitch_module.DEFAULT_SETUP_FILE = self.default_config
         imswitch_module.DEFAULT_CONFIG_PATH = self.config_folder
         imswitch_module.DEFAULT_DATA_PATH = self.data_folder
-        imswitch_module.SCAN_EXT_DATA_FOLDER = self.scan_ext_data_folder
-        imswitch_module.EXT_DRIVE_MOUNT = self.ext_drive_mount
+        imswitch_module.SCAN_EXT_DATA_PATH = self.scan_ext_data_folder
+        imswitch_module.EXT_DATA_PATH = self.ext_data_folder
+        imswitch_module.WITH_KERNEL = self.with_kernel
         imswitch_module.SOCKET_STREAM = self.socket_stream
         imswitch_module.jupyternotebookurl = self.jupyter_url
 

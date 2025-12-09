@@ -63,8 +63,29 @@ class CameraOpenCV:
         pass
 
     def close(self):
-        self.camera.release()
+        """Close camera and cleanup resources properly."""
+        self.__logger.info("Closing camera...")
         self.camera_is_open = False
+        
+        # Wait for frame grabber thread to finish
+        if hasattr(self, 'frameGrabberThread') and self.frameGrabberThread is not None:
+            if self.frameGrabberThread.is_alive():
+                self.__logger.debug("Waiting for frame grabber thread to exit...")
+                self.frameGrabberThread.join(timeout=2.0)
+                if self.frameGrabberThread.is_alive():
+                    self.__logger.warning("Frame grabber thread did not exit cleanly")
+        
+        # Release camera
+        if self.camera is not None:
+            try:
+                self.camera.release()
+                self.__logger.debug("Camera released")
+            except Exception as e:
+                self.__logger.error(f"Error releasing camera: {e}")
+            finally:
+                self.camera = None
+        
+        self.__logger.info("Camera closed")
 
     def set_exposure_time(self,exposure_time):
         if self.isAutoParameters:
@@ -149,6 +170,28 @@ class CameraOpenCV:
 
     def openPropertiesGUI(self):
         pass
+    
+    def isCameraHealthy(self):
+        """
+        Check if camera is healthy and responding.
+        
+        Returns:
+            bool: True if camera is open and frame grabber is running
+        """
+        if not self.camera_is_open:
+            return False
+        
+        if self.camera is None or not self.camera.isOpened():
+            return False
+        
+        if not hasattr(self, 'frameGrabberThread') or self.frameGrabberThread is None:
+            return False
+        
+        if not self.frameGrabberThread.is_alive():
+            self.__logger.warning("Frame grabber thread is not alive")
+            return False
+        
+        return True
 
     def listAvailableUSBCameras(self):
         '''list available cameras that can be used through openCVs VideoCapture'''
@@ -175,64 +218,252 @@ class CameraOpenCV:
         """
         Automatically match the user-chosen 'cameraindex' to the discovered /dev/video entries on Linux.
         On other platforms, just use cameraindex as provided.
+        Implements robust opening with retries and proper V4L2 buffer configuration.
         """
         from sys import platform
         if self.camera is not None:
             self.camera.release()
+            time.sleep(0.5)  # Allow time for release
 
-        if platform == "linux" or platform == "linux2":
-            # Map the requested cameraindex to an actual /dev/video device
-            available_cameras = sorted(self.listAvailableUSBCameras())
-            if isinstance(cameraindex, int):
-                # If out of range, fallback to the last device or device 0
-                if 0 <= cameraindex < len(available_cameras):
-                    dev_path = f"/dev/video{available_cameras[cameraindex]}"
+        max_retries = 3
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                if platform == "linux" or platform == "linux2":
+                    # Map the requested cameraindex to an actual /dev/video device
+                    available_cameras = sorted(self.listAvailableUSBCameras())
+                    if isinstance(cameraindex, int):
+                        # If out of range, fallback to the last device or device 0
+                        if 0 <= cameraindex < len(available_cameras):
+                            dev_path = f"/dev/video{available_cameras[cameraindex]}"
+                        else:
+                            dev_path = f"/dev/video{available_cameras[-1]}" if available_cameras else "/dev/video0"
+                    else:
+                        # Assume the user gave a direct string path like "/dev/video2"
+                        dev_path = str(cameraindex)
+
+                    self.__logger.debug(f"Attempt {attempt + 1}/{max_retries}: Opening Linux device: {dev_path}")
+                    
+                    # Try multiple capture methods for UVC cameras
+                    camera_opened = False
+                    
+                    # Method 1: V4L2 with MJPG (preferred for most cameras)
+                    try:
+                        self.camera = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
+                        if self.camera.isOpened():
+                            self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
+                            # Test if we can actually read a frame
+                            ret, test_frame = self.camera.read()
+                            if ret and test_frame is not None:
+                                self.__logger.debug(f"Successfully opened with V4L2+MJPG")
+                                camera_opened = True
+                            else:
+                                self.__logger.warning("V4L2+MJPG opened but cannot read frames")
+                                self.camera.release()
+                    except Exception as e:
+                        self.__logger.debug(f"V4L2+MJPG failed: {e}")
+                        if self.camera is not None:
+                            self.camera.release()
+                    
+                    # Method 2: V4L2 with YUYV (fallback for UVC cameras)
+                    if not camera_opened:
+                        try:
+                            self.camera = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
+                            if self.camera.isOpened():
+                                self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('Y','U','Y','V'))
+                                ret, test_frame = self.camera.read()
+                                if ret and test_frame is not None:
+                                    self.__logger.debug(f"Successfully opened with V4L2+YUYV")
+                                    camera_opened = True
+                                else:
+                                    self.__logger.warning("V4L2+YUYV opened but cannot read frames")
+                                    self.camera.release()
+                        except Exception as e:
+                            self.__logger.debug(f"V4L2+YUYV failed: {e}")
+                            if self.camera is not None:
+                                self.camera.release()
+                    
+                    # Method 3: Default OpenCV (no specific backend)
+                    if not camera_opened:
+                        try:
+                            self.camera = cv2.VideoCapture(cameraindex)
+                            if self.camera.isOpened():
+                                ret, test_frame = self.camera.read()
+                                if ret and test_frame is not None:
+                                    self.__logger.debug(f"Successfully opened with default backend")
+                                    camera_opened = True
+                                else:
+                                    self.__logger.warning("Default backend opened but cannot read frames")
+                                    self.camera.release()
+                        except Exception as e:
+                            self.__logger.debug(f"Default backend failed: {e}")
+                            if self.camera is not None:
+                                self.camera.release()
+                    
+                    if not camera_opened:
+                        raise RuntimeError(f"Failed to open camera at {dev_path} - tried V4L2+MJPG, V4L2+YUYV, and default backend")
+                    
+                    # Configure V4L2 buffer to reduce timeout issues
+                    # Set buffer size to minimum to reduce latency and timeout issues
+                    self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    
+                    # Set timeout for V4L2 (in milliseconds) - not all backends support this
+                    try:
+                        self.camera.set(cv2.CAP_PROP_TIMEOUT, 5000)  # 5 second timeout
+                    except:
+                        pass  # Some OpenCV versions don't support this
+
+                elif platform == "darwin":
+                    # macOS: just use cameraindex directly
+                    self.__logger.debug(f"Attempt {attempt + 1}/{max_retries}: Opening macOS camera: {cameraindex}")
+                    self.camera = cv2.VideoCapture(cameraindex)
                 else:
-                    dev_path = f"/dev/video{available_cameras[-1]}"
-            else:
-                # Assume the user gave a direct string path like "/dev/video2"
-                dev_path = str(cameraindex)
+                    # Windows: use CAP_DSHOW when opening
+                    self.__logger.debug(f"Attempt {attempt + 1}/{max_retries}: Opening Windows camera: {cameraindex}")
+                    self.camera = cv2.VideoCapture(cameraindex, cv2.CAP_DSHOW)
+                
+                if not self.camera.isOpened():
+                    raise RuntimeError(f"Camera not opened on attempt {attempt + 1}")
 
-            self.camera = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
-            self.__logger.debug(f"Using Linux device path: {dev_path}")
+                self.__logger.debug("Camera opened successfully")
+                
+                # Set resolution
+                #self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920.0)  # 4k/high_res
+                #self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080.0) # 4k/high_res
+                
+                # Flush initial frames and verify camera is working
+                successful_reads = 0
+                max_warmup_attempts = 10
+                
+                for i in range(max_warmup_attempts):
+                    ret, img = self.camera.read()
+                    if ret and img is not None:
+                        successful_reads += 1
+                        if successful_reads >= 3:  # Need at least 3 successful reads
+                            break
+                    else:
+                        self.__logger.warning(f"Warmup frame {i + 1} failed to read")
+                    time.sleep(0.1)  # Small delay between reads
+                
+                if successful_reads < 3:
+                    raise RuntimeError(f"Camera warmup failed - only {successful_reads} successful reads")
+                
+                # Get actual resolution
+                actual_height = self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                actual_width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
+                self.__logger.debug(f"Camera resolution: {actual_width}x{actual_height}")
+                
+                self.SensorHeight = img.shape[0]
+                self.SensorWidth = img.shape[1]
+                self.shape = (self.SensorWidth, self.SensorHeight)
+                self.camera_is_open = True
 
-        elif platform == "darwin":
-            # macOS: just use cameraindex directly
-            self.camera = cv2.VideoCapture(cameraindex)
-        else:
-            # Windows: use CAP_DSHOW when opening
-            self.camera = cv2.VideoCapture(cameraindex, cv2.CAP_DSHOW)
-
-        self.__logger.debug("Camera is open")
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1920.0)  # 4k/high_res
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080.0) # 4k/high_res
-
-        # Let the camera warm up
-        for _ in range(5):
-            _, img = self.camera.read()
-        height = self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
-        print(width, height)
-        self.__logger.debug("Camera is warmed up")
-
-        self.SensorHeight = img.shape[0]
-        self.SensorWidth = img.shape[1]
-        self.shape = (self.SensorWidth, self.SensorHeight)
-        self.camera_is_open = True
-
-        # Start a thread to continuously grab frames
-        self.frameGrabberThread = Thread(target=self.setFrameBuffer, args=(isRGB,))
-        self.frameGrabberThread.start()
+                self.__logger.info(f"Camera opened successfully: {self.SensorWidth}x{self.SensorHeight}")
+                
+                # Start a thread to continuously grab frames
+                self.frameGrabberThread = Thread(target=self.setFrameBuffer, args=(isRGB,))
+                self.frameGrabberThread.daemon = True  # Make thread daemon so it exits with main program
+                self.frameGrabberThread.start()
+                
+                return  # Success - exit retry loop
+                
+            except Exception as e:
+                self.__logger.error(f"Attempt {attempt + 1}/{max_retries} failed: {e}")
+                
+                # Clean up failed attempt
+                if self.camera is not None:
+                    try:
+                        self.camera.release()
+                    except:
+                        pass
+                    self.camera = None
+                
+                # If this wasn't the last attempt, wait before retrying
+                if attempt < max_retries - 1:
+                    self.__logger.info(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    # Last attempt failed
+                    self.__logger.error(f"Failed to open camera after {max_retries} attempts")
+                    self.camera_is_open = False
+                    raise RuntimeError(f"Could not open camera after {max_retries} attempts: {e}")
 
     def setFrameBuffer(self, isRGB=True):
-        while(self.camera_is_open):
+        """
+        Continuously grab frames from camera in background thread.
+        Implements robust error handling and recovery for V4L2 timeout issues.
+        """
+        consecutive_failures = 0
+        max_consecutive_failures = 10
+        
+        # Give camera time to initialize
+        time.sleep(0.5)
+        
+        while self.camera_is_open:
             try:
-                self.frame = self.camera.read()[1]
+                # For problematic UVC cameras, use read() directly instead of grab()+retrieve()
+                # This can help with cameras that report True but return None frames
+                ret, frame = self.camera.read()
+                
+                if not ret:
+                    consecutive_failures += 1
+                    self.__logger.warning(f"Failed to read frame - ret=False (attempt {consecutive_failures}/{max_consecutive_failures})")
+                    
+                    if consecutive_failures >= max_consecutive_failures:
+                        self.__logger.error("Too many consecutive frame read failures - stopping capture")
+                        self.camera_is_open = False
+                        break
+                    
+                    time.sleep(0.1)  # Brief pause before retry
+                    continue
+                
+                if frame is None:
+                    consecutive_failures += 1
+                    self.__logger.warning(f"Failed to read frame - frame is None (attempt {consecutive_failures}/{max_consecutive_failures})")
+                    
+                    if consecutive_failures >= max_consecutive_failures:
+                        self.__logger.error("Too many consecutive None frames - stopping capture")
+                        self.camera_is_open = False
+                        break
+                    
+                    time.sleep(0.1)  # Brief pause before retry
+                    continue
+                
+                # Validate frame has proper dimensions
+                if frame.size == 0 or len(frame.shape) < 2:
+                    consecutive_failures += 1
+                    self.__logger.warning(f"Invalid frame dimensions: {frame.shape} (attempt {consecutive_failures}/{max_consecutive_failures})")
+                    
+                    if consecutive_failures >= max_consecutive_failures:
+                        self.__logger.error("Too many consecutive invalid frames - stopping capture")
+                        self.camera_is_open = False
+                        break
+                    
+                    time.sleep(0.1)
+                    continue
+                
+                # Success - reset failure counter
+                consecutive_failures = 0
+                
+                # Process frame
                 self.frame_id_last += 1
-                if not isRGB and len(self.frame.shape)>2:
-                    self.frame = np.uint8(np.mean(self.frame, -1))
-                self.frame = np.flip(self.frame)
+                
+                if not isRGB and len(frame.shape) > 2:
+                    frame = np.uint8(np.mean(frame, -1))
+                
+                self.frame = np.flip(frame)
                 self.frame_buffer.append(self.frame)
+                
             except Exception as e:
-                self.camera_is_open = False
-                self.__logger.debug(e)
+                consecutive_failures += 1
+                self.__logger.error(f"Frame capture exception (attempt {consecutive_failures}/{max_consecutive_failures}): {e}")
+                
+                if consecutive_failures >= max_consecutive_failures:
+                    self.__logger.error("Too many consecutive exceptions - stopping capture")
+                    self.camera_is_open = False
+                    break
+                
+                time.sleep(0.1)  # Brief pause before retry
+        
+        self.__logger.info("Frame grabber thread exiting")

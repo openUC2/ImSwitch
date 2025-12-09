@@ -58,15 +58,18 @@ class PositionerController(ImConWidgetController):
             condition = lambda p: p.resetOnClose
         )
 
-    def getPos(self):
-        return self._master.positionersManager.execOnAll(lambda p: p.position)
-
+    def getPos(self, positionerName:str=None) -> Dict[str, Dict[str, float]]:
+        if positionerName is None:
+            return self._master.positionersManager.execOnAll(lambda p: p.getPosition())
+        else:
+            return {positionerName: self._master.positionersManager[positionerName].getPosition()}
+    
     def getSpeed(self):
         return self._master.positionersManager.execOnAll(lambda p: p.speed)
 
     def move(self, positionerName, axis, dist, isAbsolute=None, isBlocking=False, speed=None):
         """ Moves positioner by dist micrometers in the specified axis. """
-        if positionerName is None:
+        if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
 
         # get all speed values from the GUI
@@ -94,9 +97,11 @@ class PositionerController(ImConWidgetController):
             self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
         #self.updatePosition(positionerName, axis)
 
-    def moveForever(self, speed=(0, 0, 0, 0), is_stop=False):
+    def moveForever(self, positionerName: str=None, axis="X", speed=0, is_stop:bool=False):
         """ Moves positioner forever. """
-        self._master.positionersManager.execOnAll(lambda p: p.moveForever(speed=speed, is_stop=is_stop))
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self._master.positionersManager[positionerName].moveForever(speed=speed, is_stop=is_stop)
 
     def setPos(self, positionerName, axis, position):
         """ Moves the positioner to the specified position in the specified axis. """
@@ -116,7 +121,7 @@ class PositionerController(ImConWidgetController):
                   isBlocking=False)
 
     def setSpeed(self, positionerName, axis, speed=(1000, 1000, 1000)):
-        if positionerName is None or positionerName == "":
+        if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].setSpeed(speed, axis)
         self.setSharedAttr(positionerName, axis, _speedAttr, speed)
@@ -146,11 +151,11 @@ class PositionerController(ImConWidgetController):
         if not IS_HEADLESS: self._widget.updateSpeed(positionerName, axis, newSpeed)
 
     @APIExport(runOnUIThread=True)
-    def homeAxis(self, positionerName:str=None, axis:str="X", isBlocking:bool=False):
+    def homeAxis(self, positionerName:str=None, axis:str="X", isBlocking:bool=False, homeDirection:int=None, homeSpeed:float=None, homeEndstoppolarity:int=None, homeEndposRelease:float=None, homeTimeout:int=None):
         self.__logger.debug(f"Homing axis {axis}")
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-        self._master.positionersManager[positionerName].doHome(axis, isBlocking=isBlocking)
+        self._master.positionersManager[positionerName].doHome(axis, isBlocking=isBlocking, homeDirection=homeDirection, homeSpeed=homeSpeed, homeEndstoppolarity=homeEndstoppolarity, homeEndposRelease=homeEndposRelease, homeTimeout=homeTimeout)
         self.updatePosition(positionerName, axis)
         self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
 
@@ -229,14 +234,16 @@ class PositionerController(ImConWidgetController):
             self.move(positionerName, axis, dist)
 
     @APIExport(runOnUIThread=True)
-    def movePositionerForever(self, axis="X", speed=0, is_stop=False):
+    def movePositionerForever(self, positionerName: str=None, axis: str="X", speed: int=0, is_stop: bool=False):
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         speed = float(speed)
         if axis == "X": speed = (0, speed, 0, 0)
         elif axis == "Y": speed = (0, 0, speed, 0)
         elif axis == "Z": speed = (0, 0, 0, speed)
         elif axis == "A": speed = (speed, 0, 0, 0)
         else: return
-        self.moveForever(speed=speed, is_stop=is_stop)
+        self.moveForever(positionerName=positionerName, speed=speed, is_stop=is_stop)
 
     @APIExport(runOnUIThread=True)
     def setPositioner(self, positionerName: str, axis: str, position: float) -> None:
@@ -275,7 +282,7 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].resetStageOffsetAxis(axis=axis)
 
-    @APIExport(runOnUIThread=True)
+    @APIExport(runOnUIThread=False)
     def setStageOffsetAxis(self, positionerName: Optional[str]=None, knownPosition:float=0, currentPosition:Optional[float]=None, knownOffset:Optional[float]=None,  axis:str="X"):
         """
         Sets the stage to a known offset aside from the home position.
@@ -286,7 +293,7 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].setStageOffsetAxis(knownPosition=knownPosition, currentPosition=currentPosition, knownOffset=knownOffset, axis=axis)
 
-    @APIExport(runOnUIThread=True)
+    @APIExport(runOnUIThread=False)
     def getStageOffsetAxis(self, positionerName: Optional[str]=None, axis:str="X"):
         """
         Returns the stage offset for the given axis.
@@ -296,6 +303,18 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         return self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)
 
+    @APIExport(runOnUIThread=False)
+    def getTruePositionerPositionWithoutOffset(self, positionerName: Optional[str]=None, axis:str="X"):
+        """
+        Returns the true position of the positioner without the stage offset for the given axis.
+        """
+        self._logger.debug(f'Getting true position without offset for {axis} axis.')
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        currentPositionWithOffset = self.getPos(positionerName)[positionerName][axis]
+        currentOffset = self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)   
+        return currentPositionWithOffset - currentOffset
+    
     def saveStageOffset(self, positionerName=None, offsetValue=None, axis="X"):
         """ Save the current stage offset to the config file. """
         # This logic is now handled in the manager.
@@ -340,6 +359,14 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self.__logger.debug(f"Stopping stage scan for positioner {positionerName}")
         self._master.positionersManager[positionerName].stop_stage_scanning()
+
+    @APIExport(runOnUIThread=True)
+    def moveToSampleLoadingPosition(self, positionerName=None, speed=10000, is_blocking=True):
+        """ Move to sample loading position. """
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        self.__logger.debug(f"Moving to sample loading position for positioner {positionerName}")
+        self._master.positionersManager[positionerName].moveToSampleLoadingPosition(speed=speed, is_blocking=is_blocking)
 
 _attrCategory = 'Positioner'
 _positionAttr = 'Position'

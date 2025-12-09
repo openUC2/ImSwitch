@@ -1,5 +1,5 @@
 import numpy as np
-
+import time
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter, DetectorBooleanParameter
 
@@ -27,7 +27,9 @@ class VirtualCameraManager(DetectorManager):
         pixelSize = self._camera.PixelSize
         model = self._camera.model
         self._running = True
-
+        self.ExposureTime  = 0
+        self.Gain = 0
+        self.tLast = time.time()
         # Prepare parameters
         parameters = {
             'exposure': DetectorNumberParameter(group='Misc', value=1, valueUnits='ms',
@@ -90,18 +92,11 @@ class VirtualCameraManager(DetectorManager):
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         if returnFrameNumber:
             frame, frameNumber = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame, frameNumber
+            return np.array(frame), frameNumber
         else:
             frame = self._camera.getLast()
-            return frame
+            return np.array(frame)
 
-    def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
-        if returnFrameNumber:
-            frame, frameNumber = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame, frameNumber
-        else:
-            frame = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame
 
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
@@ -137,10 +132,12 @@ class VirtualCameraManager(DetectorManager):
             return None
 
     def startAcquisition(self, liveView=False):
-        pass
+        """Start continuous frame acquisition in the camera thread"""
+        self._camera.startAcquisition()
 
     def stopAcquisition(self):
-        pass
+        """Stop continuous frame acquisition"""
+        self._camera.stopAcquisition()
 
     def stopAcquisitionForROIChange(self):
         pass
@@ -155,6 +152,19 @@ class VirtualCameraManager(DetectorManager):
 
     def setPixelSizeUm(self, pixelSizeUm):
         self.parameters['Camera pixel size'].value = pixelSizeUm
+
+    def setFlipImage(self, flipY: bool, flipX: bool):
+        """
+        Set flip settings for the camera during runtime.
+        
+        Args:
+            flipY: Whether to flip vertically
+            flipX: Whether to flip horizontally
+        """
+        self._camera.flipImage = (flipY, flipX)
+        self._camera.flipY = flipY
+        self._camera.flipX = flipX
+        self.__logger.info(f"Updated flip settings: flipY={flipY}, flipX={flipX}")
 
     def _performSafeCameraAction(self, function):
         pass

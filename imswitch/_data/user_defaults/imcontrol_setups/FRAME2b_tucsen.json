@@ -1,0 +1,324 @@
+{
+    "detectors": {
+        "WidefieldCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "TucsenCamManager",
+            "managerProperties": {
+                "cameraListIndex": 0,
+                "cameraEffPixelsize": 3.45,
+                "isRGB": false,
+                "mockstackpath": null,
+                "mocktype": "normal",
+                "tucsencam": {
+                    "exposure_time": 100,
+                    "gain": 1,
+                    "blacklevel": 100,
+                    "binning": 1,
+                    "frame_rate": -1
+                }
+            },
+            "forAcquisition": true,
+            "forFocusLock": false
+        }
+    },
+"lasers": {
+    "635": {
+        "analogChannel": null,
+        "digitalLine": null,
+        "managerName": "ESP32LEDLaserManager",
+        "managerProperties": {
+            "rs232device": "ESP32",
+            "channel_index": 1
+        },
+        "valueRangeMin": 0,
+        "valueRangeMax": 1023,
+        "wavelength": 635,
+        "freqRangeMin": 0,
+        "freqRangeMax": 0,
+        "freqRangeInit": 0,
+        "valueRangeStep": 1.0
+    },
+    "488": {
+        "analogChannel": null,
+        "digitalLine": null,
+        "managerName": "ESP32LEDLaserManager",
+        "managerProperties": {
+            "rs232device": "ESP32",
+            "channel_index": 2
+        },
+        "valueRangeMin": 0,
+        "valueRangeMax": 1023,
+        "wavelength": 1024,
+        "freqRangeMin": 0,
+        "freqRangeMax": 0,
+        "freqRangeInit": 0,
+        "valueRangeStep": 1.0
+    },
+    "LED Array": {
+        "analogChannel": null,
+        "digitalLine": null,
+        "managerName": "ESP32LEDLaserManager",
+        "managerProperties": {
+            "rs232device": "ESP32",
+            "channel_index": "LED"
+        },
+        "valueRangeMin": 0,
+        "valueRangeMax": 1023,
+        "wavelength": 1024,
+        "freqRangeMin": 0,
+        "freqRangeMax": 0,
+        "freqRangeInit": 0,
+        "valueRangeStep": 1.0
+    },
+    "LED": {
+        "analogChannel": null,
+        "digitalLine": null,
+        "managerName": "ESP32LEDLaserManager",
+        "managerProperties": {
+            "rs232device": "ESP32",
+            "channel_index": 4
+        },
+        "valueRangeMin": 0,
+        "valueRangeMax": 1023,
+        "wavelength": 1024,
+        "freqRangeMin": 0,
+        "freqRangeMax": 0,
+        "freqRangeInit": 0,
+        "valueRangeStep": 1.0
+    }
+},
+"LEDs": {},
+"LEDMatrixs": {
+    "ESP32 LEDMatrix": {
+        "analogChannel": null,
+        "digitalLine": null,
+        "managerName": "ESP32LEDMatrixManager",
+        "managerProperties": {
+            "rs232device": "ESP32",
+            "Nx": 4,
+            "Ny": 4,
+            "wavelength": 488,
+            "valueRangeMin": 0,
+            "valueRangeMax": 32768
+        }
+    }
+},
+"positioners": {
+    "ESP32Stage": {
+        "analogChannel": null,
+        "digitalLine": null,
+        "managerName": "ESP32StageManager",
+        "managerProperties": {
+            "rs232device": "ESP32",
+            "isEnable": true,
+            "enableauto": false,
+            "stepsizeXDocu": "200*16 per revolution at 1 pitch",
+            "stepsizeX": 0.3125,
+            "stepsizeY": 0.3125,
+            "stepsizeA": 0.3125,
+            "stepsizeZ": 0.3125,
+            "homeSpeedX": 20000,
+            "homeSpeedY": 20000,
+            "homeSpeedZ": 10000,
+            "homeSpeedA": 20000,
+            "isDualaxis": false,
+            "backlashXOld": 15,
+            "backlashYOld": 40,
+            "backlashX": 0,
+            "backlashY": 0,
+            "homeEndstoppolarityA": 0,
+            "homeEndstoppolarityX": 0,
+            "homeEndstoppolarityY": 0,
+            "homeEndstoppolarityZ": 0,
+            "homeDirectionX": -1,
+            "homeDirectionY": 1,
+            "homeDirectionZ": 1,
+            "homeDirectionA": -1,
+            "homeXenabled": 1,
+            "homeYenabled": 1,
+            "homeZenabled": 1,
+            "homeAenabled": 1,
+            "homeOnStartX": 0,
+            "homeOnStartY": 0,
+            "homeOnStartZ": 0,
+            "homeOnStartA": 0,
+            "initialSpeedX": 15000,
+            "initialSpeedY": 15000,
+            "initialSpeedZ": 15000,
+            "initialSpeedA": 15000
+        },
+        "axes": [
+            "X",
+            "Y",
+            "Z",
+            "A"
+        ],
+        "isPositiveDirection": true,
+        "forPositioning": true,
+        "forScanning": true,
+        "resetOnClose": true,
+        "stageOffsets": {
+            "stageOffsetPositionX": -20000.0,
+            "stageOffsetPositionY": -110000.0,
+            "stageOffsetPositionZ": 0.0,
+            "stageOffsetPositionA": 0.0
+        }
+    }
+},
+"rs232devices": {
+    "ESP32": {
+        "managerName": "ESP32Manager",
+        "managerProperties": {
+            "host_": "192.168.43.129",
+            "serialport": "COM3",
+            "baudrate": 115200,
+            "debug": true
+        }
+    }
+},
+"slm": null,
+"sim": null,
+"dpc": null,
+"objective": {
+    "comment": "This is the MLOptics 20x and the cheapo 10x infinity corrected objectives",
+    "pixelsizes": [
+        0.28,
+        0.153
+    ],
+    "NAs": [
+        0.3,
+        0.75
+    ],
+    "magnifications": [
+        10,
+        20
+    ],
+    "objectiveNames": [
+        "10x",
+        "20x"
+    ],
+    "objectivePositions": [
+        0,
+        1
+    ],
+    "homeDirection": 1,
+    "homePolarity": 0,
+    "homeSpeed": 20000,
+    "homeAcceleration": 200000,
+    "calibrateOnStart": false,
+    "active": true
+},
+"mct": {
+    "tWait": null
+},
+"nidaq": {
+    "timerCounterChannel": null,
+    "startTrigger": false
+},
+"roiscan": null,
+"lightsheet": null,
+"webrtc": null,
+"hypha": null,
+"mockxx": null,
+"jetsonnano": null,
+"Stresstest": null,
+"HistoScan": {
+    "PreviewCamera": null
+},
+"Workflow": null,
+"FlowStop": null,
+"Lepmon": null,
+"Flatfield": null,
+"PixelCalibration": {},
+"experiment": null,
+"uc2Config": null,
+"ism": null,
+"focusLock": {
+    "camera": "FocusLockCamera",
+    "positioner": "ESP32Stage",
+    "updateFreq": 10,
+    "cropCenter": [
+        1212,
+        1236
+    ],
+    "cropSize": 1584,
+    "piKp": 1.0,
+    "piKi": 0.0,
+    "focusLockMetric": "peak",
+    "laserName": "488",
+    "laserValue": 0,
+    "fovWidth": 2048,
+    "fovCenter": [
+        null,
+        null
+    ]
+},
+"arkitekt": null,
+"fovLock": null,
+"autofocus": {
+    "camera": "WidefieldCamera",
+    "positioner": "ESP32Stage",
+    "updateFreq": 10,
+    "frameCropx": 780,
+    "frameCropy": 400,
+    "frameCropw": 500,
+    "frameCroph": 100
+},
+"scan": null,
+"etSTED": null,
+"rotators": null,
+"microscopeStand": null,
+"pulseStreamer": {
+    "ipAddress": null
+},
+"pyroServerInfo": {
+    "name": "ImSwitchServer",
+    "host": "0.0.0.0",
+    "port": 54333,
+    "active": false
+},
+"rois": {},
+"ledPresets": {},
+"defaultLEDPresetForScan": null,
+"laserPresets": {},
+"stageOffsets": {},
+"defaultLaserPresetForScan": null,
+"availableWidgets": [
+    "Settings",
+    "View",
+    "Recording",
+    "Image",
+    "Laser",
+    "Positioner",
+    "Autofocus",
+    "MCT",
+    "UC2Config",
+    "PixelCalibration",
+    "HistoScan",
+    "Joystick",
+    "Flatfield",
+    "ROIScan",
+    "Objective",
+    "Experiment",
+    "Lightsheet",
+    "ESP32InfoScreen",
+    "MazeGame",
+    "LiveView"
+],
+"nonAvailableWidgets": [
+    "TriggerAcquisition",
+    "StageScanAcquisition",
+    "FocusLock",
+    "Histogramm",
+    "STORMRecon",
+    "imswitch_arkitekt_next",
+    "DPC",
+    "Holo",
+    "FFT",
+    "Hypha",
+    "HistoScan",
+    "FocusLock",
+    "FOVLock"
+]
+}

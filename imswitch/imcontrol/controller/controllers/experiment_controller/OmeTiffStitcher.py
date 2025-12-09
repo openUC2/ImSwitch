@@ -5,7 +5,7 @@ import tifffile
 from collections import deque
 import os
 class OmeTiffStitcher:
-    def __init__(self, file_path, bigtiff=True):
+    def __init__(self, file_path, bigtiff=True, isRGB=False):
         """
         file_path: Where to write the OME-TIFF
         bigtiff:   Whether to use bigtiff=True (recommended if large or many images)
@@ -16,6 +16,7 @@ class OmeTiffStitcher:
         self.lock = threading.Lock()
         self.is_running = False
         self._thread = None
+        self.isRGB = isRGB
 
     def start(self):
         """Begin the background thread that writes images to disk as they arrive."""
@@ -66,7 +67,12 @@ class OmeTiffStitcher:
         # ensure the folder exists if it does not create it
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
-        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True) as tif:
+        
+        if self.isRGB:
+            photometric = "rgb"
+        else:
+            photometric = None
+        with tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True ) as tif:
             # Keep running until stop() is called AND the queue is empty
             while self.is_running or len(self.queue) > 0:
                 with self.lock:
@@ -78,7 +84,12 @@ class OmeTiffStitcher:
                 if image is not None:
                     # Each call writes a new series/plane in append mode.
                     try:
-                        tif.write(data=image, metadata=metadata)
+                        if len(image.shape) == 2:
+                            # Grayscale image
+                            tif.write(data=image, metadata=metadata)
+                        elif len(image.shape) == 3:
+                            # Color image (RGB or RGBA) - probably need to shuffle axis to get CXY #TODO: Not working yet
+                            tif.write(data=image, metadata=metadata, photometric=photometric)
                     except Exception as e:
                         print(f"Error writing image: {e}")
                 else:

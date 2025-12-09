@@ -17,8 +17,7 @@ import os
 class ImSwitchAPITestServer:
     """Test server that starts ImSwitch in headless mode for API testing."""
     
-    def __init__(self, config_file: str = None, 
-                 http_port: int = 8001, socket_port: int = 8002, ssl: bool = False):
+    def __init__(self, config_file: str = None, http_port: int = 8001, ssl: bool = False):
 
         # have configfile from ./_data/user_defaults/imcontrol_setups/example_virtual_microscope.json
         # Automatically find config file if not provided
@@ -34,7 +33,6 @@ class ImSwitchAPITestServer:
             
         print(f"Using config file: {self.config_file}")
         self.http_port = http_port
-        self.socket_port = socket_port
         self.ssl = ssl
         self.server_thread: Optional[threading.Thread] = None
         self.base_url = f"http://localhost:{http_port}"
@@ -48,18 +46,17 @@ class ImSwitchAPITestServer:
             
         # Check if ports are available before starting
         import socket
-        for port_name, port in [("HTTP", self.http_port), ("Socket", self.socket_port)]:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                try:
-                    s.bind(('localhost', port))
-                except OSError as e:
-                    raise RuntimeError(f"{port_name} port {port} is already in use. "
-                                     f"Another ImSwitch instance may be running. Error: {e}")
+        (port_name, port) = ("HTTP", self.http_port)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('localhost', port))
+            except OSError as e:
+                raise RuntimeError(f"{port_name} port {port} is already in use. "
+                                    f"Another ImSwitch instance may be running. Error: {e}")
             
         print(f"[TEST SERVER] Starting ImSwitch API test server...")
         print(f"[TEST SERVER] Config file: {self.config_file}")
         print(f"[TEST SERVER] HTTP port: {self.http_port}")
-        print(f"[TEST SERVER] Socket port: {self.socket_port}")
         print(f"[TEST SERVER] SSL: {self.ssl}")
 
         # Start server in background thread
@@ -153,7 +150,6 @@ class ImSwitchAPITestServer:
         thread_logger.info(f"Starting ImSwitch server in thread...")
         thread_logger.info(f"Config file: {self.config_file}")
         thread_logger.info(f"HTTP port: {self.http_port}")
-        thread_logger.info(f"Socket port: {self.socket_port}")
         
         try:
             print(f"[TEST SERVER] Starting ImSwitch server in headless mode...", flush=True)
@@ -164,7 +160,6 @@ class ImSwitchAPITestServer:
                 default_config=self.config_file,
                 is_headless=True,
                 http_port=self.http_port,
-                socket_port=self.socket_port, 
                 ssl=self.ssl,  # Fixed: was self.is_ssl
             )
         except Exception as e:
@@ -215,14 +210,9 @@ def get_test_server(config_file: str = None) -> ImSwitchAPITestServer:
             return port
         
         http_port = find_free_port()
-        socket_port = find_free_port()
         
-        print(f"[TEST SERVER] Creating new test server instance on ports {http_port}/{socket_port}")
-        _test_server = ImSwitchAPITestServer(
-            config_file=config_file,
-            http_port=http_port,
-            socket_port=socket_port
-        )
+        print(f"[TEST SERVER] Creating new test server instance on ports {http_port}")
+        _test_server = ImSwitchAPITestServer(config_file=config_file, http_port=http_port)
     return _test_server
 
 

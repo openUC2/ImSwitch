@@ -27,6 +27,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                          snake_tiles: List[List[Dict]],
                          illumination_intensities: List[float],
                          illumination_sources: List[str],
+                         isRGB: bool = False,
                          **kwargs) -> Dict[str, Any]:
         """
         Execute experiment in normal mode.
@@ -54,6 +55,8 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_min = kwargs.get('autofocus_min', 0)
         autofocus_max = kwargs.get('autofocus_max', 0)
         autofocus_step_size = kwargs.get('autofocus_step_size', 1)
+        autofocus_illumination_channel = kwargs.get('autofocus_illumination_channel', '')
+        autofocus_mode = kwargs.get('autofocus_mode', 'software')  # 'hardware' or 'software'
         t_period = kwargs.get('t_period', 1)
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
@@ -66,7 +69,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         # Set up OME writers for each tile - create new writers for each timepoint
         file_writers = self._setup_ome_writers(
             snake_tiles, t, exp_name, dir_path, m_file_name, 
-            z_positions, illumination_intensities
+            z_positions, illumination_intensities, isRGB=isRGB  
         )
         
         # Create workflow steps for each tile
@@ -75,7 +78,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 tiles, position_center_index, step_id, workflow_steps,
                 z_positions, illumination_sources, illumination_intensities,
                 exposures, gains, t, is_auto_focus, autofocus_min, 
-                autofocus_max, autofocus_step_size, n_times
+                autofocus_max, autofocus_step_size, autofocus_illumination_channel, 
+                autofocus_mode, n_times
             )
         
         # Add finalization steps
@@ -83,6 +87,15 @@ class ExperimentNormalMode(ExperimentModeBase):
             workflow_steps, step_id, snake_tiles, illumination_sources, 
             illumination_intensities, t_period, t
         )
+        
+        # Add step to set LED status to idle when done
+        workflow_steps.append(WorkflowStep(
+            step_id=step_id,
+            name="Set LED status to idle",
+            main_func=self.controller.set_led_status,
+            main_params={"status": "idle"})
+        )
+        step_id += 1
         
         return {
             "status": "workflow_created",
@@ -99,7 +112,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                           dir_path: str,
                           m_file_name: str,
                           z_positions: List[float],
-                          illumination_intensities: List[float]) -> List[OMEWriter]:
+                          illumination_intensities: List[float], 
+                          isRGB: bool) -> List[OMEWriter]:
+        
         """
         Set up OME writers for each tile.
         
@@ -141,6 +156,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 write_zarr=self.controller._ome_write_zarr,
                 write_stitched_tiff=False,  # Disable stitched TIFF
                 write_tiff_single=True,  # Enable single TIFF writing
+                write_individual_tiffs=self.controller._ome_write_individual_tiffs,
                 min_period=0.1,
                 n_time_points=1,
                 n_z_planes=len(z_positions),
@@ -182,6 +198,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     write_zarr=self.controller._ome_write_zarr,
                     write_stitched_tiff=self.controller._ome_write_stitched_tiff,
                     write_tiff_single=False,  # Disable single TIFF for multi-tile mode
+                    write_individual_tiffs=self.controller._ome_write_individual_tiffs,
                     min_period=0.1,  # Faster for normal mode
                     n_time_points=1,
                     n_z_planes=len(z_positions),
@@ -195,7 +212,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                     grid_shape=grid_shape,
                     grid_geometry=grid_geometry,
                     config=writer_config,
-                    logger=self._logger
+                    logger=self._logger, 
+                    isRGB=isRGB
                 )
                 file_writers.append(ome_writer)
         
@@ -216,6 +234,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   autofocus_min: float,
                                   autofocus_max: float,
                                   autofocus_step_size: float,
+                                  autofocus_illumination_channel: str,
+                                  autofocus_mode: str,
                                   n_times: int) -> int:
         """
         Create workflow steps for a single tile.
@@ -235,6 +255,8 @@ class ExperimentNormalMode(ExperimentModeBase):
             autofocus_min: Minimum autofocus position
             autofocus_max: Maximum autofocus position
             autofocus_step_size: Autofocus step size
+            autofocus_illumination_channel: Selected illumination channel for autofocus
+            autofocus_mode: Autofocus mode ('hardware' or 'software')
             
         Returns:
             Updated step ID
@@ -243,6 +265,25 @@ class ExperimentNormalMode(ExperimentModeBase):
         initial_z_position = self.controller.mStage.getPosition()["Z"]
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
+        
+        # Turn on illumination once at the beginning if only one source
+        active_sources_count = sum(np.array(illumination_intensities) > 0)
+        is_first_tile = (position_center_index == 0)
+        
+        if active_sources_count == 1 and is_first_tile:
+            for illu_index, illu_source in enumerate(illumination_sources):
+                illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
+                if illu_intensity > 0:
+                    workflow_steps.append(WorkflowStep(
+                        name="Turn on single illumination source for entire scan",
+                        step_id=step_id,
+                        main_func=self.controller.set_laser_power,
+                        main_params={"power": illu_intensity, "channel": illu_source},
+                        post_funcs=[self.controller.wait_time],
+                        post_params={"seconds": 0.05},
+                    ))
+                    step_id += 1
+                    break  # Only one active source
         
         # Iterate over positions in the tile
         for m_index, m_point in enumerate(tiles):
@@ -263,7 +304,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             # Iterate over Z positions
             for index_z, i_z in enumerate(z_positions):
                 # Move to Z position if we have more than one Z position
-                if len(z_positions) > 1 or (len(z_positions) == 1 and m_index == 0):
+                if (len(z_positions) > 1 or (len(z_positions) == 1 and m_index == 0)) and (i_z != 0 and len(z_positions) == 1): # TODO: The latter case is just to ensure that we don't have false values coming from the hardware 
                     workflow_steps.append(WorkflowStep(
                         name="Move to Z position",
                         step_id=step_id,
@@ -280,8 +321,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                     if illu_intensity <= 0:
                         continue
 
-                    # Turn on illumination
-                    if sum(np.array(illumination_intensities) > 0) > 1 or m_index == 0:
+                    # Turn on illumination only for multiple sources (single source was turned on once at the beginning)
+                    if active_sources_count > 1:
                         workflow_steps.append(WorkflowStep(
                             name="Turn on illumination",
                             step_id=step_id,
@@ -330,8 +371,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                     ))
                     step_id += 1
 
-                    # Turn off illumination if multiple sources
-                    if len(illumination_intensities) > 1 and sum(np.array(illumination_intensities) > 0) > 1:
+                    # Turn off illumination only if multiple sources (for switching between them)
+                    if active_sources_count > 1:
                         workflow_steps.append(WorkflowStep(
                             name="Turn off illumination",
                             step_id=step_id,
@@ -340,27 +381,33 @@ class ExperimentNormalMode(ExperimentModeBase):
                         ))
                         step_id += 1
                         
-        # Move back to the current Z position after processing all points in the tile
-        if len(z_positions) > 1 :
-            workflow_steps.append(WorkflowStep(
-                name="Move back to current Z position",
-                step_id=step_id,
-                main_func=self.controller.move_stage_z,
-                main_params={"posZ": initial_z_position, "relative": False},
-                pre_funcs=[self.controller.wait_time],
-                pre_params={"seconds": 0.1},
-            ))
-            step_id += 1
+            # Move back to the current Z position after processing all points in the tile
+            if len(z_positions) > 1 :
+                workflow_steps.append(WorkflowStep(
+                    name="Move back to current Z position",
+                    step_id=step_id,
+                    main_func=self.controller.move_stage_z,
+                    main_params={"posZ": initial_z_position, "relative": False},
+                    pre_funcs=[self.controller.wait_time],
+                    pre_params={"seconds": 0.1},
+                ))
+                step_id += 1
 
-        # Perform autofocus if enabled
-        if is_auto_focus:
-            workflow_steps.append(WorkflowStep(
-                name="Autofocus",
-                step_id=step_id,
-                main_func=self.controller.autofocus,
-                main_params={"minZ": autofocus_min, "maxZ": autofocus_max, "stepSize": autofocus_step_size},
-            ))
-            step_id += 1
+            # Perform autofocus if enabled
+            if is_auto_focus:
+                workflow_steps.append(WorkflowStep(
+                    name="Autofocus",
+                    step_id=step_id,
+                    main_func=self.controller.autofocus,
+                    main_params={
+                        "minZ": autofocus_min, 
+                        "maxZ": autofocus_max, 
+                        "stepSize": autofocus_step_size, 
+                        "illuminationChannel": autofocus_illumination_channel,
+                        "mode": autofocus_mode
+                    },
+                ))
+                step_id += 1
 
         # Finalize OME writer for this tile (skip in single TIFF mode since we only have one writer)
         # Always finalize tile writers since each timepoint creates its own writers
@@ -383,7 +430,7 @@ class ExperimentNormalMode(ExperimentModeBase):
     def _add_finalization_steps(self,
                               workflow_steps: List[WorkflowStep],
                               step_id: int,
-                              snake_tiles: List[List[Dict]],
+                              snake_tiles: List[List[Dict]], # TODO: not needed
                               illumination_sources: List[str],
                               illumination_intensities: List[float],
                               t_period: float,

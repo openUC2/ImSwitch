@@ -17,7 +17,7 @@
                 }
             },
             "forAcquisition": true,
-            "forFocusLock": false
+            "forFocusLock": true
         },
         "FocusLock": {
             "analogChannel": null,
@@ -122,7 +122,9 @@
             "managerName": "VirtualMicroscopeManager",
             "managerProperties": {
                 "imagePath_": "simplant",
-                "imagePath__": "smlm"
+                "imagePath__": "smlm",
+                "imagePath___": "astigmatism",
+                "imagePath": "wellplatecalib"
             }
         }
     },
@@ -175,18 +177,42 @@
     "Lepmon": null,
     "Flatfield": null,
     "PixelCalibration": {},
+    "experiment": {
+        "omeroServerUrl": "100.111.214.77",
+        "omeroUsername": "root",
+        "omeroPassword": "omero",
+        "omeroPort": 4064,
+        "omeroGroupId": 1,
+        "omeroProjectId": 100,
+        "omeroDatasetId": 200,
+        "omeroEnabled": true,
+        "omeroConnectionTimeout": 30,
+        "omeroUploadTimeout": 600
+    },
     "uc2Config": null,
     "ism": null,
     "focusLock": {
         "camera": "FocusLock",
         "positioner": "VirtualStage",
         "updateFreq": 4,
-        "swapImageAxes": null,
+        "cropCenter": [
+            265,
+            252
+        ],
+        "cropSize": 273,
         "piKp": 0.2,
-        "piKi": 0.2, 
-        "focusLockMetric": "astigmatism", 
-        "cropSize": 100,
-        "cropCenter": [50, 50]
+        "piKi": 0.2,
+        "focusLockMetric": "astigmatism",
+        "laserName": null,
+        "laserValue": null
+    },
+    "arkitekt": {
+        "enabled": true,
+        "appName": "imswitch",
+        "redeemToken": "561bac13-ad8d-4439-9341-a4bea57b4eef",
+        "url": "go.arkitekt.live",
+        "syncInAsync": true,
+        "deconvolveActionHash": "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
     },
     "fovLock": {
         "camera": "WidefieldCamera",
@@ -196,7 +222,6 @@
         "frameCropy": null,
         "frameCropw": null,
         "frameCroph": null,
-        "swapImageAxes": null,
         "piKp": 1.0,
         "piKi": 1.0
     },
@@ -214,14 +239,7 @@
         "port": 54333,
         "active": false
     },
-    "rois": {
-        "Full chip": {
-            "x": 600,
-            "y": 600,
-            "w": 1200,
-            "h": 1200
-        }
-    },
+    "rois": {},
     "ledPresets": {},
     "defaultLEDPresetForScan": null,
     "laserPresets": {},
@@ -246,12 +264,16 @@
         "UC2Config",
         "Objective",
         "Stresstest",
+        "ESP32InfoScreen",
+        "StageCenterCalibration",
+        "Demo",
         "FocusLock",
-        "StageCenterCalibration"
+        "Arkitekt",
+        "MazeGame"
     ],
     "nonAvailableWidgets": [
-        "Hypha",
         "STORMRecon",
+        "Hypha",
         "Histogramm",
         "Lepmon",
         "imswitch_lightsheet",

@@ -47,7 +47,9 @@ def getMainViewAndController(moduleCommChannel, *_args,
     load the setup configuration including detectors, stages, etc.
     '''
     if overrideSetupInfo is None: # TODO: This needs a rework!!
-        if imswitch.DEFAULT_SETUP_FILE is not None:
+        print("imswitch.DEFAULT_SETUP_FILE: ", imswitch.DEFAULT_SETUP_FILE)
+        print("imswitch.DEFAULT_SETUP_FILE type: ", type(imswitch.DEFAULT_SETUP_FILE))
+        if imswitch.DEFAULT_SETUP_FILE is not None and imswitch.DEFAULT_SETUP_FILE.find("None") == -1:
             try:
                 # Attempt to use the file provided via command line arguments
                 print(f"Trying to use the file: {imswitch.DEFAULT_SETUP_FILE}")

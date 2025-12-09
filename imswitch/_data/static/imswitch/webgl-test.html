@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGL2 UC2F Stream Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #f0f0f0;
+        }
+        
+        #container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        canvas {
+            border: 2px solid #333;
+            background: black;
+        }
+        
+        .controls {
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        .connection-status {
+            padding: 5px 10px;
+            border-radius: 3px;
+            margin: 5px;
+            font-weight: bold;
+        }
+        
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        .connecting { background: #fff3cd; color: #856404; }
+        
+        .info {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            max-width: 800px;
+            text-align: left;
+        }
+        
+        .status {
+            font-weight: bold;
+            padding: 5px 10px;
+            border-radius: 3px;
+            margin: 5px 0;
+        }
+        
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .warning { background: #fff3cd; color: #856404; }
+        
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        
+        input {
+            padding: 5px;
+            margin: 5px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+        }
+        
+        #debug {
+            background: #1e1e1e;
+            color: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-line;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/lz4js@0.2.0/lz4.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4/dist/socket.io.js"></script>
+</head>
+<body>
+    <div id="container">
+        <h1>WebGL2 UC2F Binary Stream Test</h1>
+        
+        <canvas id="canvas" width="400" height="300"></canvas>
+        
+        <div class="controls">
+            <div>
+                <label>Server: <input type="text" id="serverUrl" value="https://localhost:8002" /></label>
+                <span id="connectionStatus" class="connection-status disconnected">Disconnected</span>
+            </div>
+            <div>
+                <button onclick="connectSocket()">Connect Socket</button>
+                <button onclick="disconnectSocket()">Disconnect</button>
+                <button onclick="testClear()">Clear Canvas</button>
+                <button onclick="testRender()">Test Checkerboard</button>
+                <button onclick="testFeatures()">Test WebGL Features</button>
+            </div>
+        </div>
+        
+        <div class="info">
+            <div id="debug"></div>
+        </div>
+    </div>
+
+    <script>
+        let canvas, gl, program, vao, texture;
+        let socket = null;
+        let debugElement;
+        let frameCount = 0;
+        let lastTime = Date.now();
+
+        // UC2F parsing functions (copied from main app)
+        function parseUC2F(buf) {
+            if (!buf || buf.byteLength < 30) {
+                throw new Error(`Invalid buffer: expected at least 30 bytes, got ${buf?.byteLength || 0}`);
+            }
+
+            const view = new DataView(buf);
+            
+            // Check UC2F magic number at start
+            const magic = new Uint8Array(buf, 0, 4);
+            const magicStr = String.fromCharCode(...magic);
+            if (magicStr !== 'UC2F') {
+                throw new Error(`Invalid UC2F magic: got "${magicStr}", expected "UC2F"`);
+            }
+            
+            // Parse header according to backend format
+            const header = {
+                magic: magicStr,
+                version: view.getUint8(4),
+                width: view.getUint32(8, true),
+                height: view.getUint32(12, true),
+                stride: view.getUint32(16, true),
+                bitdepth: view.getUint16(20, true),
+                channels: view.getUint8(22),
+                pixfmt: view.getUint8(23),
+                ts: view.getBigUint64(24, true)
+            };
+            
+            // Read compressed size and data
+            const headerSize = 32;
+            let compSize = 0;
+            let compDataOffset = headerSize;
+            
+            if (buf.byteLength >= headerSize + 4) {
+                const potentialCompSize = view.getUint32(headerSize, true);
+                const remainingAfterCompSizeField = buf.byteLength - (headerSize + 4);
+                
+                if (potentialCompSize > 0 && potentialCompSize <= remainingAfterCompSizeField) {
+                    compSize = potentialCompSize;
+                    compDataOffset = headerSize + 4;
+                    log(`UC2F: Using compressed size field: ${compSize}`);
+                } else {
+                    compSize = buf.byteLength - headerSize;
+                    compDataOffset = headerSize;
+                    log(`UC2F: Using remaining data: ${compSize} bytes`);
+                }
+            } else {
+                compSize = buf.byteLength - headerSize;
+                compDataOffset = headerSize;
+                log(`UC2F: Using remaining data: ${compSize} bytes`);
+            }
+            
+            const compData = new Uint8Array(buf, compDataOffset, compSize);
+            
+            log(`UC2F parsed: ${JSON.stringify({
+                magic: header.magic,
+                version: header.version,
+                width: header.width,
+                height: header.height,
+                stride: header.stride,
+                bitdepth: header.bitdepth,
+                compSize: compSize
+            })}`);
+            
+            return { header, compData };
+        }
+
+        function decompressData(compData) {
+            // Check for LZ4 magic number
+            const hasLZ4Magic = compData.length >= 4 && 
+                compData[0] === 0x04 && compData[1] === 0x22 && 
+                compData[2] === 0x4D && compData[3] === 0x18;
+            
+            if (hasLZ4Magic && typeof LZ4 !== 'undefined') {
+                try {
+                    const decompressed = LZ4.decompress(compData);
+                    log(`LZ4 decompressed ${compData.length} bytes to ${decompressed.length} bytes`);
+                    return decompressed;
+                } catch (e) {
+                    log(`LZ4 decompression failed: ${e.message}`);
+                    return compData;
+                }
+            } else {
+                log('No LZ4 magic found, treating as uncompressed');
+                return compData;
+            }
+        }
+
+        function rawToUint16Array(raw, width, height, stride) {
+            const expectedPixels = width * height;
+            const expectedBytes = expectedPixels * 2; // 2 bytes per 16-bit pixel
+            
+            log(`rawToUint16Array: raw.length=${raw.length}, width=${width}, height=${height}, stride=${stride}`);
+            log(`Expected: ${expectedPixels} pixels (${expectedBytes} bytes)`);
+            
+            if (raw.length < expectedBytes) {
+                log(`Insufficient data: got ${raw.length} bytes, expected ${expectedBytes} bytes`);
+                // Pad with zeros if needed
+                const padded = new Uint8Array(expectedBytes);
+                padded.set(raw.slice(0, Math.min(raw.length, expectedBytes)));
+                raw = padded;
+            }
+            
+            // Convert to Uint16Array
+            const u16 = new Uint16Array(raw.buffer, raw.byteOffset, expectedPixels);
+            
+            // Sample first few pixels for debugging
+            const samples = Array.from(u16.slice(0, Math.min(10, u16.length)));
+            log(`Sample pixel values: [${samples.join(', ')}]`);
+            
+            // Calculate pixel range
+            let minVal = u16[0], maxVal = u16[0];
+            for (let i = 0; i < Math.min(1000, u16.length); i++) {
+                const val = u16[i];
+                if (val < minVal) minVal = val;
+                if (val > maxVal) maxVal = val;
+            }
+            log(`Pixel value range (first 1000 pixels): ${minVal} - ${maxVal}`);
+            
+            return { data: u16, minVal, maxVal };
+        }
+
+        function log(message) {
+            console.log(message);
+            if (debugElement) {
+                debugElement.textContent += new Date().toLocaleTimeString() + ': ' + message + '\n';
+                debugElement.scrollTop = debugElement.scrollHeight;
+            }
+        }
+
+        function updateConnectionStatus(status) {
+            const statusElement = document.getElementById('connectionStatus');
+            statusElement.textContent = status;
+            statusElement.className = 'connection-status ' + status.toLowerCase().replace(/[^a-z]/g, '');
+        }
+
+        function connectSocket() {
+            if (socket) {
+                log('Socket already connected');
+                return;
+            }
+
+            const serverUrl = document.getElementById('serverUrl').value;
+            log(`Connecting to: ${serverUrl}`);
+            updateConnectionStatus('Connecting');
+
+            try {
+                socket = io(serverUrl, {
+                    transports: ['websocket'],
+                    timeout: 5000
+                });
+
+                socket.on('connect', () => {
+                    log(`Socket connected with ID: ${socket.id}`);
+                    updateConnectionStatus('Connected');
+                });
+
+                socket.on('disconnect', () => {
+                    log('Socket disconnected');
+                    updateConnectionStatus('Disconnected');
+                });
+
+                socket.on('connect_error', (error) => {
+                    log(`Connection error: ${error.message}`);
+                    updateConnectionStatus('Error');
+                });
+
+                // Listen for binary frames
+                socket.on('frame', (buf) => {
+                    try {
+                        frameCount++;
+                        const now = Date.now();
+                        const fps = frameCount / ((now - lastTime) / 1000);
+                        
+                        log(`Received frame ${frameCount} (${buf.byteLength} bytes, ~${fps.toFixed(1)} FPS)`);
+                        
+                        // Parse UC2F packet
+                        const { header, compData } = parseUC2F(buf);
+                        
+                        // Decompress data
+                        const raw = decompressData(compData);
+                        
+                        // Convert to 16-bit pixel array
+                        const { data: u16Data, minVal, maxVal } = rawToUint16Array(raw, header.width, header.height, header.stride);
+                        
+                        // Render the frame
+                        renderFrame(u16Data, header.width, header.height, minVal, maxVal, 1.0);
+                        
+                        if (frameCount % 30 === 0) {
+                            lastTime = now;
+                            frameCount = 0;
+                        }
+                        
+                    } catch (error) {
+                        log(`Frame processing error: ${error.message}`);
+                    }
+                });
+
+                // Listen for JSON signals (metadata)
+                socket.on('signal', (data) => {
+                    if (data.name === 'frame_meta') {
+                        log(`Frame metadata: ${JSON.stringify(data.metadata)}`);
+                    }
+                });
+
+            } catch (error) {
+                log(`Socket creation error: ${error.message}`);
+                updateConnectionStatus('Error');
+            }
+        }
+
+        function disconnectSocket() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                log('Socket disconnected manually');
+                updateConnectionStatus('Disconnected');
+            }
+        }
+
+        // WebGL initialization and rendering
+        function initWebGL() {
+            canvas = document.getElementById('canvas');
+            debugElement = document.getElementById('debug');
+            
+            // Get WebGL2 context
+            gl = canvas.getContext('webgl2');
+            if (!gl) {
+                log('WebGL2 not supported', 'error');
+                return false;
+            }
+            
+            log('WebGL2 context created successfully');
+            
+            // Check for integer texture support
+            const intTextures = gl.getExtension('EXT_color_buffer_float') !== null;
+            log(`Integer texture support: ${intTextures ? 'YES' : 'NO'}`);
+            
+            // Set viewport
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            gl.clearColor(0, 0, 0, 1);
+            
+            return createShaderProgram() && createBuffers() && createTexture();
+        }
+        
+        function createShaderProgram() {
+            const vertexShaderSource = `#version 300 es
+                in vec2 a_position;
+                in vec2 a_texCoord;
+                out vec2 v_texCoord;
+                
+                void main() {
+                    gl_Position = vec4(a_position, 0.0, 1.0);
+                    v_texCoord = a_texCoord;
+                }
+            `;
+            
+            const fragmentShaderSource = `#version 300 es
+                precision highp float;
+                precision highp int;
+                
+                uniform highp usampler2D u_texture;
+                uniform float u_min;
+                uniform float u_max;
+                uniform float u_gamma;
+                
+                in vec2 v_texCoord;
+                out vec4 fragColor;
+                
+                void main() {
+                    uint rawValue = texture(u_texture, v_texCoord).r;
+                    float normalized = (float(rawValue) - u_min) / (u_max - u_min);
+                    normalized = clamp(normalized, 0.0, 1.0);
+                    normalized = pow(normalized, 1.0 / u_gamma);
+                    fragColor = vec4(normalized, normalized, normalized, 1.0);
+                }
+            `;
+            
+            function createShader(source, type) {
+                const shader = gl.createShader(type);
+                gl.shaderSource(shader, source);
+                gl.compileShader(shader);
+                
+                if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                    const error = gl.getShaderInfoLog(shader);
+                    log(`Shader compilation failed: ${error}`);
+                    gl.deleteShader(shader);
+                    return null;
+                }
+                
+                return shader;
+            }
+            
+            const vertexShader = createShader(vertexShaderSource, gl.VERTEX_SHADER);
+            const fragmentShader = createShader(fragmentShaderSource, gl.FRAGMENT_SHADER);
+            
+            if (!vertexShader || !fragmentShader) {
+                return false;
+            }
+            
+            program = gl.createProgram();
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+            
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                const error = gl.getProgramInfoLog(program);
+                log(`Program linking failed: ${error}`);
+                return false;
+            }
+            
+            log('Shaders compiled and linked successfully');
+            return true;
+        }
+        
+        function createBuffers() {
+            // Create VAO first
+            vao = gl.createVertexArray();
+            gl.bindVertexArray(vao);
+            
+            // Create quad vertices (position + texCoord)
+            const vertices = new Float32Array([
+                // Triangle 1
+                -1, -1,  0, 1,  // bottom-left
+                 1, -1,  1, 1,  // bottom-right
+                -1,  1,  0, 0,  // top-left
+                // Triangle 2
+                -1,  1,  0, 0,  // top-left
+                 1, -1,  1, 1,  // bottom-right
+                 1,  1,  1, 0   // top-right
+            ]);
+            
+            const buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+            
+            // Setup vertex attributes
+            const positionLocation = gl.getAttribLocation(program, 'a_position');
+            const texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
+            
+            gl.enableVertexAttribArray(positionLocation);
+            gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
+            
+            gl.enableVertexAttribArray(texCoordLocation);
+            gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 16, 8);
+            
+            log('Vertex buffers created');
+            return true;
+        }
+        
+        function createTexture() {
+            texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            
+            // Create initial checkerboard pattern (64x64)
+            const size = 64;
+            const data = new Uint16Array(size * size);
+            
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    const checkerboard = (Math.floor(x / 8) + Math.floor(y / 8)) % 2;
+                    data[y * size + x] = checkerboard ? 65535 : 0;
+                }
+            }
+            
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, size, size, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, data);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            
+            log(`Created ${size}x${size} checkerboard texture`);
+            return true;
+        }
+        
+        function renderFrame(imageData, width, height, minVal, maxVal, gamma) {
+            if (!gl || !program) {
+                log('Cannot render: WebGL not initialized');
+                return;
+            }
+
+            // If we have new image data, upload it
+            if (imageData && width && height) {
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, width, height, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, imageData);
+                log(`Uploaded new image data: ${width}x${height}, range: ${minVal}-${maxVal}`);
+                
+                // Update canvas size to match image
+                canvas.width = width;
+                canvas.height = height;
+                gl.viewport(0, 0, width, height);
+            }
+
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            
+            gl.useProgram(program);
+            gl.bindVertexArray(vao);
+            
+            // Set uniforms
+            gl.uniform1f(gl.getUniformLocation(program, 'u_min'), minVal || 0);
+            gl.uniform1f(gl.getUniformLocation(program, 'u_max'), maxVal || 65535);
+            gl.uniform1f(gl.getUniformLocation(program, 'u_gamma'), gamma || 1.0);
+            
+            // Bind texture
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.uniform1i(gl.getUniformLocation(program, 'u_texture'), 0);
+            
+            // Draw
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+        }
+        
+        // Test functions
+        function testClear() {
+            if (gl) {
+                gl.clear(gl.COLOR_BUFFER_BIT);
+                log('Canvas cleared');
+            }
+        }
+        
+        function testRender() {
+            renderFrame();
+            log('Checkerboard rendered');
+        }
+        
+        function testFeatures() {
+            if (!gl) {
+                log('WebGL2 not initialized');
+                return;
+            }
+            
+            log('--- WebGL2 Feature Detection ---');
+            log(`Vendor: ${gl.getParameter(gl.VENDOR)}`);
+            log(`Renderer: ${gl.getParameter(gl.RENDERER)}`);
+            log(`Version: ${gl.getParameter(gl.VERSION)}`);
+            log(`GLSL Version: ${gl.getParameter(gl.SHADING_LANGUAGE_VERSION)}`);
+            
+            const extensions = [
+                'EXT_color_buffer_float',
+                'EXT_texture_norm16',
+                'OES_texture_float_linear'
+            ];
+            
+            extensions.forEach(ext => {
+                const supported = gl.getExtension(ext) !== null;
+                log(`${ext}: ${supported ? 'SUPPORTED' : 'NOT SUPPORTED'}`);
+            });
+            
+            log(`Max texture size: ${gl.getParameter(gl.MAX_TEXTURE_SIZE)}`);
+            log(`Max 3D texture size: ${gl.getParameter(gl.MAX_3D_TEXTURE_SIZE)}`);
+        }
+
+        // Initialize when page loads
+        // Initialize when page loads
+        window.onload = function() {
+            if (initWebGL()) {
+                renderFrame();
+                log('Initialization complete - checkerboard should be visible');
+            } else {
+                log('WebGL initialization failed');
+            }
+        }
+    </script>
+</body>
+</html>

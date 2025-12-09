@@ -45,3 +45,5 @@ ashlarUC2
 pydantic >= 1.9.0
 imjoy-rpc==0.5.59
 useq-schema >= 0.8.0
+lz4 >= 4.0.0
+zstandard >= 0.22.0

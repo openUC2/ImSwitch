@@ -89,6 +89,13 @@ class MockCameraTIS:
 
     suspend_live = stop_live  # alias for compatibility
 
+    def setROI(self, x: int, y: int, w: int, h: int):
+        """Set region of interest. Here, just change the image size."""
+        self.SensorWidth  = w
+        self.SensorHeight = h
+        self.flushBuffer()
+        
+        
     def getTriggerSource(self):
         """Match CameraHIK interface."""
         return self.trigger_source.value

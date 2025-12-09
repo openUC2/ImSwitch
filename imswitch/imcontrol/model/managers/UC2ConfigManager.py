@@ -23,7 +23,8 @@ class UC2ConfigManager(SignalInterface):
         # TODO: HARDCODED!!
         try:
             self.ESP32 = lowLevelManagers["rs232sManager"]["ESP32"]._esp32
-        except:
+        except Exception as e:
+            self.__logger.error(f"Could not connect to ESP32 low level manager: {e}")
             return
 
     def saveState(self, state_general=None, state_pos=None, state_aber=None):

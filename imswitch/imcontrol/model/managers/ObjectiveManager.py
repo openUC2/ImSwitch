@@ -274,7 +274,7 @@ class ObjectiveManager(SignalInterface):
             self.__logger.error(f"Failed to save objective configuration to file: {e}", exc_info=True)
 
 
-# Copyright (C) 2020-2024 ImSwitch developers
+# Copyright (C) 2020-2026 ImSwitch developers
 # This file is part of ImSwitch.
 #
 # ImSwitch is free software: you can redistribute it and/or modify

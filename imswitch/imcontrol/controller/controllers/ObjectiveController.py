@@ -209,7 +209,9 @@ class ObjectiveController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Objective homing failed: {e}", exc_info=True)
             self._isHomed = False
-
+        # need to state the current status after homing (e.g. 2 )
+        self._currentObjective = 2
+        
     @APIExport(runOnUIThread=True)
     def moveToObjective(self, slot: int, skipZ: bool = False):
         """
@@ -220,11 +222,16 @@ class ObjectiveController(LiveUpdatedController):
             skipZ: If True, only move axis A (objective turret) without Z focus adjustment.
                    If False (default), also apply Z delta based on z0/z1 config.
         """
+        import threading
+        mThread = threading.Thread(target=self.moveToObjectiveThread, args=(slot, skipZ))
+        mThread.start()
+        
+    def moveToObjectiveThread(self, slot: int, skipZ: bool = False):
         if slot not in [0, 1]:
             self._logger.error(f"Invalid objective slot: {slot} (must be 0 or 1)")
             return
         
-        if slot == self._currentObjective:
+        if False and slot == self._currentObjective:
             self._logger.debug(f"Already at objective slot {slot}, no movement needed")
             return
         
@@ -232,13 +239,25 @@ class ObjectiveController(LiveUpdatedController):
         
         # Calculate Z delta if needed (before changing slot)
         z_delta = 0
-        if not skipZ and self._currentObjective is not None:
+        if not skipZ and self._currentObjective is not None and self._currentObjective in [0, 1]:
             # Calculate Z delta: difference between target z position and current z position
             current_z = self._zPositions[self._currentObjective] if self._currentObjective < len(self._zPositions) else 0
             target_z = self._zPositions[slot] if slot < len(self._zPositions) else 0
             z_delta = target_z - current_z
             self._logger.debug(f"Z delta: {z_delta} µm (from z{self._currentObjective}={current_z} to z{slot}={target_z})")
-        
+            # Apply Z focus adjustment if needed
+            if  z_delta != 0 and self._positioner is not None:
+                try:
+                    self._logger.info(f"Applying Z focus adjustment: {z_delta} µm")
+                    self._positioner.move(
+                        value=z_delta,
+                        axis="Z",
+                        is_absolute=False,  # Relative movement for Z
+                        is_blocking=False
+                    )
+                except Exception as e:
+                    self._logger.error(f"Failed to apply Z focus adjustment: {e}", exc_info=True)
+            
         # Move the axis A motor (objective turret)
         success = self._moveMotorToSlot(slot)
         
@@ -246,19 +265,7 @@ class ObjectiveController(LiveUpdatedController):
             # Update state
             self._currentObjective = slot
             
-            # Apply Z focus adjustment if needed
-            if not skipZ and z_delta != 0 and self._positioner is not None:
-                try:
-                    self._logger.info(f"Applying Z focus adjustment: {z_delta} µm")
-                    self._positioner.move(
-                        value=z_delta,
-                        axis="Z",
-                        is_absolute=False,  # Relative movement for Z
-                        is_blocking=True
-                    )
-                except Exception as e:
-                    self._logger.error(f"Failed to apply Z focus adjustment: {e}", exc_info=True)
-            
+
             # Update detector pixel size
             self._updatePixelSize()
             

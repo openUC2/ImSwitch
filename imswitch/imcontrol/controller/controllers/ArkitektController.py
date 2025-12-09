@@ -39,6 +39,7 @@ class ArkitektController(ImConWidgetController):
         self.arkitekt_app = self._master.arkitektManager.get_arkitekt_app()
         self.arkitekt_app.register(self.moveToSampleLoadingPosition)
         self.arkitekt_app.register(self.runTileScan)
+        self.arkitekt_app.register(self.goToPosition)
         self.arkitekt_app.run_detached()
 
     def moveToSampleLoadingPosition(
@@ -58,6 +59,75 @@ class ArkitektController(ImConWidgetController):
         self._master.positionersManager[positionerName].moveToSampleLoadingPosition(
             speed=speed, is_blocking=is_blocking
         )
+
+    @APIExport(runOnUIThread=False)
+    def goToPosition(
+        self,
+        x_micrometer: float,
+        y_micrometer: float,
+        positionerName: str | None = None,
+        speed: float = 10000,
+        is_blocking: bool = True,
+        t_settle: float = 0.2,
+    ) -> None:
+        """Move the stage to the specified X,Y position.
+
+        Moves the specified positioner (or the first available one) to the given
+        X and Y coordinates in micrometers.
+
+        Args:
+            x_micrometer (float): Target X position in micrometers.
+            y_micrometer (float): Target Y position in micrometers.
+            positionerName (str | None): Name of the positioner to use. If None,
+                the first available positioner will be used.
+            speed (float): Speed of the positioner movement (units per second).
+                Default is 10000.
+            is_blocking (bool): Whether to wait for movement completion before returning.
+                Default is True.
+            t_settle (float): Settling time in seconds to wait after movement completes.
+                Only used if is_blocking is True. Default is 0.2 seconds.
+
+        Example:
+            >>> # Move to position (5000, 3000) micrometers
+            >>> goToPosition(x_micrometer=5000, y_micrometer=3000)
+            
+            >>> # Move with custom speed and non-blocking
+            >>> goToPosition(
+            ...     x_micrometer=5000,
+            ...     y_micrometer=3000,
+            ...     speed=5000,
+            ...     is_blocking=False
+            ... )
+        """
+        # Get positioner
+        if positionerName is None:
+            positionerNames = self._master.positionersManager.getAllDeviceNames()
+            if len(positionerNames) == 0:
+                self._logger.error("No positioners available for positioning")
+                return
+            positionerName = positionerNames[0]
+
+        mPositioner = self._master.positionersManager[positionerName]
+
+        self._logger.debug(
+            f"Moving positioner {positionerName} to ({x_micrometer}, {y_micrometer}) µm"
+        )
+
+        # Move to position
+        mPositioner.move(
+            value=(x_micrometer, y_micrometer),
+            axis="XY",
+            is_absolute=True,
+            is_blocking=is_blocking,
+            speed=(speed, speed)
+        )
+
+        # Wait for settling if blocking
+        if is_blocking:
+            time.sleep(t_settle)
+            self._logger.debug(
+                f"Position reached and settled at ({x_micrometer}, {y_micrometer}) µm"
+            )
 
     @APIExport(runOnUIThread=False)
     def runTileScanInThread(self,

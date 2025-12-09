@@ -53,9 +53,6 @@ CALLBACK_SIG = CFUNCTYPE(
 # ----------------------------------------------------------------------------
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
-    
-    # Class-level tracking of opened cameras (serial checksums)
-    _opened_cameras = set()
 
     def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=2, flipImage=(False, False)):
         super().__init__()
@@ -185,33 +182,32 @@ class CameraHIK:
                 serial_checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
                 self.__logger.debug(f"Camera {i} serial checksum: {serial_checksum}")
                 if serial_checksum == number:
-                    # Check if this camera is already opened
-                    if serial_checksum in CameraHIK._opened_cameras:
-                        raise RuntimeError(f"Camera with serial checksum {number} is already opened by another detector")
                     camera_index = i
                     self.__logger.info(f"Found camera with matching serial checksum {number} at index {i}")
                     break
             
             if camera_index is None:
-                # No fallback - if the requested camera is not found, fail explicitly
-                # List all available cameras with their status for diagnostic purposes
-                available_info = []
+                # Fallback: use the first available camera if requested checksum not found
+                # This handles the case where camera order may have changed or camera was replaced
+                self.__logger.warning(
+                    f"No camera found with serial checksum {number}. "
+                    f"Falling back to first available camera (index 0)."
+                )
+                # Log available cameras for diagnostic purposes
                 for i, info in enumerate(infos):
                     checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
-                    is_opened = checksum in CameraHIK._opened_cameras
-                    status = "opened" if is_opened else "available"
-                    available_info.append(f"Index {i}: checksum {checksum} ({status})")
-                
-                raise RuntimeError(
-                    f"No camera found with serial checksum {number}. "
-                    f"Please check your configuration. Available cameras: {'; '.join(available_info)}"
-                )
+                    self.__logger.info(f"Available camera {i}: checksum {checksum}")
+                camera_index = 0
             
             number = camera_index  # Use the found index for the rest of the function
         else:
             # Traditional index-based selection
             if number >= len(infos):
-                raise RuntimeError(f"No suitable Hik camera found. Requested camera {number}, but only {len(infos)} cameras available.")
+                self.__logger.warning(
+                    f"Requested camera index {number} out of range (only {len(infos)} cameras available). "
+                    f"Falling back to camera index 0."
+                )
+                number = 0
 
         self.__logger.info(f"Opening camera {number} out of {len(infos)} available cameras")
         
@@ -225,10 +221,6 @@ class CameraHIK:
         ret = self.camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
         if ret != 0:
             raise RuntimeError(f"OpenDevice failed 0x{ret:x}")
-        
-        # Add this camera to the opened cameras set
-        CameraHIK._opened_cameras.add(self._serial_checksum)
-        self.__logger.debug(f"Added camera with checksum {self._serial_checksum} to opened cameras list")
 
         # optimise packet size for GigE
         if infos[number].nTLayerType == MV_GIGE_DEVICE:
@@ -589,11 +581,6 @@ class CameraHIK:
         if hasattr(self, '_callback_registered') and self._callback_registered:
             self.camera.MV_CC_RegisterImageCallBackEx(None, None)
             self._callback_registered = False
-        
-        # Remove this camera from the opened cameras set before closing
-        if hasattr(self, '_serial_checksum') and self._serial_checksum in CameraHIK._opened_cameras:
-            CameraHIK._opened_cameras.discard(self._serial_checksum)
-            self.__logger.debug(f"Removed camera with checksum {self._serial_checksum} from opened cameras list")
             
         self.camera.MV_CC_CloseDevice()
         self.camera.MV_CC_DestroyHandle()

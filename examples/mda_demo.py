@@ -22,7 +22,7 @@ class MDADemo:
     
     def __init__(self, server_url: str):
         self.server_url = server_url.rstrip('/')
-        self.api_base = f"{self.server_url}/api/experimentcontroller"
+        self.api_base = f"{self.server_url}/ExperimentController"
         
     def check_capabilities(self) -> Dict[str, Any]:
         """Check if MDA functionality is available."""
@@ -66,8 +66,8 @@ class MDADemo:
         
         experiment = {
             "channels": [
-                {"name": "DAPI", "exposure": 50.0, "power": 100.0},
-                {"name": "FITC", "exposure": 100.0, "power": 80.0}
+                {"name": "635", "exposure": 50.0, "power": 100.0},
+                {"name": "488", "exposure": 100.0, "power": 80.0}
             ],
             "z_range": 10.0,  # 10 µm total range
             "z_step": 2.0,    # 2 µm steps  
@@ -88,9 +88,9 @@ class MDADemo:
             print(f"Estimated duration: {preview.get('estimated_duration_minutes', 'N/A'):.1f} minutes")
         
         # Uncomment to actually start the experiment
-        # print("\nStarting experiment...")
-        # result = self.start_experiment(experiment)
-        # print(f"Result: {result}")
+        print("\nStarting experiment...")
+        result = self.start_experiment(experiment)
+        print(f"Result: {result}")
         
     def demo_timelapse(self):
         """Demonstrate a time-lapse experiment."""
@@ -147,15 +147,10 @@ class MDADemo:
             print(f"Estimated duration: {preview.get('estimated_duration_minutes', 'N/A'):.1f} minutes")
 
 def main():
-    parser = argparse.ArgumentParser(description='ImSwitch MDA Integration Demo')
-    parser.add_argument('--server', default='http://localhost:8000', 
-                      help='ImSwitch server URL (default: http://localhost:8000)')
-    parser.add_argument('--demo', choices=['simple', 'timelapse', 'full'], 
-                      default='simple', help='Demo type to run')
-    
-    args = parser.parse_args()
-    
-    demo = MDADemo(args.server)
+
+    server = "http://localhost:8001"
+    demo_model = "simple" # simple, timelapse, full
+    demo = MDADemo(server)
     
     # Check if MDA is available
     print("Checking MDA capabilities...")
@@ -172,11 +167,11 @@ def main():
     print()
     
     # Run the selected demo
-    if args.demo == 'simple':
+    if demo_model == 'simple':
         demo.demo_simple_zstack()
-    elif args.demo == 'timelapse':
+    elif demo_model == 'timelapse':
         demo.demo_timelapse()
-    elif args.demo == 'full':
+    elif demo_model == 'full':
         demo.demo_full_mda()
     
     print("\n=== Demo Complete ===")

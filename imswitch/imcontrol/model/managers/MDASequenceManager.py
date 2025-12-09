@@ -125,7 +125,7 @@ class MDASequenceManager:
                     step_id=str(step_id),
                     main_func=controller_functions['set_detector_parameter'],
                     main_params={
-                        "parameter": "ExposureTime", 
+                        "parameter": "exposure", 
                         "value": event.exposure
                     }
                 ))

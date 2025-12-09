@@ -256,9 +256,9 @@ class ExperimentController(ImConWidgetController):
         self.mda_manager = MDASequenceManager()
 
         # set default values
-        self.SPEED_Y_default = 25000
-        self.SPEED_X_default = 25000
-        self.SPEED_Z_default = 10000
+        self.SPEED_Y = self.SPEED_Y_default = 25000
+        self.SPEED_X = self.SPEED_X_default = 25000
+        self.SPEED_Z = self.SPEED_Z_default = 10000
         self.ACCELERATION = 1000000
 
         # select detectors
@@ -1236,15 +1236,15 @@ class ExperimentController(ImConWidgetController):
         #if posY and posX is None:
         self.mStage.move(value=(posX, posY), speed=(self.SPEED_X_default, self.SPEED_Y_default), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
-        self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
-        return (posX, posY)
+        #self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
+        return (posX, posY) # TODO: Need to adjust in case of relative move
 
     def move_stage_z(self, posZ: float, relative: bool = False, maxSpeedZ=5000):
         self._logger.debug(f"Moving stage to Z={posZ}")
         self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, maxSpeedZ)), axis="Z", is_absolute=not relative, is_blocking=True)
-        newPosition = self.mStage.getPosition()
-        self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
-        return newPosition["Z"]
+        #newPosition = self.mStage.getPosition()
+        #self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
+        return posZ # TODO: Need to adjust in case of relative move
 
     def set_detector_parameter(self, parameter: str, value: Any):
         """Set a detector parameter."""
@@ -1809,7 +1809,7 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Error starting MDA experiment: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error starting MDA experiment: {str(e)}")
 
-    @APIExport()
+    @APIExport(requestType="POST")
     def get_mda_sequence_info(self, request: MDASequenceRequest) -> MDASequenceInfo:
         """Get information about an MDA sequence without starting it."""
         if not self.mda_manager.is_available():

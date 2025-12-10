@@ -229,8 +229,8 @@ class ExperimentController(ImConWidgetController):
         self.workflow_manager = WorkflowsManager()
 
         # set default values
-        self.SPEED_Y_default = 25000
-        self.SPEED_X_default = 25000
+        self.SPEED_Y_default = 20000
+        self.SPEED_X_default = 20000
         self.SPEED_Z_default = 10000
         self.ACCELERATION = 1000000
 
@@ -1205,7 +1205,7 @@ class ExperimentController(ImConWidgetController):
 
     def move_stage_xy(self, posX: float = None, posY: float = None, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
-        self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
+        self._logger.info(f"Moving stage to X={posX}, Y={posY}")
         #if posY and posX is None:
         self.mStage.move(value=(posX, posY), speed=(self.SPEED_X_default, self.SPEED_Y_default), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
@@ -1213,7 +1213,7 @@ class ExperimentController(ImConWidgetController):
         return (posX, posY)
 
     def move_stage_z(self, posZ: float, relative: bool = False, maxSpeedZ=5000):
-        self._logger.debug(f"Moving stage to Z={posZ}")
+        self._logger.info(f"Moving stage to Z={posZ}")
         self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, maxSpeedZ)), axis="Z", is_absolute=not relative, is_blocking=True)
         newPosition = self.mStage.getPosition()
         self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])

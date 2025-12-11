@@ -1430,11 +1430,11 @@ class FocusCalibThread(object):
                 self._controller._logger.info(
                     f"Calibration step {i+1}/{len(scan_list)}: Z={zpos:.3f}, Focus value={focus_signal:.4f}"
                 )
-            
             # Enhanced calibration data structure and PID integration
             self.poly = np.polyfit(self.positionData, self.signalData, 1)
             self.calibrationResult = np.around(self.poly, 4)
-
+            self._controller._logger.info("PositionData vs SigntalData: " +
+                ", ".join([f"({p:.2f}, {s:.4f})" for p, s in zip(self.positionData, self.signalData)]))
             # Calculate enhanced calibration metrics
             r_squared = self._calculate_r_squared()
             sensitivity_nm_per_unit = self._get_sensitivity_nm_per_px()

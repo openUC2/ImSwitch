@@ -199,6 +199,7 @@ class FocusLockController(ImConWidgetController):
             background_threshold=self._focus_params.background_threshold,
             crop_radius=self._focus_params.crop_size or 300,
             enable_gaussian_blur=True,
+            peak_distance=200
         )
         self._focus_metric = FocusMetricFactory.create(self._focus_params.focus_metric, focus_config)
 
@@ -293,6 +294,8 @@ class FocusLockController(ImConWidgetController):
         # Measurement smoothing
         self._meas_filt = None
 
+        # deubgging?
+        self.is_debug = False
 
         # Threads
         self._focusCalibThread = FocusCalibThread(self)
@@ -571,7 +574,7 @@ class FocusLockController(ImConWidgetController):
     # =========================
     # Single Source of Truth: Frame Capture and Focus Computation
     # =========================
-    def _captureAndComputeFocus(self, num_frames: int = 2) -> Dict[str, Any]:
+    def _captureAndComputeFocus(self, num_frames: int = 2, is_debug: bool = False) -> Dict[str, Any]:
         """Capture frame(s) and compute focus value - single source of truth.
         
         This method is the ONLY place where frames are captured and processed
@@ -635,6 +638,46 @@ class FocusLockController(ImConWidgetController):
             focus_result = self._focus_metric.compute(cropped_im)
             focus_value = focus_result.get("focus", None)
             
+            '''
+            is_debug => plot and visualize the focusmetric and current image by using the following parameters:
+            {
+            "t": ts,
+            "focus": focus_value,
+            "left_peak_x": left_peak,
+            "right_peak_x": right_peak,
+            "x_peak_distance": x_peak_distance,
+            "proj_x": projx_s.astype(float),
+            "avg_peak_distance": self._get_average_distance(),
+            "peak_history_length": len(self.peak_distances),
+            "compute_ms": (time.time() - t0) * 1000.0,
+            }
+            '''
+            if is_debug:
+                try:
+                    # plot the current image and plot the focus metric result
+                    import matplotlib.pyplot as plt
+                    import matplotlib
+                    matplotlib.use("Agg")
+
+                    fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+                    axs[0].imshow(cropped_im, cmap='gray')
+                    axs[0].set_title('Cropped Image for Focus Computation')
+                    # aslo plot the projection and peaks from focus_result if available
+                    if "proj_x" in focus_result:
+                        axs[1].plot(focus_result["proj_x"], label='Projection X')
+                    if "left_peak_x" in focus_result and "right_peak_x" in focus_result:
+                        axs[1].axvline(focus_result["left_peak_x"], color='r', linestyle='--', label='Left Peak')
+                        if focus_result["right_peak_x"] is not None:
+                            axs[1].axvline(focus_result["right_peak_x"], color='g', linestyle='--', label='Right Peak')
+                        # add current z-position and focus value to the plot title
+                        axs[1].set_title(f'Focus Value: {focus_value:.2f} at Z: {self.currentZPosition:.2f} µm')
+                    else:
+                        axs[1].set_title(f'Focus Value: {focus_value:.2f} at Z: {self.currentZPosition:.2f} µm')
+                        axs[1].legend() 
+                    plt.savefig(f"focus_metric_debug_{int(timestamp)}.png")
+                    plt.close(fig)
+                except Exception as e:
+                    self._logger.error(f"Failed to generate debug plot: {e}")
             if focus_value is None or np.isnan(focus_value):
                 self._logger.debug("Invalid focus value computed (None or NaN)")
                 return result
@@ -668,7 +711,7 @@ class FocusLockController(ImConWidgetController):
                     continue
                 
                 # Use single source of truth for frame capture and focus computation
-                capture_result = self._captureAndComputeFocus(num_frames=2)
+                capture_result = self._captureAndComputeFocus(num_frames=2, is_debug= self.is_debug)
                 
                 if not capture_result["valid"]:
                     continue
@@ -1090,6 +1133,7 @@ class FocusLockController(ImConWidgetController):
                 "final_error_um": None
             }
 
+        initial_z_position = self.currentZPosition
         # Use provided setpoint or fall back to stored setpoint
         if target_focus_setpoint is None:
             target_focus_setpoint = self._pi_params.set_point
@@ -1102,7 +1146,7 @@ class FocusLockController(ImConWidgetController):
         # Ensure laser is on if configured
         laserName = getattr(self._setupInfo.focusLock, "laserName", None)
         laserValue = getattr(self._setupInfo.focusLock, "laserValue", None)
-        if laserName and laserValue is not None:
+        if laserName and laserValue is not None and False : # TODO: We assume the laser is on always for now
             try:
                 self._master.lasersManager[laserName].setValue(laserValue)
                 self._master.lasersManager[laserName].setEnabled(True)
@@ -1120,10 +1164,12 @@ class FocusLockController(ImConWidgetController):
             num_attempts += 1
 
             # Use single source of truth for frame capture and focus computation
-            capture_result = self._captureAndComputeFocus(num_frames=1)
+            capture_result = self._captureAndComputeFocus(num_frames=1, is_debug=self.is_debug)
             
             if not capture_result["valid"]:
                 self._logger.error("Failed to capture and compute focus")
+                # move back to original position if we moved
+                self.stage
                 return {
                     "success": False,
                     "error": "Frame capture or focus computation failed",
@@ -1139,7 +1185,7 @@ class FocusLockController(ImConWidgetController):
             current_focus_value = capture_result["focus_value"]
 
             # Calculate focus offset from target setpoint
-            focus_offset = current_focus_value - target_focus_setpoint
+            focus_offset =  target_focus_setpoint - current_focus_value
 
             # Convert focus offset to Z offset using calibration scale factor
             # Scale factor is in µm per focus unit (e.g., µm per pixel)
@@ -1176,8 +1222,8 @@ class FocusLockController(ImConWidgetController):
                         z_offset = np.sign(z_offset) * max_single_move_um
 
                     # Move stage (relative movement)
-                    self.stage.move(value=z_offset, axis="Z", is_absolute=False, is_blocking=True)
-                    time.sleep(0.1)  # Small settle time
+                    self.stage.move(value=z_offset, axis="Z", is_absolute=False, speed=10000, is_blocking=True)
+                    time.sleep(0.3)  # Small settle time
 
                 except Exception as e:
                     self._logger.error(f"Failed to move Z stage: {e}")
@@ -1359,7 +1405,7 @@ class FocusCalibThread(object):
                 time.sleep(calib_params.settle_time)
                 
                 # Use single source of truth for focus computation
-                capture_result = self._controller._captureAndComputeFocus(num_frames=2)
+                capture_result = self._controller._captureAndComputeFocus(num_frames=2, is_debug=self._controller.is_debug)
                 
                 if capture_result["valid"]:
                     focus_signal = capture_result["focus_value"]
@@ -1432,6 +1478,7 @@ class FocusCalibThread(object):
                 plt.plot(self.positionData, y_fit, "-", label="Fit")
                 plt.xlabel("Z Position (µm)")
                 plt.ylabel("Focus Value")
+                plt.title("Focus Calibration with factor: {:.1f} nm/unit".format(sensitivity_nm_per_unit))
                 plt.legend()
                 plt.savefig("calibration_plot.png")
                 plt.close()

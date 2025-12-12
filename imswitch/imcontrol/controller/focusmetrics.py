@@ -314,23 +314,37 @@ class PeakMetric1D(FocusMetricBase):
 
         return result
 
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
 
 
 class PeakMetric(FocusMetricBase):
     """
-    Robust X-only peak finder for 2 laser dots.
-    - Uses max-projection by default (better for bright dots)
-    - Robust baseline removal + Gaussian smoothing
-    - Adaptive peak thresholds via MAD (noise units)
-    - Always returns left-most strong peak; right peak optional
+    Left-dot-only peak metric (prevents jumps to the right peak).
+
+    Strategy:
+    1) Build a 1D x-projection (max or mean).
+    2) Robust baseline removal + optional Gaussian smoothing.
+    3) Convert to noise units (MAD z-score).
+    4) Detect peaks ONLY inside a left-ROI:
+         - Prefer config.left_peak_roi if given
+         - Else track around last_left_x with a radius (config.left_track_radius)
+         - Else (first frame) use full width, pick leftmost of top-2 peaks, then lock-on.
+    5) If no peak is detected inside ROI, fallback to argmax inside ROI (still left-only).
     """
 
     def __init__(self, config: Optional[FocusConfig] = None):
         super().__init__(config)
+        self._last_left_x: Optional[float] = None
+
+        # kept for compatibility (can still be useful for monitoring)
         self.peak_distances: List[float] = []
         self.max_history = 5
-        self.outlier_threshold_mad = 6.0  # z-score in MAD units for distance history
+        self.outlier_threshold_mad = 6.0  # MAD-z for distance history
 
     # -----------------------------
     # 1D helpers
@@ -362,7 +376,7 @@ class PeakMetric(FocusMetricBase):
             return float(i)
         y0, y1, y2 = float(y[i - 1]), float(y[i]), float(y[i + 1])
         denom = (y0 - 2 * y1 + y2)
-        if abs(denom) < 1e-9:
+        if abs(denom) < 1e-12:
             return float(i)
         delta = 0.5 * (y0 - y2) / denom
         return float(i) + delta
@@ -389,18 +403,48 @@ class PeakMetric(FocusMetricBase):
 
     def reset_history(self):
         self.peak_distances = []
+        self._last_left_x = None
+
+    # -----------------------------
+    # ROI logic
+    # -----------------------------
+    def _compute_left_roi(self, width: int) -> Tuple[int, int, str]:
+        """
+        Returns (xmin, xmax, roi_source)
+        roi_source in {"config", "track", "full"}.
+        """
+        left_roi: Optional[Tuple[int, int]] = getattr(self.config, "left_peak_roi", None)
+        if left_roi is not None:
+            xmin, xmax = int(left_roi[0]), int(left_roi[1])
+            xmin = max(0, min(width - 1, xmin))
+            xmax = max(0, min(width, xmax))
+            if xmax <= xmin:
+                xmin, xmax = 0, width
+                return xmin, xmax, "full"
+            return xmin, xmax, "config"
+
+        if self._last_left_x is not None:
+            r = int(getattr(self.config, "left_track_radius", 180))
+            cx = int(round(self._last_left_x))
+            xmin = max(0, cx - r)
+            xmax = min(width, cx + r + 1)
+            if xmax <= xmin:
+                xmin, xmax = 0, width
+                return xmin, xmax, "full"
+            return xmin, xmax, "track"
+
+        return 0, width, "full"
 
     # -----------------------------
     # Main compute
     # -----------------------------
     def compute(self, frame: np.ndarray, n_supersample: int = 1) -> Dict[str, Any]:
-        """
-        n_supersample kept for API compatibility; not needed because we do subpixel fit.
-        """
         ts = time.time()
         t0 = time.time()
 
         im = np.asarray(frame)
+        if im.ndim != 2:
+            raise ValueError(f"PeakMetric expects a 2D grayscale frame, got shape={im.shape}")
 
         # 1) projection
         proj_mode = getattr(self.config, "projection_mode", "max")  # "max" default
@@ -416,85 +460,153 @@ class PeakMetric(FocusMetricBase):
 
         # 3) smoothing
         enable_blur = bool(getattr(self.config, "enable_gaussian_blur", True))
-        sigma = float(getattr(self.config, "gaussian_sigma", 2.0))  # <- explicit sigma default
+        sigma = float(getattr(self.config, "gaussian_sigma", 2.0))
         projx_s = self._smooth_1d(projx, sigma) if enable_blur else projx
 
-        # 4) adaptive scaling to noise units
-        if 0: 
-            med = float(np.median(projx_s))
-            mad = self._mad(projx_s)
-            zsig = (projx_s - med) / mad
-            zsig = np.clip(zsig, 0, None)
-        else:
-            zsig = np.clip(projx_s, projx_s.mean()*.2, None)
+        # 4) convert to MAD z-score (noise units)
+        med = float(np.median(projx_s))
+        mad = self._mad(projx_s)
+        zsig = (projx_s - med) / mad
+        zsig = np.clip(zsig, 0, None)
 
-        # 5) peak detection in noise units
+        # 5) left-only ROI (config or tracking)
+        width = int(zsig.shape[0])
+        xmin, xmax, roi_source = self._compute_left_roi(width)
+        z_roi = zsig[xmin:xmax]
+
         min_dist = int(getattr(self.config, "peak_distance", 200))
         prom_mad = float(getattr(self.config, "auto_peak_prom_mad", 4.0))
         height_mad = float(getattr(self.config, "auto_peak_height_mad", 3.0))
 
-        peaks, props = find_peaks(
-            zsig,
-            distance=min_dist,
+        # tighten distance inside small ROIs so we can still find a single peak
+        if (xmax - xmin) < 2 * min_dist:
+            min_dist_eff = max(1, (xmax - xmin) // 3)
+        else:
+            min_dist_eff = min_dist
+
+        peaks_roi, props_roi = find_peaks(
+            z_roi,
+            distance=min_dist_eff,
             prominence=prom_mad,
-            height=height_mad
+            height=height_mad,
         )
+        peaks = (peaks_roi + xmin).astype(int)
 
-        # optional ROI for left dot (xmin, xmax)
-        left_roi: Optional[Tuple[int, int]] = getattr(self.config, "left_peak_roi", None)
-        if left_roi is not None and len(peaks):
-            xmin, xmax = left_roi
-            mask = (peaks >= xmin) & (peaks <= xmax)
-            peaks = peaks[mask]
-            if "prominences" in props:
-                props["prominences"] = np.asarray(props["prominences"])[mask]
-            if "peak_heights" in props:
-                props["peak_heights"] = np.asarray(props["peak_heights"])[mask]
+        left_peak_x: Optional[float] = None
+        left_peak_i: Optional[int] = None
+        left_peak_height_mad: Optional[float] = None
+        left_peak_prom_mad: Optional[float] = None
+        used_fallback_argmax = False
 
-        left_peak = None
-        right_peak = None
-        x_peak_distance = None
+        # helper: pick best peak inside ROI by prominence (then height)
+        def _pick_best_peak(peaks_abs: np.ndarray, props: Dict[str, np.ndarray]) -> int:
+            prom = props.get("prominences", None)
+            h = props.get("peak_heights", None)
 
-        if len(peaks) >= 1:
-            prominences = props.get("prominences", zsig[peaks])
-            order = np.argsort(prominences)
-            best = peaks[order][-2:] if len(peaks) >= 2 else peaks[order][-1:]
-            best = np.sort(best)
+            if prom is None or len(prom) != len(peaks_abs):
+                prom = zsig[peaks_abs]
+            if h is None or len(h) != len(peaks_abs):
+                h = zsig[peaks_abs]
 
-            # optional max distance guard
-            max_sep = getattr(self.config, "peak_max_distance", None)
-            if max_sep is not None and len(best) == 2:
-                if (best[1] - best[0]) > int(max_sep):
-                    best = best[-1:]  # keep only strongest
+            # sort by (prominence, height) descending
+            order = np.lexsort((h, prom))  # ascending
+            return int(peaks_abs[order][-1])
 
-            # leftmost always returned
-            left_i = int(best[0])
-            left_peak = self._parabolic_subpixel(projx_s, left_i)
+        if len(peaks) > 0:
+            # If we are NOT locked yet (first frame, no ROI), try to initialize using two peaks
+            if roi_source == "full" and self._last_left_x is None:
+                # pick two most prominent peaks (if available), then choose the leftmost of those
+                prom = props_roi.get("prominences", None)
+                if prom is None or len(prom) != len(peaks_roi):
+                    prom = z_roi[peaks_roi]
+                order = np.argsort(prom)
+                top = order[-2:] if len(order) >= 2 else order[-1:]
+                top_abs = np.sort(peaks[top])
+                left_peak_i = int(top_abs[0])
+            else:
+                # locked / ROI mode: choose best peak inside ROI
+                left_peak_i = _pick_best_peak(peaks, props_roi)
 
-            if len(best) == 2:
-                right_i = int(best[1])
-                right_peak = self._parabolic_subpixel(projx_s, right_i)
-                x_peak_distance = float(right_peak - left_peak)
+            left_peak_x = self._parabolic_subpixel(projx_s, int(left_peak_i))
+            left_peak_height_mad = float(zsig[int(left_peak_i)])
+            # prominence for the chosen peak (map from ROI index if possible)
+            try:
+                idx_roi = int(left_peak_i - xmin)
+                if "prominences" in props_roi and idx_roi in peaks_roi.tolist():
+                    # find matching entry
+                    j = int(np.where(peaks_roi == idx_roi)[0][0])
+                    left_peak_prom_mad = float(np.asarray(props_roi["prominences"])[j])
+            except Exception:
+                left_peak_prom_mad = None
 
-                if not self._is_outlier(x_peak_distance):
-                    self._update_history(x_peak_distance)
+        # 6) fallback: if no peak found inside ROI, use argmax inside ROI (still left-only)
+        if left_peak_x is None:
+            fallback = bool(getattr(self.config, "left_fallback_argmax", True))
+            if fallback and (xmax - xmin) >= 3:
+                used_fallback_argmax = True
+                i0 = int(np.argmax(zsig[xmin:xmax]) + xmin)
+                # validate a minimum height in MAD units
+                min_h = float(getattr(self.config, "left_min_height_mad", height_mad))
+                if float(zsig[i0]) >= min_h:
+                    left_peak_i = i0
+                    left_peak_x = self._parabolic_subpixel(projx_s, i0)
+                    left_peak_height_mad = float(zsig[i0])
+                else:
+                    left_peak_i = None
+                    left_peak_x = None
 
-        focus_value = left_peak  # <- what you care about
+        # 7) tracking update (only if confident)
+        if left_peak_x is not None:
+            min_h_track = float(getattr(self.config, "left_min_height_mad", height_mad))
+            if left_peak_height_mad is None or left_peak_height_mad >= min_h_track:
+                self._last_left_x = float(left_peak_x)
 
+        # ---- optional: still compute right peak distance for monitoring (never used as focus) ----
+        right_peak_x: Optional[float] = None
+        x_peak_distance: Optional[float] = None
+        if bool(getattr(self.config, "report_right_peak", False)):
+            # detect on full signal for reporting only
+            peaks_full, props_full = find_peaks(
+                zsig,
+                distance=min_dist,
+                prominence=prom_mad,
+                height=height_mad,
+            )
+            if len(peaks_full) >= 2:
+                # choose the nearest peak to the right of left_peak_i
+                if left_peak_x is not None:
+                    li = int(round(left_peak_x))
+                    rights = peaks_full[peaks_full > li]
+                    if len(rights) > 0:
+                        ri = int(rights[np.argmin(rights - li)])
+                        right_peak_x = self._parabolic_subpixel(projx_s, ri)
+                        x_peak_distance = float(right_peak_x - left_peak_x)
+                        if not self._is_outlier(x_peak_distance):
+                            self._update_history(x_peak_distance)
+
+        focus_value = left_peak_x  # <- ONLY LEFT DOT
 
         return {
             "t": ts,
             "focus": focus_value,
-            "left_peak_x": left_peak,
-            "right_peak_x": right_peak,
-            "x_peak_distance": x_peak_distance,
+
+            "left_peak_x": left_peak_x,
+            "left_peak_i": left_peak_i,
+            "left_peak_height_mad": left_peak_height_mad,
+            "left_peak_prom_mad": left_peak_prom_mad,
+
+            "right_peak_x": right_peak_x,            # optional (reporting only)
+            "x_peak_distance": x_peak_distance,      # optional (reporting only)
+
+            "roi_left": (xmin, xmax),
+            "roi_source": roi_source,
+            "used_fallback_argmax": used_fallback_argmax,
+
             "proj_x": projx_s.astype(float),
             "avg_peak_distance": self._get_average_distance(),
             "peak_history_length": len(self.peak_distances),
             "compute_ms": (time.time() - t0) * 1000.0,
         }
-
-
 
 
 

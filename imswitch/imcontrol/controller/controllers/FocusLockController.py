@@ -619,7 +619,10 @@ class FocusLockController(ImConWidgetController):
             # Step 2: Crop image using consistent parameters from _focus_params
             crop_size = self._focus_params.crop_size
             crop_center = self._focus_params.crop_center
-            
+            if crop_size is None:
+                crop_size = min(im.shape)  # use smallest dimension
+            if crop_center is None:
+                crop_center = (im.shape[0] // 2, im.shape[1] // 2)
             try:
                 import NanoImagingPack as nip
                 cropped_im = nip.extract(
@@ -1082,7 +1085,8 @@ class FocusLockController(ImConWidgetController):
     def performOneStepAutofocus(self, target_focus_setpoint: Optional[float] = None,
                                 move_to_focus: bool = True,
                                 max_attempts: int = 3,
-                                threshold_um: float = 0.5) -> Dict[str, Any]:
+                                threshold_um: float = 0.5,
+                                in_background: bool=True) -> Dict[str, Any]:
         """Perform one-shot hardware-based autofocus using calibration data.
 
         This is designed for wellplate scanning where we need fast, accurate focusing
@@ -1119,6 +1123,24 @@ class FocusLockController(ImConWidgetController):
             - num_attempts: int - number of iterations performed
             - final_error_um: float - final positioning error
         """
+        if in_background:
+            import threading
+            mOneStepAutofocusThread = threading.Thread(target=self.performOneStepAutofocusInThread, args=(target_focus_setpoint,
+                                                                                    move_to_focus,
+                                                                                    max_attempts,
+                                                                                    threshold_um))
+            mOneStepAutofocusThread.start()
+            return {"status": "Autofocus started in background thread."}    
+        else:
+            return self.performOneStepAutofocusInThread(target_focus_setpoint,
+                                                        move_to_focus,
+                                                        max_attempts,
+                                                        threshold_um)
+    
+    def performOneStepAutofocusInThread(self, target_focus_setpoint: Optional[float] = None,
+                                move_to_focus: bool = True,
+                                max_attempts: int = 3,
+                                threshold_um: float = 0.5) -> Dict[str, Any]:        
         if not self._current_calibration:
             self._logger.error("One-step autofocus requires calibration. Run calibration first.")
             return {
@@ -1133,7 +1155,7 @@ class FocusLockController(ImConWidgetController):
                 "final_error_um": None
             }
 
-        initial_z_position = self.currentZPosition
+        performOneStepAutofocus = self.currentZPosition
         # Use provided setpoint or fall back to stored setpoint
         if target_focus_setpoint is None:
             target_focus_setpoint = self._pi_params.set_point
@@ -1312,6 +1334,14 @@ class FocusLockController(ImConWidgetController):
             "settle_time": settle_time,
         }
 
+    @APIExport(runOnUIThread=True)
+    def stopFocusCalibration(self) -> Dict[str, Any]:
+        """Stop ongoing focus calibration."""
+        if hasattr(self, '_focusCalibThread') and self._focusCalibThread.isRunning():
+            self._focusCalibThread.stopThread()
+            return {"message": "Calibration stopped"}
+        else:
+            return {"message": "No calibration running"}
 
 # =========================
 # Calibration thread

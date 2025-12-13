@@ -57,6 +57,8 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_step_size = kwargs.get('autofocus_step_size', 1)
         autofocus_illumination_channel = kwargs.get('autofocus_illumination_channel', '')
         autofocus_mode = kwargs.get('autofocus_mode', 'software')  # 'hardware' or 'software'
+        autofocus_max_attempts = kwargs.get('autofocus_max_attempts', 2)
+        autofocus_target_focus_setpoint = kwargs.get('autofocus_target_focus_setpoint', None)
         t_period = kwargs.get('t_period', 1)
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
@@ -79,7 +81,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 z_positions, illumination_sources, illumination_intensities,
                 exposures, gains, t, is_auto_focus, autofocus_min, 
                 autofocus_max, autofocus_step_size, autofocus_illumination_channel, 
-                autofocus_mode, n_times
+                autofocus_mode, autofocus_max_attempts, autofocus_target_focus_setpoint, n_times
             )
         
         # Add finalization steps
@@ -236,6 +238,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   autofocus_step_size: float,
                                   autofocus_illumination_channel: str,
                                   autofocus_mode: str,
+                                    autofocus_max_attempts: int,
+                                    autofocus_target_focus_setpoint: float,
                                   n_times: int) -> int:
         """
         Create workflow steps for a single tile.
@@ -257,6 +261,9 @@ class ExperimentNormalMode(ExperimentModeBase):
             autofocus_step_size: Autofocus step size
             autofocus_illumination_channel: Selected illumination channel for autofocus
             autofocus_mode: Autofocus mode ('hardware' or 'software')
+            autofocus_max_attempts,
+            autofocus_target_focus_setpoint,
+                   
             
         Returns:
             Updated step ID
@@ -404,6 +411,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                         "maxZ": autofocus_max, 
                         "stepSize": autofocus_step_size, 
                         "illuminationChannel": autofocus_illumination_channel,
+                        "max_attempts": autofocus_max_attempts,
+                        "target_focus_setpoint": autofocus_target_focus_setpoint,
                         "mode": autofocus_mode
                     },
                 ))

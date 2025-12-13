@@ -799,7 +799,7 @@ class PeakMetric(FocusMetricBase):
             "compute_ms": (time.time() - t0) * 1000.0,
         }
 
-
+'''
 
 class CenterOfMassFocusMetric(FocusMetricBase):
     """
@@ -923,7 +923,7 @@ class CenterOfMassFocusMetric(FocusMetricBase):
             logger.error(f"Center of mass focus computation failed: {e}")
             return {"t": timestamp, "focus": self.config.max_focus_value, "error": str(e)}
 
-'''
+
 class FocusMetricFactory:
     """Factory for creating focus metric instances."""
 

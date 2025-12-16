@@ -419,7 +419,7 @@ class AutofocusController(ImConWidgetController):
             
             # Calculate scan positions
             Nz = int(max(5, np.floor((abs(rangez)) / max(1e-6, abs(resolutionz))) + 1))
-            relative_positions = np.linspace(-abs(rangez//2), abs(rangez//2), Nz).astype(float)
+            relative_positions = np.linspace(-abs(rangez/2), abs(rangez/2), Nz).astype(float)
             absolute_positions = relative_positions + center_position
             
             # Move to start position

@@ -131,6 +131,8 @@ class ParameterValue(BaseModel):
     autoFocusStepSize: float
     autoFocusIlluminationChannel: str = "" # Selected illumination channel for autofocus
     autoFocusMode: str = "software" # "software" (Z-sweep) or "hardware" (one-shot using FocusLock)
+    autofocus_target_focus_setpoint: float = None
+    autofocus_max_attempts: int = 2
     zStack: bool
     zStackMin: float
     zStackMax: float
@@ -229,8 +231,8 @@ class ExperimentController(ImConWidgetController):
         self.workflow_manager = WorkflowsManager()
 
         # set default values
-        self.SPEED_Y_default = 25000
-        self.SPEED_X_default = 25000
+        self.SPEED_Y_default = 20000
+        self.SPEED_X_default = 20000
         self.SPEED_Z_default = 10000
         self.ACCELERATION = 1000000
 
@@ -682,7 +684,9 @@ class ExperimentController(ImConWidgetController):
         autofocusStepSize = p.autoFocusStepSize
         autofocusIlluminationChannel = getattr(p, 'autoFocusIlluminationChannel', "") or ""
         autofocusMode = getattr(p, 'autoFocusMode', 'software')  # Default to software if not specified
-
+        autofocus_target_focus_setpoint = getattr(p, 'autofocus_target_focus_setpoint', None)
+        autofocus_max_attempts = getattr(p, 'autofocus_max_attempts', 2)
+        
         # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
         if type(gains) is not List and type(gains) is not list: gains = [gains]
         if type(exposures) is not List and type(exposures) is not list: exposures = [exposures]
@@ -785,6 +789,8 @@ class ExperimentController(ImConWidgetController):
                     autofocus_step_size=autofocusStepSize,
                     autofocus_illumination_channel=autofocusIlluminationChannel,
                     autofocus_mode=autofocusMode,  # Pass autofocus mode
+                    autofocus_target_focus_setpoint=autofocus_target_focus_setpoint,
+                    autofocus_max_attempts=autofocus_max_attempts,
                     t_period=tPeriod,
                     isRGB=self.mDetector._isRGB
                 )
@@ -872,7 +878,7 @@ class ExperimentController(ImConWidgetController):
         self._logger.debug("Dummy main function called")
         return True
 
-    def autofocus_hardware(self, illuminationChannel: str = "") -> Optional[float]:
+    def autofocus_hardware(self, target_focus_setpoint: Optional[float] = None, max_attempts=2, illuminationChannel: str = "") -> Optional[float]:
         """Perform hardware-based one-shot autofocus using FocusLockController.
 
         This is significantly faster than software autofocus because it:
@@ -914,11 +920,12 @@ class ExperimentController(ImConWidgetController):
         # Perform one-shot autofocus
         try:
             result = focusLockController.performOneStepAutofocus(
+                target_focus_setpoint=target_focus_setpoint,
                 move_to_focus=True,
-                max_attempts=3,
-                threshold_um=0.5
+                max_attempts=max_attempts,
+                threshold_um=0.5, 
+                in_background=False
             )
-
             if result.get('success', False):
                 target_z = result.get('target_z_position')
                 self._logger.info(
@@ -937,7 +944,9 @@ class ExperimentController(ImConWidgetController):
             return None
 
     def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0,
-                  illuminationChannel: str="", mode: str="software"):
+                  illuminationChannel: str="", mode: str="software", 
+                  max_attempts: int=2, 
+                  target_focus_setpoint: Optional[float] = None) -> Optional[float]:
         """Perform autofocus using either hardware or software method.
 
         Args:
@@ -957,7 +966,9 @@ class ExperimentController(ImConWidgetController):
 
         # Route to appropriate autofocus method
         if mode == "hardware":
-            return self.autofocus_hardware(illuminationChannel=illuminationChannel)
+            return self.autofocus_hardware(target_focus_setpoint=target_focus_setpoint, 
+                                           max_attempts=max_attempts,
+                                           illuminationChannel=illuminationChannel)
         else:
             return self.autofocus_software(
                 minZ=minZ,
@@ -1205,7 +1216,7 @@ class ExperimentController(ImConWidgetController):
 
     def move_stage_xy(self, posX: float = None, posY: float = None, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}
-        self._logger.debug(f"Moving stage to X={posX}, Y={posY}")
+        self._logger.info(f"Moving stage to X={posX}, Y={posY}")
         #if posY and posX is None:
         self.mStage.move(value=(posX, posY), speed=(self.SPEED_X_default, self.SPEED_Y_default), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
@@ -1213,7 +1224,7 @@ class ExperimentController(ImConWidgetController):
         return (posX, posY)
 
     def move_stage_z(self, posZ: float, relative: bool = False, maxSpeedZ=5000):
-        self._logger.debug(f"Moving stage to Z={posZ}")
+        self._logger.info(f"Moving stage to Z={posZ}")
         self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, maxSpeedZ)), axis="Z", is_absolute=not relative, is_blocking=True)
         newPosition = self.mStage.getPosition()
         self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])

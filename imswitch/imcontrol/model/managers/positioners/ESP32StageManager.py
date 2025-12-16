@@ -69,7 +69,7 @@ class ESP32StageManager(PositionerManager):
         self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
 
         # move z before homing? 
-        self._safeDistanceZHoming = positionerInfo.managerProperties.get('safeDistanceZHoming',0)
+        self._safePositionZHoming = positionerInfo.managerProperties.get('safePositionZHoming',None)
         
         self.stageOffsetPositions = {}
         self.stageOffsetPositions["X"] = positionerInfo.stageOffsets.get('stageOffsetPositionX',0)
@@ -206,6 +206,10 @@ class ESP32StageManager(PositionerManager):
             self._motor.register_callback(0,callbackfct=self.setPositionFromDevice)
         except Exception as e:
             self.__logger.error(f"Could not register callback: {e}")
+
+        # do frame homing if enabled 
+        if positionerInfo.managerProperties.get('frameHomeOnStart', 0):
+            self.frameHomingProcedure(False)
 
     def setHomeParametersAxis(self, axis, speed, direction, endstoppolarity, endposrelease, timeout=None):
         if axis == "X":
@@ -462,8 +466,9 @@ class ESP32StageManager(PositionerManager):
             
     def home_x(self, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         # move z prior to homing?
-        if self._safeDistanceZHoming !=0:
-            self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
+        self._zPositionPriorHoming = self.getPosition()["Z"]
+        if self._safePositionZHoming is not None:
+            self.move(value=self._zPositionPriorHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
         if abs(self.homeStepsX)>0:
             self.move(value=self.homeStepsX, speed=self.homeSpeedX, axis="X", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsX)*np.abs(self.homeEndposReleaseX), speed=self.homeSpeedX, axis="X", is_absolute=False, is_blocking=True)
@@ -474,11 +479,12 @@ class ESP32StageManager(PositionerManager):
         else:
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
-        self.setPosition(axis="X", value=0)
+        # self.setPosition(axis="X", value=0)  # TODO: Not necessary as we get the position asynchronusly?
 
     def home_y(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
-        if self._safeDistanceZHoming !=0:
-            self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
+        self._zPositionPriorHoming = self.getPosition()["Z"]
+        if self._safePositionZHoming is not None:
+            self.move(value=self._zPositionPriorHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
         # TODO: Wehave to go back after we are done with the homing        
         if abs(self.homeStepsY)>0:
             self.move(value=self.homeStepsY, speed=self.homeSpeedY, axis="Y", is_absolute=False, is_blocking=True)
@@ -490,7 +496,7 @@ class ESP32StageManager(PositionerManager):
         else:
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
-        self.setPosition(axis="Y", value=0)
+        # self.setPosition(axis="Y", value=0)  # TODO: Not necessary as we get the position asynchronusly?
 
     def home_z(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         if abs(self.homeStepsZ)>0:
@@ -503,7 +509,7 @@ class ESP32StageManager(PositionerManager):
         else:
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
-        self.setPosition(axis="Z", value=0)
+        # self.setPosition(axis="Z", value=0) # TODO: Not necessary as we get the position asynchronusly?
         self._zPositionPriorHoming = 0
 
     def home_a(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
@@ -517,7 +523,7 @@ class ESP32StageManager(PositionerManager):
         else:
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
-        self.setPosition(axis="A", value=0)
+        # self.setPosition(axis="A", value=0) # TODO: Not necessary as we get the position asynchronusly?
 
     def home_xyz(self):
         if self.homeXenabled and self.homeYenabled and self.homeZenabled:
@@ -538,8 +544,9 @@ class ESP32StageManager(PositionerManager):
 
     def setStageOffsetAxis(self, knownPosition=0, currentPosition=None, knownOffset=None, axis="X"):
         """
-        Sets the stage offset for calibration purposes.
+        Sets the stage offset for calibration purposes (in-memory only).
         knownPosition and currentPosition are in physical (user) coordinates.
+        Persistence is handled by the controller.
         """
         if currentPosition is None:
             currentPosition = self._position[axis]
@@ -555,7 +562,6 @@ class ESP32StageManager(PositionerManager):
         
         self.stageOffsetPositions[axis] = offset
         self.__logger.info(f"Set offset for {axis} axis to {offset} µm.")
-        self.saveStageOffset(offsetValue=offset, axis=axis)
 
     def resetStageOffsetAxis(self, axis="X"):
         """
@@ -607,6 +613,51 @@ class ESP32StageManager(PositionerManager):
     def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):
         value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
+        
+
+    def frameHomingProcedure(self, is_blocking=False):
+        '''
+        1. Store Z-position
+        2. Home Z 
+        3. Move Z to Safe position 
+        4. Home X 
+        5. Home Y 
+        6. Move Z to previous position (safeposition + previous position
+        7. Ready 
+        
+        Optionally: in a thread
+        '''
+        
+        def homingThreadFunction(self):
+            # Step 1: Store Z-position
+            self._zPositionPriorHoming = self.getPosition()["Z"]
+            # STep 1.5: Move to Save XY position
+            self._safePositionXHoming = 10000
+            self._safePositionYHoming = 10000
+            self.move(value=(self._safePositionXHoming, self._safePositionYHoming), speed=max(self.homeSpeedX, self.homeSpeedY), axis="XY", is_absolute=True, is_blocking=True)
+            # Step 2: Home Z
+            self.home_z(isBlocking=True)
+            # Step 3: Move Z to Safe position # Assuming Z will be 0 now!
+            if self._safePositionZHoming !=0:
+                self.move(value=self._safePositionZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
+            # Step 4: Home X
+            self.home_x(isBlocking=True)
+            self.move(value=self._safePositionXHoming, speed=self.homeSpeedX, axis="X", is_absolute=True, is_blocking=False) 
+            # Step 5: Home Y
+            self.home_y(isBlocking=True)
+            self.move(value=self._safePositionYHoming, speed=self.homeSpeedY, axis="Y", is_absolute=True, is_blocking=False)
+            # Step 6: Move Z to previous position (safeposition + previous position
+            self.move(value=self._zPositionPriorHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
+            # Step 7: Ready 
+            self.__logger.info("Frame homing procedure completed.")
+        
+        if is_blocking:
+            homingThreadFunction(self)
+        else:
+            import threading
+            homingThread = threading.Thread(target=homingThreadFunction, args=(self,))
+            homingThread.start()
+        
         
 
 # Copyright (C) 2020, 2021 The imswitch developers

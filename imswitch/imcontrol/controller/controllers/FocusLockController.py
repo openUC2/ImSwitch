@@ -1512,8 +1512,9 @@ class FocusCalibThread(object):
                 plt.legend()
                 plt.savefig("calibration_plot.png")
                 plt.close()
-            except Exception:
-                pass
+            except Exception as e:
+                # Log the exception to avoid silent failure during calibration plot saving
+                self._controller._logger.warning(f"Failed to save calibration plot: {e}", exc_info=True)
 
             self._controller.sigCalibrationProgress.emit({
                 "event": "calibration_completed",

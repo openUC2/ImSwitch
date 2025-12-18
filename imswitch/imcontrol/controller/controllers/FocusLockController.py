@@ -275,7 +275,7 @@ class FocusLockController(ImConWidgetController):
         self.aboutToLock = False
 
         # Thread control
-        self.__isPollingFramesActive = False
+        self._isPollingFramesActive = False
         self.pollingFrameUpdatePeriode = 1.0 / self._focus_params.update_freq
 
         # About-to-lock logic
@@ -312,20 +312,21 @@ class FocusLockController(ImConWidgetController):
         # PID instance using extracted module (kept as self.pi for API stability)
         self.pi: Optional[PIDController] = None
 
+        # Satrt Camera acquisition
+        try:
+            self._master.detectorsManager[self.camera].startAcquisition()
+        except Exception as e:
+            self._logger.error(f"Failed to start acquisition on camera '{self.camera}': {e}")
+
 
     def __del__(self):
         try:
-            self.__isPollingFramesActive = False
+            self._isPollingFramesActive = False
         except Exception:
             pass
         try:
             if hasattr(self, "_master") and hasattr(self, "camera"):
                 self._master.detectorsManager[self.camera].stopAcquisition()
-        except Exception:
-            pass
-        try:
-            if hasattr(self, "ESP32Camera"):
-                self.ESP32Camera.stopStreaming()
         except Exception:
             pass
         if hasattr(super(), "__del__"):
@@ -335,8 +336,8 @@ class FocusLockController(ImConWidgetController):
                 pass
 
     def updateThread(self):
-        if not self.__isPollingFramesActive:
-            self.__isPollingFramesActive = True
+        if not self._isPollingFramesActive:
+            self._isPollingFramesActive = True
             self._pollFramesThread = threading.Thread(target=self._pollFrames, name="FocusLockPollFramesThread")
             self._pollFramesThread.daemon = True
             self._pollFramesThread.start()
@@ -435,11 +436,6 @@ class FocusLockController(ImConWidgetController):
         self._focus_metric = FocusMetricFactory.create(self._focus_params.focus_metric, focus_config)
 
         self.updateThread()
-        # Camera acquisition
-        try:
-            self._master.detectorsManager[self.camera].startAcquisition()
-        except Exception as e:
-            self._logger.error(f"Failed to start acquisition on camera '{self.camera}': {e}")
 
         try:
             if not self._state.is_measuring:
@@ -454,12 +450,14 @@ class FocusLockController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def stopFocusMeasurement(self) -> bool:
+        '''
         # Camera acquisition
         try:
             self._master.detectorsManager[self.camera].stopAcquisition()
         except Exception as e:
             self._logger.error(f"Failed to start acquisition on camera '{self.camera}': {e}")
-
+        '''
+        self._isPollingFramesActive = False
         try:
             if self._state.is_measuring:
                 self._state.is_measuring = False
@@ -705,7 +703,7 @@ class FocusLockController(ImConWidgetController):
         # Store a history of the last values and filter out outliers
         self._focus_metric.reset_history()
         try:
-            while self.__isPollingFramesActive:
+            while self._isPollingFramesActive:
                 if (time.time() - tLast) < self.pollingFrameUpdatePeriode:
                     time.sleep(0.001)
                     continue
@@ -797,7 +795,7 @@ class FocusLockController(ImConWidgetController):
                     self.updateSetPointData()
         except Exception as e:
             self._logger.error(f"Error in frame polling thread: {e}")
-            self.__isPollingFramesActive = False
+            self._isPollingFramesActive = False
 
     @APIExport(runOnUIThread=True)
     def setParamsAstigmatism(self, gaussian_sigma: float, background_threshold: float,
@@ -1362,7 +1360,8 @@ class FocusCalibThread(object):
         self.calibrationResult = None
         self._isRunning = False
         self.initial_z_position = initial_z_position
-
+        self.is_debug = False
+        
     def isRunning(self) -> bool:
         return self._isRunning
 
@@ -1381,7 +1380,7 @@ class FocusCalibThread(object):
             self.signalData = []
             self.positionData = []
             self._isRunning = True
-
+            
             if self.initial_z_position is not None:
                 try:
                     self._controller._master.positionersManager[self._controller.positioner].move(
@@ -1496,25 +1495,25 @@ class FocusCalibThread(object):
             self._controller._logger.info(
                 f"Calibration completed: sensitivity={sensitivity_nm_per_unit:.1f} nm/unit, R²={r_squared:.4f}"
             )
-
-            # Save calibration plot if matplotlib available
-            try:
-                import matplotlib
-                matplotlib.use('Agg')
-                import matplotlib.pyplot as plt
-                y_fit = np.polyval(self.poly, self.positionData)
-                plt.figure()
-                plt.plot(self.positionData, self.signalData, "o", label="Data")
-                plt.plot(self.positionData, y_fit, "-", label="Fit")
-                plt.xlabel("Z Position (µm)")
-                plt.ylabel("Focus Value")
-                plt.title("Focus Calibration with factor: {:.1f} nm/unit".format(sensitivity_nm_per_unit))
-                plt.legend()
-                plt.savefig("calibration_plot.png")
-                plt.close()
-            except Exception as e:
-                # Log the exception to avoid silent failure during calibration plot saving
-                self._controller._logger.warning(f"Failed to save calibration plot: {e}", exc_info=True)
+            if self.is_debug:
+                # Save calibration plot if matplotlib available
+                try:
+                    import matplotlib
+                    matplotlib.use('Agg')
+                    import matplotlib.pyplot as plt
+                    y_fit = np.polyval(self.poly, self.positionData)
+                    plt.figure()
+                    plt.plot(self.positionData, self.signalData, "o", label="Data")
+                    plt.plot(self.positionData, y_fit, "-", label="Fit")
+                    plt.xlabel("Z Position (µm)")
+                    plt.ylabel("Focus Value")
+                    plt.title("Focus Calibration with factor: {:.1f} nm/unit".format(sensitivity_nm_per_unit))
+                    plt.legend()
+                    plt.savefig("calibration_plot.png")
+                    plt.close()
+                except Exception as e:
+                    # Log the exception to avoid silent failure during calibration plot saving
+                    self._controller._logger.warning(f"Failed to save calibration plot: {e}", exc_info=True)
 
             self._controller.sigCalibrationProgress.emit({
                 "event": "calibration_completed",

@@ -55,6 +55,11 @@ class ImSwitchConfig:
     # Version info
     version: str = "2.1.41"
     
+    # Logging settings
+    log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+    log_to_file: bool = True
+    log_folder: Optional[str] = None  # If None, uses config_folder/logs
+    
     def update_from_args(self, **kwargs) -> None:
         """Update configuration from keyword arguments, ignoring None values."""
         for key, value in kwargs.items():

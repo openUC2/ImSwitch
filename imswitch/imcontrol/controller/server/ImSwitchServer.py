@@ -34,6 +34,7 @@ import socket
 import os
 import threading
 import asyncio
+from datetime import datetime
 from fastapi.openapi.docs import (
     get_redoc_html,
     get_swagger_ui_html,
@@ -628,7 +629,7 @@ class ImSwitchServer(Worker):
                 file_stat = os.stat(file_path)
                 log_files.append({
                     'filename': filename,
-                    'size': file_stat.st_size,
+                    'size': str(file_stat.st_size),
                     'modified': datetime.fromtimestamp(file_stat.st_mtime).isoformat(),
                     'path': file_path
                 })

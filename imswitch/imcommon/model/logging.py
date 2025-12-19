@@ -136,15 +136,21 @@ class SignalEmittingHandler(logging.Handler):
         
         try:
             log_entry = self.format(record)
-            # Emit signal with log data
-            self._signal.emit({
-                'timestamp': record.created,
-                'level': record.levelname,
-                'name': record.name,
-                'message': record.getMessage(),
-                'formatted': log_entry
-            })
+            # Emit signal with log data as individual parameters
+            # This avoids issues with psygnal expecting specific signatures
+            self._signal.emit(
+                record.created,
+                record.levelname,
+                record.name,
+                record.getMessage(),
+                log_entry
+            )
+        except (TypeError, AttributeError, RuntimeError) as e:
+            # Silently ignore signal emission errors to avoid breaking logging
+            # These typically occur when the signal is not properly configured
+            pass
         except Exception:
+            # For unexpected exceptions, use standard error handling
             self.handleError(record)
 
 

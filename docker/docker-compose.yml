@@ -1,31 +1,36 @@
 services:
   imswitch-docker-noqt:
-    image: ghcr.io/openuc2/imswitch-noqt:latest
+    image: ghcr.io/openuc2/imswitch-noqt:sha-540a0a6
     privileged: true
     ports:
-      - "3000:3000"
-      - "8002:8002"
-      - "8001:8001"
-      - "8888:8888"
-      - "2222:22"
+      - "8001:8001" # frontend, HTTP API, WebSockets API
+      - "8888:8888" # Jupyter
     volumes:
-      - /Users/bene:/config
-      - /Users/bene:/dataset
-      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
       - /etc/machine-id:/etc/machine-id:ro
+      - /home/pi/ImSwitchConfig:/home/pi/ImSwitchConfig
+      - /home/pi/Datasets:/home/pi/Datasets
+      - /media:/media
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+      - /run/udev:/run/udev:ro
+      - /dev/dma_heap:/dev/dma_heap
+
     environment:
       - HEADLESS=1
       - HTTP_PORT=8001
-      - HTTP_PORT=8005
-      #- CONFIG_FILE=example_virtual_microscope.json
+      - CONFIG_PATH=/home/pi/ImSwitchConfig
       - UPDATE_GIT=0
       - UPDATE_CONFIG=0
-      - DATA_PATH=/dataset
-      - CONFIG_PATH=/config
-      - SCAN_EXT_DATA_FOLDER=1
-      - EXT_DRIVE_MOUNT=/media
-      - SSL=1
-      - scan-ext-drive-mount=false
-      - WIFI_MODE=host
-
+      - DATA_PATH=/home/pi/Datasets
+      - SCAN_EXT_DATA_PATH=1
+      - EXT_DATA_PATH=/media
+      - SSL=0
     restart: always
+
+  volume-setup:
+    # This service ensures that root isn't the owner of /home/pi/Datasets, since Docker auto-creates
+    # that path if it didn't exist before for the bind mount, and Docker creates such directories
+    # with root ownership.
+    image: docker.io/library/alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412
+    volumes:
+      - /home/pi/Datasets:/home/pi/Datasets
+    command: 'sh -c "chown -R 1000:1000 /home/pi/Datasets; sleep 60"'

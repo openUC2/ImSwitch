@@ -404,6 +404,72 @@ def test_detector_settings_endpoints(api_server):
         print(f"? Settings endpoints validation failed: {e}")
 
 
+def test_camera_status_endpoint(api_server):
+    """Test the new getCameraStatus endpoint."""
+    # Try to discover detectors first
+    try:
+        response = api_server.get("/SettingsController/getDetectorNames")
+        assert response.status_code == 200
+        detector_names = response.json()
+        assert len(detector_names) > 0
+        first_detector = detector_names[0]
+        print(f"✓ Found detector: {first_detector}")
+    except:
+        print("? Could not discover detectors, skipping camera status test")
+        return
+    
+    # Test getCameraStatus endpoint without detector name (should use current detector)
+    try:
+        response = api_server.get("/SettingsController/getCameraStatus")
+        if response.status_code == 200:
+            status = response.json()
+            print(f"✓ Camera status retrieved successfully (current detector)")
+            
+            # Verify expected fields are present
+            expected_fields = [
+                'model', 'isMock', 'isConnected', 'isRGB',
+                'sensorWidth', 'sensorHeight', 'currentWidth', 'currentHeight',
+                'pixelSizeUm', 'binning', 'supportedBinnings', 'frameStart',
+                'croppable', 'forAcquisition', 'parameters'
+            ]
+            
+            missing_fields = [field for field in expected_fields if field not in status]
+            if missing_fields:
+                print(f"? Missing fields in camera status: {missing_fields}")
+            else:
+                print(f"✓ All expected fields present in camera status")
+            
+            # Print some key information
+            print(f"  Model: {status.get('model', 'N/A')}")
+            print(f"  Sensor: {status.get('sensorWidth', 'N/A')}x{status.get('sensorHeight', 'N/A')} pixels")
+            print(f"  Pixel size: {status.get('pixelSizeUm', 'N/A')} µm")
+            print(f"  Is RGB: {status.get('isRGB', 'N/A')}")
+            print(f"  Is Mock: {status.get('isMock', 'N/A')}")
+            print(f"  Is Connected: {status.get('isConnected', 'N/A')}")
+            print(f"  Camera Type: {status.get('cameraType', 'N/A')}")
+            
+            # Print parameters if available
+            if 'parameters' in status:
+                print(f"  Parameters ({len(status['parameters'])} total):")
+                for param_name, param_info in list(status['parameters'].items())[:5]:
+                    print(f"    - {param_name}: {param_info.get('value')} {param_info.get('units', '')}")
+        else:
+            print(f"? Camera status endpoint returned status {response.status_code}")
+    except Exception as e:
+        print(f"? Camera status test (current detector) failed: {e}")
+    
+    # Test getCameraStatus endpoint with specific detector name
+    try:
+        response = api_server.get(f"/SettingsController/getCameraStatus?detectorName={first_detector}")
+        if response.status_code == 200:
+            status = response.json()
+            print(f"✓ Camera status retrieved successfully for {first_detector}")
+        else:
+            print(f"? Camera status for {first_detector} returned status {response.status_code}")
+    except Exception as e:
+        print(f"? Camera status test for {first_detector} failed: {e}")
+
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

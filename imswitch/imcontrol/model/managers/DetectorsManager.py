@@ -1,6 +1,7 @@
 from time import sleep
 import threading
 import numpy as np
+from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Mutex, Signal, SignalInterface, Thread, Timer, Worker
 from .MultiManager import MultiManager
 
@@ -25,16 +26,23 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._activeAcqLVHandles = []
         self._activeAcqsMutex = Mutex()
 
-        self._currentDetectorName = None
+        '''
         # Default parameters for the streaming  # TODO: Not sure if this is the best place to have them - maybe a dedicated dataclass?
         self.detectorParams["compressionlevel"]=80
         self.detectorParams["stream_compression_algorithm"]="lz4"
         self.detectorParams["stream_subsampling_factor"]=4  # 8 or 16
         self.detectorParams["stream_throttle_ms"]=50  # 1,2,4,8
+        '''
+        if IS_HEADLESS:
+            # get first detector name from dictionary
+            detectorName, detectorInfo = next(iter(detectorInfos.items()))
+            self._currentDetectorName = detectorName
+            return # In headless mode, we don't start the LV worker automatically - streaming is managed by LiveViewController
         for detectorName, detectorInfo in detectorInfos.items():
+            self._currentDetectorName = None
             if not self._subManagers[detectorName].forAcquisition:
                 continue
-            # Connect signals
+            # Connect signals - this is only used to trigger live-view # TODO: We should think about a better way to handle this as we also have the sigImageUpdated and sigUpdateImage - basically whenever we have a sigImageUpdated, the sigUpdateImage is triggered, through the MasterController - why? I think this has to go that way as
             self._subManagers[detectorName].sigImageUpdated.connect(
                 lambda image, init, scale, detectorName=detectorName: self.sigImageUpdated.emit(
                     detectorName, image, init, scale, detectorName==self._currentDetectorName, self.detectorParams
@@ -58,11 +66,15 @@ class DetectorsManager(MultiManager, SignalInterface):
                 self._currentDetectorName = detectorName
 
         # A timer will collect the new frame and update it through the communication channel
+        # In headless mode, we don't start the timer automatically - streaming is managed by LiveViewController
         self._lvWorker = LVWorker(self, updatePeriod)
         self._thread = Thread()
         self._lvWorker.moveToThread(self._thread)
         self._thread.started.connect(self._lvWorker.run)
         self._thread.finished.connect(self._lvWorker.stop)
+        
+        # Note: In headless mode, LVWorker is only started when live view acquisition is explicitly requested
+        # This avoids unnecessary resource consumption. The LiveViewController handles explicit streaming.
 
     def updateGlobalDetectorParams(self, params):
         # we expect a dictionary with the parameters
@@ -137,7 +149,9 @@ class DetectorsManager(MultiManager, SignalInterface):
         if enableAcq:
             self.execOnAll(lambda c: c.startAcquisition(), condition=lambda c: c.forAcquisition)
             self.sigAcquisitionStarted.emit()
-        if enableLV:
+        if enableLV and not IS_HEADLESS:
+            # In headless mode, don't start the LVWorker timer automatically
+            # Streaming is managed explicitly by LiveViewController
             sleep(0.3)
             self._thread.start()
 
@@ -167,13 +181,13 @@ class DetectorsManager(MultiManager, SignalInterface):
             self._activeAcqsMutex.unlock()
 
         # Do actual disabling
-        self._thread.finished.emit()
         if disableLV:
             self._thread.quit()
             self._thread.wait()
         if disableAcq:
             self.execOnAll(lambda c: c.stopAcquisition(), condition=lambda c: c.forAcquisition)
             self.sigAcquisitionStopped.emit()
+        self._thread.finished.emit()
 
     def getAcquistionHandles(self):
         """ Returns the list of active acquisition handles. """
@@ -201,6 +215,15 @@ class LVWorker(Worker):
 
     def run(self):
         print("start lvworker")
+        # for all available detectors with the "forAcquisition" flag start polling frames 
+        for detectorName in self._detectorsManager.getAllDeviceNames():
+            if self._detectorsManager[detectorName]._DetectorManager__forAcquisition:
+                # initialize the latest frame acquisition
+                pass
+        # TODO: This is a very complicated way of getting franes periodically:
+        # For all forAcquisiton detectors we we connect their updateLatestFrame function to a timer that triggers every updatePeriod ms
+        # via a signal; This signal is then consumed by the detector which emits the frame via sigImageUpdated which is then caught by the MasterController and sent to the client
+        # then we send this out via the socket connection - does not seem very efficient...
         self._detectorsManager.execOnAll(lambda c: c.updateLatestFrame(False),
                                          condition=lambda c: c.forAcquisition)
         self._vtimer = Timer()
@@ -217,6 +240,19 @@ class LVWorker(Worker):
 
     def setUpdatePeriod(self, updatePeriod):
         self._updatePeriod = updatePeriod
+        # Restart timer with new period
+        if self._vtimer is not None:
+            self._vtimer.stop()
+            self._vtimer.start(self._updatePeriod)
+        print("start lvworker")
+        self._detectorsManager.execOnAll(lambda c: c.updateLatestFrame(False),
+                                         condition=lambda c: c.forAcquisition)
+        self._vtimer = Timer()
+        self._vtimer.timeout.connect(
+            lambda: self._detectorsManager.execOnAll(lambda c: c.updateLatestFrame(True),
+                                                     condition=lambda c: c.forAcquisition)
+        )
+        self._vtimer.start(self._updatePeriod)
 
 class NoDetectorsError(RuntimeError):
     """ Error raised when a function related to the current detector is called

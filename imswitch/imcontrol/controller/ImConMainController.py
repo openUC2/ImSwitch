@@ -4,25 +4,30 @@ import h5py
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.controller import MainController, PickDatasetsController
 from imswitch.imcommon.model import (
-    ostools, initLogger, generateAPI, generateUI, generateShortcuts, SharedAttributes
+    ostools,
+    initLogger,
+    generateAPI,
+    generateUI,
+    generateShortcuts,
+    SharedAttributes,
 )
-from imswitch.imcommon.framework import Thread
 from .server import ImSwitchServer
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view import guitools
-#from . import controllers
+
+# from . import controllers
 from .CommunicationChannel import CommunicationChannel
 from .MasterController import MasterController
 from .PickSetupController import PickSetupController
 from .basecontrollers import ImConWidgetControllerFactory
 import threading
 import importlib
-import logging
+
 
 class ImConMainController(MainController):
     def __init__(self, options, setupInfo, mainView, moduleCommChannel):
         self.__logger = initLogger(self)
-        self.__logger.debug('Initializing')
+        self.__logger.debug("Initializing")
 
         self.__options = options
         self.__setupInfo = setupInfo
@@ -31,12 +36,16 @@ class ImConMainController(MainController):
 
         # Init communication channel and master controller
         self.__commChannel = CommunicationChannel(self, self.__setupInfo)
-        self.__masterController = MasterController(self.__setupInfo, self.__commChannel,
-                                                   self._moduleCommChannel)
+        self.__masterController = MasterController(
+            self.__setupInfo, self.__commChannel, self._moduleCommChannel
+        )
 
         # List of Controllers for the GUI Widgets
         self.__factory = ImConWidgetControllerFactory(
-            self.__setupInfo, self.__masterController, self.__commChannel, self._moduleCommChannel
+            self.__setupInfo,
+            self.__masterController,
+            self.__commChannel,
+            self._moduleCommChannel,
         )
 
         if not IS_HEADLESS:
@@ -54,74 +63,153 @@ class ImConMainController(MainController):
         self.controllers = {}
 
         for widgetKey, widget in self.__mainView.widgets.items():
-            self.__logger.info(f'Creating controller for widget {widgetKey}')
+            self.__logger.info(f"Creating controller for widget {widgetKey}")
 
-            controller_name = f'{widgetKey}Controller'
-            if widgetKey == 'Scan':
-                controller_name = f'{widgetKey}Controller{self.__setupInfo.scan.scanWidgetType}'
-            if widgetKey == 'ImSwitchServer':
+            controller_name = f"{widgetKey}Controller"
+            if widgetKey == "Scan":
+                controller_name = (
+                    f"{widgetKey}Controller{self.__setupInfo.scan.scanWidgetType}"
+                )
+            if widgetKey == "ImSwitchServer":
                 continue
 
             controller_class = None
             # Try to get controller from controllers module (static import)
-            #if hasattr(controllers, controller_name):
+            # if hasattr(controllers, controller_name):
             #    controller_class = getattr(controllers, controller_name)
             try:
-                module = importlib.import_module(f'imswitch.imcontrol.controller.controllers.{controller_name}')
+                module = importlib.import_module(
+                    f"imswitch.imcontrol.controller.controllers.{controller_name}"
+                )
                 controller_class = getattr(module, controller_name)
-                #module = importlib.import_module(f'.{controller_name}', package='imswitch.imcontrol.controller.controllers')
+                # module = importlib.import_module(f'.{controller_name}', package='imswitch.imcontrol.controller.controllers')
             except Exception as e:
-                self.__logger.warning(f"Could not dynamically import (1) {controller_name}: {e}")
+                self.__logger.warning(
+                    f"Could not dynamically import (1) {controller_name}: {e}"
+                )
                 continue
             if controller_class is not None:
                 try:
-                    self.controllers[widgetKey] = self.__factory.createController(controller_class, widget)
+                    self.controllers[widgetKey] = self.__factory.createController(
+                        controller_class, widget
+                    )
+                    # Register controller in MasterController for inter-controller communication
+                    self.__masterController.registerController(
+                        widgetKey, self.controllers[widgetKey]
+                    )
                 except Exception as e:
-                    self.__logger.error(f"Could not create controller for {controller_name}: {e}")
+                    self.__logger.error(
+                        f"Could not create controller for {controller_name}: {e}"
+                    )
             else:
                 try:
                     mPlugin = self.loadPlugin(widgetKey)
                     if mPlugin is None:
-                        raise ValueError(f'No controller found for widget {widgetKey}')
-                    self.controllers[widgetKey] = self.__factory.createController(mPlugin, widget)
+                        raise ValueError(f"No controller found for widget {widgetKey}")
+                    self.controllers[widgetKey] = self.__factory.createController(
+                        mPlugin, widget
+                    )
+                    # Register controller in MasterController
+                    self.__masterController.registerController(
+                        widgetKey, self.controllers[widgetKey]
+                    )
                 except Exception as e:
                     self.__logger.debug(e)
 
-
-        # Add WiFiController in any way # TODO: Better would be to add this to the widget dict 
-        try: 
-            self.__logger.info(f'Creating controller for widget WiFi')
-            controller_name = "WiFiController"
-            module = importlib.import_module(f'imswitch.imcontrol.controller.controllers.WiFiController')
+        # Add AcceptanceTestController in any case
+        try:
+            self.__logger.info("Creating controller for AcceptanceTest ")
+            controller_name = "AcceptanceTestController"
+            module = importlib.import_module(
+                "imswitch.imcontrol.controller.controllers.AcceptanceTestController"
+            )
             controller_class = getattr(module, controller_name)
             if controller_class is not None:
-                self.controllers["WiFi"] = self.__factory.createController(controller_class, widget)
+                self.controllers["AcceptanceTest"] = self.__factory.createController(
+                    controller_class, None
+                )
+                # Register AcceptanceTestController
+                self.__masterController.registerController(
+                    "AcceptanceTest", self.controllers["AcceptanceTest"]
+                )
         except Exception as e:
-            self.__logger.warning(f"Could not dynamically import {controller_name}: {e}")
+            self.__logger.warning(
+                f"Could not dynamically import {controller_name}: {e}"
+            )
+            
+        # Add LiveViewController in case of IS_HEADLESS in anyway
+        try:
+            if IS_HEADLESS:
+                self.__logger.info("Creating controller for LiveView ")
+                controller_name = "LiveViewController"
+                module = importlib.import_module(
+                    "imswitch.imcontrol.controller.controllers.LiveViewController"
+                )
+                controller_class = getattr(module, controller_name)
+                if controller_class is not None:
+                    self.controllers["LiveView"] = self.__factory.createController(
+                        controller_class, widget
+                    )
+                    # Register LiveViewController
+                    self.__masterController.registerController(
+                        "LiveView", self.controllers["LiveView"]
+                    )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not dynamically import {controller_name}: {e}"
+            )
         
-        
+        # Add StorageController for file storage management (no widget required)
+        try:
+            self.__logger.info("Creating StorageController for storage management")
+            from .controllers.StorageController import StorageController
+            self.controllers["Storage"] = self.__factory.createController(
+                StorageController, None
+            )
+            # Register StorageController
+            self.__masterController.registerController(
+                "Storage", self.controllers["Storage"]
+            )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not create StorageController: {e}"
+            )
+
         # Generate API
         self.__api = None
         apiObjs = list(self.controllers.values()) + [self.__commChannel]
         self.__api = generateAPI(
             apiObjs,
-            missingAttributeErrorMsg=lambda attr: f'The imcontrol API does either not have any'
-                                                f' method {attr}, or the widget that defines it'
-                                                f' is not included in your currently active'
-                                                f' hardware setup file.'
+            missingAttributeErrorMsg=lambda attr: f"The imcontrol API does either not have any"
+            f" method {attr}, or the widget that defines it"
+            f" is not included in your currently active"
+            f" hardware setup file.",
         )
         self.__apiui = None
         if IS_HEADLESS:
             uiObjs = mainView.widgets
             self.__apiui = generateUI(
                 uiObjs,
-                missingAttributeErrorMsg=lambda attr: f'The imcontrol API does either not have any'
-                                                    f' method {attr}, or the widget that defines it'
-                                                    f' is not included in your currently active'
-                                                    f' hardware setup file.'
+                missingAttributeErrorMsg=lambda attr: f"The imcontrol API does either not have any"
+                f" method {attr}, or the widget that defines it"
+                f" is not included in your currently active"
+                f" hardware setup file.",
             )
-            
-            
+
+            # Connect LiveViewController stream signal to noqt signal handler in headless mode
+            if "LiveView" in self.controllers:
+                try:
+                    liveViewController = self.controllers["LiveView"]
+                    # The sigStreamFrame from LiveViewController emits pre-formatted messages
+                    # These are automatically handled by noqt's SignalInstance._handle_stream_frame
+                    self.__logger.debug(
+                        "Connected LiveViewController.sigStreamFrame for streaming"
+                    )
+                except Exception as e:
+                    self.__logger.warning(
+                        f"Could not connect LiveViewController streaming signal: {e}"
+                    )
+
         # Generate Shorcuts
         if not IS_HEADLESS:
             self.__shortcuts = None
@@ -134,15 +222,14 @@ class ImConMainController(MainController):
         self._thread = threading.Thread(target=self._serverWorker.run)
         self._thread.start()
 
-
     def loadPlugin(self, widgetKey):
         # try to get it from the plugins
         foundPluginController = False
-        for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
-            if entry_point.name == f'{widgetKey}_controller':
+        for entry_point in pkg_resources.iter_entry_points("imswitch.implugins"):
+            if entry_point.name == f"{widgetKey}_controller":
                 packageController = entry_point.load()
                 return packageController
-        self.__logger.error(f'No controller found for widget {widgetKey}')
+        self.__logger.error(f"No controller found for widget {widgetKey}")
         return None
 
     @property
@@ -154,10 +241,12 @@ class ImConMainController(MainController):
         return self.__shortcuts
 
     def loadParamsFromHDF5(self):
-        """ Set detector, positioner, laser etc. params from values saved in a
-        user-picked HDF5 snap/recording. """
+        """Set detector, positioner, laser etc. params from values saved in a
+        user-picked HDF5 snap/recording."""
 
-        filePath = guitools.askForFilePath(self.__mainView, 'Open HDF5 file', nameFilter='*.hdf5')
+        filePath = guitools.askForFilePath(
+            self.__mainView, "Open HDF5 file", nameFilter="*.hdf5"
+        )
         if not filePath:
             return
 
@@ -184,7 +273,7 @@ class ImConMainController(MainController):
             self.__commChannel.sharedAttrs.update(attrs)
 
     def pickSetup(self):
-        """ Let the user change which setup is used. """
+        """Let the user change which setup is used."""
 
         options, _ = configfiletools.loadOptions()
 
@@ -196,8 +285,9 @@ class ImConMainController(MainController):
         if not setupFileName:
             return
 
-        proceed = guitools.askYesNoQuestion(self.__mainView, 'Warning',
-                                            'The software will restart. Continue?')
+        proceed = guitools.askYesNoQuestion(
+            self.__mainView, "Warning", "The software will restart. Continue?"
+        )
         if not proceed:
             return
 
@@ -206,13 +296,14 @@ class ImConMainController(MainController):
         ostools.restartSoftware()
 
     def closeEvent(self):
-        self.__logger.debug('Shutting down')
+        self.__logger.debug("Shutting down")
         self.__factory.closeAllCreatedControllers()
         self.__masterController.closeEvent()
 
         # seems like the imswitchserver is not closing from the closing event, need to hard kill it
         self._serverWorker.stop()
         self._thread.join()
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

@@ -2,6 +2,7 @@ import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+import threading
 import cv2
 import numpy as np
 
@@ -97,6 +98,8 @@ class DetectorManager(SignalInterface):
 
         self._detectorInfo = detectorInfo
 
+        self._isMock = False
+        
         self._frameStart = (0, 0)
         self._shape = fullShape
 
@@ -138,23 +141,7 @@ class DetectorManager(SignalInterface):
             self.__logger.error(traceback.format_exc())
         else:
             if self.__image is not None:
-                '''
-                eventually manipulate the image before sending it
-                we have 255 levels of gray, so we can use the min and max values to scale the image
-
-                TODO: not ideal as we scale noise, but we need to do this for the preview
-                def stretch_pixels(image_12bit, lower_clip, upper_clip):
-                    # Clamping to the range [lower_clip, upper_clip]
-                    clamped = np.clip(image_12bit, lower_clip, upper_clip)
-                    # Mapping the clamped values to [0, 255]
-                    scaled = (clamped - lower_clip) * 255.0 / (upper_clip - lower_clip)
-                    # Converting to 8-bit
-                    return np.clip(scaled, 0, 255).astype(np.uint8)
-                if self._maxValueFramePreview != -1 and self._minValueFramePreview != -1:
-                    self.__image = stretch_pixels(self.__image, self._minValueFramePreview, self._maxValueFramePreview)
-                '''
-                self.sigImageUpdated.emit(self.__image, init, self.scale) # TODO - inject compressionrate?
-
+                self.sigImageUpdated.emit(self.__image, init, self.scale) 
     def setMinValueFramePreview(self, value):
         """ Sets the minimum value for the frame preview to display via a jpeg image """
         self._minValueFramePreview = value
@@ -351,6 +338,73 @@ class DetectorManager(SignalInterface):
 
     def getIsRGB(self):
         return self.isRGB
+
+    def getCameraStatus(self) -> Dict[str, Any]:
+        """ Returns comprehensive camera status information.
+        This method collects all available camera information including hardware specs,
+        current settings, and operational status.
+        
+        Returns:
+            Dictionary containing camera status with the following keys:
+            - model: Camera model name
+            - isMock: Whether this is a mock/dummy camera
+            - isConnected: Connection status
+            - isRGB: Whether camera is RGB/color
+            - sensorWidth: Full sensor width in pixels
+            - sensorHeight: Full sensor height in pixels
+            - currentWidth: Current frame width (after ROI/binning)
+            - currentHeight: Current frame height (after ROI/binning)
+            - pixelSizeUm: Physical pixel size in micrometers
+            - binning: Current binning value
+            - supportedBinnings: List of supported binning values
+            - frameStart: Current ROI position as (x, y)
+            - croppable: Whether ROI/cropping is supported
+            - forAcquisition: Whether detector is used for acquisition
+            - forFocusLock: Whether detector is used for focus lock
+            - parameters: Dictionary of all detector parameters with values and metadata
+        """
+        status = {
+            'model': self.__model,
+            'isMock': self._isMock,
+            'isConnected': not self._isMock,  # Override in subclasses if needed
+            'isRGB': self._isRGB,
+            'sensorWidth': self.__fullShape[0],
+            'sensorHeight': self.__fullShape[1],
+            'currentWidth': self._shape[0],
+            'currentHeight': self._shape[1],
+            'pixelSizeUm': self.pixelSizeUm,
+            'binning': self._binning,
+            'supportedBinnings': self.__supportedBinnings,
+            'frameStart': self._frameStart,
+            'croppable': self.__croppable,
+            'forAcquisition': self.__forAcquisition,
+            'forFocusLock': self.__forFocusLock,
+            'parameters': {}
+        }
+        
+        # Add all parameters with their current values and metadata
+        for param_name, param_obj in self.__parameters.items():
+            param_info = {
+                'value': param_obj.value,
+                'group': param_obj.group,
+                'editable': param_obj.editable
+            }
+            
+            # Add type-specific metadata
+            if isinstance(param_obj, DetectorNumberParameter):
+                param_info['type'] = 'number'
+                param_info['units'] = param_obj.valueUnits
+            elif isinstance(param_obj, DetectorListParameter):
+                param_info['type'] = 'list'
+                param_info['options'] = param_obj.options
+            elif isinstance(param_obj, DetectorBooleanParameter):
+                param_info['type'] = 'boolean'
+            else:
+                param_info['type'] = 'unknown'
+            
+            status['parameters'][param_name] = param_info
+        
+        return status
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

@@ -337,6 +337,7 @@ class DemoController(ImConWidgetController):
                 laser_names = list(self.lasers.keys())
                 if laser_names:
                     random_laser = random.choice(laser_names)
+                    self.lasers[random_laser].setValue(np.random.randint(100, 255))  # Random intensity
                     self.lasers[random_laser].setEnabled(True)
                     self._logger.debug(f"Enabled laser: {random_laser}")
 
@@ -501,6 +502,10 @@ class DemoController(ImConWidgetController):
 
         try:
             self.shouldStop = True
+            
+            # immediately send stop to motors 
+            if self.stages:
+                self.stages.stopAll()
 
             # Wait for thread to complete
             if self.demo_thread and self.demo_thread.is_alive():

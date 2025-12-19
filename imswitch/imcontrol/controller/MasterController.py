@@ -54,6 +54,9 @@ class MasterController:
         self.__setupInfo = setupInfo
         self.__commChannel = commChannel
         self.__moduleCommChannel = moduleCommChannel
+        
+        # Dictionary to hold controller references for inter-controller communication
+        self._controllersRegistry = {}
 
         # Init managers
         self.rs232sManager = RS232sManager(self.__setupInfo.rs232devices)
@@ -63,7 +66,9 @@ class MasterController:
         self.detectorsManager = DetectorsManager(
             self.__setupInfo.detectors, updatePeriod=100, **lowLevelManagers
         )
-        self.lasersManager = LasersManager(self.__setupInfo.lasers, **lowLevelManagers)
+        self.lasersManager = LasersManager(
+            self.__setupInfo.lasers, self.__commChannel, **lowLevelManagers
+        )
         self.positionersManager = PositionersManager(
             self.__setupInfo.positioners, self.__commChannel, **lowLevelManagers
         )
@@ -88,8 +93,12 @@ class MasterController:
             self.dpcManager = DPCManager(self.__setupInfo.dpc)
         if "MCT" in self.__setupInfo.availableWidgets:
             self.mctManager = MCTManager(self.__setupInfo.mct)
-        self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
-        self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
+        if "NIDAQ" in self.__setupInfo.availableWidgets:
+            self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
+        if "Hypha" in self.__setupInfo.availableWidgets:
+            self.hyphaManager = HyphaManager(self.__setupInfo.hypha)
+        if "ROIScan" in self.__setupInfo.availableWidgets:
+            self.roiscanManager = ROIScanManager(self.__setupInfo.roiscan)
         if "Lightsheet" in self.__setupInfo.availableWidgets:
             self.lightsheetManager = LightsheetManager(self.__setupInfo.lightsheet)
         if "WebRTC" in self.__setupInfo.availableWidgets:
@@ -99,7 +108,7 @@ class MasterController:
         if "Experiment" in self.__setupInfo.availableWidgets:
             self.experimentManager = ExperimentManager(self.__setupInfo.experiment)
         if "Objective" in self.__setupInfo.availableWidgets:
-            self.objectiveManager = ObjectiveManager(self.__setupInfo.objective)
+            self.objectiveManager = ObjectiveManager(self.__setupInfo.objective, setupInfo=self.__setupInfo)
         if "HistoScan" in self.__setupInfo.availableWidgets:
             self.HistoScanManager = HistoScanManager(self.__setupInfo.HistoScan)
         if "Stresstest" in self.__setupInfo.availableWidgets:
@@ -177,7 +186,7 @@ class MasterController:
         self.detectorsManager.sigAcquisitionStarted.connect(cc.sigAcquisitionStarted)
         self.detectorsManager.sigAcquisitionStopped.connect(cc.sigAcquisitionStopped)
         self.detectorsManager.sigDetectorSwitched.connect(cc.sigDetectorSwitched)
-        self.detectorsManager.sigImageUpdated.connect(cc.sigUpdateImage)
+        self.detectorsManager.sigImageUpdated.connect(cc.sigUpdateImage) # TODO: why do we need to map a signal into a signal and cannot direclty use it ?! 
         self.detectorsManager.sigNewFrame.connect(cc.sigNewFrame)
 
         self.recordingManager.sigRecordingStarted.connect(cc.sigRecordingStarted)
@@ -191,15 +200,43 @@ class MasterController:
             self.memoryRecordingAvailable
         )
 
-        if "SLM" in self.__setupInfo.availableWidgets:
-            self.slmManager.sigSLMMaskUpdated.connect(cc.sigSLMMaskUpdated)
-            self.simManager.sigSIMMaskUpdated.connect(cc.sigSIMMaskUpdated)
-
     def memoryRecordingAvailable(self, name, file, filePath, savedToDisk):
         self.__moduleCommChannel.memoryRecordings[name] = VFileItem(
             data=file, filePath=filePath, savedToDisk=savedToDisk
         )
+    
+    def registerController(self, name, controller):
+        """Register a controller for inter-controller communication.
+        
+        This allows controllers to call methods on other controllers directly
+        via self._master.getController('ControllerName').
+        
+        Args:
+            name: Name of the controller (e.g., 'Autofocus', 'Arkitekt')
+            controller: The controller instance
+        """
+        self._controllersRegistry[name] = controller
+        self.__logger.debug(f"Registered controller: {name}")
+    
+    def getController(self, name):
+        """Get a registered controller by name.
+        
+        Args:
+            name: Name of the controller (e.g., 'Autofocus', 'Arkitekt')
+            
+        Returns:
+            The controller instance or None if not found
+        """
+        return self._controllersRegistry.get(name, None)
 
+    def getAllControllerNames(self):
+        """Get a list of all registered controller names.
+        
+        Returns:
+            List of controller names
+        """
+        return list(self._controllersRegistry.keys())
+    
     def closeEvent(self):
         self.recordingManager.endRecording(emitSignal=False, wait=True)
 

@@ -213,25 +213,7 @@ class GXPIPYManager(DetectorManager):
         self._camera.flushBuffer()
 
     def startAcquisition(self, liveView=False):
-        if self._camera.model == "mock":
-
-            # reconnect? Not sure if this is smart..
-            del self._camera
-            self._camera = self._getGXObj(self.cameraId, self.binningValue)
-
-            for propertyName, propertyValue in self.detectorInfo.managerProperties['gxipycam'].items():
-                self._camera.setPropertyValue(propertyName, propertyValue)
-
-            fullShape = (self._camera.SensorWidth,
-                        self._camera.SensorHeight)
-
-            model = self._camera.model
-            self._running = False
-            self._adjustingParameters = False
-
-            # TODO: Not implemented yet
-            self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
-
+        # Camera is already initialized, just start streaming
         if not self._running:
             self._camera.start_live()
             self._running = True
@@ -260,6 +242,24 @@ class GXPIPYManager(DetectorManager):
 
     def setPixelSizeUm(self, pixelSizeUm):
         self.parameters['Camera pixel size'].value = pixelSizeUm
+
+    def setFlipImage(self, flipY: bool, flipX: bool):
+        """
+        Set flip settings for the camera during runtime.
+        
+        Args:
+            flipY: Whether to flip vertically
+            flipX: Whether to flip horizontally
+        """
+        self._camera.flipImage = (flipY, flipX)
+        self.flipX = flipX
+        self.flipY = flipY
+        # Update parameters if they exist
+        if 'flipX' in self.parameters:
+            self.parameters['flipX'].value = flipX
+        if 'flipY' in self.parameters:
+            self.parameters['flipY'].value = flipY
+        self.__logger.info(f"Updated flip settings: flipY={flipY}, flipX={flipX}")
 
     def crop(self, hpos, vpos, hsize, vsize):
         '''
@@ -333,6 +333,36 @@ class GXPIPYManager(DetectorManager):
         record n images and average them before subtracting from the latest frame
         '''
         self._camera.recordFlatfieldImage()
+
+    def getCameraStatus(self):
+        """ Returns comprehensive GXIPY camera status information. """
+        # Get base status from parent class
+        status = super().getCameraStatus()
+        
+        # Add GXIPY-specific information
+        status['cameraType'] = 'GXIPY'
+        status['isMock'] = False  # GXIPY cameras are always real hardware
+        status['isConnected'] = self._camera is not None and hasattr(self._camera, 'camera')
+        
+        # Add acquisition status
+        status['isAcquiring'] = self._running
+        status['isAdjustingParameters'] = self._adjustingParameters
+        
+        # Try to get additional camera information
+        try:
+            if hasattr(self._camera, 'camera') and self._camera.camera is not None:
+                status['isStreaming'] = self._camera.camera.is_streaming()
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve streaming status: {e}")
+        
+        # Add current trigger source if available
+        try:
+            status['currentTriggerSource'] = self._camera.getTriggerSource()
+            status['availableTriggerTypes'] = self._camera.getTriggerTypes()
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve trigger information: {e}")
+        
+        return status
 
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.

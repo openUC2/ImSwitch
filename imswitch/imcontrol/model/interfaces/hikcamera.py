@@ -53,8 +53,11 @@ CALLBACK_SIG = CFUNCTYPE(
 # ----------------------------------------------------------------------------
 class CameraHIK:
     """Minimal wrapper that grabs frames via SDK callback (no polling)."""
+    
+    # Class-level tracking of opened cameras (serial checksums)
+    _opened_cameras = set()
 
-    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=-1, blacklevel=100, isRGB=False, binning=2):
+    def __init__(self,cameraNo=None, exposure_time = 10000, gain = 0, frame_rate=30, blacklevel=100, isRGB=False, binning=2, flipImage=(False, False)):
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
 
@@ -67,12 +70,11 @@ class CameraHIK:
         self.blacklevel = blacklevel
         self.exposure_time = exposure_time
         self.gain = gain
-        self.preview_width = 600
-        self.preview_height = 600
         self.frame_rate = frame_rate
         self.cameraNo = cameraNo
+        self.flipImage = flipImage  # (flipY, flipX)
 
-        self.NBuffer = 5
+        self.NBuffer = 3
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.flatfieldImage = None
@@ -117,7 +119,7 @@ class CameraHIK:
                 PixelType_Gvsp_BayerGB8,
                 PixelType_Gvsp_BayerGR8
             ]
-            
+
             format_set = False
             for pixel_format in formats_to_try:
                 ret = self.camera.MV_CC_SetEnumValue("PixelFormat", pixel_format)
@@ -183,18 +185,27 @@ class CameraHIK:
                 serial_checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
                 self.__logger.debug(f"Camera {i} serial checksum: {serial_checksum}")
                 if serial_checksum == number:
+                    # Check if this camera is already opened
+                    if serial_checksum in CameraHIK._opened_cameras:
+                        raise RuntimeError(f"Camera with serial checksum {number} is already opened by another detector")
                     camera_index = i
                     self.__logger.info(f"Found camera with matching serial checksum {number} at index {i}")
                     break
             
             if camera_index is None:
-                # List all available checksums for debugging
-                available_checksums = []
+                # No fallback - if the requested camera is not found, fail explicitly
+                # List all available cameras with their status for diagnostic purposes
+                available_info = []
                 for i, info in enumerate(infos):
                     checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
-                    available_checksums.append(f"Index {i}: checksum {checksum}")
+                    is_opened = checksum in CameraHIK._opened_cameras
+                    status = "opened" if is_opened else "available"
+                    available_info.append(f"Index {i}: checksum {checksum} ({status})")
                 
-                raise RuntimeError(f"No camera found with serial checksum {number}. Available cameras: {'; '.join(available_checksums)}")
+                raise RuntimeError(
+                    f"No camera found with serial checksum {number}. "
+                    f"Please check your configuration. Available cameras: {'; '.join(available_info)}"
+                )
             
             number = camera_index  # Use the found index for the rest of the function
         else:
@@ -203,6 +214,10 @@ class CameraHIK:
                 raise RuntimeError(f"No suitable Hik camera found. Requested camera {number}, but only {len(infos)} cameras available.")
 
         self.__logger.info(f"Opening camera {number} out of {len(infos)} available cameras")
+        
+        # Track the serial checksum of the camera we're opening
+        self._serial_checksum = np.sum(infos[number].SpecialInfo.stUsb3VInfo.chSerialNumber)
+        
         self.camera = MvCamera()
         ret = self.camera.MV_CC_CreateHandle(infos[number])
         if ret != 0:
@@ -210,6 +225,10 @@ class CameraHIK:
         ret = self.camera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
         if ret != 0:
             raise RuntimeError(f"OpenDevice failed 0x{ret:x}")
+        
+        # Add this camera to the opened cameras set
+        CameraHIK._opened_cameras.add(self._serial_checksum)
+        self.__logger.debug(f"Added camera with checksum {self._serial_checksum} to opened cameras list")
 
         # optimise packet size for GigE
         if infos[number].nTLayerType == MV_GIGE_DEVICE:
@@ -226,12 +245,26 @@ class CameraHIK:
         # set parameters
         self.setBinning(binning=self.binning)
         self.trigger_source = self.mParameters.get("trigger_source", "Continuous")
-
+        # TODO: This is necessary to ensure that we don't create delays when operating multiple cameras
         stBool = c_bool(False)
         ret = self.camera.MV_CC_GetBoolValue("AcquisitionFrameRateEnable", stBool)
         if ret != 0:
             self.__logger.debug("Get AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
-
+        # TODO: Limit our framerate (force) to 30 fps for now 
+        if self.frame_rate > 0:
+            stBool.value = True
+            ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", stBool)
+            if ret != 0:
+                self.__logger.debug("Set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
+            ret = self.camera.MV_CC_SetFloatValue("AcquisitionFrameRate", self.frame_rate)
+            if ret != 0:
+                self.__logger.debug("Set AcquisitionFrameRate fail! ret[0x%x]" % ret)
+            self.__logger.info(f"Set frame rate to {self.frame_rate} fps")
+        else:
+            stBool.value = False
+            ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", stBool)
+            if ret != 0:
+                self.__logger.debug("Set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
         ret = self.camera.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
         if ret != 0:
             self.__logger.debug("Set trigger mode fail! ret[0x%x]" % ret)
@@ -249,6 +282,11 @@ class CameraHIK:
 
     def reconnectCamera(self):
         # Safely close any existing handle
+        
+        # Store the serial checksum before closing
+        old_checksum = getattr(self, '_serial_checksum', None)
+        
+        # todo: Need to store the current camerano and other settings and open it in case it's the hash/referenc enumber 
         if self.camera is not None:
             try:
                 # Deregister callback if registered
@@ -256,6 +294,11 @@ class CameraHIK:
                     self.camera.MV_CC_RegisterImageCallBackEx(None, None)
                     self._callback_registered = False
                     
+                # Remove from opened cameras list
+                if old_checksum is not None and old_checksum in CameraHIK._opened_cameras:
+                    CameraHIK._opened_cameras.discard(old_checksum)
+                    self.__logger.debug(f"Removed camera with checksum {old_checksum} from opened cameras list during reconnect")
+                
                 self.camera.MV_CC_CloseDevice()
                 self.camera.MV_CC_DestroyHandle()
             except Exception as e:
@@ -264,7 +307,7 @@ class CameraHIK:
 
         # Re-initialize camera with original cameraNo
         try:
-            self._open_camera(cameraNo=self.cameraNo)
+            self._open_camera(number=self.cameraNo)
             self.__logger.debug("Camera reconnected successfully.")
         except Exception as e:
             self.__logger.error(f"Failed to reconnect camera: {e}")
@@ -383,11 +426,12 @@ class CameraHIK:
                 self.__logger.error(f"Unsupported pixel type 0x{pix:x}")
                 return
 
-            # push into ring buffers for later use
-            #self.frame_buffer.append(frame)
-            #self.frameid_buffer.append(fid)
-            #self.frameNumber = fid
-            #self.timestamp   = ts
+            # Apply flip if needed (zero-CPU operation using numpy)
+            if self.flipImage[0]:  # flipY
+                frame = np.flip(frame, axis=0)
+            if self.flipImage[1]:  # flipX
+                frame = np.flip(frame, axis=1)
+                
 
             # pass to user callback
             user_cb(frame, fid, ts)
@@ -412,11 +456,20 @@ class CameraHIK:
             if param_dict["model_name"].find("UC")>0:
                 param_dict["isRGB"] = True
         # if isRGB switch off AWB 
-        if param_dict["isRGB"]:
-            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_OFF)
+        if param_dict["isRGB"] and False:
+            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS)
             if ret != 0:
                 print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
                 self.init_ok = False
+            else:
+                # 2) Set color temperature mode to Wide
+                ret = self.camera.MV_CC_SetEnumValueByString("BalanceColorTempMode", "WideMode")
+                if ret != 0:
+                    print("set BalanceColorTempMode failed! ret [0x%x]" % ret)
+        elif param_dict["isRGB"]:
+            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_OFF)
+            if ret != 0:
+                print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
 
 
         # Image Width
@@ -474,6 +527,15 @@ class CameraHIK:
             return
         self.flushBuffer()
         
+        # in case the camera is None, we have to restart it anyway
+        if self.camera is None: # TODO: 2025-11-03 15:13:38 ERROR [LiveViewController] Error starting live view: 'NoneType' object has no attribute 'MV_CC_RegisterImageCallBackEx'
+            self.reconnectCamera()
+            ret = self.camera.MV_CC_StartGrabbing()
+            if ret != 0:
+                raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
+            self.is_streaming = True
+            return          
+        
         # Re-register callback if needed (in case it was deregistered during stop)
         if hasattr(self, '_callback_registered') and not self._callback_registered:
             ret = self.camera.MV_CC_RegisterImageCallBackEx(self._sdk_cb, None)
@@ -482,8 +544,16 @@ class CameraHIK:
             self._callback_registered = True
             self.__logger.debug("Callback re-registered successfully")
         
-        ret = self.camera.MV_CC_StartGrabbing()
-        if ret != 0:
+        try: 
+            ret = self.camera.MV_CC_StartGrabbing()
+            if ret != 0:
+                #raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
+                self.reconnectCamera()
+                ret = self.camera.MV_CC_StartGrabbing()
+                if ret != 0:
+                    self.__logger.error(f"StartGrabbing exception: {e}")
+                    raise RuntimeError(f"StartGrabbing failed after reconnect 0x{ret:x}")
+        except Exception as e:
             raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")
         self.is_streaming = True
 
@@ -519,6 +589,11 @@ class CameraHIK:
         if hasattr(self, '_callback_registered') and self._callback_registered:
             self.camera.MV_CC_RegisterImageCallBackEx(None, None)
             self._callback_registered = False
+        
+        # Remove this camera from the opened cameras set before closing
+        if hasattr(self, '_serial_checksum') and self._serial_checksum in CameraHIK._opened_cameras:
+            CameraHIK._opened_cameras.discard(self._serial_checksum)
+            self.__logger.debug(f"Removed camera with checksum {self._serial_checksum} from opened cameras list")
             
         self.camera.MV_CC_CloseDevice()
         self.camera.MV_CC_DestroyHandle()
@@ -528,6 +603,7 @@ class CameraHIK:
         self.camera.MV_CC_SetFloatValue("ExposureTime", self.exposure_time * 1000)
 
     def set_exposure_mode(self, exposure_mode="manual"):
+        exposure_mode = exposure_mode.lower()
         if exposure_mode == "manual":
             self.camera.MV_CC_SetEnumValue("ExposureAuto", MV_EXPOSURE_AUTO_MODE_OFF)
         elif exposure_mode == "auto":
@@ -538,7 +614,7 @@ class CameraHIK:
             self.__logger.warning("Exposure mode not recognized")
 
     def set_camera_mode(self, isAutomatic):
-        self.set_exposure_mode("auto" if isAutomatic.lower() else "manual")
+        self.set_exposure_mode(isAutomatic)
 
     def set_gain(self, gain):
         self.gain = gain
@@ -548,7 +624,7 @@ class CameraHIK:
         ret = self.camera.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", True)
         if ret != 0:
             self.__logger.error("set AcquisitionFrameRateEnable fail! ret[0x%x]" % ret)
-        ret = self.camera.MV_CC_SetFloatValue("AcquisitionFrameRate", 5.0)
+        ret = self.camera.MV_CC_SetFloatValue("AcquisitionFrameRate", frame_rate)
         if ret != 0:
             self.__logger.error("set AcquisitionFrameRate fail! ret[0x%x]" % ret)
 
@@ -611,9 +687,17 @@ class CameraHIK:
                 return (self.lastFrameFromBuffer, self.lastFrameId) if returnFrameNumber else self.lastFrameFromBuffer
             time.sleep(0.005)
 
+        # Get the latest frame and remove it from the buffer to avoid repeated consumption
+        latest_frame = self.frame_buffer.pop()
+        latest_frame_id = self.frameid_buffer.pop()
+        
+        # Store as last frame from buffer for fallback scenarios
+        self.lastFrameFromBuffer = latest_frame
+        self.lastFrameId = latest_frame_id
+
         if returnFrameNumber:
-            return self.frame_buffer[-1], self.frameid_buffer[-1]
-        return self.frame_buffer[-1]
+            return latest_frame, latest_frame_id
+        return latest_frame
 
     def flushBuffer(self):
         self.frameid_buffer.clear()
@@ -686,7 +770,7 @@ class CameraHIK:
         elif property_name == "trigger_source":
             self.setTriggerSource(property_value)
         elif property_name == 'mode':
-            self.set_camera_mode(property_value)
+            self.set_camera_mode(isAutomatic=property_value)
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
             return False

@@ -111,9 +111,9 @@ class RecordingController(ImConWidgetController):
             else:
                 mSaveFormat = SaveFormat(1)  # TIFF
 
-        timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-        relativeFolder = os.path.join("recordings", timeStamp)
-        folder = os.path.join(dirtools.UserFileDirs.Data, relativeFolder)
+        timeStampDay = datetime.datetime.now().strftime("%Y_%m_%d")
+        relativeFolder = os.path.join("recordings", timeStampDay)
+        folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), relativeFolder)
         if not os.path.exists(folder):
             os.makedirs(folder)
             time.sleep(0.01)
@@ -438,14 +438,14 @@ class RecordingController(ImConWidgetController):
 
     def getTimelapseFreq(self):
         return self._widget.getTimelapseFreq()
-
-    def setLiveStreamStart(self):
+ 
+    def setLiveStreamStart(self): # TODO: we need to connect that to the signal in the communication channel
         self.streamRunning = True
 
-    def setLiveStreamStop(self):
+    def setLiveStreamStop(self): # TODO: we need to connect that to the signal in the communication channel
         self.streamRunning = False
 
-    def stopStream(self):
+    def stopStream(self): # TODO: we need to connect that to the signal in the communication channel
         self.streamRunning = False
         self.streamstarted = False
         self.streamQueue = None
@@ -533,7 +533,7 @@ class RecordingController(ImConWidgetController):
 
     def streamer(self):
         # Start the streaming worker thread once and create a thread-safe queue
-        if not self.streamstarted:
+        if not self.streamstarted: # TODO: This has to be connected to the signal in the communication channel and also check if the thrad is still running
             import threading
 
             self.streamQueue = queue.Queue(maxsize=10)
@@ -564,8 +564,23 @@ class RecordingController(ImConWidgetController):
     @APIExport(runOnUIThread=False)
     def video_feeder(self, startStream: bool = True) -> StreamingResponse:
         """
-        return a generator that converts frames into jpeg's reads to stream
+        Return a generator that converts frames into jpeg's ready to stream.
+        
+        This method is maintained for backward compatibility but now delegates to LiveViewController.
+        If LiveViewController is not available, falls back to legacy implementation.
         """
+        # Try to use LiveViewController if available
+        try:
+            if hasattr(self._commChannel, '_CommunicationChannel__main'):
+                main_controller = self._commChannel._CommunicationChannel__main
+                if 'LiveView' in main_controller.controllers:
+                    # Delegate to LiveViewController
+                    return main_controller.controllers['LiveView'].video_feeder(startStream)
+        except Exception as e:
+            self.__logger.warning(f"Could not use LiveViewController for video_feeder: {e}")
+            # Fall back to legacy implementation
+        
+        # Legacy implementation (kept for backward compatibility)
         if startStream:
             # start the live video feed
             self._commChannel.sigStartLiveAcquistion.emit(True)
@@ -619,8 +634,14 @@ class RecordingController(ImConWidgetController):
             return HTTPException(detail="Variable not found", status_code=404)
 
     @APIExport(runOnUIThread=True)
-    def snapImageToPath(self, fileName: str = ".", saveFormat:SaveFormat = SaveFormat.TIFF) -> dict:
-        """Take a snap and save it to a .tiff file at the given fileName."""
+    def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: SaveFormat = SaveFormat.TIFF) -> dict:
+        """Take a snap and save it to a file at the given fileName.
+
+        Parameters:
+        - fileName: Optional suffix or filename to append to the generated name. If None,
+            the default naming used by `snap()` will be applied.
+        - saveFormat: Desired `SaveFormat` enum value (default: `SaveFormat.TIFF`).
+        """
         '''
         numpy_array = list(self.snapNumpy().values())[0]
         deconvoled_image = self._master.arkitekt_controller.upload_and_deconvolve_image(
@@ -738,7 +759,7 @@ class RecordingController(ImConWidgetController):
                 return
 
             timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-            folder = os.path.join(dirtools.UserFileDirs.Data, "recordings", timeStamp)
+            folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "recordings", timeStamp)
             if not os.path.exists(folder):
                 os.makedirs(folder)
             time.sleep(0.01)

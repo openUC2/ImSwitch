@@ -1,0 +1,75 @@
+{
+    "detectors": {
+        "RPiCam": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "Picamera2Manager",
+            "managerProperties": {
+                "cameraListIndex": 0,
+                "cameraEffPixelsize": 1.12,
+                "isRGB": true,
+                "resolution": [640, 480],
+                "binning": 1,
+                "use_video_mode": true,
+                "mocktype": "normal",
+                "picamera2": {
+                    "exposure": 10,
+                    "gain": 1.0,
+                    "frame_rate": 30,
+                    "flipX": false,
+                    "flipY": false
+                }
+            },
+            "forAcquisition": true,
+            "forFocusLock": true
+        }
+    },
+    "lasers": {},
+    "positioners": {},
+    "rs232devices": {},
+    "scan": {
+        "scanDesigner": {
+            "scanModes": []
+        }
+    },
+    "focusLock": {
+        "camera": "RPiCam",
+        "port": "COM2",
+        "positioner": null,
+        "updateFreq": 4,
+        "frameCropx": 780,
+        "frameCropy": 400,
+        "frameCropw": 500,
+        "frameCroph": 100
+    },
+    "availableWidgets": [
+        "Settings",
+        "View",
+        "Recording",
+        "Image",
+        "Laser",
+        "Positioner"
+    ],
+    "mct": {
+        "monitorIdx": 2,
+        "width": 1152,
+        "height": 1920,
+        "wavelength": 0.6,
+        "pixelSize": 0.0036,
+        "angleMount": 0,
+        "patternsDirWin": "C:\\Users\\STEDred\\Documents\\ImSwitchConfig\\imcontrol_slm\\488",
+        "patternsDir": "/users/bene/ImSwitchConfig/imcontrol_sim/488"
+    },
+    "dpc": {
+        "wavelength": 0.53,
+        "pixelSize": 0.2,
+        "NA": 0.45,
+        "NA_illu": 0.45,
+        "rotations": [
+            0,
+            90,
+            180,
+            270
+        ]
+    }
+}

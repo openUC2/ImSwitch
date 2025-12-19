@@ -10,24 +10,24 @@ apt-get install -y \
   mesa-utils \
   libhdf5-dev \
   usbutils \
-  libglib2.0-0
+  libglib2.0-0 \
+  git
+# TODO(ethanjli): find a way to not rely on git inside a container image
 
+# Install system picamera2 which pulls in compatible libcamera dependencies
+# Note: python3-picamera2 will automatically install the correct libcamera version
+apt-get update && apt install -y --no-install-recommends \
+         python3-picamera2 \
+     && apt-get clean \
+     && apt-get autoremove \
+     && rm -rf /var/cache/apt/archives/* \
+     && rm -rf /var/lib/apt/lists/*
+
+# Install conda packages
 /opt/conda/bin/conda install -n imswitch -y -c conda-forge \
-  h5py
-/opt/conda/bin/conda install \
-  numcodecs=0.15.0 \
-  numpy=2.1.2
-/bin/bash -c "source /opt/conda/bin/activate imswitch && \
-  conda install -c conda-forge scikit-image=0.19.3"
-
-# Install nmcli
-# TODO(ethanjli): can we interact with the host's NetworkManager API without installing and running
-# nmcli in the container?
-apt-get install -y \
-  network-manager \
-  dbus \
-  systemd \
-  sudo
+  h5py \
+  numpy \
+  scikit-image
 
 # we want psygnal to be installed without binaries - so first remove it
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
@@ -35,6 +35,16 @@ apt-get install -y \
 
 # fix the version of OME-ZARR
 /bin/bash -c "source /opt/conda/bin/activate imswitch && pip install zarr==2.11.3"
+
+# install deps listed in pyproject.toml, but don't install ImSwitch yet:
+mkdir -p /tmp/ImSwitch/imswitch
+cat >/tmp/ImSwitch/imswitch/__init__.py <<EOF
+# temporary placeholder to be overwritten
+__version__ = "0.0.0"
+EOF
+cp /mnt/ImSwitch/pyproject.toml /tmp/ImSwitch/pyproject.toml
+cd /tmp/ImSwitch
+/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install /tmp/ImSwitch"
 
 # Clean up build-only tools
 

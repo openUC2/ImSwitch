@@ -13,9 +13,14 @@ if __name__ == '__main__':
     example:
     main(is_headless=True, data_folder="/Users/bene/Downloads")
     
-     sudo firewall-cmd --zone=public --add-port=8001/tcp; sudo firewall-cmd --zone=nm-shared --add-port=8001/tcp
-     sudo firewall-cmd --zone=public --add-port=8002/tcp; sudo firewall-cmd --zone=nm-shared --add-port=8002/tcp
-     sudo firewall-cmd --zone=public --add-port=8888/tcp; sudo firewall-cmd --zone=nm-shared --add-port=8888/tcp
+    # Anythin firewall related
+    
+     sudo firewall-cmd --add-port=8001/tcp --permanent
+     sudo firewall-cmd --reload
+     sudo firewall-cmd --list-ports | grep 8001
+
+     # kill -9 $(lsof -ti:8001)
+
     '''
     # DON'T CHANGE THIS!!!!
     # This has to be maintained for DOCKER!

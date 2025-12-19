@@ -87,7 +87,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: dockerfile
+          file: Dockerfile
           pull: true
           platforms: ${{ matrix.docker-platform }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -111,9 +111,14 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             # Finalize OME writers if they were created
             if file_writers:
                 self._finalize_ome_writers(file_writers)
+            
+            # Set LED status to idle when scan completes successfully
+            self.controller.set_led_status("idle")
 
         except Exception as e:
             self._logger.error(f"Error in performance mode scan: {str(e)}")
+            # Set LED status to error
+            self.controller.set_led_status("error")
         finally:
             self._scan_running = False
 
@@ -284,6 +289,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             write_zarr=getattr(self.controller, '_ome_write_zarr', True),
             write_stitched_tiff=False,  # Disable stitched TIFF
             write_tiff_single=True,  # Enable single TIFF writing
+            write_individual_tiffs=getattr(self.controller, '_ome_write_individual_tiffs', False),
             min_period=0.1,
             n_time_points=1,
             n_z_planes=1,  # Performance mode typically single Z
@@ -361,6 +367,10 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             self._scan_running = False
             if self._scan_thread and self._scan_thread.is_alive():
                 self._scan_thread.join(timeout=5.0)  # Wait up to 5 seconds for thread to finish
+            
+            # Set LED status to idle
+            self.controller.set_led_status("idle")
+            
             return {"status": "stopped", "message": "Performance mode scan stopped"}
         else:
             return {"status": "not_running", "message": "No performance mode scan is running"}

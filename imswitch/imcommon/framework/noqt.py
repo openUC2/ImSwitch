@@ -5,27 +5,17 @@ from psygnal import emit_queued
 import psygnal
 import asyncio
 import threading
-import os
-import json
 from functools import lru_cache
 import numpy as np
 from socketio import AsyncServer, ASGIApp
-import uvicorn
 import imswitch.imcommon.framework.base as abstract
-import cv2
-import base64
-from imswitch import SOCKET_STREAM
 import time
-import queue
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
-import imswitch
-from imswitch import __ssl__, __socketport__
-import logging
+from imswitch import __ssl__
+import msgpack  # MessagePack for efficient binary serialization
 
-# Try to import config and binary streaming - handle gracefully if not available
-from imswitch.config import get_config
-from imswitch.imcommon.framework.binary_streaming import BinaryFrameEncoder
+
 HAS_BINARY_STREAMING = True
 class Mutex(abstract.Mutex):
     """Wrapper around the `threading.Lock` class."""
@@ -41,46 +31,16 @@ class Mutex(abstract.Mutex):
 
 # Initialize Socket.IO server
 sio = AsyncServer(async_mode="asgi", cors_allowed_origins="*")
-app = ASGIApp(sio)
+socket_app = ASGIApp(sio)  # Renamed to socket_app - will be mounted on FastAPI app
 
 # Per-client frame acknowledgement tracking
-_client_frame_ready = {}  # sid -> bool (True if client is ready for next frame)
+_client_sent_frame_id = {}  # sid -> last sent frame id (int or None)
+_client_ack_frame_id = {}  # sid -> last acked frame id
 _client_frame_lock = threading.Lock()
 
-# Fallback message queue and worker thread for Socket.IO failures
-_fallback_message_queue = queue.Queue()
-_fallback_worker_thread = None
+# Event loop reference - will be set by ImSwitchServer
+_shared_event_loop = None
 
-
-def _fallback_worker():
-    """Background worker thread to handle Socket.IO fallback messages."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    try:
-        while True:
-            try:
-                message = _fallback_message_queue.get(timeout=1.0)
-                if message is None:  # Poison pill to stop worker
-                    break
-                loop.run_until_complete(sio.emit("signal", message))
-                _fallback_message_queue.task_done()
-            except queue.Empty:
-                continue
-            except Exception:
-                # Silently handle errors to avoid spam
-                pass
-    finally:
-        loop.close()
-
-
-def _start_fallback_worker():
-    """Start the fallback worker thread if not already running."""
-    global _fallback_worker_thread
-    if _fallback_worker_thread is None or not _fallback_worker_thread.is_alive():
-        _fallback_worker_thread = threading.Thread(target=_fallback_worker,
-                                                    daemon=True)
-        _fallback_worker_thread.start()
 
 class SignalInterface(abstract.SignalInterface):
     """Base implementation of abstract.SignalInterface."""
@@ -90,14 +50,12 @@ class SignalInterface(abstract.SignalInterface):
 class SignalInstance(psygnal.SignalInstance):
     last_emit_time = 0
     emit_interval = 0.0  # Emit at most every 100ms
-    last_image_emit_time = 0
-    image_emit_interval = .2  # Emit at most every 200ms
-    IMG_QUALITY = 80  # Set the desired quality level (0-100)
-    image_id = 0
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Initialize timing for binary streaming
-        self._last_binary_emit_time = 0
+        self._last_frame_emit_time = 0
+
     def emit(
         self, *args: Any, check_nargs: bool = False, check_types: bool = False
     ) -> None:
@@ -121,15 +79,20 @@ class SignalInstance(psygnal.SignalInstance):
                 print(f"Error broadcasting log message: {e}")
             return
 
-        # Skip large data signals
-        if self.name in ["sigUpdateImage", "sigExperimentImageUpdate"]:  #, "sigImageUpdated"]:
-            now = time.time()
-            if SOCKET_STREAM: # TODO: Shall we implement the throttle here?  and (now - self.last_image_emit_time > self.image_emit_interval) or self.name == "sigExperimentImageUpdate":
-                self._handle_image_signal(args)
-                self.last_image_emit_time = now
+        # Handle pre-formatted stream messages from LiveViewController
+        elif self.name == "sigUpdateImage" or self.name == "sigUpdateFrame" or self.name == "sigImageReceived" or self.name == "sigHoloImageComputed" or self.name == "sigHoloProcessed": # both stemp from the liveviewcontroller
             return
-        elif self.name in ["sigImageUpdated"]:
-            return # ignore for now TODO:
+        elif self.name == "sigUpdateStreamFrame":
+            # this can be binary or jpeg frame
+            self._handle_stream_frame(args[0])
+
+            return
+        elif self.name in ["sigImageUpdated", "sigStreamFrame"]:
+            # These signals are internal to the streaming pipeline:
+            # - sigStreamFrame: emitted by StreamWorkers (already handled by sigUpdateImage)
+            # - sigImageUpdated: legacy signal from MasterController (deprecated in favor of unified frame events)
+            # Skip broadcasting to avoid duplicate frame transmissions
+            return
 
         try:
             message = self._generate_json_message(args)
@@ -140,219 +103,124 @@ class SignalInstance(psygnal.SignalInstance):
         self._safe_broadcast_message(message)
         del message
 
-    def _handle_image_signal(self, args):
-        """Compress and broadcast image signals."""
-        detectorName = args[0]
-        try:pixelSize = np.min(args[3])
-        except:pixelSize = 1
-        
-        # Get stream parameters from globalDetectorParams (like compressionlevel)
-        try:
-            # Get the global detector parameters if available
-            global_params = args[5] if len(args) > 5 and isinstance(args[5], dict) else {}
-        except:
-            global_params = {}
-        
-        try:
-            for arg in args:
-                if isinstance(arg, np.ndarray):
-                    output_frame = np.ascontiguousarray(arg)  # Avoid memory fragmentation
-                    # if frame is float, we need to convert to uint8
-                    if output_frame.dtype == np.float32 or output_frame.dtype == np.float64:
-                        output_frame = np.uint8(output_frame*255)
-                    if output_frame.dtype not in [np.uint8, np.uint16]:
-                        output_frame = np.uint8(output_frame)  # Convert to uint8 for visualization
-                    # Check stream parameters for binary streaming
-                    stream_compression_algorithm = global_params.get('stream_compression_algorithm')
-                    if stream_compression_algorithm in ["LZ4", "lz4", "ZSTD", "zstd", "ZStandard"]:
-                        self._emit_binary_frame(output_frame, detectorName, pixelSize, global_params)
-                    elif stream_compression_algorithm == "jpeg":
-                        # emit JPEG (legacy behavior for compatibility)
-                        self._emit_jpeg_frame(output_frame, detectorName, pixelSize, global_params)
-                    self.image_id += 1
-                    # print(f"Emitted image id {self.image_id} from detector {detectorName}")
-                        
-        except Exception as e:
-            print(f"Error processing image signal: {e}")
-    
-    def _emit_binary_frame(self, img: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
-        """Emit binary frame via Socket.IO with flow control."""
-        if not HAS_BINARY_STREAMING:
-            return
-            
-        # Get throttle interval from global params
-        throttle_ms = global_params.get('stream_throttle_ms', 200) / 1000.0
-        
-        now = time.time()
-        if now - self._last_binary_emit_time < throttle_ms:
-            return  # Throttle binary emissions
-        
-        # Update encoder config from global params
-        compression_algorithm = global_params.get('stream_compression_algorithm', 'lz4')
-        compression_level = global_params.get('stream_compression_level', 0)
-        subsampling_factor = global_params.get('stream_subsampling_factor', 1)
-        
-        # Create or update encoder with current parameters
-        try:
-            from imswitch.imcommon.framework.binary_streaming import BinaryFrameEncoder
-            encoder = BinaryFrameEncoder(
-                compression_algorithm=compression_algorithm,
-                compression_level=compression_level,
-                subsampling_factor=subsampling_factor,
-            )
-        except ImportError:
-            return  # Binary streaming not available
-        
-        try:
-            # Encode frame
-            t1 = time.time()
-            packet, metadata = encoder.encode_frame(img)
-            #print("Encoding frame with binary encoder...", time.time()-t1)
-            
-            # Add timestamp to metadata for latency tracking
-            metadata['server_timestamp'] = time.time()
-            metadata['image_id'] = self.image_id
+    def _handle_stream_frame(self, message: dict):
+        """
+        Handle pre-formatted stream frame message from LiveViewController.
+        Message format: {'type': 'binary_frame' or 'jpeg_frame', 'event': str, 'data': bytes or dict, 'metadata': dict}
+        Uses explicit frame_ack event from frontend for flow control.
+        Implements proper backpressure - only sends to clients that are ready.
+        Thread-safe using asyncio.run_coroutine_threadsafe for cross-thread calls.
 
-            # Emit to clients that are ready (acknowledged previous frame)
+        UNIFIED HANDLING: Both binary and JPEG frames use the same 'frame' event
+        with MessagePack-encoded metadata for efficiency and consistency.
+        """
+        try:
+            msg_type = message.get('type')
+            event = message.get('event', 'frame')
+            data = message.get('data')
+            metadata = message.get('metadata', {})
+
+            def get_ready_clients(last_ack, last_sent):
+                """
+                Determine which clients are ready for the next frame.
+                Implements rollover-safe backpressure check.
+                """
+                FRAME_ID_MODULO = 256  # Small value to test rollover frequently
+                MAX_FRAME_LAG = 1  # Allow client to be 1 frame behind
+
+                next_id = {}
+                for sid, sent_id in last_sent.items():
+                    # Initialize: client is ready for first frame
+                    if sent_id is None or last_ack[sid] is None:
+                        next_id[sid] = 0
+                        continue
+
+                    # Calculate distance between sent and ack with rollover awareness
+                    # Distance = (sent - ack) mod MODULO
+                    # If distance <= MAX_FRAME_LAG, client is ready
+                    distance = (sent_id - last_ack[sid]) % FRAME_ID_MODULO
+
+                    if distance <= MAX_FRAME_LAG:
+                        # Client is ready for next frame
+                        next_id[sid] = (sent_id + 1) % FRAME_ID_MODULO
+                    else:
+                        # Client is lagging too much - apply backpressure
+                        pass # print(f"Client {sid} not ready for new frame (last sent: {sent_id}, last ack: {last_ack[sid]}, distance: {distance})")
+
+                return next_id
+
+            # Get ready clients
             with _client_frame_lock:
-                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
-            
-            if ready_clients:
-                # Mark clients as not ready (waiting for acknowledgement)
-                with _client_frame_lock:
-                    for sid in ready_clients:
-                        _client_frame_ready[sid] = False
-                
-                # Emit binary frame with acknowledgement callback
-                for sid in ready_clients:
-                    def ack_callback(sid=sid):
-                        """Mark client as ready for next frame"""
-                        with _client_frame_lock:
-                            _client_frame_ready[sid] = True
-                            # print(f"Client {sid} acknowledged frame {self.image_id}")
-                    
-                    sio.start_background_task(
-                        sio.emit, 
-                        "frame", 
-                        packet, 
-                        to=sid,
-                        callback=ack_callback
-                    )
-                
-                # Emit metadata as JSON signal
-                meta_message = {
-                    "name": "frame_meta",
-                    "detectorname": detector_name,
-                    "pixelsize": int(pixel_size),
-                    "format": "binary",
-                    "metadata": metadata
-                    }
-                for sid in ready_clients:
-                    sio.start_background_task(sio.emit, "signal", json.dumps(meta_message), to=sid)
-                
-                self._last_binary_emit_time = now
-            
+                ready_clients = get_ready_clients(_client_ack_frame_id, _client_sent_frame_id)
+
+                if not ready_clients:
+                    # print("No clients ready for new frame, dropping frame to avoid buildup")
+                    return
+
+                # Thread-safe emission using the shared event loop
+                if not _shared_event_loop or not _shared_event_loop.is_running():
+                    print("Warning: Event loop not available for frame emission")
+                    return
+
+                # Unified frame emission for both binary and JPEG using MessagePack
+                if msg_type == 'binary_frame':
+                    # Binary frame: Send complete payload as MessagePack
+                    for sid, next_frame_id in ready_clients.items():
+                        # Create a copy of metadata for each client to avoid race conditions
+                        client_metadata = metadata.copy()
+                        client_metadata['frame_id'] = next_frame_id
+
+                        # Pack entire frame (metadata + data) with MessagePack
+                        frame_payload = msgpack.packb({
+                            'metadata': client_metadata,
+                            'data': data
+                        }, use_bin_type=True)
+
+                        # print(f"Sending binary frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
+                        _client_sent_frame_id[sid] = next_frame_id
+
+                        # Emit using socket.io's native binary support
+                        asyncio.run_coroutine_threadsafe(
+                            sio.emit(event, frame_payload, to=sid),
+                            _shared_event_loop
+                        )
+
+                elif msg_type == 'jpeg_frame':
+                    # JPEG frame: Send complete payload as MessagePack
+                    # Note: For JPEG, metadata is in data['metadata'], image is in data['image']
+                    for sid, next_frame_id in ready_clients.items():
+                        # Create a copy of metadata for each client to avoid race conditions
+                        client_metadata = data.get('metadata', {}).copy()
+                        client_metadata['frame_id'] = next_frame_id
+
+                        # Pack entire frame (metadata + image) with MessagePack
+                        frame_payload = msgpack.packb({
+                            'metadata': client_metadata,
+                            'image': data['image']
+                        }, use_bin_type=True)
+
+                        _client_sent_frame_id[sid] = next_frame_id
+
+                        # Emit on same 'frame' event as binary for unified frontend handling
+                        asyncio.run_coroutine_threadsafe(
+                            sio.emit(event, frame_payload, to=sid),
+                            _shared_event_loop
+                        )
+
+
         except Exception as e:
-            print(f"Error emitting binary frame: {e}")
-            # Fallback to JPEG if binary fails
-            self._emit_jpeg_frame(img, detector_name, pixel_size, global_params)
-    
-    def _emit_jpeg_frame(self, output_frame: np.ndarray, detector_name: str, pixel_size: float, global_params: dict):
-        """Emit JPEG frame (legacy path) with flow control."""
-        try:
-            # Apply legacy subsampling logic
-            if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
-                everyNthsPixel = np.min((np.min([output_frame.shape[0]//240, output_frame.shape[1]//320]), 3))
-            else:
-                everyNthsPixel = 1
-            everyNthsPixel = global_params.get("stream_subsampling_factor", everyNthsPixel)                
-            try:
-                output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
-            except:
-                output_frame = np.zeros((640,460))
-                
-            # convert 16 bit to 8 bit for visualization
-            if output_frame.dtype == np.uint16:
-                output_frame = np.uint8(output_frame//128) 
+            print(f"Error handling stream frame: {e}")
 
-            # Get JPEG quality from global params
-            jpegQuality = global_params.get("compressionlevel", self.IMG_QUALITY)
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, jpegQuality]
-
-            # Compress image using JPEG format
-            flag, compressed = cv2.imencode(".jpg", output_frame, encode_params)
-            encoded_image = base64.b64encode(compressed).decode('utf-8')
-
-            # Create a minimal message with timestamp
-            message = {
-                "name": self.name, # e.g. sigUpdateImage
-                "detectorname": detector_name,
-                "pixelsize": int(pixel_size), # must not be int64
-                "format": "jpeg",
-                "image": encoded_image,
-                "server_timestamp": time.time()  # Add timestamp for latency tracking
-                ,"image_id": self.image_id
-            }
-            
-            # Emit to clients that are ready (acknowledged previous frame)
-            with _client_frame_lock:
-                ready_clients = [sid for sid, ready in _client_frame_ready.items() if ready]
-            
-            if ready_clients:
-                # Mark clients as not ready (waiting for acknowledgement)
-                with _client_frame_lock:
-                    for sid in ready_clients:
-                        _client_frame_ready[sid] = False
-                
-                # Emit with acknowledgement callback
-                for sid in ready_clients:
-                    def ack_callback(sid=sid):
-                        """Mark client as ready for next frame"""
-                        with _client_frame_lock:
-                            _client_frame_ready[sid] = True
-                    
-                    sio.start_background_task(
-                        sio.emit,
-                        "signal",
-                        json.dumps(message),
-                        to=sid,
-                        callback=ack_callback
-                    )
-            
-            del message
-        except Exception as e:
-            print(f"Error processing JPEG image signal: {e}")
-
-            # Create a minimal message
-            message = {
-                "name": self.name,
-                "detectorname": detector_name,
-                "pixelsize": int(pixel_size), # must not be int64
-                "format": "jpeg",
-                "image": encoded_image,
-            }
-            self._safe_broadcast_message(message)
-            del message
-        except Exception as e:
-            self._logger.error(f"Error emitting JPEG frame: {e}")
-    
-    def update_binary_config(self, **kwargs):
-        """Update binary streaming configuration at runtime."""
-        if self._binary_encoder is not None:
-            self._binary_encoder.update_config(**kwargs)
-        
-        # Update throttle if provided
-        if 'throttle_ms' in kwargs:
-            self._binary_throttle_ms = kwargs['throttle_ms'] / 1000.0
-
-    def _generate_json_message(self, args):  # Consider using msgpspec for efficiency
+    def _generate_json_message(self, args):
+        """Generate message dict from signal arguments (will be serialized with MessagePack or JSON)."""
         param_names = list(self.signature.parameters.keys())
         data = {"name": self.name, "args": {}}
 
         for i, arg in enumerate(args):
             param_name = param_names[i] if i < len(param_names) else f"arg{i}"
             if isinstance(arg, np.ndarray):
-                data["args"][param_name] = arg.tolist().copy()
+                # Convert numpy arrays to lists for serialization
+                data["args"][param_name] = arg.tolist()
             elif isinstance(arg, (str, int, float, bool)):
                 data["args"][param_name] = arg
             elif isinstance(arg, dict):
@@ -362,10 +230,8 @@ class SignalInstance(psygnal.SignalInstance):
 
         return data
 
-
-
     def _safe_broadcast_message(self, mMessage: dict) -> None:
-        """Throttle the emit to avoid task buildup."""
+        """Throttle the emit to avoid task buildup. Thread-safe using call_soon_threadsafe."""
         now = time.time()
         if now - self.last_emit_time < self.emit_interval:
             # print("too fast")
@@ -373,22 +239,24 @@ class SignalInstance(psygnal.SignalInstance):
         self.last_emit_time = now
 
         try:
-            sio.start_background_task(sio.emit, "signal", json.dumps(mMessage))
+            # Serialize message using MessagePack
+            message_bytes = msgpack.packb(mMessage, use_bin_type=True)
+            event_name = "signal_msgpack"
+
+            # Thread-safe emission using call_soon_threadsafe
+            if _shared_event_loop and _shared_event_loop.is_running():
+                async def emit_signal():
+                    await sio.emit(event_name, message_bytes)
+
+                # Schedule the coroutine in the shared event loop from any thread
+                asyncio.run_coroutine_threadsafe(emit_signal(), _shared_event_loop)
+            else:
+                # Event loop not available yet - This happens during app startup
+                # before ImSwitchServer has initialized the shared event loop
+                # Signals emitted during this phase will be dropped (acceptable during init)
+                pass
         except Exception as e:
-            # Use fallback worker thread instead of creating new threads
-            try:
-                _start_fallback_worker()
-                message = (json.dumps(mMessage) if isinstance(mMessage, dict)
-                           else mMessage)
-                _fallback_message_queue.put_nowait(message)
-            except queue.Full:
-                # Queue is full, drop the message to prevent memory buildup
-                pass
-            except Exception as e:
-                # Silently handle any other errors
-                print(f"Error broadcasting message: {e}")
-                pass
-        del mMessage
+            print(f"Error in safe broadcast message: {e}")
 
 class Signal(psygnal.Signal):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -536,46 +404,47 @@ class FrameworkUtils(abstract.FrameworkUtils):
 # Socket.IO event handlers for client connection management
 @sio.event
 async def connect(sid, environ):
-    """Handle client connection - mark as ready for frames"""
-    print(f"Client connected: {sid}")
+    """Handle client connection - mark as ready for frames and send capabilities"""
+    print(f"SocketIO Client connected: {sid}")
     with _client_frame_lock:
-        _client_frame_ready[sid] = True
+        _client_sent_frame_id[sid] = None
+        _client_ack_frame_id[sid] = None
+
+    # Send server capabilities to client
+    capabilities = {
+        "messagepack": True,
+        "binary_streaming": HAS_BINARY_STREAMING,
+        "protocol_version": "1.0"
+    }
+    await sio.emit("server_capabilities", capabilities, to=sid)
+    print(f"Sent capabilities to {sid}: {capabilities}")
+
 
 @sio.event
 async def disconnect(sid):
     """Handle client disconnection - cleanup state"""
-    print(f"Client disconnected: {sid}")
+    print(f"SocketIO Client disconnected: {sid}")
     with _client_frame_lock:
-        _client_frame_ready.pop(sid, None)
+        _client_sent_frame_id.pop(sid, None)
+        _client_ack_frame_id.pop(sid, None)
 
 @sio.event
-async def frame_ack(sid):
+async def frame_ack(sid, data):
     """Client explicitly acknowledges frame processing complete"""
     with _client_frame_lock:
-        _client_frame_ready[sid] = True
-        # print(f"Client {sid} acknowledged frame")
+        _client_ack_frame_id[sid] = data.get('frame_id', None)  # Unified field name
+        # print(f"Client {sid} acknowledged frame", data)
 
-# Function to run Uvicorn server with Socket.IO app
-def run_uvicorn():
-    try:
-        _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(imswitch.__file__)), '_data')
-        config = uvicorn.Config(
-            app,
-            host="0.0.0.0",
-            port=__socketport__,
-            ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if __ssl__ else None,
-            ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if __ssl__ else None,
-            timeout_keep_alive=2,
-        )
-        try:
-            uvicorn.Server(config).run()
-        except Exception as e:
-            print(f"Couldn't start server: {e}")
-    except Exception as e:
-        print(f"Couldn't start server: {e}")
 
-def start_websocket_server():
-    server_thread = threading.Thread(target=run_uvicorn, daemon=True)
-    server_thread.start()
+# Function to set the shared event loop (called by ImSwitchServer)
+def set_shared_event_loop(loop):
+    """Set the shared event loop for thread-safe signal emission."""
+    global _shared_event_loop
+    _shared_event_loop = loop
+    print(f"Shared event loop set: {loop}")
 
-start_websocket_server()
+
+# Function to get the socket app for mounting on FastAPI
+def get_socket_app():
+    """Returns the Socket.IO ASGI app to be mounted on FastAPI."""
+    return socket_app

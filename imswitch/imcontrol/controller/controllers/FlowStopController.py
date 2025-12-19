@@ -266,7 +266,7 @@ class FlowStopController(LiveUpdatedController):
         self.is_measure = True
         if numImages < 0: numImages = np.inf
         self.imagesTaken = 0
-        drivePath = dirtools.UserFileDirs.Data
+        drivePath = dirtools.UserFileDirs.getValidatedDataPath()
         dirPath = os.path.join(drivePath, 'recordings', timeStamp)
         self._logger.debug(dirPath)
         if not os.path.exists(dirPath):

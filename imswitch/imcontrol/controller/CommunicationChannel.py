@@ -19,6 +19,9 @@ class CommunicationChannel(SignalInterface):
     and Widgets, or between Widgets.
     """
 
+    sigUpdateStreamFrame = Signal()
+    
+    
     sigUpdateImage = Signal(
         str, np.ndarray, bool, list, bool
     )  # (detectorName, image, init, scale, isCurrentDetector)
@@ -99,9 +102,12 @@ class CommunicationChannel(SignalInterface):
 
     sigAutoFocus =  Signal(float, float) # scanrange and stepsize
     sigAutoFocusRunning = Signal(bool) # indicate if autofocus is running or not
+    sigAutoFocusLiveValue = Signal(object) # live focus value during monitoring mode {"focus_value": float, "timestamp": float}
 
     # Objective 
     sigToggleObjective = Signal(int) # objective slot number 1,2
+    sigSetObjectiveByName = Signal(str) # objective name (e.g., "10x", "20x")
+    sigSetObjectiveByID = Signal(str) # objective ID
     sigStartLiveAcquistion = Signal(bool)
     sigStopLiveAcquisition = Signal(bool)
 
@@ -116,6 +122,10 @@ class CommunicationChannel(SignalInterface):
     sigUpdateRotatorPosition = Signal(str, str)  # (rotatorName)
 
     sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI
+
+    sigUpdateLaserPower = Signal(dict)  # (laserPowerDict) - updates laser power values from device callbacks
+
+    sigUpdateCANDevices = Signal(list)  # (canDevicesList) - updates CAN device scan results from callbacks
 
     sigSetSyncInMovementSettings = Signal(str, float)  # (rotatorName, position)
 

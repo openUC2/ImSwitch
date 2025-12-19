@@ -41,8 +41,20 @@ class HikCamManager(DetectorManager):
         except:
             self._mocktype = "normal"
 
+        # Get flip settings from affine calibration if available
+        try:
+            flipX = detectorInfo.managerProperties['hikcam']['flipX']
+        except:
+            flipX = False
 
-        self._camera = self._getHikObj(cameraId, isRGB, binning)
+        try:
+            flipY = detectorInfo.managerProperties['hikcam']['flipY']
+        except:
+            flipY = False
+
+        flipImage = (flipY, flipX)
+
+        self._camera = self._getHikObj(cameraId, isRGB, binning, flipImage)
 
         for propertyName, propertyValue in detectorInfo.managerProperties['hikcam'].items():
             self._camera.setPropertyValue(propertyName, propertyValue)
@@ -182,6 +194,17 @@ class HikCamManager(DetectorManager):
     def setPixelSizeUm(self, pixelSizeUm):
         self.parameters['Camera pixel size'].value = pixelSizeUm
 
+    def setFlipImage(self, flipY: bool, flipX: bool):
+        """
+        Set flip settings for the camera during runtime.
+        
+        Args:
+            flipY: Whether to flip vertically
+            flipX: Whether to flip horizontally
+        """
+        self._camera.flipImage = (flipY, flipX)
+        self.__logger.info(f"Updated flip settings: flipY={flipY}, flipX={flipX}")
+
     def crop(self, hpos, vpos, hsize, vsize):
         '''
         hpos - horizontal start position of crop window
@@ -238,11 +261,11 @@ class HikCamManager(DetectorManager):
         """Get the available trigger types for the camera."""
         return self._camera.getTriggerTypes()
 
-    def _getHikObj(self, cameraId, isRGB = False, binning=1):
+    def _getHikObj(self, cameraId, isRGB=False, binning=1, flipImage=(False, False)):
         try:
             from imswitch.imcontrol.model.interfaces.hikcamera import CameraHIK
             self.__logger.debug(f'Trying to initialize Hik camera {cameraId}')
-            camera = CameraHIK(cameraNo=cameraId, isRGB=isRGB, binning=binning)#, pixeltype=PixelType_Gvsp_BayerRG8)
+            camera = CameraHIK(cameraNo=cameraId, isRGB=isRGB, binning=binning, flipImage=flipImage)
         except Exception as e:
             self.__logger.error(e)
             self.__logger.warning(f'Failed to initialize CameraHik {cameraId}, loading TIS mocker')
@@ -261,6 +284,37 @@ class HikCamManager(DetectorManager):
         record n images and average them before subtracting from the latest frame
         '''
         self._camera.recordFlatfieldImage()
+
+    def getCameraStatus(self):
+        """ Returns comprehensive HIK camera status information. """
+        # Get base status from parent class
+        status = super().getCameraStatus()
+        
+        # Add HIK-specific information
+        status['cameraType'] = 'HIK'
+        status['isMock'] = self._mocktype != "normal" if hasattr(self, '_mocktype') else False
+        status['isConnected'] = self._camera is not None and hasattr(self._camera, 'cam')
+        
+        # Add acquisition status
+        status['isAcquiring'] = self._running
+        status['isAdjustingParameters'] = self._adjustingParameters
+        
+        # Try to get additional camera parameters if available
+        try:
+            camera_params = self._camera.get_camera_parameters()
+            if camera_params:
+                status['hardwareParameters'] = camera_params
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve hardware parameters: {e}")
+        
+        # Add current trigger source if available
+        try:
+            status['currentTriggerSource'] = self._camera.getTriggerSource()
+            status['availableTriggerTypes'] = self._camera.getTriggerTypes()
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve trigger information: {e}")
+        
+        return status
 
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.

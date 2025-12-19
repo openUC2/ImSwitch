@@ -73,7 +73,7 @@ _modulesFilePath = os.path.join(dirtools.UserFileDirs.Config, 'modules.json')
 
 if not os.path.isfile(_modulesFilePath):
     # Modules file doesn't exist, create it.
-    _modules = _Modules(enabled=['imcontrol', 'imscripting', 'imnotebook'])
+        _modules = _Modules(enabled=['imcontrol', 'imscripting', 'imnotebook'])
 else:
     with open(_modulesFilePath, 'r') as modulesFile:
         _modules = _Modules.from_json(modulesFile.read(), infer_missing=True)

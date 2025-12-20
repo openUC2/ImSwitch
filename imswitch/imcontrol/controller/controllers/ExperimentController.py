@@ -1210,9 +1210,9 @@ class ExperimentController(ImConWidgetController):
         if channel not in self.allIlluNames:
             self._logger.error(f"Channel {channel} not found in available lasers: {self.allIlluNames}")
             return None
-        self._master.lasersManager[channel].setValue(power)
+        self._master.lasersManager[channel].setValue(power, getReturn=True)
         if self._master.lasersManager[channel].enabled == 0:
-            self._master.lasersManager[channel].setEnabled(1)
+            self._master.lasersManager[channel].setEnabled(1, getReturn=True)
         self._logger.debug(f"Setting laser power to {power} for channel {channel}")
         return power
 

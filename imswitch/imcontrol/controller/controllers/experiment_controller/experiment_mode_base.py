@@ -18,13 +18,27 @@ from ..experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
 
 class OMEFileStorePaths:
     """Helper class for managing OME file storage paths."""
-    def __init__(self, base_dir):
+    def __init__(self, base_dir, shared_individual_tiffs_dir=None):
+        """
+        Initialize OME file storage paths.
+        
+        Args:
+            base_dir: Base directory for this writer's files (e.g., tiles, zarr)
+            shared_individual_tiffs_dir: Shared directory for individual TIFFs across all timepoints.
+                                        If None, creates one under base_dir.
+        """
         self.base_dir = base_dir
         self.tiff_dir = os.path.join(base_dir, "tiles")
         self.zarr_dir = os.path.join(base_dir + ".ome.zarr")
-        self.individual_tiffs_dir = os.path.join(base_dir, "individual_tiffs")
-        os.makedirs(self.tiff_dir) if not os.path.exists(self.tiff_dir) else None
-        os.makedirs(self.individual_tiffs_dir) if not os.path.exists(self.individual_tiffs_dir) else None
+        
+        # Use shared individual_tiffs directory or create one under base_dir
+        if shared_individual_tiffs_dir is not None:
+            self.individual_tiffs_dir = shared_individual_tiffs_dir
+        else:
+            self.individual_tiffs_dir = os.path.join(base_dir, "individual_tiffs")
+            
+        os.makedirs(self.tiff_dir, exist_ok=True)
+        os.makedirs(self.individual_tiffs_dir, exist_ok=True)
     
     def get_timepoint_dir(self, timepoint_index: int):
         """Get or create directory for a specific timepoint."""
@@ -80,9 +94,18 @@ class ExperimentModeBase(ABC):
             
         return minX, maxX, minY, maxY, diffX, diffY
     
-    def create_ome_file_paths(self, base_path: str) -> 'OMEFileStorePaths':
-        """Create OME file storage paths."""
-        return OMEFileStorePaths(base_path)
+    def create_ome_file_paths(self, base_path: str, shared_individual_tiffs_dir: str = None) -> 'OMEFileStorePaths':
+        """
+        Create OME file storage paths.
+        
+        Args:
+            base_path: Base path for the writer's files
+            shared_individual_tiffs_dir: Optional shared directory for individual TIFFs across all timepoints
+            
+        Returns:
+            OMEFileStorePaths instance
+        """
+        return OMEFileStorePaths(base_path, shared_individual_tiffs_dir)
     
     def create_writer_config(self, 
                            write_tiff: bool = False,

@@ -163,7 +163,7 @@ class OMEWriter:
         """Set up the single TIFF writer for appending tiles with metadata."""
         single_tiff_path = os.path.join(self.file_paths.base_dir, "single_tiles.ome.tif")
         self.single_tiff_writer = SingleTiffWriter(single_tiff_path, bigtiff=True)
-        self.single_tiff_writer.start()
+        # No longer need to start() since we write synchronously
         if self.logger:
             self.logger.debug(f"Single TIFF writer initialized: {single_tiff_path}")
     

@@ -266,13 +266,17 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         # Create experiment directory and file paths
         timeStamp, dirPath, mFileName = self.create_experiment_directory("performance_scan")
         
+        # Create shared individual_tiffs directory at the experiment root level
+        shared_individual_tiffs_dir = os.path.join(dirPath, "individual_tiffs")
+        os.makedirs(shared_individual_tiffs_dir, exist_ok=True)
+        
         # Create a single OME writer for all tiles in single TIFF mode
         experiment_name = f"0_performance_scan"
         m_file_path = os.path.join(dirPath, f"{mFileName}_{experiment_name}.ome.tif")
         self._logger.debug(f"Performance mode single TIFF path: {m_file_path}")
         
-        # Create file paths
-        file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""))
+        # Create file paths with shared individual_tiffs directory
+        file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
         
         # Calculate combined tile and grid parameters for all positions
         all_tiles = [tile for tiles in snake_tiles for tile in tiles]  # Flatten all tiles

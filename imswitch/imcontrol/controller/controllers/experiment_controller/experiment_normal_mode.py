@@ -134,6 +134,10 @@ class ExperimentNormalMode(ExperimentModeBase):
         """
         file_writers = []
         
+        # Create shared individual_tiffs directory at the experiment root level
+        shared_individual_tiffs_dir = os.path.join(dir_path, "individual_tiffs")
+        os.makedirs(shared_individual_tiffs_dir, exist_ok=True)
+        
         # Check if single TIFF writing is enabled (single tile scan mode)
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
         
@@ -143,8 +147,8 @@ class ExperimentNormalMode(ExperimentModeBase):
             m_file_path = os.path.join(dir_path, f"{m_file_name}_{experiment_name}.ome.tif")
             self._logger.debug(f"Single TIFF mode - OME-TIFF path: {m_file_path}")
             
-            # Create file paths
-            file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""))
+            # Create file paths with shared individual_tiffs directory
+            file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
             
             # Calculate combined tile and grid parameters for all positions
             all_tiles = [tile for tiles in snake_tiles for tile in tiles]  # Flatten all tiles
@@ -178,6 +182,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             
         else:
             # Original behavior: create separate writers for each tile position
+            # but use shared individual_tiffs directory
             for position_center_index, tiles in enumerate(snake_tiles):
                 experiment_name = f"{t}_{exp_name}_{position_center_index}"
                 m_file_path = os.path.join(
@@ -186,8 +191,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 )
                 self._logger.debug(f"OME-TIFF path: {m_file_path}")
                 
-                # Create file paths
-                file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""))
+                # Create file paths with shared individual_tiffs directory
+                file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
                 
                 # Calculate tile and grid parameters
                 tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])

@@ -248,6 +248,7 @@ class FocusLockController(ImConWidgetController):
         integral_limit = getattr(self._setupInfo.focusLock, "integralLimit", 100.0)
         meas_lowpass_alpha = getattr(self._setupInfo.focusLock, "measLowpassAlpha", 0.0)
 
+        # TODO: we should save and load the slope of the calibration (steps vs focus value) to have a better initial estimate of the scale_um_per_unit and use that by default since we can assume the system doesn't change 
         self._pi_params = PIControllerParams(
             kp=piKp, ki=piKi, kd=piKd, set_point=setPoint,
             safety_distance_limit=safety_distance_limit,
@@ -311,6 +312,9 @@ class FocusLockController(ImConWidgetController):
 
         # PID instance using extracted module (kept as self.pi for API stability)
         self.pi: Optional[PIDController] = None
+
+        # Load calibration data from config file if available
+        self.loadCalibrationData()
 
         # Satrt Camera acquisition
         try:
@@ -615,24 +619,26 @@ class FocusLockController(ImConWidgetController):
             im = np.mean(np.array(frames), axis=0) if len(frames) > 1 else frames[0]
             
             # Step 2: Crop image using consistent parameters from _focus_params
-            crop_size = self._focus_params.crop_size
-            crop_center = self._focus_params.crop_center
-            if crop_size is None:
-                crop_size = min(im.shape)  # use smallest dimension
-            if crop_center is None:
-                crop_center = (im.shape[0] // 2, im.shape[1] // 2)
-            try:
-                import NanoImagingPack as nip
-                cropped_im = nip.extract(
-                    img=im,
-                    ROIsize=(crop_size, crop_size),
-                    centerpos=crop_center,
-                    PadValue=0.0,
-                    checkComplex=True,
-                )
-            except Exception:
-                cropped_im = self.extract(im, crop_size=crop_size, crop_center=crop_center)
-            
+            if 1:
+                crop_size = self._focus_params.crop_size
+                crop_center = self._focus_params.crop_center
+                if crop_size is None:
+                    crop_size = min(im.shape)  # use smallest dimension
+                if crop_center is None:
+                    crop_center = (im.shape[0] // 2, im.shape[1] // 2)
+                try:
+                    import NanoImagingPack as nip
+                    cropped_im = nip.extract(
+                        img=im,
+                        ROIsize=(crop_size, crop_size),
+                        centerpos=crop_center,
+                        PadValue=0.0,
+                        checkComplex=True,
+                    )
+                except Exception:
+                    cropped_im = self.extract(im, crop_size=crop_size, crop_center=crop_center)
+            else:
+                cropped_im = im
             result["cropped_image"] = cropped_im
             
             # Step 3: Compute focus metric using the configured focus metric
@@ -1060,6 +1066,61 @@ class FocusLockController(ImConWidgetController):
             self._logger.error(f"Could not save crop parameters: {e}")
             return
 
+    def saveCalibrationData(self):
+        """Save the current calibration data to the config file."""
+        try:
+            if not self._current_calibration:
+                self._logger.warning("No calibration data to save")
+                return
+            
+            # Save calibration data to setup info
+            if hasattr(self, '_setupInfo') and hasattr(self._setupInfo, 'focusLock'):
+                # Convert calibration data to dict for storage
+                self._setupInfo.focusLock.calibrationData = self._current_calibration.to_dict()
+                
+                # Save the updated setup info to config file
+                from imswitch.imcontrol.model import configfiletools
+                options, _ = configfiletools.loadOptions()
+                configfiletools.saveSetupInfo(options, self._setupInfo)
+                
+                self._logger.info(f"Calibration data saved to config file: sensitivity={self._current_calibration.sensitivity_nm_per_unit:.1f} nm/unit, R²={self._current_calibration.r_squared:.4f}")
+                
+        except Exception as e:
+            self._logger.error(f"Could not save calibration data: {e}")
+            return
+
+    def loadCalibrationData(self):
+        """Load calibration data from the config file on startup."""
+        try:
+            if not hasattr(self, '_setupInfo') or not hasattr(self._setupInfo, 'focusLock'):
+                return
+            
+            calibration_dict = getattr(self._setupInfo.focusLock, 'calibrationData', None)
+            
+            if calibration_dict is None:
+                self._logger.info("No saved calibration data found in config")
+                return
+            
+            # Reconstruct CalibrationData object from dict
+            self._current_calibration = CalibrationData(
+                position_data=calibration_dict.get('position_data', []),
+                focus_data=calibration_dict.get('focus_data', []),
+                polynomial_coeffs=calibration_dict.get('polynomial_coeffs', None),
+                sensitivity_nm_per_unit=calibration_dict.get('sensitivity_nm_per_unit', 0.0),
+                r_squared=calibration_dict.get('r_squared', 0.0),
+                linear_range=tuple(calibration_dict.get('linear_range', [0.0, 0.0])),
+                timestamp=calibration_dict.get('timestamp', 0.0),
+                lookup_table=calibration_dict.get('lookup_table', None),
+            )
+            
+            self._logger.info(
+                f"Loaded calibration data from config: sensitivity={self._current_calibration.sensitivity_nm_per_unit:.1f} nm/unit, "
+                f"R²={self._current_calibration.r_squared:.4f}, timestamp={datetime.fromtimestamp(self._current_calibration.timestamp).isoformat()}"
+            )
+            
+        except Exception as e:
+            self._logger.error(f"Could not load calibration data: {e}")
+            self._current_calibration = None
 
     @APIExport(runOnUIThread=True)
     def getCurrentFocusValue(self) -> Dict[str, Any]:
@@ -1522,7 +1583,10 @@ class FocusCalibThread(object):
                 "sensitivity_nm_per_px": sensitivity_nm_per_unit,
                 "calibration_data": calibration_data.to_dict(),
             })
-
+            
+            # Save calibration data to config file for persistence across reboots
+            self._controller.saveCalibrationData()
+            
             self.show()
             # Move back to initial position
             self._controller._master.positionersManager[self._controller.positioner].move(

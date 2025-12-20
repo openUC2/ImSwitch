@@ -329,7 +329,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                         continue
 
                     # Turn on illumination only for multiple sources (single source was turned on once at the beginning)
-                    if active_sources_count > 1:
+                    if active_sources_count > 1 or True:
                         workflow_steps.append(WorkflowStep(
                             name="Turn on illumination",
                             step_id=step_id,
@@ -379,7 +379,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     step_id += 1
 
                     # Turn off illumination only if multiple sources (for switching between them)
-                    if active_sources_count > 1:
+                    if active_sources_count > 1 or True:
                         workflow_steps.append(WorkflowStep(
                             name="Turn off illumination",
                             step_id=step_id,

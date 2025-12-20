@@ -69,7 +69,7 @@ class ESP32StageManager(PositionerManager):
         self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
 
         # move z before homing? 
-        self._safePositionZHoming = positionerInfo.managerProperties.get('safePositionZHoming',None)
+        self._safeDistanceZHoming = positionerInfo.managerProperties.get('safeDistanceZHoming',0)
         
         self.stageOffsetPositions = {}
         self.stageOffsetPositions["X"] = positionerInfo.stageOffsets.get('stageOffsetPositionX',0)
@@ -466,9 +466,8 @@ class ESP32StageManager(PositionerManager):
             
     def home_x(self, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         # move z prior to homing?
-        self._zPositionPriorHoming = self.getPosition()["Z"]
-        if self._safePositionZHoming is not None:
-            self.move(value=self._zPositionPriorHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
+        if self._safeDistanceZHoming !=0:
+            self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
         if abs(self.homeStepsX)>0:
             self.move(value=self.homeStepsX, speed=self.homeSpeedX, axis="X", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsX)*np.abs(self.homeEndposReleaseX), speed=self.homeSpeedX, axis="X", is_absolute=False, is_blocking=True)
@@ -482,9 +481,8 @@ class ESP32StageManager(PositionerManager):
         # self.setPosition(axis="X", value=0)  # TODO: Not necessary as we get the position asynchronusly?
 
     def home_y(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
-        self._zPositionPriorHoming = self.getPosition()["Z"]
-        if self._safePositionZHoming is not None:
-            self.move(value=self._zPositionPriorHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
+        if self._safeDistanceZHoming !=0:
+            self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
         # TODO: Wehave to go back after we are done with the homing        
         if abs(self.homeStepsY)>0:
             self.move(value=self.homeStepsY, speed=self.homeSpeedY, axis="Y", is_absolute=False, is_blocking=True)
@@ -631,23 +629,19 @@ class ESP32StageManager(PositionerManager):
         def homingThreadFunction(self):
             # Step 1: Store Z-position
             self._zPositionPriorHoming = self.getPosition()["Z"]
-            # STep 1.5: Move to Save XY position
-            self._safePositionXHoming = 10000
-            self._safePositionYHoming = 10000
-            self.move(value=(self._safePositionXHoming, self._safePositionYHoming), speed=max(self.homeSpeedX, self.homeSpeedY), axis="XY", is_absolute=True, is_blocking=True)
             # Step 2: Home Z
             self.home_z(isBlocking=True)
             # Step 3: Move Z to Safe position # Assuming Z will be 0 now!
-            if self._safePositionZHoming !=0:
-                self.move(value=self._safePositionZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
+            if self._safeDistanceZHoming !=0:
+                self.move(value=self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
             # Step 4: Home X
             self.home_x(isBlocking=True)
-            self.move(value=self._safePositionXHoming, speed=self.homeSpeedX, axis="X", is_absolute=True, is_blocking=False) 
+            self.move(value=1000, speed=self.homeSpeedX, axis="X", is_absolute=True, is_blocking=False) 
             # Step 5: Home Y
             self.home_y(isBlocking=True)
-            self.move(value=self._safePositionYHoming, speed=self.homeSpeedY, axis="Y", is_absolute=True, is_blocking=False)
+            self.move(value=1000, speed=self.homeSpeedY, axis="Y", is_absolute=True, is_blocking=False)
             # Step 6: Move Z to previous position (safeposition + previous position
-            self.move(value=self._zPositionPriorHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
+            self.move(value=self._zPositionPriorHoming-self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
             # Step 7: Ready 
             self.__logger.info("Frame homing procedure completed.")
         

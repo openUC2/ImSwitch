@@ -458,6 +458,11 @@ class FocusLockInfo:
     fovCenter: list = field(default_factory=lambda: [None, None])
     """ Center of the field of view for focus lock, in pixels. [x, y] """
     
+    calibrationData: Optional[dict] = None
+    """ Stored calibration data from previous calibration runs. 
+    Contains position_data, focus_data, polynomial_coeffs, sensitivity, r_squared, 
+    linear_range, timestamp, and lookup_table. """
+    
 @dataclass(frozen=False)
 class ArkitektInfo:
     enabled: bool = True

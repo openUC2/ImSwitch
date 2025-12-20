@@ -764,6 +764,9 @@ class ExperimentController(ImConWidgetController):
             all_workflow_steps = []
             all_file_writers = []
 
+            # Get the initial Z position at the start of each timepoint
+            initial_z_position = self.mStage.getPosition()["Z"]
+            
             for t in range(nTimes):
                 experiment_params = {
                     'mExperiment': mExperiment,
@@ -776,6 +779,7 @@ class ExperimentController(ImConWidgetController):
                     illumination_intensities=illuminationIntensities,
                     illumination_sources=illuSources,
                     z_positions=z_positions,
+                    initial_z_position=initial_z_position,
                     exposures=exposures,
                     gains=gains,
                     exp_name=exp_name,
@@ -927,7 +931,7 @@ class ExperimentController(ImConWidgetController):
                 in_background=False
             )
             if result.get('success', False):
-                target_z = result.get('target_z_position')
+                target_z = result.get('z_offset')
                 self._logger.info(
                     f"Hardware autofocus successful: "
                     f"Z={target_z:.2f}µm, error={result.get('final_error_um', 0):.3f}µm, "

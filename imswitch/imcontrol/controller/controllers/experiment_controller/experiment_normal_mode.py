@@ -59,6 +59,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_mode = kwargs.get('autofocus_mode', 'software')  # 'hardware' or 'software'
         autofocus_max_attempts = kwargs.get('autofocus_max_attempts', 2)
         autofocus_target_focus_setpoint = kwargs.get('autofocus_target_focus_setpoint', None)
+        initial_z_position = kwargs.get('initial_z_position', None)
         t_period = kwargs.get('t_period', 1)
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
@@ -73,12 +74,11 @@ class ExperimentNormalMode(ExperimentModeBase):
             snake_tiles, t, exp_name, dir_path, m_file_name, 
             z_positions, illumination_intensities, isRGB=isRGB  
         )
-        
         # Create workflow steps for each tile
         for position_center_index, tiles in enumerate(snake_tiles):
             step_id = self._create_tile_workflow_steps(
                 tiles, position_center_index, step_id, workflow_steps,
-                z_positions, illumination_sources, illumination_intensities,
+                z_positions, initial_z_position, illumination_sources, illumination_intensities,
                 exposures, gains, t, is_auto_focus, autofocus_min, 
                 autofocus_max, autofocus_step_size, autofocus_illumination_channel, 
                 autofocus_mode, autofocus_max_attempts, autofocus_target_focus_setpoint, n_times
@@ -227,6 +227,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   step_id: int,
                                   workflow_steps: List[WorkflowStep],
                                   z_positions: List[float],
+                                  initial_z_position: float,  
                                   illumination_sources: List[str],
                                   illumination_intensities: List[float],
                                   exposures: List[float],
@@ -269,7 +270,6 @@ class ExperimentNormalMode(ExperimentModeBase):
             Updated step ID
         """
         # Get scan range information
-        initial_z_position = self.controller.mStage.getPosition()["Z"]
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
         
@@ -329,7 +329,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                         continue
 
                     # Turn on illumination only for multiple sources (single source was turned on once at the beginning)
-                    if active_sources_count > 1:
+                    if active_sources_count > 1 or True:
                         workflow_steps.append(WorkflowStep(
                             name="Turn on illumination",
                             step_id=step_id,
@@ -379,7 +379,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     step_id += 1
 
                     # Turn off illumination only if multiple sources (for switching between them)
-                    if active_sources_count > 1:
+                    if active_sources_count > 1 or True:
                         workflow_steps.append(WorkflowStep(
                             name="Turn off illumination",
                             step_id=step_id,

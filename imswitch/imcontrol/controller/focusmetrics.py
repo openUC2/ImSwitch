@@ -478,7 +478,7 @@ class PeakMetric(FocusMetricBase):
 
         focus_value = left_peak  # <- what you care about
 
-        if 1 or bool(getattr(self.config, "debug_plot", False)):
+        if 0 or bool(getattr(self.config, "debug_plot", False)):
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt

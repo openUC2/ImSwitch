@@ -57,6 +57,9 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_step_size = kwargs.get('autofocus_step_size', 1)
         autofocus_illumination_channel = kwargs.get('autofocus_illumination_channel', '')
         autofocus_mode = kwargs.get('autofocus_mode', 'software')  # 'hardware' or 'software'
+        autofocus_max_attempts = kwargs.get('autofocus_max_attempts', 2)
+        autofocus_target_focus_setpoint = kwargs.get('autofocus_target_focus_setpoint', None)
+        initial_z_position = kwargs.get('initial_z_position', None)
         t_period = kwargs.get('t_period', 1)
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
@@ -71,15 +74,14 @@ class ExperimentNormalMode(ExperimentModeBase):
             snake_tiles, t, exp_name, dir_path, m_file_name, 
             z_positions, illumination_intensities, isRGB=isRGB  
         )
-        
         # Create workflow steps for each tile
         for position_center_index, tiles in enumerate(snake_tiles):
             step_id = self._create_tile_workflow_steps(
                 tiles, position_center_index, step_id, workflow_steps,
-                z_positions, illumination_sources, illumination_intensities,
+                z_positions, initial_z_position, illumination_sources, illumination_intensities,
                 exposures, gains, t, is_auto_focus, autofocus_min, 
                 autofocus_max, autofocus_step_size, autofocus_illumination_channel, 
-                autofocus_mode, n_times
+                autofocus_mode, autofocus_max_attempts, autofocus_target_focus_setpoint, n_times
             )
         
         # Add finalization steps
@@ -132,6 +134,10 @@ class ExperimentNormalMode(ExperimentModeBase):
         """
         file_writers = []
         
+        # Create shared individual_tiffs directory at the experiment root level
+        shared_individual_tiffs_dir = os.path.join(dir_path, "individual_tiffs")
+        os.makedirs(shared_individual_tiffs_dir, exist_ok=True)
+        
         # Check if single TIFF writing is enabled (single tile scan mode)
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
         
@@ -141,8 +147,8 @@ class ExperimentNormalMode(ExperimentModeBase):
             m_file_path = os.path.join(dir_path, f"{m_file_name}_{experiment_name}.ome.tif")
             self._logger.debug(f"Single TIFF mode - OME-TIFF path: {m_file_path}")
             
-            # Create file paths
-            file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""))
+            # Create file paths with shared individual_tiffs directory
+            file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
             
             # Calculate combined tile and grid parameters for all positions
             all_tiles = [tile for tiles in snake_tiles for tile in tiles]  # Flatten all tiles
@@ -176,6 +182,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             
         else:
             # Original behavior: create separate writers for each tile position
+            # but use shared individual_tiffs directory
             for position_center_index, tiles in enumerate(snake_tiles):
                 experiment_name = f"{t}_{exp_name}_{position_center_index}"
                 m_file_path = os.path.join(
@@ -184,8 +191,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 )
                 self._logger.debug(f"OME-TIFF path: {m_file_path}")
                 
-                # Create file paths
-                file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""))
+                # Create file paths with shared individual_tiffs directory
+                file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
                 
                 # Calculate tile and grid parameters
                 tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
@@ -225,6 +232,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   step_id: int,
                                   workflow_steps: List[WorkflowStep],
                                   z_positions: List[float],
+                                  initial_z_position: float,  
                                   illumination_sources: List[str],
                                   illumination_intensities: List[float],
                                   exposures: List[float],
@@ -236,6 +244,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   autofocus_step_size: float,
                                   autofocus_illumination_channel: str,
                                   autofocus_mode: str,
+                                    autofocus_max_attempts: int,
+                                    autofocus_target_focus_setpoint: float,
                                   n_times: int) -> int:
         """
         Create workflow steps for a single tile.
@@ -257,12 +267,14 @@ class ExperimentNormalMode(ExperimentModeBase):
             autofocus_step_size: Autofocus step size
             autofocus_illumination_channel: Selected illumination channel for autofocus
             autofocus_mode: Autofocus mode ('hardware' or 'software')
+            autofocus_max_attempts,
+            autofocus_target_focus_setpoint,
+                   
             
         Returns:
             Updated step ID
         """
         # Get scan range information
-        initial_z_position = self.controller.mStage.getPosition()["Z"]
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
         
@@ -322,7 +334,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                         continue
 
                     # Turn on illumination only for multiple sources (single source was turned on once at the beginning)
-                    if active_sources_count > 1:
+                    if active_sources_count > 1 or True:
                         workflow_steps.append(WorkflowStep(
                             name="Turn on illumination",
                             step_id=step_id,
@@ -372,7 +384,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     step_id += 1
 
                     # Turn off illumination only if multiple sources (for switching between them)
-                    if active_sources_count > 1:
+                    if active_sources_count > 1 or True:
                         workflow_steps.append(WorkflowStep(
                             name="Turn off illumination",
                             step_id=step_id,
@@ -404,6 +416,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                         "maxZ": autofocus_max, 
                         "stepSize": autofocus_step_size, 
                         "illuminationChannel": autofocus_illumination_channel,
+                        "max_attempts": autofocus_max_attempts,
+                        "target_focus_setpoint": autofocus_target_focus_setpoint,
                         "mode": autofocus_mode
                     },
                 ))

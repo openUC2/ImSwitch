@@ -34,6 +34,9 @@ class StreamParams:
     subsampling_factor: int = 4
     throttle_ms: int = 50
     
+    # Crop parameters (applied before subsampling)
+    crop_size: int = 0  # 0 means no crop (full FOV), >0 crops quadratic region around center
+    
     # JPEG/MJPEG parameters
     jpeg_quality: int = 80
     
@@ -61,6 +64,42 @@ class StreamParams:
     def from_dict(cls, data: Dict[str, Any]) -> 'StreamParams':
         """Create StreamParams from dictionary."""
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+def apply_center_crop(frame: np.ndarray, crop_size: int) -> np.ndarray:
+    """
+    Apply quadratic (square) center crop to frame.
+    
+    Args:
+        frame: Input image (2D or 3D array)
+        crop_size: Size of the square crop region. If 0 or >= min(height, width), returns original frame.
+    
+    Returns:
+        Cropped frame
+    """
+    if crop_size <= 0:
+        return frame
+    
+    height, width = frame.shape[:2]
+    min_dim = min(height, width)
+    
+    # Clamp crop_size to image dimensions
+    crop_size = min(crop_size, min_dim)
+    
+    # Calculate center crop coordinates
+    center_y, center_x = height // 2, width // 2
+    half_crop = crop_size // 2
+    
+    y_start = center_y - half_crop
+    y_end = y_start + crop_size
+    x_start = center_x - half_crop
+    x_end = x_start + crop_size
+    
+    # Crop the frame
+    if len(frame.shape) == 2:
+        return frame[y_start:y_end, x_start:x_end]
+    else:
+        return frame[y_start:y_end, x_start:x_end, :]
 
 
 class StreamWorker(Worker):
@@ -214,6 +253,10 @@ class BinaryStreamWorker(StreamWorker):
             if frame.dtype not in [np.uint8, np.uint16]:
                 frame = np.uint8(frame)
             
+            # Apply center crop if specified (before subsampling)
+            if self._params.crop_size > 0:
+                frame = apply_center_crop(frame, self._params.crop_size)
+            
             # Get encoder
             encoder = self._get_encoder()
             if encoder is None:
@@ -295,6 +338,10 @@ class JPEGStreamWorker(StreamWorker):
                 else:
                     frame = np.zeros_like(frame, dtype=np.uint8)
             
+            # Apply center crop if specified (before subsampling)
+            if self._params.crop_size > 0:
+                frame = apply_center_crop(frame, self._params.crop_size)
+            
             # Apply subsampling if needed
             if self._params.subsampling_factor > 1:
                 frame = frame[::self._params.subsampling_factor, ::self._params.subsampling_factor]
@@ -375,6 +422,10 @@ class MJPEGStreamWorker(StreamWorker):
                     frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
                 else:
                     frame = np.zeros_like(frame, dtype=np.uint8)
+            
+            # Apply center crop if specified (before encoding)
+            if self._params.crop_size > 0:
+                frame = apply_center_crop(frame, self._params.crop_size)
             
             # Encode as JPEG
             encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
@@ -459,6 +510,10 @@ class WebRTCStreamWorker(StreamWorker):
                         frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
                     else:
                         frame = np.zeros_like(frame, dtype=np.uint8)
+            
+            # Apply center crop if specified (before streaming)
+            if self._params.crop_size > 0:
+                frame = apply_center_crop(frame, self._params.crop_size)
             
             # Put frame in queue, replacing old frame if full
             try:

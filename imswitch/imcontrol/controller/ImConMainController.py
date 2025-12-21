@@ -116,6 +116,27 @@ class ImConMainController(MainController):
                 except Exception as e:
                     self.__logger.debug(e)
 
+        # Add AcceptanceTestController in any case
+        try:
+            self.__logger.info("Creating controller for AcceptanceTest ")
+            controller_name = "AcceptanceTestController"
+            module = importlib.import_module(
+                "imswitch.imcontrol.controller.controllers.AcceptanceTestController"
+            )
+            controller_class = getattr(module, controller_name)
+            if controller_class is not None:
+                self.controllers["AcceptanceTest"] = self.__factory.createController(
+                    controller_class, None
+                )
+                # Register AcceptanceTestController
+                self.__masterController.registerController(
+                    "AcceptanceTest", self.controllers["AcceptanceTest"]
+                )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not dynamically import {controller_name}: {e}"
+            )
+            
         # Add LiveViewController in case of IS_HEADLESS in anyway
         try:
             if IS_HEADLESS:

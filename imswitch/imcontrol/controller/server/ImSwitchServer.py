@@ -34,6 +34,7 @@ import socket
 import os
 import threading
 import asyncio
+from datetime import datetime
 from fastapi.openapi.docs import (
     get_redoc_html,
     get_swagger_ui_html,
@@ -608,6 +609,57 @@ class ImSwitchServer(Worker):
         if restartSoftware: 
             ostools.restartSoftware()
         return f"Setup file {setupFileName} set successfully."
+
+    # Log file management endpoints
+    @app.get("/LogController/listLogFiles")
+    def list_log_files() -> Dict[str, List[Dict[str, str]]]:
+        """
+        Returns a list of available log files in alphanumerical order.
+        """
+        from imswitch.imcommon.model import get_log_folder
+        log_folder = get_log_folder()
+        
+        if not os.path.exists(log_folder):
+            return {"log_files": []}
+        
+        log_files = []
+        for filename in os.listdir(log_folder):
+            if filename.endswith('.log'):
+                file_path = os.path.join(log_folder, filename)
+                file_stat = os.stat(file_path)
+                log_files.append({
+                    'filename': filename,
+                    'size': str(file_stat.st_size),
+                    'modified': datetime.fromtimestamp(file_stat.st_mtime).isoformat(),
+                    'path': file_path
+                })
+        
+        # Sort alphanumerically by filename
+        log_files.sort(key=lambda x: x['filename'])
+        
+        return {"log_files": log_files}
+
+    @app.get("/LogController/downloadLogFile")
+    def download_log_file(filename: str):
+        """
+        Download a specific log file.
+        """
+        from imswitch.imcommon.model import get_log_folder
+        log_folder = get_log_folder()
+        
+        # Security: prevent directory traversal
+        if '..' in filename or '/' in filename or '\\' in filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        
+        file_path = os.path.join(log_folder, filename)
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Log file not found")
+        
+        if not os.path.isfile(file_path):
+            raise HTTPException(status_code=400, detail="Not a file")
+        
+        return FileResponse(file_path, filename=filename, media_type='text/plain')
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

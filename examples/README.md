@@ -4,10 +4,64 @@ This directory contains example scripts and demonstrations for ImSwitch function
 
 ## MDA Integration Examples
 
-ImSwitch supports the useq-schema standard for multi-dimensional acquisition in two ways:
+ImSwitch supports the useq-schema standard for multi-dimensional acquisition using **native useq.MDASequence objects**, following the same pattern as pymmcore-plus and raman-mda-engine.
 
-1. **High-level REST API** (`mda_demo.py`) - Submit MDA experiments via HTTP endpoints
-2. **Direct Engine Pattern** (`mda_engine_wrapper.py`) - Control ImSwitch HAL directly with useq-schema
+### Key Features
+
+- **Native useq-schema support**: Use native `useq.MDASequence` objects directly
+- **Protocol compatibility**: Share protocols with pymmcore-plus, raman-mda-engine, and other useq-compatible systems
+- **Full schema support**: metadata, stage_positions, grid_plan, channels, time_plan, z_plan, autofocus_plan, axis_order
+- **Hook system**: Add custom logic for autofocus, drift correction, analysis, etc.
+
+### Native useq-schema Example (Recommended)
+
+`native_useq_mda_example.py` - Demonstrates using native `useq.MDASequence` objects following the **EXACT** pattern from pymmcore-plus and raman-mda-engine.
+
+#### Requirements
+```bash
+pip install useq-schema
+```
+
+#### Usage
+```bash
+# Run the comprehensive example
+python examples/native_useq_mda_example.py
+```
+
+#### Example Code
+
+```python
+from useq import MDASequence, Channel, TIntervalLoops, ZRangeAround, AbsolutePosition
+from imswitch.imcontrol.model.managers.MDASequenceManager import MDASequenceManager
+
+# Create native useq-schema sequence
+mda = MDASequence(
+    metadata={"experiment": "test"},
+    stage_positions=[
+        AbsolutePosition(x=100.0, y=100.0, z=30.0),
+        AbsolutePosition(x=200.0, y=150.0, z=35.0)
+    ],
+    channels=[Channel(config="BF"), Channel(config="DAPI")],
+    time_plan=TIntervalLoops(interval=1, loops=20),
+    z_plan=ZRangeAround(range=4.0, step=0.5),
+    axis_order="tpcz"
+)
+
+# Register engine with ImSwitch managers
+engine = MDASequenceManager()
+engine.register(
+    detector_manager=detectorsManager,
+    positioners_manager=positionersManager,
+    lasers_manager=lasersManager
+)
+
+# Run the sequence
+engine.run_mda(mda, output_path="/data/experiment")
+```
+
+This follows the **same pattern** as:
+- `core.run_mda(mda)` in pymmcore-plus
+- `engine.run_mda(mda)` in raman-mda-engine
 
 ### MDA Demo (REST API)
 

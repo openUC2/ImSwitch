@@ -12,8 +12,9 @@ ImSwitch supports the useq-schema standard for multi-dimensional acquisition usi
 - **Protocol compatibility**: Share protocols with pymmcore-plus, raman-mda-engine, and other useq-compatible systems
 - **Full schema support**: metadata, stage_positions, grid_plan, channels, time_plan, z_plan, autofocus_plan, axis_order
 - **Hook system**: Add custom logic for autofocus, drift correction, analysis, etc.
+- **REST API**: Send MDA sequences from Jupyter notebooks or external scripts
 
-### Native useq-schema Example (Recommended)
+### 1. Native useq-schema Example (Recommended)
 
 `native_useq_mda_example.py` - Demonstrates using native `useq.MDASequence` objects following the **EXACT** pattern from pymmcore-plus and raman-mda-engine.
 
@@ -63,7 +64,58 @@ This follows the **same pattern** as:
 - `core.run_mda(mda)` in pymmcore-plus
 - `engine.run_mda(mda)` in raman-mda-engine
 
-### MDA Demo (REST API)
+### 2. REST API with imswitchclient (NEW)
+
+`mda_imswitchclient_example.py` - Shows how to create MDA sequences in Jupyter notebooks or external scripts and send them to ImSwitch via REST API.
+
+#### Requirements
+```bash
+pip install useq-schema requests
+# Optional: pip install imswitchclient
+```
+
+#### Usage
+```bash
+# Run the example
+python examples/mda_imswitchclient_example.py
+```
+
+#### Example: XYZ Time-Lapse from Jupyter Notebook
+
+```python
+import requests
+from useq import MDASequence, Channel, TIntervalLoops, ZRangeAround, AbsolutePosition
+
+# Create MDA sequence in Jupyter notebook
+sequence = MDASequence(
+    metadata={"experiment": "xyz_timelapse"},
+    stage_positions=[
+        AbsolutePosition(x=100.0, y=100.0, z=30.0),
+        AbsolutePosition(x=200.0, y=150.0, z=35.0)
+    ],
+    channels=[Channel(config="Brightfield", exposure=10.0)],
+    z_plan=ZRangeAround(range=10.0, step=2.0),
+    time_plan=TIntervalLoops(interval=60.0, loops=10),
+    axis_order="tpzc"
+)
+
+# Send to ImSwitch for execution
+response = requests.post(
+    "http://localhost:8000/api/experimentcontroller/run_native_mda_sequence",
+    json=sequence.model_dump()  # or sequence.dict() for older pydantic
+)
+
+print(response.json())
+# Output: {'status': 'started', 'save_directory': '/data/...', ...}
+```
+
+This pattern allows you to:
+- **Formulate protocols outside ImSwitch** in Jupyter notebooks
+- **Send via REST API** to a running ImSwitch instance
+- **Execute remotely** on microscope hardware
+- **Compatible with imswitchclient** library
+
+### 3. MDA Demo (REST API)
 
 `mda_demo.py` - Demonstrates the MDA functionality using the REST API endpoints.
 

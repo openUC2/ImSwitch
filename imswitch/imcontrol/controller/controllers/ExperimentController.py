@@ -1853,6 +1853,109 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Error getting MDA sequence info: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error getting MDA sequence info: {str(e)}")
 
+    @APIExport(requestType="POST")
+    def run_native_mda_sequence(self, sequence_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a native useq-schema MDASequence from JSON.
+        
+        This endpoint accepts a native useq.MDASequence serialized as JSON (dict),
+        following the EXACT pattern from pymmcore-plus and raman-mda-engine.
+        
+        Args:
+            sequence_dict: Native useq.MDASequence serialized to dict/JSON with fields:
+                - metadata: Dict with arbitrary experiment metadata
+                - stage_positions: List of (x, y, z) tuples or AbsolutePosition dicts
+                - grid_plan: Dict with GridRowsColumns configuration
+                - channels: List of Channel dicts with 'config' and optional 'exposure'
+                - time_plan: Dict with 'interval' and 'loops' for TIntervalLoops
+                - z_plan: Dict with 'range' and 'step' for ZRangeAround
+                - autofocus_plan: Dict with autofocus configuration
+                - axis_order: String like "tpcz" defining acquisition order
+                - keep_shutter_open_across: Tuple of axes to keep shutter open
+        
+        Returns:
+            Dict with execution status and sequence information
+            
+        Example request body:
+            {
+                "metadata": {"experiment": "test", "user": "researcher"},
+                "stage_positions": [[100.0, 100.0, 30.0], [200.0, 150.0, 35.0]],
+                "channels": [
+                    {"config": "BF", "exposure": 50.0},
+                    {"config": "DAPI", "exposure": 100.0}
+                ],
+                "time_plan": {"interval": 1, "loops": 20},
+                "z_plan": {"range": 4.0, "step": 0.5},
+                "axis_order": "tpcz"
+            }
+        """
+        if not self.mda_manager.is_available():
+            raise HTTPException(status_code=400, detail="useq-schema not available. Install with: pip install useq-schema")
+        
+        try:
+            from useq import MDASequence
+            
+            # Parse the native useq-schema JSON into an MDASequence object
+            # useq-schema's pydantic models can parse from dict
+            self._logger.info(f"Received native MDA sequence: {sequence_dict.keys()}")
+            sequence = MDASequence(**sequence_dict)
+            
+            self._logger.info(f"Parsed MDASequence: {len(list(sequence))} events, axis_order={sequence.axis_order}")
+            
+            # Register the MDA manager with ImSwitch hardware
+            if not self.mda_manager._detector_manager:
+                self.mda_manager.register(
+                    detector_manager=self._master.detectorsManager,
+                    positioners_manager=self._master.positionersManager,
+                    lasers_manager=self._master.lasersManager,
+                    autofocus_manager=getattr(self._master, 'autofocusManager', None)
+                )
+                self._logger.info("Registered MDA engine with ImSwitch hardware managers")
+            
+            # Get sequence info
+            seq_info = self.mda_manager.get_sequence_info(sequence)
+            self._logger.info(f"Sequence info: {seq_info}")
+            
+            # Setup data directory
+            metadata = sequence.metadata if hasattr(sequence, 'metadata') and sequence.metadata else {}
+            experiment_name = metadata.get('experiment_name', 'MDA_Experiment')
+            
+            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            drivePath = dirtools.UserFileDirs.Data
+            dirPath = os.path.join(drivePath, 'NativeMDA', experiment_name, timeStamp)
+            
+            if not os.path.exists(dirPath):
+                os.makedirs(dirPath)
+                self._logger.info(f"Created output directory: {dirPath}")
+            
+            # Run the MDA sequence using the native engine
+            # This runs in a background thread to not block the API
+            import threading
+            
+            def run_sequence():
+                try:
+                    self._logger.info("Starting native MDA sequence execution")
+                    self.mda_manager.run_mda(sequence, output_path=dirPath)
+                    self._logger.info("Native MDA sequence completed successfully")
+                except Exception as e:
+                    self._logger.error(f"Error during MDA execution: {str(e)}", exc_info=True)
+            
+            # Start execution thread
+            thread = threading.Thread(target=run_sequence, daemon=False)
+            thread.start()
+            
+            return {
+                "status": "started",
+                "sequence_info": seq_info,
+                "save_directory": dirPath,
+                "estimated_duration_minutes": seq_info["estimated_duration_minutes"],
+                "message": "Native MDA sequence started in background thread"
+            }
+            
+        except Exception as e:
+            self._logger.error(f"Error starting native MDA sequence: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error starting native MDA sequence: {str(e)}")
+
     def snap_image_with_metadata(self, metadata: Dict[str, Any]) -> np.ndarray:
         """Snap an image with MDA metadata."""
         # This is a wrapper around the existing snap functionality

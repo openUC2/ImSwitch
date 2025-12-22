@@ -171,7 +171,7 @@ class MDASequenceManager:
                 if not self._is_running:
                     self.__logger.warning("MDA sequence stopped by user")
                     break
-                
+                self.__logger.info(f"Processing event {event_idx}: {dict(event.index)}")  
                 # Handle time_plan: Wait until min_start_time if specified
                 if event.min_start_time is not None:
                     elapsed_time = time.time() - sequence_start_time

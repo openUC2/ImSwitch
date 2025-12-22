@@ -155,6 +155,7 @@ class MDASequenceManager:
         self._is_running = True
         self._current_sequence = sequence
         
+        # TODO: z_plan, time_plan, grid_plan handling can be added here if needed
         try:
             # Run pre-sequence hooks
             for hook in self._hooks_before_sequence:
@@ -224,14 +225,14 @@ class MDASequenceManager:
         if event.z_pos is not None:
             self._move_z(event.z_pos)
         
+        # Setup channel (illumination + exposure)
+        if event.channel is not None:
+            self._setup_channel(event.channel, event.exposure)
+        
         # Run autofocus if specified in the event's action
         # Note: useq-schema can specify autofocus via autofocus_plan
         if hasattr(event, 'action') and event.action and 'autofocus' in str(event.action).lower():
             self._run_autofocus()
-        
-        # Setup channel (illumination + exposure)
-        if event.channel is not None:
-            self._setup_channel(event.channel, event.exposure)
         
         # Handle min_start_time (timing synchronization)
         if event.min_start_time is not None:
@@ -273,11 +274,13 @@ class MDASequenceManager:
             stage_name = stage_names[0]
             stage = self._positioners_manager[stage_name]
             
-            # Move to position - API depends on PositionerManager implementation
-            if x is not None:
-                stage.move(x, "X", absolute=True)
-            if y is not None:
-                stage.move(y, "Y", absolute=True)
+            # Move to position - API depends on PositionerManager implementation # TODO: Fuse to have x/y together
+            if x is not None and y is not None:
+                stage.move(value=(x,y), axis="XY", is_absolute=True, is_blocking=True)
+            elif x is not None:
+                stage.move(x, "X", is_absolute=True, is_blocking=True)
+            elif y is not None:
+                stage.move(y, "Y", is_absolute=True, is_blocking=True)
             
             self.__logger.debug(f"Moved stage to XY: ({x}, {y})")
         except Exception as e:
@@ -296,7 +299,7 @@ class MDASequenceManager:
             stage_name = stage_names[0]
             stage = self._positioners_manager[stage_name]
             
-            stage.move(z, "Z", absolute=True)
+            stage.move(z, "Z", is_absolute=True, is_blocking=True)
             
             self.__logger.debug(f"Moved stage to Z: {z}")
         except Exception as e:
@@ -345,6 +348,13 @@ class MDASequenceManager:
                 if detector_names:
                     detector_name = detector_names[0]
                     detector = self._detector_manager[detector_name]
+                    if not detector.forAcquisition:
+                        # try next available detector
+                        for name in detector_names:
+                            det = self._detector_manager[name]
+                            if det.forAcquisition:
+                                detector = det
+                                break
                     
                     # Set exposure - API may vary by detector type
                     if hasattr(detector, 'setParameter'):

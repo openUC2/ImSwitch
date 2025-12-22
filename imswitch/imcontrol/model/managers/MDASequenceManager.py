@@ -155,23 +155,38 @@ class MDASequenceManager:
         self._is_running = True
         self._current_sequence = sequence
         
-        # TODO: z_plan, time_plan, grid_plan handling can be added here if needed
+        # Track sequence start time for time_plan synchronization
+        sequence_start_time = time.time()
+        
         try:
             # Run pre-sequence hooks
             for hook in self._hooks_before_sequence:
                 hook(sequence)
             
             # Execute each MDAEvent in the sequence
+            # Note: z_plan, time_plan, and grid_plan are automatically handled by useq-schema
+            # which generates MDAEvents with appropriate positions (x_pos, y_pos, z_pos) and
+            # timing (min_start_time). We just need to execute each event at the right time.
             for event_idx, event in enumerate(sequence):
                 if not self._is_running:
                     self.__logger.warning("MDA sequence stopped by user")
                     break
+                
+                # Handle time_plan: Wait until min_start_time if specified
+                if event.min_start_time is not None:
+                    elapsed_time = time.time() - sequence_start_time
+                    wait_time = event.min_start_time - elapsed_time
+                    if wait_time > 0:
+                        self.__logger.debug(f"Waiting {wait_time:.2f}s for time point {event.index.get('t', 0)}")
+                        time.sleep(wait_time)
                 
                 # Run pre-event hooks
                 for hook in self._hooks_before_event:
                     hook(event)
                 
                 # Execute the event
+                # z_plan handling: event.z_pos is automatically set by useq-schema
+                # grid_plan handling: event.x_pos, event.y_pos are automatically set
                 image = self._execute_event(event, event_idx)
                 
                 # Run post-event hooks
@@ -225,20 +240,14 @@ class MDASequenceManager:
         if event.z_pos is not None:
             self._move_z(event.z_pos)
         
-        # Setup channel (illumination + exposure)
-        if event.channel is not None:
-            self._setup_channel(event.channel, event.exposure)
-        
         # Run autofocus if specified in the event's action
         # Note: useq-schema can specify autofocus via autofocus_plan
         if hasattr(event, 'action') and event.action and 'autofocus' in str(event.action).lower():
             self._run_autofocus()
         
-        # Handle min_start_time (timing synchronization)
-        if event.min_start_time is not None:
-            # Wait until the specified time
-            # This would need sequence start time tracking
-            pass
+        # Setup channel (illumination + exposure)
+        if event.channel is not None:
+            self._setup_channel(event.channel, event.exposure)
         
         # Acquire image
         image = self._acquire_image()

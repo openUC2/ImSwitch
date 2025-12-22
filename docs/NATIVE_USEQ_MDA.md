@@ -16,11 +16,26 @@ The `MDASequenceManager` is now a full-featured MDA engine that:
   - `stage_positions`: AbsolutePosition tuples for multi-position
   - `grid_plan`: GridRowsColumns for automated grid scanning
   - `channels`: Channel configurations with exposure times
-  - `time_plan`: TIntervalLoops for time-lapse
-  - `z_plan`: ZRangeAround for Z-stacks
+  - `time_plan`: TIntervalLoops for time-lapse with automatic timing delays
+  - `z_plan`: ZRangeAround for Z-stacks with automatic position generation
   - `autofocus_plan`: Autofocus strategies
   - `axis_order`: Order of acquisition (e.g., "tpcz")
   - `keep_shutter_open_across`: Keep illumination on across certain axes
+
+### How Plans Are Handled
+
+The useq-schema library automatically expands plans into individual `MDAEvent` objects:
+
+- **z_plan**: Each event gets a `z_pos` field with the appropriate Z position
+- **time_plan**: Each event gets a `min_start_time` field specifying when it should execute
+- **grid_plan**: Each event gets `x_pos` and `y_pos` fields for grid positions
+
+The `MDASequenceManager` executes these events, respecting:
+- **Positioning**: Moves stage to specified x_pos, y_pos, z_pos before acquisition
+- **Timing**: Waits until `min_start_time` before executing each event (handles time-lapse delays)
+- **Channel setup**: Configures illumination and exposure for each channel
+
+This automatic expansion means you just define high-level plans and the engine handles all the details.
 
 ### 2. Engine Pattern (like pymmcore-plus)
 

@@ -68,9 +68,9 @@ class SingleTiffWriter:
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
         
-        # Initialize TiffWriter on first write
+        # Initialize TiffWriter on first write (without append mode to create a new file)
         if self._tiff_writer is None:
-            self._tiff_writer = tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff, append=True)
+            self._tiff_writer = tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff)
         
         try:
             # Extract metadata in EXACT same format as HistoScanController
@@ -99,7 +99,7 @@ class SingleTiffWriter:
             self._tiff_writer.write(data=image, metadata=metadata)
             
             self.image_count += 1
-            print(f"Wrote image {self.image_count} to single TIFF at position ({pos_x}, {pos_y}) with index ({index_x}, {index_y})")
+            #print(f"Wrote image {self.image_count} to single TIFF at position ({pos_x}, {pos_y}) with index ({index_x}, {index_y})")
         except Exception as e:
             print(f"Error writing image to single TIFF: {e}")
             import traceback

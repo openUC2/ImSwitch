@@ -43,7 +43,7 @@ class OMEFileStorePaths:
     def get_timepoint_dir(self, timepoint_index: int):
         """Get or create directory for a specific timepoint."""
         time_now = time.strftime("%Y%m%d_%H%M%S")
-        timepoint_dir = os.path.join(self.individual_tiffs_dir, f"timepoint_{timepoint_index:04d}_{time_now}")
+        timepoint_dir = os.path.join(self.individual_tiffs_dir, f"timepoint_{timepoint_index:04d}")#_{time_now}")
         os.makedirs(timepoint_dir, exist_ok=True)
         return timepoint_dir
 

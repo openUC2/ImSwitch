@@ -161,6 +161,7 @@ class OMEWriter:
     
     def _setup_single_tiff_writer(self):
         """Set up the single TIFF writer for appending tiles with metadata."""
+        # Place single_tiles.ome.tif in the experiment-specific base_dir (per timepoint)
         single_tiff_path = os.path.join(self.file_paths.base_dir, "single_tiles.ome.tif")
         self.single_tiff_writer = SingleTiffWriter(single_tiff_path, bigtiff=True)
         # No longer need to start() since we write synchronously
@@ -288,11 +289,11 @@ class OMEWriter:
         
         Files are organized in folders by timepoint, with filenames indicating:
         - Position in XYZ (in microns, without decimal points)
-        - Channel name
+        - Channel index and name
         - Iterator (running number)
         - Laser power
         
-        Example filename: x5000_y3000_z1500_c0_i0042_p80.tif
+        Example: individual_tiffs/timepoint_0000_20251223_070926/x5000_y3000_z1500_c0_LED_i0042_p80.tif
         """
         # Extract metadata
         t_idx = metadata.get("time_index", 0)
@@ -314,9 +315,11 @@ class OMEWriter:
         # Get timepoint directory
         timepoint_dir = self.file_paths.get_timepoint_dir(t_idx)
         
-        # Create filename: x{x}_y{y}_z{z}_c{channel}_i{iterator}_p{power}.tif
-        filename = f"x{x_microns}_y{y_microns}_z{z_microns}_c{c_idx}_{channel}_i{iterator:04d}_p{laser_power}.tif"
+        # Create filename: x{x}_y{y}_z{z}_c{channel_idx}_{channel_name}_i{iterator}_p{power}.tif
+        current_time = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"t{current_time}_x{x_microns}_y{y_microns}_z{z_microns}_c{c_idx}_{channel}_i{iterator:04d}_p{laser_power}.tif"
         filepath = os.path.join(timepoint_dir, filename)
+        # print(f"Writing individual TIFF: {filepath}")
         
         # Write TIFF file
         tif.imwrite(filepath, frame, compression=self.config.compression)

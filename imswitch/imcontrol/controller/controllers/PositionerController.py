@@ -246,6 +246,15 @@ class PositionerController(ImConWidgetController):
         self.moveForever(positionerName=positionerName, speed=speed, is_stop=is_stop)
 
     @APIExport(runOnUIThread=True)
+    def movePositionerForeverXYZA(self, positionerName: str=None, speedX: float=0, speedY: float=0, speedZ: float=0, speedA: float=0, is_stop: bool=False):
+        """Move all axes simultaneously with individual speed control for X, Y, Z, and A axes."""
+        if positionerName is None:
+            positionerName = self._master.positionersManager.getAllDeviceNames()[0]
+        # Speed tuple format: (A, X, Y, Z)
+        speed = (float(speedA), float(speedX), float(speedY), float(speedZ))
+        self.moveForever(positionerName=positionerName, speed=speed, is_stop=is_stop)
+
+    @APIExport(runOnUIThread=True)
     def setPositioner(self, positionerName: str, axis: str, position: float) -> None:
         """ Moves the specified positioner axis to the specified position. """
         self.setPos(positionerName, axis, position)

@@ -214,7 +214,7 @@ class Positioner:
 
     def compute_psf(self, dz):
         dz = np.float32(dz)
-        print("Defocus:" + str(dz))
+        # print("Defocus:" + str(dz))
         if IS_NIP and dz != 0:
             obj = nip.image(np.zeros(self.mDimensions))
             obj.pixelsize = (100.0, 100.0) # TODO: adjust based on objective

@@ -34,11 +34,20 @@ class OMEWriterConfig:
     compression: str = "zlib"
     zarr_compressor = None
     pixel_size: float = 1.0  # pixel size in microns
+    pixel_size_z: float = 1.0  # z-step size in microns
     dimension_seperator: str = "/"
     # Multi-dimensional support
     n_time_points: int = 1  # Number of time points
     n_z_planes: int = 1     # Number of z planes
     n_channels: int = 1     # Number of channels
+    # Channel metadata
+    channel_names: List[str] = None  # List of channel names
+    channel_colors: List[str] = None  # List of channel colors (hex)
+    # Physical coordinates
+    x_start: float = 0.0  # Starting X position in microns
+    y_start: float = 0.0  # Starting Y position in microns
+    z_start: float = 0.0  # Starting Z position in microns
+    time_interval: float = 1.0  # Time interval in seconds
     
     
     def __post_init__(self):
@@ -56,6 +65,16 @@ class OMEWriterConfig:
                 self.zarr_compressor = get_zarr_compressor("3")
             else:
                 self.zarr_compressor = get_zarr_compressor("2")
+        
+        # Initialize default channel names if not provided
+        if self.channel_names is None:
+            self.channel_names = [f"Channel_{i}" for i in range(self.n_channels)]
+        
+        # Initialize default channel colors if not provided  
+        if self.channel_colors is None:
+            # Default colors: green, red, blue, cyan, magenta, yellow
+            default_colors = ["00FF00", "FF0000", "0000FF", "00FFFF", "FF00FF", "FFFF00"]
+            self.channel_colors = [default_colors[i % len(default_colors)] for i in range(self.n_channels)]
             
 
 
@@ -112,7 +131,7 @@ class OMEWriter:
             self._setup_single_tiff_writer()
     
     def _setup_zarr_store(self):
-        """Set up the OME-Zarr store and canvas."""
+        """Set up the OME-Zarr store and canvas with proper OME-NGFF metadata."""
         # Use path string for Zarr v3 compatibility
         self.store = str(self.file_paths.zarr_dir)
         # Use context manager to ensure proper closing (if supported)
@@ -131,25 +150,82 @@ class OMEWriter:
             compressor=self.config.zarr_compressor # Has proper BLOSC compression (based on v3)
         )
 
-        # Set OME-Zarr metadata
+        # Set OME-Zarr metadata with proper physical coordinates and channel info
+        self._set_ome_ngff_metadata()
+    
+    def _set_ome_ngff_metadata(self):
+        """
+        Set OME-NGFF compliant metadata for the Zarr store.
+        
+        This sets up:
+        - multiscales: Image pyramid metadata with physical coordinates
+        - omero: Channel visualization metadata (names, colors)
+        """
+        # Physical pixel sizes in microns
+        pixel_size_x = self.config.pixel_size
+        pixel_size_y = self.config.pixel_size
+        pixel_size_z = self.config.pixel_size_z
+        time_interval = self.config.time_interval
+        
+        # Set multiscales metadata with physical coordinate transformations
         self.root.attrs["multiscales"] = [{
             "version": "0.4",
+            "name": "experiment",
             "datasets": [
                 {
                     "path": "0",
                     "coordinateTransformations": [
-                        {"type": "scale", "scale": [1, 1, 1, 1, 1]}
+                        # Scale: converts pixel indices to physical coordinates
+                        {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]},
+                        # Translation: offset to physical origin (stage position)
+                        {"type": "translation", "translation": [0, 0, self.config.z_start, self.y_start, self.x_start]}
                     ]
                 }
             ],
             "axes": [
-                {"name": "t", "type": "time"},
+                {"name": "t", "type": "time", "unit": "second"},
                 {"name": "c", "type": "channel"},
-                {"name": "z", "type": "space"},
-                {"name": "y", "type": "space"},
-                {"name": "x", "type": "space"},
+                {"name": "z", "type": "space", "unit": "micrometer"},
+                {"name": "y", "type": "space", "unit": "micrometer"},
+                {"name": "x", "type": "space", "unit": "micrometer"},
             ],
+            "coordinateTransformations": [
+                # Global transformation for the entire dataset
+                {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]}
+            ]
         }]
+        
+        # Set omero metadata for channel visualization
+        channels = []
+        for i in range(self.config.n_channels):
+            channel_name = self.config.channel_names[i] if i < len(self.config.channel_names) else f"Channel_{i}"
+            channel_color = self.config.channel_colors[i] if i < len(self.config.channel_colors) else "FFFFFF"
+            channels.append({
+                "label": channel_name,
+                "color": channel_color,
+                "active": True,
+                "coefficient": 1.0,
+                "family": "linear",
+                "inverted": False,
+                "window": {
+                    "start": 0,
+                    "end": 65535,  # 16-bit max
+                    "min": 0,
+                    "max": 65535
+                }
+            })
+        
+        self.root.attrs["omero"] = {
+            "id": 1,
+            "name": os.path.basename(self.file_paths.zarr_dir),
+            "version": "0.4",
+            "channels": channels,
+            "rdefs": {
+                "defaultT": 0,
+                "defaultZ": self.config.n_z_planes // 2,
+                "model": "color"
+            }
+        }
     
     def _setup_tiff_stitcher(self):
         """Set up the TIFF stitcher for creating stitched OME-TIFF files."""
@@ -358,109 +434,146 @@ class OMEWriter:
     def _generate_pyramids_sync(self):
         """
         Synchronous pyramid generation with memory-efficient processing.
+        Processes all t, c, z dimensions properly.
         """
-        # Get dimensions of the full resolution data
-        full_shape = self.canvas.shape[-2:]  # Get y,x dimensions from t,c,z,y,x
+        # Get full shape: t, c, z, y, x
+        full_shape = self.canvas.shape
+        n_t, n_c, n_z = full_shape[0], full_shape[1], full_shape[2]
+        spatial_shape = full_shape[-2:]  # y, x
         
-        # Create pyramid levels with 2x downsampling
+        # Create pyramid levels with 2x downsampling (only in y, x)
         max_levels = 4  # Create up to 4 pyramid levels
         
         for level in range(1, max_levels):
-            # Calculate new shape for this level (2x downsampling)
-            new_shape = (full_shape[0] // (2**level), full_shape[1] // (2**level))
+            # Calculate new spatial shape for this level (2x downsampling)
+            new_y = spatial_shape[0] // (2**level)
+            new_x = spatial_shape[1] // (2**level)
             
             # Stop if the image becomes too small
-            if new_shape[0] < 64 or new_shape[1] < 64:
+            if new_y < 64 or new_x < 64:
                 break
             
-            # Create new dataset for this pyramid level
-            level_canvas = self.root.create_dataset(
-                str(level),
-                shape=(1, 1, 1, int(new_shape[0]), int(new_shape[1])),  # t c z y x
-                chunks=(1, 1, 1, int(min(self.tile_h, new_shape[0])), int(min(self.tile_w, new_shape[1]))),
+            # Create new dataset for this pyramid level with full t, c, z dimensions
+            level_canvas = self.root.create_array(
+                name=str(level),
+                shape=(n_t, n_c, n_z, int(new_y), int(new_x)),  # t c z y x
+                chunks=(1, 1, 1, int(min(self.tile_h, new_y)), int(min(self.tile_w, new_x))),
                 dtype="uint16",
                 compressor=self.config.zarr_compressor
             )
             
-            # Process data in chunks to avoid loading entire array into memory
-            self._downsample_in_chunks(self.canvas, level_canvas, level)
+            # Process data for all t, c, z combinations
+            self._downsample_all_dimensions(self.canvas, level_canvas, level, n_t, n_c, n_z)
             
             if self.logger:
-                self.logger.debug(f"Created pyramid level {level} with shape {new_shape}")
+                self.logger.debug(f"Created pyramid level {level} with shape ({n_t}, {n_c}, {n_z}, {new_y}, {new_x})")
         
         # Update the multiscales metadata to include all pyramid levels
         self._update_multiscales_metadata()
     
-    def _downsample_in_chunks(self, source_canvas, target_canvas, level):
+    def _downsample_all_dimensions(self, source_canvas, target_canvas, level, n_t, n_c, n_z):
         """
-        Downsample data in chunks to avoid memory issues with large arrays.
+        Downsample data for all t, c, z dimensions.
         
         Args:
             source_canvas: Source zarr array
             target_canvas: Target zarr array for downsampled data
             level: Pyramid level (1, 2, 3, ...)
+            n_t, n_c, n_z: Number of timepoints, channels, z-planes
         """
-        # Get source and target shapes
-        source_shape = source_canvas.shape[-2:]  # y, x
-        target_shape = target_canvas.shape[-2:]  # y, x
-        
-        # Define chunk size for processing (adjust based on available memory)
-        chunk_size = min(1024, source_shape[0], source_shape[1])
-        
-        # Process in overlapping chunks to handle downsampling
         downsample_factor = 2 ** level
         
-        for y_start in range(0, target_shape[0], chunk_size):
-            y_end = min(y_start + chunk_size, target_shape[0])
-            
-            for x_start in range(0, target_shape[1], chunk_size):
-                x_end = min(x_start + chunk_size, target_shape[1])
-                
-                # Calculate corresponding region in source
-                src_y_start = y_start * downsample_factor
-                src_y_end = min(y_end * downsample_factor, source_shape[0])
-                src_x_start = x_start * downsample_factor
-                src_x_end = min(x_end * downsample_factor, source_shape[1])
-                
-                # Read source data chunk
-                source_chunk = source_canvas[0, 0, 0, src_y_start:src_y_end, src_x_start:src_x_end]
-                
-                # Downsample using simple subsampling
-                downsampled_chunk = source_chunk[::downsample_factor, ::downsample_factor]
-                
-                # Calculate actual target region size
-                actual_y_size = min(downsampled_chunk.shape[0], y_end - y_start)
-                actual_x_size = min(downsampled_chunk.shape[1], x_end - x_start)
-                
-                # Write downsampled chunk to target
-                target_canvas[0, 0, 0, y_start:y_start+actual_y_size, x_start:x_start+actual_x_size] = \
-                    downsampled_chunk[:actual_y_size, :actual_x_size]
+        for t_idx in range(n_t):
+            for c_idx in range(n_c):
+                for z_idx in range(n_z):
+                    try:
+                        # Read source data for this t, c, z combination
+                        source_data = np.array(source_canvas[t_idx, c_idx, z_idx, :, :])
+                        
+                        # Downsample using simple subsampling
+                        downsampled = source_data[::downsample_factor, ::downsample_factor]
+                        
+                        # Write to target
+                        target_canvas[t_idx, c_idx, z_idx, :, :] = downsampled
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.warning(f"Failed to downsample t={t_idx}, c={c_idx}, z={z_idx}: {e}")
     
     def _update_multiscales_metadata(self):
-        """Update the multiscales metadata to include all pyramid levels."""
+        """Update the multiscales metadata to include all pyramid levels with physical coordinates."""
+        # Physical pixel sizes in microns
+        pixel_size_x = self.config.pixel_size
+        pixel_size_y = self.config.pixel_size
+        pixel_size_z = self.config.pixel_size_z
+        time_interval = self.config.time_interval
+        
         datasets = []
-        for level_name in sorted(self.root.keys(), key=int):
+        for level_name in sorted([k for k in self.root.keys() if k.isdigit()], key=int):
             level_int = int(level_name)
             scale_factor = 2 ** level_int
             datasets.append({
                 "path": level_name,
                 "coordinateTransformations": [
-                    {"type": "scale", "scale": [1, 1, 1, scale_factor, scale_factor]}
+                    # Scale transformation with physical units (scaled by pyramid level for x, y)
+                    {"type": "scale", "scale": [
+                        time_interval,
+                        1,  # channel has no physical scale
+                        pixel_size_z,
+                        pixel_size_y * scale_factor,
+                        pixel_size_x * scale_factor
+                    ]},
+                    # Translation to physical origin
+                    {"type": "translation", "translation": [
+                        0,
+                        0,
+                        self.config.z_start,
+                        self.y_start,
+                        self.x_start
+                    ]}
                 ]
             })
         
         # Update multiscales metadata with all levels
         self.root.attrs["multiscales"] = [{
             "version": "0.4",
+            "name": "experiment",
             "datasets": datasets,
             "axes": [
-                {"name": "t", "type": "time"},
+                {"name": "t", "type": "time", "unit": "second"},
                 {"name": "c", "type": "channel"},
-                {"name": "z", "type": "space"},
-                {"name": "y", "type": "space"},
-                {"name": "x", "type": "space"},
+                {"name": "z", "type": "space", "unit": "micrometer"},
+                {"name": "y", "type": "space", "unit": "micrometer"},
+                {"name": "x", "type": "space", "unit": "micrometer"},
             ],
+            "coordinateTransformations": [
+                {"type": "scale", "scale": [time_interval, 1, pixel_size_z, pixel_size_y, pixel_size_x]}
+            ]
         }]
+        
+        # Preserve omero metadata
+        if "omero" not in self.root.attrs:
+            # Re-set omero metadata if it was lost
+            channels = []
+            for i in range(self.config.n_channels):
+                channel_name = self.config.channel_names[i] if i < len(self.config.channel_names) else f"Channel_{i}"
+                channel_color = self.config.channel_colors[i] if i < len(self.config.channel_colors) else "FFFFFF"
+                channels.append({
+                    "label": channel_name,
+                    "color": channel_color,
+                    "active": True,
+                    "coefficient": 1.0,
+                    "family": "linear",
+                    "inverted": False,
+                    "window": {"start": 0, "end": 65535, "min": 0, "max": 65535}
+                })
+            
+            self.root.attrs["omero"] = {
+                "id": 1,
+                "name": os.path.basename(self.file_paths.zarr_dir),
+                "version": "0.4",
+                "channels": channels,
+                "rdefs": {"defaultT": 0, "defaultZ": self.config.n_z_planes // 2, "model": "color"}
+            }
     
     def finalize(self):
         """Finalize the writing process and optionally build pyramids."""

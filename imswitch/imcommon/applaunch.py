@@ -121,6 +121,7 @@ def keep_alive_loop(moduleMainControllers):
                 # if the storage is full or the user presses Ctrl+C, we want to stop the experiment
                 moduleMainControllers.mapping["imcontrol"]._ImConMainController__commChannel.sigExperimentStop.emit()
                 tDiskCheck = time.time()
+                print("Disk usage is above 90%! Experiment stopped to avoid data loss.")
 
         except KeyboardInterrupt:
             exitCode = 0

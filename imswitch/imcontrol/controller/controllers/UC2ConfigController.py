@@ -54,7 +54,7 @@ class UC2ConfigController(ImConWidgetController):
         # OTA update tracking
         self._ota_status = {}  # Dictionary to track OTA status by CAN ID
         self._ota_lock = threading.Lock()
-        self._firmware_server_url = "http://localhost:9000"  # Default firmware server URL
+        self._firmware_server_url = "http://localhost/firmware"  # Firmware server URL (must end with /)
         self._firmware_cache_dir = Path(tempfile.gettempdir()) / "uc2_ota_firmware_cache"
         self._firmware_cache_dir.mkdir(parents=True, exist_ok=True)
         
@@ -399,47 +399,42 @@ class UC2ConfigController(ImConWidgetController):
         """
         Download firmware for a specific CAN ID from the firmware server.
         
-        Queries the server for available firmware matching the pattern id_<CANID>_*.bin
-        and downloads it to a local cache.
+        Queries the server for available firmware using JSON API.
+        Matches firmware based on CAN device type (motor, laser, led, etc.).
         
         :param can_id: CAN ID of the device
         :return: Path to downloaded firmware file or None
         """
         try:
-            # First, get list of available firmware files from server
-            firmware_list_url = f"{self._firmware_server_url}/latest/"
-            
-            self.__logger.debug(f"Fetching firmware list from {firmware_list_url}")
-            response = requests.get(firmware_list_url, timeout=10)
+            # Get list of available firmware files from server via JSON API
+            self.__logger.debug(f"Fetching firmware list from {self._firmware_server_url}")
+            response = requests.get(
+                self._firmware_server_url,
+                headers={"Accept": "application/json"},
+                timeout=10
+            )
             response.raise_for_status()
             
-            # Parse HTML directory listing to find matching firmware
-            from html.parser import HTMLParser
+            # Parse JSON response
+            firmware_data = response.json()
             
-            class FirmwareLinkParser(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.firmware_files = []
-                
-                def handle_starttag(self, tag, attrs):
-                    if tag == 'a':
-                        for attr, value in attrs:
-                            if attr == 'href' and value.endswith('.bin'):
-                                self.firmware_files.append(value)
+            # Extract firmware file names
+            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
             
-            parser = FirmwareLinkParser()
-            parser.feed(response.text)
+            self.__logger.debug(f"Available firmware files: {firmware_files}")
             
             # Find firmware file matching the CAN ID pattern: id_<CANID>_*.bin
             target_pattern = f"id_{can_id}_"
-            matching_files = [f for f in parser.firmware_files if f.startswith(target_pattern)]
+            matching_files = [f for f in firmware_files if f.startswith(target_pattern)]
             
             if not matching_files:
                 # Try to find generic firmware based on device type
+                # Map CAN IDs to device types matching firmware naming: can_slave_<type>.bin
                 device_type_map = {
-                    range(10, 14): "motor",  # 10-13: motors (A, X, Y, Z)
-                    range(20, 30): "laser",  # 20-29: lasers
-                    range(30, 40): "led",    # 30-39: LEDs
+                    range(10, 14): "motor",         # 10-13: motors (A, X, Y, Z)
+                    range(20, 30): "illumination",  # 20-29: lasers/LEDs
+                    range(30, 40): "illumination",  # 30-39: LEDs
+                    range(40, 50): "galvo",         # 40-49: galvo mirrors
                 }
                 
                 device_type = None
@@ -449,8 +444,9 @@ class UC2ConfigController(ImConWidgetController):
                         break
                 
                 if device_type:
-                    # Look for any firmware containing the device type
-                    matching_files = [f for f in parser.firmware_files if device_type in f]
+                    # Look for firmware matching pattern: esp32_*_can_slave_<device_type>.bin
+                    target_device_pattern = f"can_slave_{device_type}"
+                    matching_files = [f for f in firmware_files if target_device_pattern in f]
                     if matching_files:
                         self.__logger.warning(f"Using generic {device_type} firmware for device {can_id}: {matching_files[0]}")
             
@@ -461,8 +457,9 @@ class UC2ConfigController(ImConWidgetController):
             # Use the first matching file
             firmware_filename = matching_files[0]
             
-            # Download the firmware file
-            firmware_url = f"{self._firmware_server_url}/latest/{firmware_filename}" # TODO: We should make this adaptable 
+            # Download the firmware file - construct full URL
+            # The server provides relative URLs (./filename.bin), so we build the full URL
+            firmware_url = f"{self._firmware_server_url}/{firmware_filename}"
             local_path = self._firmware_cache_dir / firmware_filename
             
             self.__logger.info(f"Downloading firmware from {firmware_url}")

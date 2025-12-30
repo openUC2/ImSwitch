@@ -298,7 +298,19 @@ class UC2ConfigController(ImConWidgetController):
 
             self.__logger.debug("Fetching available CAN devices...")
             response = self._master.UC2ConfigManager.ESP32.can.get_available_devices(timeout=timeout)
-            available_ids = [can_id for can_id in response.get("available", []) if can_id != 0]
+            # the second response should hold the available IDs
+            scan_response = response[-1]
+            ''' example response:
+            {"scan": [
+                {"canId": 10, "deviceType": 0, "status": 1, "deviceTypeStr": "motor", "statusStr": "busy"}, 
+                {"canId": 11, "deviceType": 0, "status": 0, "deviceTypeStr": "motor", "statusStr": "idle"}, 
+                {"canId": 12, "deviceType": 0, "status": 0, "deviceTypeStr": "motor", "statusStr": "idle"}, 
+                {"canId": 13, "deviceType": 0, "status": 1, "deviceTypeStr": "motor", "statusStr": "busy"}, 
+                {"canId": 20, "deviceType": 1, "status": 0, "deviceTypeStr": "laser", "statusStr": "idle"}, 
+                {"canId": 30, "deviceType": 2, "status": 0, "deviceTypeStr": "led", "statusStr": "idle"}], 
+                "qid": 125, "count": 6}
+            '''
+            available_ids = [device["canId"] for device in scan_response.get("scan", [])]
 
             self.__logger.info(f"Available CAN devices: {available_ids}")
             return available_ids
@@ -589,6 +601,7 @@ class UC2ConfigController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def is_connected(self):
         return self._master.UC2ConfigManager.isConnected()
+
 
     @APIExport(runOnUIThread=True)
     def btpairing(self):

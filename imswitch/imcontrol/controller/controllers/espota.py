@@ -68,7 +68,7 @@ def upload_ota(
     firmware_path,
     esp_port=3232,
     host_ip="0.0.0.0",
-    host_port=None,
+    host_port=3333,
     password="",
     spiffs=False,
     timeout=10,

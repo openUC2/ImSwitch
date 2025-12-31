@@ -477,7 +477,7 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.info(f"Downloading firmware from {firmware_url}")
             
             # Check if already cached
-            if False and local_path.exists():#TODO: Always redownload for now
+            if local_path.exists():
                 self.__logger.debug(f"Using cached firmware: {local_path}")
                 return local_path
             
@@ -523,7 +523,7 @@ class UC2ConfigController(ImConWidgetController):
         self.stages.enalbeMotors(enable=True, enableauto=False)
 
     def set_positionX(self):
-        if not IS_HEADLESS: x = self._widget.motorXEdit.text() # TODO: Should be a signal for all motors
+        if not IS_HEADLESS: x = self._widget.motorXEdit.text()
         self.set_motor_positions(None, x, None, None)
 
     def set_positionY(self):
@@ -655,7 +655,7 @@ class UC2ConfigController(ImConWidgetController):
         }
         
     @APIExport(runOnUIThread=False)
-    def setOTAFirmwareServer(self, server_url="http://localhost:9000"):
+    def setOTAFirmwareServer(self, server_url="http://localhost/firmware"):
         """
         Set the firmware server URL for OTA updates.
         
@@ -665,7 +665,7 @@ class UC2ConfigController(ImConWidgetController):
         - id_20_esp32_seeed_xiao_esp32s3_can_slave_laser_debug.bin
         - id_21_esp32_seeed_xiao_esp32s3_can_slave_led_debug.bin
         
-        :param server_url: URL of the firmware server (default: http://localhost:9000)
+        :param server_url: URL of the firmware server (default: http://localhost/firmware)
         :return: Status message with list of available firmware files
         """
         # Remove trailing slash if present
@@ -673,40 +673,32 @@ class UC2ConfigController(ImConWidgetController):
         
         try:
             # Test server connectivity
-            test_url = f"{server_url}/latest/"
-            self.__logger.debug(f"Testing firmware server: {test_url}")
-            
-            response = requests.get(test_url, timeout=5)
+            self.__logger.debug(f"Testing firmware server: {server_url}")
+            response = requests.get(
+                server_url,
+                headers={"Accept": "application/json"},
+                timeout=1
+            )
             response.raise_for_status()
             
-            # Parse available firmware files
-            from html.parser import HTMLParser
+            # Parse JSON response
+            firmware_data = response.json()
             
-            class FirmwareLinkParser(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.firmware_files = []
-                
-                def handle_starttag(self, tag, attrs):
-                    if tag == 'a':
-                        for attr, value in attrs:
-                            if attr == 'href' and value.endswith('.bin'):
-                                self.firmware_files.append(value)
-            
-            parser = FirmwareLinkParser()
-            parser.feed(response.text)
-            
+            if not isinstance(firmware_data, list):
+                raise ValueError("Invalid response format from firmware server")
+            if not all('name' in item for item in firmware_data):
+                raise ValueError("Firmware server response missing 'name' fields")
             self._firmware_server_url = server_url
             
             self.__logger.info(f"OTA firmware server set: {server_url}")
-            self.__logger.info(f"Found {len(parser.firmware_files)} firmware files")
+            self.__logger.info(f"Found {len(firmware_data)} firmware files")
             
             return {
                 "status": "success",
                 "message": f"Firmware server set: {server_url}",
                 "server_url": server_url,
-                "firmware_files": parser.firmware_files,
-                "count": len(parser.firmware_files)
+                "firmware_files": firmware_data,
+                "count": len(firmware_data)
             }
             
         except requests.exceptions.RequestException as e:
@@ -745,46 +737,81 @@ class UC2ConfigController(ImConWidgetController):
         
         try:
             # Fetch firmware list from server
-            list_url = f"{self._firmware_server_url}/latest/"
+            list_url = f"{self._firmware_server_url}/"
             self.__logger.debug(f"Fetching firmware list from {list_url}")
             
-            response = requests.get(list_url, timeout=10)
+            response = requests.get(list_url, timeout=10, headers={"Accept": "application/json"})
             response.raise_for_status()
             
-            # Parse HTML directory listing
-            from html.parser import HTMLParser
             
-            class FirmwareLinkParser(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.firmware_files = []
-                
-                def handle_starttag(self, tag, attrs):
-                    if tag == 'a':
-                        for attr, value in attrs:
-                            if attr == 'href' and value.endswith('.bin'):
-                                self.firmware_files.append(value)
+            # Parse JSON response (same format as setOTAFirmwareServer)
+            firmware_data = response.json()
             
-            parser = FirmwareLinkParser()
-            parser.feed(response.text)
+            if not isinstance(firmware_data, list):
+                raise ValueError("Invalid response format from firmware server")
             
-            # Organize by device ID
+            # Extract firmware file names from JSON response
+            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
+            
+            self.__logger.debug(f"Available firmware files: {firmware_files}")
+            
+            # Create CAN ID to firmware type lookup table
+            # Based on device type mapping:
+            # 10-13: motor, 20-29: laser/led, 30-39: led, 40-49: galvo
+            can_id_to_firmware = {
+                10: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",
+                11: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",
+                12: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",
+                13: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",
+                20: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                21: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                22: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                23: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                24: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                25: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                26: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                27: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                28: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                29: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                30: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                31: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                32: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                33: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                34: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                35: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                36: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                37: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                38: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                39: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                40: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
+                41: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
+                42: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
+                43: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
+                44: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
+                45: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
+                46: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
+                47: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
+                48: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
+                49: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
+            }
+            
+            # Organize by device ID using lookup table
             firmware_by_id = {}
-            for fw_file in parser.firmware_files:
-                # Extract CAN ID from filename (e.g., "id_20_..." -> 20)
-                try:
-                    parts = fw_file.split('_')
-                    if len(parts) >= 2 and parts[0] == 'id':
-                        can_id = int(parts[1])
-                        firmware_url = f"{self._firmware_server_url}/latest/{fw_file}"
-                        
-                        firmware_by_id[can_id] = {
-                            "filename": fw_file,
-                            "url": firmware_url,
-                            "can_id": can_id
-                        }
-                except (ValueError, IndexError):
-                    continue
+            for can_id, expected_firmware in can_id_to_firmware.items():
+                # Check if expected firmware exists in available files
+                if expected_firmware in firmware_files:
+                    firmware_url = f"{self._firmware_server_url}/{expected_firmware}"
+                    
+                    # Find matching item in firmware_data to get size and mod_time
+                    firmware_info = next((item for item in firmware_data if item['name'] == expected_firmware), None)
+                    
+                    firmware_by_id[can_id] = {
+                        "filename": expected_firmware,
+                        "url": firmware_url,
+                        "can_id": can_id,
+                        "size": firmware_info.get('size', 0) if firmware_info else 0,
+                        "mod_time": firmware_info.get('mod_time', '') if firmware_info else ''
+                    }
             
             return {
                 "status": "success",

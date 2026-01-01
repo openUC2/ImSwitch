@@ -86,7 +86,8 @@ setup(
         "mikro-next>=0.18.0", 
         "arkitekt-next[all]==0.35.0", 
         "koil>=2.0.5", 
-        "msgpack>=1.0.4"
+        "msgpack>=1.0.4", 
+        "esptool"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

@@ -377,13 +377,12 @@ class UC2ConfigController(ImConWidgetController):
                 esp_port=3232,  # Default ESP32 OTA port
                 host_ip="0.0.0.0",
                 password="",  # No password by default
-                timeout=10,
+                timeout=20,
                 show_progress=True,
                 logger=self.__logger,
                 progress_callback=progress_callback
             )
             
-
             if result == 0:
                 self.__logger.info(f"Firmware uploaded successfully to device {can_id}")
                 with self._ota_lock:
@@ -761,55 +760,32 @@ class UC2ConfigController(ImConWidgetController):
             # Extract firmware file names from JSON response
             firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
             
-            self.__logger.debug(f"Available firmware files: {firmware_files}")
+            self.__logger.info(f"Available firmware files: {firmware_files}")
             
             # Create CAN ID to firmware type lookup table
             # Based on device type mapping:
             # 10-13: motor, 20-29: laser/led, 30-39: led, 40-49: galvo
-            can_id_to_firmware = {
+            can_id_to_firmware = { #TODO: we should perhaps change naming on the server/build side?
+                1: "esp32_UC2_3_CAN_HAT_Master.bin",  # Master firmware (not used here) #TODO: We need to implement this through esptool since it's connected via serial
                 10: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",
                 11: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",
                 12: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",
                 13: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",
-                20: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                21: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                22: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                23: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                24: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                25: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                26: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                27: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                28: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                29: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
+                14: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",
+                15: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",
+                20: "seeed_xiao_esp32s3_can_slave_laser.bin",
                 30: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                31: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                32: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                33: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                34: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                35: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                36: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                37: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                38: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
-                39: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",
                 40: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
-                41: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
-                42: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
-                43: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
-                44: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
-                45: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
-                46: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
-                47: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
-                48: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
-                49: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",
             }
             
             # Organize by device ID using lookup table
             firmware_by_id = {}
             for can_id, expected_firmware in can_id_to_firmware.items():
                 # Check if expected firmware exists in available files
+                print(expected_firmware)
                 if expected_firmware in firmware_files:
                     firmware_url = f"{self._firmware_server_url}/{expected_firmware}"
-                    
+                    print(firmware_url)
                     # Find matching item in firmware_data to get size and mod_time
                     firmware_info = next((item for item in firmware_data if item['name'] == expected_firmware), None)
                     

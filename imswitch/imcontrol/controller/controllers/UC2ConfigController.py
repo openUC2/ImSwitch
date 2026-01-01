@@ -20,6 +20,10 @@ import shutil
 from pathlib import Path
 from serial.tools import list_ports
 import socket
+import sys
+import subprocess
+import time
+import re
 
 try:
     import esptool
@@ -58,6 +62,10 @@ class UC2ConfigController(ImConWidgetController):
         self._firmware_cache_dir = Path(tempfile.gettempdir()) / "uc2_ota_firmware_cache"
         self._firmware_cache_dir.mkdir(parents=True, exist_ok=True)
         
+        # Prevent concurrent flashing attempts
+        self._usb_flash_lock = threading.Lock()
+
+
         # WiFi credentials for OTA (can be overridden via API)
         self._ota_wifi_ssid = socket.gethostname().split(".local")[0]
         self._ota_wifi_password = "youseetoo" # this is the default password for forklifted UC2 firmwares
@@ -1098,6 +1106,306 @@ class UC2ConfigController(ImConWidgetController):
             return {
                 "status": "error",
                 "message": f"Failed to get cache status: {str(e)}"
+            }
+    
+    '''ESPTOOL related uploads'''
+    
+    # -----------------------------
+    # USB flashing for CAN HAT (master)
+    # -----------------------------
+    def _list_serial_ports(self):
+        ports = []
+        try:
+            for p in list_ports.comports():
+                ports.append({
+                    "device": p.device,
+                    "description": getattr(p, "description", "") or "",
+                    "manufacturer": getattr(p, "manufacturer", "") or "",
+                    "product": getattr(p, "product", "") or "",
+                    "hwid": getattr(p, "hwid", "") or "",
+                    "vid": getattr(p, "vid", None),
+                    "pid": getattr(p, "pid", None),
+                    "serial_number": getattr(p, "serial_number", None),
+                })
+        except Exception as e:
+            self.__logger.error(f"Failed to list serial ports: {e}")
+        return ports
+
+    def _find_hat_serial_port(self, match: str = "HAT", preferred_can_id: int = 1) -> str:
+        """
+        Find the USB serial port for the master CAN HAT by matching a substring
+        in the port metadata (description/manufacturer/product/hwid).
+        """
+        ports = self._list_serial_ports()
+        if not ports:
+            raise RuntimeError("No serial ports found.")
+
+        match_l = (match or "").strip().lower()
+        candidates = []
+        for p in ports:
+            hay = " ".join([
+                p.get("device", ""),
+                p.get("description", ""),
+                p.get("manufacturer", ""),
+                p.get("product", ""),
+                p.get("hwid", ""),
+            ]).lower()
+            if match_l and match_l in hay:
+                candidates.append(p)
+
+        # Fallback heuristics if no direct match
+        if not candidates:
+            # Prefer common USB-UART/CDC device names
+            usb_like = []
+            for p in ports:
+                dev = (p.get("device") or "").lower()
+                hwid = (p.get("hwid") or "").lower()
+                desc = (p.get("description") or "").lower()
+                if any(x in dev for x in ["/dev/ttyusb", "/dev/ttyacm", "com"]) or "usb" in hwid or "usb" in desc:
+                    usb_like.append(p)
+            candidates = usb_like
+
+        if not candidates:
+            raise RuntimeError(f"No candidate serial ports found for match='{match}'. Ports={ports}")
+
+        # If ImSwitch currently uses one of these ports, prefer it
+        try:
+            current_port = getattr(self._master.UC2ConfigManager, "serialport", None)
+            if current_port:
+                for c in candidates:
+                    if c["device"] == current_port:
+                        return current_port
+        except Exception:
+            pass
+
+        # Prefer stable ordering: ttyACM before ttyUSB (often native USB), then the first
+        def rank(p):
+            dev = (p.get("device") or "").lower()
+            if "/dev/ttyacm" in dev:
+                return 0
+            if "/dev/ttyusb" in dev:
+                return 1
+            return 2
+
+        candidates = sorted(candidates, key=rank)
+        return candidates[0]["device"]
+
+    def _download_firmware_by_name(self, firmware_filename: str) -> Path | None:
+        server_url = (self._firmware_server_url or "").rstrip("/")
+        if not server_url:
+            self.__logger.error("Firmware server URL is not set.")
+            return None
+
+        firmware_filename = firmware_filename.lstrip("./")
+        local_path = self._firmware_cache_dir / firmware_filename
+        if local_path.exists():
+            return local_path
+
+        url = f"{server_url}/{firmware_filename}"
+        try:
+            self.__logger.info(f"Downloading firmware: {url}")
+            with requests.get(url, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                with open(local_path, "wb") as f:
+                    shutil.copyfileobj(r.raw, f)
+            return local_path
+        except Exception as e:
+            self.__logger.error(f"Failed to download {url}: {e}")
+            try:
+                if local_path.exists():
+                    local_path.unlink()
+            except Exception:
+                pass
+            return None
+
+    def _download_master_firmware(self) -> Path | None:
+        """
+        Resolve + download the master (CAN HAT) firmware from the firmware server.
+        Tries (in this order):
+          1) exact known names (HAT/master)
+          2) id_1_*.bin
+          3) anything containing 'hat' and 'master'
+        """
+        server_url = (self._firmware_server_url or "").rstrip("/")
+        if not server_url:
+            self.__logger.error("Firmware server URL is not set.")
+            return None
+
+        try:
+            resp = requests.get(server_url, headers={"Accept": "application/json"}, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            names = [i.get("name", "") for i in data if isinstance(i, dict) and i.get("name", "").endswith(".bin")]
+        except Exception as e:
+            self.__logger.error(f"Failed to query firmware server '{server_url}': {e}")
+            return None
+
+        # 1) preferred exact names
+        preferred = [
+            "esp32_UC2_3_CAN_HAT_Master.bin",
+            "esp32_UC2_CAN_HAT_Master.bin",
+            "UC2_CAN_HAT_Master.bin",
+            "CAN_HAT_Master.bin",
+        ]
+        for fn in preferred:
+            if fn in names:
+                return self._download_firmware_by_name(fn)
+
+        # 2) id_1_*.bin
+        id1 = [n for n in names if n.startswith("id_1_")]
+        if id1:
+            return self._download_firmware_by_name(id1[0])
+
+        # 3) fuzzy match
+        fuzzy = [n for n in names if ("hat" in n.lower() and "master" in n.lower())]
+        if fuzzy:
+            return self._download_firmware_by_name(fuzzy[0])
+
+        self.__logger.error(f"No master firmware found on server. Available={names}")
+        return None
+
+    def _run_esptool(self, args: list[str]) -> tuple[bool, str]:
+        """
+        Run esptool either via python module (preferred) or subprocess fallback.
+        Returns (success, message).
+        """
+        # Preferred: imported esptool (no external process)
+        if HAS_ESPTOOL:
+            try:
+                # esptool.main() calls sys.exit(); catch it.
+                esptool.main(args)
+                return True, "OK"
+            except SystemExit as e:
+                code = int(getattr(e, "code", 1) or 0)
+                return (code == 0), f"esptool exited with code {code}"
+            except Exception as e:
+                return False, f"esptool failed: {e}"
+
+        # Fallback: subprocess (requires esptool to be installed as module)
+        try:
+            cmd = [sys.executable, "-m", "esptool"] + args
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            ok = (proc.returncode == 0)
+            out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+            return ok, out.strip()
+        except Exception as e:
+            return False, f"Failed to run esptool subprocess: {e}"
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def flashMasterFirmwareUSB(
+        self,
+        port: str | None = None,
+        match: str = "HAT",
+        baud: int = 921600,
+        flash_offset: int = 0x0,
+        erase_flash: bool = False,
+        reconnect_after: bool = True,
+    ):
+        """
+        Flash the master CAN HAT firmware via USB serial using esptool.
+
+        - Disconnects ImSwitch from the ESP32 first (master carries comms).
+        - Downloads firmware from the configured firmware server.
+        - Flashes firmware to the detected (or provided) USB serial port.
+
+        Parameters:
+          port: explicit serial port (e.g. "/dev/ttyACM0"). If None, auto-detect via 'match'.
+          match: substring to identify the HAT in serial port metadata (default "HAT").
+          baud: flashing baudrate (default 921600).
+          flash_offset: address to flash the BIN to. Use 0x0 for merged images; 0x10000 for app-only images.
+          erase_flash: if True, erase flash before writing.
+          reconnect_after: if True, reconnect ImSwitch to the master after flashing.
+        """
+        with self._usb_flash_lock:
+            if not (HAS_ESPTOOL or True):
+                return {"status": "error", "message": "esptool not available. Install with: pip install esptool"}
+
+            # 1) disconnect master from ImSwitch
+            try:
+                self.__logger.info("Disconnecting ImSwitch from master before USB flashing…")
+                try:
+                    self._master.UC2ConfigManager.interruptSerialCommunication()
+                except Exception:
+                    pass
+                self._master.UC2ConfigManager.closeSerial()
+            except Exception as e:
+                self.__logger.warning(f"Could not fully close serial before flashing: {e}")
+
+            time.sleep(0.5)  # give OS time to release port
+
+            # 2) resolve firmware
+            fw_path = self._download_master_firmware()
+            if not fw_path:
+                return {"status": "error", "message": "No master firmware found/downloaded."}
+
+            # 3) resolve port
+            try:
+                flash_port = port or self._find_hat_serial_port(match=match)
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "message": f"Failed to resolve HAT serial port: {e}",
+                    "available_ports": self._list_serial_ports(),
+                }
+
+            self.__logger.info(f"Flashing master firmware via {flash_port} (baud={baud}, offset=0x{flash_offset:x})")
+
+            # 4) optionally erase
+            if erase_flash:
+                ok, msg = self._run_esptool(["--port", flash_port, "--baud", str(baud), "erase_flash"])
+                if not ok:
+                    return {
+                        "status": "error",
+                        "message": "erase_flash failed",
+                        "details": msg,
+                        "port": flash_port,
+                        "firmware": str(fw_path),
+                    }
+
+            # 5) write flash
+            write_args = [
+                "--port", flash_port,
+                "--baud", str(baud),
+                "write_flash",
+                "--flash_size", "detect",
+                "0x%X" % int(flash_offset),
+                str(fw_path),
+            ]
+            ok, msg = self._run_esptool(write_args)
+            if not ok:
+                return {
+                    "status": "error",
+                    "message": "write_flash failed",
+                    "details": msg,
+                    "port": flash_port,
+                    "firmware": str(fw_path),
+                    "flash_offset": int(flash_offset),
+                }
+
+            # 6) reconnect
+            if reconnect_after:
+                try:
+                    time.sleep(1.0)
+                    self.__logger.info("Reconnecting ImSwitch to master after flashing…")
+                    self._master.UC2ConfigManager.initSerial(baudrate=None)
+                except Exception as e:
+                    return {
+                        "status": "warning",
+                        "message": "Flashed OK, but reconnect failed",
+                        "port": flash_port,
+                        "firmware": str(fw_path),
+                        "details": str(e),
+                    }
+
+            return {
+                "status": "success",
+                "message": "Master firmware flashed via USB",
+                "port": flash_port,
+                "firmware": str(fw_path),
+                "baud": int(baud),
+                "flash_offset": int(flash_offset),
+                "erase_flash": bool(erase_flash),
+                "reconnect_after": bool(reconnect_after),
             }
     
 

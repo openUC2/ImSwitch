@@ -483,11 +483,6 @@ class UC2ConfigController(ImConWidgetController):
             
             self.__logger.info(f"Downloading firmware from {firmware_url}")
             
-            # Check if already cached
-            if local_path.exists():
-                self.__logger.debug(f"Using cached firmware: {local_path}")
-                return local_path
-            
             # Download firmware
             with requests.get(firmware_url, stream=True, timeout=60) as r:
                 r.raise_for_status()

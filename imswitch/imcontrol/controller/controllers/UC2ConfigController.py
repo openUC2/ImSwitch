@@ -1342,7 +1342,7 @@ class UC2ConfigController(ImConWidgetController):
         port: str | None = None,
         match: str = "HAT",
         baud: int = 921600,
-        flash_offset: int = 0x0,
+        flash_offset: int = 0x10000,
         erase_flash: bool = False,
         reconnect_after: bool = True,
     ):
@@ -1423,11 +1423,24 @@ class UC2ConfigController(ImConWidgetController):
             write_args = [
                 "--port", flash_port,
                 "--baud", str(baud),
+                "--chip", "esp32",
                 "write_flash",
-                "--flash_size", "detect",
+                "--flash_mode", "dio",
+                "--flash_freq", "80m",
+                "--flash_size", "4MB",
                 "0x%X" % int(flash_offset),
                 str(fw_path),
             ]
+            '''should be:
+            esptool.py \
+                --chip esp32 \
+                --port /dev/cu.SLAB_USBtoUART \
+                --baud 921600 \
+                write_flash \
+                --flash_mode dio \
+                --flash_freq 80m \
+                --flash_size 4MB \
+                0x10000 firmware.bin'''
             ok, msg = self._run_esptool(write_args)
             if not ok:
                 self._emit_usb_flash_status("failed", 50, "Firmware write failed", msg)

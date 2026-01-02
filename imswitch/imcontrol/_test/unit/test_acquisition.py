@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 import time
-import threading
 
 from imswitch.imcontrol.model import DetectorsManager, RS232sManager
 from imswitch.imcontrol.model.SetupInfo import RS232Info
@@ -26,16 +25,16 @@ def getImage(detectorsManager, timeout_seconds=30):
     try:
         # Start acquisition
         handle = detectorsManager.startAcquisition(liveView=True)
-        
+
         # Wait for images with timeout
         start_time = time.time()
         while numImagesReceived < 3 and (time.time() - start_time) < timeout_seconds:
             time.sleep(0.1)  # Small sleep to prevent busy waiting
-            
+
         # Check if we got the required images
         if numImagesReceived < 3:
             raise TimeoutError(f"Only received {numImagesReceived} images within {timeout_seconds}s timeout")
-            
+
     finally:
         # Clean up
         try:
@@ -84,8 +83,8 @@ def test_acquisition_liveview_multi(currentDetector):
         detectorInfosMulti[currentDetector].managerProperties['virtcam']['image_width']
     )
     assert not np.all(receivedImage == receivedImage[0, 0])  # Assert that not all pixels are same
-    
-    
+
+
     '''
     TODO: Weget the following issue:
     

@@ -1,6 +1,5 @@
 from imswitch.imcommon.model import initLogger
 from .LEDMatrixManager import LEDMatrixManager
-import numpy as np
 
 
 class ESP32LEDMatrixManager(LEDMatrixManager):
@@ -90,7 +89,7 @@ class ESP32LEDMatrixManager(LEDMatrixManager):
         Light up only left/right/top/bottom in 'color'.
         """
         self.mLEDmatrix.send_LEDMatrix_halves(region=region, intensity=intensity, getReturn=getReturn, timeout=timeout)
-        
+
     def setRing(self, radius=4, intensity=(255,255,255), getReturn=True, timeout=1):
         """
         Draw ring of radius on the matrix.
@@ -102,7 +101,7 @@ class ESP32LEDMatrixManager(LEDMatrixManager):
         Draw filled circle of radius.
         """
         self.mLEDmatrix.send_LEDMatrix_circles(radius=radius, intensity=intensity, getReturn=getReturn, timeout=timeout)
-        
+
     def setStatus(self, status:str="idle") -> None:
         """ Sets the value of the LEDMatrix. """
         self.mLEDmatrix.send_LEDMatrix_status(status=status)

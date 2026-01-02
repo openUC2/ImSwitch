@@ -36,7 +36,7 @@ class MDAClient:
     This can be used from Jupyter notebooks or Python scripts to execute
     MDA protocols on a running ImSwitch instance.
     """
-    
+
     def __init__(self, base_url: str = "http://localhost:8000"):
         """
         Initialize the MDA client.
@@ -46,7 +46,7 @@ class MDAClient:
         """
         self.base_url = base_url.rstrip('/')
         self.api_base = f"{self.base_url}/api/experimentcontroller"
-    
+
     def check_mda_available(self) -> Dict[str, Any]:
         """Check if MDA functionality is available on the server."""
         try:
@@ -56,7 +56,7 @@ class MDAClient:
         except Exception as e:
             print(f"Error checking MDA capabilities: {e}")
             return {}
-    
+
     def run_mda_sequence(self, sequence: 'MDASequence') -> Dict[str, Any]:
         """
         Execute a native useq-schema MDASequence on ImSwitch.
@@ -70,10 +70,10 @@ class MDAClient:
         # Convert MDASequence to dict/JSON
         # useq-schema objects have a .model_dump() method for serialization
         sequence_dict = sequence.model_dump() if hasattr(sequence, 'model_dump') else sequence.dict()
-        
+
         print(f"Sending MDA sequence with {len(list(sequence))} events...")
         print(f"Axis order: {sequence.axis_order}")
-        
+
         try:
             response = requests.post(
                 f"{self.api_base}/run_native_mda_sequence",
@@ -82,19 +82,19 @@ class MDAClient:
             )
             response.raise_for_status()
             result = response.json()
-            
-            print(f"✓ MDA sequence started successfully")
+
+            print("✓ MDA sequence started successfully")
             print(f"  Status: {result.get('status')}")
             print(f"  Save directory: {result.get('save_directory')}")
             print(f"  Estimated duration: {result.get('estimated_duration_minutes', 0):.1f} minutes")
-            
+
             return result
         except requests.exceptions.RequestException as e:
             print(f"✗ Error sending MDA sequence: {e}")
             if hasattr(e, 'response') and e.response is not None:
                 print(f"  Response: {e.response.text}")
             raise
-    
+
     def get_sequence_info(self, sequence: 'MDASequence') -> Dict[str, Any]:
         """
         Get information about a sequence without executing it.
@@ -102,7 +102,7 @@ class MDAClient:
         This is useful for previewing what the sequence will do.
         """
         sequence_dict = sequence.model_dump() if hasattr(sequence, 'model_dump') else sequence.dict()
-        
+
         # For now, we compute this locally
         # Could also add a server endpoint for this
         events = list(sequence)
@@ -121,12 +121,12 @@ def example_1_simple_xyz_timelapse():
     """
     if not HAS_USEQ:
         return
-    
+
     print("=" * 70)
     print("Example 1: XYZ Time-Lapse Scan")
     print("=" * 70)
     print()
-    
+
     # Define the MDA sequence
     sequence = MDASequence(
         metadata={
@@ -146,27 +146,27 @@ def example_1_simple_xyz_timelapse():
         time_plan=TIntervalLoops(interval=60.0, loops=10),  # 10 timepoints, 1 min apart
         axis_order="tpzc"  # time, position, z, channel
     )
-    
-    print(f"Created MDA sequence:")
+
+    print("Created MDA sequence:")
     print(f"  3 positions × 6 Z-slices × 10 timepoints = {len(list(sequence))} events")
     print(f"  Axis order: {sequence.axis_order}")
     print(f"  Metadata: {sequence.metadata}")
     print()
-    
+
     # Send to ImSwitch
     client = MDAClient(base_url="http://localhost:8000")
-    
+
     # Check if MDA is available
     caps = client.check_mda_available()
     if not caps.get('mda_available'):
         print("MDA functionality not available on server")
         return
-    
-    print(f"Server capabilities:")
+
+    print("Server capabilities:")
     print(f"  Available channels: {caps.get('available_channels')}")
     print(f"  Stage available: {caps.get('stage_available')}")
     print()
-    
+
     # Execute the sequence
     # result = client.run_mda_sequence(sequence)
     print("To execute, uncomment: result = client.run_mda_sequence(sequence)")
@@ -179,12 +179,12 @@ def example_2_multi_channel_zstack():
     """
     if not HAS_USEQ:
         return
-    
+
     print("=" * 70)
     print("Example 2: Multi-Channel Z-Stack at Multiple Positions")
     print("=" * 70)
     print()
-    
+
     sequence = MDASequence(
         metadata={
             "experiment": "multi_channel_zstack",
@@ -202,21 +202,21 @@ def example_2_multi_channel_zstack():
         z_plan=ZRangeAround(range=20.0, step=2.0),  # 20µm range, 2µm steps
         axis_order="pczg"  # position, channel, z
     )
-    
-    print(f"Created MDA sequence:")
+
+    print("Created MDA sequence:")
     print(f"  2 positions × 3 channels × 11 Z-slices = {len(list(sequence))} events")
     print(f"  Axis order: {sequence.axis_order}")
     print()
-    
+
     # Show the sequence as JSON (what gets sent to the API)
     print("Sequence as JSON (first 500 chars):")
     sequence_json = json.dumps(
-        sequence.model_dump() if hasattr(sequence, 'model_dump') else sequence.dict(), 
+        sequence.model_dump() if hasattr(sequence, 'model_dump') else sequence.dict(),
         indent=2
     )
     print(sequence_json[:500] + "...")
     print()
-    
+
     # To execute:
     # client = MDAClient()
     # result = client.run_mda_sequence(sequence)
@@ -231,12 +231,12 @@ def example_3_timelapse_with_autofocus():
     """
     if not HAS_USEQ:
         return
-    
+
     print("=" * 70)
     print("Example 3: Time-Lapse with Autofocus Metadata")
     print("=" * 70)
     print()
-    
+
     sequence = MDASequence(
         metadata={
             "experiment": "timelapse_autofocus",
@@ -256,8 +256,8 @@ def example_3_timelapse_with_autofocus():
         time_plan=TIntervalLoops(interval=300.0, loops=20),  # 20 timepoints, 5 min apart
         axis_order="tpc"
     )
-    
-    print(f"Created MDA sequence:")
+
+    print("Created MDA sequence:")
     print(f"  4 positions × 20 timepoints = {len(list(sequence))} events")
     print(f"  Autofocus metadata: {sequence.metadata.get('autofocus')}")
     print()
@@ -274,7 +274,7 @@ def example_4_integration_with_imswitchclient():
     print("Example 4: imswitchclient Integration Pattern")
     print("=" * 70)
     print()
-    
+
     print("Future imswitchclient API (proposed):")
     print()
     print("```python")
@@ -292,7 +292,7 @@ def example_4_integration_with_imswitchclient():
     print()
     print("# Execute via experimentController")
     print("result = client.experimentController.run_mda_sequence(sequence)")
-    print("print(f'MDA started: {result}')") 
+    print("print(f'MDA started: {result}')")
     print("```")
     print()
 
@@ -303,12 +303,12 @@ def example_5_raw_requests():
     """
     if not HAS_USEQ:
         return
-    
+
     print("=" * 70)
     print("Example 5: Using Raw Requests (No imswitchclient Required)")
     print("=" * 70)
     print()
-    
+
     # Create sequence
     sequence = MDASequence(
         metadata={"experiment": "test"},
@@ -316,10 +316,10 @@ def example_5_raw_requests():
         z_plan=ZRangeAround(range=5.0, step=1.0),
         axis_order="zc"
     )
-    
+
     # Convert to dict
     sequence_dict = sequence.model_dump() if hasattr(sequence, 'model_dump') else sequence.dict()
-    
+
     print("Using plain requests library:")
     print()
     print("```python")
@@ -337,7 +337,7 @@ def example_5_raw_requests():
     print("print(response.json())")
     print("```")
     print()
-    print(f"Example payload (first 300 chars):")
+    print("Example payload (first 300 chars):")
     print(json.dumps(sequence_dict, indent=2)[:300] + "...")
     print()
 
@@ -352,17 +352,17 @@ def main():
     print("These examples show how to create MDA sequences in a Jupyter notebook")
     print("or Python script and execute them on ImSwitch via REST API.")
     print()
-    
+
     if not HAS_USEQ:
         return
-    
+
     # Run examples
     example_1_simple_xyz_timelapse()
     example_2_multi_channel_zstack()
     example_3_timelapse_with_autofocus()
     example_4_integration_with_imswitchclient()
     example_5_raw_requests()
-    
+
     print("=" * 70)
     print("Summary")
     print("=" * 70)

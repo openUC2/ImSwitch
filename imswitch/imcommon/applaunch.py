@@ -3,7 +3,6 @@ import os
 import sys
 import traceback
 import time
-import threading
 
 
 # somewhere after all your variables & functions exist
@@ -15,14 +14,11 @@ except ImportError:
     embed_kernel = None
 
 from .model import dirtools, pythontools, initLogger
-from imswitch.imcommon.framework import Signal, Thread
 from imswitch import IS_HEADLESS
 from imswitch.config import get_config
 if not IS_HEADLESS:
     from qtpy import QtCore, QtGui, QtWidgets
     from .view.guitools import getBaseStyleSheet
-    from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import QApplication
 else:
     from psygnal import emit_queued
 
@@ -70,17 +66,17 @@ def start_jupyter_kernel_in_main_thread(moduleMainControllers):
     try:
         logger = initLogger('JupyterKernel')
         logger.info('Starting Jupyter kernel in main thread...')
-        
+
         # Create namespace with access to all managers
         kernel_ns = {
             'moduleMainControllers': moduleMainControllers,
         }
-        
+
         # Add direct access to imcontrol master controller if available
         if hasattr(moduleMainControllers, 'mapping') and 'imcontrol' in moduleMainControllers.mapping:
             master_controller = moduleMainControllers.mapping['imcontrol']._ImConMainController__masterController
             kernel_ns['master'] = master_controller
-            
+
             # Add direct access to managers
             if hasattr(master_controller, 'lasersManager'):
                 kernel_ns['lasersManager'] = master_controller.lasersManager
@@ -90,23 +86,23 @@ def start_jupyter_kernel_in_main_thread(moduleMainControllers):
                 kernel_ns['positionersManager'] = master_controller.positionersManager
             if hasattr(master_controller, 'recordingManager'):
                 kernel_ns['recordingManager'] = master_controller.recordingManager
-                
+
             logger.info('Managers added to kernel namespace')
-        
+
         # Import commonly used packages in kernel namespace
         import numpy as np
         import matplotlib.pyplot as plt
         import time
-        
+
         kernel_ns.update({
             'np': np,
             'plt': plt,
             'time': time
         })
-        
+
         # Start the kernel in main thread (will block)
-        IPython.embed_kernel(local_ns=kernel_ns) # TODO: We have to start the jupyter notebook server AFTER we have started the kernel! 
-        
+        IPython.embed_kernel(local_ns=kernel_ns) # TODO: We have to start the jupyter notebook server AFTER we have started the kernel!
+
     except Exception as e:
         logger.error(f'Failed to start Jupyter kernel: {e}')
 
@@ -131,7 +127,7 @@ def keep_alive_loop(moduleMainControllers):
 def launchApp(app, mainView, moduleMainControllers):
     """ Launches the app. The program will exit when the app is exited. """
     logger = initLogger('launchApp')
-    
+
     # Get kernel setting from configuration
     config = get_config()
     kernel_enabled = config.with_kernel
@@ -142,13 +138,13 @@ def launchApp(app, mainView, moduleMainControllers):
         if kernel_enabled:
             # Start kernel in main thread (this will block, but that's what we want in headless mode)
             start_jupyter_kernel_in_main_thread(moduleMainControllers)
-        
+
         # Start keep-alive loop to keep the process running
         keep_alive_loop(moduleMainControllers)
         exitCode = 0
 
     else:
-        
+
         # Show app
         if mainView is not None:
             mainView.showMaximized()

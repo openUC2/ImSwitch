@@ -2,20 +2,9 @@ import time
 import cv2
 import numpy as np
 from time import perf_counter
-import scipy.ndimage as ndi
-from skimage.feature import peak_local_max
 
-import numpy as np
-import matplotlib.pyplot as plt
-import tifffile as tif
-import serial
-import time
-import serial.tools.list_ports
-from PIL import Image, ImageFile
+from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-import base64
-import io
-import serial.tools.list_ports
 import threading
 
 from imswitch.imcommon.framework import Thread, Timer
@@ -354,7 +343,6 @@ class FOVCalibThread(object):
         return pixelShiftX, pixelShiftY
 
     def startThread(self):
-        import threading
         self.mThread = threading.Thread(target=self.runCalibration)
         self.mThread.start()
 

@@ -7,12 +7,11 @@ OME-Zarr format standards and viewers like vivZAR and vtkviewer.
 """
 
 import zarr
-import os
 
 
 class VanillaZarrStore:
     """Simple store wrapper for vanilla Zarr functionality."""
-    
+
     def __init__(self, path):
         self.path = path
         # Zarr 3.0 compatibility - DirectoryStore was replaced with LocalStore or direct path usage
@@ -25,7 +24,7 @@ class VanillaZarrStore:
         else:
             # Zarr 3.x with direct path usage
             self.store = path
-    
+
     def close(self):
         """Close the store."""
         pass  # No explicit close needed for directory stores
@@ -33,7 +32,7 @@ class VanillaZarrStore:
 
 class VanillaZarrURL:
     """Simple URL wrapper for vanilla Zarr functionality."""
-    
+
     def __init__(self, path, mode="r"):
         self.path = path
         self.mode = mode
@@ -69,7 +68,7 @@ def write_image(image, group, axes="zyx"):
     for dim_size in image.shape:
         chunk_size = min(dim_size, 512)  # Use 512 or dimension size, whichever is smaller
         chunk_shape.append(chunk_size)
-    
+
     array = group.create_dataset(
         "0",
         shape=tuple(int(dim) for dim in image.shape),
@@ -77,7 +76,7 @@ def write_image(image, group, axes="zyx"):
         dtype=image.dtype
     )
     array[:] = image
-    
+
     # Set OME-Zarr metadata for the image
     axes_metadata = []
     for axis in axes:
@@ -91,7 +90,7 @@ def write_image(image, group, axes="zyx"):
             axes_metadata.append({"name": "t", "type": "time"})
         elif axis == 'c':
             axes_metadata.append({"name": "c", "type": "channel"})
-    
+
     multiscales = [{
         "version": "0.4",
         "datasets": [
@@ -104,7 +103,7 @@ def write_image(image, group, axes="zyx"):
         ],
         "axes": axes_metadata
     }]
-    
+
     group.attrs["multiscales"] = multiscales
 
 
@@ -125,23 +124,23 @@ def write_multiscales_metadata(group, datasets, format_version, shape, **attrs):
         for d in datasets:
             if isinstance(d, dict) and 'path' in d:
                 dataset_list.append({
-                    'path': d['path'], 
+                    'path': d['path'],
                     'coordinateTransformations': [{'type': 'identity'}]
                 })
             else:
                 # Handle legacy format
                 dataset_list.append({
-                    'path': str(d), 
+                    'path': str(d),
                     'coordinateTransformations': [{'type': 'identity'}]
                 })
     else:
         # Single dataset case
         path = datasets['path'] if isinstance(datasets, dict) else str(datasets)
         dataset_list = [{
-            'path': path, 
+            'path': path,
             'coordinateTransformations': [{'type': 'identity'}]
         }]
-    
+
     # Create OME-Zarr multiscales metadata
     multiscales = [{
         'version': format_version,
@@ -151,9 +150,9 @@ def write_multiscales_metadata(group, datasets, format_version, shape, **attrs):
             {'name': 'x', 'type': 'space'}
         ]
     }]
-    
+
     group.attrs['multiscales'] = multiscales
-    
+
     # Add any additional attributes
     for key, value in attrs.items():
         group.attrs[key] = value

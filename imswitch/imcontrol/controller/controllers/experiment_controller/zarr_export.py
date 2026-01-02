@@ -27,7 +27,7 @@ import zarr
 import numpy as np
 import tifffile as tif
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List, Tuple, Union
+from typing import Dict, Any, List, Tuple
 
 
 @dataclass
@@ -51,7 +51,7 @@ class DatasetInfo:
     channel_names: List[str]
     channel_colors: List[str]
     pyramid_levels: int
-    
+
     def __str__(self):
         return f"""OME-Zarr Dataset Info:
   Path: {self.path}
@@ -74,7 +74,7 @@ class ZarrExporter:
     
     Provides methods to explore and extract data from OME-Zarr datasets.
     """
-    
+
     def __init__(self, zarr_path: str):
         """
         Initialize the exporter with a path to an OME-Zarr file.
@@ -85,25 +85,25 @@ class ZarrExporter:
         self.zarr_path = zarr_path
         self.root = zarr.open_group(zarr_path, mode="r")
         self._parse_metadata()
-    
+
     def _parse_metadata(self):
         """Parse OME-NGFF metadata from the zarr store."""
         # Get multiscales metadata
         self.multiscales = self.root.attrs.get("multiscales", [{}])[0]
         self.axes = self.multiscales.get("axes", [])
         self.datasets = self.multiscales.get("datasets", [])
-        
+
         # Get omero metadata for channels
         self.omero = self.root.attrs.get("omero", {})
         self.channels = self.omero.get("channels", [])
-        
+
         # Get the base resolution array (level 0)
         self.base_array = self.root["0"]
         self.shape = self.base_array.shape
-        
+
         # Parse coordinate transformations
         self._parse_transforms()
-    
+
     def _parse_transforms(self):
         """Parse coordinate transformations from metadata."""
         # Default values
@@ -114,7 +114,7 @@ class ZarrExporter:
         self.x_start = 0.0
         self.y_start = 0.0
         self.z_start = 0.0
-        
+
         # Try to get from dataset-level transforms
         if self.datasets:
             transforms = self.datasets[0].get("coordinateTransformations", [])
@@ -132,7 +132,7 @@ class ZarrExporter:
                         self.z_start = translation[2]
                         self.y_start = translation[3]
                         self.x_start = translation[4]
-        
+
         # Also check global transforms
         global_transforms = self.multiscales.get("coordinateTransformations", [])
         for transform in global_transforms:
@@ -143,7 +143,7 @@ class ZarrExporter:
                     self.pixel_size_z = scale[2]
                     self.pixel_size_y = scale[3]
                     self.pixel_size_x = scale[4]
-    
+
     def get_info(self) -> DatasetInfo:
         """
         Get comprehensive information about the dataset.
@@ -153,16 +153,16 @@ class ZarrExporter:
         """
         # Count pyramid levels
         pyramid_levels = len([k for k in self.root.keys() if k.isdigit()])
-        
+
         # Get channel names and colors
         channel_names = [ch.get("label", f"Channel_{i}") for i, ch in enumerate(self.channels)]
         if not channel_names:
             channel_names = [f"Channel_{i}" for i in range(self.shape[1])]
-        
+
         channel_colors = [ch.get("color", "FFFFFF") for ch in self.channels]
         if not channel_colors:
             channel_colors = ["FFFFFF"] * self.shape[1]
-        
+
         return DatasetInfo(
             path=self.zarr_path,
             shape=self.shape,
@@ -183,7 +183,7 @@ class ZarrExporter:
             channel_colors=channel_colors,
             pyramid_levels=pyramid_levels
         )
-    
+
     def list_channels(self) -> List[Dict[str, Any]]:
         """
         List all channels with their metadata.
@@ -196,7 +196,7 @@ class ZarrExporter:
         else:
             # Return default channel info
             return [{"label": f"Channel_{i}", "color": "FFFFFF"} for i in range(self.shape[1])]
-    
+
     def get_physical_coordinates(self, t: int = 0, z: int = 0, y_pixel: int = 0, x_pixel: int = 0) -> Dict[str, float]:
         """
         Convert pixel coordinates to physical coordinates.
@@ -216,7 +216,7 @@ class ZarrExporter:
             "y_um": self.y_start + y_pixel * self.pixel_size_y,
             "z_um": self.z_start + z * self.pixel_size_z
         }
-    
+
     def extract_slice(self, t: int = 0, c: int = 0, z: int = 0, level: int = 0) -> np.ndarray:
         """
         Extract a single 2D slice from the dataset.
@@ -232,7 +232,7 @@ class ZarrExporter:
         """
         array = self.root[str(level)]
         return np.array(array[t, c, z, :, :])
-    
+
     def extract_volume(self, t: int = 0, c: int = 0, level: int = 0) -> np.ndarray:
         """
         Extract a 3D volume (all z-planes) for a specific timepoint and channel.
@@ -247,7 +247,7 @@ class ZarrExporter:
         """
         array = self.root[str(level)]
         return np.array(array[t, c, :, :, :])
-    
+
     def extract_time_series(self, c: int = 0, z: int = 0, level: int = 0) -> np.ndarray:
         """
         Extract a time series for a specific channel and z-plane.
@@ -262,7 +262,7 @@ class ZarrExporter:
         """
         array = self.root[str(level)]
         return np.array(array[:, c, z, :, :])
-    
+
     def extract_region(self, t: int = 0, c: int = 0, z: int = 0,
                        y_start: int = 0, y_end: int = None,
                        x_start: int = 0, x_end: int = None,
@@ -285,7 +285,7 @@ class ZarrExporter:
         if x_end is None:
             x_end = array.shape[4]
         return np.array(array[t, c, z, y_start:y_end, x_start:x_end])
-    
+
     def export_tiff(self, output_path: str, t: int = 0, c: int = 0, z: int = 0,
                     level: int = 0, compression: str = "zlib"):
         """
@@ -298,7 +298,7 @@ class ZarrExporter:
             compression: TIFF compression method
         """
         data = self.extract_slice(t, c, z, level)
-        
+
         # Create OME metadata
         info = self.get_info()
         metadata = {
@@ -309,10 +309,10 @@ class ZarrExporter:
                 'PhysicalSizeYUnit': 'µm',
             }
         }
-        
+
         tif.imwrite(output_path, data, compression=compression, metadata=metadata)
         print(f"Exported slice to {output_path}")
-    
+
     def export_z_stack(self, output_path: str, t: int = 0, c: int = 0,
                        level: int = 0, compression: str = "zlib"):
         """
@@ -326,7 +326,7 @@ class ZarrExporter:
             compression: TIFF compression method
         """
         data = self.extract_volume(t, c, level)
-        
+
         info = self.get_info()
         metadata = {
             'Pixels': {
@@ -338,10 +338,10 @@ class ZarrExporter:
                 'PhysicalSizeZUnit': 'µm',
             }
         }
-        
+
         tif.imwrite(output_path, data, compression=compression, metadata=metadata)
         print(f"Exported z-stack ({data.shape[0]} planes) to {output_path}")
-    
+
     def export_tiff_series(self, output_dir: str, channel: int = None,
                            timepoint: int = None, z_plane: int = None,
                            level: int = 0, compression: str = "zlib"):
@@ -358,12 +358,12 @@ class ZarrExporter:
         """
         os.makedirs(output_dir, exist_ok=True)
         info = self.get_info()
-        
+
         # Determine ranges
         t_range = [timepoint] if timepoint is not None else range(info.n_timepoints)
         c_range = [channel] if channel is not None else range(info.n_channels)
         z_range = [z_plane] if z_plane is not None else range(info.n_z_planes)
-        
+
         count = 0
         for t in t_range:
             for c in c_range:
@@ -371,13 +371,13 @@ class ZarrExporter:
                     channel_name = info.channel_names[c] if c < len(info.channel_names) else f"ch{c}"
                     filename = f"t{t:04d}_c{c}_{channel_name}_z{z:04d}.tif"
                     filepath = os.path.join(output_dir, filename)
-                    
+
                     data = self.extract_slice(t, c, z, level)
                     tif.imwrite(filepath, data, compression=compression)
                     count += 1
-        
+
         print(f"Exported {count} TIFF files to {output_dir}")
-    
+
     def export_ome_tiff(self, output_path: str, level: int = 0,
                         channels: List[int] = None, timepoints: List[int] = None,
                         z_planes: List[int] = None):
@@ -393,18 +393,18 @@ class ZarrExporter:
         """
         info = self.get_info()
         array = self.root[str(level)]
-        
+
         # Determine ranges
         t_list = timepoints if timepoints is not None else list(range(info.n_timepoints))
         c_list = channels if channels is not None else list(range(info.n_channels))
         z_list = z_planes if z_planes is not None else list(range(info.n_z_planes))
-        
+
         # Extract data
         data = np.array(array[t_list, :, :, :, :][:, c_list, :, :, :][:, :, z_list, :, :])
-        
+
         # Build OME-XML metadata
         channel_names = [info.channel_names[c] for c in c_list]
-        
+
         # Write OME-TIFF
         with tif.TiffWriter(output_path, bigtiff=True) as tiff:
             tiff.write(
@@ -423,9 +423,9 @@ class ZarrExporter:
                     }
                 }
             )
-        
+
         print(f"Exported OME-TIFF ({data.shape}) to {output_path}")
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """
         Export dataset information to a dictionary.
@@ -462,7 +462,7 @@ class ZarrExporter:
             "pyramid_levels": info.pyramid_levels,
             "dtype": info.dtype
         }
-    
+
     def to_json(self, indent: int = 2) -> str:
         """
         Export dataset information to JSON string.
@@ -474,7 +474,7 @@ class ZarrExporter:
             JSON string
         """
         return json.dumps(self.to_dict(), indent=indent)
-    
+
     def save_info(self, output_path: str):
         """
         Save dataset information to a JSON file.
@@ -490,7 +490,7 @@ class ZarrExporter:
 def main():
     """Command-line interface for the Zarr exporter."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="OME-Zarr Export Utility")
     parser.add_argument("zarr_path", help="Path to the .ome.zarr directory")
     parser.add_argument("--info", action="store_true", help="Print dataset info")
@@ -502,23 +502,23 @@ def main():
     parser.add_argument("-c", type=int, default=0, help="Channel index")
     parser.add_argument("-z", type=int, default=0, help="Z-plane index")
     parser.add_argument("--level", type=int, default=0, help="Pyramid level")
-    
+
     args = parser.parse_args()
-    
+
     exporter = ZarrExporter(args.zarr_path)
-    
+
     if args.info:
         print(exporter.get_info())
-    
+
     if args.json:
         print(exporter.to_json())
-    
+
     if args.export_tiff:
         exporter.export_tiff(args.export_tiff, t=args.t, c=args.c, z=args.z, level=args.level)
-    
+
     if args.export_dir:
         exporter.export_tiff_series(args.export_dir, level=args.level)
-    
+
     if args.export_ome_tiff:
         exporter.export_ome_tiff(args.export_ome_tiff, level=args.level)
 

@@ -94,45 +94,45 @@ def run_benchmark_via_api(base_url, config, duration, roi_size, dz):
         Dict with benchmark results
     """
     import requests
-    
+
     print(f"\n{'='*60}")
     print(f"Testing: {config['name']}")
     print(f"{'='*60}")
-    
+
     # Set parameters
     params = config['params'].copy()
     params['roi_size'] = roi_size
     params['dz'] = dz
-    
+
     try:
         response = requests.post(
             f"{base_url}/holocontroller/set_parameters_inlineholo",
             json=params
         )
         response.raise_for_status()
-        print(f"✓ Parameters set")
+        print("✓ Parameters set")
     except Exception as e:
         print(f"✗ Failed to set parameters: {e}")
         return None
-    
+
     # Start processing
     try:
         response = requests.get(f"{base_url}/holocontroller/start_processing_inlineholo")
         response.raise_for_status()
-        print(f"✓ Processing started")
+        print("✓ Processing started")
     except Exception as e:
         print(f"✗ Failed to start processing: {e}")
         return None
-    
+
     # Wait for warmup
-    print(f"  Warming up (5s)...")
+    print("  Warming up (5s)...")
     time.sleep(5)
-    
+
     # Collect metrics during test period
     print(f"  Running benchmark ({duration}s)...")
     start_time = time.time()
     samples = []
-    
+
     while time.time() - start_time < duration:
         try:
             response = requests.get(f"{base_url}/holocontroller/get_state_inlineholo")
@@ -148,26 +148,26 @@ def run_benchmark_via_api(base_url, config, duration, roi_size, dz):
             })
         except Exception as e:
             print(f"  Warning: Failed to get state: {e}")
-        
+
         time.sleep(1.0)
-    
+
     # Stop processing
     try:
         response = requests.get(f"{base_url}/holocontroller/stop_processing_inlineholo")
         response.raise_for_status()
-        print(f"✓ Processing stopped")
+        print("✓ Processing stopped")
     except Exception as e:
         print(f"✗ Failed to stop processing: {e}")
-    
+
     # Calculate statistics
     if not samples:
-        print(f"✗ No samples collected")
+        print("✗ No samples collected")
         return None
-    
+
     capture_fps_values = [s['capture_fps'] for s in samples if s['capture_fps'] > 0]
     processing_fps_values = [s['processing_fps'] for s in samples if s['processing_fps'] > 0]
     process_time_values = [s['avg_process_time'] for s in samples if s['avg_process_time'] > 0]
-    
+
     results = {
         'config_name': config['name'],
         'params': params,
@@ -182,15 +182,15 @@ def run_benchmark_via_api(base_url, config, duration, roi_size, dz):
         'total_dropped_frames': samples[-1]['dropped_frames'] if samples else 0,
         'total_processed_frames': samples[-1]['processed_count'] if samples else 0,
     }
-    
+
     # Print results
-    print(f"\n  Results:")
+    print("\n  Results:")
     print(f"    Capture FPS:     {results['capture_fps_mean']:.2f} ± {results['capture_fps_std']:.2f}")
     print(f"    Processing FPS:  {results['processing_fps_mean']:.2f} ± {results['processing_fps_std']:.2f}")
     print(f"    Avg Process Time: {results['avg_process_time_mean']*1000:.2f} ± {results['avg_process_time_std']*1000:.2f} ms")
     print(f"    Dropped Frames:  {results['total_dropped_frames']}")
     print(f"    Total Processed: {results['total_processed_frames']}")
-    
+
     return results
 
 
@@ -206,21 +206,21 @@ def main():
                         help="Propagation distance in meters")
     parser.add_argument("--output", default=None,
                         help="Output JSON file for results")
-    
+
     args = parser.parse_args()
-    
+
     print(f"\n{'='*60}")
-    print(f"Hologram Processing Benchmark")
+    print("Hologram Processing Benchmark")
     print(f"{'='*60}")
     print(f"Base URL: {args.base_url}")
     print(f"Duration per test: {args.duration}s")
     print(f"ROI size: {args.roi_size}x{args.roi_size}")
     print(f"Propagation distance: {args.dz}m")
     print(f"Configurations to test: {len(BENCHMARK_CONFIGS)}")
-    
+
     # Run all benchmarks
     all_results = []
-    
+
     for config in BENCHMARK_CONFIGS:
         result = run_benchmark_via_api(
             args.base_url,
@@ -229,28 +229,28 @@ def main():
             args.roi_size,
             args.dz
         )
-        
+
         if result:
             all_results.append(result)
-        
+
         # Short pause between tests
         time.sleep(2)
-    
+
     # Summary
     print(f"\n{'='*60}")
-    print(f"BENCHMARK SUMMARY")
+    print("BENCHMARK SUMMARY")
     print(f"{'='*60}")
-    
+
     if not all_results:
         print("No successful benchmarks completed")
         return
-    
+
     # Find baseline
     baseline = all_results[0]
-    
+
     print(f"\n{'Configuration':<40} {'Process FPS':<15} {'Speedup':<10} {'Avg Time (ms)':<15}")
     print(f"{'-'*80}")
-    
+
     for result in all_results:
         speedup = result['processing_fps_mean'] / baseline['processing_fps_mean'] if baseline['processing_fps_mean'] > 0 else 0
         print(
@@ -259,7 +259,7 @@ def main():
             f"{speedup:>6.2f}x     "
             f"{result['avg_process_time_mean']*1000:>6.2f} ± {result['avg_process_time_std']*1000:>5.2f}"
         )
-    
+
     # Save results
     if args.output:
         output_data = {
@@ -271,28 +271,28 @@ def main():
             },
             'results': all_results,
         }
-        
+
         with open(args.output, 'w') as f:
             json.dump(output_data, f, indent=2)
-        
+
         print(f"\n✓ Results saved to {args.output}")
-    
+
     # Print recommendations
     print(f"\n{'='*60}")
-    print(f"RECOMMENDATIONS")
+    print("RECOMMENDATIONS")
     print(f"{'='*60}")
-    
+
     best_config = max(all_results, key=lambda x: x['processing_fps_mean'])
     speedup = best_config['processing_fps_mean'] / baseline['processing_fps_mean']
-    
+
     print(f"\nBest configuration: {best_config['config_name']}")
     print(f"  Processing FPS: {best_config['processing_fps_mean']:.2f} fps")
     print(f"  Speedup: {speedup:.2f}x over baseline")
     print(f"  Avg processing time: {best_config['avg_process_time_mean']*1000:.2f} ms")
-    
+
     if best_config['total_dropped_frames'] > 0:
         print(f"\n⚠ Warning: {best_config['total_dropped_frames']} frames dropped")
-        print(f"  Consider reducing update_freq or ROI size")
+        print("  Consider reducing update_freq or ROI size")
 
 
 if __name__ == "__main__":

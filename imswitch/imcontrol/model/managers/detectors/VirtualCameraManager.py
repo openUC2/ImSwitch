@@ -1,7 +1,7 @@
 import numpy as np
 import time
 from imswitch.imcommon.model import initLogger
-from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter, DetectorBooleanParameter
+from .DetectorManager import DetectorManager, DetectorNumberParameter, DetectorListParameter, DetectorBooleanParameter
 
 
 class VirtualCameraManager(DetectorManager):
@@ -175,23 +175,23 @@ class VirtualCameraManager(DetectorManager):
         if source not in valid_sources:
             self.__logger.warning(f"Invalid trigger source '{source}'. Valid options: {valid_sources}")
             return
-            
+
         # Update the parameter
         self.setParameter('trigger_source', source)
-        
+
         # Also update the underlying camera property if available
         try:
             if hasattr(self._camera, 'setPropertyValue'):
                 # Map source strings to values that the virtual camera expects
                 source_mapping = {
                     'Continous': 0,
-                    'Internal trigger': 1, 
+                    'Internal trigger': 1,
                     'External trigger': 2
                 }
                 self._camera.setPropertyValue('trigger_source', source_mapping.get(source, 1))
         except Exception as e:
             self.__logger.debug(f"Could not set camera trigger source: {e}")
-        
+
         self.__logger.info(f"Set trigger source to: {source}")
 
     def openPropertiesDialog(self):

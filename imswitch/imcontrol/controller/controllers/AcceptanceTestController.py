@@ -3,11 +3,9 @@ Controller for step-by-step acceptance testing of microscope functionality.
 Tests motion, lighting, camera, and autofocus features with user confirmation.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict
 import time
-import json
 
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import initLogger
@@ -22,7 +20,7 @@ class AcceptanceTestController(ImConWidgetController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
-        
+
         # Store test results
         self.test_results = {
             "motion": {},
@@ -31,13 +29,13 @@ class AcceptanceTestController(ImConWidgetController):
             "autofocus": {},
             "timestamp": None
         }
-        
+
         # Test state
         self.current_test_step = None
         self.test_in_progress = False
 
     # ==================== Motion Tests ====================
-    
+
     @APIExport(runOnUIThread=True)
     def homeAxisX(self, positionerName: str = None) -> Dict:
         """
@@ -52,9 +50,9 @@ class AcceptanceTestController(ImConWidgetController):
         try:
             if positionerName is None:
                 positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-            
+
             positioner = self._master.positionersManager[positionerName]
-            
+
             # Execute homing for X axis
             if hasattr(positioner, 'home'):
                 positioner.home_x()
@@ -94,9 +92,9 @@ class AcceptanceTestController(ImConWidgetController):
         try:
             if positionerName is None:
                 positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-            
+
             positioner = self._master.positionersManager[positionerName]
-            
+
             # Execute homing for Y axis
             if hasattr(positioner, 'home'):
                 positioner.home_y()
@@ -136,9 +134,9 @@ class AcceptanceTestController(ImConWidgetController):
         try:
             if positionerName is None:
                 positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-            
+
             positioner = self._master.positionersManager[positionerName]
-            
+
             # Execute homing for Z axis
             if hasattr(positioner, 'home'):
                 positioner.home_z()
@@ -177,9 +175,9 @@ class AcceptanceTestController(ImConWidgetController):
         try:
             if positionerName is None:
                 positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-            
+
             positioner = self._master.positionersManager[positionerName]
-            
+
             # Execute homing for A axis
             if hasattr(positioner, 'home'):
                 positioner.home_a()
@@ -224,9 +222,9 @@ class AcceptanceTestController(ImConWidgetController):
             speed = 5000
             if positionerName is None:
                 positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-            
+
             self.positioner = self._master.positionersManager[positionerName]
-            
+
             # Move to absolute position for X, Y, Z (test all three axes)
             if 'X' in self.positioner.axes:
                 self.positioner.move(value=x, axis='X', speed=speed, is_absolute=False, is_blocking=True)
@@ -236,9 +234,9 @@ class AcceptanceTestController(ImConWidgetController):
                 self.positioner.move(value=z/-10, axis='Z', speed=speed, is_absolute=False, is_blocking=True)
             if 'A' in self.positioner.axes:
                 self.positioner.move(value=a, axis='A', speed=speed, is_absolute=True, is_blocking=True)
-                
+
             self.__logger.info(f"Moving to test position X:{x}, Y:{y}, Z:{z}")
-            
+
             return {
                 "status": "success",
                 "message": "Moving to test position",
@@ -267,12 +265,12 @@ class AcceptanceTestController(ImConWidgetController):
         try:
             if positionerName is None:
                 positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-            
+
             positioner = self._master.positionersManager[positionerName]
             positioner.move(value=distance, axis='X', is_absolute=False, is_blocking=False)
-            
+
             self.__logger.info(f"Moving +X by {distance} µm")
-            
+
             return {
                 "status": "success",
                 "message": f"Moving +{distance} µm in X direction",
@@ -303,12 +301,12 @@ class AcceptanceTestController(ImConWidgetController):
         try:
             if positionerName is None:
                 positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-            
+
             positioner = self._master.positionersManager[positionerName]
             positioner.move(value=-distance, axis='X', is_absolute=False, is_blocking=False)
-            
+
             self.__logger.info(f"Moving -X by {distance} µm")
-            
+
             return {
                 "status": "success",
                 "message": f"Moving -{distance} µm in X direction",
@@ -325,7 +323,7 @@ class AcceptanceTestController(ImConWidgetController):
             }
 
     # ==================== Lighting Tests ====================
-    
+
     @APIExport(runOnUIThread=True)
     def getAvailableLightSources(self) -> Dict:
         """
@@ -336,7 +334,7 @@ class AcceptanceTestController(ImConWidgetController):
         """
         try:
             laser_names = self._master.lasersManager.getAllDeviceNames()
-            
+
             sources = []
             for name in laser_names:
                 laser = self._master.lasersManager[name]
@@ -344,7 +342,7 @@ class AcceptanceTestController(ImConWidgetController):
                     "name": name,
                     "enabled": int(laser.enabled if hasattr(laser, 'enabled') else False)
                 })
-            
+
             return {
                 "status": "success",
                 "light_sources": sources,
@@ -377,9 +375,9 @@ class AcceptanceTestController(ImConWidgetController):
             time.sleep(0.5)  # Allow time to see the light ON
             # Turn off
             laser.setEnabled(False)
-            
+
             self.__logger.info(f"Toggled light on/off: {laserName}")
-            
+
             return {
                 "status": "success",
                 "message": f"Light source {laserName} toggled ON then OFF",
@@ -409,7 +407,7 @@ class AcceptanceTestController(ImConWidgetController):
         """
         try:
             laserDevice = self._master.lasersManager[laser]
-            
+
             if active:
                 laserDevice.setEnabled(True)
                 laserDevice.setValue(intensity)
@@ -417,9 +415,9 @@ class AcceptanceTestController(ImConWidgetController):
             else:
                 laserDevice.setEnabled(False)
                 action = "disabled"
-            
+
             self.__logger.info(f"Set laser {laser} active={active}")
-            
+
             return {
                 "status": "success",
                 "message": f"Light source {laser} {action}",
@@ -448,9 +446,9 @@ class AcceptanceTestController(ImConWidgetController):
         try:
             laser = self._master.lasersManager[laserName]
             laser.setEnabled(False)
-            
+
             self.__logger.info(f"Turned off light: {laserName}")
-            
+
             return {
                 "status": "success",
                 "message": f"Light source {laserName} turned OFF",
@@ -466,7 +464,7 @@ class AcceptanceTestController(ImConWidgetController):
             }
 
     # ==================== Camera/Detector Tests ====================
-    
+
     @APIExport(runOnUIThread=True)
     def getCameraInfo(self) -> Dict:
         """
@@ -477,17 +475,17 @@ class AcceptanceTestController(ImConWidgetController):
         """
         try:
             detector_names = self._master.detectorsManager.getAllDeviceNames()
-            
+
             cameras = []
             for name in detector_names:
                 detector = self._master.detectorsManager[name]
-                
+
                 # Get camera specifications
                 camera_info = {
                     "name": name,
                     "model": detector.model if hasattr(detector, 'model') else "Unknown",
                 }
-                
+
                 # Get shape if available
                 if hasattr(detector, 'parameters') and 'image_width' in detector.parameters:
                     camera_info["width_pixels"] = detector.parameters['image_width']
@@ -495,13 +493,13 @@ class AcceptanceTestController(ImConWidgetController):
                 elif hasattr(detector, 'shape'):
                     camera_info["width_pixels"] = detector.shape[1]
                     camera_info["height_pixels"] = detector.shape[0]
-                
+
                 # Get pixel size if available
                 if hasattr(detector, 'pixelSizeUm'):
                     camera_info["pixel_size_um"] = detector.pixelSizeUm
-                
+
                 cameras.append(camera_info)
-            
+
             return {
                 "status": "success",
                 "cameras": cameras,
@@ -529,12 +527,12 @@ class AcceptanceTestController(ImConWidgetController):
         try:
             if detectorName is None:
                 detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
-            
+
             detector = self._master.detectorsManager[detectorName]
-            
+
             exposure = None
             gain = None
-            
+
             # Try to get exposure time
             if hasattr(detector, 'getParameter'):
                 try:
@@ -545,7 +543,7 @@ class AcceptanceTestController(ImConWidgetController):
                     gain = detector.getParameter('Gain')
                 except:
                     pass
-            
+
             return {
                 "status": "success",
                 "detector": detectorName,
@@ -560,7 +558,7 @@ class AcceptanceTestController(ImConWidgetController):
             }
 
     # ==================== Autofocus Tests ====================
-    
+
     @APIExport(runOnUIThread=True)
     def runAutofocus(self, maxZ:int=100, minZ:int=-100, stepSize:float=10.0, illuminationChannel=None) -> Dict:
         """
@@ -570,7 +568,7 @@ class AcceptanceTestController(ImConWidgetController):
             Dict with autofocus result
         """
         try:
-            
+
             if illuminationChannel is None:
                 # pick one that sounds like "LED"
                 self.laserNames = self._master.lasersManager.getAllDeviceNames()
@@ -605,7 +603,7 @@ class AcceptanceTestController(ImConWidgetController):
                 twoStage=False
             )
 
-            self._logger.debug(f"Autofocus completed successfully")
+            self._logger.debug("Autofocus completed successfully")
             return {"result": result}
 
         except Exception as e:
@@ -636,7 +634,7 @@ class AcceptanceTestController(ImConWidgetController):
                     "status": "unavailable",
                     "message": "Autofocus not available"
                 }
-            
+
             # This is a placeholder - actual implementation depends on autofocus controller
             return {
                 "status": "available",
@@ -650,7 +648,7 @@ class AcceptanceTestController(ImConWidgetController):
             }
 
     # ==================== Test Recording & Reporting ====================
-    
+
     @APIExport(runOnUIThread=True)
     def recordTestResult(self, category: str, test_name: str, passed: bool, notes: str = "") -> Dict:
         """
@@ -668,15 +666,15 @@ class AcceptanceTestController(ImConWidgetController):
         try:
             if category not in self.test_results:
                 self.test_results[category] = {}
-            
+
             self.test_results[category][test_name] = {
                 "passed": passed,
                 "notes": notes,
                 "timestamp": time.time()
             }
-            
+
             self.__logger.info(f"Recorded test result: {category}/{test_name} = {'PASS' if passed else 'FAIL'}")
-            
+
             return {
                 "status": "success",
                 "message": "Test result recorded",
@@ -703,7 +701,7 @@ class AcceptanceTestController(ImConWidgetController):
             # Calculate summary statistics
             total_tests = 0
             passed_tests = 0
-            
+
             for category, tests in self.test_results.items():
                 if isinstance(tests, dict):
                     for test_name, result in tests.items():
@@ -711,7 +709,7 @@ class AcceptanceTestController(ImConWidgetController):
                             total_tests += 1
                             if result['passed']:
                                 passed_tests += 1
-            
+
             return {
                 "status": "success",
                 "test_results": self.test_results,
@@ -745,9 +743,9 @@ class AcceptanceTestController(ImConWidgetController):
                 "autofocus": {},
                 "timestamp": time.time()
             }
-            
+
             self.__logger.info("Test results reset")
-            
+
             return {
                 "status": "success",
                 "message": "Test results have been reset"

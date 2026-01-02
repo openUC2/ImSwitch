@@ -1,9 +1,6 @@
 import pyqtgraph as pg
 from qtpy import QtCore, QtWidgets
-import pyqtgraph as pg
 
-from imswitch.imcommon.view.guitools import pyqtgraphtools
-from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
 
 

@@ -5,7 +5,6 @@ from numba import cuda
 
 from .GPUfunctions import *
 
-from ..constants import NV_PSP
 
 
 @cuda.jit(device=True)

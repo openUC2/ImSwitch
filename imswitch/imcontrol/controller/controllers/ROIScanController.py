@@ -2,19 +2,12 @@ import os
 import threading
 from datetime import datetime
 import time
-import cv2
-import matplotlib.pyplot as plt
 import numpy as np
-import scipy
-import scipy.ndimage as ndi
-import scipy.signal as signal
-import skimage.transform as transform
 import tifffile as tif
 from imswitch import IS_HEADLESS
 
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
-from imswitch.imcommon.model import dirtools, initLogger, APIExport
-from skimage.registration import phase_cross_correlation
+from imswitch.imcommon.framework import Signal
+from imswitch.imcommon.model import dirtools, initLogger
 from ..basecontrollers import ImConWidgetController
 
 

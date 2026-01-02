@@ -5,14 +5,11 @@ Created on 2024-04-02
 @author:fdy
 '''
 
-import ctypes
 from ctypes import *
 from TUCam import *
-from enum import Enum
 import time
 import threading
 import numpy as np
-import logging
 
 # C:\Users\benir\Documents\ImSwitch\imswitch\imcontrol\model\interfaces\tucam_win\lib\x64
 class Tucam():
@@ -26,7 +23,7 @@ class Tucam():
         # I think this is not really smart
         # if we do not disconnect the camera correctly, the camera gets stuck in a timeout or code completiely gets stuck
 
-       
+
         TUCAM_Api_Init(pointer(self.TUCAMINIT), 2000)
 
         print(self.TUCAMINIT.uiCamCount)
@@ -66,7 +63,7 @@ class Tucam():
             time.sleep(0.5)
         except Exception:
             pass
-        
+
         try:
             # Try to init and immediately uninit to reset state
             dummy_init = TUCAM_INIT(0, b'./')
@@ -76,46 +73,46 @@ class Tucam():
             time.sleep(0.5)
         except Exception:
             pass
-        
+
         print("Emergency cleanup completed")
 
 
     def _open_camera_with_timeout(self, timeout_seconds=5):
         """Open camera with timeout to prevent hanging"""
         result = {'success': False, 'exception': None}
-        
+
         def open_camera_thread():
             try:
                 TUCAM_Dev_Open(pointer(self.TUCAMOPEN))
                 result['success'] = True
             except Exception as e:
                 result['exception'] = e
-        
+
         thread = threading.Thread(target=open_camera_thread, daemon=True)
         thread.start()
         thread.join(timeout=timeout_seconds)
-        
+
         if thread.is_alive():
             print(f"Camera open timed out after {timeout_seconds} seconds")
             return False
-        
+
         if result['exception']:
             print(f"TUCAM_Dev_Open failed: {result['exception']}")
             return False
-            
+
         return result['success']
 
     def OpenCamera(self, Idx):
 
         if  Idx >= self.TUCAMINIT.uiCamCount:
             return
-        
+
         print(f"Camera count: {self.TUCAMINIT.uiCamCount}, requested index: {Idx}")
-        
+
         # Cleanup any existing session before opening
         print("Cleaning up any existing camera session...")
         self._shutdown_capture()
-        
+
         # Try to close any existing handle
         if hasattr(self, 'TUCAMOPEN') and getattr(self.TUCAMOPEN, 'hIdxTUCam', 0) != 0:
             try:
@@ -123,15 +120,15 @@ class Tucam():
                 print("Closed existing camera handle")
             except Exception as e:
                 print(f"Error closing existing handle: {e}")
-        
+
         self.TUCAMOPEN = TUCAM_OPEN(Idx, 0)
-        print(f"Opening camera index {Idx}") 
-        
+        print(f"Opening camera index {Idx}")
+
         # Use timeout to prevent hanging
         if not self._open_camera_with_timeout(timeout_seconds=10):
             print("Failed to open camera (timeout or error)")
             return
-            
+
         print(f"Camera handle: {self.TUCAMOPEN.hIdxTUCam}")
         if 0 == self.TUCAMOPEN.hIdxTUCam:
             print('Open the camera failure!')
@@ -147,7 +144,7 @@ class Tucam():
     def UnInitApi(self):
         TUCAM_Api_Uninit()
 
-    # ch:计算黑白图片平均灰度值 | en:Calculate mono image average gray 
+    # ch:计算黑白图片平均灰度值 | en:Calculate mono image average gray
     def CalculateMonoAverageGray(self, m_frame):
 
         buf = create_string_buffer(m_frame.uiImgSize)
@@ -263,7 +260,7 @@ class Tucam():
         except Exception as e:
             print(f"Convert frame failed: {e}")
             return None
-        
+
     # ===== Threaded version preserving original syntax/flow =====
     def _thread_loop(self):
         print("Entered thread loop")
@@ -317,9 +314,9 @@ class Tucam():
 if __name__ == '__main__':
     # Perform emergency cleanup first to handle any stuck sessions
     Tucam.emergency_cleanup()
-    
+
     demo = Tucam()
-    
+
     # Attempt to open camera with cleanup
     print("Attempting to open camera...")
     try:

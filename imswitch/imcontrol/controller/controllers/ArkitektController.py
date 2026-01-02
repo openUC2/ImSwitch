@@ -1,8 +1,6 @@
-from imswitch.imcontrol.model.managers.ArkitektManager import set_global_context_locally
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 import xarray as xr
-from arkitekt_next import register, easy, progress
 from mikro_next.api.schema import (
     Image,
     from_array_like,

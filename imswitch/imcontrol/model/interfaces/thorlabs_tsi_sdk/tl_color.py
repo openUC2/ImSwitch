@@ -7,7 +7,6 @@ import logging
 import os
 import numpy as np
 
-from .tl_color_enums import FORMAT, FILTER_ARRAY_PHASE, FILTER_TYPE
 
 _logger = logging.getLogger(__name__)
 

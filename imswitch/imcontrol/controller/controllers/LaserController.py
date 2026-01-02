@@ -12,7 +12,7 @@ class LaserController(ImConWidgetController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         self._logger = initLogger(self)
         self.settingAttr = False
         self.presetBeforeScan = None
@@ -281,7 +281,7 @@ class LaserController(ImConWidgetController):
         else:
             try:
                 return self._master.lasersManager[laserName].power
-            except Exception as e:
+            except Exception:
                 return 0
 
     @APIExport(runOnUIThread=True)
@@ -291,16 +291,16 @@ class LaserController(ImConWidgetController):
         else:
             try:
                 return self._master.lasersManager[laserName].enabled
-            except Exception as e:
+            except Exception:
                 return False
-            
+
     @APIExport(runOnUIThread=True)
     def setLaserActive(self, laserName: str, active: bool) -> None:
         """ Sets whether the specified laser is powered on. """
         if not IS_HEADLESS: self._widget.setLaserActive(laserName, active)
         else: self.toggleLaser(laserName, active) #TODO: !!! self.laserModules[laserName].sigEnableChanged.emit(laserName, active)
 
-            
+
     @APIExport(runOnUIThread=True)
     def setLaserValue(self, laserName: str, value: Union[int, float]) -> None:
         """ Sets the value of the specified laser, in the units that the laser
@@ -330,36 +330,36 @@ class LaserController(ImConWidgetController):
             if laserName not in self._setupInfo.lasers:
                 self._logger.error(f"Laser '{laserName}' not found in setup")
                 return False
-            
+
             # Get the laser info
             laserInfo = self._setupInfo.lasers[laserName]
-            
+
             # Check if managerProperties exists and has channel_index
             if 'channel_index' not in laserInfo.managerProperties and channelIndex == "LED":
                 self._logger.warning(f"Laser '{laserName}' does not have 'channel_index' in managerProperties")
                 return False
-            
+
             # Store old value for logging
             oldChannelIndex = laserInfo.managerProperties['channel_index']
-            
+
             # update internal state
             self._master.lasersManager[laserName].channel_index = int(channelIndex)
-            
+
             # Update the channel index
             laserInfo.managerProperties['channel_index'] = int(channelIndex)
-            
+
             # Save to configuration file
             configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
-            
+
             self._logger.info(f"Successfully changed laser '{laserName}' channel_index from {oldChannelIndex} to {channelIndex}")
-            
+
             # Update the laser manager's channel_index if it has this attribute
             if hasattr(self._master.lasersManager[laserName], 'channel_index'):
                 self._master.lasersManager[laserName].channel_index = channelIndex
                 self._logger.info(f"Updated runtime channel_index for laser '{laserName}'")
-            
+
             return True
-            
+
         except Exception as e:
             self._logger.error(f"Error setting channel_index for laser '{laserName}': {str(e)}")
             return False
@@ -378,15 +378,15 @@ class LaserController(ImConWidgetController):
             if laserName not in self._setupInfo.lasers:
                 self._logger.error(f"Laser '{laserName}' not found in setup")
                 return None
-            
+
             laserInfo = self._setupInfo.lasers[laserName]
-            
+
             if 'channel_index' in laserInfo.managerProperties:
                 return laserInfo.managerProperties['channel_index']
             else:
                 self._logger.warning(f"Laser '{laserName}' does not have 'channel_index' in managerProperties")
                 return None
-                
+
         except Exception as e:
             self._logger.error(f"Error getting channel_index for laser '{laserName}': {str(e)}")
             return None

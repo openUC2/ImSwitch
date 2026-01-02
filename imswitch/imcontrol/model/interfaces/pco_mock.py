@@ -83,7 +83,7 @@ class MockCameraPCO:
     def getPropertyValue(self, property_name):
         try:
             return self.properties[property_name]
-        except Exception as e:
+        except Exception:
             return 0
 
     def getLastFrameId(self):

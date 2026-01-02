@@ -5,11 +5,8 @@ try:
 except:
     isNIP = False
 import time
-import threading
-import collections
 
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
-from imswitch.imcontrol.view import guitools
+from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from imswitch.imcommon.model import initLogger
 from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS
@@ -84,7 +81,7 @@ class HoliSheetController(LiveUpdatedController):
             else:
                 self.detectorLightsheetName = allDetectorNames[1]
                 self.detectorHoloName = allDetectorNames[0]
-        except Exception as e:
+        except Exception:
             self._logger.debug("No camera found - in debug mode?")
 
         # get all Lasers

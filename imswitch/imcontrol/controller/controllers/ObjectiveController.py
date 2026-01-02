@@ -1,15 +1,12 @@
 
-from imswitch.imcommon.model import dirtools, modulesconfigtools, ostools, APIExport
-from imswitch.imcommon.framework import Signal, Worker, Mutex, Timer
-from imswitch.imcontrol.view import guitools
+from imswitch.imcommon.model import APIExport
+from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from imswitch.imcontrol.controller.basecontrollers import LiveUpdatedController
 
-from imswitch.imcommon.model import APIExport, initLogger
 from imswitch import IS_HEADLESS
 
 
-from pydantic import BaseModel
 from typing import Tuple, Optional
 
 
@@ -31,7 +28,7 @@ class ObjectiveController(LiveUpdatedController):
     - Objective positions (x0, x1) are stored in config and moved to via absolute positioning
     - Homing uses ESP32StageManager.home_a()
     """
-    
+
     # Signal for backwards compatibility and UI updates
     sigObjectiveChanged = Signal(dict)  # pixelsize, NA, magnification, objectiveName, FOVx, FOVy
 
@@ -41,13 +38,13 @@ class ObjectiveController(LiveUpdatedController):
 
         # Reference to the config manager (only for reading/writing config parameters)
         self._configManager = self._master.objectiveManager
-        
+
         # === State variables (Single Source of Truth) ===
         self._currentObjective: Optional[int] = None  # 0 or 1, or None if not initialized
         self._isHomed: bool = False
         self._detectorWidth: Optional[int] = None
         self._detectorHeight: Optional[int] = None
-        
+
         # Cache configuration values for quick access
         self._objectivePositions = list(self._configManager.objectivePositions)  # [x0, x1] in µm
         self._zPositions = list(self._configManager.zPositions)  # [z0, z1] in µm - Z focus offsets
@@ -55,14 +52,14 @@ class ObjectiveController(LiveUpdatedController):
         self._NAs = list(self._configManager.NAs)
         self._magnifications = list(self._configManager.magnifications)
         self._objectiveNames = list(self._configManager.objectiveNames)
-        
+
         # Connect to config manager signals for external parameter updates
         self._configManager.sigObjectiveParametersChanged.connect(self._onConfigParametersChanged)
-        
+
         # Connect to communication channel signals
         self._commChannel.sigSetObjectiveByName.connect(self._onSetObjectiveByName)
         self._commChannel.sigSetObjectiveByID.connect(self._onSetObjectiveByID)
-        
+
         # Get detector reference and store dimensions
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
@@ -76,7 +73,7 @@ class ObjectiveController(LiveUpdatedController):
         try:
             if not self._configManager.isActive:
                 raise Exception("Objective is not active in the setup, skipping motor initialization.")
-            
+
             positionerNames = self._master.positionersManager.getAllDeviceNames()
             if "ESP32Stage" in positionerNames:
                 self._positioner = self._master.positionersManager["ESP32Stage"]
@@ -91,7 +88,7 @@ class ObjectiveController(LiveUpdatedController):
         # Initialize objective state
         if self._configManager.isActive and self._hasMotor:
             calibrateOnStart = self._configManager.calibrateOnStart
-            
+
             if calibrateOnStart:
                 self._logger.info("Calibrating objective on startup...")
                 self.calibrateObjective()
@@ -106,36 +103,36 @@ class ObjectiveController(LiveUpdatedController):
             # No motor, just set default slot
             self._currentObjective = 0
             self._logger.info("No motor control available, defaulting to objective slot 0")
-        
+
         # Update detector with current pixel size
         self._updatePixelSize()
 
     # === State Property Accessors ===
-    
+
     def _getCurrentPixelSize(self) -> Optional[float]:
         """Get the pixel size for the current objective."""
         if self._currentObjective is not None and 0 <= self._currentObjective < len(self._pixelsizes):
             return self._pixelsizes[self._currentObjective]
         return None
-    
+
     def _getCurrentNA(self) -> Optional[float]:
         """Get the NA for the current objective."""
         if self._currentObjective is not None and 0 <= self._currentObjective < len(self._NAs):
             return self._NAs[self._currentObjective]
         return None
-    
+
     def _getCurrentMagnification(self) -> Optional[int]:
         """Get the magnification for the current objective."""
         if self._currentObjective is not None and 0 <= self._currentObjective < len(self._magnifications):
             return self._magnifications[self._currentObjective]
         return None
-    
+
     def _getCurrentObjectiveName(self) -> str:
         """Get the name of the current objective."""
         if self._currentObjective is not None and 0 <= self._currentObjective < len(self._objectiveNames):
             return self._objectiveNames[self._currentObjective]
         return "default"
-    
+
     def _getCurrentFOV(self) -> Optional[Tuple[float, float]]:
         """Get the field of view (FOV_x, FOV_y) in µm for the current objective."""
         if self._detectorWidth is None or self._detectorHeight is None:
@@ -146,7 +143,7 @@ class ObjectiveController(LiveUpdatedController):
         return (pixelsize * self._detectorWidth, pixelsize * self._detectorHeight)
 
     # === Motor Control Methods (using ESP32StageManager axis A) ===
-    
+
     def _moveMotorToSlot(self, slot: int) -> bool:
         """
         Move the objective motor to the position for the given slot using axis A.
@@ -160,18 +157,18 @@ class ObjectiveController(LiveUpdatedController):
         if not self._hasMotor or self._positioner is None:
             self._logger.warning("No motor available for objective movement")
             return False
-        
+
         if slot not in [0, 1]:
             self._logger.error(f"Invalid slot {slot}, must be 0 or 1")
             return False
-        
+
         if slot >= len(self._objectivePositions):
             self._logger.error(f"No position configured for slot {slot}")
             return False
-        
+
         target_position = self._objectivePositions[slot]
         self._logger.info(f"Moving objective motor (axis A) to position {target_position} µm for slot {slot}")
-        
+
         try:
             # Use ESP32StageManager to move axis A to absolute position
             self._positioner.move(
@@ -198,9 +195,9 @@ class ObjectiveController(LiveUpdatedController):
         if not self._hasMotor or self._positioner is None:
             self._logger.error("No motor available for objective calibration")
             return
-        
+
         self._logger.info("Starting objective calibration (homing axis A)...")
-        
+
         try:
             # Home axis A using ESP32StageManager
             self._positioner.home_a(isBlocking=True)
@@ -211,7 +208,7 @@ class ObjectiveController(LiveUpdatedController):
             self._isHomed = False
         # need to state the current status after homing (e.g. 2 )
         self._currentObjective = 2
-        
+
     @APIExport(runOnUIThread=True)
     def moveToObjective(self, slot: int, skipZ: bool = False):
         """
@@ -225,18 +222,18 @@ class ObjectiveController(LiveUpdatedController):
         import threading
         mThread = threading.Thread(target=self.moveToObjectiveThread, args=(slot, skipZ))
         mThread.start()
-        
+
     def moveToObjectiveThread(self, slot: int, skipZ: bool = False):
         if slot not in [0, 1]:
             self._logger.error(f"Invalid objective slot: {slot} (must be 0 or 1)")
             return
-        
+
         if False and slot == self._currentObjective:
             self._logger.debug(f"Already at objective slot {slot}, no movement needed")
             return
-        
+
         self._logger.info(f"Moving to objective slot {slot} ({self._objectiveNames[slot]}), skipZ={skipZ}")
-        
+
         # Calculate Z delta if needed (before changing slot)
         z_delta = 0
         if not skipZ and self._currentObjective is not None and self._currentObjective in [0, 1]:
@@ -257,18 +254,18 @@ class ObjectiveController(LiveUpdatedController):
                     )
                 except Exception as e:
                     self._logger.error(f"Failed to apply Z focus adjustment: {e}", exc_info=True)
-            
+
         # Move the axis A motor (objective turret)
         success = self._moveMotorToSlot(slot)
-        
+
         if success or not self._hasMotor:
             # Update state
             self._currentObjective = slot
-            
+
 
             # Update detector pixel size
             self._updatePixelSize()
-            
+
             # Update UI if not headless
             if not IS_HEADLESS:
                 self._widget.setCurrentObjectiveInfo(self._currentObjective)
@@ -300,7 +297,7 @@ class ObjectiveController(LiveUpdatedController):
         if pixelsize is not None:
             self.detector.setPixelSizeUm(pixelsize)
             self._logger.debug(f"Updated detector pixel size to {pixelsize} µm/px")
-    
+
     def _onConfigParametersChanged(self, slot: int, params: dict):
         """
         Handle objective parameters changed signal from config manager.
@@ -311,7 +308,7 @@ class ObjectiveController(LiveUpdatedController):
             params: Updated parameters
         """
         self._logger.debug(f"Objective {slot} config parameters changed: {params}")
-        
+
         # Update local cache
         if "pixelsize" in params and slot < len(self._pixelsizes):
             self._pixelsizes[slot] = params["pixelsize"]
@@ -325,11 +322,11 @@ class ObjectiveController(LiveUpdatedController):
             self._objectivePositions[slot] = params["position"]
         if "zPosition" in params and slot < len(self._zPositions):
             self._zPositions[slot] = params["zPosition"]
-        
+
         # If this is the current objective, update detector
         if slot == self._currentObjective:
             self._updatePixelSize()
-    
+
     def _onSetObjectiveByID(self, objective_id):
         """
         Handle request to set objective by ID from communication channel.
@@ -340,7 +337,7 @@ class ObjectiveController(LiveUpdatedController):
         try:
             if isinstance(objective_id, str):
                 objective_id = int(objective_id)
-            
+
             if objective_id in [0, 1]:
                 if self._currentObjective != objective_id:
                     self._logger.info(f"Received request to move to objective ID {objective_id}")
@@ -353,7 +350,7 @@ class ObjectiveController(LiveUpdatedController):
             self._logger.error(f"Invalid objective ID format: {objective_id} (must be convertible to int)")
         except Exception as e:
             self._logger.error(f"Failed to set objective by ID {objective_id}: {e}", exc_info=True)
-    
+
     def _onSetObjectiveByName(self, objective_name: str):
         """
         Handle request to set objective by name from communication channel.
@@ -364,7 +361,7 @@ class ObjectiveController(LiveUpdatedController):
         try:
             if objective_name in self._objectiveNames:
                 slot = self._objectiveNames.index(objective_name)
-                
+
                 if self._currentObjective != slot:
                     self._logger.info(f"Received request to move to objective '{objective_name}' (slot {slot})")
                     self.moveToObjective(slot)
@@ -407,20 +404,20 @@ class ObjectiveController(LiveUpdatedController):
         if x0 is not None:
             self._objectivePositions[0] = x0
             self._configManager.setObjectiveParameters(slot=0, position=x0, emitSignal=False)
-        
+
         if x1 is not None:
             self._objectivePositions[1] = x1
             self._configManager.setObjectiveParameters(slot=1, position=x1, emitSignal=False)
-        
+
         # Update local cache and config for Z focus positions
         if z0 is not None:
             self._zPositions[0] = z0
             self._configManager.setObjectiveParameters(slot=0, zPosition=z0, emitSignal=False)
-        
+
         if z1 is not None:
             self._zPositions[1] = z1
             self._configManager.setObjectiveParameters(slot=1, zPosition=z1, emitSignal=False)
-        
+
         self._logger.info(f"Set objective positions: x0={x0}, x1={x1}, z0={z0}, z1={z1} µm")
 
     @APIExport(runOnUIThread=True)
@@ -439,29 +436,29 @@ class ObjectiveController(LiveUpdatedController):
         """
         if slot is None:
             slot = self._currentObjective
-        
+
         if slot not in [0, 1]:
             self._logger.error(f"Invalid slot {slot}, must be 0 or 1")
             return {"success": False, "error": "Invalid slot"}
-        
+
         if self._positioner is None:
             self._logger.error("No positioner available to read Z position")
             return {"success": False, "error": "No positioner"}
-        
+
         try:
             positions = self._positioner.getPosition()
             if "Z" not in positions:
                 self._logger.error("Z axis not available")
                 return {"success": False, "error": "Z axis not available"}
-            
+
             current_z = positions["Z"]
-            
+
             # Update local cache and config
             self._zPositions[slot] = current_z
             self._configManager.setObjectiveParameters(slot=slot, zPosition=current_z, emitSignal=True)
-            
+
             self._logger.info(f"Saved Z position {current_z} µm for objective slot {slot}")
-            
+
             return {
                 "success": True,
                 "slot": slot,
@@ -471,7 +468,7 @@ class ObjectiveController(LiveUpdatedController):
         except Exception as e:
             self._logger.error(f"Failed to save Z position: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
-        
+
     @APIExport(runOnUIThread=True)
     def setObjectivePosition(self, slot: int, position: float):
         """
@@ -484,19 +481,19 @@ class ObjectiveController(LiveUpdatedController):
         """
         if slot not in [0, 1]:
             raise ValueError("Objective slot must be 0 or 1")
-        
+
         # Update local cache
         if slot < len(self._objectivePositions):
             self._objectivePositions[slot] = position
-        
+
         # Update config manager (will save to file)
         self._configManager.setObjectiveParameters(slot=slot, position=position)
-        
+
         self._logger.info(f"Set objective {slot} position to {position} µm")
 
     @APIExport(runOnUIThread=True)
-    def setObjectiveParameters(self, objectiveSlot: int, pixelsize: float = None, 
-                               objectiveName: str = None, NA: float = None, 
+    def setObjectiveParameters(self, objectiveSlot: int, pixelsize: float = None,
+                               objectiveName: str = None, NA: float = None,
                                magnification: int = None, position: float = None):
         """
         Set objective parameters for a specific objective slot.
@@ -515,7 +512,7 @@ class ObjectiveController(LiveUpdatedController):
         """
         if objectiveSlot not in [0, 1]:
             raise ValueError("Objective slot must be 0 or 1")
-        
+
         # Update config manager (will save to file and emit signal)
         self._configManager.setObjectiveParameters(
             slot=objectiveSlot,
@@ -526,7 +523,7 @@ class ObjectiveController(LiveUpdatedController):
             position=position,
             emitSignal=True
         )
-        
+
         # Return updated parameters
         return self._configManager.getObjectiveParameters(objectiveSlot)
 
@@ -543,14 +540,14 @@ class ObjectiveController(LiveUpdatedController):
             # Current state
             "currentObjective": self._currentObjective,
             "isHomed": self._isHomed,
-            
+
             # Current objective parameters
             "objectiveName": self._getCurrentObjectiveName(),
             "pixelsize": self._getCurrentPixelSize(),
             "NA": self._getCurrentNA(),
             "magnification": self._getCurrentMagnification(),
             "FOV": self._getCurrentFOV(),
-            
+
             # Available objectives configuration
             "availableObjectives": [0, 1],
             "availableObjectivesNames": list(self._objectiveNames),
@@ -559,32 +556,32 @@ class ObjectiveController(LiveUpdatedController):
             "availableObjectiveMagnifications": list(self._magnifications),
             "availableObjectiveNAs": list(self._NAs),
             "availableObjectivePixelSizes": list(self._pixelsizes),
-            
+
             # Legacy API aliases for x0, x1, z0, z1 (for frontend compatibility)
             "x0": self._objectivePositions[0] if len(self._objectivePositions) > 0 else None,
             "x1": self._objectivePositions[1] if len(self._objectivePositions) > 1 else None,
             "z0": self._zPositions[0] if len(self._zPositions) > 0 else None,
             "z1": self._zPositions[1] if len(self._zPositions) > 1 else None,
-            
+
             # Motor configuration
             "homeDirection": self._configManager.homeDirection,
             "homePolarity": self._configManager.homePolarity,
             "homeSpeed": self._configManager.homeSpeed,
             "homeAcceleration": self._configManager.homeAcceleration,
-            
+
             # Detector info
             "detectorWidth": self._detectorWidth,
             "detectorHeight": self._detectorHeight,
-            
+
             # Motor availability
             "hasMotor": self._hasMotor,
             "isActive": self._configManager.isActive,
-            
+
             # Current motor position (if available)
             "motorPosition": None,
             "zPosition": None
         }
-        
+
         # Get current motor positions from positioner if available
         if self._hasMotor and self._positioner is not None:
             try:
@@ -595,7 +592,7 @@ class ObjectiveController(LiveUpdatedController):
                     status["zPosition"] = positions["Z"]
             except Exception as e:
                 self._logger.debug(f"Could not get motor position: {e}")
-        
+
         return status
 
 

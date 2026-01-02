@@ -1,5 +1,4 @@
 import threading
-import time
 import collections
 from enum import Enum
 from pathlib import Path
@@ -94,8 +93,8 @@ class MockCameraTIS:
         self.SensorWidth  = w
         self.SensorHeight = h
         self.flushBuffer()
-        
-        
+
+
     def getTriggerSource(self):
         """Match CameraHIK interface."""
         return self.trigger_source.value

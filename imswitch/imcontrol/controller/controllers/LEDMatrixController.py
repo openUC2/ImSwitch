@@ -1,12 +1,10 @@
-from typing import Dict, List
 from functools import partial
-import numpy as np
 
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcontrol.view import guitools as guitools
-from imswitch.imcommon.model import initLogger, APIExport
+from imswitch.imcommon.model import initLogger
 
 class LEDMatrixController(ImConWidgetController):
     """ Linked to LEDMatrixWidget."""
@@ -109,7 +107,7 @@ class LEDMatrixController(ImConWidgetController):
         #self.setIntensity(intensity=intensity)
         if intensity_r is not None and intensity_g is not None and intensity_b is not None:
             self.ledMatrix.setCircle(radius=circleRadius, intensity=(intensity_r, intensity_g, intensity_b))
-        else:        
+        else:
             self.ledMatrix.setCircle(radius=circleRadius, intensity=intensity)
         if not IS_HEADLESS: self._widget.leds[str(circleRadius)].setChecked(True)
 

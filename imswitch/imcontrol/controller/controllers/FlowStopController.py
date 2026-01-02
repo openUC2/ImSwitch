@@ -2,19 +2,15 @@ import numpy as np
 import datetime
 import tifffile as tif
 import os
-import platform
-import subprocess
 import cv2
 from threading import Thread, Event
 try:
-    import NanoImagingPack as nip
     isNIP = True
 except:
     isNIP = False
 import time
 from imswitch.imcommon.model import dirtools, APIExport
-from imswitch.imcommon.framework import Signal, Worker, Mutex, Timer
-from imswitch.imcontrol.view import guitools
+from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS

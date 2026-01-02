@@ -1,9 +1,6 @@
 import unittest
 import os
-import tempfile
 import importlib.util
-import sys
-import pathlib
 import time
 
 
@@ -141,7 +138,7 @@ class TestDemoController(unittest.TestCase):
     def test_move_to_position(self):
         """Test moving to position in testing mode."""
         position = [100.0, 200.0]
-        
+
         # Should not raise error in testing mode
         self.controller._moveToPosition(position)
 
@@ -171,7 +168,7 @@ class TestDemoController(unittest.TestCase):
         # Stop demo
         result = self.controller.stopDemo()
         self.assertTrue(result)
-        
+
         # Wait a moment for cleanup
         time.sleep(0.1)
         self.assertFalse(self.controller.isRunning)
@@ -196,7 +193,7 @@ class TestDemoController(unittest.TestCase):
     def test_stop_demo_not_running(self):
         """Test stopping demo when not running."""
         self.assertFalse(self.controller.isRunning)
-        
+
         result = self.controller.stopDemo()
         self.assertFalse(result)  # Should fail
 
@@ -227,7 +224,7 @@ class TestDemoController(unittest.TestCase):
         # Test parameter setting and getting
         result = self.controller.setDemoParams(valid_params)
         self.assertTrue(result)
-        
+
         retrieved_params = self.controller.getDemoParams()
         self.assertEqual(retrieved_params.scanningScheme, "grid")
         self.assertEqual(retrieved_params.illuminationMode, "continuous")
@@ -247,15 +244,15 @@ class TestDemoController(unittest.TestCase):
         # Start demo
         result = self.controller.startDemo()
         self.assertTrue(result)
-        
+
         # Wait for completion
         start_time = time.time()
         while self.controller.isRunning and (time.time() - start_time) < 2.0:
             time.sleep(0.01)
-        
+
         # Check that demo completed
         self.assertFalse(self.controller.isRunning)
-        
+
         # Check results
         results = self.controller.getDemoResults()
         self.assertGreater(results.elapsedTime, 0.0)

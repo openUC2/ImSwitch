@@ -5,7 +5,7 @@ import argparse
 import os
 # TODO: This file needs a heavy re-write!
 import imswitch
-from imswitch.config import get_config, update_config
+from imswitch.config import get_config
 
 # python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes
 # python -m imswitch --headless --http-port 8001 --config-folder /Users/bene --config-file None
@@ -254,9 +254,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
                 if not config.is_headless:
                     multiModuleWindow.updateLoadingProgress(i / len(modulePkgs))
                     app.processEvents()  # Draw window before continuing
-        logger.info(f'init done')
+        logger.info('init done')
         launchApp(app, multiModuleWindow, moduleMainControllers.values())
-    except Exception as e:
+    except Exception:
         logging.error(traceback.format_exc())
 
 

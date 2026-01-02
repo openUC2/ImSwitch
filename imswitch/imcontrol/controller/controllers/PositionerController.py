@@ -4,7 +4,7 @@ from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import initLogger
-from typing import Optional, Union
+from typing import Optional
 from imswitch.imcontrol.model import configfiletools
 
 
@@ -63,7 +63,7 @@ class PositionerController(ImConWidgetController):
             return self._master.positionersManager.execOnAll(lambda p: p.getPosition())
         else:
             return {positionerName: self._master.positionersManager[positionerName].getPosition()}
-    
+
     def getSpeed(self):
         return self._master.positionersManager.execOnAll(lambda p: p.speed)
 
@@ -327,9 +327,9 @@ class PositionerController(ImConWidgetController):
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         currentPositionWithOffset = self.getPos(positionerName)[positionerName][axis]
-        currentOffset = self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)   
+        currentOffset = self._master.positionersManager[positionerName].getStageOffsetAxis(axis=axis)
         return currentPositionWithOffset - currentOffset
-    
+
     def saveStageOffset(self, positionerName: str, axis: str = None):
         """
         Save the current stage offset(s) to the config file.
@@ -345,9 +345,9 @@ class PositionerController(ImConWidgetController):
             if positionerName is None:
                 self.__logger.warning("Cannot save stage offset: positionerName is None")
                 return
-            
+
             manager = self._master.positionersManager[positionerName]
-            
+
             # Build stageOffsets dict from current manager state
             axes = ["X", "Y", "Z", "A"]
             stageOffsets = {}
@@ -358,13 +358,13 @@ class PositionerController(ImConWidgetController):
                 # No offset positions defined in manager, use defaults
                 for ax in axes:
                     stageOffsets["stageOffsetPosition" + ax] = 0
-            
+
             # Update setupInfo and save to config file
             if hasattr(self, '_setupInfo') and self._setupInfo is not None:
                 # Update the positioner's stageOffsets in setupInfo
                 if hasattr(self._setupInfo, 'positioners') and positionerName in self._setupInfo.positioners:
                     self._setupInfo.positioners[positionerName].stageOffsets = stageOffsets
-                    
+
                     # Save the updated setupInfo to disk
                     mOptions, _ = configfiletools.loadOptions()
                     configfiletools.saveSetupInfo(mOptions, self._setupInfo)
@@ -373,7 +373,7 @@ class PositionerController(ImConWidgetController):
                     self.__logger.warning(f"Positioner {positionerName} not found in setupInfo.positioners")
             else:
                 self.__logger.warning("Cannot save stage offset: _setupInfo not available")
-                
+
         except Exception as e:
             self.__logger.error(f"Could not save stage offset: {e}")
             import traceback

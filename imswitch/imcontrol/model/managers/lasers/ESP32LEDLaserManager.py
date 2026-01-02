@@ -60,7 +60,7 @@ class ESP32LEDLaserManager(LaserManager):
             self.__logger.debug(f"Laser status callback registered for channel {self.channel_index}")
         except Exception as e:
             self.__logger.error(f"Could not register laser status callback: {e}")
-            
+
     def _callback_laser_status(self, laserValues):
         """ Callback function to handle laser status updates from the ESP32.
         Updates the internal state of the laser manager based on the received laser values array.
@@ -71,7 +71,7 @@ class ESP32LEDLaserManager(LaserManager):
         """
         try:
             self.__logger.debug(f"Received laser status update: {laserValues}")
-            
+
             # Update power for this specific laser channel
             if self.channel_index != "LED" and isinstance(self.channel_index, int):
                 if 0 <= self.channel_index < len(laserValues):
@@ -81,15 +81,15 @@ class ESP32LEDLaserManager(LaserManager):
                         self.__logger.info(f"Laser channel {self.channel_index} power updated to {self.power} mW")
                         # Update enabled state based on power value
                         self.enabled = (self.power > 0)
-                        
+
                         # Emit signal to update GUI if commChannel is available
                         if self._commChannel is not None:
                             laserDict = {self.name: {"power": self.power, "enabled": bool(self.enabled)}}
                             self._commChannel.sigUpdateLaserPower.emit(laserDict)
-            
+
         except Exception as e:
             self.__logger.error(f"Error in _callback_laser_status: {e}")
-            
+
     def setEnabled(self, enabled,  getReturn=False):
         """Turn on (N) or off (F) laser emission"""
         self.enabled = enabled
@@ -133,7 +133,7 @@ class ESP32LEDLaserManager(LaserManager):
         self._rs232manager._esp32.galvo.set_dac(
             channel=channel, frequency=frequency, offset=offset, amplitude=amplitude, clk_div=clk_div,
             phase=phase, invert=invert, timeout=timeout)
-    
+
     def setLEDStatus(self, status: str = "idle"):
         """
         Set the LED matrix status to indicate system state.

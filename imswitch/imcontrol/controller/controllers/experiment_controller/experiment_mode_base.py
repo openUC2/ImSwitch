@@ -13,7 +13,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 
 from imswitch.imcommon.model import dirtools
-from ..experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
+from ..experiment_controller.ome_writer import OMEWriterConfig
 
 
 class OMEFileStorePaths:
@@ -30,16 +30,16 @@ class OMEFileStorePaths:
         self.base_dir = base_dir
         self.tiff_dir = os.path.join(base_dir, "tiles")
         self.zarr_dir = os.path.join(base_dir + ".ome.zarr")
-        
+
         # Use shared individual_tiffs directory or create one under base_dir
         if shared_individual_tiffs_dir is not None:
             self.individual_tiffs_dir = shared_individual_tiffs_dir
         else:
             self.individual_tiffs_dir = os.path.join(base_dir, "individual_tiffs")
-            
+
         os.makedirs(self.tiff_dir, exist_ok=True)
         os.makedirs(self.individual_tiffs_dir, exist_ok=True)
-    
+
     def get_timepoint_dir(self, timepoint_index: int):
         """Get or create directory for a specific timepoint."""
         time_now = time.strftime("%Y%m%d_%H%M%S")
@@ -56,12 +56,12 @@ class ExperimentModeBase(ABC):
     experiment execution, including parameter processing, scan range computation,
     and OME writer configuration.
     """
-    
+
     def __init__(self, experiment_controller):
         """Initialize the base mode with reference to the main controller."""
         self.controller = experiment_controller
         self._logger = experiment_controller._logger
-        
+
     def compute_scan_ranges(self, snake_tiles: List[List[Dict]]) -> Tuple[float, float, float, float, float, float]:
         """
         Compute scan ranges from snake tiles.
@@ -78,23 +78,23 @@ class ExperimentModeBase(ABC):
         maxX = max(pt["x"] for pt in all_points)
         minY = min(pt["y"] for pt in all_points)
         maxY = max(pt["y"] for pt in all_points)
-        
+
         # compute step between two adjacent points in X/Y
         uniqueX = np.unique([pt["x"] for pt in all_points])
         uniqueY = np.unique([pt["y"] for pt in all_points])
-        
+
         if len(uniqueX) == 1:
             diffX = 0
         else:
             diffX = np.diff(uniqueX).min()
-            
+
         if len(uniqueY) == 1:
             diffY = 0
         else:
             diffY = np.diff(uniqueY).min()
-            
+
         return minX, maxX, minY, maxY, diffX, diffY
-    
+
     def create_ome_file_paths(self, base_path: str, shared_individual_tiffs_dir: str = None) -> 'OMEFileStorePaths':
         """
         Create OME file storage paths.
@@ -107,10 +107,10 @@ class ExperimentModeBase(ABC):
             OMEFileStorePaths instance
         """
         return OMEFileStorePaths(base_path, shared_individual_tiffs_dir)
-    
-    def create_writer_config(self, 
+
+    def create_writer_config(self,
                            write_tiff: bool = False,
-                           write_zarr: bool = True, 
+                           write_zarr: bool = True,
                            write_stitched_tiff: bool = True,
                            write_tiff_single: bool = False,
                            write_individual_tiffs: bool = False,
@@ -136,7 +136,7 @@ class ExperimentModeBase(ABC):
             OMEWriterConfig instance
         """
         pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
-        
+
         return OMEWriterConfig(
             write_tiff=write_tiff,
             write_zarr=write_zarr,
@@ -149,7 +149,7 @@ class ExperimentModeBase(ABC):
             n_z_planes=n_z_planes,
             n_channels=n_channels
         )
-    
+
     def prepare_illumination_parameters(self, illumination_intensities: List[float]) -> Dict[str, Optional[float]]:
         """
         Prepare illumination parameters in the format expected by hardware.
@@ -168,7 +168,7 @@ class ExperimentModeBase(ABC):
             "led": 0  # Default LED value
         }
         return illum_dict
-    
+
     def create_experiment_directory(self, exp_name: str) -> Tuple[str, str, str]:
         """
         Create experiment directory and generate file paths.
@@ -185,9 +185,9 @@ class ExperimentModeBase(ABC):
         if not os.path.exists(dirPath):
             os.makedirs(dirPath)
         mFileName = f"{timeStamp}_{exp_name}"
-        
+
         return timeStamp, dirPath, mFileName
-    
+
     def calculate_grid_parameters(self, tiles: List[Dict]) -> Tuple[Tuple[int, int], Tuple[float, float, float, float]]:
         """
         Calculate grid parameters from tile list.
@@ -203,7 +203,7 @@ class ExperimentModeBase(ABC):
             if point is not None:
                 try:all_points.append([point["x"], point["y"]])
                 except Exception as e: self._logger.error(f"Error processing point {point}: {e}")
-        
+
         if all_points:
             x_coords = [p[0] for p in all_points]
             y_coords = [p[1] for p in all_points]
@@ -219,9 +219,9 @@ class ExperimentModeBase(ABC):
         else:
             grid_shape = (1, 1)
             grid_geometry = (0, 0, 100, 100)
-            
+
         return grid_shape, grid_geometry
-    
+
     @abstractmethod
     def execute_experiment(self, **kwargs) -> Dict[str, Any]:
         """

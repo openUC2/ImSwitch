@@ -52,9 +52,9 @@ def add_mda_engine_to_controller(controller: 'ExperimentController'):
     if not HAS_USEQ:
         controller._logger.warning("useq-schema not available, MDA engine not added")
         return
-        
+
     from examples.mda_engine_wrapper import ImSwitchMDAEngine
-    
+
     # Create engine with controller's managers
     controller.mda_engine = ImSwitchMDAEngine(
         detector_manager=controller._master.detectorsManager,
@@ -62,7 +62,7 @@ def add_mda_engine_to_controller(controller: 'ExperimentController'):
         lasers_manager=controller._master.lasersManager,
         logger=controller._logger
     )
-    
+
     # Add convenience method
     def run_mda_with_engine(sequence: MDASequence, output_dir: str = None):
         """Run an MDA sequence using the direct engine."""
@@ -75,13 +75,13 @@ def add_mda_engine_to_controller(controller: 'ExperimentController'):
                 'MDAEngine',
                 timestamp
             )
-        
+
         controller._logger.info(f"Running MDA sequence with engine, saving to {output_dir}")
         controller.mda_engine.run(sequence, output_path=output_dir)
         return output_dir
-        
+
     controller.run_mda_with_engine = run_mda_with_engine
-    
+
     # Add hook builder
     def create_mda_with_hooks(
         channels,
@@ -113,17 +113,17 @@ def add_mda_engine_to_controller(controller: 'ExperimentController'):
         """
         # Build channel objects
         channel_objs = [Channel(config=ch, exposure=100.0) for ch in channels]
-        
+
         # Build z plan
         z_plan = None
         if z_range and z_step:
             z_plan = ZRangeAround(range=z_range, step=z_step)
-            
+
         # Build time plan
         time_plan = None
         if time_points > 1:
             time_plan = TIntervalLoops(interval=time_interval, loops=time_points)
-            
+
         # Build grid plan
         grid_plan = None
         if grid_rows and grid_cols and fov_size:
@@ -135,7 +135,7 @@ def add_mda_engine_to_controller(controller: 'ExperimentController'):
                 fov_width=fov_size,
                 fov_height=fov_size
             )
-        
+
         # Create sequence
         sequence = MDASequence(
             channels=channel_objs,
@@ -143,17 +143,17 @@ def add_mda_engine_to_controller(controller: 'ExperimentController'):
             time_plan=time_plan,
             grid_plan=grid_plan
         )
-        
+
         # Register hooks
         if before_event_hook:
             controller.mda_engine.register_hook_before_event(before_event_hook)
         if after_event_hook:
             controller.mda_engine.register_hook_after_event(after_event_hook)
-            
+
         return sequence
-        
+
     controller.create_mda_with_hooks = create_mda_with_hooks
-    
+
     controller._logger.info("MDA engine functionality added to controller")
 
 
@@ -162,7 +162,7 @@ def example_1_simple_acquisition(controller):
     """Example 1: Simple Z-stack with two channels."""
     if not HAS_USEQ:
         return
-        
+
     sequence = MDASequence(
         channels=[
             Channel(config="DAPI", exposure=50.0),
@@ -170,7 +170,7 @@ def example_1_simple_acquisition(controller):
         ],
         z_plan=ZRangeAround(range=10.0, step=2.0)
     )
-    
+
     output_dir = controller.run_mda_with_engine(sequence)
     print(f"Acquisition complete, saved to {output_dir}")
 
@@ -179,21 +179,21 @@ def example_2_with_autofocus(controller):
     """Example 2: Time-lapse with autofocus at each timepoint."""
     if not HAS_USEQ:
         return
-        
+
     def autofocus_hook(event):
         """Run autofocus at start of each timepoint."""
         if event.index.get('c', 0) == 0 and event.index.get('z', 0) == 0:
             controller._logger.info(f"Running autofocus for timepoint {event.index.get('t', 0)}")
             # Uncomment if autofocus manager available:
             # controller._master.autofocusManager.runAutofocus()
-    
+
     sequence = controller.create_mda_with_hooks(
         channels=["Brightfield"],
         time_points=10,
         time_interval=60.0,  # Every minute
         before_event_hook=autofocus_hook
     )
-    
+
     controller.run_mda_with_engine(sequence)
 
 
@@ -201,10 +201,10 @@ def example_3_multi_position_timelapse(controller):
     """Example 3: Multi-position time-lapse (grid pattern)."""
     if not HAS_USEQ:
         return
-        
+
     # Track images for quick analysis
     image_stats = []
-    
+
     def analyze_hook(event, image):
         """Quick analysis after each acquisition."""
         if image is not None:
@@ -219,7 +219,7 @@ def example_3_multi_position_timelapse(controller):
             }
             image_stats.append(stats)
             controller._logger.debug(f"Image stats: {stats}")
-    
+
     sequence = controller.create_mda_with_hooks(
         channels=["DAPI", "FITC"],
         grid_rows=3,
@@ -229,15 +229,15 @@ def example_3_multi_position_timelapse(controller):
         time_interval=300.0,  # Every 5 minutes
         after_event_hook=analyze_hook
     )
-    
+
     output_dir = controller.run_mda_with_engine(sequence)
-    
+
     # Save statistics
     import json
     stats_file = os.path.join(output_dir, 'image_statistics.json')
     with open(stats_file, 'w') as f:
         json.dump(image_stats, f, indent=2)
-    
+
     print(f"Acquired {len(image_stats)} images")
     print(f"Statistics saved to {stats_file}")
 
@@ -251,7 +251,7 @@ def example_4_shared_protocol():
     """
     if not HAS_USEQ:
         return
-        
+
     # Define experiment (software-agnostic!)
     experiment = MDASequence(
         channels=[
@@ -261,23 +261,23 @@ def example_4_shared_protocol():
         z_plan=ZRangeAround(range=10.0, step=2.0),
         time_plan=TIntervalLoops(interval=60.0, loops=10)
     )
-    
+
     # Save protocol to file (can be shared with other systems)
     protocol_file = "/tmp/shared_protocol.json"
     import json
     with open(protocol_file, 'w') as f:
         # Note: useq-schema objects can be serialized to JSON
         json.dump(experiment.dict(), f, indent=2)
-    
+
     print(f"Protocol saved to {protocol_file}")
     print("This protocol can be loaded and executed on:")
     print("  - ImSwitch (using ImSwitchMDAEngine)")
     print("  - pymmcore-plus (using PMCEngine)")
     print("  - Any other useq-schema compatible system")
-    
+
     # To execute on ImSwitch:
     # controller.run_mda_with_engine(experiment)
-    
+
     # To execute on pymmcore-plus:
     # from pymmcore_plus import CMMCorePlus
     # from pymmcore_plus.mda import mda_engine

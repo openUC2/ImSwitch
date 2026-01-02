@@ -1,5 +1,4 @@
 import numpy as np
-from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 import time
@@ -20,9 +19,8 @@ try:
 except:
     hasCV2 = False
 
-from imswitch.imcommon.model import dirtools, initLogger, APIExport
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
-from imswitch.imcontrol.view import guitools
+from imswitch.imcommon.model import initLogger, APIExport
+from imswitch.imcommon.framework import Signal
 from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS
 
@@ -47,7 +45,7 @@ class OffAxisHoloParams:
     binning: int = 1  # binning factor (1, 2, 4, etc.)
     cc_center: Optional[Tuple[int, int]] = None  # Cross-correlation center
     cc_radius: int = 100  # Cross-correlation radius
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "pixelsize": self.pixelsize,
@@ -76,7 +74,7 @@ class OffAxisHoloState:
     last_process_time: float = 0.0
     frame_count: int = 0
     processed_count: int = 0
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "is_processing": self.is_processing,
@@ -117,7 +115,7 @@ class OffAxisHoloController(LiveUpdatedController):
             self.camera = getattr(self._setupInfo.holo, 'camera', None)
         else:
             self.camera = None
-            
+
         # If no camera specified, use first available detector
         if self.camera is None:
             try:
@@ -131,7 +129,7 @@ class OffAxisHoloController(LiveUpdatedController):
             except Exception as e:
                 self._logger.error(f"Failed to get detector list: {e}")
                 return
-        
+
         # Initialize parameters from setup or defaults
         if hasattr(self._setupInfo, 'holo') and self._setupInfo.holo is not None:
             self._params = OffAxisHoloParams(
@@ -147,25 +145,25 @@ class OffAxisHoloController(LiveUpdatedController):
             )
         else:
             self._params = OffAxisHoloParams()
-        
+
         self._state = OffAxisHoloState()
         self._processing_lock = threading.Lock()
-        
+
         # Store last frame for pause mode
         self._last_frame = None
-        
+
         # MJPEG streaming
         self._mjpeg_queue = queue.Queue(maxsize=10)
         self._jpeg_quality = 85
-        
+
         # Processing thread
         self._processing_thread = None
         self._stop_processing_event = threading.Event()
-        
+
         # Legacy GUI setup
         if not IS_HEADLESS:
             self._setup_legacy_gui()
-            
+
         self._logger.info("OffAxisHoloController initialized successfully")
 
     def __del__(self):
@@ -209,10 +207,10 @@ class OffAxisHoloController(LiveUpdatedController):
         # Use effective pixel size (adjusted for binning)
         ps = self._params.pixelsize * self._params.binning
         lambda0 = self._params.wavelength
-        
+
         n = E0.shape[1]  # Image width in pixels
         grid_size = ps * n  # Grid size in x-direction
-        
+
         # 1-D frequency grids
         fx = np.linspace(-(n-1)/2*(1/grid_size), (n-1)/2*(1/grid_size), n)
         fy = np.linspace(-(n-1)/2*(1/grid_size), (n-1)/2*(1/grid_size), n)
@@ -229,22 +227,22 @@ class OffAxisHoloController(LiveUpdatedController):
         G *= hfy[:, None]  # broadcasts along rows
 
         Ef = self._iFT(G)
-        
+
         return Ef
 
     def _apply_binning(self, image):
         """Apply binning to image if binning > 1"""
         if self._params.binning <= 1:
             return image
-        
+
         b = self._params.binning
         h, w = image.shape[:2]
-        
+
         # Crop to multiple of binning
         new_h = (h // b) * b
         new_w = (w // b) * b
         image = image[:new_h, :new_w]
-        
+
         # Reshape and average
         if len(image.shape) == 2:
             # Grayscale
@@ -256,32 +254,32 @@ class OffAxisHoloController(LiveUpdatedController):
     def _extract_roi(self, image):
         """Extract ROI from image based on current parameters"""
         h, w = image.shape[:2]
-        
+
         # Determine ROI center
         if self._params.roi_center is not None:
             cx, cy = self._params.roi_center
         else:
             cx, cy = w // 2, h // 2
-        
+
         # Calculate ROI bounds
         roi_size = self._params.roi_size
         half_size = roi_size // 2
-        
+
         x1 = max(0, cx - half_size)
         y1 = max(0, cy - half_size)
         x2 = min(w, cx + half_size)
         y2 = min(h, cy + half_size)
-        
+
         return image[y1:y2, x1:x2]
 
     def _extract_color_channel(self, image):
         """Extract specified color channel from RGB image"""
         if len(image.shape) == 2:
             return image  # Already grayscale
-        
+
         channel_map = {"red": 0, "green": 1, "blue": 2}
         channel_idx = channel_map.get(self._params.color_channel, 1)
-        
+
         return image[:, :, channel_idx]
 
     def _apply_transforms(self, image):
@@ -290,7 +288,7 @@ class OffAxisHoloController(LiveUpdatedController):
             image = np.fliplr(image)
         if self._params.flip_y:
             image = np.flipud(image)
-        
+
         # Apply rotation (counter-clockwise)
         if self._params.rotation == 90:
             image = np.rot90(image, k=1)
@@ -298,7 +296,7 @@ class OffAxisHoloController(LiveUpdatedController):
             image = np.rot90(image, k=2)
         elif self._params.rotation == 270:
             image = np.rot90(image, k=3)
-        
+
         return image
 
     def _process_offaxis(self, image):
@@ -306,21 +304,21 @@ class OffAxisHoloController(LiveUpdatedController):
         if self._params.cc_center is None:
             self._logger.warning("CC center not set for off-axis processing")
             return None
-        
+
         # Apply binning first
         binned = self._apply_binning(image)
-        
+
         # Extract ROI and color channel
         roi = self._extract_roi(binned)
         gray = self._extract_color_channel(roi)
         gray = self._apply_transforms(gray)
-        
+
         # Get E-field
         mimage = np.sqrt(nip.image(gray.copy().astype(float)))
-        
+
         # Bring to FT space
         mpupil = nip.ft(mimage.copy())
-        
+
         # Extract cross-correlation peak
         mpupil = nip.extract(
             mpupil,
@@ -328,17 +326,17 @@ class OffAxisHoloController(LiveUpdatedController):
             centerpos=(int(self._params.cc_center[0]), int(self._params.cc_center[1])),
             checkComplex=False
         )
-        
+
         # Pad to original size
         mpupil = nip.zeroPad(mpupil, gray.shape)
-        
+
         # Back to real space
         mimage = nip.ift(mpupil)
-        
+
         # Propagate
         E0 = np.array(mimage)
         Ef = self._fresnel_propagator(E0, self._params.dz)
-        
+
         return self._abssqr(Ef)
 
     def _process_frame(self, image):
@@ -348,7 +346,7 @@ class OffAxisHoloController(LiveUpdatedController):
             if result is not None:
                 self.sigHoloImageComputed.emit(result, "offaxis_holo")
                 self._state.processed_count += 1
-                
+
                 # Add to MJPEG stream if active
                 if self._state.is_streaming:
                     self._add_to_mjpeg_stream(result)
@@ -379,7 +377,7 @@ class OffAxisHoloController(LiveUpdatedController):
         """
         if not hasCV2:
             return
-        
+
         try:
             # Normalize to uint8
             frame = np.array(image)
@@ -390,11 +388,11 @@ class OffAxisHoloController(LiveUpdatedController):
                     frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
                 else:
                     frame = np.zeros_like(frame, dtype=np.uint8)
-            
+
             # Encode as JPEG
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
             success, encoded = cv2.imencode('.jpg', frame, encode_params)
-            
+
             if success:
                 jpeg_bytes = encoded.tobytes()
                 # Build MJPEG frame with proper headers
@@ -404,7 +402,7 @@ class OffAxisHoloController(LiveUpdatedController):
                 )
                 content_length = f'Content-Length: {len(jpeg_bytes)}\r\n\r\n'.encode('ascii')
                 mjpeg_frame = header + content_length + jpeg_bytes + b'\r\n'
-                
+
                 # Put in queue, drop frame if full
                 try:
                     self._mjpeg_queue.put_nowait(mjpeg_frame)
@@ -419,19 +417,19 @@ class OffAxisHoloController(LiveUpdatedController):
         Respects the update_freq parameter.
         """
         self._logger.info("Processing loop started")
-        
+
         while not self._stop_processing_event.is_set():
             try:
                 # Calculate minimum interval between processing
                 min_interval = 1.0 / self._params.update_freq if self._params.update_freq > 0 else 0.0
-                
+
                 current_time = time.time()
-                
+
                 # Check if enough time has passed
                 if current_time - self._state.last_process_time < min_interval:
                     time.sleep(min_interval * 0.1)  # Short sleep to prevent CPU spinning
                     continue
-                
+
                 # Check if paused
                 if self._state.is_paused:
                     # In pause mode, process last frame continuously at update rate
@@ -445,19 +443,19 @@ class OffAxisHoloController(LiveUpdatedController):
                     if frame is not None:
                         self._state.frame_count += 1
                         self._last_frame = frame.copy()  # Store for pause mode
-                        
+
                         with self._processing_lock:
                             self._process_frame(frame)
                             self._state.last_process_time = current_time
                     else:
                         # No frame available, wait a bit
                         time.sleep(0.01)
-                    
+
             except Exception as e:
                 self._logger.error(f"Error in processing loop: {e}")
                 self._logger.debug(traceback.format_exc())
                 time.sleep(0.1)
-        
+
         self._logger.info("Processing loop stopped")
 
     # =========================
@@ -505,7 +503,7 @@ class OffAxisHoloController(LiveUpdatedController):
             for key, value in params.items():
                 if hasattr(self._params, key):
                     setattr(self._params, key, value)
-        
+
         self._emit_state_changed()
         return self._params.to_dict()
 
@@ -528,7 +526,7 @@ class OffAxisHoloController(LiveUpdatedController):
     def set_roi(self, center: List[int], size: int) -> Dict[str, Any]:
         """Set ROI center and size"""
         return self.set_parameters({"roi_center": center, "roi_size": size})
-    
+
     @APIExport(runOnUIThread=True)
     def set_binning(self, binning: int) -> Dict[str, Any]:
         """
@@ -560,26 +558,26 @@ class OffAxisHoloController(LiveUpdatedController):
         """
         if self._params.cc_center is None:
             self._logger.warning("CC center not set - off-axis processing may fail")
-        
+
         with self._processing_lock:
             self._state.is_processing = True
             self._state.is_paused = False
             self._state.frame_count = 0
             self._state.processed_count = 0
             self._state.last_process_time = 0.0
-        
+
         # Ensure camera is running
         self._ensure_camera_running()
-        
+
         # Start processing thread if not already running
         if self._processing_thread is None or not self._processing_thread.is_alive():
             self._stop_processing_event.clear()
             self._processing_thread = threading.Thread(target=self._processing_loop, daemon=True)
             self._processing_thread.start()
-        
+
         self._logger.info("Started off-axis hologram processing")
         self._emit_state_changed()
-        
+
         return self._state.to_dict()
 
     @APIExport(runOnUIThread=True)
@@ -593,13 +591,13 @@ class OffAxisHoloController(LiveUpdatedController):
         with self._processing_lock:
             self._state.is_processing = False
             self._state.is_paused = False
-        
+
         # Stop processing thread
         self._stop_processing_event.set()
-        
+
         self._logger.info("Stopped hologram processing")
         self._emit_state_changed()
-        
+
         return self._state.to_dict()
 
     @APIExport(runOnUIThread=True)
@@ -613,10 +611,10 @@ class OffAxisHoloController(LiveUpdatedController):
         with self._processing_lock:
             if self._state.is_processing:
                 self._state.is_paused = True
-        
+
         self._logger.info("Paused hologram processing (processing last frame)")
         self._emit_state_changed()
-        
+
         return self._state.to_dict()
 
     @APIExport(runOnUIThread=True)
@@ -630,10 +628,10 @@ class OffAxisHoloController(LiveUpdatedController):
         with self._processing_lock:
             if self._state.is_processing:
                 self._state.is_paused = False
-        
+
         self._logger.info("Resumed hologram processing")
         self._emit_state_changed()
-        
+
         return self._state.to_dict()
 
     @APIExport(runOnUIThread=False)
@@ -655,10 +653,10 @@ class OffAxisHoloController(LiveUpdatedController):
             from fastapi.responses import StreamingResponse
         except ImportError:
             return {"status": "error", "message": "FastAPI not available"}
-        
+
         if not hasCV2:
             return {"status": "error", "message": "opencv-python required for MJPEG streaming"}
-        
+
         if not startStream:
             # Stop streaming
             with self._processing_lock:
@@ -672,21 +670,21 @@ class OffAxisHoloController(LiveUpdatedController):
             self._logger.info("Stopped MJPEG stream")
             self._emit_state_changed()
             return {"status": "success", "message": "stream stopped"}
-        
+
         # Update JPEG quality
         self._jpeg_quality = max(0, min(100, jpeg_quality))
-        
+
         # Start streaming
         with self._processing_lock:
             self._state.is_streaming = True
-        
+
         # Ensure processing is running
         if not self._state.is_processing:
             self.start_processing()
-        
+
         self._logger.info(f"Started MJPEG stream (quality={self._jpeg_quality})")
         self._emit_state_changed()
-        
+
         # Create generator for streaming response
         def frame_generator():
             """Generator that yields MJPEG frames."""
@@ -705,7 +703,7 @@ class OffAxisHoloController(LiveUpdatedController):
                 self._emit_state_changed()
             except Exception as e:
                 self._logger.error(f"Error in MJPEG frame generator: {e}")
-        
+
         # Return streaming response with proper headers
         headers = {
             "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -714,7 +712,7 @@ class OffAxisHoloController(LiveUpdatedController):
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         }
-        
+
         return StreamingResponse(
             frame_generator(),
             media_type="multipart/x-mixed-replace;boundary=frame",
@@ -735,12 +733,12 @@ class OffAxisHoloController(LiveUpdatedController):
         if image is None:
             # Capture from camera
             image = self._capture_camera_frame()
-        
+
         if image is None:
             return {"success": False, "error": "No image available"}
-        
+
         result = self._process_frame(image)
-        
+
         return {
             "success": result is not None,
             "frame_shape": result.shape if result is not None else None
@@ -799,14 +797,14 @@ class OffAxisHoloController(LiveUpdatedController):
         """Legacy: Select cross-correlation center from GUI"""
         if IS_HEADLESS or not hasattr(self, '_widget'):
             return
-        
+
         try:
             cc_center = self._widget.getCCCenterFromNapari()
             cc_radius = self._widget.getCCRadius()
-            
+
             if cc_radius is None or cc_radius < 50:
                 cc_radius = 100
-            
+
             self.set_cc_params(cc_center, cc_radius)
         except Exception as e:
             self._logger.warning(f"Failed to get CC center from GUI: {e}")
@@ -815,7 +813,7 @@ class OffAxisHoloController(LiveUpdatedController):
         """Legacy: Update CC center from text fields"""
         if IS_HEADLESS or not hasattr(self, '_widget'):
             return
-        
+
         try:
             centerX = int(self._widget.textEditCCCenterX.text())
             centerY = int(self._widget.textEditCCCenterY.text())
@@ -827,7 +825,7 @@ class OffAxisHoloController(LiveUpdatedController):
         """Legacy: Update CC radius from text field"""
         if IS_HEADLESS or not hasattr(self, '_widget'):
             return
-        
+
         try:
             radius = int(self._widget.textEditCCRadius.text())
             self.set_cc_params(self._params.cc_center, radius)
@@ -838,7 +836,7 @@ class OffAxisHoloController(LiveUpdatedController):
         """Legacy: Display image in napari widget"""
         if IS_HEADLESS:
             return
-        
+
         if im.dtype == complex or np.iscomplexobj(im):
             self._widget.setImage(np.abs(im), name + "_abs")
             self._widget.setImage(np.angle(im), name + "_angle")
@@ -854,12 +852,12 @@ class OffAxisHoloController(LiveUpdatedController):
         """Setup legacy GUI connections"""
         if IS_HEADLESS or not hasattr(self, '_widget'):
             return
-        
+
         try:
             self._widget.sigShowOffAxisToggled.connect(self.setShowOffAxisHolo)
             self._widget.sigUpdateRateChanged.connect(self.changeRate)
             self._widget.sigOffAxisSliderValueChanged.connect(self.offAxisValueChanged)
-            
+
             if hasattr(self._widget, 'btnSelectCCCenter'):
                 self._widget.btnSelectCCCenter.clicked.connect(self.selectCCCenter)
             if hasattr(self._widget, 'textEditCCCenterX'):
@@ -868,16 +866,16 @@ class OffAxisHoloController(LiveUpdatedController):
                 self._widget.textEditCCCenterY.textChanged.connect(self.updateCCCenter)
             if hasattr(self._widget, 'textEditCCRadius'):
                 self._widget.textEditCCRadius.textChanged.connect(self.updateCCRadius)
-            
+
             # Set initial values
             if hasattr(self._widget, 'getUpdateRate'):
                 self.changeRate(self._widget.getUpdateRate())
             if hasattr(self._widget, 'getShowOffAxisHoloChecked'):
                 self.setShowOffAxisHolo(self._widget.getShowOffAxisHoloChecked())
-            
+
             # Connect signal for displaying processed images
             self.sigHoloImageComputed.connect(self.displayImage)
-            
+
         except Exception as e:
             self._logger.warning(f"Could not setup all GUI connections: {e}")
 

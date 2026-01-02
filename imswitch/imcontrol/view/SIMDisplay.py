@@ -1,8 +1,6 @@
 import numpy as np
-import skimage
-import skimage.transform
 from qtpy import QtCore, QtGui, QtWidgets
-from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
+from imswitch.imcommon.model import initLogger
 
 class SIMDisplay(QtWidgets.QLabel):
     """ Full-screen SIM display. """

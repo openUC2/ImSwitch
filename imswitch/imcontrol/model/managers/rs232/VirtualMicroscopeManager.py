@@ -2,7 +2,7 @@ import os
 import cv2
 import math
 import time
-from imswitch import IS_HEADLESS, __file__
+from imswitch import __file__
 import threading
 import numpy as np
 import matplotlib.pyplot as plt
@@ -38,9 +38,6 @@ End-to-end astigmatism autofocus simulation:
 - Plots + saves stack (NPZ) and metrics (CSV)
 """
 
-import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
 from math import cos, sin
 
 # ----------------------- Simulation -----------------------

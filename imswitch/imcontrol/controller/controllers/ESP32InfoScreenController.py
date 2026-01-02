@@ -1,23 +1,13 @@
-import numpy as np
 try:
-    import NanoImagingPack as nip
     isNIP = True
 except:
     isNIP = False
-import time
-import threading
-import collections
 
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
-from imswitch.imcontrol.view import guitools
-from imswitch.imcommon.model import initLogger
+from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
 from imswitch import IS_HEADLESS
 
-import time
-import logging
 
-from .esp32_infoscreen.uc2_serial_controller import UC2SerialController, find_esp32_port
 
 class ESP32InfoScreenController(ImConWidgetController):
     """ Linked to HoliSheetWidget."""
@@ -26,13 +16,13 @@ class ESP32InfoScreenController(ImConWidgetController):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         detoctorName = allDetectorNames[0]
         self.detector = self._master.detectorsManager[detoctorName]
-        
-        # select stage 
+
+        # select stage
         allPositionerNames = self._master.positionersManager.getAllDeviceNames()
         positionerName = allPositionerNames[0]
         self.positioner = self._master.positionersManager[positionerName]
@@ -44,7 +34,7 @@ class ESP32InfoScreenController(ImConWidgetController):
             self._master.lasersManager[self.laser].setGalvo(channel=1, frequency=10, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1)
         except  Exception as e:
             self._logger.error(e)
-            
+
         # get LEDMatrix # TODO: Improve
         allLEDMatrixNames = self._master.LEDMatrixsManager.getAllDeviceNames()
         if len(allLEDMatrixNames) == 0:
@@ -54,10 +44,10 @@ class ESP32InfoScreenController(ImConWidgetController):
 
 
 
-        # assign signals 
+        # assign signals
         # TODO: We need to assign this objective to the button click on the remote display (on_objective_slot_command,on_objective_slot_update )
         # self._commChannel.sigToggleObjective.emit(1)
-        
+
         # TODO: We need to assign the stage motion self.positioner.move to the button clicks (on_motor_xy_command, on_motor_command, on_sample_position_update
 
         # TODO: We need to assign the led intensity setting to the infoscreen buttons (on_led_update),                 self.ledMatrix.mLEDmatrix.setAll(0)

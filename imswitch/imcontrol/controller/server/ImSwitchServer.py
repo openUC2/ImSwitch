@@ -2,10 +2,10 @@ import threading
 from imswitch.imcommon.framework import Worker
 from imswitch.imcommon.model import dirtools, initLogger
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from pydantic import BaseModel
 from imswitch.imcontrol.model import Options
-from imswitch.imcommon.model import APIExport, initLogger, ostools
+from imswitch.imcommon.model import ostools
 from imswitch.imcontrol.view.guitools import ViewSetupInfo
 import dataclasses
 from typing import List
@@ -14,31 +14,22 @@ import shutil
 from fastapi.responses import FileResponse
 import zipfile
 import uvicorn
-from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi import Request
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 import imswitch
-import uvicorn
 from functools import wraps
-import os
 import socket
-from typing import List, Dict
-from imswitch import IS_HEADLESS, __ssl__, __httpport__, __version__
+from typing import Dict
+from imswitch import __ssl__, __httpport__, __version__
 from imswitch.imcontrol.model import configfiletools
 from fastapi.responses import RedirectResponse
-import socket
-import os
-import threading
 import asyncio
 from datetime import datetime
 from fastapi.openapi.docs import (
-    get_redoc_html,
     get_swagger_ui_html,
-    get_swagger_ui_oauth2_redirect_html,
 )
 from fastapi.staticfiles import StaticFiles
 
@@ -183,7 +174,7 @@ def preview_file(file_path: str):
     Provides file previews by serving the file from disk.
     - `file_path` is the relative path to the file within dirtools.UserFileDirs.getValidatedDataPath().
     """
-    # Resolve the absolute file path 
+    # Resolve the absolute file path
     absolute_path = dirtools.UserFileDirs.getValidatedDataPath() / file_path
 
     # Check if the file exists and is a file
@@ -326,25 +317,25 @@ class ServerThread(threading.Thread):
         try:
             # Set the event loop for this thread
             asyncio.set_event_loop(self._asyncio_loop)
-            
+
             # Configure the shared event loop for signal emission
             set_shared_event_loop(self._asyncio_loop)
-            print(f"Shared event loop configured for Socket.IO and FastAPI")
-            
+            print("Shared event loop configured for Socket.IO and FastAPI")
+
             # Create Uvicorn config with the shared event loop
             config = uvicorn.Config(
                 app,
                 host="0.0.0.0",
                 port=PORT,
                 ssl_keyfile=os.path.join(_baseDataFilesDir, "ssl", "key.pem") if IS_SSL else None,
-                ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None, 
-                loop=self._asyncio_loop,  #loop="none",  # Use "none" to let us manage the loop # TODO: This is not yet complete 
+                ssl_certfile=os.path.join(_baseDataFilesDir, "ssl", "cert.pem") if IS_SSL else None,
+                loop=self._asyncio_loop,  #loop="none",  # Use "none" to let us manage the loop # TODO: This is not yet complete
                 log_level="info"
             )
-            
+
             # Create server instance
             self.server = uvicorn.Server(config)
-            
+
             # Run the server using the existing event loop
             self._asyncio_loop.run_until_complete(self.server.serve())
         except Exception as e:
@@ -465,7 +456,6 @@ class ImSwitchServer(Worker):
                     @app.get(str) # TODO: Perhaps we want POST instead?
                     @wraps(func)
                     async def wrapper(*args, **kwargs):
-                        import importlib #importlib.reload(my_module)
                         return await func(*args, **kwargs) # sometimes we need to return a future
             else:
                 if hasattr(func, '_APIRequestType') and func._APIRequestType == "POST":
@@ -589,7 +579,7 @@ class ImSwitchServer(Worker):
             options, _ = configfiletools.loadOptions()
             options = dataclasses.replace(options, setupFileName=setupFileName)
             configfiletools.saveOptions(options)
-        if restart: 
+        if restart:
             ostools.restartSoftware()
 
         if restart:
@@ -607,7 +597,7 @@ class ImSwitchServer(Worker):
         options, _ = configfiletools.loadOptions()
         options = dataclasses.replace(options, setupFileName=setupFileName)
         configfiletools.saveOptions(options)
-        if restartSoftware: 
+        if restartSoftware:
             ostools.restartSoftware()
         return f"Setup file {setupFileName} set successfully."
 
@@ -619,10 +609,10 @@ class ImSwitchServer(Worker):
         """
         from imswitch.imcommon.model import get_log_folder
         log_folder = get_log_folder()
-        
+
         if not os.path.exists(log_folder):
             return {"log_files": []}
-        
+
         log_files = []
         for filename in os.listdir(log_folder):
             if filename.endswith('.log'):
@@ -634,10 +624,10 @@ class ImSwitchServer(Worker):
                     'modified': datetime.fromtimestamp(file_stat.st_mtime).isoformat(),
                     'path': file_path
                 })
-        
+
         # Sort alphanumerically by filename
         log_files.sort(key=lambda x: x['filename'])
-        
+
         return {"log_files": log_files}
 
     @app.get("/LogController/downloadLogFile")
@@ -647,19 +637,19 @@ class ImSwitchServer(Worker):
         """
         from imswitch.imcommon.model import get_log_folder
         log_folder = get_log_folder()
-        
+
         # Security: prevent directory traversal
         if '..' in filename or '/' in filename or '\\' in filename:
             raise HTTPException(status_code=400, detail="Invalid filename")
-        
+
         file_path = os.path.join(log_folder, filename)
-        
+
         if not os.path.exists(file_path):
             raise HTTPException(status_code=404, detail="Log file not found")
-        
+
         if not os.path.isfile(file_path):
             raise HTTPException(status_code=400, detail="Not a file")
-        
+
         return FileResponse(file_path, filename=filename, media_type='text/plain')
 
 

@@ -1,16 +1,6 @@
-import enum
-import glob
-import math
-import os
-import threading
 
-import numpy as np
-from PIL import Image
-import uc2rest as uc2
-import json
 
-from imswitch.imcommon.model import dirtools
-from imswitch.imcommon.framework import Signal, SignalInterface
+from imswitch.imcommon.framework import SignalInterface
 from imswitch.imcommon.model import initLogger
 
 

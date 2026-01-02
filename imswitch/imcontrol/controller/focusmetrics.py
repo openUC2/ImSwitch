@@ -15,7 +15,7 @@ from scipy.optimize import curve_fit
 from scipy.ndimage import gaussian_filter, center_of_mass
 from skimage.feature import peak_local_max
 from scipy.ndimage import gaussian_filter1d
-from scipy.signal import find_peaks, resample
+from scipy.signal import find_peaks
 
 
 

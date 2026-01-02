@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime
-            
+
 import numpy as np
 from PIL import Image, ImageFile
 from fastapi import Response

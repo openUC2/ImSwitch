@@ -1,6 +1,4 @@
-import json
 import os
-import io
 import queue
 
 import numpy as np
@@ -14,15 +12,9 @@ import cv2
 
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
+from imswitch.imcommon.framework import Signal
 
-from ..basecontrollers import LiveUpdatedController
 
-import os
-import time
-import numpy as np
-from pathlib import Path
-import tifffile
 from imswitch import IS_HEADLESS
 
 pi    = np.pi
@@ -50,7 +42,7 @@ class DPCParams:
     save_directory: str = ""
     reg_u: float = 1e-1  # Tikhonov regularization for absorption
     reg_p: float = 5e-3  # Tikhonov regularization for phase
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -63,7 +55,7 @@ class DPCState:
     processed_count: int = 0
     last_process_time: float = 0.0
     processing_fps: float = 0.0
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -81,7 +73,7 @@ class DPCController(ImConWidgetController):
     sigImageReceived = Signal()
     sigDPCProcessorImageComputed = Signal(np.ndarray, str)
     sigDPCStateChanged = Signal(object)  # state_dict
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
@@ -90,7 +82,7 @@ class DPCController(ImConWidgetController):
         self.isRecording = False
 
         # load config file
-        if self._setupInfo.dpc is None: # TODO: We should have a default config example here 
+        if self._setupInfo.dpc is None: # TODO: We should have a default config example here
             self._logger.error('DPC is not configured in your setup file.')
 
         # Pattern names for DPC (using LEDMatrix setHalves)
@@ -134,22 +126,22 @@ class DPCController(ImConWidgetController):
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
         self.detector.startAcquisition()
         self.frameShape = self.detector.shape
-        
+
         # initialize DPC processor
         self.DPCProcessor = DPCProcessor(self, self.frameShape, self._params)
 
         # MJPEG streaming
         self._mjpeg_queue = queue.Queue(maxsize=2)
         self._jpeg_quality = 85
-        
+
         # Processing queue - decouples capture from reconstruction
         self._processing_queue = queue.Queue(maxsize=2)
-        
+
         # Processing threads
         self._capture_thread = None
         self._reconstruction_thread = None
         self._stop_processing_event = threading.Event()
-        
+
         # Performance monitoring
         self._perf_process_times = []
         self._perf_window_size = 30
@@ -160,63 +152,63 @@ class DPCController(ImConWidgetController):
     def __del__(self):
         """Cleanup on deletion"""
         self.stop_dpc_processing()
-        
+
         if self._capture_thread is not None:
             self._stop_processing_event.set()
             self._capture_thread.join(timeout=2.0)
-        
+
         if self._reconstruction_thread is not None:
             self._stop_processing_event.set()
             self._reconstruction_thread.join(timeout=2.0)
-    
+
     # =========================
     # Core Processing Methods
     # =========================
     def _set_led_pattern(self, pattern_name: str):
         """Set LED pattern using LEDMatrix manager setHalves method"""
-        intensity = (self._params.led_intensity_r, 
-                    self._params.led_intensity_g, 
+        intensity = (self._params.led_intensity_r,
+                    self._params.led_intensity_g,
                     self._params.led_intensity_b)
         self.ledMatrix.setHalves(
             intensity=intensity,
-            region=pattern_name, 
+            region=pattern_name,
             getReturn=True,
             timeout=.2
         )
-    
+
     def _get_fresh_frame(self, timeout: float = 1.0, nFrameSync: int = 2) -> Optional[np.ndarray]:
         """Get a fresh frame with frame sync (like ExperimentController)"""
         cTime = time.time()
         lastFrameNumber = -1
-        
+
         while True:
             # Get frame and frame number to ensure fresh frame
             mFrame, currentFrameNumber = self.detector.getLatestFrame(returnFrameNumber=True)
-            
+
             if lastFrameNumber == -1:
                 # First round
                 lastFrameNumber = currentFrameNumber
-            
+
             if time.time() - cTime > timeout:
                 # Timeout - use whatever we have
                 if mFrame is None:
                     mFrame = self.detector.getLatestFrame(returnFrameNumber=False)
                 break
-            
+
             if currentFrameNumber <= lastFrameNumber + nFrameSync:
                 time.sleep(0.01)  # Off-load CPU
             else:
                 break
-        
+
         return mFrame
-    
+
     def _capture_dpc_stack(self):
         """Capture 4 images with different LED patterns"""
         stack = []
-        
+
         # Turn off all LEDs first
         #self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
-        
+
         for pattern_name in self.allDPCPatternNames:
             if self._stop_processing_event.is_set():
                 return None
@@ -225,36 +217,36 @@ class DPCController(ImConWidgetController):
             self._set_led_pattern(pattern_name)
             self._logger.debug(f"Showing pattern: {pattern_name}")
             time.sleep(self._params.wait_time / 2)
-                        
+
             # Capture fresh frame with sync
             frame = self._get_fresh_frame(timeout=1.0, nFrameSync=self._params.frame_sync)
             if frame is None:
                 self._logger.warning(f"Failed to get frame for pattern {pattern_name}")
                 continue
-            
+
             if len(frame.shape) > 2:
                 frame = np.mean(frame, axis=2)
             stack.append(frame)
-            
+
             self._state.frame_count += 1
-        
-        
+
+
         return np.array(stack) if len(stack) == 4 else None
-    
+
     def _capture_loop(self):
         """Capture loop - captures DPC stacks and adds to processing queue"""
         self._logger.info("DPC capture loop started")
-        
+
         while not self._stop_processing_event.is_set():
             try:
                 # Capture 4-image stack
                 stack = self._capture_dpc_stack()
-                
+
                 if stack is None:
                     if self._stop_processing_event.is_set():
                         break
                     continue
-                
+
                 # Add to processing queue (non-blocking, drop old if full)
                 try:
                     self._processing_queue.put_nowait(stack)
@@ -265,19 +257,19 @@ class DPCController(ImConWidgetController):
                         self._processing_queue.put_nowait(stack)
                     except:
                         pass
-                
+
             except Exception as e:
                 self._logger.error(f"Error in DPC capture loop: {e}", exc_info=True)
                 time.sleep(0.1)
-        
+
         # Turn off LEDs when done
         self.ledMatrix.setAll(state=(0,0,0), getReturn=False)
         self._logger.info("DPC capture loop stopped")
-    
+
     def _reconstruction_loop(self):
         """Reconstruction loop - processes stacks from queue"""
         self._logger.info("DPC reconstruction loop started")
-        
+
         while not self._stop_processing_event.is_set():
             try:
                 # Get stack from queue with timeout
@@ -285,19 +277,19 @@ class DPCController(ImConWidgetController):
                     stack = self._processing_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
-                
+
                 t_start = time.time()
-                
+
                 # Process stack
                 result = self.DPCProcessor.process_stack(stack, save=self._params.save_images)
-                
+
                 if result is not None:
                     dpc_lr, dpc_tb, qdpc = result
-                    
+
                     # Emit signals for display
                     self.sigDPCProcessorImageComputed.emit(dpc_lr, "DPC left/right")
                     self.sigDPCProcessorImageComputed.emit(dpc_tb, "DPC top/bottom")
-                    
+
                     # Add to MJPEG stream (use phase or combined image)
                     if qdpc is not None and len(qdpc) > 0:
                         phase_image = np.angle(qdpc[0])
@@ -305,59 +297,59 @@ class DPCController(ImConWidgetController):
                     else:
                         # Fallback to gradient image
                         self._add_to_mjpeg_stream(dpc_lr)
-                    
+
                     self._state.processed_count += 1
-                
+
                 # Update performance metrics
                 t_end = time.time()
                 process_time = t_end - t_start
                 self._state.last_process_time = process_time
-                
+
                 self._perf_process_times.append(process_time)
                 if len(self._perf_process_times) > self._perf_window_size:
                     self._perf_process_times.pop(0)
-                
+
                 if len(self._perf_process_times) > 0:
                     avg_time = np.mean(self._perf_process_times)
                     self._state.processing_fps = 1.0 / avg_time if avg_time > 0 else 0.0
-                
+
                 self._emit_state_changed()
-                
+
             except Exception as e:
                 self._logger.error(f"Error in DPC reconstruction loop: {e}", exc_info=True)
                 time.sleep(0.1)
-        
+
         self._logger.info("DPC reconstruction loop stopped")
-    
+
     def _add_to_mjpeg_stream(self, image):
         """Add processed image to MJPEG stream"""
         try:
             # Normalize to 0-255 with NaN handling
             img_normalized = image.copy()
-            
+
             # Replace NaN and inf with 0
             img_normalized = np.nan_to_num(img_normalized, nan=0.0, posinf=0.0, neginf=0.0)
-            
+
             img_min, img_max = img_normalized.min(), img_normalized.max()
             if img_max > img_min and np.isfinite(img_max) and np.isfinite(img_min):
                 img_normalized = (img_normalized - img_min) / (img_max - img_min) * 255.0
             else:
                 # If min == max or invalid, just clip to 0-255
                 img_normalized = np.clip(img_normalized, 0, 255)
-            
+
             # Safely convert to uint8
             img_normalized = np.clip(img_normalized, 0, 255).astype(np.uint8)
-            
+
             # Convert to BGR for JPEG encoding
             if len(img_normalized.shape) == 2:
                 img_bgr = cv2.cvtColor(img_normalized, cv2.COLOR_GRAY2BGR)
             else:
                 img_bgr = cv2.cvtColor(img_normalized, cv2.COLOR_RGB2BGR)
-            
+
             # Encode as JPEG
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality]
             _, buffer = cv2.imencode('.jpg', img_bgr, encode_param)
-            
+
             # Add to queue (non-blocking, drop old frames)
             try:
                 self._mjpeg_queue.put_nowait(buffer.tobytes())
@@ -369,11 +361,11 @@ class DPCController(ImConWidgetController):
                     pass
         except Exception as e:
             self._logger.error(f"Error adding image to MJPEG stream: {e}")
-    
+
     def _emit_state_changed(self):
         """Emit state changed signal"""
         self.sigDPCStateChanged.emit(self._state.to_dict())
-    
+
     # =========================
     # API: Parameter Control
     # =========================
@@ -381,7 +373,7 @@ class DPCController(ImConWidgetController):
     def get_dpc_params(self) -> Dict[str, Any]:
         """Get current DPC parameters"""
         return self._params.to_dict()
-    
+
     @APIExport(runOnUIThread=True, requestType="POST")
     def set_dpc_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -398,18 +390,18 @@ class DPCController(ImConWidgetController):
                 if hasattr(self._params, key):
                     setattr(self._params, key, value)
                     self._logger.debug(f"Updated DPC parameter: {key} = {value}")
-            
+
             # Update processor if it exists
             if hasattr(self, 'DPCProcessor'):
                 self.DPCProcessor.update_parameters(self._params)
-        
+
         return self.get_dpc_params()
-    
+
     @APIExport(runOnUIThread=True)
     def get_dpc_state(self) -> Dict[str, Any]:
         """Get current DPC processing state"""
         return self._state.to_dict()
-    
+
     # =========================
     # API: Processing Control
     # =========================
@@ -419,72 +411,72 @@ class DPCController(ImConWidgetController):
         with self._processing_lock:
             if self._state.is_processing:
                 return {"status": "already_running", "state": self._state.to_dict()}
-            
+
             # Reset state
             self._state.is_processing = True
             self._state.is_paused = False
             self._state.frame_count = 0
             self._state.processed_count = 0
             self._perf_process_times = []
-            
+
             # Ensure camera is running
             self._ensure_camera_running()
-            
+
             # Clear processing queue
             while not self._processing_queue.empty():
                 try:
                     self._processing_queue.get_nowait()
                 except queue.Empty:
                     break
-            
+
             # Start capture and reconstruction threads
             self._stop_processing_event.clear()
-            
+
             self._capture_thread = threading.Thread(
                 target=self._capture_loop,
                 daemon=True,
                 name="DPC-Capture"
             )
             self._capture_thread.start()
-            
+
             self._reconstruction_thread = threading.Thread(
                 target=self._reconstruction_loop,
                 daemon=True,
                 name="DPC-Reconstruction"
             )
             self._reconstruction_thread.start()
-            
+
             self._emit_state_changed()
             self._logger.info("DPC processing started")
-            
+
             return {"status": "started", "state": self._state.to_dict()}
-    
+
     @APIExport(runOnUIThread=True)
     def stop_dpc_processing(self) -> Dict[str, Any]:
         """Stop DPC processing"""
         with self._processing_lock:
             if not self._state.is_processing:
                 return {"status": "not_running", "state": self._state.to_dict()}
-            
+
             # Stop processing
             self._stop_processing_event.set()
-            
+
             if self._capture_thread is not None:
                 self._capture_thread.join(timeout=2.0)
                 self._capture_thread = None
-            
+
             if self._reconstruction_thread is not None:
                 self._reconstruction_thread.join(timeout=2.0)
                 self._reconstruction_thread = None
-            
+
             self._state.is_processing = False
             self._state.is_paused = False
-            
+
             self._emit_state_changed()
             self._logger.info("DPC processing stopped")
-            
+
             return {"status": "stopped", "state": self._state.to_dict()}
-    
+
     @APIExport(runOnUIThread=False)
     def mjpeg_stream_dpc(self, startStream: bool = True, jpeg_quality: int = 85) -> Any:
         """
@@ -499,9 +491,9 @@ class DPCController(ImConWidgetController):
         """
         if not startStream:
             return
-        
+
         self._jpeg_quality = jpeg_quality
-        
+
         def generate():
             self._logger.info("Starting MJPEG stream for DPC")
             try:
@@ -517,9 +509,9 @@ class DPCController(ImConWidgetController):
                         break
             except GeneratorExit:
                 self._logger.info("MJPEG stream closed")
-        
+
         return generate()
-    
+
     def _ensure_camera_running(self):
         """Ensure camera is running"""
         try:
@@ -527,7 +519,7 @@ class DPCController(ImConWidgetController):
                 self.detector.startAcquisition()
         except:
             pass
-    
+
     # =========================
     # Legacy GUI compatibility
     # =========================
@@ -571,7 +563,7 @@ class DPCProcessor(object):
             pixelsize=self.pixelsize,
             rotation=self.rotation
         )
-        
+
         # Set Tikhonov regularization
         self.dpc_solver_obj.setTikhonovRegularization(
             reg_u=params.reg_u,
@@ -590,7 +582,7 @@ class DPCProcessor(object):
         self.n = params.n
         self.wavelength = params.wavelength
         self.save_directory = params.save_directory
-        
+
         # Recreate solver with new parameters
         self.dpc_solver_obj = DPCSolver(
             shape=self.shape,
@@ -600,7 +592,7 @@ class DPCProcessor(object):
             pixelsize=self.pixelsize,
             rotation=self.rotation
         )
-        
+
         self.dpc_solver_obj.setTikhonovRegularization(
             reg_u=params.reg_u,
             reg_p=params.reg_p
@@ -621,32 +613,32 @@ class DPCProcessor(object):
             if stack.shape[0] != 4:
                 self._logger.error(f"Expected 4 images, got {stack.shape[0]}")
                 return None
-            
+
             # Compute qDPC reconstruction
             qdpc_result = self.dpc_solver_obj.solve(dpc_imgs=stack.astype('float64'))
-            
+
             # Compute gradient images (normalized difference)
             dpc_result_1 = (stack[0] - stack[1]) / (stack[0] + stack[1] + 1e-10)  # top - bottom
             dpc_result_2 = (stack[2] - stack[3]) / (stack[2] + stack[3] + 1e-10)  # right - left
-            
+
             # Save images if requested
             if save and self.save_directory:
                 date = datetime.now().strftime("%Y_%m_%d-%H-%M-%S")
-                
+
                 # Save qDPC reconstruction
                 filename_recon = os.path.join(self.save_directory, f"{date}_DPC_Reconstruction.tif")
                 tif.imwrite(filename_recon, qdpc_result)
-                
+
                 # Save gradient images
                 filename_lr = os.path.join(self.save_directory, f"{date}_DPC_LeftRight.tif")
                 filename_tb = os.path.join(self.save_directory, f"{date}_DPC_TopBottom.tif")
                 tif.imwrite(filename_lr, dpc_result_2.astype(np.float32))
                 tif.imwrite(filename_tb, dpc_result_1.astype(np.float32))
-                
+
                 self._logger.info(f"Saved DPC results to {self.save_directory}")
-            
+
             return dpc_result_2, dpc_result_1, qdpc_result
-            
+
         except Exception as e:
             self._logger.error(f"Error during DPC reconstruction: {e}", exc_info=True)
             return None
@@ -654,16 +646,12 @@ class DPCProcessor(object):
 # (C) Wallerlab 2019
 # https://github.com/Waller-Lab/DPC/blob/master/python_code/dpc_algorithm.py
 import numpy as np
-import matplotlib.pyplot as plt
-from os import listdir
-from skimage import io
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 from scipy.ndimage import uniform_filter
 
 class DPCSolver:
     def __init__(self, shape, wavelength, na, NAi, pixelsize, rotation):
-        self.shape = (shape[1], shape[0]) # the image shape comes in X,Y but here we assume height, width => so transpose 
+        self.shape = (shape[1], shape[0]) # the image shape comes in X,Y but here we assume height, width => so transpose
         if self.shape[0] == 0:
             self.shape = (512, 512)
 
@@ -726,23 +714,23 @@ class DPCSolver:
         AHA         = [(self.Hu.conj()*self.Hu).sum(axis=0)+self.reg_u,            (self.Hu.conj()*self.Hp).sum(axis=0),\
                        (self.Hp.conj()*self.Hu).sum(axis=0)           , (self.Hp.conj()*self.Hp).sum(axis=0)+self.reg_p]
         determinant = AHA[0]*AHA[3]-AHA[1]*AHA[2]
-        
+
         # Avoid division by zero - add small epsilon where determinant is zero
         determinant = np.where(np.abs(determinant) < 1e-10, 1e-10, determinant)
-        
+
         for frame_index in range(self.dpc_imgs.shape[0]//self.dpc_num):
             fIntensity = np.asarray([F(self.dpc_imgs[frame_index*self.dpc_num+image_index]) for image_index in range(self.dpc_num)])
             AHy        = np.asarray([(self.Hu.conj()*fIntensity).sum(axis=0), (self.Hp.conj()*fIntensity).sum(axis=0)])
-            
+
             # Compute with safe division
             with np.errstate(divide='ignore', invalid='ignore'):
                 absorption = IF((AHA[3]*AHy[0]-AHA[1]*AHy[1])/determinant).real
                 phase      = IF((AHA[0]*AHy[1]-AHA[2]*AHy[0])/determinant).real
-            
+
             # Replace NaN/inf with 0
             absorption = np.nan_to_num(absorption, nan=0.0, posinf=0.0, neginf=0.0)
             phase = np.nan_to_num(phase, nan=0.0, posinf=0.0, neginf=0.0)
-            
+
             dpc_result.append(absorption+1.0j*phase)
 
         return np.asarray(dpc_result)

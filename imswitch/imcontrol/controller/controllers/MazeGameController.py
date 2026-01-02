@@ -5,11 +5,7 @@ import threading
 import queue
 import numpy as np
 import cv2
-from fastapi import FastAPI, Response
-from PIL import Image
-import io
 
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import initLogger, APIExport
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
@@ -88,13 +84,13 @@ class MazeGameController(ImConWidgetController):
             try:
                 self.positioner.move(value=startX, speed=20000, axis="X", is_absolute=True, is_blocking=True)
             except Exception as e:
-                self.__logger.error(f"MazeGameController: could not move to start position ({startX}, {startY}): {e}")  
+                self.__logger.error(f"MazeGameController: could not move to start position ({startX}, {startY}): {e}")
         if startY is not None and startY != 0:
             try:
                 self.positioner.move(value=startY, speed=20000, axis="Y", is_absolute=True, is_blocking=True)
             except Exception as e:
                 self.__logger.error(f"MazeGameController: could not move to start position ({startX}, {startY}): {e}")
-             
+
         with self._lock:
             if self._running:
                 return {"ok": True, "already_running": True}

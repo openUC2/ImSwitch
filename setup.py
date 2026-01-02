@@ -82,11 +82,11 @@ setup(
         "zarr>=3",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
-        "numba>=0.61.2", 
-        "mikro-next>=0.18.0", 
-        "arkitekt-next[all]==0.35.0", 
-        "koil>=2.0.5", 
-        "msgpack>=1.0.4", 
+        "numba>=0.61.2",
+        "mikro-next>=0.18.0",
+        "arkitekt-next[all]==0.35.0",
+        "koil>=2.0.5",
+        "msgpack>=1.0.4",
         "esptool"
         ],
 

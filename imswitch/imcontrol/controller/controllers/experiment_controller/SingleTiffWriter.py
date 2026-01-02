@@ -6,13 +6,12 @@ to a single TIFF file with proper OME metadata including spatial coordinates
 and channel information.
 """
 
-import time
 import threading
 import numpy as np
 import tifffile
 from collections import deque
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 
 class SingleTiffWriter:
@@ -26,7 +25,7 @@ class SingleTiffWriter:
     
     Uses the exact same pattern as the working HistoScanController.
     """
-    
+
     def __init__(self, file_path: str, bigtiff: bool = True):
         """
         Initialize the single TIFF writer.
@@ -44,7 +43,7 @@ class SingleTiffWriter:
         self.image_count = 0
         self._finalize_requested = False
         self._tiff_writer = None  # Keep writer reference for synchronous mode
-        
+
     def add_image(self, image: np.ndarray, metadata: Dict[str, Any]):
         """
         Write an image synchronously with metadata.
@@ -55,7 +54,7 @@ class SingleTiffWriter:
         """
         # Write synchronously instead of queueing
         self._write_image_sync(image, metadata)
-    
+
     def _write_image_sync(self, image: np.ndarray, input_metadata: Dict[str, Any]):
         """
         Write image synchronously without using a background thread.
@@ -67,21 +66,21 @@ class SingleTiffWriter:
         # Ensure the folder exists
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
-        
+
         # Initialize TiffWriter on first write (without append mode to create a new file)
         if self._tiff_writer is None:
             self._tiff_writer = tifffile.TiffWriter(self.file_path, bigtiff=self.bigtiff)
-        
+
         try:
             # Extract metadata in EXACT same format as HistoScanController
             pixel_size = input_metadata.get("pixel_size", 1.0)
             pos_x = input_metadata.get("x", 0)
             pos_y = input_metadata.get("y", 0)
-            
+
             # Calculate index coordinates from position and grid step
             index_x = self.image_count # Assuming image_count corresponds to the x index
             index_y = 0
-            
+
             # Create metadata in EXACT same format as working HistoScanController
             metadata = {'Pixels': {
                 'ImageDescription': f"ImageID={self.image_count}",
@@ -89,22 +88,22 @@ class SingleTiffWriter:
                 'PhysicalSizeXUnit': 'µm',
                 'PhysicalSizeY': float(pixel_size),
                 'PhysicalSizeYUnit': 'µm'},
-                
+
                 'Plane': {
                     'PositionX': float(pos_x),
                     'PositionY': float(pos_y)
             }}
-            
+
             # Write image using EXACT same method as HistoScanController
             self._tiff_writer.write(data=image, metadata=metadata)
-            
+
             self.image_count += 1
             #print(f"Wrote image {self.image_count} to single TIFF at position ({pos_x}, {pos_y}) with index ({index_x}, {index_y})")
         except Exception as e:
             print(f"Error writing image to single TIFF: {e}")
             import traceback
             traceback.print_exc()
-    
+
     def _process_queue(self):
         """
         DEPRECATED: Background loop for asynchronous writing.
@@ -123,9 +122,9 @@ class SingleTiffWriter:
                 print(f"Error closing TIFF writer: {e}")
             finally:
                 self._tiff_writer = None
-        
+
         print(f"Single TIFF writer completed. Total images written: {self.image_count}")
-        
+
         self.is_running = False
         self._finalize_requested = True
         self.queue.clear()

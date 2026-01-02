@@ -1,7 +1,5 @@
-import numpy as np
 
 from imswitch.imcommon.model import initLogger
-from imswitch.imcontrol.model.interfaces.ofmcamera import CameraOFMCam
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter
 
 

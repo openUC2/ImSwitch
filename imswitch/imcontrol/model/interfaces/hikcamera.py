@@ -543,7 +543,7 @@ class CameraHIK:
                 self.reconnectCamera()
                 ret = self.camera.MV_CC_StartGrabbing()
                 if ret != 0:
-                    self.__logger.error(f"StartGrabbing exception: {e}")
+                    self.__logger.error(f"StartGrabbing exception: RuntimeError after reconnect 0x{ret:x}")
                     raise RuntimeError(f"StartGrabbing failed after reconnect 0x{ret:x}")
         except Exception as e:
             raise RuntimeError(f"StartGrabbing failed 0x{ret:x}")

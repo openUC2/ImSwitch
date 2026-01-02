@@ -859,6 +859,7 @@ class MockCameraPicamera2:
     
     def _generate_frame(self):
         """Generate a mock frame with pattern"""
+        import cv2
         if self.isRGB:
             frame = np.random.randint(0, 255, (self.SensorHeight, self.SensorWidth, 3), dtype=np.uint8)
             # Add pattern

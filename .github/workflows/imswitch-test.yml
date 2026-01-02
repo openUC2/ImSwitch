@@ -40,9 +40,11 @@ jobs:
       shell: bash
     - name: Lint with ruff
       run: |
-        # Check for syntax errors and undefined names (critical issues that should fail the build)
+        # Check for critical errors that should fail the build
+        # E9: Runtime/syntax errors
+        # F821-F823: Undefined names (most critical Pyflakes errors)
         ruff check . --select=E9,F821,F822,F823 --output-format=full
-        # Run all checks with warnings (exit-zero equivalent)
+        # Run all configured checks (exit-zero treats all errors as warnings)
         ruff check . --exit-zero --output-format=full
       shell: bash
     - name: Test with pytest

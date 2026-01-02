@@ -122,3 +122,29 @@ include = ["imswitch*"]
 
 [project.entry-points."jupyter_client.kernel_provisioners"]
 imswitch-provisioner = "imswitch.imcontrol.model.jupyter_connection:ExistingProvisioner"
+
+[tool.ruff]
+# Exclude directories
+exclude = [
+    "imswitch/_data",
+    "build",
+    "ImTools",
+    "imswitch/imcontrol/model/interfaces/pyicic",
+]
+# Line length configuration (matching flake8's max-line-length)
+line-length = 100
+
+[tool.ruff.lint]
+# Enable the following rule categories:
+# E - pycodestyle errors
+# F - Pyflakes
+# W - pycodestyle warnings
+# C90 - mccabe complexity
+select = ["E", "F", "W", "C90"]
+
+# Ignore F401 (unused imports) in __init__.py files (matching flake8 per-file-ignores)
+per-file-ignores = {"__init__.py" = ["F401"]}
+
+[tool.ruff.lint.mccabe]
+# Maximum McCabe complexity (matching flake8's max-complexity)
+max-complexity = 10

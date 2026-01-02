@@ -1,5 +1,0 @@
-[flake8]
-exclude=imswitch/_data/*,build/*,ImTools
-max-complexity = 10
-max-line-length = 100
-per-file-ignores = __init__.py:F401

@@ -861,9 +861,11 @@ class MockCameraPicamera2:
         if self.isRGB:
             frame = np.random.randint(0, 255, (self.SensorHeight, self.SensorWidth, 3), dtype=np.uint8)
             # Add pattern
+            import cv2 # TODO: this causes ruff to suffer - why?
             cv2.rectangle(frame, (self.SensorWidth//2-25, self.SensorHeight//2-25),
                          (self.SensorWidth//2+25, self.SensorHeight//2+25), (255, 255, 255), -1)
         else:
+            import cv2 # TODO: this causes ruff to suffer - why?
             frame = np.random.randint(0, 255, (self.SensorHeight, self.SensorWidth), dtype=np.uint8)
             cv2.rectangle(frame, (self.SensorWidth//2-25, self.SensorHeight//2-25),
                          (self.SensorWidth//2+25, self.SensorHeight//2+25), 255, -1)

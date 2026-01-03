@@ -136,7 +136,7 @@ class ImConMainController(MainController):
             self.__logger.warning(
                 f"Could not dynamically import {controller_name}: {e}"
             )
-            
+
         # Add LiveViewController in case of IS_HEADLESS in anyway
         try:
             if IS_HEADLESS:
@@ -158,7 +158,7 @@ class ImConMainController(MainController):
             self.__logger.warning(
                 f"Could not dynamically import {controller_name}: {e}"
             )
-        
+
         # Add StorageController for file storage management (no widget required)
         try:
             self.__logger.info("Creating StorageController for storage management")

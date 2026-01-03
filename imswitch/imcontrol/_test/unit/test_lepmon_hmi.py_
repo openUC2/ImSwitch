@@ -1,11 +1,8 @@
 import unittest
-import time
 import os
-import tempfile
 import importlib.util
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 import threading
-from datetime import datetime
 
 
 # Dynamically build the path to LepmonController.py based on this test file's location
@@ -52,7 +49,7 @@ with patch.dict('sys.modules', {
     'luma.core.render': Mock(),
     'luma.oled.device': Mock(),
     'PIL.ImageFont': Mock(),
-    'PIL.ImageDraw': Mock(), 
+    'PIL.ImageDraw': Mock(),
     'PIL.Image': Mock(),
     'smbus': Mock(),
 }):
@@ -75,14 +72,14 @@ class TestLepmonHMI(unittest.TestCase):
         self.mock_master.LepmonManager.updateConfig = Mock()
         self.mock_master.detectorsManager = Mock()
         self.mock_master.detectorsManager.getAllDeviceNames = Mock(return_value=['TestCamera'])
-        
+
         # Mock detector
         self.mock_detector = Mock()
         self.mock_detector.getLatestFrame = Mock(return_value=None)
         self.mock_detector.setParameter = Mock()
         self.mock_detector.setGain = Mock()
         self.mock_master.detectorsManager.__getitem__ = Mock(return_value=self.mock_detector)
-        
+
         # Create controller instance with mocked dependencies
         with patch('threading.Thread'), \
              patch('time.sleep'), \
@@ -110,15 +107,15 @@ class TestLepmonHMI(unittest.TestCase):
         """Test HMI menu opening - matching trap_hmi.py initial state."""
         with patch.object(self.controller, '_turn_on_led') as mock_led, \
              patch.object(self.controller, '_display_text') as mock_display:
-            
+
             self.controller._open_hmi_menu()
-            
+
             # Verify blue LED is turned on (menu indicator)
             mock_led.assert_called_with("blau")
-            
+
             # Verify correct display text (German interface matching trap_hmi.py)
             mock_display.assert_called_with("Menü öffnen:", "bitte Enter drücken", "(rechts unten)", "")
-            
+
             # Menu should not be open yet (waiting for enter press)
             self.assertFalse(self.controller.menu_open)
 
@@ -135,10 +132,10 @@ class TestLepmonHMI(unittest.TestCase):
         with patch.object(self.controller, '_button_pressed') as mock_button, \
              patch.object(self.controller, '_display_text') as mock_display, \
              patch('time.sleep'):
-            
+
             # Simulate enter button press on 5th iteration
             mock_button.side_effect = lambda btn: btn == "enter" and mock_button.call_count >= 5
-            
+
             # Simulate the menu entry logic
             self.controller.menu_open = False
             for i in range(10):  # Shortened loop for test
@@ -146,7 +143,7 @@ class TestLepmonHMI(unittest.TestCase):
                     self.controller.menu_open = True
                     mock_display("Eingabe Menü", "geöffnet", "", "")
                     break
-            
+
             # Verify menu was opened
             self.assertTrue(self.controller.menu_open)
             mock_display.assert_called_with("Eingabe Menü", "geöffnet", "", "")
@@ -155,9 +152,9 @@ class TestLepmonHMI(unittest.TestCase):
         """Test focus menu handling (rechts button)."""
         with patch.object(self.controller, '_run_focus_mode') as mock_focus, \
              patch.object(self.controller, '_display_text') as mock_display:
-            
+
             self.controller._handle_focus_menu()
-            
+
             # Verify focus mode activation
             mock_display.assert_any_call("Fokussierhilfe", "aktiviert", "15 Sekunden", "")
             mock_focus.assert_called_once()
@@ -166,9 +163,9 @@ class TestLepmonHMI(unittest.TestCase):
         """Test location menu handling (unten button)."""
         with patch.object(self.controller, '_display_text') as mock_display, \
              patch('time.sleep'):
-            
+
             self.controller._handle_location_menu()
-            
+
             # Verify correct display for location menu
             mock_display.assert_any_call("Code unverändert", "fahre fort", "", "")
 
@@ -179,13 +176,13 @@ class TestLepmonHMI(unittest.TestCase):
              patch.object(self.controller, '_turn_on_led') as mock_led_on, \
              patch.object(self.controller, '_turn_off_led') as mock_led_off, \
              patch('time.sleep'):
-            
+
             # Simulate "oben" button press to update time
             mock_button.side_effect = lambda btn: btn == "oben" and mock_button.call_count >= 3
             self.controller.hmi_stop_event = threading.Event()  # Ensure event exists
-            
+
             self.controller._handle_time_menu()
-            
+
             # Verify time menu displays
             mock_display.assert_any_call("Datum / Uhrzeit:", "hoch aktualisieren", "runter bestätigen", "")
             mock_led_on.assert_called_with("blau")
@@ -198,13 +195,13 @@ class TestLepmonHMI(unittest.TestCase):
              patch.object(self.controller, '_turn_on_led') as mock_led_on, \
              patch.object(self.controller, '_turn_off_led') as mock_led_off, \
              patch('time.sleep'):
-            
+
             # Simulate "unten" button press to confirm coordinates
             mock_button.side_effect = lambda btn: btn == "unten" and mock_button.call_count >= 2
             self.controller.hmi_stop_event = threading.Event()  # Ensure event exists
-            
+
             self.controller._handle_gps_menu()
-            
+
             # Verify GPS menu displays
             mock_display.assert_any_call("Koordinaten mit", "hoch aktualisieren", "runter bestätigen", "")
             mock_led_on.assert_called_with("blau")
@@ -220,14 +217,14 @@ class TestLepmonHMI(unittest.TestCase):
              patch.object(self.controller, '_lepiled_ende') as mock_led_end, \
              patch.object(self.controller, '_get_disk_space') as mock_disk, \
              patch('time.sleep'):
-            
+
             # Mock successful responses
             mock_sensors.return_value = {"LUX": 50, "Temp_in": 22.5, "bus_voltage": 12.1, "Temp_out": 18.3}
             mock_snap.return_value = {"success": True}
             mock_disk.return_value = (100.0, 50.0, 50.0, 50.0, 50.0)  # 50GB free
-            
+
             self.controller._handle_system_test()
-            
+
             # Verify system test sequence
             mock_display.assert_any_call("Testlauf starten", "", "", "")
             mock_sensor_display.assert_called_once()
@@ -242,19 +239,19 @@ class TestLepmonHMI(unittest.TestCase):
         """Test sensor status display with text format."""
         with patch.object(self.controller, '_display_text') as mock_display, \
              patch('time.sleep'):
-            
+
             sensor_data = {
                 "LUX": 45.2,
                 "Temp_in": 23.1,
-                "bus_voltage": 11.8, 
+                "bus_voltage": 11.8,
                 "Temp_out": 19.5
             }
-            
+
             self.controller._display_sensor_status_with_text(sensor_data)
-            
+
             # Verify sensor display calls (should be 4 sensors)
             self.assertEqual(mock_display.call_count, 4)
-            
+
             # Verify correct format for one sensor
             calls = mock_display.call_args_list
             first_call = calls[0][0]  # First positional arguments
@@ -269,31 +266,31 @@ class TestLepmonHMI(unittest.TestCase):
              patch.object(self.controller, '_lepiled_start') as mock_led_start, \
              patch.object(self.controller, '_lepiled_ende') as mock_led_end, \
              patch('time.sleep'):
-            
+
             # First call fails, second succeeds
             mock_snap.side_effect = [
                 {"success": False},  # First attempt fails
                 {"success": True}    # Second attempt succeeds
             ]
-            
+
             # Simulate camera test portion of system test
             Status_Kamera = 0
             test_attempts = 0
             max_attempts = 3
-            
+
             while Status_Kamera == 0 and test_attempts < max_attempts:
                 mock_display("Kamera Test", "aktiviere", "UV Lampe", "")
                 mock_led_start()
-                
+
                 result = mock_snap("jpg", "display", 0, 80)
                 Status_Kamera = 1 if result["success"] else 0
-                
+
                 mock_led_end()
                 test_attempts += 1
-                
+
                 if Status_Kamera == 0:
                     mock_display("Kamera Test", "Fehler- Falle", "wiederholt Test", "")
-                    
+
             # Verify retry logic worked
             self.assertEqual(test_attempts, 2)
             self.assertEqual(Status_Kamera, 1)
@@ -303,11 +300,11 @@ class TestLepmonHMI(unittest.TestCase):
         """Test LED control integration with HMI states."""
         with patch.object(self.controller, '_turn_on_led') as mock_on, \
              patch.object(self.controller, '_turn_off_led') as mock_off:
-            
+
             # Test menu open LED control
             self.controller._open_hmi_menu()
             mock_on.assert_called_with("blau")
-            
+
             # Test LED off when menu closes
             self.controller._turn_off_led("blau")
             mock_off.assert_called_with("blau")
@@ -315,11 +312,11 @@ class TestLepmonHMI(unittest.TestCase):
     def test_display_text_formatting(self):
         """Test display text formatting matches trap_hmi.py patterns."""
         with patch.object(self.controller, '_display_text') as mock_display:
-            
+
             # Test German text patterns from trap_hmi.py
             self.controller._open_hmi_menu()
             mock_display.assert_called_with("Menü öffnen:", "bitte Enter drücken", "(rechts unten)", "")
-            
+
             # Test sensor display patterns
             self.controller._display_text("Light_Sensor", "Status: OK", "Wert: 45.2 Lux", "")
             mock_display.assert_called_with("Light_Sensor", "Status: OK", "Wert: 45.2 Lux", "")
@@ -328,11 +325,11 @@ class TestLepmonHMI(unittest.TestCase):
         """Test HMI state transitions through menu system."""
         # Test state progression
         self.assertEqual(self.controller.current_menu_state, "main")
-        
+
         # Simulate menu completion
         self.controller.current_menu_state = "submenu_completed"
         self.assertEqual(self.controller.current_menu_state, "submenu_completed")
-        
+
         # Simulate progression to time menu
         self.controller.current_menu_state = "time_menu"
         self.assertEqual(self.controller.current_menu_state, "time_menu")
@@ -341,7 +338,7 @@ class TestLepmonHMI(unittest.TestCase):
         """Test error handling in HMI functions."""
         with patch.object(self.controller, '_display_text', side_effect=Exception("Display error")), \
              patch.object(self.controller._logger, 'error') as mock_log:
-            
+
             # Test that errors are logged but don't crash
             self.controller._open_hmi_menu()
             mock_log.assert_called()
@@ -351,7 +348,7 @@ class TestLepmonHMI(unittest.TestCase):
         # Verify timing constants are preserved
         self.assertIsInstance(self.controller.timingConfig, dict)
         self.assertIn("acquisitionInterval", self.controller.timingConfig)
-        
+
         # Test timing config update
         new_config = {"acquisitionInterval": 30}
         result = self.controller.setTimingConfig(new_config)

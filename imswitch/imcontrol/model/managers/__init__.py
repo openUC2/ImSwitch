@@ -1,5 +1,5 @@
 import warnings
-# TODO: Import managers dynamically - similar to the controllers - to save time 
+# TODO: Import managers dynamically - similar to the controllers - to save time
 from .AutofocusManager import AutofocusManager
 from .FOVLockManager import FOVLockManager
 from .DetectorsManager import DetectorsManager, NoDetectorsError

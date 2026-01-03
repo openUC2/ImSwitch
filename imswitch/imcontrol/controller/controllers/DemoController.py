@@ -167,10 +167,10 @@ class DemoController(ImConWidgetController):
         self._initializeHardware()
 
         self._logger.info("DemoController initialized")
-        
+
     def _initializeHardware(self):
         """Initialize hardware managers"""
-        
+
         try:
             # Get stage/positioner
             self._initializeStages()
@@ -243,7 +243,7 @@ class DemoController(ImConWidgetController):
         center_pos = self._getCurrentPosition()
         self.start_position = center_pos.copy()
         self._logger.info(f"Using current position as center: {center_pos}")
-        
+
         positions = []
 
         if self.params.scanningScheme == "random":
@@ -264,23 +264,23 @@ class DemoController(ImConWidgetController):
     def _generateGridPositions(self, center_pos: List[float]) -> List[List[float]]:
         """Generate grid positions around center position"""
         positions = []
-        
+
         # Calculate step sizes
         x_step = (2 * self.params.maxRangeX) / max(1, self.params.gridColumns - 1)
         y_step = (2 * self.params.maxRangeY) / max(1, self.params.gridRows - 1)
-        
+
         # Generate grid centered around current position
         start_x = center_pos[0] - self.params.maxRangeX
         start_y = center_pos[1] - self.params.maxRangeY
-        
+
         grid_coords = raster(
             start_x, start_y,
             x_step, y_step,
             self.params.gridRows, self.params.gridColumns
         )
-        
+
         return grid_coords
-        
+
     def _generateSpiralPositions(self, center_pos: List[float]) -> List[List[float]]:
         """Generate spiral positions around center position"""
         positions = []
@@ -289,7 +289,7 @@ class DemoController(ImConWidgetController):
 
         # Start at center
         positions.append([center_x, center_y])
-        
+
         # Generate spiral pattern
         for shell in range(1, self.params.spiralShells + 1):
             shell_radius = shell * max_radius / self.params.spiralShells
@@ -435,7 +435,7 @@ class DemoController(ImConWidgetController):
                     self._logger.info(f"Returned to start position: {self.start_position}")
             except Exception as e:
                 self._logger.error(f"Error returning to start position: {e}")
-                
+
             # Turn off illumination
             self._turnOffIllumination()
             self.isRunning = False
@@ -502,8 +502,8 @@ class DemoController(ImConWidgetController):
 
         try:
             self.shouldStop = True
-            
-            # immediately send stop to motors 
+
+            # immediately send stop to motors
             if self.stages:
                 self.stages.stopAll()
 

@@ -17,7 +17,6 @@ trying out various image viewers designed for scientific imaging such as ThorCam
 """
 
 import os
-import sys
 import pathlib
 
 
@@ -33,7 +32,6 @@ def configure_path():
 
 configure_path()
 
-import os
 import tifffile
 
 from thorlabs_tsi_sdk.tl_camera import TLCameraSDK

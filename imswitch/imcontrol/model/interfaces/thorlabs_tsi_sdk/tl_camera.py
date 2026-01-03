@@ -5,7 +5,7 @@ tl_camera.py
 
 from ctypes import cdll, create_string_buffer, POINTER, CFUNCTYPE, c_int, c_ushort, c_void_p, c_char_p, c_uint, \
     c_char, c_double, c_bool, c_float, c_longlong
-from typing import Callable, Any, Optional, NamedTuple, List
+from typing import Any, NamedTuple
 from traceback import format_exception
 import logging
 import platform
@@ -17,7 +17,7 @@ import os
 import numpy as np
 
 from .tl_camera_enums import EEP_STATUS, DATA_RATE, SENSOR_TYPE, OPERATION_MODE, COMMUNICATION_INTERFACE, \
-    USB_PORT_TYPE, TRIGGER_POLARITY, TAPS
+    USB_PORT_TYPE, TRIGGER_POLARITY
 from .tl_color_enums import FILTER_ARRAY_PHASE
 from .tl_polarization_enums import POLAR_PHASE
 

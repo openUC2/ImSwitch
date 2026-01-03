@@ -4,7 +4,6 @@ import numpy as np
 import logging
 logging.basicConfig(level=logging.DEBUG)
 from .PositionerManager import PositionerManager
-from ..detectors.DetectorManager import DetectorNumberParameter
 
 try:
     from imswitch.imcontrol.model.interfaces.SmarACT import *

@@ -1,6 +1,5 @@
 from imswitch.imcommon.model import initLogger
 from .LaserManager import LaserManager
-import numpy as np
 
 class VirtualLaserManager(LaserManager):
     """ LaserManager for controlling LEDs and LAsers connected to an

@@ -3,7 +3,6 @@ import pyqtgraph as pg
 from qtpy import QtWidgets
 
 from imswitch.imcontrol.view import guitools as guitools
-from .basewidgets import Widget
 from .basewidgets import NapariHybridWidget
 
 class AutofocusWidget(NapariHybridWidget):

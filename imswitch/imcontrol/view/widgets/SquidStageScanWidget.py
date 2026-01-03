@@ -1,7 +1,5 @@
-import pyqtgraph as pg
 from qtpy import QtCore, QtWidgets
 
-from imswitch.imcommon.view.guitools import pyqtgraphtools
 from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
 
@@ -109,7 +107,7 @@ class SquidStageScanWidget(NapariHybridWidget):
         self.labelCurrentX.setText(f'Current Pos. (Y) {position} [µm]')
 
     def updateRotationSpeed(self, speed):
-        self.labelRotationSpeed.setText(f'Speed Rotation {speed} [stp\s]')
+        self.labelRotationSpeed.setText(rf'Speed Rotation {speed} [stp\s]')
 
     def getPixelsize(self):
         self.pixelsize=self.editPixelsize.text()

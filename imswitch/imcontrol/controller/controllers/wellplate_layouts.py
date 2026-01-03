@@ -2,7 +2,7 @@
 Wellplate layout definitions and generator functions.
 Provides pre-defined wellplate layouts and utilities to generate custom layouts.
 """
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -68,16 +68,16 @@ def generate_wellplate_layout(
         WellplateLayout object
     """
     wells = []
-    
+
     # Standard row naming: A, B, C, ...
     row_names = [chr(65 + i) for i in range(rows)]  # A=65 in ASCII
-    
+
     for row in range(rows):
         for col in range(cols):
             well_id = f"{row_names[row]}{col + 1}"
             well_x = offset_x + col * well_spacing_x
             well_y = offset_y + row * well_spacing_y
-            
+
             well = WellDefinition(
                 id=well_id,
                 name=well_id,
@@ -91,7 +91,7 @@ def generate_wellplate_layout(
                 col=col
             )
             wells.append(well)
-    
+
     return WellplateLayout(
         name=name,
         description=description,
@@ -109,7 +109,7 @@ def generate_wellplate_layout(
 def get_predefined_layouts() -> Dict[str, WellplateLayout]:
     """Get dictionary of pre-defined wellplate layouts"""
     layouts = {}
-    
+
     # 96-well plate (standard SBS format)
     # 9mm spacing, 6.4mm diameter wells
     layouts["96-well-standard"] = generate_wellplate_layout(
@@ -124,7 +124,7 @@ def get_predefined_layouts() -> Dict[str, WellplateLayout]:
         offset_x=0,
         offset_y=0
     )
-    
+
     # 384-well plate (standard SBS format)
     # 4.5mm spacing, 3.6mm diameter wells
     layouts["384-well-standard"] = generate_wellplate_layout(
@@ -139,7 +139,7 @@ def get_predefined_layouts() -> Dict[str, WellplateLayout]:
         offset_x=0,
         offset_y=0
     )
-    
+
     # 24-well plate
     # 19.3mm spacing, 15.6mm diameter wells
     layouts["24-well-standard"] = generate_wellplate_layout(
@@ -154,7 +154,7 @@ def get_predefined_layouts() -> Dict[str, WellplateLayout]:
         offset_x=0,
         offset_y=0
     )
-    
+
     # 6-well plate
     # 39.1mm spacing, 34.8mm diameter wells
     layouts["6-well-standard"] = generate_wellplate_layout(
@@ -169,7 +169,7 @@ def get_predefined_layouts() -> Dict[str, WellplateLayout]:
         offset_x=0,
         offset_y=0
     )
-    
+
     # Custom histology slide layout (4 samples)
     layouts["histology-4x"] = generate_wellplate_layout(
         name="Histology 4x Sample",
@@ -184,7 +184,7 @@ def get_predefined_layouts() -> Dict[str, WellplateLayout]:
         offset_x=0,
         offset_y=0
     )
-    
+
     return layouts
 
 
@@ -200,24 +200,24 @@ def get_layout_by_name(layout_name: str, **params) -> Optional[WellplateLayout]:
         WellplateLayout object or None if not found
     """
     layouts = get_predefined_layouts()
-    
+
     if layout_name == "custom":
         # Generate custom layout from parameters
         required_params = ['rows', 'cols', 'well_spacing_x', 'well_spacing_y', 'well_shape']
         if not all(p in params for p in required_params):
             return None
         return generate_wellplate_layout(**params)
-    
+
     # Get pre-defined layout
     layout = layouts.get(layout_name)
     if not layout:
         return None
-    
+
     # Apply parameter overrides if provided
     if params:
         layout_dict = layout.dict()
         layout_dict.update(params)
-        
+
         # Regenerate wells if offset changed
         if 'offset_x' in params or 'offset_y' in params:
             layout = generate_wellplate_layout(
@@ -236,5 +236,5 @@ def get_layout_by_name(layout_name: str, **params) -> Optional[WellplateLayout]:
             )
         else:
             layout = WellplateLayout(**layout_dict)
-    
+
     return layout

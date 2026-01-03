@@ -1,7 +1,6 @@
 import numpy as np
 
 from .basesignaldesigners import TTLCycleDesigner
-from imswitch.imcommon.model import initLogger
 
 class PointScanTTLCycleDesigner(TTLCycleDesigner):
     """ Line-based TTL cycle designer, for point-scanning applications. Treats

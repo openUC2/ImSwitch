@@ -3,7 +3,6 @@
 import sys
 import threading
 import msvcrt
-import numpy as np
 from ctypes import *
 
 

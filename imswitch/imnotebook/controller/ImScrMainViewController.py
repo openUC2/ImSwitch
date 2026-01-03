@@ -1,5 +1,4 @@
 from .basecontrollers import ImScrWidgetController
-from imswitch import IS_HEADLESS
 
 class ImScrMainViewController(ImScrWidgetController):
     """ Connected to ImScrMainView. """

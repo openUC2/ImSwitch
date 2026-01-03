@@ -1,6 +1,5 @@
 from imswitch.imcommon.model import initLogger
 from .LaserManager import LaserManager
-import numpy as np
 
 class ImSwitchRESTLaserManager(LaserManager):
     """ LaserManager for controlling lasers via a REST API.

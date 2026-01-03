@@ -2,7 +2,6 @@ from imswitch.imcommon.model import initLogger, APIExport
 from ..basecontrollers import LiveUpdatedController
 from imswitch.imcommon.framework import Signal
 import numpy as np
-import time
 
 class TriggerAcquisitionController(LiveUpdatedController):
     """

@@ -3,24 +3,17 @@ import os
 import threading
 from datetime import datetime
 import time
-import cv2
-import matplotlib.pyplot as plt
 import numpy as np
-import scipy.ndimage as ndi
-import scipy.signal as signal
 import skimage.transform as transform
-import tifffile as tif
 from pydantic import BaseModel
 from typing import Optional
 
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
+from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
-from skimage.registration import phase_cross_correlation
 from ..basecontrollers import ImConWidgetController
 from imswitch import IS_HEADLESS
 
 import h5py
-import numpy as np
 
 
 

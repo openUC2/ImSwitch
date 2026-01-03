@@ -5,11 +5,8 @@ Created on 2024-01-10
 @author:fdy
 '''
 
-import ctypes
 from ctypes import *
 from TUCam import *
-from enum import Enum
-import time
 
 class Tucam():
     def __init__(self):
@@ -65,7 +62,7 @@ class Tucam():
         TUCAM_Capa_SetValue(self.TUCAMOPEN.hIdxTUCam, TUCAM_IDCAPA.TUIDC_ATLEVELS.value, c_int32(3))
         # 3 Set auto level percentage only support mono camera 10->0.001
         print("Set auto level percentage")
-        TUCAM_Prop_SetValue(self.TUCAMOPEN.hIdxTUCam, TUCAM_IDPROP.TUIDP_ATLEVEL_PERCENTAGE.value, c_double(10.0), 0);
+        TUCAM_Prop_SetValue(self.TUCAMOPEN.hIdxTUCam, TUCAM_IDPROP.TUIDP_ATLEVEL_PERCENTAGE.value, c_double(10.0), 0)
 
         nTimes = 1
         for i in range(nTimes):

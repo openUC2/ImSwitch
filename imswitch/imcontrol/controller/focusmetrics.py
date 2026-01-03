@@ -7,7 +7,7 @@ Provides various focus measurement algorithms including astigmatism-based metric
 
 import time
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 import logging
 
 import numpy as np
@@ -15,7 +15,7 @@ from scipy.optimize import curve_fit
 from scipy.ndimage import gaussian_filter, center_of_mass
 from skimage.feature import peak_local_max
 from scipy.ndimage import gaussian_filter1d
-from scipy.signal import find_peaks, resample
+from scipy.signal import find_peaks
 
 
 

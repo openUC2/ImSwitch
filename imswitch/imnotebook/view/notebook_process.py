@@ -33,7 +33,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
                                     "--port=%s" % port,
                                     "--allow-root",
                                     "--IdentityProvider.token=",
-                                    "--ServerApp.password=",                                    
+                                    "--ServerApp.password=",
                                     "--no-browser",
                                     "--ip=0.0.0.0",
                                     "--config=%s" % configfile,
@@ -49,7 +49,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
                                     "--no-browser",
                                     "--ip=0.0.0.0",
                                     "--config=%s" % configfile,
-                                    "--notebook-dir=%s" % directory, 
+                                    "--notebook-dir=%s" % directory,
                                     ], bufsize=1, stderr=subprocess.PIPE)
 
         print("Starting jupyter with: %s" % " ".join(notebookp.args))

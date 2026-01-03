@@ -12,7 +12,6 @@ import imswitch.imcommon.framework.base as abstract
 import time
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
-from imswitch import __ssl__
 import msgpack  # MessagePack for efficient binary serialization
 
 
@@ -267,7 +266,7 @@ class Signal(psygnal.Signal):
     def connect(self, func: 'Union[Callable, abstract.Signal]') -> None:
         if isinstance(func, abstract.Signal):
             if any([t1 != t2 for t1, t2 in zip(self.types, func.types)]):
-                raise TypeError(f"Source and destination must have the same signature.")
+                raise TypeError("Source and destination must have the same signature.")
             func = func.emit
         super().connect(func)
 

@@ -8,18 +8,17 @@ Created on 2023-12-12
 import ctypes
 from ctypes import *
 from enum import Enum
-import time
 
 #加载SDK动态库
 # 32bit
 #TUSDKdll = OleDLL("./lib/x86/TUCam.dll")
 # 64bit
 # Use relative path from the module's own directory and add DLL dir to PATH
-import os 
+import os
 dll_dir = os.path.join(os.path.dirname(__file__), 'lib', 'x64')
 if dll_dir not in os.environ['PATH']:
     os.environ['PATH'] = dll_dir + os.pathsep + os.environ['PATH']
-    
+
 # Load the DLL - this will work from any working directory
 dll_path = os.path.join(dll_dir, 'TUCam.dll')
 TUSDKdll = OleDLL(dll_path)

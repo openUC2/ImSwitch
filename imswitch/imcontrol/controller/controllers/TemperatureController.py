@@ -1,11 +1,8 @@
 import numpy as np
 import time
 import threading
-import collections
 import csv
 import os
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
-from imswitch.imcontrol.view import guitools
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from datetime import datetime

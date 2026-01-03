@@ -4,10 +4,6 @@ Tests laser control, scanning, recording, and other microscopy-specific function
 """
 import pytest
 import requests
-import time
-import json
-from typing import Dict, List, Any
-from ..api import api_server, base_url
 
 
 def test_laser_controller_endpoints(api_server):
@@ -15,23 +11,23 @@ def test_laser_controller_endpoints(api_server):
     response = api_server.get("/openapi.json")
     assert response.status_code == 200
     spec = response.json()
-    
+
     # Find laser-related endpoints
     paths = spec.get("paths", {})
     laser_endpoints = [p for p in paths.keys() if "Laser" in p or "laser" in p]
-    
+
     if not laser_endpoints:
         pytest.skip("No laser endpoints found in API")
-    
+
     print(f"Found {len(laser_endpoints)} laser endpoints")
-    
+
     # Test laser discovery
     discovery_endpoints = [
         "/LaserController/getLaserNames",
     ]
-    
 
-    
+
+
     for endpoint in discovery_endpoints:
         try:
             response = api_server.get(endpoint)
@@ -54,7 +50,7 @@ def run_laser_control_checks(api_server, lasers):
         first_laser = lasers[0]
     else:
         return
-    
+
     # Test setLaserActive - proper OpenAPI format with GET and query parameters
     active_params = {
         "laserName": first_laser,
@@ -63,7 +59,7 @@ def run_laser_control_checks(api_server, lasers):
     response = api_server.get("/LaserController/setLaserActive", params=active_params)
     if response.status_code == 200:
         print(f"✓ Laser {first_laser} activated successfully")
-        
+
         # Test setLaserValue - set laser power/value
         value_params = {
             "laserName": first_laser,
@@ -72,20 +68,20 @@ def run_laser_control_checks(api_server, lasers):
         value_response = api_server.get("/LaserController/setLaserValue", params=value_params)
         if value_response.status_code == 200:
             print(f"✓ Laser {first_laser} value set to 50")
-            
+
             # Test getLaserValue - verify the value was set
             get_value_params = {"laserName": first_laser}
             get_response = api_server.get("/LaserController/getLaserValue", params=get_value_params)
             if get_response.status_code == 200:
                 current_value = get_response.json()
                 print(f"✓ Current laser value: {current_value}")
-            
+
             # Test getLaserValueRanges - get valid value range
             range_response = api_server.get("/LaserController/getLaserValueRanges", params=get_value_params)
             if range_response.status_code == 200:
                 value_range = range_response.json()
                 print(f"✓ Laser value range: {value_range}")
-        
+
         # Turn laser off
         deactivate_params = {
             "laserName": first_laser,
@@ -94,7 +90,7 @@ def run_laser_control_checks(api_server, lasers):
         deactivate_response = api_server.get("/LaserController/setLaserActive", params=deactivate_params)
         if deactivate_response.status_code == 200:
             print(f"✓ Laser {first_laser} deactivated successfully")
-        
+
     else:
         print(f"? Laser control not available: {response.status_code}")
 
@@ -107,23 +103,23 @@ def test_additional_laser_endpoints(api_server):
     if spec_response.status_code == 200:
         spec = spec_response.json()
         laser_endpoints = [
-            path for path in spec["paths"].keys() 
+            path for path in spec["paths"].keys()
             if "LaserController" in path
         ]
-        
+
         print(f"✓ Found {len(laser_endpoints)} LaserController endpoints:")
         for endpoint in laser_endpoints:
             methods = list(spec["paths"][endpoint].keys())
             print(f"  - {endpoint}: {methods}")
-        
+
         # Verify key endpoints are present
         required_endpoints = [
             "/LaserController/getLaserNames",
-            "/LaserController/setLaserActive", 
+            "/LaserController/setLaserActive",
             "/LaserController/setLaserValue",
             "/LaserController/getLaserValue"
         ]
-        
+
         for required in required_endpoints:
             if required in laser_endpoints:
                 print(f"✓ Required endpoint found: {required}")
@@ -135,7 +131,7 @@ def test_video_streaming(api_server):
     streaming_endpoints = [
         "/RecordingController/video_feeder"
     ]
-    
+
     for endpoint in streaming_endpoints:
         try:
             # Start stream with a strict timeout and streamed response to avoid hangs

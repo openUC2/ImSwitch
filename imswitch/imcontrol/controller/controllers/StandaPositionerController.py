@@ -1,7 +1,5 @@
-from typing import Dict, List
 
 from imswitch.imcommon.model import APIExport
-from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import initLogger
 from imswitch.imcontrol.controller.controllers import PositionerController
 

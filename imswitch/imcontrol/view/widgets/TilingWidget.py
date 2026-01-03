@@ -1,8 +1,7 @@
-from qtpy import QtCore, QtWidgets, QtGui
+from qtpy import QtCore, QtWidgets
 
 from imswitch.imcontrol.view import guitools
 from .basewidgets import Widget
-import os
 
 
 class TilingWidget(Widget):

@@ -1,18 +1,11 @@
 from imswitch.imcommon.model import initLogger
 from .PositionerManager import PositionerManager
-import time
 import numpy as np
 
 MAX_ACCEL = 500000
 PHYS_FACTOR = 1
 gTIMEOUT = 100
 
-from imswitch.imcommon.model import initLogger
-from .PositionerManager import PositionerManager
-import time
-import numpy as np
-from imswitch.imcommon.model import APIExport, generateAPI, initLogger
-import threading
 
 MAX_ACCEL = 500000
 PHYS_FACTOR = 1

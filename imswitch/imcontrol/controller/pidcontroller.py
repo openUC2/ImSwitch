@@ -53,13 +53,13 @@ class PIDController:
         self.integral_limit = float(integral_limit)
         self.output_alpha = float(output_lowpass_alpha)
         self.derivative_alpha = float(derivative_filter_alpha)
-        
+
         # Internal state
         self.integral = 0.0
         self.last_measurement: Optional[float] = None
         self.last_output = 0.0
         self.derivative_filtered = 0.0
-        
+
         logger.debug(f"PID initialized: Kp={kp}, Ki={ki}, Kd={kd}, dt={sample_time}")
 
     def set_parameters(self, kp: float, ki: float) -> None:
@@ -101,35 +101,35 @@ class PIDController:
             Controller output
         """
         measurement = float(measurement)
-        
+
         # Proportional term
         error = self.set_point - measurement
-        
+
         # Integral term with anti-windup
         self.integral += error * self.dt
         self.integral = max(min(self.integral, self.integral_limit), -self.integral_limit)
-        
+
         # Derivative term (on measurement to avoid derivative kick)
         if self.last_measurement is None:
             derivative_raw = 0.0
         else:
             derivative_raw = (measurement - self.last_measurement) / self.dt
-        
+
         # Apply derivative filtering
         self.derivative_filtered = (
             self.derivative_alpha * self.derivative_filtered +
             (1.0 - self.derivative_alpha) * derivative_raw
         )
-        
+
         self.last_measurement = measurement
-        
+
         # Calculate raw output
         output_raw = (
             self.kp * error +
             self.ki * self.integral -
             self.kd * self.derivative_filtered
         )
-        
+
         # Apply output filtering if enabled
         if self.output_alpha > 0.0:
             self.last_output = (
@@ -138,7 +138,7 @@ class PIDController:
             )
         else:
             self.last_output = output_raw
-            
+
         return self.last_output
 
     def reset(self) -> None:

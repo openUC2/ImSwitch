@@ -1,6 +1,5 @@
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import APIExport
-import numpy as np
 
 
 class TilingController(ImConWidgetController):

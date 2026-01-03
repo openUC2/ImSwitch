@@ -6,8 +6,6 @@ import sys
 if not IS_HEADLESS:
     from PyQt5.QtWidgets import QMessageBox
 from .notebook_process import testnotebook, startnotebook, stopnotebook
-import os
-import sys
 
 class LaunchNotebookServer:
 

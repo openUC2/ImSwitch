@@ -17,7 +17,7 @@ detectorInfosBasic = {
                     "image_height": 300
                 }
         },
-        forAcquisition=True, 
+        forAcquisition=True,
         forFocusLock=False,
     )
 }

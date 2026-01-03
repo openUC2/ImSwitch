@@ -1,49 +1,22 @@
-import json
 import os
-import base64
-from fastapi import FastAPI, Response, HTTPException
+from fastapi import HTTPException
 from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
-from imswitch import IS_HEADLESS
-from imswitch.imcommon.model import initLogger, ostools
+from imswitch.imcommon.model import initLogger
 import numpy as np
 import time
 import tifffile
-import threading
-from datetime import datetime
-import cv2
-import numpy as np
-from skimage.io import imsave
-from scipy.ndimage import gaussian_filter
 from collections import deque
-import ast
-import skimage.transform
-import skimage.util
-import skimage
-import datetime
-import numpy as np
-from imswitch.imcommon.model import dirtools, initLogger, APIExport
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
-import time
+from imswitch.imcommon.model import APIExport
+from imswitch.imcommon.framework import Signal
 from ..basecontrollers import LiveUpdatedController
 from pydantic import BaseModel
 from typing import List, Optional, Union
-from PIL import Image
-import io
-from fastapi import Header
-from pydantic import BaseModel
-from typing import List, Optional, Union, Tuple
+from typing import Tuple
 
-from typing import List, Dict, Any, Optional
-import threading
-import json
-import numpy as np
-from pydantic import BaseModel
+from typing import Dict, Any
 from fastapi import Query
-from collections import deque
 from tempfile import TemporaryDirectory
-import os
-from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional
+from pydantic import Field
 import uuid
 
 
@@ -51,13 +24,10 @@ import uuid
 isZARR=True
 
 try:
-    from ashlarUC2 import utils
     IS_ASHLAR_AVAILABLE = True
-except Exception as e:
+except Exception:
     IS_ASHLAR_AVAILABLE = False
 
-from pydantic import BaseModel
-from typing import List, Tuple, Dict
 
 class XYZScanRequest(BaseModel):
     coords: List[Tuple[float, float, float]]
@@ -373,7 +343,6 @@ class WorkflowController(LiveUpdatedController):
         metadata["frame_saved"] = True
 
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
-        import time
         time.sleep(seconds)
 
     def addFrametoFile(self, frame:np.ndarray, context: WorkflowContext, metadata: Dict[str, Any]):
@@ -628,7 +597,7 @@ class WorkflowController(LiveUpdatedController):
                 for illu in illuSources:
                     # Set laser power (arbitrary, could be parameterized)
                     workflowSteps.append(WorkflowStep(
-                        name=f"Set laser power",
+                        name="Set laser power",
                         step_id=str(step_id),
                         main_func=self.set_laser_power,
                         main_params={"power": 10, "channel": illu},
@@ -795,7 +764,7 @@ class WorkflowController(LiveUpdatedController):
                         metadata["illum_index"] = ill_i
 
                     workflowSteps.append(WorkflowStep(
-                        name=f"Update indices",
+                        name="Update indices",
                         main_func=self.dummy_main_func,
                         main_params={},
                         step_id=str(step_id),

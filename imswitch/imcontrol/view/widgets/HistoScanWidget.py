@@ -1,9 +1,8 @@
 import numpy as np
-from qtpy import QtCore, QtWidgets, QtGui, QtWidgets
-from PyQt5.QtGui import QPixmap, QImage
-from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout
-from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QPoint, QRect
-from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor
+from qtpy import QtCore, QtGui, QtWidgets
+from PyQt5.QtWidgets import QLabel
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QRect
+from PyQt5.QtGui import QPainter, QPen, QColor
 from imswitch import IS_HEADLESS
 
 from PyQt5 import QtGui, QtWidgets

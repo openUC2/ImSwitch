@@ -2,45 +2,29 @@ from datetime import datetime
 import time
 from fastapi import HTTPException
 import numpy as np
-import scipy.ndimage as ndi
-import scipy.signal as signal
-import skimage.transform as transform
-import tifffile as tif
 from pydantic import BaseModel
-from typing import Any, List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union
 import os
-import uuid
-import os
-import time
 import threading
-import collections
-import tifffile as tif
-from fastapi.responses import FileResponse
 
 from imswitch.imcommon.framework import Signal
-from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
+from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowContext, WorkflowsManager
+from imswitch.imcontrol.model.managers.MDASequenceManager import MDASequenceManager
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
-from pydantic import BaseModel
-import numpy as np
-from .wellplate_layouts import get_predefined_layouts, get_layout_by_name, WellplateLayout
+from .wellplate_layouts import get_predefined_layouts, get_layout_by_name
 
 try:
-    from ashlarUC2 import utils
-    from ashlarUC2.scripts.ashlar import process_images
     IS_ASHLAR_AVAILABLE = True
-except Exception as e:
+except Exception:
     IS_ASHLAR_AVAILABLE = False
 
 # Attempt to use OME-Zarr
 try:
-    from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
-    from imswitch.imcontrol.controller.controllers.experiment_controller.single_multiscale_zarr_data_source import SingleMultiscaleZarrWriter
     IS_OMEZARR_AVAILABLE = True # TODO: True
-except Exception as e:
+except Exception:
     IS_OMEZARR_AVAILABLE = False
 
-from imswitch.imcontrol.controller.controllers.experiment_controller.OmeTiffStitcher import OmeTiffStitcher
 from imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
 from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ExperimentPerformanceMode,
@@ -48,9 +32,7 @@ from imswitch.imcontrol.controller.controllers.experiment_controller import (
     OMEFileStorePaths
 )
 
-from pydantic import BaseModel, Field
-from typing import List, Optional, Tuple, Dict
-import uuid
+from pydantic import Field
 
 # -----------------------------------------------------------
 # Reuse the existing sub-models:
@@ -180,9 +162,34 @@ class Experiment(BaseModel):
         return config
 
 
+# MDA-related models for useq-schema integration
+class MDAChannelConfig(BaseModel):
+    """Configuration for an MDA channel."""
+    name: str = Field(..., description="Channel name/identifier")
+    exposure: Optional[float] = Field(100.0, description="Exposure time in milliseconds")
+    power: Optional[float] = Field(100.0, description="Laser/illumination power")
+
+class MDASequenceRequest(BaseModel):
+    """Request to start an MDA experiment using useq-schema."""
+    channels: List[MDAChannelConfig] = Field(..., description="List of channel configurations")
+    z_range: Optional[float] = Field(None, description="Total Z range to scan (µm)")
+    z_step: Optional[float] = Field(None, description="Z step size (µm)")
+    time_points: int = Field(1, description="Number of time points")
+    time_interval: float = Field(1.0, description="Interval between time points (seconds)")
+    save_directory: Optional[str] = Field(None, description="Directory to save data")
+    experiment_name: str = Field("MDA_Experiment", description="Name of the experiment")
+
+class MDASequenceInfo(BaseModel):
+    """Information about an MDA sequence."""
+    total_events: int
+    channels: List[str]
+    z_positions: List[float]
+    time_points: List[int]
+    axis_order: tuple
+    estimated_duration_minutes: float
+
 class ExperimentWorkflowParams(BaseModel):
     """Parameters for the experiment workflow."""
-
 
     # Illumination parameters
     illuSources: List[str] = Field(default_factory=list, description="List of illumination sources")
@@ -229,11 +236,12 @@ class ExperimentController(ImConWidgetController):
         # initialize variables
         self.tWait = 0.1
         self.workflow_manager = WorkflowsManager()
+        self.mda_manager = MDASequenceManager()
 
         # set default values
-        self.SPEED_Y_default = 20000
-        self.SPEED_X_default = 20000
-        self.SPEED_Z_default = 10000
+        self.SPEED_Y = self.SPEED_Y_default = 20000
+        self.SPEED_X = self.SPEED_X_default = 20000
+        self.SPEED_Z = self.SPEED_Z_default = 10000
         self.ACCELERATION = 1000000
 
         # select detectors
@@ -686,7 +694,7 @@ class ExperimentController(ImConWidgetController):
         autofocusMode = getattr(p, 'autoFocusMode', 'software')  # Default to software if not specified
         autofocus_target_focus_setpoint = getattr(p, 'autofocus_target_focus_setpoint', None)
         autofocus_max_attempts = getattr(p, 'autofocus_max_attempts', 2)
-        
+
         # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
         if type(gains) is not List and type(gains) is not list: gains = [gains]
         if type(exposures) is not List and type(exposures) is not list: exposures = [exposures]
@@ -766,7 +774,7 @@ class ExperimentController(ImConWidgetController):
 
             # Get the initial Z position at the start of each timepoint
             initial_z_position = self.mStage.getPosition()["Z"]
-            
+
             for t in range(nTimes):
                 experiment_params = {
                     'mExperiment': mExperiment,
@@ -927,7 +935,7 @@ class ExperimentController(ImConWidgetController):
                 target_focus_setpoint=target_focus_setpoint,
                 move_to_focus=True,
                 max_attempts=max_attempts,
-                threshold_um=0.5, 
+                threshold_um=0.5,
                 in_background=False
             )
             if result.get('success', False):
@@ -948,8 +956,8 @@ class ExperimentController(ImConWidgetController):
             return None
 
     def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0,
-                  illuminationChannel: str="", mode: str="software", 
-                  max_attempts: int=2, 
+                  illuminationChannel: str="", mode: str="software",
+                  max_attempts: int=2,
                   target_focus_setpoint: Optional[float] = None) -> Optional[float]:
         """Perform autofocus using either hardware or software method.
 
@@ -970,7 +978,7 @@ class ExperimentController(ImConWidgetController):
 
         # Route to appropriate autofocus method
         if mode == "hardware":
-            return self.autofocus_hardware(target_focus_setpoint=target_focus_setpoint, 
+            return self.autofocus_hardware(target_focus_setpoint=target_focus_setpoint,
                                            max_attempts=max_attempts,
                                            illuminationChannel=illuminationChannel)
         else:
@@ -1033,7 +1041,7 @@ class ExperimentController(ImConWidgetController):
                 twoStage=False
             )
 
-            self._logger.debug(f"Autofocus completed successfully")
+            self._logger.debug("Autofocus completed successfully")
             return result
 
         except Exception as e:
@@ -1224,15 +1232,27 @@ class ExperimentController(ImConWidgetController):
         #if posY and posX is None:
         self.mStage.move(value=(posX, posY), speed=(self.SPEED_X_default, self.SPEED_Y_default), axis="XY", is_absolute=not relative, is_blocking=True, acceleration=self.ACCELERATION)
         #newPosition = self.mStage.getPosition()
-        self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
-        return (posX, posY)
+        #self._commChannel.sigUpdateMotorPosition.emit([posX, posY])
+        return (posX, posY) # TODO: Need to adjust in case of relative move
 
     def move_stage_z(self, posZ: float, relative: bool = False, maxSpeedZ=5000):
         self._logger.info(f"Moving stage to Z={posZ}")
         self.mStage.move(value=posZ, speed=np.min((self.SPEED_Z, maxSpeedZ)), axis="Z", is_absolute=not relative, is_blocking=True)
-        newPosition = self.mStage.getPosition()
-        self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
-        return newPosition["Z"]
+        #newPosition = self.mStage.getPosition()
+        #self._commChannel.sigUpdateMotorPosition.emit([newPosition["Z"]])
+        return posZ # TODO: Need to adjust in case of relative move
+
+    def set_detector_parameter(self, parameter: str, value: Any):
+        """Set a detector parameter."""
+        try:
+            if hasattr(self.mDetector, 'setParameter'):
+                self.mDetector.setParameter(parameter, value)
+            elif hasattr(self.mDetector, '_camera') and hasattr(self.mDetector._camera, 'setParameter'):
+                self.mDetector._camera.setParameter(parameter, value)
+            else:
+                self._logger.warning(f"Cannot set detector parameter {parameter} - method not available")
+        except Exception as e:
+            self._logger.error(f"Error setting detector parameter {parameter} to {value}: {e}")
 
 
     @APIExport()
@@ -1415,7 +1435,7 @@ class ExperimentController(ImConWidgetController):
         # 2. start writer thread ----------------------------------------------
         nLastTime = time.time()
         for iTime in range(nTimes):
-            saveOMEZarr = True;
+            saveOMEZarr = True
             nTimePoints = 1  # For now, we assume a single time point
             nZPlanes = 1  # For now, we assume a single Z plane
 
@@ -1677,6 +1697,266 @@ class ExperimentController(ImConWidgetController):
             return self.fastStageScanFilePath
         else:
             return "No fast stage scan available yet"
+
+    # MDA (Multi-Dimensional Acquisition) Methods using useq-schema
+
+    @APIExport()
+    def get_mda_capabilities(self) -> Dict[str, Any]:
+        """Get information about MDA capabilities and available channels."""
+        return {
+            "mda_available": self.mda_manager.is_available(),
+            "available_channels": self.allIlluNames,
+            "available_detectors": self._master.detectorsManager.getAllDeviceNames(),
+            "stage_available": self.mStage is not None
+        }
+
+    @APIExport(requestType="POST")
+    def start_mda_experiment(self, request: MDASequenceRequest) -> Dict[str, Any]:
+        """
+        Start an MDA experiment using useq-schema.
+        
+        This provides a modern, standardized interface for multi-dimensional 
+        acquisition experiments.
+        """
+        if not self.mda_manager.is_available():
+            raise HTTPException(status_code=400, detail="useq-schema not available")
+
+        # Check if another workflow is running
+        if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
+            raise HTTPException(status_code=400, detail="Another workflow is already running.")
+
+        try:
+            # Convert channel configurations to useq format
+            channel_names = [ch.name for ch in request.channels]
+            exposure_times = {ch.name: ch.exposure for ch in request.channels}
+
+            # Create MDA sequence
+            sequence = self.mda_manager.create_simple_sequence(
+                channels=channel_names,
+                z_range=request.z_range,
+                z_step=request.z_step,
+                time_points=request.time_points,
+                time_interval=request.time_interval,
+                exposure_times=exposure_times
+            )
+
+            # Get sequence info for logging/validation
+            seq_info = self.mda_manager.get_sequence_info(sequence)
+            self._logger.info(f"Starting MDA experiment: {seq_info}")
+
+            # Start the detector if not already running
+            if not self.mDetector._running:
+                self.mDetector.startAcquisition()
+
+            # Create controller function mapping for MDA conversion
+            controller_functions = {
+                'move_stage_xy': self.move_stage_xy,
+                'move_stage_z': self.move_stage_z,
+                'set_laser_power': self.set_laser_power,
+                'set_detector_parameter': self.set_detector_parameter,
+                'snap_image': self.snap_image_with_metadata
+            }
+
+            # Convert MDA sequence to workflow steps
+            workflow_steps = self.mda_manager.convert_sequence_to_workflow_steps(
+                sequence, controller_functions
+            )
+
+            # Setup data directory
+            if request.save_directory:
+                dirPath = request.save_directory
+            else:
+                timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                drivePath = dirtools.UserFileDirs.Data
+                dirPath = os.path.join(drivePath, 'MDAExperiments', timeStamp)
+
+            if not os.path.exists(dirPath):
+                os.makedirs(dirPath)
+
+            # Create workflow progress handler
+            def sendProgress(payload):
+                self.sigExperimentWorkflowUpdate.emit()
+
+            # Create workflow and context
+            from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext
+            wf = Workflow(workflow_steps, self.workflow_manager)
+            context = WorkflowContext()
+
+            # Set metadata
+            context.set_metadata("experiment_name", request.experiment_name)
+            context.set_metadata("sequence_info", seq_info)
+            context.set_metadata("save_directory", dirPath)
+            context.set_metadata("channels", channel_names)
+            context.set_metadata("experiment_start_time", time.time())
+
+            context.on("progress", sendProgress)
+
+            # Start the workflow
+            result = self.workflow_manager.start_workflow(wf, context)
+
+            return {
+                "status": result["status"],
+                "sequence_info": seq_info,
+                "save_directory": dirPath,
+                "estimated_duration_minutes": seq_info["estimated_duration_minutes"]
+            }
+
+        except Exception as e:
+            self._logger.error(f"Error starting MDA experiment: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error starting MDA experiment: {str(e)}")
+
+    @APIExport(requestType="POST")
+    def get_mda_sequence_info(self, request: MDASequenceRequest) -> MDASequenceInfo:
+        """Get information about an MDA sequence without starting it."""
+        if not self.mda_manager.is_available():
+            raise HTTPException(status_code=400, detail="useq-schema not available")
+
+        try:
+            # Convert channel configurations to useq format
+            channel_names = [ch.name for ch in request.channels]
+            exposure_times = {ch.name: ch.exposure for ch in request.channels}
+
+            # Create MDA sequence
+            sequence = self.mda_manager.create_simple_sequence(
+                channels=channel_names,
+                z_range=request.z_range,
+                z_step=request.z_step,
+                time_points=request.time_points,
+                time_interval=request.time_interval,
+                exposure_times=exposure_times
+            )
+
+            # Get sequence info
+            info = self.mda_manager.get_sequence_info(sequence)
+            return MDASequenceInfo(**info)
+
+        except Exception as e:
+            self._logger.error(f"Error getting MDA sequence info: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error getting MDA sequence info: {str(e)}")
+
+    @APIExport(requestType="POST")
+    def run_native_mda_sequence(self, sequence_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a native useq-schema MDASequence from JSON.
+        
+        This endpoint accepts a native useq.MDASequence serialized as JSON (dict),
+        following the EXACT pattern from pymmcore-plus and raman-mda-engine.
+        
+        Args:
+            sequence_dict: Native useq.MDASequence serialized to dict/JSON with fields:
+                - metadata: Dict with arbitrary experiment metadata
+                - stage_positions: List of (x, y, z) tuples or AbsolutePosition dicts
+                - grid_plan: Dict with GridRowsColumns configuration
+                - channels: List of Channel dicts with 'config' and optional 'exposure'
+                - time_plan: Dict with 'interval' and 'loops' for TIntervalLoops
+                - z_plan: Dict with 'range' and 'step' for ZRangeAround
+                - autofocus_plan: Dict with autofocus configuration
+                - axis_order: String like "tpcz" defining acquisition order
+                - keep_shutter_open_across: Tuple of axes to keep shutter open
+        
+        Returns:
+            Dict with execution status and sequence information
+            
+        Example request body:
+            {
+                "metadata": {"experiment": "test", "user": "researcher"},
+                "stage_positions": [[100.0, 100.0, 30.0], [200.0, 150.0, 35.0]],
+                "channels": [
+                    {"config": "BF", "exposure": 50.0},
+                    {"config": "DAPI", "exposure": 100.0}
+                ],
+                "time_plan": {"interval": 1, "loops": 20},
+                "z_plan": {"range": 4.0, "step": 0.5},
+                "axis_order": "tpcz"
+            }
+        """
+        if not self.mda_manager.is_available():
+            raise HTTPException(status_code=400, detail="useq-schema not available. Install with: pip install useq-schema")
+
+        try:
+            from useq import MDASequence
+
+            # Parse the native useq-schema JSON into an MDASequence object
+            # useq-schema's pydantic models can parse from dict
+            self._logger.info(f"Received native MDA sequence: {sequence_dict.keys()}")
+            sequence = MDASequence(**sequence_dict)
+
+            self._logger.info(f"Parsed MDASequence: {len(list(sequence))} events, axis_order={sequence.axis_order}")
+
+            # Register the MDA manager with ImSwitch hardware
+            if not self.mda_manager._detector_manager:
+                self.mda_manager.register(
+                    detector_manager=self._master.detectorsManager,
+                    positioners_manager=self._master.positionersManager,
+                    lasers_manager=self._master.lasersManager,
+                    autofocus_manager=getattr(self._master, 'autofocusManager', None)
+                )
+                self._logger.info("Registered MDA engine with ImSwitch hardware managers")
+
+            # Get sequence info
+            seq_info = self.mda_manager.get_sequence_info(sequence)
+            self._logger.info(f"Sequence info: {seq_info}")
+
+            # Setup data directory
+            metadata = sequence.metadata if hasattr(sequence, 'metadata') and sequence.metadata else {}
+            experiment_name = metadata.get('experiment_name', 'MDA_Experiment')
+
+            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            drivePath = dirtools.UserFileDirs.Data
+            dirPath = os.path.join(drivePath, 'NativeMDA', experiment_name, timeStamp)
+
+            if not os.path.exists(dirPath):
+                os.makedirs(dirPath)
+                self._logger.info(f"Created output directory: {dirPath}")
+
+            # Run the MDA sequence using the native engine
+            # This runs in a background thread to not block the API
+            import threading
+
+            def run_sequence():
+                try:
+                    self._logger.info("Starting native MDA sequence execution")
+                    self.mda_manager.run_mda(sequence, output_path=dirPath)
+                    self._logger.info("Native MDA sequence completed successfully")
+                except Exception as e:
+                    self._logger.error(f"Error during MDA execution: {str(e)}", exc_info=True)
+
+            # Start execution thread
+            thread = threading.Thread(target=run_sequence, daemon=False)
+            thread.start()
+
+            return {
+                "status": "started",
+                "sequence_info": seq_info,
+                "save_directory": dirPath,
+                "estimated_duration_minutes": seq_info["estimated_duration_minutes"],
+                "message": "Native MDA sequence started in background thread"
+            }
+
+        except Exception as e:
+            self._logger.error(f"Error starting native MDA sequence: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Error starting native MDA sequence: {str(e)}")
+
+    def snap_image_with_metadata(self, metadata: Dict[str, Any]) -> np.ndarray:
+        """Snap an image with MDA metadata."""
+        # This is a wrapper around the existing snap functionality
+        # that includes MDA-specific metadata handling
+        image = self.mDetector.getLatestFrame()
+
+        # Store metadata with the image (implementation depends on storage backend)
+        # For now, just log it
+        self._logger.debug(f"Captured MDA image with metadata: {metadata}")
+
+        # Emit signal for live view update
+        self.sigExperimentImageUpdate.emit(
+            self.mDetector.name,
+            image,
+            False,  # not init
+            [1, 1, 1, 1],  # scale
+            True  # is current detector
+        )
+
+        return image
 
 
 # Copyright (C) 2025 Benedict Diederich

@@ -3,7 +3,6 @@ from .PositionerManager import PositionerManager
 from thorlabs_apt_device.devices.bsc import BSC
 from serial.serialutil import SerialException
 import numpy as np
-import time
 
 STEPS_PER_REV = 409600
 REV_PER_MM = 2

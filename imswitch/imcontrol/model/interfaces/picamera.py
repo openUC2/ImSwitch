@@ -1,7 +1,4 @@
-import numpy as np
-import time
 from imswitch.imcommon.model import initLogger
-import socket
 from imswitch.imcontrol.model.interfaces.restapicamera import RestPiCamera
 
 class CameraPiCam:

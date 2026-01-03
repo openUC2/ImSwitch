@@ -5,11 +5,8 @@ Created on 2024-01-11
 @author:fdy
 '''
 
-import ctypes
 from ctypes import *
 from TUCam import *
-from enum import Enum
-import time
 
 class Tucam():
     def __init__(self):
@@ -64,11 +61,11 @@ class Tucam():
 
         # Set GPS parameter
         # GPS Start Time dwTime = (m_nHour << 16) + (m_nMin << 8) + m_nSec;
-        TUCAM_Prop_SetValue(self.TUCAMOPEN.hIdxTUCam, TUCAM_IDPROP.TUIDP_START_TIME.value, 0);
+        TUCAM_Prop_SetValue(self.TUCAMOPEN.hIdxTUCam, TUCAM_IDPROP.TUIDP_START_TIME.value, 0)
         # GPS Frame Number
-        TUCAM_Prop_SetValue(self.TUCAMOPEN.hIdxTUCam, TUCAM_IDPROP.TUIDP_FRAME_NUMBER.value, 1);
+        TUCAM_Prop_SetValue(self.TUCAMOPEN.hIdxTUCam, TUCAM_IDPROP.TUIDP_FRAME_NUMBER.value, 1)
         # GPS Interval Time
-        TUCAM_Prop_SetValue(self.TUCAMOPEN.hIdxTUCam, TUCAM_IDPROP.TUIDP_INTERVAL_TIME.value, 1);
+        TUCAM_Prop_SetValue(self.TUCAMOPEN.hIdxTUCam, TUCAM_IDPROP.TUIDP_INTERVAL_TIME.value, 1)
 
         # Get GPS parameter
         valinfo =  TUCAM_VALUE_INFO()

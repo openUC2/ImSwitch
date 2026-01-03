@@ -2,7 +2,6 @@ import platform
 import numpy as np
 import os
 import sys
-import platform
 import tempfile
 import re
 import importlib
@@ -167,7 +166,7 @@ class StandaMotor():
             global pyximc
             pyximc = importlib.__import__("pyximc", globals=globals(), locals=locals(), fromlist=[], level=0)
             self._imported = True
-        except ImportError as err:
+        except ImportError:
             self._imported = False
             self.__logger.warning('pyximc library import failed, check lib location in setup json file.')
         except OSError as err:

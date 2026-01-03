@@ -12,7 +12,7 @@ from .ome_writer import OMEWriter, OMEWriterConfig
 
 __all__ = [
     'ExperimentModeBase',
-    'ExperimentPerformanceMode', 
+    'ExperimentPerformanceMode',
     'ExperimentNormalMode',
     'OMEFileStorePaths',
     'OMEWriter',

@@ -1,25 +1,20 @@
-import json
 import os
 import threading
 from imswitch import IS_HEADLESS
-import numpy as np
 import datetime
 from imswitch.imcommon.model import APIExport, initLogger, dirtools, ostools
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
-from imswitch.imcontrol.model import configfiletools
 import tifffile as tif
-from imswitch.imcontrol.model import Options
-from imswitch.imcontrol.view.guitools import ViewSetupInfo
-import json
-import os
 import tempfile
-import threading
 import requests
 import shutil
 from pathlib import Path
 from serial.tools import list_ports
 import socket
+import sys
+import subprocess
+import time
 
 try:
     import esptool
@@ -45,6 +40,7 @@ class UC2ConfigController(ImConWidgetController):
     sigUC2SerialWriteMessage = Signal(str)
     sigUC2SerialIsConnected = Signal(bool)
     sigOTAStatusUpdate = Signal(object)  # Emits OTA status updates
+    sigUSBFlashStatusUpdate = Signal(object)  # Emits USB flash status updates
 
 
     def __init__(self, *args, **kwargs):
@@ -54,10 +50,14 @@ class UC2ConfigController(ImConWidgetController):
         # OTA update tracking
         self._ota_status = {}  # Dictionary to track OTA status by CAN ID
         self._ota_lock = threading.Lock()
-        self._firmware_server_url = "http://localhost:9000"  # Default firmware server URL
+        self._firmware_server_url = "http://localhost/firmware"  # Firmware server URL (must end with /)
         self._firmware_cache_dir = Path(tempfile.gettempdir()) / "uc2_ota_firmware_cache"
         self._firmware_cache_dir.mkdir(parents=True, exist_ok=True)
-        
+
+        # Prevent concurrent flashing attempts
+        self._usb_flash_lock = threading.Lock()
+
+
         # WiFi credentials for OTA (can be overridden via API)
         self._ota_wifi_ssid = socket.gethostname().split(".local")[0]
         self._ota_wifi_password = "youseetoo" # this is the default password for forklifted UC2 firmwares
@@ -71,10 +71,10 @@ class UC2ConfigController(ImConWidgetController):
         #
         # register the callback to take a snapshot triggered by the ESP32
         self.registerCaptureCallback()
-        
+
         # register OTA callback
         self.registerOTACallback()
-        
+
         # register CAN callback
         self.registerCANCallback()
 
@@ -102,6 +102,31 @@ class UC2ConfigController(ImConWidgetController):
         self._widget.closeConnectionButton.clicked.connect(self.closeConnection)
         self._widget.btpairingButton.clicked.connect(self.btpairing)
         self._widget.stopCommunicationButton.clicked.connect(self.interruptSerialCommunication)
+
+    def _get_can_id_firmware_mapping(self):
+        """
+        Centralized CAN ID to firmware filename mapping.
+        
+        This mapping is used by both firmware download and listing operations
+        to ensure consistent firmware assignment across the system.
+        
+        :return: Dictionary mapping CAN IDs to firmware filenames
+        """
+        return {
+            1: "esp32_UC2_3_CAN_HAT_Master.bin",  # Master firmware (USB connected, use esptool)
+            10: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor A
+            11: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor X
+            12: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor Y
+            13: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor Z
+            14: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Additional motor
+            15: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Additional motor
+            20: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # Laser 0
+            21: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # Laser 1
+            22: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # Laser 2
+            30: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # LED 0
+            31: "esp32_seeed_xiao_esp32s3_can_slave_illumination.bin",  # LED 1
+            40: "esp32_seeed_xiao_esp32s3_can_slave_galvo.bin",  # Galvo mirror
+        }
 
     def processSerialWriteMessage(self, message):
         self.sigUC2SerialWriteMessage.emit(message)
@@ -164,26 +189,34 @@ class UC2ConfigController(ImConWidgetController):
                 - success: True if status == 0
             """
             can_id = ota_response.get("canId")
-            
+
             # Update internal status tracking
             with self._ota_lock:
                 if can_id not in self._ota_status:
                     self._ota_status[can_id] = {}
-                
+
                 self._ota_status[can_id].update({
+                    "can_id": can_id,  # Ensure can_id is always in the status
                     "status": ota_response.get("status"),
                     "statusMsg": ota_response.get("statusMsg"),
                     "ip": ota_response.get("ip"),
                     "hostname": ota_response.get("hostname"),
                     "success": ota_response.get("success"),
                     "timestamp": datetime.datetime.now().isoformat(),
-                    "upload_status": "pending" if ota_response.get("success") else "failed"
+                    "upload_status": "wifi_connected" if ota_response.get("success") else "wifi_failed",
+                    "message": f"Device {can_id} connected to WiFi at {ota_response.get('ip')}" if ota_response.get("success") else f"WiFi connection failed: {ota_response.get('statusMsg')}"
                 })
-            
+
+                # Get the current status dict for emission
+                current_status = self._ota_status[can_id].copy()
+
             # Log the status
             if ota_response.get("success"):
-                self.__logger.info(f"Device {can_id} ready for OTA at {ota_response.get('ip')}")
-                
+                self.__logger.info(f"✅ Device {can_id} ready for OTA at {ota_response.get('ip')}")
+
+                # Emit WiFi connection success to frontend BEFORE starting upload
+                self.sigOTAStatusUpdate.emit(current_status)
+
                 # Trigger firmware upload if we have a firmware server configured
                 if self._firmware_server_url:
                     threading.Thread(
@@ -191,12 +224,17 @@ class UC2ConfigController(ImConWidgetController):
                         args=(can_id, ota_response.get("ip")),
                         daemon=True
                     ).start()
+                else:
+                    # No firmware server configured, mark as ready for manual upload
+                    with self._ota_lock:
+                        self._ota_status[can_id]["upload_status"] = "ready_for_upload"
+                        self._ota_status[can_id]["message"] = f"Device {can_id} ready for firmware upload (no server configured)"
+                    self.sigOTAStatusUpdate.emit(self._ota_status[can_id])
             else:
                 self.__logger.error(f"❌ OTA setup failed for device {can_id}: {ota_response.get('statusMsg')}")
-            
-            # Emit signal for external listeners
-            self.sigOTAStatusUpdate.emit(ota_response)
-        
+                # Emit failure status to frontend
+                self.sigOTAStatusUpdate.emit(current_status)
+
         try:
             # Register callback with UC2 client's canota module
             if hasattr(self._master.UC2ConfigManager, "ESP32") and hasattr(self._master.UC2ConfigManager.ESP32, "canota"):
@@ -206,7 +244,7 @@ class UC2ConfigController(ImConWidgetController):
                 self.__logger.warning("UC2 ESP32 client does not have canota module")
         except Exception as e:
             self.__logger.error(f"Could not register OTA callback: {e}")
-    
+
     def registerCANCallback(self):
         """Register callback for CAN device scan updates."""
         def can_scan_callback(scan_results):
@@ -225,13 +263,13 @@ class UC2ConfigController(ImConWidgetController):
                     self.__logger.debug(f"CAN Device: ID={device.get('canId')}, "
                                       f"Type={device.get('deviceTypeStr')}, "
                                       f"Status={device.get('statusStr')}")
-                
+
                 # Emit signal to update GUI or notify other components
                 self._commChannel.sigUpdateCANDevices.emit(scan_results)
-                
+
             except Exception as e:
                 self.__logger.error(f"Error in CAN scan callback: {e}")
-        
+
         try:
             if hasattr(self._master.UC2ConfigManager, "ESP32") and hasattr(self._master.UC2ConfigManager.ESP32, "can"):
                 self._master.UC2ConfigManager.ESP32.can.register_callback(0, can_scan_callback)
@@ -240,8 +278,8 @@ class UC2ConfigController(ImConWidgetController):
                 self.__logger.warning("ESP32 CAN not available - CAN scan callbacks won't work")
         except Exception as e:
             self.__logger.error(f"Could not register CAN callback: {e}")
-    
-    
+
+
     @APIExport(runOnUIThread=False)
     def scan_canbus(self, timeout:int=5) -> dict:
         """
@@ -282,7 +320,7 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Error scanning CAN bus: {e}")
             return {}
-        
+
     @APIExport(runOnUIThread=False)
     def get_canbus_devices(self, timeout:int=2):
         """
@@ -298,7 +336,19 @@ class UC2ConfigController(ImConWidgetController):
 
             self.__logger.debug("Fetching available CAN devices...")
             response = self._master.UC2ConfigManager.ESP32.can.get_available_devices(timeout=timeout)
-            available_ids = [can_id for can_id in response.get("available", []) if can_id != 0]
+            # the second response should hold the available IDs
+            scan_response = response[-1]
+            ''' example response:
+            {"scan": [
+                {"canId": 10, "deviceType": 0, "status": 1, "deviceTypeStr": "motor", "statusStr": "busy"}, 
+                {"canId": 11, "deviceType": 0, "status": 0, "deviceTypeStr": "motor", "statusStr": "idle"}, 
+                {"canId": 12, "deviceType": 0, "status": 0, "deviceTypeStr": "motor", "statusStr": "idle"}, 
+                {"canId": 13, "deviceType": 0, "status": 1, "deviceTypeStr": "motor", "statusStr": "busy"}, 
+                {"canId": 20, "deviceType": 1, "status": 0, "deviceTypeStr": "laser", "statusStr": "idle"}, 
+                {"canId": 30, "deviceType": 2, "status": 0, "deviceTypeStr": "led", "statusStr": "idle"}], 
+                "qid": 125, "count": 6}
+            '''
+            available_ids = [device["canId"] for device in scan_response.get("scan", [])]
 
             self.__logger.info(f"Available CAN devices: {available_ids}")
             return available_ids
@@ -306,7 +356,7 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Error fetching CAN devices: {e}")
             return []
-        
+
     def _upload_firmware_to_device(self, can_id, ip_address):
         """
         Upload firmware to a device via Arduino OTA.
@@ -320,36 +370,49 @@ class UC2ConfigController(ImConWidgetController):
         """
         try:
             from . import espota
-            
+
             with self._ota_lock:
                 if can_id in self._ota_status:
                     self._ota_status[can_id]["upload_status"] = "downloading"
-            
+
             # Download firmware from server
             firmware_path = self._download_firmware_for_device(can_id)
-            
+
             if not firmware_path:
-                self.__logger.error(f"No firmware found for device {can_id}")
+                error_msg = f"❌ No firmware found for device {can_id}"
+                self.__logger.error(error_msg)
                 with self._ota_lock:
                     if can_id in self._ota_status:
                         self._ota_status[can_id]["upload_status"] = "failed"
                         self._ota_status[can_id]["upload_error"] = "No firmware file found on server"
+                        self._ota_status[can_id]["message"] = error_msg
+                        # Emit error update to frontend
+                        self.sigOTAStatusUpdate.emit(self._ota_status[can_id])
                 return
-            
+
             with self._ota_lock:
                 if can_id in self._ota_status:
                     self._ota_status[can_id]["upload_status"] = "uploading"
-            
+                    self._ota_status[can_id]["upload_progress"] = 0
+                    self._ota_status[can_id]["message"] = f"Starting upload to device {can_id}..."
+                    # Emit upload start to frontend
+                    self.sigOTAStatusUpdate.emit(self._ota_status[can_id])
+
             self.__logger.info(f"Uploading firmware to device {can_id} at {ip_address}: {firmware_path.name}")
-            
+
             # Get firmware size for logging
             firmware_size = os.path.getsize(firmware_path)
             self.__logger.info(f"Firmware size: {firmware_size:,} bytes")
-            
-            # Define progress callback
+
+            # Define progress callback that updates status and emits signal
             def progress_callback(percent):
                 self.__logger.info(f"Upload progress: {percent}%")
-            
+                with self._ota_lock:
+                    if can_id in self._ota_status:
+                        self._ota_status[can_id]["upload_progress"] = percent
+                        # Emit progress update to frontend
+                        self.sigOTAStatusUpdate.emit(self._ota_status[can_id])
+
             # Upload firmware using integrated espota module
             result = espota.upload_ota(
                 esp_ip=ip_address,
@@ -357,130 +420,123 @@ class UC2ConfigController(ImConWidgetController):
                 esp_port=3232,  # Default ESP32 OTA port
                 host_ip="0.0.0.0",
                 password="",  # No password by default
-                timeout=10,
+                timeout=20,
                 show_progress=True,
                 logger=self.__logger,
                 progress_callback=progress_callback
             )
-            
 
             if result == 0:
-                self.__logger.info(f"Firmware uploaded successfully to device {can_id}")
+                success_msg = f"✅ Firmware uploaded successfully to device {can_id}"
+                self.__logger.info(success_msg)
                 with self._ota_lock:
                     if can_id in self._ota_status:
                         self._ota_status[can_id]["upload_status"] = "success"
+                        self._ota_status[can_id]["upload_progress"] = 100
                         self._ota_status[can_id]["upload_timestamp"] = datetime.datetime.now().isoformat()
+                        self._ota_status[can_id]["message"] = success_msg
+                        # Emit final success update to frontend
+                        self.sigOTAStatusUpdate.emit(self._ota_status[can_id])
             else:
-                error_msg = f"OTA upload failed with code {result}"
+                error_msg = f"❌ OTA upload failed with code {result}"
                 self.__logger.error(error_msg)
                 with self._ota_lock:
                     if can_id in self._ota_status:
                         self._ota_status[can_id]["upload_status"] = "failed"
                         self._ota_status[can_id]["upload_error"] = error_msg
-                        
+                        self._ota_status[can_id]["message"] = error_msg
+                        # Emit failure update to frontend
+                        self.sigOTAStatusUpdate.emit(self._ota_status[can_id])
+
         except FileNotFoundError as e:
-            self.__logger.error(f"File not found: {e}")
+            error_msg = f"❌ File not found: {e}"
+            self.__logger.error(error_msg)
             with self._ota_lock:
                 if can_id in self._ota_status:
                     self._ota_status[can_id]["upload_status"] = "failed"
                     self._ota_status[can_id]["upload_error"] = str(e)
-                    
+                    self._ota_status[can_id]["message"] = error_msg
+                    # Emit error update to frontend
+                    self.sigOTAStatusUpdate.emit(self._ota_status[can_id])
+
         except Exception as e:
-            self.__logger.error(f"Error uploading firmware to device {can_id}: {e}")
+            error_msg = f"❌ Error uploading firmware to device {can_id}: {e}"
+            self.__logger.error(error_msg)
             with self._ota_lock:
                 if can_id in self._ota_status:
                     self._ota_status[can_id]["upload_status"] = "failed"
                     self._ota_status[can_id]["upload_error"] = str(e)
-    
-        # we need to send out the final response via socket 
-        self.sigOTAStatusUpdate.emit(self._ota_status.get(can_id, {}))
-        
+                    self._ota_status[can_id]["message"] = error_msg
+                    # Emit error update to frontend
+                    self.sigOTAStatusUpdate.emit(self._ota_status[can_id])
+
     def _download_firmware_for_device(self, can_id):
         """
         Download firmware for a specific CAN ID from the firmware server.
         
-        Queries the server for available firmware matching the pattern id_<CANID>_*.bin
-        and downloads it to a local cache.
+        Queries the server for available firmware using JSON API.
+        Matches firmware based on CAN device type (motor, laser, led, etc.).
         
         :param can_id: CAN ID of the device
         :return: Path to downloaded firmware file or None
         """
         try:
-            # First, get list of available firmware files from server
-            firmware_list_url = f"{self._firmware_server_url}/latest/"
-            
-            self.__logger.debug(f"Fetching firmware list from {firmware_list_url}")
-            response = requests.get(firmware_list_url, timeout=10)
+            # Get list of available firmware files from server via JSON API
+            self.__logger.debug(f"Fetching firmware list from {self._firmware_server_url}")
+            response = requests.get(
+                self._firmware_server_url,
+                headers={"Accept": "application/json"},
+                timeout=10
+            )
             response.raise_for_status()
-            
-            # Parse HTML directory listing to find matching firmware
-            from html.parser import HTMLParser
-            
-            class FirmwareLinkParser(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.firmware_files = []
-                
-                def handle_starttag(self, tag, attrs):
-                    if tag == 'a':
-                        for attr, value in attrs:
-                            if attr == 'href' and value.endswith('.bin'):
-                                self.firmware_files.append(value)
-            
-            parser = FirmwareLinkParser()
-            parser.feed(response.text)
-            
-            # Find firmware file matching the CAN ID pattern: id_<CANID>_*.bin
+
+            # Parse JSON response
+            firmware_data = response.json()
+
+            # Extract firmware file names
+            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
+
+            self.__logger.debug(f"Available firmware files: {firmware_files}")
+
+            # Use centralized firmware mapping
+            can_id_to_firmware = self._get_can_id_firmware_mapping()
+
+            # Find firmware file matching the CAN ID pattern: id_<CANID>_*.bin (custom firmware)
             target_pattern = f"id_{can_id}_"
-            matching_files = [f for f in parser.firmware_files if f.startswith(target_pattern)]
-            
-            if not matching_files:
-                # Try to find generic firmware based on device type
-                device_type_map = {
-                    range(10, 14): "motor",  # 10-13: motors (A, X, Y, Z)
-                    range(20, 30): "laser",  # 20-29: lasers
-                    range(30, 40): "led",    # 30-39: LEDs
-                }
-                
-                device_type = None
-                for id_range, dtype in device_type_map.items():
-                    if can_id in id_range:
-                        device_type = dtype
-                        break
-                
-                if device_type:
-                    # Look for any firmware containing the device type
-                    matching_files = [f for f in parser.firmware_files if device_type in f]
-                    if matching_files:
-                        self.__logger.warning(f"Using generic {device_type} firmware for device {can_id}: {matching_files[0]}")
-            
-            if not matching_files:
-                self.__logger.error(f"No firmware found for device {can_id} on server")
+            matching_files = [f for f in firmware_files if f.startswith(target_pattern)]
+
+            if matching_files:
+                # Custom firmware for specific device found
+                firmware_filename = matching_files[0]
+                self.__logger.info(f"Using custom firmware for device {can_id}: {firmware_filename}")
+            elif can_id in can_id_to_firmware:
+                # Use standard firmware from mapping
+                firmware_filename = can_id_to_firmware[can_id]
+                if firmware_filename in firmware_files:
+                    self.__logger.info(f"Using standard firmware for device {can_id}: {firmware_filename}")
+                else:
+                    self.__logger.error(f"Standard firmware not found on server: {firmware_filename}")
+                    return None
+            else:
+                self.__logger.error(f"No firmware mapping found for CAN ID {can_id}")
                 return None
-            
-            # Use the first matching file
-            firmware_filename = matching_files[0]
-            
-            # Download the firmware file
-            firmware_url = f"{self._firmware_server_url}/latest/{firmware_filename}" # TODO: We should make this adaptable 
+
+            # Download the firmware file - construct full URL
+            # The server provides relative URLs (./filename.bin), so we build the full URL
+            firmware_url = f"{self._firmware_server_url}/{firmware_filename}"
             local_path = self._firmware_cache_dir / firmware_filename
-            
+
             self.__logger.info(f"Downloading firmware from {firmware_url}")
-            
-            # Check if already cached
-            if False and local_path.exists():#TODO: Always redownload for now
-                self.__logger.debug(f"Using cached firmware: {local_path}")
-                return local_path
-            
+
             # Download firmware
             with requests.get(firmware_url, stream=True, timeout=60) as r:
                 r.raise_for_status()
                 with open(local_path, 'wb') as f:
                     shutil.copyfileobj(r.raw, f)
-            
+
             self.__logger.info(f"Downloaded firmware to {local_path}")
             return local_path
-            
+
         except Exception as e:
             self.__logger.error(f"Error downloading firmware for device {can_id}: {e}")
             return None
@@ -514,7 +570,7 @@ class UC2ConfigController(ImConWidgetController):
         self.stages.enalbeMotors(enable=True, enableauto=False)
 
     def set_positionX(self):
-        if not IS_HEADLESS: x = self._widget.motorXEdit.text() # TODO: Should be a signal for all motors
+        if not IS_HEADLESS: x = self._widget.motorXEdit.text()
         self.set_motor_positions(None, x, None, None)
 
     def set_positionY(self):
@@ -593,6 +649,7 @@ class UC2ConfigController(ImConWidgetController):
     def is_connected(self):
         return self._master.UC2ConfigManager.isConnected()
 
+
     @APIExport(runOnUIThread=True)
     def btpairing(self):
         self._logger.debug('Pairing BT device.')
@@ -613,11 +670,11 @@ class UC2ConfigController(ImConWidgetController):
             return {"status": "ESP32 restarted successfully"}
         except Exception as e:
             return {"error": str(e)}
-         
-    
-    
+
+
+
     ''' CAN OTA Update Methods '''
-    
+
     @APIExport(runOnUIThread=False)
     def setOTAWiFiCredentials(self, ssid, password):
         """
@@ -631,7 +688,7 @@ class UC2ConfigController(ImConWidgetController):
         self._ota_wifi_password = password
         self.__logger.info(f"OTA WiFi credentials set: SSID={ssid}")
         return {"status": "success", "message": f"WiFi credentials set for SSID: {ssid}"}
-    
+
     @APIExport(runOnUIThread=False)
     def getOTAWiFiCredentials(self):
         """
@@ -643,9 +700,9 @@ class UC2ConfigController(ImConWidgetController):
             "ssid": self._ota_wifi_ssid,
             "password": self._ota_wifi_password
         }
-        
+
     @APIExport(runOnUIThread=False)
-    def setOTAFirmwareServer(self, server_url="http://localhost:9000"):
+    def setOTAFirmwareServer(self, server_url="http://localhost/firmware"):
         """
         Set the firmware server URL for OTA updates.
         
@@ -655,50 +712,42 @@ class UC2ConfigController(ImConWidgetController):
         - id_20_esp32_seeed_xiao_esp32s3_can_slave_laser_debug.bin
         - id_21_esp32_seeed_xiao_esp32s3_can_slave_led_debug.bin
         
-        :param server_url: URL of the firmware server (default: http://localhost:9000)
+        :param server_url: URL of the firmware server (default: http://localhost/firmware)
         :return: Status message with list of available firmware files
         """
         # Remove trailing slash if present
         server_url = server_url.rstrip('/')
-        
+
         try:
             # Test server connectivity
-            test_url = f"{server_url}/latest/"
-            self.__logger.debug(f"Testing firmware server: {test_url}")
-            
-            response = requests.get(test_url, timeout=5)
+            self.__logger.debug(f"Testing firmware server: {server_url}")
+            response = requests.get(
+                server_url,
+                headers={"Accept": "application/json"},
+                timeout=1
+            )
             response.raise_for_status()
-            
-            # Parse available firmware files
-            from html.parser import HTMLParser
-            
-            class FirmwareLinkParser(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.firmware_files = []
-                
-                def handle_starttag(self, tag, attrs):
-                    if tag == 'a':
-                        for attr, value in attrs:
-                            if attr == 'href' and value.endswith('.bin'):
-                                self.firmware_files.append(value)
-            
-            parser = FirmwareLinkParser()
-            parser.feed(response.text)
-            
+
+            # Parse JSON response
+            firmware_data = response.json()
+
+            if not isinstance(firmware_data, list):
+                raise ValueError("Invalid response format from firmware server")
+            if not all('name' in item for item in firmware_data):
+                raise ValueError("Firmware server response missing 'name' fields")
             self._firmware_server_url = server_url
-            
+
             self.__logger.info(f"OTA firmware server set: {server_url}")
-            self.__logger.info(f"Found {len(parser.firmware_files)} firmware files")
-            
+            self.__logger.info(f"Found {len(firmware_data)} firmware files")
+
             return {
                 "status": "success",
                 "message": f"Firmware server set: {server_url}",
                 "server_url": server_url,
-                "firmware_files": parser.firmware_files,
-                "count": len(parser.firmware_files)
+                "firmware_files": firmware_data,
+                "count": len(firmware_data)
             }
-            
+
         except requests.exceptions.RequestException as e:
             return {
                 "status": "error",
@@ -732,64 +781,63 @@ class UC2ConfigController(ImConWidgetController):
                 "status": "error",
                 "message": "Firmware server not set. Use setOTAFirmwareServer first."
             }
-        
+
         try:
             # Fetch firmware list from server
-            list_url = f"{self._firmware_server_url}/latest/"
+            list_url = f"{self._firmware_server_url}/"
             self.__logger.debug(f"Fetching firmware list from {list_url}")
-            
-            response = requests.get(list_url, timeout=10)
+
+            response = requests.get(list_url, timeout=10, headers={"Accept": "application/json"})
             response.raise_for_status()
-            
-            # Parse HTML directory listing
-            from html.parser import HTMLParser
-            
-            class FirmwareLinkParser(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.firmware_files = []
-                
-                def handle_starttag(self, tag, attrs):
-                    if tag == 'a':
-                        for attr, value in attrs:
-                            if attr == 'href' and value.endswith('.bin'):
-                                self.firmware_files.append(value)
-            
-            parser = FirmwareLinkParser()
-            parser.feed(response.text)
-            
-            # Organize by device ID
+
+
+            # Parse JSON response (same format as setOTAFirmwareServer)
+            firmware_data = response.json()
+
+            if not isinstance(firmware_data, list):
+                raise ValueError("Invalid response format from firmware server")
+
+            # Extract firmware file names from JSON response
+            firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
+
+            self.__logger.info(f"Available firmware files: {firmware_files}")
+
+            # Use centralized firmware mapping
+            can_id_to_firmware = self._get_can_id_firmware_mapping()
+
+            # Organize by device ID using lookup table
             firmware_by_id = {}
-            for fw_file in parser.firmware_files:
-                # Extract CAN ID from filename (e.g., "id_20_..." -> 20)
-                try:
-                    parts = fw_file.split('_')
-                    if len(parts) >= 2 and parts[0] == 'id':
-                        can_id = int(parts[1])
-                        firmware_url = f"{self._firmware_server_url}/latest/{fw_file}"
-                        
-                        firmware_by_id[can_id] = {
-                            "filename": fw_file,
-                            "url": firmware_url,
-                            "can_id": can_id
-                        }
-                except (ValueError, IndexError):
-                    continue
-            
+            for can_id, expected_firmware in can_id_to_firmware.items():
+                # Check if expected firmware exists in available files
+                # print(expected_firmware)
+                if expected_firmware in firmware_files:
+                    firmware_url = f"{self._firmware_server_url}/{expected_firmware}"
+                    # print(firmware_url)
+                    # Find matching item in firmware_data to get size and mod_time
+                    firmware_info = next((item for item in firmware_data if item['name'] == expected_firmware), None)
+
+                    firmware_by_id[can_id] = {
+                        "filename": expected_firmware,
+                        "url": firmware_url,
+                        "can_id": can_id,
+                        "size": firmware_info.get('size', 0) if firmware_info else 0,
+                        "mod_time": firmware_info.get('mod_time', '') if firmware_info else ''
+                    }
+
             return {
                 "status": "success",
                 "firmware_server": self._firmware_server_url,
                 "firmware_count": len(firmware_by_id),
                 "firmware": firmware_by_id
             }
-            
+
         except requests.exceptions.RequestException as e:
             return {
                 "status": "error",
                 "message": f"Failed to fetch firmware list from server: {str(e)}",
                 "server_url": self._firmware_server_url
             }
-    
+
     @APIExport(runOnUIThread=False)
     def startSingleDeviceOTA(self, can_id:int, ssid:str=None, password:str=None, timeout:int=300000):
         """
@@ -810,29 +858,33 @@ class UC2ConfigController(ImConWidgetController):
         # Use provided credentials or fall back to configured ones
         wifi_ssid = ssid or self._ota_wifi_ssid
         wifi_password = password or self._ota_wifi_password
-        
+
         if not wifi_ssid or not wifi_password:
             return {
                 "status": "error",
                 "message": "WiFi credentials not provided. Use setOTAWiFiCredentials or provide ssid/password parameters."
             }
-        
+
         # Check if ESP32 client has canota module
         if not hasattr(self._master.UC2ConfigManager, "ESP32"):
             return {"status": "error", "message": "ESP32 client not available"}
-        
+
         if not hasattr(self._master.UC2ConfigManager.ESP32, "canota"):
             return {"status": "error", "message": "CAN OTA module not available in UC2 client"}
-        
+
         # Initialize status tracking
         with self._ota_lock:
             self._ota_status[can_id] = {
                 "status": "initiated",
                 "timestamp": datetime.datetime.now().isoformat(),
                 "can_id": can_id,
-                "upload_status": "waiting"
+                "upload_status": "command_sent",
+                "message": f"OTA command sent to device {can_id}, waiting for WiFi connection..."
             }
-        
+
+        # Emit initial status to frontend
+        self.sigOTAStatusUpdate.emit(self._ota_status[can_id])
+
         try:
             # Send OTA command to device
             self.__logger.info(f"Starting OTA update for device {can_id}")
@@ -843,26 +895,26 @@ class UC2ConfigController(ImConWidgetController):
                 timeout=timeout,
                 is_blocking=False
             )
-            
+
             return {
                 "status": "success",
                 "message": f"OTA update initiated for device {can_id}",
                 "can_id": can_id,
                 "command_response": response
             }
-            
+
         except Exception as e:
             self.__logger.error(f"Error starting OTA for device {can_id}: {e}")
             with self._ota_lock:
                 if can_id in self._ota_status:
                     self._ota_status[can_id]["status"] = "error"
                     self._ota_status[can_id]["error"] = str(e)
-            
+
             return {
                 "status": "error",
                 "message": f"Failed to start OTA for device {can_id}: {str(e)}"
             }
-    
+
     @APIExport(runOnUIThread=False, requestType="POST")
     def startMultipleDeviceOTA(self, can_ids:list[int]=[10,20], ssid=None, password=None, timeout=300000, delay_between:int=2):
         """
@@ -877,9 +929,9 @@ class UC2ConfigController(ImConWidgetController):
         """
         if not isinstance(can_ids, list):
             return {"status": "error", "message": "can_ids must be a list"}
-        
+
         results = []
-        
+
         for can_id in can_ids:
             result = self.startSingleDeviceOTA(
                 can_id=can_id,
@@ -891,18 +943,18 @@ class UC2ConfigController(ImConWidgetController):
                 "can_id": can_id,
                 "result": result
             })
-            
+
             # Small delay between commands to avoid overwhelming the CAN bus
             if delay_between > 0:
                 import time
                 time.sleep(delay_between)
-        
+
         return {
             "status": "success",
             "message": f"OTA update initiated for {len(can_ids)} devices",
             "results": results
         }
-    
+
     @APIExport(runOnUIThread=False)
     def getOTAStatus(self, can_id=None):
         """
@@ -932,7 +984,7 @@ class UC2ConfigController(ImConWidgetController):
                     "device_count": len(self._ota_status),
                     "devices": self._ota_status
                 }
-    
+
     @APIExport(runOnUIThread=False)
     def clearOTAStatus(self, can_id=None):
         """
@@ -952,7 +1004,7 @@ class UC2ConfigController(ImConWidgetController):
                 count = len(self._ota_status)
                 self._ota_status.clear()
                 return {"status": "success", "message": f"Cleared OTA status for {count} devices"}
-    
+
     @APIExport(runOnUIThread=False)
     def getOTADeviceMapping(self):
         """
@@ -982,7 +1034,7 @@ class UC2ConfigController(ImConWidgetController):
             },
             "description": "CAN ID mapping for UC2 devices"
         }
-    
+
     @APIExport(runOnUIThread=False)
     def clearOTAFirmwareCache(self):
         """
@@ -997,10 +1049,10 @@ class UC2ConfigController(ImConWidgetController):
             if self._firmware_cache_dir.exists():
                 cache_files = list(self._firmware_cache_dir.glob("*.bin"))
                 count = len(cache_files)
-                
+
                 for cache_file in cache_files:
                     cache_file.unlink()
-                
+
                 self.__logger.info(f"Cleared {count} files from firmware cache")
                 return {
                     "status": "success",
@@ -1018,7 +1070,7 @@ class UC2ConfigController(ImConWidgetController):
                 "status": "error",
                 "message": f"Failed to clear cache: {str(e)}"
             }
-    
+
     @APIExport(runOnUIThread=False)
     def getOTAFirmwareCacheStatus(self):
         """
@@ -1035,10 +1087,10 @@ class UC2ConfigController(ImConWidgetController):
                     "cached_files": [],
                     "total_size": 0
                 }
-            
+
             cache_files = list(self._firmware_cache_dir.glob("*.bin"))
             total_size = sum(f.stat().st_size for f in cache_files)
-            
+
             file_info = []
             for cache_file in cache_files:
                 stat = cache_file.stat()
@@ -1047,7 +1099,7 @@ class UC2ConfigController(ImConWidgetController):
                     "size": stat.st_size,
                     "modified": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat()
                 })
-            
+
             return {
                 "status": "success",
                 "cache_directory": str(self._firmware_cache_dir),
@@ -1062,7 +1114,378 @@ class UC2ConfigController(ImConWidgetController):
                 "status": "error",
                 "message": f"Failed to get cache status: {str(e)}"
             }
-    
+
+    '''ESPTOOL related uploads'''
+
+    # USB flash status tracking
+    _usb_flash_status = {
+        "status": "idle",
+        "progress": 0,
+        "message": "",
+        "details": None
+    }
+
+    def _emit_usb_flash_status(self, status, progress, message, details=None):
+        """Emit USB flash status update to frontend via signal."""
+        self._usb_flash_status = {
+            "status": status,
+            "progress": progress,
+            "message": message,
+            "details": details,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        self.sigUSBFlashStatusUpdate.emit(self._usb_flash_status)
+        self.__logger.info(f"USB Flash: {message} ({progress}%)")
+
+    @APIExport(runOnUIThread=False)
+    def listSerialPorts(self):
+        """
+        List all available serial ports on the system.
+        
+        :return: List of serial port information dictionaries
+        """
+        return self._list_serial_ports()
+
+    @APIExport(runOnUIThread=False)
+    def getUSBFlashStatus(self):
+        """
+        Get current USB flash status.
+        
+        :return: Dictionary with current flash status
+        """
+        return self._usb_flash_status
+
+    # -----------------------------
+    # USB flashing for CAN HAT (master)
+    # -----------------------------
+    def _list_serial_ports(self):
+        ports = []
+        try:
+            for p in list_ports.comports():
+                ports.append({
+                    "device": p.device,
+                    "description": getattr(p, "description", "") or "",
+                    "manufacturer": getattr(p, "manufacturer", "") or "",
+                    "product": getattr(p, "product", "") or "",
+                    "hwid": getattr(p, "hwid", "") or "",
+                    "vid": getattr(p, "vid", None),
+                    "pid": getattr(p, "pid", None),
+                    "serial_number": getattr(p, "serial_number", None),
+                })
+        except Exception as e:
+            self.__logger.error(f"Failed to list serial ports: {e}")
+        return ports
+
+    def _find_hat_serial_port(self, match: str = "HAT", preferred_can_id: int = 1) -> str:
+        """
+        Find the USB serial port for the master CAN HAT by matching a substring
+        in the port metadata (description/manufacturer/product/hwid).
+        """
+        ports = self._list_serial_ports()
+        if not ports:
+            raise RuntimeError("No serial ports found.")
+
+        match_l = (match or "").strip().lower()
+        candidates = []
+        for p in ports:
+            hay = " ".join([
+                p.get("device", ""),
+                p.get("description", ""),
+                p.get("manufacturer", ""),
+                p.get("product", ""),
+                p.get("hwid", ""),
+            ]).lower()
+            if match_l and match_l in hay:
+                candidates.append(p)
+
+        # Fallback heuristics if no direct match
+        if not candidates:
+            # Prefer common USB-UART/CDC device names
+            usb_like = []
+            for p in ports:
+                dev = (p.get("device") or "").lower()
+                hwid = (p.get("hwid") or "").lower()
+                desc = (p.get("description") or "").lower()
+                if any(x in dev for x in ["/dev/ttyusb", "/dev/ttyacm", "com"]) or "usb" in hwid or "usb" in desc:
+                    usb_like.append(p)
+            candidates = usb_like
+
+        if not candidates:
+            raise RuntimeError(f"No candidate serial ports found for match='{match}'. Ports={ports}")
+
+        # If ImSwitch currently uses one of these ports, prefer it
+        try:
+            current_port = getattr(self._master.UC2ConfigManager, "serialport", None)
+            if current_port:
+                for c in candidates:
+                    if c["device"] == current_port:
+                        return current_port
+        except Exception:
+            pass
+
+        # Prefer stable ordering: ttyACM before ttyUSB (often native USB), then the first
+        def rank(p):
+            dev = (p.get("device") or "").lower()
+            if "/dev/ttyacm" in dev:
+                return 0
+            if "/dev/ttyusb" in dev:
+                return 1
+            return 2
+
+        candidates = sorted(candidates, key=rank)
+        return candidates[0]["device"]
+
+    def _download_firmware_by_name(self, firmware_filename: str) -> Path | None:
+        server_url = (self._firmware_server_url or "").rstrip("/")
+        if not server_url:
+            self.__logger.error("Firmware server URL is not set.")
+            return None
+
+        firmware_filename = firmware_filename.lstrip("./")
+        local_path = self._firmware_cache_dir / firmware_filename
+        if local_path.exists():
+            return local_path
+
+        url = f"{server_url}/{firmware_filename}"
+        try:
+            self.__logger.info(f"Downloading firmware: {url}")
+            with requests.get(url, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                with open(local_path, "wb") as f:
+                    shutil.copyfileobj(r.raw, f)
+            return local_path
+        except Exception as e:
+            self.__logger.error(f"Failed to download {url}: {e}")
+            try:
+                if local_path.exists():
+                    local_path.unlink()
+            except Exception:
+                pass
+            return None
+
+    def _download_master_firmware(self) -> Path | None:
+        """
+        Resolve + download the master (CAN HAT) firmware from the firmware server.
+        Tries (in this order):
+          1) exact known names (HAT/master)
+          2) id_1_*.bin
+          3) anything containing 'hat' and 'master'
+        """
+        server_url = (self._firmware_server_url or "").rstrip("/")
+        if not server_url:
+            self.__logger.error("Firmware server URL is not set.")
+            return None
+
+        try:
+            resp = requests.get(server_url, headers={"Accept": "application/json"}, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            names = [i.get("name", "") for i in data if isinstance(i, dict) and i.get("name", "").endswith(".bin")]
+        except Exception as e:
+            self.__logger.error(f"Failed to query firmware server '{server_url}': {e}")
+            return None
+
+        # 1) preferred exact names
+        preferred = [
+            "esp32_UC2_3_CAN_HAT_Master.bin",
+            "esp32_UC2_CAN_HAT_Master.bin",
+            "UC2_CAN_HAT_Master.bin",
+            "CAN_HAT_Master.bin",
+        ]
+        for fn in preferred:
+            if fn in names:
+                return self._download_firmware_by_name(fn)
+
+        # 2) id_1_*.bin
+        id1 = [n for n in names if n.startswith("id_1_")]
+        if id1:
+            return self._download_firmware_by_name(id1[0])
+
+        # 3) fuzzy match
+        fuzzy = [n for n in names if ("hat" in n.lower() and "master" in n.lower())]
+        if fuzzy:
+            return self._download_firmware_by_name(fuzzy[0])
+
+        self.__logger.error(f"No master firmware found on server. Available={names}")
+        return None
+
+    def _run_esptool(self, args: list[str]) -> tuple[bool, str]:
+        """
+        Run esptool either via python module (preferred) or subprocess fallback.
+        Returns (success, message).
+        """
+        # Preferred: imported esptool (no external process)
+        if HAS_ESPTOOL:
+            try:
+                # esptool.main() calls sys.exit(); catch it.
+                esptool.main(args)
+                return True, "OK"
+            except SystemExit as e:
+                code = int(getattr(e, "code", 1) or 0)
+                return (code == 0), f"esptool exited with code {code}"
+            except Exception as e:
+                return False, f"esptool failed: {e}"
+
+        # Fallback: subprocess (requires esptool to be installed as module)
+        try:
+            cmd = [sys.executable, "-m", "esptool"] + args
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            ok = (proc.returncode == 0)
+            out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+            return ok, out.strip()
+        except Exception as e:
+            return False, f"Failed to run esptool subprocess: {e}"
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def flashMasterFirmwareUSB(
+        self,
+        port: str | None = None,
+        match: str = "HAT",
+        baud: int = 921600,
+        flash_offset: int = 0x10000,
+        erase_flash: bool = False,
+        reconnect_after: bool = True,
+    ):
+        """
+        Flash the master CAN HAT firmware via USB serial using esptool.
+
+        - Disconnects ImSwitch from the ESP32 first (master carries comms).
+        - Downloads firmware from the configured firmware server.
+        - Flashes firmware to the detected (or provided) USB serial port.
+
+        Parameters:
+          port: explicit serial port (e.g. "/dev/ttyACM0"). If None, auto-detect via 'match'.
+          match: substring to identify the HAT in serial port metadata (default "HAT").
+          baud: flashing baudrate (default 921600).
+          flash_offset: address to flash the BIN to. Use 0x0 for merged images; 0x10000 for app-only images.
+          erase_flash: if True, erase flash before writing.
+          reconnect_after: if True, reconnect ImSwitch to the master after flashing.
+        """
+        with self._usb_flash_lock:
+            if not (HAS_ESPTOOL or True):
+                self._emit_usb_flash_status("failed", 0, "esptool not available", "Install with: pip install esptool")
+                return {"status": "error", "message": "esptool not available. Install with: pip install esptool"}
+
+            # 1) disconnect master from ImSwitch
+            self._emit_usb_flash_status("disconnecting", 5, "Disconnecting from ESP32...")
+            try:
+                self.__logger.info("Disconnecting ImSwitch from master before USB flashing…")
+                try:
+                    self._master.UC2ConfigManager.interruptSerialCommunication()
+                except Exception:
+                    pass
+                self._master.UC2ConfigManager.closeSerial()
+            except Exception as e:
+                self.__logger.warning(f"Could not fully close serial before flashing: {e}")
+
+            time.sleep(0.5)  # give OS time to release port
+            self._emit_usb_flash_status("downloading", 10, "Downloading firmware from server...")
+
+            # 2) resolve firmware
+            fw_path = self._download_master_firmware()
+            if not fw_path:
+                self._emit_usb_flash_status("failed", 10, "No master firmware found on server")
+                return {"status": "error", "message": "No master firmware found/downloaded."}
+
+            self._emit_usb_flash_status("downloading", 20, f"Firmware downloaded: {fw_path.name}")
+
+            # 3) resolve port
+            try:
+                flash_port = port or self._find_hat_serial_port(match=match)
+                self._emit_usb_flash_status("flashing", 25, f"Using port: {flash_port}")
+            except Exception as e:
+                self._emit_usb_flash_status("failed", 20, f"Failed to find serial port: {e}")
+                return {
+                    "status": "error",
+                    "message": f"Failed to resolve HAT serial port: {e}",
+                    "available_ports": self._list_serial_ports(),
+                }
+
+            self.__logger.info(f"Flashing master firmware via {flash_port} (baud={baud}, offset=0x{flash_offset:x})")
+
+            # 4) optionally erase
+            if erase_flash:
+                self._emit_usb_flash_status("erasing", 30, "Erasing flash memory...")
+                ok, msg = self._run_esptool(["--port", flash_port, "--baud", str(baud), "erase_flash"])
+                if not ok:
+                    self._emit_usb_flash_status("failed", 30, "Flash erase failed", msg)
+                    return {
+                        "status": "error",
+                        "message": "erase_flash failed",
+                        "details": msg,
+                        "port": flash_port,
+                        "firmware": str(fw_path),
+                    }
+                self._emit_usb_flash_status("flashing", 40, "Flash erased successfully")
+
+            # 5) write flash
+            self._emit_usb_flash_status("flashing", 45, "Writing firmware to device...")
+            write_args = [
+                "--port", flash_port,
+                "--baud", str(baud),
+                "--chip", "esp32",
+                "write_flash",
+                "--flash_mode", "dio",
+                "--flash_freq", "80m",
+                "--flash_size", "4MB",
+                "0x%X" % int(flash_offset),
+                str(fw_path),
+            ]
+            '''should be:
+            esptool.py \
+                --chip esp32 \
+                --port /dev/cu.SLAB_USBtoUART \
+                --baud 921600 \
+                write_flash \
+                --flash_mode dio \
+                --flash_freq 80m \
+                --flash_size 4MB \
+                0x10000 firmware.bin'''
+            ok, msg = self._run_esptool(write_args)
+            if not ok:
+                self._emit_usb_flash_status("failed", 50, "Firmware write failed", msg)
+                return {
+                    "status": "error",
+                    "message": "write_flash failed",
+                    "details": msg,
+                    "port": flash_port,
+                    "firmware": str(fw_path),
+                    "flash_offset": int(flash_offset),
+                }
+
+            self._emit_usb_flash_status("flashing", 85, "Firmware written successfully!")
+
+            # 6) reconnect
+            if reconnect_after:
+                self._emit_usb_flash_status("reconnecting", 90, "Reconnecting to device...")
+                try:
+                    time.sleep(1.0)
+                    self.__logger.info("Reconnecting ImSwitch to master after flashing…")
+                    self._master.UC2ConfigManager.initSerial(baudrate=None)
+                    self._emit_usb_flash_status("success", 100, "✅ Firmware flashed and reconnected!")
+                except Exception as e:
+                    self._emit_usb_flash_status("warning", 95, "Flashed OK, but reconnect failed", str(e))
+                    return {
+                        "status": "warning",
+                        "message": "Flashed OK, but reconnect failed",
+                        "port": flash_port,
+                        "firmware": str(fw_path),
+                        "details": str(e),
+                    }
+            else:
+                self._emit_usb_flash_status("success", 100, "✅ Firmware flashed successfully!")
+
+            return {
+                "status": "success",
+                "message": "Master firmware flashed via USB",
+                "port": flash_port,
+                "firmware": str(fw_path),
+                "baud": int(baud),
+                "flash_offset": int(flash_offset),
+                "erase_flash": bool(erase_flash),
+                "reconnect_after": bool(reconnect_after),
+            }
+
 
 
 

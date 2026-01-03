@@ -1,5 +1,3 @@
-import numpy as np
-import pyqtgraph as pg
 from PyQt5.QtWidgets import  QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QLabel
 from .basewidgets import Widget
 from imswitch.imcommon.model import APIExport

@@ -1,8 +1,7 @@
 # image processing libraries
-from dataclasses_json.api import _process_class
 import numpy as np
 import time
-import cv2, queue, threading
+import cv2
 from imswitch.imcommon.model import initLogger
 from threading import Thread
 import imageio as iio

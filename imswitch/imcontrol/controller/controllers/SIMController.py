@@ -1,5 +1,4 @@
 import requests
-import json
 import os
 
 import numpy as np
@@ -10,22 +9,14 @@ import tifffile as tif
 
 from imswitch.imcommon.model import dirtools, initLogger, APIExport, ostools
 from ..basecontrollers import ImConWidgetController
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
+from imswitch.imcommon.framework import Signal
 
-from ..basecontrollers import LiveUpdatedController
 
-import os
-import time
-import numpy as np
-from pathlib import Path
-import tifffile
 
 from imswitch import IS_HEADLESS
 
-from datetime import datetime
 
 try:
-    import mcsim
     ismcSIM=True
 except:
     ismcSIM=False
@@ -53,7 +44,6 @@ except:
 
 try:
     from napari_sim_processor.processors.convSimProcessor import ConvSimProcessor
-    from napari_sim_processor.processors.hexSimProcessor import HexSimProcessor
     isSIM = True
 
 except:
@@ -61,7 +51,6 @@ except:
 
 try:
     # FIXME: This does not pass pytests!
-    import torch
     isPytorch = True
 except:
     isPytorch = False

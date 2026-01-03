@@ -10,7 +10,6 @@ import wave
 import asyncio
 
 
-import base64
 from functools import partial
 
 class OutputRecorder:

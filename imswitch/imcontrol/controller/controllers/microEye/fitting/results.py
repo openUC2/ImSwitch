@@ -172,7 +172,7 @@ class FittingResults:
                     (self.locY, params[:, 1]))
             except:
                 pass
-            
+
         if self.background is None:
             self.background = params[:, 2]
         else:
@@ -183,8 +183,8 @@ class FittingResults:
                 self.background = np.hstack(
                     (self.background, self.background[-1]))
                 print("TypeError in concat Background")
-                
-                
+
+
         if self.intensity is None:
             self.intensity = params[:, 3]
         else:

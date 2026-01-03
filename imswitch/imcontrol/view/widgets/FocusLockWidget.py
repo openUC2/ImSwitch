@@ -1,7 +1,7 @@
 import numpy as np
 import pyqtgraph as pg
 from qtpy import QtWidgets
-from qtpy import QtCore, QtWidgets
+from qtpy import QtCore
 
 from imswitch.imcontrol.view import guitools as guitools
 from .basewidgets import Widget

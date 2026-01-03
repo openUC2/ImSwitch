@@ -58,7 +58,7 @@ def update_progress(progress, show_progress_bar=False, logger=None):
     else:
         sys.stderr.write('.')
         sys.stderr.flush()
-    
+
     if logger:
         logger.debug(f"Upload progress: {int(progress * 100)}%")
 
@@ -68,7 +68,7 @@ def upload_ota(
     firmware_path,
     esp_port=3232,
     host_ip="0.0.0.0",
-    host_port=None,
+    host_port=3333,
     password="",
     spiffs=False,
     timeout=10,
@@ -94,12 +94,12 @@ def upload_ota(
     """
     if logger is None:
         logger = logging.getLogger(__name__)
-    
+
     if host_port is None:
         host_port = random.randint(10000, 60000)
-    
+
     command = SPIFFS if spiffs else FLASH
-    
+
     return serve(
         remoteAddr=esp_ip,
         localAddr=host_ip,
@@ -115,8 +115,8 @@ def upload_ota(
     )
 
 
-def serve(remoteAddr, localAddr, remotePort, localPort, password, filename, 
-          command=FLASH, timeout=10, show_progress=False, logger=None, 
+def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
+          command=FLASH, timeout=10, show_progress=False, logger=None,
           progress_callback=None):
     """
     Internal function to handle the OTA upload process.
@@ -136,12 +136,12 @@ def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
     """
     if logger is None:
         logger = logging.getLogger(__name__)
-    
+
     # Create a TCP/IP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_address = (localAddr, localPort)
     logger.info(f'Starting on {server_address[0]}:{server_address[1]}')
-    
+
     try:
         sock.bind(server_address)
         sock.listen(1)
@@ -162,12 +162,12 @@ def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
     msg = f'Sending invitation to {remoteAddr} '
     sys.stderr.write(msg)
     sys.stderr.flush()
-    
+
     while inv_trys < 10:
         inv_trys += 1
         sock2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         remote_address = (remoteAddr, int(remotePort))
-        
+
         try:
             sent = sock2.sendto(message.encode(), remote_address)
         except Exception as e:
@@ -176,7 +176,7 @@ def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
             sock2.close()
             logger.error(f'Host {remoteAddr} Not Found: {e}')
             return 1
-        
+
         sock2.settimeout(timeout)
         try:
             data = sock2.recv(37).decode()
@@ -185,14 +185,14 @@ def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
             sys.stderr.write('.')
             sys.stderr.flush()
             sock2.close()
-    
+
     sys.stderr.write('\n')
     sys.stderr.flush()
-    
+
     if inv_trys == 10:
         logger.error('No response from the ESP')
         return 1
-    
+
     if data != "OK":
         if data.startswith('AUTH'):
             nonce = data.split()[1]
@@ -206,7 +206,7 @@ def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
             message = '%d %s %s\n' % (AUTH, cnonce, result)
             sock2.sendto(message.encode(), remote_address)
             sock2.settimeout(10)
-            
+
             try:
                 data = sock2.recv(32).decode()
             except:
@@ -214,7 +214,7 @@ def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
                 logger.error('No Answer to our Authentication')
                 sock2.close()
                 return 1
-            
+
             if data != "OK":
                 sys.stderr.write('FAIL\n')
                 logger.error(f'Authentication failed: {data}')
@@ -225,7 +225,7 @@ def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
             logger.error(f'Bad Answer: {data}')
             sock2.close()
             return 1
-    
+
     sock2.close()
 
     logger.info('Waiting for device...')
@@ -238,7 +238,7 @@ def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
         logger.error(f'No response from device: {e}')
         sock.close()
         return 1
-    
+
     try:
         f = open(filename, "rb")
         if show_progress:
@@ -246,19 +246,19 @@ def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
         else:
             sys.stderr.write('Uploading')
             sys.stderr.flush()
-        
+
         offset = 0
         last_progress = 0
-        
+
         while True:
             chunk = f.read(1024)
             if not chunk:
                 break
             offset += len(chunk)
             progress = offset / float(content_size)
-            
+
             update_progress(progress, show_progress, logger)
-            
+
             # Call progress callback if provided
             if progress_callback:
                 current_percent = int(progress * 100)
@@ -268,7 +268,7 @@ def serve(remoteAddr, localAddr, remotePort, localPort, password, filename,
                         last_progress = current_percent
                     except Exception as e:
                         logger.warning(f"Progress callback failed: {e}")
-            
+
             connection.settimeout(10)
             try:
                 connection.sendall(chunk)

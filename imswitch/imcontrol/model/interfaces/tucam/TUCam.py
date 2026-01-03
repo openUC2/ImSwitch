@@ -8,7 +8,6 @@ Created on 2023-12-12
 import ctypes
 from ctypes import *
 from enum import Enum
-import time
 
 #加载SDK动态库
 # 32bit

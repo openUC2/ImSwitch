@@ -2,8 +2,6 @@ import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-import threading
-import cv2
 import numpy as np
 
 from imswitch.imcommon.framework import Signal, SignalInterface
@@ -71,7 +69,7 @@ class DetectorManager(SignalInterface):
 
     sigImageUpdated = Signal(np.ndarray, bool, list)
     sigNewFrame = Signal()
-    
+
     @abstractmethod
     def __init__(self, detectorInfo, name: str, fullShape: Tuple[int, int],
                  supportedBinnings: List[int], model: str, *,
@@ -99,7 +97,7 @@ class DetectorManager(SignalInterface):
         self._detectorInfo = detectorInfo
 
         self._isMock = False
-        
+
         self._frameStart = (0, 0)
         self._shape = fullShape
 
@@ -141,7 +139,7 @@ class DetectorManager(SignalInterface):
             self.__logger.error(traceback.format_exc())
         else:
             if self.__image is not None:
-                self.sigImageUpdated.emit(self.__image, init, self.scale) 
+                self.sigImageUpdated.emit(self.__image, init, self.scale)
     def setMinValueFramePreview(self, value):
         """ Sets the minimum value for the frame preview to display via a jpeg image """
         self._minValueFramePreview = value
@@ -163,6 +161,7 @@ class DetectorManager(SignalInterface):
             return
         if name not in self.__parameters:
             raise AttributeError(f'Non-existent parameter "{name}" specified')
+        if name.find("posure")>0:name = "exposure" # TODO: Hacky fix for inconsistent naming
         self.__parameters[name].value = value
         return self.parameters
 
@@ -381,7 +380,7 @@ class DetectorManager(SignalInterface):
             'forFocusLock': self.__forFocusLock,
             'parameters': {}
         }
-        
+
         # Add all parameters with their current values and metadata
         for param_name, param_obj in self.__parameters.items():
             param_info = {
@@ -389,7 +388,7 @@ class DetectorManager(SignalInterface):
                 'group': param_obj.group,
                 'editable': param_obj.editable
             }
-            
+
             # Add type-specific metadata
             if isinstance(param_obj, DetectorNumberParameter):
                 param_info['type'] = 'number'
@@ -401,9 +400,9 @@ class DetectorManager(SignalInterface):
                 param_info['type'] = 'boolean'
             else:
                 param_info['type'] = 'unknown'
-            
+
             status['parameters'][param_name] = param_info
-        
+
         return status
 
 # Copyright (C) 2020-2024 ImSwitch developers

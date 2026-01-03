@@ -4,7 +4,7 @@ import cv2
 import dask.array
 import numpy as np
 from scipy import signal
-from scipy.fftpack import fft2, fftshift, ifft2, ifftshift
+from scipy.fftpack import fftshift, ifftshift
 
 #from .uImage import ZarrImageSequence
 
@@ -15,7 +15,7 @@ class AbstractFilter:
         return image
 
     def getWidget(self):
-        return None 
+        return None
 
 
 class DoG_Filter(AbstractFilter):

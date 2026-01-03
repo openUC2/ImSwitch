@@ -10,9 +10,9 @@ except ImportError:
     class MockQDarkStyle:
         def load_stylesheet(self, qt_api=None):
             return ""
-    
+
     qdarkstyle = MockQDarkStyle()
-    
+
     class DarkPalette:
         COLOR_BACKGROUND_1 = "#19232D"
         COLOR_BACKGROUND_2 = "#1e1e1e"

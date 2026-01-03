@@ -1,30 +1,24 @@
 import numpy as np
 
 try:
-    import NanoImagingPack as nip
     isNIP = True
 except:
     isNIP = False
 
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
-from imswitch.imcontrol.view import guitools
+from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from ..basecontrollers import LiveUpdatedController
 
 import asyncio
 import json
-import logging
 import os
-import asyncio
 import threading
 from aiohttp import web
-from aiohttp import web
 from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc.contrib.media import MediaPlayer, MediaRelay, MediaStreamTrack
+from aiortc.contrib.media import MediaStreamTrack
 from aiortc.rtcrtpsender import RTCRtpSender
 from av import VideoFrame
 import fractions
-import numpy as np
 
 
 ROOT = os.path.dirname(__file__)

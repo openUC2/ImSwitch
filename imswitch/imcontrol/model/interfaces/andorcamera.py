@@ -10,7 +10,7 @@ from __future__ import annotations
 import collections
 import threading
 import time
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 
 import numpy as np
 from imswitch.imcommon.model import initLogger

@@ -2,7 +2,6 @@ from qtpy import QtCore, QtWidgets
 
 from imswitch.imcontrol.view import guitools as guitools
 from .basewidgets import Widget
-from imswitch.imcontrol.view.widgets.PositionerWidget import PositionerWidget
 
 class StandaStageWidget(Widget):
     """ Customized Widget in control of the piezo movement of a Standa Stage. """

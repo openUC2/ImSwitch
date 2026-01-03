@@ -4,37 +4,36 @@ ImSwitch configuration management.
 This module provides a centralized way to manage ImSwitch configuration,
 replacing the global variables with a proper configuration object.
 """
-import os
 from typing import Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
 class ImSwitchConfig:
     """Central configuration object for ImSwitch."""
-    
+
     # Core settings
     is_headless: bool = False
-    
+
     # Network settings
     http_port: int = 8001
     ssl: bool = True
-    
+
     # File paths
     default_config: Optional[str] = None
     config_folder: Optional[str] = None
     data_folder: Optional[str] = None
-    
+
     # External drive settings
     scan_ext_data_folder: bool = False
     ext_data_folder: Optional[str] = None
-    
+
     # Kernel settings
     with_kernel: bool = False
-    
+
     # Streaming settings
     socket_stream: bool = True
-    
+
     # Binary streaming configuration
     stream_binary_enabled: bool = True
     stream_binary_websocket_path: str = "/ws/frames"
@@ -44,28 +43,28 @@ class ImSwitchConfig:
     stream_binary_compression_level: int = 0
     stream_binary_subsampling_factor: int = 1
     stream_binary_throttle_ms: int = 50
-    
+
     # Legacy JPEG streaming
     stream_jpeg_enabled: bool = False
-    
+
     # Jupyter settings
     jupyter_port: int = 8888
     jupyter_url: str = "localhost"
-    
+
     # Version info
     version: str = "2.1.41"
-    
+
     # Logging settings
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
     log_to_file: bool = True
     log_folder: Optional[str] = None  # If None, uses config_folder/logs
-    
+
     def update_from_args(self, **kwargs) -> None:
         """Update configuration from keyword arguments, ignoring None values."""
         for key, value in kwargs.items():
             if value is not None and hasattr(self, key):
                 setattr(self, key, value)
-    
+
     def update_from_argparse(self, args) -> None:
         """Update configuration from argparse Namespace object."""
         # Map argparse attribute names to config attribute names
@@ -80,16 +79,16 @@ class ImSwitchConfig:
             'ext_data_folder': 'ext_data_folder',
             'with_kernel': 'with_kernel'
         }
-        
+
         for arg_name, config_attr in arg_mapping.items():
             if hasattr(args, arg_name):
                 value = getattr(args, arg_name)
                 if value is not None:
                     setattr(self, config_attr, value)
-    
-        
+
+
     def to_legacy_globals(self, imswitch_module) -> None:
-        """Update legacy global variables for backward compatibility.""" # @ethanjli this also needs a review as this is sharing global variables 
+        """Update legacy global variables for backward compatibility.""" # @ethanjli this also needs a review as this is sharing global variables
         imswitch_module.IS_HEADLESS = self.is_headless
         imswitch_module.__httpport__ = self.http_port
         imswitch_module.__ssl__ = self.ssl

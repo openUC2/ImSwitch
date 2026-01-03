@@ -1,14 +1,11 @@
 import numpy as np
 try:
-    import NanoImagingPack as nip
     isNIP = True
 except:
     isNIP = False
 
 from imswitch import IS_HEADLESS
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
-from imswitch.imcontrol.view import guitools
-from imswitch.imcommon.model import initLogger
+from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import LiveUpdatedController
 import cv2

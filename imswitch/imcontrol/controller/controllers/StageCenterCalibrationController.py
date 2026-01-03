@@ -4,7 +4,6 @@ import time
 from datetime import datetime
 
 import numpy as np
-import tifffile as tif
 
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal, Mutex
@@ -45,7 +44,7 @@ class StageCenterCalibrationController(ImConWidgetController):
     def getDetector(self):
         # devices
         return self._master.detectorsManager[self._master.detectorsManager.getAllDeviceNames()[0]]
-        
+
     def getStage(self):
         stageName = self._master.positionersManager.getAllDeviceNames()[0]
         return self._master.positionersManager[stageName]
@@ -170,7 +169,7 @@ class StageCenterCalibrationController(ImConWidgetController):
         if frame is None or frame.size == 0:
             return None
         meanValue = np.mean(frame[::20, ::20])  # subsample for speed
-        self._logger.debug(f"Mean value of frame: {meanValue}") 
+        self._logger.debug(f"Mean value of frame: {meanValue}")
         return meanValue
 
     def _savePositionsCsv(self):

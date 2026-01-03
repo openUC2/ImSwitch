@@ -1,9 +1,6 @@
 # -- coding: utf-8 --
 
-import sys
-import copy
 import ctypes
-import os
 
 from ctypes import *
 from imswitch.imcontrol.model.interfaces.hikrobotMac.CameraParams_const import *
@@ -18,7 +15,7 @@ if platform == "linux" or platform == "linux2":
     try:
         MvCamCtrldll = ctypes.cdll.LoadLibrary("/opt/MVS/lib/aarch64/libMvCameraControl.so")
     except Exception as e:
-        print(e);
+        print(e)
         try:
             MvCamCtrldll = ctypes.cdll.LoadLibrary("/opt/MVS/lib/64/libMvCameraControl.so")
         except Exception as e:

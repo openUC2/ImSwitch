@@ -3,13 +3,12 @@ Detector Manager for Raspberry Pi Camera (Picamera2)
 Compatible interface with HIK camera manager for seamless integration.
 """
 
-import numpy as np
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import (
-    DetectorManager, 
-    DetectorAction, 
-    DetectorNumberParameter, 
-    DetectorListParameter, 
+    DetectorManager,
+    DetectorAction,
+    DetectorNumberParameter,
+    DetectorListParameter,
     DetectorBooleanParameter
 )
 
@@ -36,7 +35,7 @@ class Picamera2Manager(DetectorManager):
         # Get configuration parameters
         binning = detectorInfo.managerProperties.get('binning', 1)
         cameraId = detectorInfo.managerProperties['cameraListIndex']
-        
+
         try:
             pixelSize = detectorInfo.managerProperties['cameraEffPixelsize']  # micrometers
         except KeyError:
@@ -80,9 +79,9 @@ class Picamera2Manager(DetectorManager):
 
         # Initialize camera
         self._camera = self._getPicamera2Obj(
-            cameraId, 
-            isRGB, 
-            binning, 
+            cameraId,
+            isRGB,
+            binning,
             flipImage,
             resolution,
             use_video_mode
@@ -96,7 +95,7 @@ class Picamera2Manager(DetectorManager):
 
         fullShape = (self._camera.SensorWidth, self._camera.SensorHeight)
         model = self._camera.model
-        
+
         self._running = False
         self._adjustingParameters = False
 
@@ -106,72 +105,72 @@ class Picamera2Manager(DetectorManager):
         # Prepare parameters
         parameters = {
             'exposure': DetectorNumberParameter(
-                group='Misc', 
-                value=10, 
+                group='Misc',
+                value=10,
                 valueUnits='ms',
                 editable=True
             ),
             'gain': DetectorNumberParameter(
-                group='Misc', 
-                value=1.0, 
+                group='Misc',
+                value=1.0,
                 valueUnits='arb.u.',
                 editable=True
             ),
             'blacklevel': DetectorNumberParameter(
-                group='Misc', 
-                value=0, 
+                group='Misc',
+                value=0,
                 valueUnits='arb.u.',
                 editable=False  # Not supported on RPi camera
             ),
             'image_width': DetectorNumberParameter(
-                group='Misc', 
-                value=fullShape[0], 
+                group='Misc',
+                value=fullShape[0],
                 valueUnits='px',
                 editable=False
             ),
             'image_height': DetectorNumberParameter(
-                group='Misc', 
-                value=fullShape[1], 
+                group='Misc',
+                value=fullShape[1],
                 valueUnits='px',
                 editable=False
             ),
             'frame_rate': DetectorNumberParameter(
-                group='Misc', 
-                value=30, 
+                group='Misc',
+                value=30,
                 valueUnits='fps',
                 editable=True
             ),
             'frame_number': DetectorNumberParameter(
-                group='Misc', 
-                value=0, 
+                group='Misc',
+                value=0,
                 valueUnits='frames',
                 editable=False
             ),
             'exposure_mode': DetectorListParameter(
-                group='Misc', 
+                group='Misc',
                 value='manual',
-                options=['manual', 'auto', 'once'], 
+                options=['manual', 'auto', 'once'],
                 editable=True
             ),
             'flat_fielding': DetectorBooleanParameter(
-                group='Misc', 
-                value=False, 
+                group='Misc',
+                value=False,
                 editable=True
             ),
             'mode': DetectorBooleanParameter(
-                group='Misc', 
-                value=name, 
+                group='Misc',
+                value=name,
                 editable=False
             ),
             'previewMinValue': DetectorNumberParameter(
-                group='Misc', 
-                value=0, 
+                group='Misc',
+                value=0,
                 valueUnits='arb.u.',
                 editable=True
             ),
             'previewMaxValue': DetectorNumberParameter(
-                group='Misc', 
-                value=255, 
+                group='Misc',
+                value=255,
                 valueUnits='arb.u.',
                 editable=True
             ),
@@ -182,9 +181,9 @@ class Picamera2Manager(DetectorManager):
                 editable=True
             ),
             'Camera pixel size': DetectorNumberParameter(
-                group='Miscellaneous', 
+                group='Miscellaneous',
                 value=pixelSize,
-                valueUnits='µm', 
+                valueUnits='µm',
                 editable=True
             )
         }
@@ -198,13 +197,13 @@ class Picamera2Manager(DetectorManager):
         }
 
         super().__init__(
-            detectorInfo, 
-            name, 
-            fullShape=fullShape, 
+            detectorInfo,
+            name,
+            fullShape=fullShape,
             supportedBinnings=[1, 2, 4],
-            model=model, 
-            parameters=parameters, 
-            actions=actions, 
+            model=model,
+            parameters=parameters,
+            actions=actions,
             croppable=False  # ROI not fully implemented yet
         )
 
@@ -332,15 +331,15 @@ class Picamera2Manager(DetectorManager):
         """
         self._adjustingParameters = True
         wasrunning = self._running
-        
+
         if wasrunning:
             self.stopAcquisitionForROIChange()
-        
+
         function()
-        
+
         if wasrunning:
             self.startAcquisition()
-        
+
         self._adjustingParameters = False
 
     def openPropertiesDialog(self):
@@ -362,7 +361,7 @@ class Picamera2Manager(DetectorManager):
         """Get available trigger types"""
         return self._camera.getTriggerTypes()
 
-    def _getPicamera2Obj(self, cameraId, isRGB=True, binning=1, flipImage=(False, False), 
+    def _getPicamera2Obj(self, cameraId, isRGB=True, binning=1, flipImage=(False, False),
                          resolution=(640, 480), use_video_mode=True):
         """
         Get camera object (real or mock).
@@ -380,9 +379,9 @@ class Picamera2Manager(DetectorManager):
         """
         try:
             from imswitch.imcontrol.model.interfaces.picamera2_interface import CameraPicamera2
-            
+
             self.__logger.debug(f'Initializing Picamera2 camera {cameraId}')
-            
+
             camera = CameraPicamera2(
                 cameraNo=cameraId,
                 isRGB=isRGB,
@@ -391,21 +390,21 @@ class Picamera2Manager(DetectorManager):
                 resolution=resolution,
                 use_video_mode=use_video_mode
             )
-            
+
             self.__logger.info(f'Initialized camera: {camera.model}')
             return camera
-            
+
         except Exception as e:
             self.__logger.error(f'Failed to initialize Picamera2: {e}')
             self.__logger.warning('Loading mock camera instead')
-            
+
             from imswitch.imcontrol.model.interfaces.picamera2_interface import MockCameraPicamera2
-            
+
             camera = MockCameraPicamera2(
                 isRGB=isRGB,
                 resolution=resolution
             )
-            
+
             self.__logger.info(f'Initialized mock camera: {camera.model}')
             return camera
 

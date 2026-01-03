@@ -1,4 +1,3 @@
-import json
 import os
 
 import numpy as np
@@ -8,9 +7,8 @@ import threading
 from datetime import datetime
 
 
-from imswitch.imcommon.model import dirtools, initLogger, APIExport
-from ..basecontrollers import ImConWidgetController
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
+from imswitch.imcommon.model import dirtools, initLogger
+from imswitch.imcommon.framework import Signal
 
 
 from ..basecontrollers import LiveUpdatedController

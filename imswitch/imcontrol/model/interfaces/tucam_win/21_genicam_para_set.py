@@ -8,7 +8,6 @@ Created on 2023-12-12
 import ctypes
 from ctypes import *
 from TUCam import *
-from enum import Enum
 import time
 
 # the call back fuction

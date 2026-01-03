@@ -2,8 +2,6 @@ import inspect
 import asyncio
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Mutex, Signal, SignalInterface
-from importlib.resources import files
-from fastapi.staticfiles import StaticFiles
 
 
 class APIExport:

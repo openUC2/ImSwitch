@@ -5,11 +5,8 @@ Created on 2024-01-03
 @author:fdy
 '''
 
-import ctypes
 from ctypes import *
 from TUCam import *
-from enum import Enum
-import time
 
 class Tucam():
     def __init__(self):
@@ -81,7 +78,7 @@ class Tucam():
                 if num == TUCAM_IDPROP.TUIDP_BLACKLEVELLG.value:
                     continue
 
-                TUCAM_Prop_SetValue(self.TUCAMOPEN.hIdxTUCam, prop.idProp, c_double(prop.dbValDft), 0);
+                TUCAM_Prop_SetValue(self.TUCAMOPEN.hIdxTUCam, prop.idProp, c_double(prop.dbValDft), 0)
                 print("PropID=",prop.idProp, "Set default value", prop.dbValDft)
             except Exception:
                 #print('PropID=%#d Not support' %(num))

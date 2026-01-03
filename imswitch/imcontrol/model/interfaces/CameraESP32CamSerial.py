@@ -4,8 +4,6 @@ from threading import Thread
 import numpy as np
 import serial.tools.list_ports
 import base64
-from PIL import Image
-import io
 import math
 
 class CameraESP32CamSerial:

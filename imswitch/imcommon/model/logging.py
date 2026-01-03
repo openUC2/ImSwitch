@@ -20,7 +20,7 @@ _signal_handler = None
 objLoggers = {}
 
 
-def setup_logging(log_level: str = "INFO", log_to_file: bool = True, 
+def setup_logging(log_level: str = "INFO", log_to_file: bool = True,
                  log_folder: Optional[str] = None, config_folder: Optional[str] = None):
     """
     Set up the logging system with configurable log level and file output.
@@ -32,11 +32,11 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = True,
         config_folder: Path to config folder (used as fallback for log_folder)
     """
     global _file_handler, baseLogger
-    
+
     # Convert log level string to logging level
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     baseLogger.setLevel(numeric_level)
-    
+
     # Setup console logging with coloredlogs if available
     if _coloredlogs_available:
         coloredlogs.install(level=numeric_level, logger=baseLogger,
@@ -45,7 +45,7 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = True,
     else:
         # Remove existing handlers to avoid duplicate logs
         baseLogger.handlers.clear()
-        
+
         # Setup console handler
         console_handler = logging.StreamHandler()
         console_handler.setLevel(numeric_level)
@@ -55,7 +55,7 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = True,
         )
         console_handler.setFormatter(console_formatter)
         baseLogger.addHandler(console_handler)
-    
+
     # Setup file logging if requested
     if log_to_file:
         # Determine log folder
@@ -65,19 +65,19 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = True,
                 from imswitch.imcommon.model.dirtools import UserFileDirs
                 config_folder = UserFileDirs.Root
             log_folder = os.path.join(config_folder, 'logs')
-        
+
         # Create log folder if it doesn't exist
         os.makedirs(log_folder, exist_ok=True)
-        
+
         # Create log filename with timestamp
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         log_filename = os.path.join(log_folder, f'imswitch_{timestamp}.log')
-        
+
         # Remove old file handler if it exists
         if _file_handler is not None:
             baseLogger.removeHandler(_file_handler)
             _file_handler.close()
-        
+
         # Create new file handler
         _file_handler = logging.FileHandler(log_filename, encoding='utf-8')
         _file_handler.setLevel(numeric_level)
@@ -87,9 +87,9 @@ def setup_logging(log_level: str = "INFO", log_to_file: bool = True,
         )
         _file_handler.setFormatter(file_formatter)
         baseLogger.addHandler(_file_handler)
-        
+
         baseLogger.info(f"Logging to file: {log_filename}")
-    
+
     return baseLogger
 
 
@@ -120,20 +120,20 @@ else:
 
 class SignalEmittingHandler(logging.Handler):
     """Custom logging handler that emits log messages via signals."""
-    
+
     def __init__(self, signal=None):
         super().__init__()
         self._signal = signal
-    
+
     def set_signal(self, signal):
         """Set or update the signal to emit log messages to."""
         self._signal = signal
-    
+
     def emit(self, record):
         """Emit a log record via signal."""
         if self._signal is None:
             return
-        
+
         try:
             log_entry = self.format(record)
             # Emit signal with log data as individual parameters
@@ -145,7 +145,7 @@ class SignalEmittingHandler(logging.Handler):
                 record.getMessage(),
                 log_entry
             )
-        except (TypeError, AttributeError, RuntimeError) as e:
+        except (TypeError, AttributeError, RuntimeError):
             # Silently ignore signal emission errors to avoid breaking logging
             # These typically occur when the signal is not properly configured
             pass
@@ -181,7 +181,7 @@ class LoggerAdapter(logging.LoggerAdapter):
             )
         else:
             processedMsg = f'[{" -> ".join(processedPrefixes)}] {msg}'
-            
+
         return processedMsg, kwargs
 
     def error(self, msg, *args, **kwargs):
@@ -217,11 +217,11 @@ def enable_signal_emission(signal):
         signal: A signal object with an emit method that accepts a dict
     """
     global _signal_handler, baseLogger
-    
+
     # Remove old signal handler if it exists
     if _signal_handler is not None:
         baseLogger.removeHandler(_signal_handler)
-    
+
     # Create and add new signal handler
     _signal_handler = SignalEmittingHandler(signal)
     _signal_handler.setLevel(logging.DEBUG)  # Emit all levels
@@ -231,11 +231,11 @@ def enable_signal_emission(signal):
     )
     _signal_handler.setFormatter(formatter)
     baseLogger.addHandler(_signal_handler)
-    
+
     baseLogger.debug("Signal emission enabled for logging")
 
 
-def initLogger(obj, *, instanceName=None, tryInheritParent=False, level=None, 
+def initLogger(obj, *, instanceName=None, tryInheritParent=False, level=None,
                format_string=None, include_traceback=False, extra_prefixes=None,
                logger_name_override=None):
     """ 
@@ -283,10 +283,10 @@ def initLogger(obj, *, instanceName=None, tryInheritParent=False, level=None,
         # Build prefix list
         prefixes = []
         prefixes.append(objName)
-        
+
         if instanceName:
             prefixes.append(instanceName)
-            
+
         if extra_prefixes:
             if isinstance(extra_prefixes, str):
                 prefixes.append(extra_prefixes)

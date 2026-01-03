@@ -49,16 +49,16 @@ def pick_first_external_folder(default_data_path: str) -> Optional[str]:
         return None
 
     SYSTEM_VOLUMES = {"Macintosh HD", "System Volume Information", "Recovery", "Preboot", "VM"}
-    
+
     for d in sorted(os.listdir(default_data_path)):
         full_path = os.path.join(default_data_path, d)
         if not os.path.isdir(full_path):
             continue
-        
+
         # Exclude system volumes and hidden directories
         if d not in SYSTEM_VOLUMES and not d.startswith('.') and is_writable_directory(full_path):
             return full_path
-    
+
     return None
 
 
@@ -136,18 +136,18 @@ class UserFileDirs(FileDirs):
     This class now uses the simplified storage_paths module for path resolution.
     Paths are resolved dynamically to support runtime changes via API.
     """
-    
+
     Root = _baseUserFilesDir
     Config = os.path.join(_baseUserFilesDir, 'config')
     Data = get_data_path()  # Dynamic resolution using storage_paths
-    
+
     @classmethod
     def refresh_paths(cls):
         """Refresh paths from current configuration. Call this after runtime path changes."""
         cls.Root = get_config_path()
         cls.Config = os.path.join(cls.Root, 'config')
         cls.Data = get_data_path()
-    
+
     @classmethod
     def getValidatedDataPath(cls) -> str:
         """
@@ -166,13 +166,13 @@ class UserFileDirs(FileDirs):
         from imswitch.imcommon.model.storage_paths import validate_path
         from imswitch.imcommon.model.storage_scanner import StorageScanner
         from imswitch.config import get_config
-        
+
         # 1. Try current configured data path
         current_path = get_data_path()
         is_valid, _ = validate_path(current_path)
         if is_valid:
             return current_path
-        
+
         # 2. Try to create current path if it doesn't exist
         if current_path:
             try:
@@ -182,7 +182,7 @@ class UserFileDirs(FileDirs):
                     return current_path
             except (OSError, PermissionError):
                 pass  # Fall through to next option
-        
+
         # 3. If external scanning is enabled, try external drives
         config = get_config()
         if config.scan_ext_data_folder and config.ext_data_folder:
@@ -192,7 +192,7 @@ class UserFileDirs(FileDirs):
             external_path = scanner.pick_first_external_folder(mount_paths[0] if mount_paths else None)
             if external_path:
                 return external_path
-        
+
         # 4. Last resort: use config_path/data (always create)
         fallback_path = os.path.join(get_config_path(), 'data')
         os.makedirs(fallback_path, exist_ok=True)

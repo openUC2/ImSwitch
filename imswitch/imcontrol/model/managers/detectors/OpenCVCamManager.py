@@ -179,11 +179,11 @@ class OpenCVCamManager(DetectorManager):
     def _getOpenCVObj(self, cameraindex=0, isRGB=0):
         try:
             from imswitch.imcontrol.model.interfaces.opencvcam import CameraOpenCV
-            self.__logger.debug(f'Trying to initialize OpenCV IMX219 camera')
+            self.__logger.debug('Trying to initialize OpenCV IMX219 camera')
             camera = CameraOpenCV(cameraindex, isRGB=isRGB)
         except Exception as e:
             self.__logger.error(e)
-            self.__logger.warning(f'Failed to initialize OpenCV IMX219 camera, loading TIS mocker')
+            self.__logger.warning('Failed to initialize OpenCV IMX219 camera, loading TIS mocker')
             from imswitch.imcontrol.model.interfaces.tiscamera_mock import MockCameraTIS
             camera = MockCameraTIS()
 

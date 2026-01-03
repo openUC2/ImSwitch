@@ -1,4 +1,3 @@
-import numpy as np
 
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter
@@ -177,16 +176,16 @@ class PiCamManager(DetectorManager):
         """ Returns comprehensive Picamera2 status information. """
         # Get base status from parent class
         status = super().getCameraStatus()
-        
+
         # Add Picamera2-specific information
         status['cameraType'] = 'Picamera2'
         status['isMock'] = False
         status['isConnected'] = self._camera is not None and hasattr(self._camera, 'camera_is_open') and self._camera.camera_is_open
-        
+
         # Add acquisition status
         status['isAcquiring'] = self._running
         status['isAdjustingParameters'] = self._adjustingParameters
-        
+
         # Try to get camera-specific information
         try:
             if hasattr(self._camera, 'camera_is_open'):
@@ -195,7 +194,7 @@ class PiCamManager(DetectorManager):
                 status['cameraIndex'] = self._camera.cameraindex
         except Exception as e:
             self.__logger.debug(f"Could not retrieve camera-specific information: {e}")
-        
+
         return status
 
 # Copyright (C) ImSwitch developers 2021

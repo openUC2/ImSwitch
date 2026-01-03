@@ -65,7 +65,8 @@ dependencies = [
     "mikro-next>=0.18.0",
     "arkitekt-next[all]==0.30.1",
     "koil>=2.0.5",
-    "msgpack>=1.0.4"
+    "msgpack>=1.0.4", 
+    "esptool"
 ]
 
 [project.optional-dependencies]

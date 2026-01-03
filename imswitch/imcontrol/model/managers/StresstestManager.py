@@ -2,7 +2,7 @@ import json
 import os
 
 from imswitch.imcommon.model import dirtools
-from imswitch.imcommon.framework import Signal, SignalInterface
+from imswitch.imcommon.framework import SignalInterface
 from imswitch.imcommon.model import initLogger
 
 
@@ -83,7 +83,7 @@ class StresstestManager(SignalInterface):
             if key in self.defaultParams:
                 setattr(self, key, value)
                 self.defaultParams[key] = value
-        
+
         # Save updated configuration
         self.writeConfig(self.getDefaultParams())
 

@@ -1,4 +1,4 @@
-from qtpy import QtCore, QtWidgets
+from qtpy import QtWidgets
 from PyQt5.QtCore import Qt
 
 

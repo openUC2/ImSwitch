@@ -1,4 +1,3 @@
-import asyncio
 from typing import Mapping
 
 import numpy as np
@@ -6,12 +5,6 @@ from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import pythontools, APIExport, SharedAttributes
 from imswitch.imcommon.model import initLogger
 
-import numpy as np
-from PIL import Image
-from io import BytesIO
-from fastapi.responses import StreamingResponse
-from fastapi import FastAPI, Response
-import cv2
 
 class CommunicationChannel(SignalInterface):
     """
@@ -20,8 +13,8 @@ class CommunicationChannel(SignalInterface):
     """
 
     sigUpdateStreamFrame = Signal()
-    
-    
+
+
     sigUpdateImage = Signal(
         str, np.ndarray, bool, list, bool
     )  # (detectorName, image, init, scale, isCurrentDetector)
@@ -104,7 +97,7 @@ class CommunicationChannel(SignalInterface):
     sigAutoFocusRunning = Signal(bool) # indicate if autofocus is running or not
     sigAutoFocusLiveValue = Signal(object) # live focus value during monitoring mode {"focus_value": float, "timestamp": float}
 
-    # Objective 
+    # Objective
     sigToggleObjective = Signal(int) # objective slot number 1,2
     sigSetObjectiveByName = Signal(str) # objective name (e.g., "10x", "20x")
     sigSetObjectiveByID = Signal(str) # objective ID

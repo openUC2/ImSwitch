@@ -1,6 +1,5 @@
 import time
 import threading
-import numpy as np
 import tifffile
 from collections import deque
 import os
@@ -67,7 +66,7 @@ class OmeTiffStitcher:
         # ensure the folder exists if it does not create it
         if not os.path.exists(os.path.dirname(self.file_path)):
             os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
-        
+
         if self.isRGB:
             photometric = "rgb"
         else:

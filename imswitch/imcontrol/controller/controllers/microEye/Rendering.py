@@ -1,12 +1,10 @@
 
-from os import name
 
-import cv2
 import numba
 import numpy as np
 
 
-from scipy.interpolate import interp1d, UnivariateSpline
+from scipy.interpolate import interp1d
 
 
 def model(xc, yc, sigma_x, sigma_y, flux, offset, X, Y):

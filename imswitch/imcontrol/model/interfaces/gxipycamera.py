@@ -1,9 +1,6 @@
-from logging import raiseExceptions
 import numpy as np
 import time
-import cv2
 from imswitch.imcommon.model import initLogger
-from PIL import Image
 from typing import List
 
 from skimage.filters import gaussian, median
@@ -102,12 +99,12 @@ class CameraGXIPY:
 
         # set camera to mono12 mode
         availablePixelFormats = self.camera.PixelFormat.get_range()
-        
+
         try:
             self.set_pixel_format(list(availablePixelFormats)[-1]) # last one is at highest bitrate
         except Exception as e:
             self.__logger.error(e)
-        
+
         # Detect RGB after pixel format is set
         self.isRGB = self._detect_rgb_camera()
         self.__logger.debug(f"RGB camera detected: {self.isRGB}")
@@ -145,7 +142,7 @@ class CameraGXIPY:
         if self.is_streaming:
             return
         self.flushBuffer()
-        
+
         # Re-register callback if needed (in case it was deregistered during stop)
         if hasattr(self, '_callback_registered') and not self._callback_registered:
             try:
@@ -155,7 +152,7 @@ class CameraGXIPY:
                 self.__logger.debug("Callback re-registered successfully")
             except Exception as e:
                 self.__logger.warning(f"Failed to re-register capture callback: {e}")
-        
+
         # start data acquisition
         self.camera.stream_on()
         self.is_streaming = True
@@ -163,13 +160,13 @@ class CameraGXIPY:
     def stop_live(self):
         if not self.is_streaming:
             return
-        
+
         # Stop stream first
         try:
             self.camera.stream_off()
         except Exception as e:
             self.__logger.warning(f"Failed to stop stream: {e}")
-        
+
         # Deregister callback to ensure clean state for next start
         if hasattr(self, '_callback_registered') and self._callback_registered:
             try:
@@ -178,7 +175,7 @@ class CameraGXIPY:
                 self.__logger.debug("Callback deregistered successfully")
             except Exception as e:
                 self.__logger.warning(f"Failed to deregister callback: {e}")
-        
+
         self.is_streaming = False
 
     def suspend_live(self):
@@ -190,7 +187,7 @@ class CameraGXIPY:
     def close(self):
         if self.is_streaming:
             self.stop_live()
-        
+
         # Ensure callback is deregistered before closing
         if hasattr(self, '_callback_registered') and self._callback_registered:
             try:
@@ -198,7 +195,7 @@ class CameraGXIPY:
                 self._callback_registered = False
             except Exception as e:
                 self.__logger.warning(f"Failed to deregister callback during close: {e}")
-        
+
         try:
             self.camera.close_device()
         except Exception as e:
@@ -261,7 +258,7 @@ class CameraGXIPY:
         if self.camera.PixelFormat.is_implemented() and self.camera.PixelFormat.is_writable():
             # Determine if format is RGB/Bayer
             is_rgb_format = 'BAYER' in format or 'RGB' in format or 'BGR' in format
-            
+
             if format == 'MONO8':
                 result = self.camera.PixelFormat.set(gx.GxPixelFormatEntry.MONO8)
             elif format == 'MONO10':
@@ -281,7 +278,7 @@ class CameraGXIPY:
             else:
                 self.__logger.warning(f"Unknown pixel format: {format}")
                 return -1
-            
+
             # Update RGB flag based on format
             self.isRGB = is_rgb_format
             self.__logger.debug(f"Pixel format set to {format}, isRGB={self.isRGB}")
@@ -410,7 +407,7 @@ class CameraGXIPY:
         return property_value
 
     def getPropertyValue(self, property_name):
-        """Get camera property values with improved error handling.""" 
+        """Get camera property values with improved error handling."""
         try:
             # Check if the property exists.
             if property_name == "gain":
@@ -455,7 +452,7 @@ class CameraGXIPY:
         was_streaming = self.is_streaming
         if was_streaming:
             self.suspend_live()
-            
+
         tlow = str(trigger_source).lower()
         try:
             if tlow.find("cont") >= 0 or trigger_source == 'Continuous':
@@ -502,14 +499,14 @@ class CameraGXIPY:
 
             # Set trigger source to LINE2 (external trigger)
             self.camera.TriggerSource.set(gx.GxTriggerSourceEntry.LINE2)
-            
+
             # Configure trigger line settings
             if self.camera.LineSelector.is_implemented():
                 self.camera.LineSelector.set(2)  # Select LINE2
-                
+
             if self.camera.LineMode.is_implemented():
                 self.camera.LineMode.set(0)  # Set as input
-                
+
             # Set trigger activation to rising edge (default)
             if self.camera.TriggerActivation.is_implemented():
                 self.camera.TriggerActivation.set(gx.GxTriggerActivationEntry.RISING_EDGE)
@@ -526,7 +523,7 @@ class CameraGXIPY:
             self.trigger_mode = TriggerMode.HARDWARE
             self.flushBuffer()
             self.__logger.debug("Hardware trigger acquisition configured successfully")
-            
+
         except Exception as e:
             self.__logger.error(f"Failed to configure hardware trigger: {e}")
             # Fall back to software trigger
@@ -541,7 +538,7 @@ class CameraGXIPY:
             # First check if PixelColorFilter is implemented (indicates Bayer pattern sensor)
             if self.camera.PixelColorFilter.is_implemented():
                 return True
-                
+
             # Check available pixel formats for color formats
             available_formats = self.camera.PixelFormat.get_range()
             rgb_keywords = ['RGB', 'BGR', 'BAYER', 'COLOR']
@@ -549,16 +546,16 @@ class CameraGXIPY:
                 fmt_str = str(fmt).upper()
                 if any(keyword in fmt_str for keyword in rgb_keywords):
                     return True
-                    
+
             # Check device model name for RGB indicators
             if hasattr(self.camera, 'DeviceModelName') and self.camera.DeviceModelName.is_readable():
                 model_name = self.camera.DeviceModelName.get()
                 if 'RGB' in model_name.upper() or 'COLOR' in model_name.upper():
                     return True
-                    
+
         except Exception as e:
             self.__logger.debug(f"Error during RGB detection: {e}")
-            
+
         return False
 
     def getTriggerTypes(self) -> List[str]:
@@ -568,7 +565,7 @@ class CameraGXIPY:
                 return ["Camera not connected"]
             return [
                 "Continuous",
-                "Internal trigger", 
+                "Internal trigger",
                 "External trigger"
             ]
         except Exception as e:
@@ -590,7 +587,7 @@ class CameraGXIPY:
         return self.send_trigger()
 
     def send_trigger(self):
-        """Fire software trigger pulse.""" 
+        """Fire software trigger pulse."""
         if self.is_streaming:
             self.camera.TriggerSoftware.send_command()
             return True
@@ -612,7 +609,7 @@ class CameraGXIPY:
 
         try:
             numpy_image = None
-            
+
             # Check if frame has RGB/Bayer data by checking if convert method works
             # This is more robust than relying on isRGB flag
             try:
@@ -628,7 +625,7 @@ class CameraGXIPY:
 
                     # create numpy array with data from RGB image
                     numpy_image = rgb_image.get_numpy_array()
-                    
+
                     if numpy_image is not None and not self.isRGB:
                         # Update flag if we detected RGB capability
                         self.isRGB = True
@@ -636,7 +633,7 @@ class CameraGXIPY:
             except Exception as e:
                 # convert() failed, likely a mono camera
                 self.__logger.debug(f"RGB conversion not available: {e}")
-            
+
             # Fallback to mono if RGB conversion failed
             if numpy_image is None:
                 numpy_image = frame.get_numpy_array()
@@ -644,7 +641,7 @@ class CameraGXIPY:
                     # Update flag if RGB conversion failed
                     self.isRGB = False
                     self.__logger.info("Switching to mono mode - RGB conversion unavailable")
-            
+
             if numpy_image is None:
                 self.__logger.error("Failed to get numpy array from frame")
                 return
@@ -654,15 +651,15 @@ class CameraGXIPY:
                 numpy_image = np.flip(numpy_image, axis=0)
             if self.flipImage[1]: # X
                 numpy_image = np.flip(numpy_image, axis=1)
-                
+
             self.frame = numpy_image.copy()
             self.frameNumber = frame.get_frame_id()
             self.timestamp = time.time()
 
-            # Add to ring buffer 
+            # Add to ring buffer
             self.frame_buffer.append(numpy_image)
             self.frameid_buffer.append(self.frameNumber)
-            
+
         except Exception as e:
             self.__logger.error(f"Error processing frame: {e}")
             return

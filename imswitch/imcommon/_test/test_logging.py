@@ -2,30 +2,26 @@
 Unit tests for enhanced logging functionality.
 """
 
-import pytest
 import os
 import tempfile
 import shutil
-import logging
-from datetime import datetime
-from unittest.mock import Mock, MagicMock
 
-from imswitch.imcommon.model import setup_logging, enable_signal_emission, get_log_folder, initLogger
+from imswitch.imcommon.model import setup_logging, get_log_folder, initLogger
 
 
 class TestLoggingSetup:
     """Test the logging setup functionality."""
-    
+
     def setup_method(self):
         """Set up test environment with temporary directory."""
         self.test_dir = tempfile.mkdtemp()
         self.log_folder = os.path.join(self.test_dir, 'logs')
-    
+
     def teardown_method(self):
         """Clean up test environment."""
         if os.path.exists(self.test_dir):
             shutil.rmtree(self.test_dir)
-        
+
         # Reset logging handlers
         from imswitch.imcommon.model.logging import baseLogger
         for handler in baseLogger.handlers[:]:
@@ -40,7 +36,7 @@ class TestLoggingSetup:
             log_folder=self.log_folder,
             config_folder=None
         )
-        
+
         assert os.path.exists(self.log_folder)
         assert os.path.isdir(self.log_folder)
 
@@ -52,11 +48,11 @@ class TestLoggingSetup:
             log_folder=self.log_folder,
             config_folder=None
         )
-        
+
         # Check that at least one log file was created
         log_files = [f for f in os.listdir(self.log_folder) if f.endswith('.log')]
         assert len(log_files) > 0
-        
+
         # Check filename format
         log_file = log_files[0]
         assert log_file.startswith('imswitch_')
@@ -71,7 +67,7 @@ class TestLoggingSetup:
 
 class TestLoggerAdapter:
     """Test the LoggerAdapter functionality."""
-    
+
     def test_init_logger_basic(self):
         """Test basic logger initialization."""
         logger = initLogger('test_component')
@@ -85,7 +81,7 @@ class TestLoggerAdapter:
     def test_logger_messages(self):
         """Test that logger can log messages at different levels."""
         logger = initLogger('test_messages')
-        
+
         # These should not raise exceptions
         logger.debug("Debug message")
         logger.info("Info message")

@@ -1,7 +1,4 @@
 from qtpy import QtCore, QtWidgets
-from PyQt5.QtCore import pyqtSignal, Qt
-from PyQt5.QtWidgets import QPushButton, QColorDialog
-from PyQt5.QtGui import QPainter, QColor, QPixmap, QIcon
 
 from imswitch.imcontrol.view import guitools as guitools
 from .basewidgets import Widget

@@ -1,8 +1,7 @@
 import numpy as np
 
-from imswitch.imcommon.model import APIExport
 from imswitch.imcommon.model import initLogger
-from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter
+from .DetectorManager import DetectorManager, DetectorNumberParameter
 
 class ESP32SerialCamManager(DetectorManager):
     """ DetectorManager that deals with the ESP32 Serial Cam
@@ -119,7 +118,7 @@ class ESP32SerialCamManager(DetectorManager):
     def _getESP32CamObj(self, port ):
         try:
             from imswitch.imcontrol.model.interfaces.CameraESP32CamSerial import CameraESP32CamSerial
-            self.__logger.debug(f'Trying to initialize ESP32Camera')
+            self.__logger.debug('Trying to initialize ESP32Camera')
             camera = CameraESP32CamSerial(port)
         except Exception as e:
             self.__logger.warning(f'Failed to initialize PiCamera {e}, loading TIS mocker')

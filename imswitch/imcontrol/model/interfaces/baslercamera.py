@@ -1,11 +1,9 @@
 import numpy as np
-import time
 import cv2
 from imswitch.imcommon.model import initLogger
 
 import threading
 from pypylon import pylon
-from pypylon import genicam
 
 class CameraBasler:
     def __init__(self,cameraNo=None, exposure_time = 1000, gain = 0, blacklevel=100):

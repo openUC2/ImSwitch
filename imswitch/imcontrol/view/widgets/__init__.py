@@ -56,9 +56,7 @@ if not IS_HEADLESS:
     from .SquidStageScanWidget import SquidStageScanWidget
     from .ISMWidget import ISMWidget
     from .SettingsWidget import SettingsWidget
-    from .SLMWidget import SLMWidget
     from .TilingWidget import TilingWidget
-    from .basewidgets import WidgetFactory
     from .ULensesWidget import ULensesWidget
     from .ViewWidget import ViewWidget
     from .WatcherWidget import WatcherWidget

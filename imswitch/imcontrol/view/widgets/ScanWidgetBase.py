@@ -1,4 +1,3 @@
-import pyqtgraph as pg
 from qtpy import QtCore, QtWidgets
 from abc import abstractmethod
 

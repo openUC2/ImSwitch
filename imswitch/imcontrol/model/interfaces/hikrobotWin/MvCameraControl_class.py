@@ -1,7 +1,5 @@
 # -- coding: utf-8 --
 
-import sys
-import copy
 import ctypes
 
 from ctypes import *
@@ -16,7 +14,7 @@ import os
 if platform == "linux" or platform == "linux2":
     try:
         MvCamCtrldll = ctypes.cdll.LoadLibrary("/opt/MVS/lib/aarch64/libMvCameraControl.so")
-    except Exception as e:
+    except Exception:
         try:
             MvCamCtrldll = ctypes.cdll.LoadLibrary("/opt/MVS/lib/64/libMvCameraControl.so")
         except Exception as e:
@@ -32,7 +30,7 @@ elif platform == "win32":
     try:
         MvCamCtrldll = WinDLL(mFWD+'\\dll\\MvCameraControl.dll', winmode=0) # https://stackoverflow.com/questions/59330863/cant-import-dll-module-in-python
     except:
-        MvCamCtrldll = WinDLL('C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64\MvCameraControl.dll')#, winmode=1) # https://stackoverflow.com/questions/59330863/cant-import-dll-module-in-python
+        MvCamCtrldll = WinDLL(r'C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64\MvCameraControl.dll')#, winmode=1) # https://stackoverflow.com/questions/59330863/cant-import-dll-module-in-python
 
 
 

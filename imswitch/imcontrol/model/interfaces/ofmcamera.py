@@ -270,7 +270,7 @@ class ofmCamera(object):
                         if self.callback_fct is not None:
                             self.callback_fct(frame)
 
-                    except Exception as e:
+                    except Exception:
                         errorCounter+=1
 
                     # limit thread workload

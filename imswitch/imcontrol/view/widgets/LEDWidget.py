@@ -1,6 +1,5 @@
 from qtpy import QtCore, QtWidgets
 
-from imswitch.imcommon.view.guitools import colorutils
 from imswitch.imcontrol.view import guitools
 from .basewidgets import Widget
 
@@ -99,7 +98,7 @@ class LEDWidget(Widget):
 
         nameLabel = QtWidgets.QLabel(ledName)
         nameLabel.setStyleSheet(
-            f'font-size: 16px; font-weight: bold; padding: 0 6px 0 12px;'
+            'font-size: 16px; font-weight: bold; padding: 0 6px 0 12px;'
         )
 
         self.ledGrid.addWidget(nameLabel, len(self.ledModules), 0)

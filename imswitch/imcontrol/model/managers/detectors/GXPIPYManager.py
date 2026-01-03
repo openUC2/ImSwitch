@@ -1,4 +1,3 @@
-import numpy as np
 
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter, DetectorBooleanParameter
@@ -175,7 +174,7 @@ class GXPIPYManager(DetectorManager):
 
 
     def setTriggerSource(self, source):
-        """Set trigger source using the improved camera interface.""" 
+        """Set trigger source using the improved camera interface."""
         try:
             if source in ['Continuous', 'Continous']:  # Handle both old and new spellings
                 self._performSafeCameraAction(
@@ -338,30 +337,30 @@ class GXPIPYManager(DetectorManager):
         """ Returns comprehensive GXIPY camera status information. """
         # Get base status from parent class
         status = super().getCameraStatus()
-        
+
         # Add GXIPY-specific information
         status['cameraType'] = 'GXIPY'
         status['isMock'] = False  # GXIPY cameras are always real hardware
         status['isConnected'] = self._camera is not None and hasattr(self._camera, 'camera')
-        
+
         # Add acquisition status
         status['isAcquiring'] = self._running
         status['isAdjustingParameters'] = self._adjustingParameters
-        
+
         # Try to get additional camera information
         try:
             if hasattr(self._camera, 'camera') and self._camera.camera is not None:
                 status['isStreaming'] = self._camera.camera.is_streaming()
         except Exception as e:
             self.__logger.debug(f"Could not retrieve streaming status: {e}")
-        
+
         # Add current trigger source if available
         try:
             status['currentTriggerSource'] = self._camera.getTriggerSource()
             status['availableTriggerTypes'] = self._camera.getTriggerTypes()
         except Exception as e:
             self.__logger.debug(f"Could not retrieve trigger information: {e}")
-        
+
         return status
 
 # Copyright (C) ImSwitch developers 2021

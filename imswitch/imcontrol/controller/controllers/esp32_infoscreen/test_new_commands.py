@@ -6,18 +6,16 @@ This test verifies that the Python backend can handle all the new command-type m
 that are sent from the ESP32 when users interact with the display interface.
 """
 
-import json
-import time
 from uc2_serial_controller import UC2SerialController
 
 def test_command_message_handling():
     """Test that all command messages from the problem statement are handled correctly"""
-    
+
     print("🧪 Testing new command message handling...")
-    
+
     # Create controller (no connection needed for message testing)
     controller = UC2SerialController()
-    
+
     # Track which callbacks were called
     callback_results = {
         'objective_slot_command': [],
@@ -27,32 +25,32 @@ def test_command_message_handling():
         'pwm_command': [],
         'snap_image_command': []
     }
-    
+
     # Register callbacks for all new command types
     def on_objective_slot_command(data):
         callback_results['objective_slot_command'].append(data)
         print(f"✅ Objective slot command: {data}")
-    
+
     def on_motor_command(data):
         callback_results['motor_command'].append(data)
         print(f"✅ Motor command: {data}")
-    
+
     def on_motor_xy_command(data):
         callback_results['motor_xy_command'].append(data)
         print(f"✅ Motor XY command: {data}")
-    
+
     def on_led_command(data):
         callback_results['led_command'].append(data)
         print(f"✅ LED command: {data}")
-    
+
     def on_pwm_command(data):
         callback_results['pwm_command'].append(data)
         print(f"✅ PWM command: {data}")
-    
+
     def on_snap_image_command(data):
         callback_results['snap_image_command'].append(data)
         print(f"✅ Snap image command: {data}")
-    
+
     # Register callbacks
     controller.on_objective_slot_command(on_objective_slot_command)
     controller.on_motor_command(on_motor_command)
@@ -60,7 +58,7 @@ def test_command_message_handling():
     controller.on_led_command(on_led_command)
     controller.on_pwm_command(on_pwm_command)
     controller.on_snap_image_command(on_snap_image_command)
-    
+
     # Test messages from the problem statement
     test_messages = [
         '{"type":"objective_slot_command","data":{"slot":1}}',
@@ -100,18 +98,18 @@ def test_command_message_handling():
         '{"type":"pwm_command","data":{"channel":4,"value":847}}',
         '{"type":"snap_image_command"}'
     ]
-    
+
     print(f"\n📨 Processing {len(test_messages)} command messages...")
-    
+
     for i, message in enumerate(test_messages):
         print(f"\nMessage {i+1}/{len(test_messages)}: {message}")
         controller._handle_message(message)
-    
+
     # Verify all callback types were called
-    print(f"\n📊 Callback Results Summary:")
+    print("\n📊 Callback Results Summary:")
     for event_type, results in callback_results.items():
         print(f"  {event_type}: {len(results)} calls")
-        
+
     # Verify specific counts based on test messages
     expected_counts = {
         'objective_slot_command': 2,  # 2 slot commands
@@ -121,7 +119,7 @@ def test_command_message_handling():
         'pwm_command': 4,  # 4 PWM commands
         'snap_image_command': 1  # 1 snap command
     }
-    
+
     all_passed = True
     for event_type, expected_count in expected_counts.items():
         actual_count = len(callback_results[event_type])
@@ -130,21 +128,21 @@ def test_command_message_handling():
         else:
             print(f"❌ {event_type}: Expected {expected_count}, got {actual_count}")
             all_passed = False
-    
+
     if all_passed:
-        print(f"\n🎉 All command message tests passed!")
+        print("\n🎉 All command message tests passed!")
         return True
     else:
-        print(f"\n❌ Some command message tests failed!")
+        print("\n❌ Some command message tests failed!")
         return False
 
 def test_existing_functionality_preserved():
     """Test that existing message types still work"""
-    
-    print(f"\n🔄 Testing that existing functionality is preserved...")
-    
+
+    print("\n🔄 Testing that existing functionality is preserved...")
+
     controller = UC2SerialController()
-    
+
     # Test existing message types
     existing_messages = [
         '{"type": "status_update", "data": {"connected": true, "modules": {"motor": true, "led": true}}}',
@@ -155,7 +153,7 @@ def test_existing_functionality_preserved():
         '{"type": "sample_map_click", "data": {"pixel_x": 414, "pixel_y": 68, "sample_number": 12}}',
         '{"type": "image_captured", "data": {}}',
     ]
-    
+
     for message in existing_messages:
         print(f"Processing existing message: {message}")
         try:
@@ -164,21 +162,21 @@ def test_existing_functionality_preserved():
         except Exception as e:
             print(f"❌ Error processing message: {e}")
             return False
-    
+
     print("✅ All existing message types still work")
     return True
 
 if __name__ == "__main__":
     print("🚀 Testing New ESP32 Command Messages")
     print("=" * 60)
-    
+
     try:
         # Test new command message handling
         commands_passed = test_command_message_handling()
-        
+
         # Test existing functionality still works
         existing_passed = test_existing_functionality_preserved()
-        
+
         print("\n" + "=" * 60)
         if commands_passed and existing_passed:
             print("🎉 ALL TESTS PASSED!")
@@ -187,7 +185,7 @@ if __name__ == "__main__":
         else:
             print("❌ SOME TESTS FAILED!")
             exit(1)
-            
+
     except Exception as e:
         print(f"\n❌ Test suite failed with error: {e}")
         import traceback

@@ -1,6 +1,5 @@
-import numpy as np
 import pyqtgraph as pg
-from qtpy import QtCore, QtWidgets
+from qtpy import QtWidgets
 from pyqtgraph.parametertree import ParameterTree
 from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget

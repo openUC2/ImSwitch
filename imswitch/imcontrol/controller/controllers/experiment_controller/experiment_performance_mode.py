@@ -111,7 +111,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             # Finalize OME writers if they were created
             if file_writers:
                 self._finalize_ome_writers(file_writers)
-            
+
             # Set LED status to idle when scan completes successfully
             self.controller.set_led_status("idle")
 
@@ -255,7 +255,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             List of OMEWriter instances
         """
         file_writers = []
-        
+
         # Only create writers if single TIFF mode is enabled
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
         if not is_single_tiff_mode:
@@ -265,19 +265,19 @@ class ExperimentPerformanceMode(ExperimentModeBase):
 
         # Create experiment directory and file paths
         timeStamp, dirPath, mFileName = self.create_experiment_directory("performance_scan")
-        
+
         # Create shared individual_tiffs directory at the experiment root level
         shared_individual_tiffs_dir = os.path.join(dirPath, "individual_tiffs")
         os.makedirs(shared_individual_tiffs_dir, exist_ok=True)
-        
+
         # Create a single OME writer for all tiles in single TIFF mode
-        experiment_name = f"0_performance_scan"
+        experiment_name = "0_performance_scan"
         m_file_path = os.path.join(dirPath, f"{mFileName}_{experiment_name}.ome.tif")
         self._logger.debug(f"Performance mode single TIFF path: {m_file_path}")
-        
+
         # Create file paths with shared individual_tiffs directory
         file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
-        
+
         # Calculate combined tile and grid parameters for all positions
         all_tiles = [tile for tiles in snake_tiles for tile in tiles]  # Flatten all tiles
         if hasattr(self.controller, 'mDetector') and hasattr(self.controller.mDetector, '_shape'):
@@ -285,7 +285,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         else:
             tile_shape = (512, 512)  # Default shape
         grid_shape, grid_geometry = self.calculate_grid_parameters(all_tiles)
-        
+
         # Create writer configuration for single TIFF mode
         n_channels = sum(np.array(illumination_intensities) > 0)
         writer_config = self.create_writer_config(
@@ -299,7 +299,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             n_z_planes=1,  # Performance mode typically single Z
             n_channels=n_channels
         )
-        
+
         # Create single OME writer for all positions
         ome_writer = OMEWriter(
             file_paths=file_paths,
@@ -310,7 +310,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             logger=self._logger
         )
         file_writers.append(ome_writer)
-        
+
         return file_writers
 
     def _finalize_ome_writers(self, file_writers: List[OMEWriter]) -> None:
@@ -371,10 +371,10 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             self._scan_running = False
             if self._scan_thread and self._scan_thread.is_alive():
                 self._scan_thread.join(timeout=5.0)  # Wait up to 5 seconds for thread to finish
-            
+
             # Set LED status to idle
             self.controller.set_led_status("idle")
-            
+
             return {"status": "stopped", "message": "Performance mode scan stopped"}
         else:
             return {"status": "not_running", "message": "No performance mode scan is running"}

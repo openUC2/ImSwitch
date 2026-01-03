@@ -83,7 +83,8 @@ class DetectorsManager(MultiManager, SignalInterface):
         return self.detectorParams
 
     def __del__(self):
-        self._lvWorker.stop()
+        if hasattr(self, '_lvWorker'):
+            self._lvWorker.stop()
         if hasattr(super(), '__del__'):
             super().__del__()
 
@@ -112,7 +113,7 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._currentDetectorName = detectorName
         self.sigDetectorSwitched.emit(detectorName, oldDetectorName)
 
-        if self._thread.isRunning():
+        if hasattr(self, '_thread') and self._thread.isRunning():
             self.execOnCurrent(lambda c: c.updateLatestFrame(True))
 
     def execOnCurrent(self, func):

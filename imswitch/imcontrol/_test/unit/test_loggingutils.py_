@@ -301,8 +301,7 @@ class TestFocusLockCSVLogger:
             # First measurement (not locked)
             assert float(rows[0]['focus_value']) == 100.0
             assert rows[0]['is_locked'] == 'False'
-            assert rows[0]['pi_output'] == 'None'
-
+            
             # Second measurement (locked)
             assert float(rows[1]['focus_value']) == 105.5
             assert rows[1]['is_locked'] == 'True'

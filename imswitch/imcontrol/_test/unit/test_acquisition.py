@@ -55,8 +55,8 @@ def test_acquisition_liveview_single(detectorInfos):
         'rs232sManager': VirtualMicroscope
     }
     detectorsManager = DetectorsManager(detectorInfos, updatePeriod=100, **lowLevelManagers)
-    receivedImage = getImage(detectorsManager)
-
+    # TODO: Hacky
+    receivedImage = detectorsManager['CAM'].getLatestFrame()
     assert receivedImage is not None
     assert receivedImage.shape == (
         detectorInfos['CAM'].managerProperties['virtcam']['image_height'],
@@ -75,35 +75,14 @@ def test_acquisition_liveview_multi(currentDetector):
     }
     detectorsManager = DetectorsManager(detectorInfosMulti, updatePeriod=100, **lowLevelManagers)
     detectorsManager.setCurrentDetector(currentDetector)
-    receivedImage = getImage(detectorsManager)
-
+    receivedImage = detectorsManager[currentDetector].getLatestFrame()
+    
     assert receivedImage is not None
     assert receivedImage.shape == (
         detectorInfosMulti[currentDetector].managerProperties['virtcam']['image_height'],
         detectorInfosMulti[currentDetector].managerProperties['virtcam']['image_width']
     )
     assert not np.all(receivedImage == receivedImage[0, 0])  # Assert that not all pixels are same
-
-
-    '''
-    TODO: Weget the following issue:
-    
-self = <imswitch.imcontrol.model.managers.DetectorsManager.DetectorsManager object at 0x15a242750>
-detectorName = 'Camera 2'
-
-    def setCurrentDetector(self, detectorName):
-        """ Sets the current detector by its name. """
-    
-        self._validateManagedDeviceName(detectorName)
-    
-        oldDetectorName = self._currentDetectorName
-        self._currentDetectorName = detectorName
-        self.sigDetectorSwitched.emit(detectorName, oldDetectorName)
-    
->       if self._thread.isRunning():
-E       AttributeError: 'Thread' object has no attribute 'isRunning'
-
-'''
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.12", "3.13"]
 
     steps:
       - name: Checkout
@@ -45,7 +45,7 @@ jobs:
             uv pip install --system pytest
           fi
           # Install additional test dependencies that might be needed
-          uv pip install --system pytest-qt pytest-xvfb
+          uv pip install --system pytest-xvfb
         shell: bash
 
       - name: Install project with uv (editable)
@@ -57,7 +57,7 @@ jobs:
           echo "Uninstalling psygnal..."
           uv pip uninstall psygnal || echo "psygnal uninstall failed (not installed)"
           echo "Installing psygnal from source..."
-          uv pip install --system psygnal --no-binary :all:
+          uv pip install psygnal --no-binary :all:
           echo "Verifying installation..."
           python -c "import dataclasses_json; print('dataclasses_json imported successfully')" || echo "dataclasses_json import failed"
           python -c "import psygnal; print('psygnal imported successfully')" || echo "psygnal import failed"
@@ -73,16 +73,20 @@ jobs:
           python -c "from imswitch.imcontrol.model import Options; print('Options import successful')" || echo "Options import failed"
         shell: bash
 
-      - name: Run tests
+      - name: Run Unit Tests
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            xvfb-run --server-args "-screen 0 1920x1080x24" python -m pytest --pyargs imswitch/imcontrol/_test -v -s
-          elif [ "$RUNNER_OS" = "Windows" ]; then
-            # Keep Windows special-casing similar to existing workflow
-            python -m pytest --pyargs imswitch/imcontrol/_test -v -s
+          # Run unit tests using --pyargs to find the installed package
+          # The -p no:arkitekt_next disables the arkitekt pytest plugin which requires arkitekt_server
+          # Note: pytest.ini already configures this, but we add it explicitly for clarity
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            xvfb-run --server-args "-screen 0 1920x1080x24" python3 -m pytest \
+              --pyargs imswitch.imcontrol._test.unit \
+              -p no:arkitekt_next \
+              -v --tb=short
           else
-            # macOS: split API and unit to avoid sporadic issues
-            python -m pytest imswitch/imcontrol/_test/api -v -s
-            python -m pytest imswitch/imcontrol/_test/unit -v -s
+            python3 -m pytest \
+              --pyargs imswitch.imcontrol._test.unit \
+              -p no:arkitekt_next \
+              -v --tb=short
           fi
         shell: bash

@@ -57,7 +57,7 @@ jobs:
           echo "Uninstalling psygnal..."
           uv pip uninstall psygnal || echo "psygnal uninstall failed (not installed)"
           echo "Installing psygnal from source..."
-          uv pip install psygnal --no-binary :all:
+          uv pip install psygnal --system --no-binary :all:
           echo "Verifying installation..."
           python -c "import dataclasses_json; print('dataclasses_json imported successfully')" || echo "dataclasses_json import failed"
           python -c "import psygnal; print('psygnal imported successfully')" || echo "psygnal import failed"

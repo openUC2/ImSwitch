@@ -97,7 +97,7 @@ class MinimalZarrDataSource:
         else:
             # Direct path usage for newer Zarr versions
             store = self.file_name
-        
+
         self.image = zarr.group(store=store, overwrite=True)
         self._store = store
         self.image.attrs["description"] = "OME-Zarr from MinimalZarrDataSource"

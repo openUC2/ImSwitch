@@ -1,7 +1,6 @@
 from imswitch import IS_HEADLESS
 import time
 import numpy as np
-import scipy.ndimage as ndi
 import threading
 from scipy.optimize import curve_fit
 from imswitch.imcommon.model import initLogger, APIExport
@@ -114,15 +113,15 @@ class AutofocusController(ImConWidgetController):
 
         try:
             self.camera = self._master.detectorsManager[self.cameraName]
-        except Exception as e:
+        except Exception:
             self.cameraName = self._master.detectorsManager.getAllDeviceNames()[0]
             self.camera = self._master.detectorsManager[self.cameraName]
         try:
             self.stages = self._master.positionersManager[self.stageName]
-        except Exception as e:
+        except Exception:
             self.stageName = self._master.positionersManager.getAllDeviceNames()[0]
             self.stages = self._master.positionersManager[self.stageName]
-            
+
         self._commChannel.sigAutoFocus.connect(self.autoFocus)
 
         self._moveController = MovementController(self.stages)
@@ -171,7 +170,7 @@ class AutofocusController(ImConWidgetController):
         self._AutofocusThead.start()
 
     @APIExport(runOnUIThread=True)
-    def autoFocusFast(self, sweep_range: float = 150.0, speed: float = None, defocusz: int = 0, axis: str = gAxis, 
+    def autoFocusFast(self, sweep_range: float = 150.0, speed: float = None, defocusz: int = 0, axis: str = gAxis,
                       nCropsize: int = 2048, focusAlgorithm: str = "LAPE", static_offset: float = 0.0):
         """
         Continuous fast-sweep autofocus WITHOUT continuous Z-readback:
@@ -209,18 +208,18 @@ class AutofocusController(ImConWidgetController):
         if self.isLiveMonitoring:
             self.__logger.warning("Live monitoring already running")
             return {"status": "already_running", "period": self._liveMonitoringPeriod, "method": self._focusMethod}
-        
+
         self._liveMonitoringPeriod = max(0.1, float(period))  # minimum 0.1s
         self._focusMethod = method if method in ["LAPE", "GLVA", "JPEG"] else "LAPE"
         self._liveMonitoringCropsize = int(nCropsize)
-        
+
         self.isLiveMonitoring = True
         self._liveMonitoringThread = threading.Thread(
             target=self._doLiveMonitoringBackground,
             daemon=True
         )
         self._liveMonitoringThread.start()
-        
+
         self.__logger.info(f"Live focus monitoring started with period={self._liveMonitoringPeriod}s, method={self._focusMethod}, cropsize={self._liveMonitoringCropsize}")
         return {"status": "started", "period": self._liveMonitoringPeriod, "method": self._focusMethod, "cropsize": self._liveMonitoringCropsize}
 
@@ -229,11 +228,11 @@ class AutofocusController(ImConWidgetController):
         """Stop continuous live focus value monitoring."""
         if not self.isLiveMonitoring:
             return {"status": "not_running"}
-        
+
         self.isLiveMonitoring = False
         if self._liveMonitoringThread and self._liveMonitoringThread.is_alive():
             self._liveMonitoringThread.join(timeout=2.0)
-        
+
         self.__logger.info("Live focus monitoring stopped")
         return {"status": "stopped"}
 
@@ -253,7 +252,7 @@ class AutofocusController(ImConWidgetController):
             self._focusMethod = method
         if nCropsize is not None:
             self._liveMonitoringCropsize = int(nCropsize)
-        
+
         return {
             "status": "updated",
             "period": self._liveMonitoringPeriod,
@@ -275,48 +274,48 @@ class AutofocusController(ImConWidgetController):
     def _doLiveMonitoringBackground(self):
         """Background thread for continuous focus value monitoring."""
         self.__logger.info("Live monitoring thread started")
-        
+
         while self.isLiveMonitoring:
             try:
                 t_start = time.time()
-                
+
                 # Grab a fresh frame
                 frame = self.grabCameraFrame(frameSync=1)
                 if frame is None:
                     time.sleep(0.01)
                     continue
-                
+
                 # Process frame and calculate focus value using the configured cropsize
                 img = FrameProcessor.extract(frame, min(frame.shape[0], frame.shape[1], self._liveMonitoringCropsize))
                 if img.ndim == 3:
                     img = np.mean(img, axis=-1)
-                
+
                 focus_value, result_image = FrameProcessor.calculate_focus_measure_static(img, method=self._focusMethod)
-                
+
                 # Emit signal with focus value and timestamp
                 self._commChannel.sigAutoFocusLiveValue.emit({
                     "focus_value": float(focus_value),
                     "timestamp": time.time(),
                     "method": self._focusMethod
                 })
-                
+
                 # Sleep for remaining period time
                 elapsed = time.time() - t_start
                 sleep_time = max(0, self._liveMonitoringPeriod - elapsed)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
-                    
+
             except Exception as e:
                 self.__logger.error(f"Error in live monitoring: {e}")
                 time.sleep(0.1)  # avoid tight loop on repeated errors
-        
+
         self.__logger.info("Live monitoring thread stopped")
 
     def grabCameraFrame(self, frameSync: int = 2, returnFrameNumber: bool = False):
         # ensure we get a fresh frame
         timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
         cTime = time.time()
-        
+
         lastFrameNumber=-1
         currentFrameNumber = None
         while(1):
@@ -327,14 +326,14 @@ class AutofocusController(ImConWidgetController):
                 lastFrameNumber = currentFrameNumber
             if time.time()-cTime> timeoutFrameRequest:
                 # in case exposure time is too long we need break at one point
-                if mFrame is None: 
-                    mFrame = self.camera.getLatestFrame(returnFrameNumber=False) 
+                if mFrame is None:
+                    mFrame = self.camera.getLatestFrame(returnFrameNumber=False)
                 break
             if currentFrameNumber <= lastFrameNumber+frameSync:
                 time.sleep(0.01) # off-load CPU
             else:
                 break
-        
+
         if returnFrameNumber:
             return mFrame, currentFrameNumber
         return mFrame
@@ -350,26 +349,26 @@ class AutofocusController(ImConWidgetController):
             # Stage 1: Coarse scan
             self.__logger.info(f"Starting autofocus - Stage 1: Coarse scan (range=±{rangez}, resolution={resolutionz})")
             best_z_coarse = self._doSingleAutofocusScan(rangez, resolutionz, defocusz, axis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset)
-            
+
             if best_z_coarse is None or not self.isAutofusRunning:
                 self._commChannel.sigAutoFocusRunning.emit(False)
                 self.isAutofusRunning = False
                 return None
-            
+
             # Stage 2: Fine scan if enabled
             if twoStage:
                 # Fine scan with 10x finer parameters around the coarse best position
                 fine_rangez = rangez / 10.0
                 fine_resolutionz = resolutionz / 10.0
                 self.__logger.info(f"Starting autofocus - Stage 2: Fine scan (range=±{fine_rangez}, resolution={fine_resolutionz}) around z={best_z_coarse}")
-                
+
                 # Move to coarse best position first
                 self.stages.move(value=best_z_coarse, axis=axis, is_absolute=True, is_blocking=True)
                 time.sleep(tSettle * 2)
-                
+
                 # Perform fine scan centered at best_z_coarse
                 best_z_fine = self._doSingleAutofocusScan(fine_rangez, fine_resolutionz, defocusz, axis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset, center_position=best_z_coarse)
-                
+
                 if best_z_fine is None or not self.isAutofusRunning:
                     # If fine scan failed, use coarse result
                     final_z = best_z_coarse
@@ -378,18 +377,18 @@ class AutofocusController(ImConWidgetController):
                     self.__logger.info(f"Two-stage autofocus complete: Coarse={best_z_coarse:.2f}, Fine={best_z_fine:.2f}")
             else:
                 final_z = best_z_coarse
-            
+
             self._commChannel.sigAutoFocusRunning.emit(False)
             self.isAutofusRunning = False
             self.sigUpdateFocusValue.emit({"bestzpos": final_z})
             return final_z
-            
+
         except Exception as e:
             self.__logger.error(f"Autofocus error: {e}")
             self.isAutofusRunning = False
             self._commChannel.sigAutoFocusRunning.emit(False)
             return None
-    
+
     def _doSingleAutofocusScan(self, rangez:float, resolutionz:float, defocusz:float, axis:str, tSettle:float, isDebug:bool, nGauss:int, nCropsize:int, focusAlgorithm:str, static_offset:float, center_position:float=None):
         """
         Perform a single autofocus scan.
@@ -412,20 +411,20 @@ class AutofocusController(ImConWidgetController):
         """
         try:
             mProcessor = FrameProcessor(nGauss=nGauss, nCropsize=nCropsize, isDebug=isDebug, focusMethod=focusAlgorithm)
-            
+
             # Get center position for scan
             if center_position is None:
                 center_position = float(self.stages.getPosition()[axis])
-            
+
             # Calculate scan positions
             Nz = int(max(5, np.floor((abs(rangez)) / max(1e-6, abs(resolutionz))) + 1))
             relative_positions = np.linspace(-abs(rangez/2), abs(rangez/2), Nz).astype(float)
             absolute_positions = relative_positions + center_position
-            
+
             # Move to start position
             self.stages.move(value=absolute_positions[0], axis=axis, is_absolute=True, is_blocking=True)
             time.sleep(tSettle )  # allow some settling time
-            
+
             # Scan through positions
             for iz in range(Nz):
                 if not self.isAutofusRunning:
@@ -438,22 +437,22 @@ class AutofocusController(ImConWidgetController):
                     import tifffile as tif
                     # Save raw frames as-is (preserve original datatype)
                     if frame.dtype == np.uint8 or frame.dtype == np.uint16:
-                        tif.imwrite(f"autofocus_frame_z.tif", frame, append=True)
+                        tif.imwrite("autofocus_frame_z.tif", frame, append=True)
                     else:
                         # For float or other types, convert to float32
-                        tif.imwrite(f"autofocus_frame_z.tif", frame.astype(np.float32), append=True)
+                        tif.imwrite("autofocus_frame_z.tif", frame.astype(np.float32), append=True)
                 mProcessor.add_frame(frame, iz)
-            
+
             allfocusvals = np.array(mProcessor.getFocusValueList(Nz))
             mProcessor.stop()
-            
+
             # Move back to center before fitting
             self.stages.move(value=absolute_positions[0], axis=axis, is_absolute=True, is_blocking=True)
-            
+
             if not self.isAutofusRunning:
                 self.stages.move(value=center_position, axis=axis, is_absolute=True, is_blocking=True)
                 return center_position
-            
+
             # Plot data
             try:
                 if not IS_HEADLESS and hasattr(self._widget, "focusPlotCurve"):
@@ -462,28 +461,28 @@ class AutofocusController(ImConWidgetController):
                     self.sigUpdateFocusPlot.emit(absolute_positions[:len(allfocusvals)], allfocusvals)
             except Exception:
                 pass
-            
+
             # Fit Gaussian to find best position
             x0_fit, fit_y = _robust_gaussian_fit(absolute_positions[:len(allfocusvals)], allfocusvals)
-            
+
             # Plot fit
             try:
                 if fit_y is not None and not IS_HEADLESS and hasattr(self._widget, "focusPlotFitCurve"):
                     self._widget.focusPlotFitCurve.setData(absolute_positions[:len(allfocusvals)], fit_y)
             except Exception:
                 pass
-            
+
             # Move to best position
             best_target = float(x0_fit) + static_offset
             self.stages.move(value=best_target, axis=axis, is_absolute=True, is_blocking=True)
-            
+
             return best_target
-            
+
         except Exception as e:
             self.__logger.error(f"Single autofocus scan error: {e}")
             return None
     # ---------- Continuous fast-sweep autofocus with time→Z mapping (no continuous Z readback) ----------
-    def _doAutofocusFastBackground_timeMapped(self, sweep_range=150.0, speed=None, defocusz=0, axis=gAxis, 
+    def _doAutofocusFastBackground_timeMapped(self, sweep_range=150.0, speed=None, defocusz=0, axis=gAxis,
                                                nCropsize=2048, focusAlgorithm="LAPE", static_offset=0.0):
         self._commChannel.sigAutoFocusRunning.emit(True)
 
@@ -627,28 +626,28 @@ class FrameProcessor:
             img = img.astype(np.float32) / 65535.0
         elif img.dtype not in [np.float32, np.float64]:
             img = img.astype(np.float32)
-        
+
         # bin image prior to processing using imresize
         if self.binning > 1:
             import skimage.transform
             img = skimage.transform.resize(img, (img.shape[0] // self.binning, img.shape[1] // self.binning), anti_aliasing=True)
-        
+
         if self.flatFieldFrame is not None:
             img = img / (self.flatFieldFrame + 1e-12)
         img = self.extract(img, self.nCropsize)
         if len(img.shape) > 2:
             img = np.mean(img, -1)
-        # gauss filter? 
+        # gauss filter?
         if self.nGauss > 0:
             img = gaussian(img, sigma=self.nGauss)
-        
+
         # Normalize for debug TIFF saving to prevent wraparound
         if self.isDebug:
             import tifffile as tif
             # Save as float32 to preserve full dynamic range without wraparound
             img_save = np.clip(img, 0, None).astype(np.float32)
-            tif.imwrite(f"autofocus_proc_frame.tif", img_save, append=True)
-        
+            tif.imwrite("autofocus_proc_frame.tif", img_save, append=True)
+
         focusquality = self.calculate_focus_measure(img, method=self.focusMethod)
         self.allfocusvals.append(focusquality)
 
@@ -657,7 +656,7 @@ class FrameProcessor:
         # Ensure image is 2D grayscale
         if image.ndim == 3:
             image = cv2.cvtColor(image.astype(np.uint8) if image.dtype != np.uint8 else image, cv2.COLOR_RGB2GRAY)
-        
+
         # Normalize image to appropriate range for processing
         if image.dtype == np.float32 or image.dtype == np.float64:
             # Float images should be in [0, 1] range, convert to uint8 for OpenCV
@@ -668,7 +667,7 @@ class FrameProcessor:
         else:
             # Assume uint8 or convert to uint8
             image_norm = image.astype(np.uint8)
-        
+
         if method == "LAPE":
             # Use CV_64F for output to avoid overflow and ensure compatibility
             lap = cv2.Laplacian(image_norm, cv2.CV_64F)
@@ -686,7 +685,7 @@ class FrameProcessor:
                 return 0.0, image_norm
         else:
             return float(np.std(image_norm, axis=None)), image_norm
-        
+
 
     def calculate_focus_measure(self, image, method="LAPE"):
         focusValue, resultImage = self.calculate_focus_measure_static(image, method=method)

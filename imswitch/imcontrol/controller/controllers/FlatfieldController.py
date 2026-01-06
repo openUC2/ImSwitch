@@ -1,14 +1,11 @@
-from imswitch.imcommon.model import initLogger, ostools
+from imswitch.imcommon.model import initLogger
 import numpy as np
 import time
 import threading
 from imswitch import IS_HEADLESS
 from scipy.ndimage import gaussian_filter
-from collections import deque
 
-from imswitch.imcommon.model import dirtools, initLogger, APIExport
-from ..basecontrollers import ImConWidgetController
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
+from imswitch.imcommon.framework import Signal
 from ..basecontrollers import LiveUpdatedController
 
 

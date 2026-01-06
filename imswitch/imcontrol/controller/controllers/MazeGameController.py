@@ -5,11 +5,7 @@ import threading
 import queue
 import numpy as np
 import cv2
-from fastapi import FastAPI, Response
-from PIL import Image
-import io
 
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import initLogger, APIExport
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
@@ -88,13 +84,13 @@ class MazeGameController(ImConWidgetController):
             try:
                 self.positioner.move(value=startX, speed=20000, axis="X", is_absolute=True, is_blocking=True)
             except Exception as e:
-                self.__logger.error(f"MazeGameController: could not move to start position ({startX}, {startY}): {e}")  
+                self.__logger.error(f"MazeGameController: could not move to start position ({startX}, {startY}): {e}")
         if startY is not None and startY != 0:
             try:
                 self.positioner.move(value=startY, speed=20000, axis="Y", is_absolute=True, is_blocking=True)
             except Exception as e:
                 self.__logger.error(f"MazeGameController: could not move to start position ({startX}, {startY}): {e}")
-             
+
         with self._lock:
             if self._running:
                 return {"ok": True, "already_running": True}
@@ -166,34 +162,6 @@ class MazeGameController(ImConWidgetController):
     def setPollInterval(self, seconds: float = 0.03):
         self._poll_dt = max(0.005, float(seconds))
         return {"ok": True, "poll_dt": self._poll_dt}
-
-    @APIExport(runOnUIThread=False)
-    def getLatestProcessedPreview(self) -> Response:
-        """Return latest processed preview with overlay as PNG image."""
-        try:
-            was_high = False
-            self._last_preview = draw_overlay(gray, box, color=(0, 255, 0) if was_high else (255, 0, 0))
-            if hasattr(self, '_last_preview') and self._last_preview is not None:
-                im = Image.fromarray(self._last_preview)
-            else:
-                # fallback
-                frame = self.camera.getLatestFrame()  # get fresh frame for preview
-                gray = to_gray_float(frame)
-                crop, box = center_crop(gray, self._crop)
-                gray = draw_overlay(gray, box, color=(0, 255, 0))
-                im = Image.fromarray(to_uint8(gray))
-
-            # save image to an in-memory bytes buffer
-            with io.BytesIO() as buf:
-                im = im.convert("L")  # convert image to 'L' mode
-                im.save(buf, format="PNG")
-                im_bytes = buf.getvalue()
-
-            headers = {"Content-Disposition": 'inline; filename="test.png"'}
-            return Response(im_bytes, headers=headers, media_type="image/png")
-        except Exception as e:
-            self.__logger.error(f"Error generating preview image: {e}")
-            return Response(status_code=500, content="Error generating preview image")
 
 
     # ------------------------- Loops -------------------------

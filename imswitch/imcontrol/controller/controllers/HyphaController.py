@@ -1,10 +1,9 @@
 from imswitch.imcontrol.controller.controllers.hypha.hypha_storage import HyphaDataStore
 from imswitch.imcontrol.controller.controllers.hypha.hypha_executor import execute_code
 from imswitch.imcontrol.controller.basecontrollers import LiveUpdatedController
-from imswitch.imcommon.model import initLogger, APIExport
+from imswitch.imcommon.model import initLogger
 from imswitch import IS_HEADLESS
 try:
-    import NanoImagingPack as nip
     isNIP = True
 except:
     isNIP = False
@@ -14,21 +13,11 @@ import logging
 import os
 import fractions
 import numpy as np
-import numpy as np
 from av import VideoFrame
 from imjoy_rpc.hypha.sync import connect_to_server, register_rtc_service, login
 import cv2
-import logging
-import os
-import asyncio
 import threading
-from aiohttp import web
-from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc.contrib.media import MediaPlayer, MediaRelay, MediaStreamTrack
-from aiortc.rtcrtpsender import RTCRtpSender
-from av import VideoFrame
-import fractions
-import numpy as np
+from aiortc.contrib.media import MediaStreamTrack
 from pydantic import BaseModel, Field
 import tifffile as tif
 import time
@@ -257,7 +246,7 @@ class HyphaController(LiveUpdatedController):
         token: str - the token to log in to the server and will be replied by the server when you log in
 
         '''
-        self.__logger.debug(f"Starting service...")
+        self.__logger.debug("Starting service...")
         client_id = service_id + "-client"
 
         def autoLogin(message):
@@ -763,8 +752,7 @@ class VideoTransformTrack(MediaStreamTrack):
             #img = np.random.randint(0, 155, (150, 300, 3)).astype('uint8')
         else:
             img = np.random.randint(0, 155, (150, 300, 3)).astype('uint8')
-        from skimage import data, color
-        from skimage.transform import rescale, resize, downscale_local_mean
+        from skimage.transform import resize
         img = resize(img, (img.shape[0] // 4, img.shape[1] // 4, img.shape[2]),
                             anti_aliasing=True)
         img = np.uint8(img*255)

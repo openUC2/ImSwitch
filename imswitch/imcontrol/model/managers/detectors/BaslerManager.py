@@ -22,7 +22,7 @@ class BaslerManager(DetectorManager):
         self._camera = self._getBaslerObj(detectorInfo.managerProperties['cameraListIndex'])
         try:
             pixelSize = detectorInfo.managerProperties['cameraEffPixelsize'] # mum
-        except Exception as e:
+        except Exception:
             self.__logger.error("No value is given for the effective pixelsize in the config json!")
             pixelSize = 1
 

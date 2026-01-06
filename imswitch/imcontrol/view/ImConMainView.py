@@ -10,7 +10,7 @@ import importlib.util
 
 if not IS_HEADLESS:
     from pyqtgraph.dockarea import Dock, DockArea
-    from qtpy import QtCore, QtWidgets
+    from qtpy import QtWidgets
     from qtpy.QtWidgets import QMainWindow
     from imswitch.imcommon.view import PickDatasetsDialog
     from .PickSetupDialog import PickSetupDialog
@@ -22,7 +22,7 @@ class ImConMainView(QMainWindow):
     sigLoadParamsFromHDF5 = Signal()
     sigPickSetup = Signal()
     sigClosing = Signal()
-    
+
     def __init__(self, options, viewSetupInfo, *args, **kwargs):
         self.__logger = initLogger(self)
         self.__logger.debug('Initializing ImConMainView')
@@ -120,13 +120,13 @@ class ImConMainView(QMainWindow):
             'Watcher': _DockInfo(name='File Watcher', yPosition=3),
             'Tiling': _DockInfo(name='Tiling', yPosition=3)
             }
-        
+
         # Configuration tools - separated from UC2 and other widgets
         configDockInfos = {
             'UC2Config': _DockInfo(name='Hardware Config', yPosition=0),
             'PixelCalibration': _DockInfo(name='Pixel Calibration', yPosition=1),
         }
-        
+
         leftDockInfos = {
             'Settings': _DockInfo(name='Detector Settings', yPosition=0),
             'View': _DockInfo(name='Image Controls', yPosition=1),
@@ -236,7 +236,7 @@ class ImConMainView(QMainWindow):
             except Exception as e:
                 # try to get it from the plugins
                 foundPluginController = False
-                for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins'):
+                for entry_point in pkg_resources.iter_entry_points('imswitch.implugins'):
                     if entry_point.name == f'{widgetKey}_widget':
                         packageWidget = entry_point.load()
                         self.widgets[widgetKey] = self.factory.createWidget(packageWidget)
@@ -283,7 +283,7 @@ class ImConMainViewNoQt(object):
         widget_keys = {key: _DockInfo(name=key, yPosition=1) for key in enabledDockKeys if key not in disabledKeys}
         self._addWidgetNoQt(widget_keys)
         self.__logger.debug(f"Added widgets: {self.widgets.keys()}")
-        
+
     def closeEvent(self, event):
         self.sigClosing.emit()
         event.accept()
@@ -292,7 +292,7 @@ class ImConMainViewNoQt(object):
         # Preload all available plugins for widgets
         availablePlugins = {
             entry_point.name: entry_point
-            for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins')
+            for entry_point in pkg_resources.iter_entry_points('imswitch.implugins')
         }
 
         for widgetKey, dockInfo in dockInfoDict.items():

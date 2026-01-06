@@ -149,7 +149,7 @@ class DataObj:
 
     def checkLock(self):
         if self.attrs['writing']:
-            raise OSError(f'Writing in progress')
+            raise OSError('Writing in progress')
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

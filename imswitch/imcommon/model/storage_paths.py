@@ -29,17 +29,17 @@ def get_data_path() -> str:
         Absolute path to data storage directory
     """
     from imswitch.config import get_config
-    
+
     config = get_config()
-    
+
     # 1. Check runtime override (set via API)
     if hasattr(config, '_runtime_data_path') and config._runtime_data_path:
         return config._runtime_data_path
-    
+
     # 2. Check config/CLI argument
     if config.data_folder and os.path.isdir(config.data_folder):
         return config.data_folder
-    
+
     # 3. Fallback to default
     default = os.path.join(os.path.expanduser('~'), 'ImSwitchConfig', 'data')
     os.makedirs(default, exist_ok=True)
@@ -58,12 +58,12 @@ def get_config_path() -> str:
         Absolute path to configuration directory
     """
     from imswitch.config import get_config
-    
+
     config = get_config()
-    
+
     if config.config_folder and os.path.isdir(config.config_folder):
         return config.config_folder
-    
+
     default = os.path.join(os.path.expanduser('~'), 'ImSwitchConfig')
     os.makedirs(default, exist_ok=True)
     return default
@@ -85,23 +85,23 @@ def set_data_path(path: str) -> Tuple[bool, str]:
         - error_message: Empty string on success, error description on failure
     """
     from imswitch.config import get_config
-    
+
     # Validate path exists
     if not os.path.exists(path):
         return False, f"Path does not exist: {path}"
-    
+
     # Validate it's a directory
     if not os.path.isdir(path):
         return False, f"Path is not a directory: {path}"
-    
+
     # Validate it's writable
     if not os.access(path, os.W_OK):
         return False, f"Path is not writable: {path}"
-    
+
     # Set runtime override
     config = get_config()
     config._runtime_data_path = path
-    
+
     return True, ""
 
 
@@ -123,7 +123,7 @@ def get_storage_info(path: Optional[str] = None) -> Dict[str, Any]:
     """
     if path is None:
         path = get_data_path()
-    
+
     info = {
         "path": path,
         "exists": os.path.exists(path),
@@ -132,13 +132,13 @@ def get_storage_info(path: Optional[str] = None) -> Dict[str, Any]:
         "total_space_gb": 0.0,
         "percent_used": 0.0
     }
-    
+
     if not info["exists"]:
         return info
-    
+
     # Check writability
     info["writable"] = os.access(path, os.W_OK)
-    
+
     # Get disk usage
     try:
         usage = shutil.disk_usage(path)
@@ -147,7 +147,7 @@ def get_storage_info(path: Optional[str] = None) -> Dict[str, Any]:
         info["percent_used"] = round((usage.used / usage.total) * 100, 2)
     except Exception:
         pass
-    
+
     return info
 
 
@@ -173,7 +173,7 @@ def scan_external_drives(base_paths: List[str]) -> List[Dict[str, Any]]:
         ...     print(f"{drive['label']}: {drive['free_space_gb']} GB free")
     """
     from .storage_scanner import StorageScanner
-    
+
     scanner = StorageScanner()
     drives = scanner.scan_external_mounts(base_paths)
     return [drive.to_dict() for drive in drives]
@@ -192,16 +192,16 @@ def validate_path(path: str, min_free_gb: float = 1.0) -> Tuple[bool, str]:
     """
     if not path:
         return False, "Path is empty"
-    
+
     if not os.path.exists(path):
         return False, f"Path does not exist: {path}"
-    
+
     if not os.path.isdir(path):
         return False, f"Path is not a directory: {path}"
-    
+
     if not os.access(path, os.W_OK):
         return False, f"Path is not writable: {path}"
-    
+
     # Check free space
     try:
         usage = shutil.disk_usage(path)
@@ -210,7 +210,7 @@ def validate_path(path: str, min_free_gb: float = 1.0) -> Tuple[bool, str]:
             return False, f"Insufficient free space: {free_gb:.2f} GB < {min_free_gb} GB"
     except Exception as e:
         return False, f"Could not check disk usage: {e}"
-    
+
     return True, ""
 
 

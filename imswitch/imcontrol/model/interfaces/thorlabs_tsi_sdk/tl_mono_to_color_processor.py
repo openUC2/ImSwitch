@@ -3,7 +3,6 @@ tl_mono_to_color_processor.py
 """
 
 from ctypes import cdll, POINTER, c_int, c_ushort, c_void_p, c_char_p, c_float, c_ubyte
-from typing import Any
 from traceback import format_exception
 import logging
 import platform

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 
 class PositionerManager(ABC):
@@ -124,7 +124,7 @@ class PositionerManager(ABC):
         # result_pos = self._set_position(position, axis)
         # self._position[axis] = result_pos
         pass
-    
+
     def getPosition(self, axis: str) -> float:
         """ Returns the current position of the specified axis. """
         pass
@@ -181,7 +181,7 @@ class PositionerManager(ABC):
     def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):
         """ Move to sample loading position. """
         pass
-   
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

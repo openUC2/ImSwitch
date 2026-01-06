@@ -8,21 +8,17 @@ Tests storage management endpoints including:
 - Configuration path queries
 """
 import pytest
-import requests
 import os
 import tempfile
-import shutil
-from typing import Dict, Any
-from ..api import api_server, base_url
 
 
 def test_storage_status_endpoint(api_server):
     """Test that the storage status endpoint returns valid data."""
     response = api_server.get("/storageManager/status")
     assert response.status_code == 200
-    
+
     data = response.json()
-    
+
     # Check required fields
     assert "active_path" in data
     assert "fallback_path" in data
@@ -32,7 +28,7 @@ def test_storage_status_endpoint(api_server):
     assert "free_space_gb" in data
     assert "total_space_gb" in data
     assert "percent_used" in data
-    
+
     # Validate types
     assert isinstance(data["active_path"], str)
     assert data["fallback_path"] is None or isinstance(data["fallback_path"], str)
@@ -42,7 +38,7 @@ def test_storage_status_endpoint(api_server):
     assert isinstance(data["free_space_gb"], (int, float))
     assert isinstance(data["total_space_gb"], (int, float))
     assert isinstance(data["percent_used"], (int, float))
-    
+
     # Validate reasonable values
     assert data["free_space_gb"] >= 0
     assert data["total_space_gb"] >= 0
@@ -53,13 +49,13 @@ def test_external_drives_endpoint(api_server):
     """Test that the external drives endpoint returns valid data."""
     response = api_server.get("/storageManager/external-drives")
     assert response.status_code == 200
-    
+
     data = response.json()
-    
+
     # Check structure
     assert "drives" in data
     assert isinstance(data["drives"], list)
-    
+
     # If drives are found, validate their structure
     for drive in data["drives"]:
         assert "path" in drive
@@ -69,7 +65,7 @@ def test_external_drives_endpoint(api_server):
         assert "total_space_gb" in drive
         assert "filesystem" in drive
         assert "is_active" in drive
-        
+
         assert isinstance(drive["path"], str)
         assert isinstance(drive["label"], str)
         assert isinstance(drive["writable"], bool)
@@ -83,14 +79,14 @@ def test_config_paths_endpoint(api_server):
     """Test that the config paths endpoint returns valid data."""
     response = api_server.get("/storageManager/config-paths")
     assert response.status_code == 200
-    
+
     data = response.json()
-    
+
     # Check required fields
     assert "config_path" in data
     assert "data_path" in data
     assert "active_data_path" in data
-    
+
     # Validate types
     assert isinstance(data["config_path"], str)
     assert isinstance(data["data_path"], str) or data["data_path"] == ""
@@ -106,10 +102,10 @@ def test_set_active_path_with_valid_path(api_server):
             "path": tmpdir,
             "persist": False
         })
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         assert data["success"] is True
         assert data["active_path"] == tmpdir
         assert data["persisted"] is False
@@ -123,7 +119,7 @@ def test_set_active_path_with_invalid_path(api_server):
         "path": "/nonexistent/invalid/path",
         "persist": False
     })
-    
+
     # Should return error
     assert response.status_code == 400
     data = response.json()
@@ -136,12 +132,12 @@ def test_set_active_path_with_non_writable_path(api_server):
     # Skip this test if running as root
     if os.getuid() == 0:
         pytest.skip("Running as root, cannot test non-writable directory")
-    
+
     response = api_server.post("/storageManager/set-active-path", json={
         "path": "/root",
         "persist": False
     })
-    
+
     # Should return error or succeed if /root doesn't exist
     if response.status_code == 200:
         # Path validation might have different behavior
@@ -158,10 +154,10 @@ def test_update_config_paths_data_only(api_server):
             "data_path": tmpdir,
             "persist": False
         })
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         assert data["success"] is True
         assert "message" in data
         assert "config_path" in data
@@ -175,7 +171,7 @@ def test_update_config_paths_invalid_data_path(api_server):
         "data_path": "/nonexistent/invalid/path",
         "persist": False
     })
-    
+
     # Should return error
     assert response.status_code == 400
     data = response.json()
@@ -187,16 +183,16 @@ def test_storage_endpoints_in_openapi_spec(api_server):
     response = api_server.get("/openapi.json")
     assert response.status_code == 200
     spec = response.json()
-    
+
     # Check that our endpoints are in the spec
     paths = spec["paths"]
-    
+
     assert "/storageManager/status" in paths
     assert "/storageManager/external-drives" in paths
     assert "/storageManager/set-active-path" in paths
     assert "/storageManager/config-paths" in paths
     assert "/storageManager/update-config-path" in paths
-    
+
     # Validate methods
     assert "get" in paths["/storageManager/status"]
     assert "get" in paths["/storageManager/external-drives"]
@@ -211,12 +207,12 @@ def test_storage_status_consistency(api_server):
     status_response = api_server.get("/storageManager/status")
     assert status_response.status_code == 200
     status_data = status_response.json()
-    
+
     # Get config paths
     paths_response = api_server.get("/storageManager/config-paths")
     assert paths_response.status_code == 200
     paths_data = paths_response.json()
-    
+
     # Active paths should match
     assert status_data["active_path"] == paths_data["active_data_path"]
 
@@ -231,13 +227,13 @@ def test_set_and_verify_active_path(api_server):
             "persist": False
         })
         assert set_response.status_code == 200
-        
+
         # Verify in status
         status_response = api_server.get("/storageManager/status")
         assert status_response.status_code == 200
         status_data = status_response.json()
         assert status_data["active_path"] == tmpdir
-        
+
         # Verify in config paths
         paths_response = api_server.get("/storageManager/config-paths")
         assert paths_response.status_code == 200
@@ -248,11 +244,11 @@ def test_set_and_verify_active_path(api_server):
 def test_storage_api_error_handling(api_server):
     """Test that storage API endpoints handle errors gracefully."""
     # Test with malformed JSON
-    response = api_server.post("/storageManager/set-active-path", 
+    response = api_server.post("/storageManager/set-active-path",
                                data="invalid json",
                                headers={"Content-Type": "application/json"})
     assert response.status_code in [400, 422]  # Bad request or validation error
-    
+
     # Test with missing required fields
     response = api_server.post("/storageManager/set-active-path", json={})
     assert response.status_code == 422  # Validation error

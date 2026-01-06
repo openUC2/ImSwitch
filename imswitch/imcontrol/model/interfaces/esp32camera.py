@@ -1,5 +1,4 @@
 from imswitch.imcommon.model import initLogger
-from imswitch.imcontrol.model.interfaces.restapicamera import RestPiCamera
 
 from PIL import Image
 import io
@@ -308,7 +307,7 @@ class ESP32Camera(object):
                         if self.callback_fct is not None:
                             self.callback_fct(frame)
 
-                    except Exception as e:
+                    except Exception:
                         errorCounter+=1
 
                     # limit thread workload

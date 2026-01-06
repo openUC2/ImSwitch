@@ -5,16 +5,12 @@ import subprocess
 import platform
 import numpy as np
 import cv2
-import json
-import shutil
-import struct
 from datetime import timedelta
 from threading import Thread, Event
 from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import LiveUpdatedController
-from imswitch import IS_HEADLESS
-from typing import Dict, List, Union, Optional
+from typing import Dict, Optional
 from fastapi import Response
 import io
 
@@ -51,7 +47,7 @@ except ImportError:
 # Lepmon Hardware Configuration (from LepmonOS GPIO_Setup.py)
 LED_PINS = {
     'gelb': 22,    # GPIO 22 for yellow LED
-    'blau': 6,     # GPIO 6 for blue LED  
+    'blau': 6,     # GPIO 6 for blue LED
     'rot': 17      # GPIO 17 for red LED
 }
 
@@ -62,7 +58,7 @@ BUTTON_PINS = {
     'enter': 7      # GPIO 7 for enter button
 }
 
-# OLED Display Configuration  
+# OLED Display Configuration
 OLED_I2C_PORT = 1
 OLED_I2C_ADDRESS = 0x3C
 
@@ -70,7 +66,7 @@ OLED_I2C_ADDRESS = 0x3C
 I2C_BUS = 1  # I2C bus number
 SENSOR_ADDRESSES = {
     "temperature": 0x48,  # Example temperature sensor address
-    "humidity": 0x40,     # Example humidity sensor address  
+    "humidity": 0x40,     # Example humidity sensor address
     "pressure": 0x77      # Example pressure sensor address
 }
 
@@ -152,7 +148,7 @@ class LepmonController(LiveUpdatedController):
         self.lightStates = {}  # Track light on/off states
         self.lcdDisplay = {"line1": "", "line2": "", "line3": "", "line4": ""}  # LCD display content
         self.buttonStates = {"oben": False, "unten": False, "rechts": False, "enter": False}
-        
+
         # Initialize timing configurations
         self.timingConfig = {
             "acquisitionInterval": 60,  # seconds between acquisitions
@@ -170,7 +166,7 @@ class LepmonController(LiveUpdatedController):
         self.version = "V1.0"
         self.date = "2024"
         self.serial_number = "LEPMON001"
-        
+
         # LepmonOS experiment control
         self.stop_event = Event()
         self.uv_led_active = False
@@ -178,19 +174,19 @@ class LepmonController(LiveUpdatedController):
         self.experiment_start_time = None
         self.experiment_end_time = None
         self.lepiled_end_time = None
-        
+
         # LepmonOS menu system
         self.menu_open = False
         self.current_menu_state = "main"
         self.hmi_stop_event = Event()  # Event to stop continuous button monitoring
-        
+
         # Initialize LepmonOS system
         self._initializeLepmonOS()
-        
+
         # Start continuous button monitoring thread for HMI
         self.buttonMonitoringThread = Thread(target=self._continuous_button_monitoring, daemon=True)
         self.buttonMonitoringThread.start()
-        
+
         # Automatically start HMI menu system
         self._open_hmi_menu()
 
@@ -198,19 +194,19 @@ class LepmonController(LiveUpdatedController):
         """Initialize Lepmon hardware directly (GPIO LEDs, OLED display, buttons)"""
         try:
             self._logger.info("Initializing Lepmon hardware directly")
-            
+
             # Initialize GPIO if available
             if HAS_GPIO:
                 GPIO.setmode(GPIO.BCM)
                 GPIO.setwarnings(False)
-                
+
                 # Setup LED pins as outputs
                 for color, pin in LED_PINS.items():
                     GPIO.setup(pin, GPIO.OUT)
                     GPIO.output(pin, GPIO.HIGH)  # LEDs off initially
                     time.sleep(0.1)
                     GPIO.output(pin, GPIO.LOW)  # LEDs off initially
-                    self.lightStates[color] = False                
+                    self.lightStates[color] = False
                 # Setup PWM for LED dimming
                 self.led_pwm = {}
                 for color, pin in LED_PINS.items():
@@ -219,12 +215,12 @@ class LepmonController(LiveUpdatedController):
                     time.sleep(0.1)
                     pwm.start(0)  # Start at 0% duty cycle (off)
                     self.led_pwm[color] = pwm
-                    
+
                 # Setup button pins as inputs with pull-up resistors
                 for button, pin in BUTTON_PINS.items():
                     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
                     self.buttonStates[button] = False
-                    
+
                 self._logger.info("GPIO initialized successfully")
             else:
                 self.led_pwm = {}
@@ -232,13 +228,13 @@ class LepmonController(LiveUpdatedController):
                 for color in LED_PINS.keys():
                     self.lightStates[color] = False
                 self._logger.warning("GPIO not available - using simulation mode")
-                
+
             # Initialize OLED display if available
             if HAS_OLED:
                 try:
                     display_interface = i2c(port=OLED_I2C_PORT, address=OLED_I2C_ADDRESS)
                     self.oled = sh1106(display_interface)
-                    
+
                     # Try to load font
                     try:
                         font_path = os.path.join(os.path.dirname(__file__), 'FreeSans.ttf')
@@ -248,7 +244,7 @@ class LepmonController(LiveUpdatedController):
                             self.oled_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
                         except (OSError, IOError):
                             self.oled_font = ImageFont.load_default()
-                            
+
                     self._logger.info("OLED display initialized successfully")
                 except Exception as e:
                     self.oled = None
@@ -258,7 +254,7 @@ class LepmonController(LiveUpdatedController):
                 self.oled = None
                 self.oled_font = None
                 self._logger.warning("OLED libraries not available - using simulation mode")
-                
+
             # Initialize I2C for sensors if available
             if HAS_I2C:
                 try:
@@ -270,7 +266,7 @@ class LepmonController(LiveUpdatedController):
             else:
                 self.i2c_bus = None
                 self._logger.warning("I2C libraries not available - using simulation mode")
-                
+
         except Exception as e:
             self._logger.error(f"Lepmon hardware initialization failed: {e}")
             # Set simulation mode
@@ -287,19 +283,19 @@ class LepmonController(LiveUpdatedController):
             # Stop continuous button monitoring
             if hasattr(self, 'hmi_stop_event'):
                 self.hmi_stop_event.set()
-            
+
             if HAS_GPIO:
                 # Stop PWM and cleanup GPIO
                 for pwm in self.led_pwm.values():
                     pwm.stop()
                 GPIO.cleanup()
                 self._logger.info("GPIO cleaned up successfully")
-            
+
             if HAS_I2C and self.i2c_bus:
                 # Close I2C bus
                 self.i2c_bus.close()
                 self._logger.info("I2C bus closed successfully")
-                
+
         except Exception as e:
             self._logger.warning(f"Hardware cleanup failed: {e}")
 
@@ -311,25 +307,25 @@ class LepmonController(LiveUpdatedController):
         """Initialize LepmonOS system components - equivalent to 00_start_up.py"""
         try:
             self._logger.info("Starting LepmonOS initialization sequence")
-            
+
             # Equivalent to dim_down() and turn_off_led("blau")
             self._dim_down()
             self._turn_off_led("blau")
-            
+
             # Display startup sequence
             self._display_startup_sequence()
-            
+
             # Read configuration
             self._read_lepmon_config()
-            
+
             # Initialize system components
             self._initialize_system_components()
-            
+
             # Calculate sun and power times
             self._calculate_times()
-            
+
             self._logger.info("LepmonOS initialization completed successfully")
-            
+
         except Exception as e:
             self._logger.error(f"LepmonOS initialization failed: {e}")
 
@@ -383,10 +379,10 @@ class LepmonController(LiveUpdatedController):
         try:
             # Update internal state
             self.lcdDisplay["line1"] = line1[:20]
-            self.lcdDisplay["line2"] = line2[:20] 
+            self.lcdDisplay["line2"] = line2[:20]
             self.lcdDisplay["line3"] = line3[:20]
             self.lcdDisplay["line4"] = line4[:20]
-            
+
             # Direct OLED display if available
             if self.oled and HAS_OLED:
                 with canvas(self.oled) as draw:
@@ -400,15 +396,15 @@ class LepmonController(LiveUpdatedController):
                     if line3:
                         draw.text((5, 35), line3[:20], font=self.oled_font, fill="white")
                     # line4 may not fit on small OLED, skip or combine
-            
+
             # Emit signal for UI updates
             display_content = f"{line1}\n{line2}\n{line3}\n{line4}"
             self.sigLCDDisplayUpdate.emit(display_content)
-            
+
             # Wait if duration specified
             if duration > 0:
                 time.sleep(duration)
-                
+
             self._logger.debug(f"Display updated: {line1} | {line2} | {line3}")
         except Exception as e:
             self._logger.warning(f"Could not update display: {e}")
@@ -426,7 +422,7 @@ class LepmonController(LiveUpdatedController):
             else:
                 # Fallback for simulation mode
                 self._logger.info(f"Displaying image (simulation): {image_path}")
-                
+
             # Emit signal for UI
             self.sigLCDDisplayUpdate.emit(f"IMAGE: {os.path.basename(image_path)}")
         except Exception as e:
@@ -437,13 +433,13 @@ class LepmonController(LiveUpdatedController):
         try:
             # Display manual link
             self._display_text("Beachte", "Anleitung", "", "", 3)
-            
+
             # Logo startup sequence (simulated)
             for i in range(1, 10):
                 self._display_text("LepMon", f"Loading {i}/9", "", "", 1)
-            
+
             self._display_text("Willkommen", f"Version {self.version}", "", "", 3)
-            
+
         except Exception as e:
             self._logger.warning(f"Startup sequence display failed: {e}")
 
@@ -465,7 +461,7 @@ class LepmonController(LiveUpdatedController):
                     "initial_exposure": 100
                 }
             }
-            self._logger.debug(f"Loaded LepmonOS configuration")
+            self._logger.debug("Loaded LepmonOS configuration")
         except Exception as e:
             self._logger.warning(f"Could not read LepmonOS config: {e}")
 
@@ -474,10 +470,10 @@ class LepmonController(LiveUpdatedController):
         try:
             # Equivalent to erstelle_ordner(), initialisiere_logfile()
             self._logger.info("System components initialized")
-            
+
             # Send startup message (equivalent to send_lora)
             self._send_lora("Starte Lepmon Software")
-            
+
         except Exception as e:
             self._logger.warning(f"System component initialization failed: {e}")
 
@@ -495,7 +491,7 @@ class LepmonController(LiveUpdatedController):
             if button_name not in BUTTON_PINS:
                 available_buttons = ", ".join(BUTTON_PINS.keys())
                 raise ValueError(f"Invalid button name '{button_name}'. Available: {available_buttons}")
-            
+
             if HAS_GPIO:
                 # Button pressed when GPIO reads LOW (pull-up configuration)
                 is_pressed = GPIO.input(BUTTON_PINS[button_name]) == GPIO.LOW
@@ -508,7 +504,7 @@ class LepmonController(LiveUpdatedController):
             else:
                 # Simulation mode - return stored state
                 return self.buttonStates[button_name]
-                
+
         except Exception as e:
             self._logger.warning(f"Could not read button {button_name}: {e}")
             return False
@@ -545,30 +541,30 @@ class LepmonController(LiveUpdatedController):
                 elif sensor_name == "pressure":
                     return np.round(np.random.uniform(1000, 1020), 2)
                 return None
-                
+
             if sensor_name not in SENSOR_ADDRESSES:
                 self._logger.warning(f"Unknown sensor: {sensor_name}")
                 return None
-                
+
             address = SENSOR_ADDRESSES[sensor_name]
-            
+
             # Basic I2C read - implementation depends on specific sensor
             # This is a generic example that would need to be customized for each sensor type
             data = self.i2c_bus.read_byte(address)
-            
+
             # Convert raw data to meaningful value (sensor-specific conversion)
             if sensor_name == "temperature":
                 # Example temperature conversion (sensor-specific)
                 return round((data * 0.1) + 15.0, 2)  # Example conversion
             elif sensor_name == "humidity":
-                # Example humidity conversion  
+                # Example humidity conversion
                 return round((data / 255.0) * 100.0, 2)  # Example conversion
             elif sensor_name == "pressure":
                 # Example pressure conversion
                 return round(1000.0 + (data * 0.1), 2)  # Example conversion
-                
+
             return float(data)
-            
+
         except Exception as e:
             self._logger.warning(f"Failed to read I2C sensor {sensor_name}: {e}")
             # Return simulated data on error
@@ -596,16 +592,16 @@ class LepmonController(LiveUpdatedController):
             now = datetime.datetime.now()
             sunset = now.replace(hour=18, minute=30, second=0)
             sunrise = now.replace(hour=6, minute=30, second=0)
-            
+
             self.experiment_start_time = sunset.strftime('%H:%M:%S')
             self.experiment_end_time = sunrise.strftime('%H:%M:%S')
             self.lepiled_end_time = (sunset + timedelta(hours=6)).strftime('%H:%M:%S')
-            
+
             self._logger.info(f"Sonnenuntergang: {sunset.strftime('%H:%M:%S')}")
             self._logger.info(f"Sonnenaufgang: {sunrise.strftime('%H:%M:%S')}")
-            
+
             self._send_lora(f"Sonnenuntergang: {sunset.strftime('%H:%M:%S')}\nSonnenaufgang: {sunrise.strftime('%H:%M:%S')}")
-            
+
         except Exception as e:
             self._logger.warning(f"Time calculation failed: {e}")
 
@@ -618,25 +614,25 @@ class LepmonController(LiveUpdatedController):
             self._turn_on_led("blau")
             self._display_text("Menü öffnen:", "bitte Enter drücken", "(rechts unten)", "")
             self._logger.info("HMI menu opened and waiting for enter button")
-            
+
         except Exception as e:
             self._logger.error(f"Failed to open HMI menu: {e}")
 
     def _continuous_button_monitoring(self):
         """Continuously monitor button presses for menu navigation - implements main HMI loop from trap_hmi.py"""
         self._logger.info("Starting continuous button monitoring thread")
-        
+
         while not self.hmi_stop_event.is_set():
             try:
                 # Main menu entry sequence - equivalent to trap_hmi.py main loop
                 if not self.menu_open:
                     self._logger.info("Eingabe Menü mit der Taste Enter ganz rechts unten öffnen")
-                    
+
                     # Wait for enter button press (equivalent to 200 iterations in trap_hmi.py)
                     for _ in range(200):
                         if self.hmi_stop_event.is_set():
                             break
-                            
+
                         if self._button_pressed("enter"):
                             self.menu_open = True
                             self._logger.info("Eingabe Menü geöffnet")
@@ -645,77 +641,77 @@ class LepmonController(LiveUpdatedController):
                             self.sigButtonPressed.emit({"buttonName": "enter", "action": "menu_opened"})
                             break
                         time.sleep(0.05)  # 50ms delay like in trap_hmi.py
-                    
+
                     if not self.menu_open:
                         self._logger.info("Falle nicht mit lokalem User Interface parametrisiert")
                         continue
-                
+
                 # Sub-menu navigation (equivalent to 75 iterations in trap_hmi.py)
                 if self.menu_open and self.current_menu_state == "main":
                     user_interacted = False
                     for _ in range(75):
                         if self.hmi_stop_event.is_set():
                             break
-                            
+
                         # Focus menu (rechts button)
                         if self._button_pressed("rechts"):
                             self._logger.info("Rechts gedrückt. Öffne Fokusmenü")
                             self._handle_focus_menu()
                             user_interacted = True
                             break
-                            
-                        # Location code menu (unten button) 
+
+                        # Location code menu (unten button)
                         if self._button_pressed("unten"):
                             self._display_text("Bitte Land,", "Provinz und", "Stadtcode wählen", "")
                             time.sleep(3)
                             self._handle_location_menu()
                             user_interacted = True
                             break
-                            
+
                         # Update menu (oben button)
                         if self._button_pressed("oben"):
                             self._logger.info("Oben gedrückt. Öffne Update Menü")
                             self._handle_update_menu()
                             user_interacted = True
                             break
-                            
+
                         time.sleep(0.05)  # 50ms delay like in trap_hmi.py
-                    
+
                     if user_interacted:
                         self._turn_off_led("blau")
                         self.current_menu_state = "submenu_completed"
                     else:
                         self._logger.info("kein Verstecktes Menü geöffnet")
                         self.current_menu_state = "time_menu"
-                
+
                 # Time setting menu
                 if self.menu_open and self.current_menu_state == "time_menu":
                     self._handle_time_menu()
                     self.current_menu_state = "gps_menu"
-                
-                # GPS coordinate menu  
+
+                # GPS coordinate menu
                 if self.menu_open and self.current_menu_state == "gps_menu":
                     self._handle_gps_menu()
                     self.current_menu_state = "system_test"
-                
+
                 # System test sequence
                 if self.menu_open and self.current_menu_state == "system_test":
                     self._handle_system_test()
                     self.current_menu_state = "completed"
                     self.menu_open = False
-                
+
                 # Reset for next cycle
                 if self.current_menu_state == "completed":
                     self.current_menu_state = "main"
                     time.sleep(1)  # Brief pause before next cycle
-                
+
                 # Small delay to prevent excessive CPU usage
                 time.sleep(0.1)
-                
+
             except Exception as e:
                 self._logger.error(f"Continuous button monitoring error: {e}")
                 time.sleep(1)  # Longer delay on error
-        
+
         self._logger.info("Continuous button monitoring thread stopped")
 
     def _monitor_menu_buttons(self):
@@ -724,7 +720,7 @@ class LepmonController(LiveUpdatedController):
             # This method is now handled by _continuous_button_monitoring
             # Keep for backward compatibility but just log
             self._logger.info("Legacy menu monitoring called - using continuous monitoring instead")
-                
+
         except Exception as e:
             self._logger.error(f"Menu monitoring failed: {e}")
 
@@ -787,11 +783,11 @@ class LepmonController(LiveUpdatedController):
         """Handle location code menu - equivalent to set_location_code() in trap_hmi.py"""
         try:
             self._logger.info("Menü zum Ändern der Provinz und Stadtkürzel geöffnet. Erwarte Neustart nach Ende des Menüpunktes")
-            
+
             # Simulate location code setting - in real implementation this would be interactive
             # For now, just display the status and return
             restart_needed = False  # Simulate no changes
-            
+
             if not restart_needed:
                 self._logger.info("Menü zum Ändern der Provinz und Stadtkürzel beendet. Es wurden keine Änderungen eingegeben. Fahre fort")
                 self._display_text("Code unverändert", "fahre fort", "", "")
@@ -800,7 +796,7 @@ class LepmonController(LiveUpdatedController):
                 self._logger.info("Menü zum Ändern der Provinz und Stadtkürzel beendet. Es wurden Änderungen eingegeben. starte neu zum Übernehmen")
                 self._display_text("Code geändert", "Falle startet neu", "fürs Anwenden", "")
                 time.sleep(3)
-                
+
         except Exception as e:
             self._logger.error(f"Location menu handling failed: {e}")
 
@@ -810,12 +806,12 @@ class LepmonController(LiveUpdatedController):
             self._display_text("Datum / Uhrzeit:", "hoch aktualisieren", "runter bestätigen", "")
             time.sleep(3)
             self._turn_on_led("blau")
-            
+
             user_selection_time = False
             self._logger.info("Zeitmenü anfang")
             status_rtc = 0
             com_rtc = 0
-            
+
             while not user_selection_time and not self.hmi_stop_event.is_set():
                 # Get current time (equivalent to Zeit_aktualisieren())
                 if com_rtc < 2:
@@ -826,25 +822,25 @@ class LepmonController(LiveUpdatedController):
                         jetzt_local_dt = datetime.datetime.strptime(jetzt_local, "%Y-%m-%d %H:%M:%S")
                         com_rtc += 1
                     except:
-                        jetzt_local = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
+                        jetzt_local = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         jetzt_local_dt = datetime.datetime.strptime(jetzt_local, "%Y-%m-%d %H:%M:%S")
                         com_rtc += 1
                 else:
                     jetzt_local = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     jetzt_local_dt = datetime.datetime.strptime(jetzt_local, "%Y-%m-%d %H:%M:%S")
-                
+
                 self._display_text(
                     jetzt_local_dt.strftime("%Y-%m-%d"),
-                    jetzt_local_dt.strftime("%H:%M:%S"), 
+                    jetzt_local_dt.strftime("%H:%M:%S"),
                     "▲ = neu  ▼ = ok",
                     ""
                 )
-                
+
                 # Check for button presses (equivalent to 20 iterations)
                 for _ in range(20):
                     if self.hmi_stop_event.is_set():
                         break
-                        
+
                     if self._button_pressed("oben"):
                         self._turn_off_led("blau")
                         self._logger.info("Menü zum aktualisieren der Uhrzeit geöffnet")
@@ -854,20 +850,20 @@ class LepmonController(LiveUpdatedController):
                         self._logger.info("Menü zum aktualisieren der Uhrzeit geschlossen")
                         user_selection_time = True
                         break
-                        
+
                     if self._button_pressed("unten"):
                         self._logger.info("Uhrzeit nicht mit dem lokalen Interface aktualisiert")
-                        self._turn_off_led("blau")  
+                        self._turn_off_led("blau")
                         user_selection_time = True
                         break
-                        
+
                     time.sleep(0.05)
-                
+
                 if user_selection_time:
                     break
-                    
+
             self._logger.info("Zeitmenü Ende")
-            
+
         except Exception as e:
             self._logger.error(f"Time menu handling failed: {e}")
 
@@ -876,15 +872,15 @@ class LepmonController(LiveUpdatedController):
         try:
             # Get coordinates (equivalent to get_coordinates())
             latitude, longitude = 48.1351, 11.5820  # Default Munich coordinates
-            
+
             self._display_text("Koordinaten mit", "hoch aktualisieren", "runter bestätigen", "")
             time.sleep(3)
             self._display_text(f"N-S: {latitude}", f"O-W: {longitude}", "▲ = neu  ▼ = ok", "")
             self._turn_on_led("blau")
-            
+
             user_selection_GPS = False
             self._logger.info("GPS Menü Anfang")
-            
+
             while not user_selection_GPS and not self.hmi_stop_event.is_set():
                 if self._button_pressed("oben"):
                     self._turn_off_led("blau")
@@ -894,14 +890,14 @@ class LepmonController(LiveUpdatedController):
                     self._logger.info("Koordinaten aktualisiert (simuliert)")
                     self._logger.info("Menü zum aktualisieren der Koordinaten geschlossen")
                     user_selection_GPS = True
-                    
+
                 if self._button_pressed("unten"):
                     self._logger.info("Koordinaten nicht mit dem lokalen Interface aktualisiert")
                     self._turn_off_led("blau")
                     user_selection_GPS = True
-                    
+
                 time.sleep(0.05)
-                
+
         except Exception as e:
             self._logger.error(f"GPS menu handling failed: {e}")
 
@@ -911,46 +907,46 @@ class LepmonController(LiveUpdatedController):
             self._display_text("Testlauf starten", "", "", "")
             time.sleep(2)
             self._logger.info("Starte Systemcheck")
-            
+
             # Sensor data test
             now = datetime.datetime.now()
             lokale_Zeit = now.strftime("%H:%M:%S")
             sensor_data = self._read_sensor_data("Test_hmi", lokale_Zeit)
-            
+
             self._display_sensor_status_with_text(sensor_data)
-            
+
             # Camera test
             self._display_text("Kamera Test", "", "", "")
             time.sleep(1)
             Status_Kamera = 0
             test_attempts = 0
             max_attempts = 3
-            
+
             while Status_Kamera == 0 and test_attempts < max_attempts:
                 self._display_text("Kamera Test", "aktiviere", "UV Lampe", "")
                 time.sleep(1)
                 self._lepiled_start()
-                
+
                 try:
                     result = self.lepmonSnapImage("jpg", "display", 0, 80)
                     Status_Kamera = 1 if result["success"] else 0
                 except:
                     Status_Kamera = 0
-                    
+
                 self._lepiled_ende()
                 time.sleep(1)
-                
+
                 test_attempts += 1
                 self._logger.info(f"Kamera Status: {Status_Kamera}")
-                
+
                 if Status_Kamera == 0:
                     self._display_text("Kamera Test", "Fehler- Falle", "wiederholt Test", "")
                     time.sleep(3)
-                    
+
             if Status_Kamera == 1:
                 self._display_text("Kamera Test", "erfolgreich", "beendet", "")
                 time.sleep(3)
-            
+
             # USB storage test
             USB = 0
             while USB == 0:
@@ -958,11 +954,11 @@ class LepmonController(LiveUpdatedController):
                     total_space, used_space, free_space, used_pct, free_pct = self._get_disk_space()
                     total_space_gb = round(total_space, 1) if total_space else None
                     free_space_gb = round(free_space, 1) if free_space else None
-                    
+
                     self._display_text("USB Speicher", f"gesamt: {total_space_gb} GB", f"frei:   {free_space_gb} GB", "")
                     time.sleep(3)
                     self._logger.info(f"USB Speicher: gesamt: {total_space_gb} GB; frei: {free_space_gb} GB")
-                    
+
                     if total_space_gb is None:
                         self._display_text("USB Speicher", "nicht erkannt", "Prüfe Anschluss", "")
                         time.sleep(3)
@@ -980,31 +976,31 @@ class LepmonController(LiveUpdatedController):
                         time.sleep(1)
                         self._logger.info("USB Speicher OK")
                         USB = 1
-                        
+
                 except Exception as e:
                     self._logger.error(f"USB storage check failed: {e}")
                     break
-                    
+
                 time.sleep(0.05)
-            
+
             # Display sun times
             sunset_time = self.experiment_start_time or "18:30:00"
             sunrise_time = self.experiment_end_time or "06:30:00"
-            
+
             self._display_text("Sonnenuntergang", sunset_time[:10] if len(sunset_time) > 10 else "", sunset_time[-8:] if len(sunset_time) > 8 else sunset_time, "")
             time.sleep(3)
             self._display_text("Sonnenaufgang", sunrise_time[:10] if len(sunrise_time) > 10 else "", sunrise_time[-8:] if len(sunrise_time) > 8 else sunrise_time, "")
             time.sleep(3)
-            
+
             # Display serial number
             sn = self.serial_number
             self._display_text("Seriennummer", sn, "", "")
             time.sleep(2)
-            
+
             self._display_text("Testlauf beendet", "bitte Deckel", "schließen", "")
             time.sleep(2)
             self._logger.info("Beende Systemcheck")
-            
+
         except Exception as e:
             self._logger.error(f"System test failed: {e}")
 
@@ -1014,27 +1010,27 @@ class LepmonController(LiveUpdatedController):
             # Simulate sensor status - in real implementation this would read from actual sensors
             sensor_status = {
                 "Light_Sensor": 1,
-                "Inner_Sensor": 1, 
+                "Inner_Sensor": 1,
                 "Power_Sensor": 1,
                 "Environment_Sensor": 1
             }
-            
+
             sensors = [
                 ("Light_Sensor", "LUX", "Lux"),
                 ("Inner_Sensor", "Temp_in", "°C"),
                 ("Power_Sensor", "bus_voltage", "V"),
                 ("Environment_Sensor", "Temp_out", "°C")
             ]
-            
+
             for sensor_name, data_key, einheit in sensors:
                 status_value = sensor_status.get(sensor_name, 0)
                 status = "OK" if str(status_value) == "1" or status_value == 1 else "Fehler"
                 value = sensor_data.get(data_key, "---")
-                
+
                 self._display_text(sensor_name, f"Status: {status}", f"Wert: {value} {einheit}", "")
                 time.sleep(2.5)
                 self._logger.info(f"Sensor: {sensor_name}, Status: {status}, Wert: {value} {einheit}")
-                
+
         except Exception as e:
             self._logger.error(f"Sensor status display failed: {e}")
 
@@ -1108,7 +1104,7 @@ class LepmonController(LiveUpdatedController):
             free_space_gb = total_space_gb - used_space_gb
             used_percent = usage * 100
             free_percent = 100 - used_percent
-            
+
             return total_space_gb, used_space_gb, free_space_gb, used_percent, free_percent
         except Exception as e:
             self._logger.error(f"Failed to get disk space: {e}")
@@ -1324,7 +1320,7 @@ class LepmonController(LiveUpdatedController):
             self._logger.error(f"LepmonOS startup failed: {e}")
             return {"success": False, "message": f"Startup failed: {str(e)}"}
 
-    @APIExport(requestType="POST") 
+    @APIExport(requestType="POST")
     def lepmonWelcome(self) -> dict:
         """Equivalent to 01_start_up.py"""
         try:
@@ -1382,17 +1378,17 @@ class LepmonController(LiveUpdatedController):
             dusk_threshold = self.lepmon_config.get("capture_mode", {}).get("dusk_treshold", 50)
             interval = self.lepmon_config.get("capture_mode", {}).get("interval", 60)
             initial_exposure = self.lepmon_config.get("capture_mode", {}).get("initial_exposure", 100)
-            
+
             # Set camera exposure
             self.changeExposureTime(initial_exposure)
-            
+
             # Start main capturing thread
-            capture_thread = Thread(target=self._lepmon_main_loop, 
-                                  args=(dusk_threshold, interval, initial_exposure, override_timecheck), 
+            capture_thread = Thread(target=self._lepmon_main_loop,
+                                  args=(dusk_threshold, interval, initial_exposure, override_timecheck),
                                   daemon=True)
             capture_thread.start()
-            
-            return {"success": True, "message": "LepmonOS capturing started", 
+
+            return {"success": True, "message": "LepmonOS capturing started",
                    "parameters": {"dusk_threshold": dusk_threshold, "interval": interval, "exposure": initial_exposure}}
         except Exception as e:
             self._logger.error(f"LepmonOS capturing start failed: {e}")
@@ -1403,28 +1399,28 @@ class LepmonController(LiveUpdatedController):
         """Equivalent to 04_end.py shutdown sequence"""
         try:
             self._logger.info("Starting LepmonOS shutdown sequence")
-            
+
             # Send shutdown message
             self._send_lora("Falle fährt in 1 Minute herunter und startet dann neu. Letzte Nachricht im aktuellen Run")
-            
+
             # Countdown display
             for i in range(60, 0, -1):
                 self._display_text("Falle startet", "neu in", f"{i} Sekunden")
                 time.sleep(1)
                 if i % 10 == 0:  # Update every 10 seconds
                     self._logger.info(f"Shutdown in {i} seconds")
-            
+
             # Stop all activities
             self.stop_event.set()
             self.is_measure = False
-            
+
             # Turn off all LEDs
             self._lepiled_ende()
             self._visible_led_ende()
-            
+
             self._logger.info("LepmonOS shutdown sequence completed")
             return {"success": True, "message": "LepmonOS shutdown completed"}
-            
+
         except Exception as e:
             self._logger.error(f"LepmonOS shutdown failed: {e}")
             return {"success": False, "message": f"Shutdown failed: {str(e)}"}
@@ -1485,18 +1481,18 @@ class LepmonController(LiveUpdatedController):
         try:
             if exposure:
                 self.changeExposureTime(exposure)
-            
+
             current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"lepmon_{current_time}_{self.imagesTaken}"
-            
+
             # Take the image
             self.mFrame = self.snapImagelepmonCam(filename, fileFormat=format.upper())
-            
+
             self.imagesTaken += 1
             self.sigImagesTaken.emit(self.imagesTaken)
-            
+
             return {
-                "success": True, 
+                "success": True,
                 "message": "Image captured successfully",
                 "filename": filename,
                 "format": format,
@@ -1507,7 +1503,7 @@ class LepmonController(LiveUpdatedController):
             error_count += 1
             self._logger.error(f"Image capture failed: {e}")
             return {
-                "success": False, 
+                "success": False,
                 "message": f"Image capture failed: {str(e)}",
                 "error_count": error_count
             }
@@ -1554,7 +1550,7 @@ class LepmonController(LiveUpdatedController):
         try:
             total_space, used_space, free_space, used_pct, free_pct = self._get_disk_space()
             _, local_time = self._zeit_aktualisieren()
-            
+
             return {
                 "success": True,
                 "status": {
@@ -1584,54 +1580,54 @@ class LepmonController(LiveUpdatedController):
         """Main capturing loop - equivalent to the main loop in 03_capturing.py"""
         try:
             self._logger.info("Starting LepmonOS main capturing loop")
-            
+
             # Store USB space information (equivalent to FRAM writing)
             total_space, used_space, free_space, used_pct, free_pct = self._get_disk_space()
             self._logger.info(f"USB Storage - Total: {total_space}GB, Free: {free_space}GB ({free_pct:.1f}%)")
-            
+
             fang_begonnen = False
             kamera_fehlerserie = 0
-            
+
             while not self.stop_event.is_set():
                 _, local_time = self._zeit_aktualisieren()
                 sensors = self._read_sensor_data("check_lux", local_time)
                 ambient_light = sensors["LUX"]
-                
+
                 # Check if we should capture (time and light conditions)
                 should_capture = (
                     (ambient_light <= dusk_threshold and not self._is_in_time_range(self.experiment_end_time, self.experiment_start_time, local_time)) or
                     (ambient_light > dusk_threshold and not self._is_in_time_range(self.experiment_start_time, self.experiment_start_time, local_time)) or
                     override_timecheck
                 )
-                
+
                 if should_capture:
                     if not fang_begonnen:
                         self._lepiled_start()
                         fang_begonnen = True
-                    
+
                     # Capture sequence
                     exposure = initial_exposure
-                    
+
                     # Adjust exposure based on time
                     if self._is_in_first_hour(local_time):
                         exposure -= 30
-                    
+
                     if self._is_after_lepiled_end(local_time):
                         exposure -= 30
                         if self.uv_led_active:
                             self._lepiled_ende()
-                    
+
                     # Take image
                     result = self.lepmonSnapImage("tiff", "log", kamera_fehlerserie, exposure)
                     if not result["success"]:
                         kamera_fehlerserie = result.get("error_count", kamera_fehlerserie)
                     else:
                         kamera_fehlerserie = 0
-                    
+
                     # Update sensor data
                     sensors = self._read_sensor_data(f"img_{self.imagesTaken}", local_time)
                     sensors.update({"Status_Kamera": result["success"], "Exposure": exposure})
-                    
+
                     # Update display
                     self._display_text(
                         f"Image: {self.imagesTaken}",
@@ -1639,23 +1635,23 @@ class LepmonController(LiveUpdatedController):
                         f"Exp: {exposure}ms",
                         f"Lux: {ambient_light}"
                     )
-                    
+
                     # Check for camera error series
                     if kamera_fehlerserie >= 3:
                         self._logger.error("Camera error series detected, stopping")
                         break
-                    
+
                     # Wait for next image
                     self._logger.info(f"Waiting {interval} seconds until next image")
                     for _ in range(interval):
                         if self.stop_event.is_set():
                             break
                         time.sleep(1)
-                
+
                 else:
                     self._logger.info("Conditions not met for capturing, ending loop")
                     break
-                    
+
         except Exception as e:
             self._logger.error(f"Main loop error: {e}")
         finally:
@@ -1667,7 +1663,7 @@ class LepmonController(LiveUpdatedController):
             start = datetime.datetime.strptime(start_time, "%H:%M:%S").time()
             end = datetime.datetime.strptime(end_time, "%H:%M:%S").time()
             current = datetime.datetime.strptime(current_time, "%H:%M:%S").time()
-            
+
             if start <= end:
                 return start <= current <= end
             else:  # Time range crosses midnight
@@ -1691,7 +1687,7 @@ class LepmonController(LiveUpdatedController):
             lepiled_end = datetime.datetime.strptime(self.lepiled_end_time, "%H:%M:%S").time()
             exp_end = datetime.datetime.strptime(self.experiment_end_time, "%H:%M:%S").time()
             current = datetime.datetime.strptime(current_time, "%H:%M:%S").time()
-            
+
             return lepiled_end <= current < exp_end
         except:
             return False
@@ -1715,10 +1711,10 @@ class LepmonController(LiveUpdatedController):
                 # Check for aliases or special LED names
                 led_mapping = {
                     "UV_LED": "gelb",  # Map UV LED to yellow
-                    "Visible_LED": "blau",  # Map visible LED to blue  
+                    "Visible_LED": "blau",  # Map visible LED to blue
                     "Status_LED": "rot"  # Map status LED to red
                 }
-                
+
                 if lightName in led_mapping:
                     actual_led = led_mapping[lightName]
                     if state:
@@ -1729,7 +1725,7 @@ class LepmonController(LiveUpdatedController):
                 else:
                     available_leds = list(LED_PINS.keys()) + list(led_mapping.keys())
                     return {"success": False, "message": f"LED '{lightName}' not found. Available: {available_leds}"}
-                    
+
         except Exception as e:
             self._logger.error(f"Failed to set light state: {e}")
             return {"success": False, "message": f"Failed to control LED: {str(e)}"}
@@ -1748,9 +1744,9 @@ class LepmonController(LiveUpdatedController):
                 else:
                     self._turn_off_led(led_name)
                 results.append({"led": led_name, "state": state, "success": True})
-            
+
             return {
-                "success": True, 
+                "success": True,
                 "message": f"All LEDs turned {'on' if state else 'off'}",
                 "individual_results": results
             }
@@ -1766,7 +1762,7 @@ class LepmonController(LiveUpdatedController):
         try:
             # Use the new direct display method
             self._display_text(line1, line2, line3, line4)
-            
+
             return {
                 "success": True,
                 "message": "Display updated",
@@ -1840,17 +1836,17 @@ class LepmonController(LiveUpdatedController):
         try:
             valid_keys = set(self.timingConfig.keys())
             updated_keys = []
-            
+
             for key, value in config.items():
                 if key in valid_keys and isinstance(value, (int, float)) and value >= 0:
                     self.timingConfig[key] = value
                     updated_keys.append(key)
                 else:
                     self._logger.warning(f"Invalid timing config key or value: {key}={value}")
-            
+
             # Update the LepmonManager config
             self._master.LepmonManager.updateConfig("timingConfig", self.timingConfig)
-            
+
             return {
                 "success": True,
                 "message": f"Updated timing configuration for: {', '.join(updated_keys)}",
@@ -1902,7 +1898,7 @@ class LepmonController(LiveUpdatedController):
             # Pre-acquisition delay
             if self.timingConfig['preAcquisitionDelay'] > 0:
                 time.sleep(self.timingConfig['preAcquisitionDelay'])
-            
+
             currentTime = time.time()
             self.imagesTaken += 1
 
@@ -1932,20 +1928,20 @@ class LepmonController(LiveUpdatedController):
             effective_interval = max(frameRate, self.timingConfig['acquisitionInterval'])
             elapsed = time.time() - currentTime
             remaining_time = effective_interval - elapsed
-            
+
             if remaining_time > 0:
                 # Break remaining time into small chunks to allow for quick stop
                 while remaining_time > 0 and self.is_measure:
                     sleep_chunk = min(0.1, remaining_time)
                     time.sleep(sleep_chunk)
                     remaining_time -= sleep_chunk
-            
+
             if not self.is_measure:
                 break
-                
+
         self.is_measure = False
         self.sigIsRunning.emit(False)
-        
+
         # Update LCD display with experiment end
         self.updateLCDDisplay(
             line1="Experiment Complete",
@@ -1953,7 +1949,7 @@ class LepmonController(LiveUpdatedController):
             line3=f"Saved to: {dirPath[:15]}...",
             line4="Ready for next run"
         )
-        
+
         self._logger.debug("lepmonExperimentThread done.")
 
     # ----------------------- Snap single image ----------------------- #

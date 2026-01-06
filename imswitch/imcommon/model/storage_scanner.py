@@ -9,7 +9,6 @@ import os
 import shutil
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, asdict
-from pathlib import Path
 
 
 @dataclass
@@ -22,7 +21,7 @@ class ExternalStorage:
     total_space_gb: float
     filesystem: str = "unknown"
     is_active: bool = False
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
         return asdict(self)
@@ -30,7 +29,7 @@ class ExternalStorage:
 
 class StorageScanner:
     """Scanner for external storage devices."""
-    
+
     # System volumes to exclude from scanning
     SYSTEM_VOLUMES = {
         "Macintosh HD",
@@ -42,11 +41,11 @@ class StorageScanner:
         ".fseventsd",
         ".Trashes"
     }
-    
+
     def __init__(self):
         """Initialize the storage scanner."""
         pass
-    
+
     def is_writable_directory(self, path: str) -> bool:
         """
         Check if a directory is writable by attempting to create and remove a test file.
@@ -67,7 +66,7 @@ class StorageScanner:
             return True
         except Exception:
             return False
-    
+
     def get_disk_usage(self, path: str) -> tuple[float, float]:
         """
         Get disk usage for a given path.
@@ -85,7 +84,7 @@ class StorageScanner:
             return free_gb, total_gb
         except Exception:
             return 0.0, 0.0
-    
+
     def get_filesystem_type(self, path: str) -> str:
         """
         Get the filesystem type for a given path.
@@ -107,7 +106,7 @@ class StorageScanner:
                 return "ntfs"
         except Exception:
             return "unknown"
-    
+
     def is_system_volume(self, name: str) -> bool:
         """
         Check if a directory name represents a system volume.
@@ -119,7 +118,7 @@ class StorageScanner:
             True if this is a system volume, False otherwise
         """
         return name in self.SYSTEM_VOLUMES or name.startswith('.')
-    
+
     def scan_external_mounts(self, base_paths: List[str]) -> List[ExternalStorage]:
         """
         Scan mount directories for external storage devices.
@@ -131,32 +130,32 @@ class StorageScanner:
             List of detected external storage devices
         """
         detected_drives = []
-        
+
         for base_path in base_paths:
             if not base_path or not os.path.exists(base_path):
                 continue
-            
+
             try:
                 for entry in sorted(os.listdir(base_path)):
                     full_path = os.path.join(base_path, entry)
-                    
+
                     # Skip if not a directory
                     if not os.path.isdir(full_path):
                         continue
-                    
+
                     # Skip system volumes and hidden directories
                     if self.is_system_volume(entry):
                         continue
-                    
+
                     # Check if writable
                     writable = self.is_writable_directory(full_path)
-                    
+
                     # Get disk usage
                     free_gb, total_gb = self.get_disk_usage(full_path)
-                    
+
                     # Get filesystem type
                     filesystem = self.get_filesystem_type(full_path)
-                    
+
                     # Create ExternalStorage object
                     storage = ExternalStorage(
                         path=full_path,
@@ -169,13 +168,13 @@ class StorageScanner:
                     )
                     if writable:
                         detected_drives.append(storage)
-                    
+
             except Exception as e:
                 print(f"Error scanning {base_path}: {e}")
                 continue
-        
+
         return detected_drives
-    
+
     def pick_first_external_folder(self, base_path: str) -> Optional[str]:
         """
         Pick the first suitable external folder from a mount directory.
@@ -191,18 +190,18 @@ class StorageScanner:
         """
         if not base_path or not os.path.exists(base_path):
             return None
-        
+
         for d in sorted(os.listdir(base_path)):
             full_path = os.path.join(base_path, d)
             if not os.path.isdir(full_path):
                 continue
-            
+
             # Exclude system volumes and hidden directories
             if not self.is_system_volume(d) and self.is_writable_directory(full_path):
                 return full_path
-        
+
         return None
-    
+
     def validate_storage_path(self, path: str, min_free_gb: float = 1.0) -> tuple[bool, str]:
         """
         Validate a storage path for use.
@@ -216,20 +215,20 @@ class StorageScanner:
         """
         if not path:
             return False, "Path is empty"
-        
+
         if not os.path.exists(path):
             return False, f"Path does not exist: {path}"
-        
+
         if not os.path.isdir(path):
             return False, f"Path is not a directory: {path}"
-        
+
         if not self.is_writable_directory(path):
             return False, f"Path is not writable: {path}"
-        
+
         free_gb, _ = self.get_disk_usage(path)
         if free_gb < min_free_gb:
             return False, f"Insufficient free space: {free_gb:.2f} GB < {min_free_gb} GB"
-        
+
         return True, ""
 
 

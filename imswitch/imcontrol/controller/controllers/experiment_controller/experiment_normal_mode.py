@@ -6,7 +6,7 @@ of the scanning process using workflow steps for precise control.
 """
 
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import numpy as np
 
 from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowStep
@@ -22,7 +22,7 @@ class ExperimentNormalMode(ExperimentModeBase):
     acquiring frames, and saving data. This provides maximum flexibility and
     precise control over the experiment sequence.
     """
-    
+
     def execute_experiment(self,
                          snake_tiles: List[List[Dict]],
                          illumination_intensities: List[float],
@@ -42,7 +42,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             Dictionary with execution results including workflow steps and file writers
         """
         self._logger.debug("Normal mode is enabled. Creating workflow steps for precise control.")
-        
+
         # Extract parameters
         z_positions = kwargs.get('z_positions', [0])
         exposures = kwargs.get('exposures', [100])
@@ -63,33 +63,33 @@ class ExperimentNormalMode(ExperimentModeBase):
         t_period = kwargs.get('t_period', 1)
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
-        
+
         # Initialize workflow components
         workflow_steps = []
         file_writers = []
         step_id = 0
-        
+
         # Set up OME writers for each tile - create new writers for each timepoint
         file_writers = self._setup_ome_writers(
-            snake_tiles, t, exp_name, dir_path, m_file_name, 
-            z_positions, illumination_intensities, isRGB=isRGB  
+            snake_tiles, t, exp_name, dir_path, m_file_name,
+            z_positions, illumination_intensities, isRGB=isRGB
         )
         # Create workflow steps for each tile
         for position_center_index, tiles in enumerate(snake_tiles):
             step_id = self._create_tile_workflow_steps(
                 tiles, position_center_index, step_id, workflow_steps,
                 z_positions, initial_z_position, illumination_sources, illumination_intensities,
-                exposures, gains, t, is_auto_focus, autofocus_min, 
-                autofocus_max, autofocus_step_size, autofocus_illumination_channel, 
+                exposures, gains, t, is_auto_focus, autofocus_min,
+                autofocus_max, autofocus_step_size, autofocus_illumination_channel,
                 autofocus_mode, autofocus_max_attempts, autofocus_target_focus_setpoint, n_times
             )
-        
+
         # Add finalization steps
         step_id = self._add_finalization_steps(
-            workflow_steps, step_id, snake_tiles, illumination_sources, 
+            workflow_steps, step_id, snake_tiles, illumination_sources,
             illumination_intensities, t_period, t
         )
-        
+
         # Add step to set LED status to idle when done
         workflow_steps.append(WorkflowStep(
             step_id=step_id,
@@ -98,7 +98,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             main_params={"status": "idle"})
         )
         step_id += 1
-        
+
         return {
             "status": "workflow_created",
             "mode": "normal",
@@ -106,7 +106,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             "file_writers": file_writers,
             "step_count": step_id
         }
-    
+
     def _setup_ome_writers(self,
                           snake_tiles: List[List[Dict]],
                           t: int,
@@ -114,9 +114,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                           dir_path: str,
                           m_file_name: str,
                           z_positions: List[float],
-                          illumination_intensities: List[float], 
+                          illumination_intensities: List[float],
                           isRGB: bool) -> List[OMEWriter]:
-        
+
         """
         Set up OME writers for each tile.
         
@@ -133,28 +133,28 @@ class ExperimentNormalMode(ExperimentModeBase):
             List of OMEWriter instances
         """
         file_writers = []
-        
+
         # Create shared individual_tiffs directory at the experiment root level
         shared_individual_tiffs_dir = os.path.join(dir_path, "individual_tiffs")
         os.makedirs(shared_individual_tiffs_dir, exist_ok=True)
-        
+
         # Check if single TIFF writing is enabled (single tile scan mode)
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-        
+
         if is_single_tiff_mode:
             # Create a single OME writer for all tiles in single TIFF mode
             experiment_name = f"{t}_{exp_name}"
             m_file_path = os.path.join(dir_path, f"{m_file_name}_{experiment_name}.ome.tif")
             self._logger.debug(f"Single TIFF mode - OME-TIFF path: {m_file_path}")
-            
+
             # Create file paths with shared individual_tiffs directory
             file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
-            
+
             # Calculate combined tile and grid parameters for all positions
             all_tiles = [tile for tiles in snake_tiles for tile in tiles]  # Flatten all tiles
             tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
             grid_shape, grid_geometry = self.calculate_grid_parameters(all_tiles)
-            
+
             # Create writer configuration for single TIFF mode
             n_channels = sum(np.array(illumination_intensities) > 0)
             writer_config = self.create_writer_config(
@@ -168,7 +168,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 n_z_planes=len(z_positions),
                 n_channels=n_channels
             )
-            
+
             # Create single OME writer for all positions
             ome_writer = OMEWriter(
                 file_paths=file_paths,
@@ -179,25 +179,25 @@ class ExperimentNormalMode(ExperimentModeBase):
                 logger=self._logger
             )
             file_writers.append(ome_writer)
-            
+
         else:
             # Original behavior: create separate writers for each tile position
             # but use shared individual_tiffs directory
             for position_center_index, tiles in enumerate(snake_tiles):
                 experiment_name = f"{t}_{exp_name}_{position_center_index}"
                 m_file_path = os.path.join(
-                    dir_path, 
+                    dir_path,
                     m_file_name + str(position_center_index) + "_" + experiment_name + "_" + ".ome.tif"
                 )
                 self._logger.debug(f"OME-TIFF path: {m_file_path}")
-                
+
                 # Create file paths with shared individual_tiffs directory
                 file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
-                
+
                 # Calculate tile and grid parameters
                 tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
                 grid_shape, grid_geometry = self.calculate_grid_parameters(tiles)
-                
+
                 # Create writer configuration
                 n_channels = sum(np.array(illumination_intensities) > 0)
                 writer_config = self.create_writer_config(
@@ -211,7 +211,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     n_z_planes=len(z_positions),
                     n_channels=n_channels
                 )
-                
+
                 # Create OME writer
                 ome_writer = OMEWriter(
                     file_paths=file_paths,
@@ -219,20 +219,20 @@ class ExperimentNormalMode(ExperimentModeBase):
                     grid_shape=grid_shape,
                     grid_geometry=grid_geometry,
                     config=writer_config,
-                    logger=self._logger, 
+                    logger=self._logger,
                     isRGB=isRGB
                 )
                 file_writers.append(ome_writer)
-        
+
         return file_writers
-    
+
     def _create_tile_workflow_steps(self,
                                   tiles: List[Dict],
                                   position_center_index: int,
                                   step_id: int,
                                   workflow_steps: List[WorkflowStep],
                                   z_positions: List[float],
-                                  initial_z_position: float,  
+                                  initial_z_position: float,
                                   illumination_sources: List[str],
                                   illumination_intensities: List[float],
                                   exposures: List[float],
@@ -277,11 +277,11 @@ class ExperimentNormalMode(ExperimentModeBase):
         # Get scan range information
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
-        
+
         # Turn on illumination once at the beginning if only one source
         active_sources_count = sum(np.array(illumination_intensities) > 0)
         is_first_tile = (position_center_index == 0)
-        
+
         if active_sources_count == 1 and is_first_tile:
             for illu_index, illu_source in enumerate(illumination_sources):
                 illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
@@ -296,7 +296,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     ))
                     step_id += 1
                     break  # Only one active source
-        
+
         # Iterate over positions in the tile
         for m_index, m_point in enumerate(tiles):
             try:
@@ -316,7 +316,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             # Iterate over Z positions
             for index_z, i_z in enumerate(z_positions):
                 # Move to Z position if we have more than one Z position
-                if (len(z_positions) > 1 or (len(z_positions) == 1 and m_index == 0)) and (i_z != 0 and len(z_positions) == 1): # TODO: The latter case is just to ensure that we don't have false values coming from the hardware 
+                if (len(z_positions) > 1 or (len(z_positions) == 1 and m_index == 0)) and (i_z != 0 and len(z_positions) != 1): # TODO: The latter case is just to ensure that we don't have false values coming from the hardware
                     workflow_steps.append(WorkflowStep(
                         name="Move to Z position",
                         step_id=step_id,
@@ -348,12 +348,12 @@ class ExperimentNormalMode(ExperimentModeBase):
                     # Acquire frame
                     exposure_time = exposures[illu_index] if illu_index < len(exposures) else exposures[0]
                     gain = gains[illu_index] if illu_index < len(gains) else gains[0]
-                    
+
                     # In single TIFF mode, all positions within a timepoint use the same writer
                     # The writer index corresponds to the timepoint for timelapse sequences
                     is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
                     writer_index = t if is_single_tiff_mode else position_center_index
-                    
+
                     workflow_steps.append(WorkflowStep(
                         name="Acquire frame",
                         step_id=step_id,
@@ -392,7 +392,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                             main_params={"power": 0, "channel": illu_source},
                         ))
                         step_id += 1
-                        
+
             # Move back to the current Z position after processing all points in the tile
             if len(z_positions) > 1 :
                 workflow_steps.append(WorkflowStep(
@@ -412,9 +412,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                     step_id=step_id,
                     main_func=self.controller.autofocus,
                     main_params={
-                        "minZ": autofocus_min, 
-                        "maxZ": autofocus_max, 
-                        "stepSize": autofocus_step_size, 
+                        "minZ": autofocus_min,
+                        "maxZ": autofocus_max,
+                        "stepSize": autofocus_step_size,
                         "illuminationChannel": autofocus_illumination_channel,
                         "max_attempts": autofocus_max_attempts,
                         "target_focus_setpoint": autofocus_target_focus_setpoint,
@@ -427,7 +427,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         # Always finalize tile writers since each timepoint creates its own writers
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
         should_finalize_tile = not is_single_tiff_mode
-        
+
         if should_finalize_tile:
             workflow_steps.append(WorkflowStep(
                 name=f"Finalize OME writer for tile {position_center_index} (timepoint {t})",
@@ -440,7 +440,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             step_id += 1
 
         return step_id
-    
+
     def _add_finalization_steps(self,
                               workflow_steps: List[WorkflowStep],
                               step_id: int,
@@ -480,7 +480,7 @@ class ExperimentNormalMode(ExperimentModeBase):
             illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
             if illu_intensity <= 0:
                 continue
-                
+
             workflow_steps.append(WorkflowStep(
                 name="Turn off illumination",
                 step_id=step_id,

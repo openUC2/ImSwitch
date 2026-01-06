@@ -1,14 +1,9 @@
-from logging import raiseExceptions
-import numpy as np
 import time
-import cv2
-import collections
 
 from imswitch.imcommon.model import initLogger
 import threading
 try:
     import pco
-    from pco import sdk
 except:
     raise("PCO not installed")
 

@@ -3,25 +3,72 @@ import threading
 from datetime import datetime
 import time
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
-import scipy
-import scipy.ndimage as ndi
-import scipy.signal as signal
-import skimage.transform as transform
 import tifffile as tif
 from imswitch import IS_HEADLESS
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
+from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
-from skimage.registration import phase_cross_correlation
 from ..basecontrollers import ImConWidgetController
 from fastapi.responses import FileResponse
+from typing import Optional
+from pydantic import BaseModel, Field
+from enum import Enum
+
+# import OME-Zarr writer
+from imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
+from imswitch.imcontrol.controller.controllers.experiment_controller.SingleTiffWriter import SingleTiffWriter
+from dataclasses import dataclass
+
+
+
+# ============================================================================
+# Pydantic models for API
+# ============================================================================
+
+class ScanMode(str, Enum):
+    """Scan mode enumeration for lightsheet acquisition"""
+    CONTINUOUS = "continuous"  # Original fast scan mode - stage moves continuously
+    STEP_ACQUIRE = "step_acquire"  # Go-Stop-Acquire mode - stage moves, stops, acquires
+
+class StorageFormat(str, Enum):
+    """Storage format options for lightsheet data"""
+    TIFF = "tiff"
+    OME_ZARR = "ome_zarr"
+    BOTH = "both"
+
+class LightsheetScanParameters(BaseModel):
+    """Parameters for lightsheet scan configuration"""
+    minPos: float = Field(-500, description="Minimum position for scan axis")
+    maxPos: float = Field(500, description="Maximum position for scan axis")
+    stepSize: float = Field(10, description="Step size for step-acquire mode (µm)")
+    speed: float = Field(1000, description="Speed for continuous mode")
+    axis: str = Field("A", description="Scan axis (A, X, Y, Z)")
+    illuSource: str = Field("", description="Illumination source name")
+    illuValue: float = Field(512, description="Illumination intensity value")
+    scanMode: ScanMode = Field(ScanMode.CONTINUOUS, description="Scan mode")
+    storageFormat: StorageFormat = Field(StorageFormat.OME_ZARR, description="Storage format")
+    experimentName: str = Field("lightsheet_scan", description="Experiment name for file naming")
+    currentPosition: float = Field(0, description="Current position of the scan axis")
+
+class LightsheetScanStatus(BaseModel):
+    """Status information for lightsheet scan"""
+    isRunning: bool = False
+    scanMode: Optional[str] = None
+    currentPosition: float = 0
+    totalPositions: int = 0
+    currentFrame: int = 0
+    progress: float = 0.0
+    zarrPath: Optional[str] = None
+    tiffPath: Optional[str] = None
+    errorMessage: Optional[str] = None
 
 
 class LightsheetController(ImConWidgetController):
     """Linked to LightsheetWidget."""
     sigImageReceived = Signal(np.ndarray)
     sigSliderIlluValueChanged = Signal(float)
+    sigScanStatusUpdate = Signal(dict)  # Signal for scan status updates
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
@@ -29,6 +76,34 @@ class LightsheetController(ImConWidgetController):
         self.lightsheetTask = None
         self.lightsheetStack = np.ones((1,1,1))
         self.mFilePath = None
+        self.mZarrPath = None  # Path to OME-Zarr store
+
+        # Scan state
+        self._scanStatus = LightsheetScanStatus()
+        self._currentScanParams: Optional[LightsheetScanParameters] = None
+        self._omeWriter: Optional[OMEWriter] = None
+        self._tiffWriter: Optional[SingleTiffWriter] = None
+
+        # Observation camera streaming (similar to PixelCalibrationController)
+        self.observationStreamRunning = False
+        self.observationStreamStarted = False
+        self.observationStreamQueue = None
+
+        # Try to get observation camera if available
+        try:
+            # Look for an observation camera (often named differently from main detector)
+            allCameras = self._master.detectorsManager.getAllDeviceNames()
+            # Try to find observation camera (you may need to adjust this based on your setup)
+            self.observationCamera = None
+            for camName in allCameras:
+                if "observation" in camName.lower() or "overview" in camName.lower():
+                    self.observationCamera = self._master.detectorsManager[camName]
+                    self._logger.info(f"Found observation camera: {camName}")
+                    break
+        except Exception as e:
+            self._logger.warning(f"No observation camera found: {e}")
+            self.observationCamera = None
+
         # select detectors
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
         self.detector = self._master.detectorsManager[allDetectorNames[0]]
@@ -39,12 +114,12 @@ class LightsheetController(ImConWidgetController):
         self.stageName = self._master.positionersManager.getAllDeviceNames()[0]
         self.stages = self._master.positionersManager[self.stageName]
         self.isLightsheetRunning = False
-        
-         
+
+
 
         # connect signals
         self.sigImageReceived.connect(self.displayImage)
-        self._commChannel.sigStartLightSheet.connect(self.performScanningRecording)
+        self._commChannel.sigStartLightSheet.connect(self.startContinuousScanWithZarr)
         self._commChannel.sigStopLightSheet.connect(self.stopLightsheet)
         self._commChannel.sigUpdateMotorPosition.connect(self.updateAllPositionGUI)
 
@@ -252,8 +327,25 @@ class LightsheetController(ImConWidgetController):
         self._widget.stopButton.setStyleSheet("background-color: red")
         self._widget.startButton.setStyleSheet("background-color: green")
 
-        self.performScanningRecording(minPos, maxPos, speed, stageAxis, illuSource, 0)
+        # check parameters
+        if axis not in ("A", "X", "Y", "Z"):
+            axis = "A"
+        # use default illumination source if not selected
+        if illusource is None or illusource==-1 or illusource not in self._master.lasersManager.getAllDeviceNames():
+            illusource = self._master.lasersManager.getAllDeviceNames()[0]
 
+        # Redirect to new method with default TIFF storage for backward compatibility
+        return self.startContinuousScanWithZarr(
+            minPos=minPos,
+            maxPos=maxPos,
+            speed=speed,
+            axis=axis,
+            illuSource=illusource,
+            illuValue=0,
+            storageFormat="tiff",  # Use TIFF for backward compatibility
+            experimentName="lightsheet_scan_legacy"
+        )
+        
     @APIExport()
     def setGalvo(self, channel:int=1, frequency:float=10, offset:float=0, amplitude:float=1, clk_div:int=0, phase:int=0, invert:int=1):
         '''Sets the galvo parameters for the lightsheet.'''
@@ -265,27 +357,36 @@ class LightsheetController(ImConWidgetController):
                 self._logger.error(f"Error setting galvo parameters: {e}")
         else:
             self._logger.warning("Cannot set galvo parameters while lightsheet is running.")
-            
-            
-    @APIExport()
+
+
+    '''@APIExport()
     def performScanningRecording(self, minPos:int=0, maxPos:int=1000, speed:int=1000, axis:str="A", illusource:int=-1, illuvalue:int=512):
-        if not self.isLightsheetRunning:
+        """
+        [DEPRECATED] Use startContinuousScanWithZarr() instead.
+        
+        This method is kept for backward compatibility but internally redirects 
+        to the new startContinuousScanWithZarr() which supports OME-Zarr storage.
+        """
+        self._logger.warning("performScanningRecording is deprecated. Use startContinuousScanWithZarr instead.")
 
-            # check parameters
-            if axis not in ("A", "X", "Y", "Z"):
-                axis = "A"
-            # use default illumination source if not selectd
-            if illusource is None or illusource==-1 or illusource not in self._master.lasersManager.getAllDeviceNames():
-                illusource = self._master.lasersManager.getAllDeviceNames()[0]
+        # check parameters
+        if axis not in ("A", "X", "Y", "Z"):
+            axis = "A"
+        # use default illumination source if not selected
+        if illusource is None or illusource==-1 or illusource not in self._master.lasersManager.getAllDeviceNames():
+            illusource = self._master.lasersManager.getAllDeviceNames()[0]
 
-            #initialPosition = self.stages.getPosition()[axis]
-
-            self.isLightsheetRunning = True
-            if self.lightsheetTask is not None:
-                self.lightsheetTask.join()
-                del self.lightsheetTask
-            self.lightsheetTask = threading.Thread(target=self.lightsheetThread, args=(minPos, maxPos, None, None, speed, axis, illusource, illuvalue))
-            self.lightsheetTask.start()
+        # Redirect to new method with default TIFF storage for backward compatibility
+        return self.startContinuousScanWithZarr(
+            minPos=minPos,
+            maxPos=maxPos,
+            speed=speed,
+            axis=axis,
+            illuSource=illusource,
+            illuValue=illuvalue,
+            storageFormat="tiff",  # Use TIFF for backward compatibility
+            experimentName="lightsheet_scan_legacy"
+        )'''
 
     @APIExport()
     def returnLastLightsheetStackPath(self) -> str:
@@ -375,7 +476,7 @@ class LightsheetController(ImConWidgetController):
 
     def getSaveFilePath(self, date, filename, extension):
         mFilename =  f"{date}_{filename}.{extension}"
-        dirPath  = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'recordings', date)
+        dirPath  = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'LightSheet', date)
         newPath = os.path.join(dirPath,mFilename)
 
         if not os.path.exists(dirPath):
@@ -405,6 +506,26 @@ class LightsheetController(ImConWidgetController):
 
     def stopLightsheet(self):
         self.isLightsheetRunning = False
+        self._scanStatus.isRunning = False
+        self._scanStatus.progress = 100.0
+        self._emitScanStatus()
+
+        # Close OME writer if open
+        if self._omeWriter is not None:
+            try:
+                self._omeWriter.finalize()
+            except Exception as e:
+                self._logger.error(f"Error finalizing OME writer: {e}")
+            self._omeWriter = None
+
+        # Close tiff writer if open
+        if self._tiffWriter is not None:
+            try:
+                self._tiffWriter.close()
+            except Exception as e:
+                self._logger.error(f"Error closing tiff writer: {e}")
+            self._tiffWriter = None
+
         if IS_HEADLESS:
             return
         self._widget.startButton.setEnabled(True)
@@ -419,6 +540,830 @@ class LightsheetController(ImConWidgetController):
         self._widget.startButton.setStyleSheet("background-color: red")
         self._logger.debug("Lightsheet scanning stopped.")
 
+    # ========================================================================
+    # New Go-Stop-Acquire Mode with OME-Zarr support
+    # ========================================================================
+
+    def _emitScanStatus(self):
+        """Emit scan status via socket and signal"""
+        status_dict = self._scanStatus.model_dump()
+        self.sigScanStatusUpdate.emit(status_dict)
+
+    @APIExport()
+    def getScanStatus(self) -> dict:
+        """Get current scan status including progress and file paths."""
+        return self._scanStatus.model_dump()
+
+    @APIExport()
+    def getAvailableScanModes(self) -> list:
+        """Get available scan modes."""
+        return [mode.value for mode in ScanMode]
+
+    @APIExport()
+    def getAvailableStorageFormats(self) -> list:
+        """Get available storage formats."""
+        formats = [StorageFormat.TIFF.value]
+        formats.append(StorageFormat.OME_ZARR.value)
+        formats.append(StorageFormat.BOTH.value)
+        return formats
+
+    @APIExport()
+    def startStepAcquireScan(
+        self,
+        minPos: float = -500,
+        maxPos: float = 500,
+        stepSize: float = 10,
+        axis: str = "A",
+        illuSource: str = "",
+        illuValue: float = 512,
+        storageFormat: str = "ome_zarr",
+        experimentName: str = "lightsheet_scan"
+    ) -> dict:
+        """
+        Start a Go-Stop-Acquire scan with configurable storage format.
+        
+        This mode moves the stage in discrete steps, stops, acquires an image,
+        then moves to the next position. Suitable for high-quality Z-stacks.
+        
+        Args:
+            minPos: Start position in µm
+            maxPos: End position in µm
+            stepSize: Step size between acquisitions in µm
+            axis: Scan axis (A, X, Y, Z)
+            illuSource: Illumination source name
+            illuValue: Illumination intensity
+            storageFormat: Storage format (tiff, ome_zarr, both)
+            experimentName: Name for the experiment/files
+            
+        Returns:
+            dict: Status information including file paths
+        """
+        if self.isLightsheetRunning:
+            return {"error": "Scan already running", "success": False}
+
+        # Validate parameters
+        if axis not in ("A", "X", "Y", "Z"):
+            axis = "A"
+
+        # Use default illumination source if not selected
+        if not illuSource or illuSource == "-1":
+            illuSource = self._master.lasersManager.getAllDeviceNames()[0]
+
+        # Parse storage format
+        try:
+            storage = StorageFormat(storageFormat.lower())
+        except ValueError:
+            storage = StorageFormat.OME_ZARR
+
+        # get current position from device:
+        currentPosition = self.stages.getPosition()[axis]
+
+        # Create scan parameters
+        params = LightsheetScanParameters(
+            minPos=currentPosition + minPos, # TODO: we should make these parameters relative to the current position
+            maxPos=currentPosition + maxPos,# TODO: we should make these parameters relative to the current position
+            currentPosition=currentPosition,
+            stepSize=stepSize,
+            axis=axis,
+            illuSource=illuSource,
+            illuValue=illuValue,
+            scanMode=ScanMode.STEP_ACQUIRE,
+            storageFormat=storage,
+            experimentName=experimentName
+        )
+
+        self._currentScanParams = params
+        self.isLightsheetRunning = True
+
+        # Calculate total positions
+        totalSteps = int(abs(maxPos - minPos) / stepSize) + 1
+
+        # Initialize scan status
+        self._scanStatus = LightsheetScanStatus(
+            isRunning=True,
+            scanMode=ScanMode.STEP_ACQUIRE.value,
+            currentPosition=minPos,
+            totalPositions=totalSteps,
+            currentFrame=0,
+            progress=0.0
+        )
+        self._emitScanStatus()
+
+        # Start scan in background thread
+        if self.lightsheetTask is not None:
+            try:
+                self.lightsheetTask.join(timeout=1)
+            except:
+                pass
+
+        self.lightsheetTask = threading.Thread(
+            target=self._stepAcquireThread,
+            args=(params, totalSteps)
+        )
+        self.lightsheetTask.start()
+
+        return {
+            "success": True,
+            "message": "Step-acquire scan started",
+            "totalPositions": totalSteps,
+            "scanMode": ScanMode.STEP_ACQUIRE.value,
+            "storageFormat": storage.value
+        }
+
+    def _stepAcquireThread(self, params: LightsheetScanParameters, totalSteps: int):
+        """Background thread for step-acquire scanning with immediate frame writing."""
+        self._logger.info(f"Starting step-acquire scan: {params.minPos} to {params.maxPos}, step={params.stepSize}")
+
+        mDate = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
+        # Setup storage paths
+        dirPath = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'LightSheet', mDate)
+        if not os.path.exists(dirPath):
+            os.makedirs(dirPath)
+
+        # Initialize writers based on storage format
+        zarrPath = None
+        tiffPath = None
+
+        # Initialize OME-Zarr writer if needed
+        if params.storageFormat in (StorageFormat.OME_ZARR, StorageFormat.BOTH):
+            zarrPath = os.path.join(dirPath, f"{params.experimentName}.zarr")
+            self.mZarrPath = zarrPath
+            self._scanStatus.zarrPath = zarrPath
+
+            # Get image dimensions
+            testFrame = self.detector.getLatestFrame()
+            if testFrame is not None:
+                imgHeight, imgWidth = testFrame.shape[:2]
+            else:
+                imgHeight, imgWidth = 512, 512
+
+            # Initialize OME writer with proper config
+            from imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
+            from imswitch.imcontrol.controller.controllers.experiment_controller.experiment_mode_base import OMEFileStorePaths
+            
+            # Create file paths structure - base_dir should be WITHOUT .zarr extension
+            # OMEFileStorePaths automatically adds .ome.zarr to create zarr_dir
+            base_name = params.experimentName
+            base_path = os.path.join(dirPath, base_name)
+            file_paths = OMEFileStorePaths(base_dir=base_path)
+            
+            # Update zarrPath to match what OMEFileStorePaths creates
+            zarrPath = file_paths.zarr_dir
+            self.mZarrPath = zarrPath
+            self._scanStatus.zarrPath = zarrPath
+            initialPosition = self.stages.getPosition()
+            # Create OME writer config
+            ome_config = OMEWriterConfig(
+                write_tiff=False,
+                write_zarr=True,
+                n_time_points=1,
+                n_z_planes=totalSteps,
+                n_channels=1,
+                pixel_size=self.detector.pixelSizeUm[-1],
+                pixel_size_z=abs(params.stepSize),
+                channel_names=["Lightsheet"],
+                channel_colors=["00FF00"],
+                x_start=initialPosition["X"],
+                y_start=initialPosition["Y"],
+                z_start=initialPosition[params.axis],
+            )
+            
+            # Initialize OME writer
+            self._omeWriter = OMEWriter(
+                file_paths=file_paths,
+                tile_shape=(imgHeight, imgWidth),
+                grid_shape=(1, 1),  # Single tile
+                grid_geometry=(0, 0, 0, 0),
+                config=ome_config,
+                logger=self._logger
+            )
+            self._logger.info(f"OME-Zarr writer initialized: {zarrPath}")
+
+        # Initialize TIFF writer if needed
+        if params.storageFormat in (StorageFormat.TIFF, StorageFormat.BOTH):
+            tiffPath = os.path.join(dirPath, f"{params.experimentName}.tif")
+            self.mFilePath = tiffPath
+            self._scanStatus.tiffPath = tiffPath
+            self._tiffWriter = SingleTiffWriter(tiffPath, bigtiff=True)
+            self._logger.info(f"TIFF writer initialized: {tiffPath}")
+
+        try:
+            # Turn on illumination
+            if params.illuSource and params.illuSource in self._master.lasersManager.getAllDeviceNames():
+                laser = self._master.lasersManager[params.illuSource]
+                if not laser.enabled:
+                    laser.setEnabled(True)
+                maxValue = laser.valueRangeMax
+                scaledValue = (params.illuValue / 1024) * maxValue
+                laser.setValue(scaledValue)
+                laser.setEnabled(True)
+            # Start detector acquisition
+            self.detector.startAcquisition()
+
+            # Move to start position
+            self.stages.move(value=params.minPos, axis=params.axis, is_absolute=True, is_blocking=True)
+            time.sleep(0.2)  # Settling time
+
+            # Calculate positions
+            positions = np.arange(params.minPos, params.maxPos + params.stepSize/2, params.stepSize)
+
+            for idx, pos in enumerate(positions):
+                if not self.isLightsheetRunning:
+                    self._logger.info("Scan aborted by user")
+                    break
+
+                # Move to position (Go)
+                self.stages.move(value=pos, axis=params.axis, is_absolute=True, is_blocking=True)
+                time.sleep(0.05)  # Short settling time (Stop)
+
+                # Acquire frame
+                frame = None
+                for attempt in range(2):
+                    frame = self.detector.getLatestFrame()
+                    if frame is not None and frame.shape[0] > 0:
+                        break
+                    time.sleep(0.02)
+
+                if frame is not None:
+                    # Convert to 2D if needed (take first channel if RGB)
+                    if len(frame.shape) == 3:
+                        frame_2d = frame[:, :, 0]
+                    else:
+                        frame_2d = frame
+
+                    # Write to Zarr immediately if enabled
+                    if self._omeWriter is not None:
+                        try:
+                            # Create metadata dict for OME writer - must include all required fields
+                            frame_metadata = {
+                                "x": 0,
+                                "y": 0,
+                                "z": pos,  # Use physical position from axis, not index
+                                "tile_index": 0,
+                                "time_index": 0,
+                                "z_index": idx,
+                                "channel_index": 0,
+                                "runningNumber": idx,  # Required by OMEWriter
+                                "illuminationChannel": params.illuSource if params.illuSource else "Default",
+                                "illuminationValue": params.illuValue
+                            }
+                            self._omeWriter.write_frame(frame_2d.astype(np.uint16), frame_metadata)
+                        except Exception as e:
+                            self._logger.error(f"Error writing to Zarr: {e}")
+
+                    # Write to TIFF immediately if enabled
+                    if self._tiffWriter is not None:
+                        try:
+                            metadata = {
+                                "pixel_size": 1.0,  # TODO: Get from config
+                                "x": pos,
+                                "y": 0,
+                                "z": idx
+                            }
+                            self._tiffWriter.add_image(frame_2d.astype(np.uint16), metadata)
+                        except Exception as e:
+                            self._logger.error(f"Error writing to TIFF: {e}")
+
+
+                # Update status
+                self._scanStatus.currentFrame = idx + 1
+                self._scanStatus.currentPosition = pos
+                self._scanStatus.progress = (idx + 1) / totalSteps * 100
+                self._emitScanStatus()
+
+                self._logger.debug(f"Frame {idx+1}/{totalSteps} at position {pos}")
+
+            # Turn off illumination
+            if params.illuSource and params.illuSource in self._master.lasersManager.getAllDeviceNames():
+                laser = self._master.lasersManager[params.illuSource]
+                laser.setValue(0)
+
+            # move back to initial position
+            self.stages.move(value=initialPosition[params.axis], axis=params.axis, is_absolute=True, is_blocking=False)
+
+            # Close writers
+            if self._omeWriter is not None: # TODO: We should do that in background
+                self._omeWriter.finalize()
+                self._omeWriter = None
+                self._logger.info(f"OME writer finalized: {zarrPath}")
+
+            if self._tiffWriter is not None:
+                self._tiffWriter.close()
+                self._tiffWriter = None
+                self._logger.info(f"TIFF writer closed: {tiffPath}")
+
+
+        except Exception as e:
+            self._logger.error(f"Error during step-acquire scan: {e}")
+            self._scanStatus.errorMessage = str(e)
+
+        finally:
+            self._scanStatus.isRunning = False
+            self._scanStatus.progress = 100.0
+            self._emitScanStatus()
+            self.isLightsheetRunning = False
+
+    @APIExport()
+    def getLatestZarrPath(self) -> dict:
+        """Get the path to the latest OME-Zarr store for visualization."""
+        if self.mZarrPath and os.path.exists(self.mZarrPath):
+            # Return path relative to data directory for frontend access
+            dataPath = str(dirtools.UserFileDirs.getValidatedDataPath())
+            relPath = self.mZarrPath.replace(dataPath, '').lstrip(os.sep)
+            return {
+                "zarrPath": f"/data/{relPath.replace(os.sep, '/')}",
+                "absolutePath": self.mZarrPath,
+                "exists": True
+            }
+        return {"zarrPath": None, "exists": False}
+
+    @APIExport()
+    def startContinuousScanWithZarr(
+        self,
+        minPos: float = -500,
+        maxPos: float = 500,
+        speed: float = 1000,
+        axis: str = "A",
+        illuSource: str = "",
+        illuValue: float = 512,
+        storageFormat: str = "ome_zarr",
+        experimentName: str = "lightsheet_continuous"
+    ) -> dict:
+        """
+        Start a continuous scan with optional OME-Zarr storage.
+        
+        This is an enhanced version of the original continuous scan that
+        supports OME-Zarr output alongside TIFF.
+        
+        Args:
+            minPos: Start position in µm (relative)
+            maxPos: End position in µm (relative)
+            speed: Stage movement speed
+            axis: Scan axis (A, X, Y, Z)
+            illuSource: Illumination source name
+            illuValue: Illumination intensity
+            storageFormat: Storage format (tiff, ome_zarr, both)
+            experimentName: Name for the experiment/files
+            
+        Returns:
+            dict: Status information
+        """
+        if self.isLightsheetRunning:
+            return {"error": "Scan already running", "success": False}
+        # Parse storage format
+        try:
+            storage = StorageFormat(storageFormat.lower())
+        except ValueError:
+            storage = StorageFormat.TIFF
+        # current position from device:
+        currentPosition = self.stages.getPosition()[axis]
+        params = LightsheetScanParameters(
+            minPos=minPos + currentPosition, # TODO: we should make these parameters relative to the current position
+            maxPos=maxPos + currentPosition,# TODO: we should make these parameters relative to the current position
+            currentPosition=currentPosition,
+            speed=speed,
+            axis=axis,
+            illuSource=illuSource,
+            illuValue=illuValue,
+            scanMode=ScanMode.CONTINUOUS,
+            storageFormat=storage,
+            experimentName=experimentName
+        )
+
+        self._currentScanParams = params
+        self.isLightsheetRunning = True
+        self._scanStatus = LightsheetScanStatus(
+            isRunning=True,
+            scanMode=ScanMode.CONTINUOUS.value,
+            currentPosition=minPos,
+            progress=0.0
+        )
+        self._emitScanStatus()
+
+        # Start original lightsheet thread with storage format handling
+        if self.lightsheetTask is not None:
+            try:
+                self.lightsheetTask.join(timeout=1)
+            except:
+                pass
+
+        self.lightsheetTask = threading.Thread(
+            target=self._continuousScanWithZarrThread,
+            args=(params,)
+        )
+        self.lightsheetTask.start()
+
+        return {
+            "success": True,
+            "message": "Continuous scan with Zarr support started",
+            "scanMode": ScanMode.CONTINUOUS.value,
+            "storageFormat": storage.value
+        }
+
+    def _continuousScanWithZarrThread(self, params: LightsheetScanParameters):
+        """Enhanced continuous scan thread with immediate writing (memory-efficient)."""
+        self._logger.info(f"Starting continuous scan: {params.minPos} to {params.maxPos}")
+
+        mDate = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
+        # Setup storage
+        dirPath = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'LightSheet', mDate)
+        if not os.path.exists(dirPath):
+            os.makedirs(dirPath)
+
+        # Initialize writers based on storage format
+        zarrPath = None
+        tiffPath = None
+        frameCount = 0
+
+        # For keeping last frames for GUI preview
+        last_frames_preview = []
+
+        try:
+            # Turn on illumination
+            if params.illuSource and params.illuSource in self._master.lasersManager.getAllDeviceNames():
+                laser = self._master.lasersManager[params.illuSource]
+                if not laser.enabled:
+                    laser.setEnabled(True)
+                maxValue = laser.valueRangeMax
+                scaledValue = (params.illuValue / 1024) * maxValue
+                laser.setValue(scaledValue)
+
+            self.detector.startAcquisition()
+
+            # Move to start
+            self.stages.move(value=params.minPos, axis=params.axis, is_absolute=True, is_blocking=True)
+            time.sleep(0.5)
+
+            # Get initial frame for writer initialization
+            initFrame = None
+            for _ in range(5):
+                initFrame = self.detector.getLatestFrame()
+                if initFrame is not None and initFrame.shape[0] > 0:
+                    break
+                time.sleep(0.1)
+
+            if initFrame is None:
+                raise Exception("Could not acquire initial frame for writer initialization")
+
+            imgHeight, imgWidth = initFrame.shape[:2]
+
+            # Estimate total frames for OME-Zarr writer initialization
+            totalDistance = abs(params.maxPos - params.minPos)
+            estimatedFrameRate = 30  # Approximate frame rate (Hz)
+            estimatedScanTime = totalDistance / params.speed  # seconds
+            estimatedFrames = max(int(estimatedFrameRate * estimatedScanTime), 100)
+
+            # Initialize OME-Zarr writer if needed (direct frame-by-frame writing like step-acquire)
+            if params.storageFormat in (StorageFormat.OME_ZARR, StorageFormat.BOTH):
+                from imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
+                from imswitch.imcontrol.controller.controllers.experiment_controller.experiment_mode_base import OMEFileStorePaths
+                
+                # Create file paths structure - base_dir without .zarr extension
+                base_name = params.experimentName
+                base_path = os.path.join(dirPath, base_name)
+                file_paths = OMEFileStorePaths(base_dir=base_path)
+                
+                # Update zarrPath to match what OMEFileStorePaths creates
+                zarrPath = file_paths.zarr_dir
+                self.mZarrPath = zarrPath
+                self._scanStatus.zarrPath = zarrPath
+                
+                # Calculate step size from estimated frames
+                step_size_z = totalDistance / max(1, estimatedFrames - 1) if estimatedFrames > 1 else 1.0
+                
+                # Create OME writer config
+                ome_config = OMEWriterConfig(
+                    write_tiff=False,
+                    write_zarr=True,
+                    n_time_points=1,
+                    n_z_planes=estimatedFrames,  # Estimated, will write as many as captured
+                    n_channels=1,
+                    pixel_size=1.0,
+                    pixel_size_z=step_size_z,
+                    channel_names=["Lightsheet"],
+                    channel_colors=["00FF00"],
+                    x_start=0.0,
+                    y_start=0.0,
+                    z_start=params.minPos
+                )
+                
+                # Initialize OME writer
+                self._omeWriter = OMEWriter(
+                    file_paths=file_paths,
+                    tile_shape=(imgHeight, imgWidth),
+                    grid_shape=(1, 1),
+                    grid_geometry=(0, 0, 0, 0),
+                    config=ome_config,
+                    logger=self._logger
+                )
+                self._logger.info(f"OME-Zarr writer initialized for continuous scan: {zarrPath}")
+
+            # Initialize TIFF writer if needed
+            if params.storageFormat in (StorageFormat.TIFF, StorageFormat.BOTH):
+                tiffPath = os.path.join(dirPath, f"{params.experimentName}.tif")
+                self.mFilePath = tiffPath
+                self._scanStatus.tiffPath = tiffPath
+                self._tiffWriter = SingleTiffWriter(tiffPath, bigtiff=True)
+                self._logger.info(f"TIFF writer initialized: {tiffPath}")
+
+            # Start continuous movement
+            controller = MovementController(self.stages)
+            totalDistance = params.maxPos - params.minPos
+            controller.move_to_position(totalDistance, params.axis, params.speed, is_absolute=False)
+
+            # Calculate Z position from linear time relation (avoid polling stage position)
+            startTime = time.time()
+
+            while self.isLightsheetRunning and not controller.is_target_reached():
+                frame = self.detector.getLatestFrame()
+                if frame is not None and frame.shape[0] > 0:
+                    # Convert to 2D if needed
+                    if len(frame.shape) == 3:
+                        frame_2d = frame[:, :, 0]
+                    else:
+                        frame_2d = frame
+
+                    # Calculate Z position from linear time relation instead of polling
+                    elapsedTime = time.time() - startTime
+                    estimatedDistance = params.speed * elapsedTime
+                    calculatedZPos = params.minPos + estimatedDistance
+
+                    # Write to OME-Zarr immediately if enabled (frame-by-frame like step-acquire)
+                    if self._omeWriter is not None:
+                        try:
+                            frame_metadata = {
+                                "x": 0,
+                                "y": 0,
+                                "z": calculatedZPos,  # Use calculated position
+                                "tile_index": 0,
+                                "time_index": 0,
+                                "z_index": frameCount,
+                                "channel_index": 0,
+                                "runningNumber": frameCount,
+                                "illuminationChannel": params.illuSource if params.illuSource else "Default",
+                                "illuminationValue": params.illuValue
+                            }
+                            self._omeWriter.write_frame(frame_2d.astype(np.uint16), frame_metadata)
+                            self._logger.info(f"Wrote frame into OME ZARR {frameCount} at Z={calculatedZPos}")
+                        except Exception as e:
+                            self._logger.error(f"Error writing to OME-Zarr: {e}")
+
+                    # Write to TIFF immediately if enabled
+                    if self._tiffWriter is not None:
+                        try:
+                            metadata = {
+                                "pixel_size": 1.0,
+                                "x": calculatedZPos,
+                                "y": 0,
+                                "z": frameCount
+                            }
+                            self._tiffWriter.add_image(frame_2d.astype(np.uint16), metadata)
+                        except Exception as e:
+                            self._logger.error(f"Error writing to TIFF: {e}")
+
+                    frameCount += 1
+
+                    # Keep last frames for preview (limit memory)
+                    if len(last_frames_preview) < 10:
+                        last_frames_preview.append(frame.copy())
+                    else:
+                        last_frames_preview.pop(0)
+                        last_frames_preview.append(frame.copy())
+
+                    # Update status
+                    currentPos = self.stages.getPosition().get(params.axis, params.minPos)
+                    self._scanStatus.currentFrame = frameCount
+                    self._scanStatus.currentPosition = currentPos
+                    progress = abs(currentPos - params.minPos) / abs(totalDistance) * 100
+                    self._scanStatus.progress = min(progress, 100)
+                    self._emitScanStatus()
+
+                time.sleep(0.01)  # Small delay to prevent CPU overload
+
+            # Move back
+            self.stages.move(value=-totalDistance, axis=params.axis, is_absolute=False, is_blocking=True)
+
+            # Finalize OME-Zarr writer in background thread to avoid blocking
+            if self._omeWriter is not None:
+                self._logger.info("Finalizing OME-Zarr writer in background...")
+                ome_writer_to_finalize = self._omeWriter
+                self._omeWriter = None
+                
+                def finalize_in_background():
+                    try:
+                        ome_writer_to_finalize.finalize()
+                        self._logger.info(f"OME-Zarr writer finalized: {zarrPath}")
+                    except Exception as e:
+                        self._logger.error(f"Error finalizing OME-Zarr writer: {e}")
+                
+                finalize_thread = threading.Thread(target=finalize_in_background)
+                finalize_thread.daemon = True
+                finalize_thread.start()
+
+            # Close TIFF writer
+            if self._tiffWriter is not None:
+                self._tiffWriter.close()
+                self._tiffWriter = None
+                self._logger.info(f"TIFF writer closed: {tiffPath}")
+
+            # Note: OME-Zarr is now written frame-by-frame during acquisition (like step-acquire)
+            # No post-processing needed, removed TIFF-to-Zarr conversion logic
+
+            # Update preview stack
+            if len(last_frames_preview) > 0:
+                self.lightsheetStack = np.array(last_frames_preview)
+
+            # Turn off illumination
+            if params.illuSource and params.illuSource in self._master.lasersManager.getAllDeviceNames():
+                laser = self._master.lasersManager[params.illuSource]
+                laser.setValue(0)
+
+        except Exception as e:
+            self._logger.error(f"Error in continuous scan: {e}")
+            self._scanStatus.errorMessage = str(e)
+
+        finally:
+            self._scanStatus.isRunning = False
+            self._scanStatus.progress = 100.0
+            self._emitScanStatus()
+            self.isLightsheetRunning = False
+
+            if len(last_frames_preview) > 0 and not IS_HEADLESS:
+                self.sigImageReceived.emit(self.lightsheetStack)
+
+    # ========================================================================
+    # Observation Camera Streaming (for sample positioning visualization)
+    # ========================================================================
+
+    @APIExport()
+    def stopObservationStream(self):
+        """Stop the observation camera MJPEG stream."""
+        self.observationStreamRunning = False
+        self.observationStreamStarted = False
+        self.observationStreamQueue = None
+
+    def startObservationStream(self):
+        """
+        Background thread that converts observation camera frames to JPEG and queues them.
+        """
+
+        if self.observationCamera is None:
+            self._logger.error("Observation camera not available")
+            return
+
+        # Wait for first valid frame (up to 2s); fall back to black frame
+        deadline = time.time() + 2.0
+        output_frame = None
+        while self.observationStreamRunning and output_frame is None and time.time() < deadline:
+            try:
+                output_frame = self.observationCamera.getLatestFrame()
+            except Exception:
+                output_frame = None
+            if output_frame is None:
+                time.sleep(0.05)
+
+        if output_frame is None:
+            # Default black frame if nothing available (grayscale)
+            output_frame = np.zeros((480, 640), dtype=np.uint8)
+
+        # Adaptive resize: Keep frames below 640x480
+        try:
+            if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
+                everyNthsPixel = int(
+                    np.min(
+                        [
+                            max(1, output_frame.shape[0] // 480),
+                            max(1, output_frame.shape[1] // 640),
+                        ]
+                    )
+                )
+            else:
+                everyNthsPixel = 1
+        except Exception:
+            everyNthsPixel = 1
+
+        try:
+            while self.observationStreamRunning:
+                output_frame = self.observationCamera.getLatestFrame()
+                if output_frame is None:
+                    time.sleep(0.01)
+                    continue
+
+                try:
+                    # Downsample if needed
+                    output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
+                except Exception:
+                    output_frame = np.zeros((480, 640), dtype=np.uint8)
+
+                # Convert grayscale to BGR if needed (for consistent processing)
+                if len(output_frame.shape) == 2:
+                    output_frame = cv2.cvtColor(output_frame, cv2.COLOR_GRAY2BGR)
+
+                # Ensure uint8 image for JPEG; normalize if needed
+                if output_frame.dtype != np.uint8:
+                    try:
+                        vmin = float(np.min(output_frame))
+                        vmax = float(np.max(output_frame))
+                        if vmax > vmin:
+                            output_frame = (
+                                (output_frame - vmin) / (vmax - vmin) * 255.0
+                            ).astype(np.uint8)
+                        else:
+                            output_frame = np.zeros_like(output_frame, dtype=np.uint8)
+                    except Exception:
+                        output_frame = np.zeros_like(output_frame, dtype=np.uint8)
+
+                # JPEG compression
+                quality = 90  # Quality level (0-100)
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+                flag, encodedImage = cv2.imencode(".jpg", output_frame, encode_params)
+                if not flag:
+                    continue
+
+                # Put raw JPEG bytes into queue; avoid blocking forever if queue is full
+                try:
+                    self.observationStreamQueue.put(encodedImage.tobytes(), timeout=0.5)
+                except Exception:
+                    # Drop frame if queue is full or unavailable
+                    pass
+
+                time.sleep(0.033)  # ~30 FPS
+        except Exception as e:
+            self._logger.error(f"Observation stream error: {e}", exc_info=True)
+            self.observationStreamRunning = False
+
+    def observationStreamer(self):
+        """
+        Generator that yields JPEG frames from the queue.
+        Starts the background streaming thread if not already running.
+        """
+        import queue
+
+        # Start the streaming worker thread once and create a thread-safe queue
+        if not self.observationStreamStarted:
+            import threading
+
+            self.observationStreamQueue = queue.Queue(maxsize=10)
+            self.observationStreamRunning = True
+            self.observationStreamStarted = True
+            t = threading.Thread(target=self.startObservationStream, daemon=True)
+            t.start()
+
+        try:
+            while self.observationStreamRunning:
+                try:
+                    # Use timeout to allow graceful shutdown
+                    jpeg_bytes = self.observationStreamQueue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+
+                # Build proper MJPEG part with Content-Length for better client compatibility
+                header = (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(jpeg_bytes)}\r\n\r\n".encode("ascii")
+                )
+                yield header + jpeg_bytes + b"\r\n"
+        except GeneratorExit:
+            self._logger.debug("Observation stream connection closed by client.")
+            self.stopObservationStream()
+
+    @APIExport(runOnUIThread=False)
+    def observationStream(self, startStream: bool = True):
+        """
+        Get MJPEG stream from observation camera for sample positioning.
+        
+        Args:
+            startStream: Whether to start the stream (default True)
+            
+        Returns:
+            StreamingResponse with multipart/x-mixed-replace for MJPEG stream
+        """
+        if not startStream:
+            self.stopObservationStream()
+            return {"status": "success", "message": "stream stopped"}
+
+        if self.observationCamera is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=409, detail="Observation camera not available")
+
+        from fastapi.responses import StreamingResponse
+        headers = {
+            # Disable buffering and caching to reduce latency
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+
+        return StreamingResponse(
+            self.observationStreamer(),
+            media_type="multipart/x-mixed-replace;boundary=frame",
+            headers=headers,
+        )
 
 
 class MovementController:

@@ -1,15 +1,10 @@
-import enum
-import glob
 try:
     import cv2
 except ImportError:
     cv2 = None
-import os
 
-import numpy as np
-from PIL import Image
 
-from imswitch.imcommon.framework import Signal, SignalInterface
+from imswitch.imcommon.framework import SignalInterface
 from imswitch.imcommon.model import initLogger
 
 

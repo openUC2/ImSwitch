@@ -3,11 +3,8 @@ API tests for ImSwitch DetectorController endpoints.
 Tests detector management, configuration, and acquisition functionality via REST API.
 """
 import pytest
-import requests
 import time
-import json
-from typing import Dict, List, Any
-from ..api import api_server, base_url
+from typing import Dict
 
 
 def test_detector_endpoints_available(api_server):
@@ -15,14 +12,14 @@ def test_detector_endpoints_available(api_server):
     response = api_server.get("/openapi.json")
     assert response.status_code == 200
     spec = response.json()
-    
+
     # Find detector-related endpoints
     paths = spec.get("paths", {})
     detector_endpoints = [p for p in paths.keys() if "Detector" in p or "detector" in p]
-    
+
     assert len(detector_endpoints) > 0, "No detector endpoints found in API"
     print(f"Found {len(detector_endpoints)} detector endpoints")
-    
+
     # Test basic detector endpoint accessibility
     for endpoint in detector_endpoints[:3]:  # Test first 3
         try:
@@ -39,10 +36,10 @@ def test_detector_discovery_endpoints(api_server):
     discovery_endpoints = [
         "/SettingsController/getDetectorNames"
     ]
-    
+
     detector_names = None
     working_endpoint = None
-    
+
     for endpoint in discovery_endpoints:
         try:
             response = api_server.get(endpoint)
@@ -58,7 +55,7 @@ def test_detector_discovery_endpoints(api_server):
                     break
         except Exception as e:
             print(f"Discovery endpoint {endpoint} failed: {e}")
-    
+
     if detector_names and working_endpoint:
         print(f"✓ Found detectors via {working_endpoint}: {detector_names}")
         assert len(detector_names) > 0
@@ -74,16 +71,16 @@ def test_detector_parameters_endpoints(api_server):
         detector_names, _ = test_detector_discovery_endpoints(api_server)
         if not detector_names:
             pytest.skip("No detectors found")
-        
+
         first_detector = detector_names[0]
     except:
         first_detector = "testDetector"  # Fallback
-    
+
     # Test parameter endpoints
     param_endpoints = [
-        f"/SettingsController/getDetectorParameters"
+        "/SettingsController/getDetectorParameters"
     ]
-    
+
     for endpoint in param_endpoints:
         try:
             response = api_server.get(endpoint)
@@ -91,15 +88,15 @@ def test_detector_parameters_endpoints(api_server):
                 params = response.json()
                 assert isinstance(params, dict)
                 print(f"✓ Got parameters via {endpoint}: {list(params.keys())[:5]}")
-                
+
                 # Test parameter modification if we have parameters
                 if params and "exposureTime" in params:
                     _test_parameter_modification(api_server, first_detector, params)
                 return
-                
+
         except Exception as e:
             print(f"Parameter endpoint {endpoint} failed: {e}")
-    
+
     print("? No working parameter endpoints found")
 
 
@@ -107,15 +104,15 @@ def _test_parameter_modification(api_server, detector_name: str, current_params:
     """Test modifying detector parameters."""
     if "exposureTime" not in current_params:
         return
-    
+
     original_exposure = current_params["exposureTime"]
     new_exposure = max(0.001, original_exposure * 1.1)  # Increase by 10%
-    
+
     # Common parameter setting endpoints
     param_set_endpoints = [
         "/SettingsController/setDetectorParameter",
     ]
-    
+
     for endpoint in param_set_endpoints:
         try:
             # Try different payload formats
@@ -127,25 +124,25 @@ def _test_parameter_modification(api_server, detector_name: str, current_params:
                 },
                 {
                     "detector": detector_name,
-                    "parameter": "exposureTime", 
+                    "parameter": "exposureTime",
                     "value": new_exposure
                 },
                 {
                     "exposureTime": new_exposure
                 }
             ]
-            
+
             for payload in payloads:
                 response = api_server.put(endpoint, json=payload)
                 if response.status_code in [200, 201]:
                     print(f"✓ Parameter modified via PUT {endpoint}")
                     return
-                
+
                 response = api_server.post(endpoint, json=payload)
                 if response.status_code in [200, 201]:
                     print(f"✓ Parameter modified via POST {endpoint}")
                     return
-                    
+
         except Exception as e:
             print(f"Parameter modification via {endpoint} failed: {e}")
 
@@ -156,30 +153,30 @@ def test_detector_acquisition_control(api_server):
     liveview_endpoints = [
         "/ViewController/setLiveViewActive"
     ]
-    
+
     for endpoint in liveview_endpoints:
         try:
             # Test starting liveview
             response = api_server.get(f"{endpoint}?active=true")
             if response.status_code not in [200, 201]:
                 response = api_server.get(f"{endpoint}?active=true")
-            
+
             if response.status_code in [200, 201]:
                 print(f"✓ Liveview started via {endpoint}")
-                
+
                 # Test stopping liveview
                 time.sleep(0.5)
                 stop_response = api_server.get(f"{endpoint}?active=false")
                 if stop_response.status_code not in [200, 201]:
                     stop_response = api_server.get(f"{endpoint}?active=false")
-                
+
                 if stop_response.status_code in [200, 201]:
                     print(f"✓ Liveview stopped via {endpoint}")
                 return
-                
+
         except Exception as e:
             print(f"Liveview control via {endpoint} failed: {e}")
-    
+
     print("? No working liveview control endpoints found")
 
 
@@ -193,12 +190,12 @@ def test_detector_image_capture(api_server):
         first_detector = detector_names[0]
     except:
         first_detector = "testDetector"
-    
+
     # Image capture endpoints
     capture_endpoints = [
-        f"/RecordingController/snapNumpyToFastAPI",
+        "/RecordingController/snapNumpyToFastAPI",
     ]
-    
+
     for endpoint in capture_endpoints:
         try:
             response = api_server.get(endpoint)
@@ -224,16 +221,16 @@ def test_detector_image_capture(api_server):
                 except Exception as parse_error:
                     print(f"✓ Image endpoint accessible via {endpoint}, but response parsing failed: {parse_error}")
                     return
-                
+
         except Exception as e:
             print(f"Image capture via {endpoint} failed: {e}")
-    
+
     print("? No working image capture endpoints found")
 
 
 def test_detector_recording_control(api_server):
     """Test video/sequence recording functionality."""
-    # Try to discover detectors first  
+    # Try to discover detectors first
     try:
         detector_names, _ = test_detector_discovery_endpoints(api_server)
         if not detector_names:
@@ -241,7 +238,7 @@ def test_detector_recording_control(api_server):
         first_detector = detector_names[0]
     except:
         first_detector = "testDetector"
-    
+
     # Recording control endpoints
     recording_endpoints = [
         f"/RecordingController/startRecording?detectorName={first_detector}"
@@ -261,27 +258,27 @@ def test_detector_recording_control(api_server):
           }
         ],
         '''
-    
+
     for endpoint in recording_endpoints:
         try:
             # Start recording
             response = api_server.get(endpoint)
             if response.status_code in [200, 201]:
                 print(f"✓ Recording started via {endpoint}")
-                
+
                 # Let it record briefly
                 time.sleep(1)
-                
+
                 # Stop recording
                 stop_endpoint = endpoint.replace("start", "stop")
                 stop_response = api_server.get(stop_endpoint)
                 if stop_response.status_code in [200, 201]:
                     print(f"✓ Recording stopped via {stop_endpoint}")
                 return
-                
+
         except Exception as e:
             print(f"Recording control via {endpoint} failed: {e}")
-    
+
     print("? No working recording control endpoints found")
 
 
@@ -291,7 +288,7 @@ def test_detector_status_monitoring(api_server):
     status_endpoints = [
         "/ViewController/getLiveViewActive"
     ]
-    
+
     for endpoint in status_endpoints:
         try:
             response = api_server.get(endpoint)
@@ -300,10 +297,10 @@ def test_detector_status_monitoring(api_server):
                 print(f"✓ Got detector status via {endpoint}")
                 assert isinstance(status, (dict, list))
                 return
-                
+
         except Exception as e:
             print(f"Status check via {endpoint} failed: {e}")
-    
+
     print("? No working detector status endpoints found")
 
 
@@ -330,30 +327,30 @@ def test_detector_settings_endpoints(api_server):
         "detectorName": first_detector,
         "exposureTime": 100  # 100ms exposure time
     }
-    
+
     try:
         response = api_server.get("/SettingsController/setDetectorExposureTime", params=exposure_params)
         if response.status_code == 200:
             print(f"✓ Detector exposure time set successfully for {first_detector}")
         elif response.status_code == 422:
-            print(f"? Detector exposure time setting failed - validation error (expected for virtual detectors)")
+            print("? Detector exposure time setting failed - validation error (expected for virtual detectors)")
         else:
             print(f"? Detector exposure time endpoint response: {response.status_code}")
     except Exception as e:
         print(f"? Detector exposure time setting failed: {e}")
 
-    # Test setDetectorGain endpoint  
+    # Test setDetectorGain endpoint
     gain_params = {
         "detectorName": first_detector,
         "gain": 50  # Gain value of 50
     }
-    
+
     try:
         response = api_server.get("/SettingsController/setDetectorGain", params=gain_params)
         if response.status_code == 200:
             print(f"✓ Detector gain set successfully for {first_detector}")
         elif response.status_code == 422:
-            print(f"? Detector gain setting failed - validation error (expected for virtual detectors)")
+            print("? Detector gain setting failed - validation error (expected for virtual detectors)")
         else:
             print(f"? Detector gain endpoint response: {response.status_code}")
     except Exception as e:
@@ -369,7 +366,7 @@ def test_detector_settings_endpoints(api_server):
         if response.status_code == 200:
             print(f"✓ Detector mode set successfully for {first_detector}")
         elif response.status_code == 422:
-            print(f"? Detector mode setting failed - validation error")
+            print("? Detector mode setting failed - validation error")
     except Exception as e:
         print(f"? Detector mode setting test failed: {e}")
 
@@ -382,24 +379,24 @@ def test_detector_settings_endpoints(api_server):
                 path for path in spec["paths"].keys()
                 if "SettingsController" in path and ("setDetector" in path)
             ]
-            
+
             print(f"✓ Found {len(settings_endpoints)} detector settings endpoints:")
             for endpoint in settings_endpoints:
                 methods = list(spec["paths"][endpoint].keys())
                 print(f"  - {endpoint}: {methods}")
-                
+
             # Verify required endpoints are present
             required_settings = [
                 "/SettingsController/setDetectorExposureTime",
                 "/SettingsController/setDetectorGain"
             ]
-            
+
             for required in required_settings:
                 if required in settings_endpoints:
                     print(f"✓ Required settings endpoint found: {required}")
                 else:
                     print(f"? Required settings endpoint missing: {required}")
-                    
+
     except Exception as e:
         print(f"? Settings endpoints validation failed: {e}")
 
@@ -417,14 +414,14 @@ def test_camera_status_endpoint(api_server):
     except:
         print("? Could not discover detectors, skipping camera status test")
         return
-    
+
     # Test getCameraStatus endpoint without detector name (should use current detector)
     try:
         response = api_server.get("/SettingsController/getCameraStatus")
         if response.status_code == 200:
             status = response.json()
-            print(f"✓ Camera status retrieved successfully (current detector)")
-            
+            print("✓ Camera status retrieved successfully (current detector)")
+
             # Verify expected fields are present
             expected_fields = [
                 'model', 'isMock', 'isConnected', 'isRGB',
@@ -432,13 +429,13 @@ def test_camera_status_endpoint(api_server):
                 'pixelSizeUm', 'binning', 'supportedBinnings', 'frameStart',
                 'croppable', 'forAcquisition', 'parameters'
             ]
-            
+
             missing_fields = [field for field in expected_fields if field not in status]
             if missing_fields:
                 print(f"? Missing fields in camera status: {missing_fields}")
             else:
-                print(f"✓ All expected fields present in camera status")
-            
+                print("✓ All expected fields present in camera status")
+
             # Print some key information
             print(f"  Model: {status.get('model', 'N/A')}")
             print(f"  Sensor: {status.get('sensorWidth', 'N/A')}x{status.get('sensorHeight', 'N/A')} pixels")
@@ -447,7 +444,7 @@ def test_camera_status_endpoint(api_server):
             print(f"  Is Mock: {status.get('isMock', 'N/A')}")
             print(f"  Is Connected: {status.get('isConnected', 'N/A')}")
             print(f"  Camera Type: {status.get('cameraType', 'N/A')}")
-            
+
             # Print parameters if available
             if 'parameters' in status:
                 print(f"  Parameters ({len(status['parameters'])} total):")
@@ -457,7 +454,7 @@ def test_camera_status_endpoint(api_server):
             print(f"? Camera status endpoint returned status {response.status_code}")
     except Exception as e:
         print(f"? Camera status test (current detector) failed: {e}")
-    
+
     # Test getCameraStatus endpoint with specific detector name
     try:
         response = api_server.get(f"/SettingsController/getCameraStatus?detectorName={first_detector}")

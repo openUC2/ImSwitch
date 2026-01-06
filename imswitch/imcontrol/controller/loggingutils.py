@@ -49,10 +49,10 @@ class CSVLogger:
         self.fieldnames = fieldnames or []
         self._lock = threading.Lock()
         self._current_file: Optional[str] = None
-        
+
         # Create directory if it doesn't exist
         self._ensure_directory_exists()
-        
+
         logger.info(f"CSV logger initialized: {base_directory}")
 
     def _ensure_directory_exists(self) -> None:
@@ -92,28 +92,28 @@ class CSVLogger:
         if not self.fieldnames:
             logger.warning("No fieldnames configured for CSV logger")
             return
-            
+
         try:
             with self._lock:
                 filename = self._get_current_filename()
-                
+
                 # Write header if this is a new file
                 self._write_header_if_needed(filename)
-                
+
                 # Add timestamp and datetime if not present
                 if 'timestamp' not in data:
                     data['timestamp'] = datetime.now().timestamp()
                 if 'datetime' not in data:
                     data['datetime'] = datetime.fromtimestamp(data['timestamp']).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-                
+
                 # Write measurement data
                 with open(filename, 'a', newline='', encoding='utf-8') as csvfile:
                     writer = csv.DictWriter(csvfile, fieldnames=self.fieldnames, delimiter=self.delimiter)
-                    
+
                     # Filter data to only include configured fieldnames
                     filtered_data = {field: data.get(field, None) for field in self.fieldnames}
                     writer.writerow(filtered_data)
-                    
+
         except Exception as e:
             logger.error(f"Failed to log measurement to CSV: {e}")
 
@@ -147,7 +147,7 @@ class CSVLogger:
         """
         if timestamp is None:
             timestamp = datetime.now().timestamp()
-            
+
         data = {
             'timestamp': timestamp,
             'focus_value': focus_value,
@@ -160,7 +160,7 @@ class CSVLogger:
             'crop_center': crop_center,
             **extra_fields
         }
-        
+
         self.log_measurement(data)
 
     def set_fieldnames(self, fieldnames: List[str]) -> None:
@@ -190,7 +190,7 @@ class CSVLogger:
             filename = self._get_current_filename()
             if not os.path.exists(filename):
                 return 0
-                
+
             with open(filename, 'r', encoding='utf-8') as csvfile:
                 # Count lines and subtract 1 for header
                 line_count = sum(1 for _ in csvfile)
@@ -210,10 +210,10 @@ class FocusLockCSVLogger(CSVLogger):
     
     Pre-configured with standard field names for focus lock data.
     """
-    
+
     DEFAULT_FIELDNAMES = [
         'timestamp',
-        'datetime', 
+        'datetime',
         'focus_value',
         'focus_metric',
         'is_locked',

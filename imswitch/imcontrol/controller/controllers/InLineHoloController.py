@@ -1,7 +1,6 @@
 import numpy as np
-from datetime import datetime
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, List
 import time
 import traceback
 import threading
@@ -20,9 +19,8 @@ try:
 except:
     hasCV2 = False
 
-from imswitch.imcommon.model import dirtools, initLogger, APIExport
+from imswitch.imcommon.model import initLogger, APIExport
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
-from imswitch.imcontrol.view import guitools
 from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS
 
@@ -45,7 +43,7 @@ class InLineHoloParams:
     rotation: int = 0  # 0, 90, 180, 270
     update_freq: float = 10.0  # Hz (processing framerate)
     binning: int = 1  # binning factor (1, 2, 4, etc.)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "pixelsize": self.pixelsize,
@@ -72,7 +70,7 @@ class InLineHoloState:
     last_process_time: float = 0.0
     frame_count: int = 0
     processed_count: int = 0
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "is_processing": self.is_processing,
@@ -115,7 +113,7 @@ class InLineHoloController(LiveUpdatedController):
             self.camera = getattr(self._setupInfo.holo, 'camera', None)
         else:
             self.camera = None
-            
+
         # If no camera specified, use first available detector
         if self.camera is None:
             try:
@@ -129,7 +127,7 @@ class InLineHoloController(LiveUpdatedController):
             except Exception as e:
                 self._logger.error(f"Failed to get detector list: {e}")
                 return
-        
+
         # Initialize parameters from setup or defaults
         if hasattr(self._setupInfo, 'holo') and self._setupInfo.holo is not None:
             self._params = InLineHoloParams(
@@ -143,26 +141,26 @@ class InLineHoloController(LiveUpdatedController):
             )
         else:
             self._params = InLineHoloParams()
-        
+
         self._state = InLineHoloState()
         self._processing_lock = threading.Lock()
-        
+
         # Rate limiting counter (like FFTController pattern)
         # updateRate = number of frames to skip between processing
         # Calculated from update_freq relative to assumed ~30fps camera rate
         self._update_rate = 8  # Default: process every 3rd frame
         self._frame_counter = 0
-        
+
         # Store last frame for pause mode and on-demand processing
         self._last_frame = None
-        
+
         # MJPEG streaming
         self._mjpeg_queue = queue.Queue(maxsize=10)
         self._jpeg_quality = 85
-        
+
         # Frame queue for decoupled processing (small queue, drop frames if full)
         self._frame_queue = queue.Queue(maxsize=3)
-        
+
         # Processing worker and thread
         self._processing_worker = self.HoloProcessingWorker(self)
         self._processing_worker.sigHoloProcessed.connect(self._on_holo_processed)
@@ -170,15 +168,15 @@ class InLineHoloController(LiveUpdatedController):
         self._processing_worker.moveToThread(self._processing_thread)
         self.sigImageReceived.connect(self._processing_worker.processHologram)
         self._processing_thread.start()
-        
+
         # Connect to CommunicationChannel signal for frame updates
         # This is the standard pattern used by HistogrammController, FFTController, etc.
         self._commChannel.sigUpdateImage.connect(self.update)
-        
+
         # Legacy GUI setup
         if not IS_HEADLESS:
             self._setup_legacy_gui()
-            
+
         self._logger.info("InLineHoloController initialized successfully")
 
     def __del__(self):
@@ -186,7 +184,7 @@ class InLineHoloController(LiveUpdatedController):
         # Stop processing thread
         self._processing_thread.quit()
         self._processing_thread.wait()
-        
+
         if hasattr(super(), '__del__'):
             super().__del__()
 
@@ -209,26 +207,26 @@ class InLineHoloController(LiveUpdatedController):
         # Only process frames from our target camera
         if detectorName != self.camera:
             return
-        
+
         # Skip if processing is not enabled
         if not self._state.is_processing:
             return
-        
+
         # Skip if image is None
         if image is None:
             return
-        
+
         # Store last frame (always, for pause mode)
         self._last_frame = image
         self._state.frame_count += 1
-        
+
         # Rate limiting: process every N-th frame
         if self._frame_counter >= max(5,self._update_rate):
             self._frame_counter = 0
-            
+
             # Queue frame for processing (or reprocess last frame if paused)
             frame_to_process = self._last_frame if self._state.is_paused else image
-            
+
             # Prepare worker and emit signal to trigger processing
             self._processing_worker.prepareForNewImage(frame_to_process)
             self.sigImageReceived.emit()
@@ -246,7 +244,7 @@ class InLineHoloController(LiveUpdatedController):
             self.sigHoloImageComputed.emit(result, "inline_holo")
             self._state.processed_count += 1
             self._state.last_process_time = time.time()
-            
+
             # Add to MJPEG stream if active
             if self._state.is_streaming:
                 self._add_to_mjpeg_stream(result)
@@ -270,7 +268,7 @@ class InLineHoloController(LiveUpdatedController):
         self._frame_counter = 0
         self._params.update_freq = update_freq
         self._logger.info(f"Set update rate: {update_freq} Hz (skip every {skip_rate} frames)")
-    
+
     # =========================
     # Hologram Processing Core
     # =========================
@@ -288,7 +286,7 @@ class InLineHoloController(LiveUpdatedController):
                 scipy_fft.fft2(x, workers=4)
             )
         return np.fft.fftshift(np.fft.fft2(x))
-    
+
     @staticmethod
     def _iFT(x):
         """Inverse Fourier transform with proper frequency shift"""
@@ -312,12 +310,12 @@ class InLineHoloController(LiveUpdatedController):
         # Use effective pixel size (adjusted for binning)
         ps = self._params.pixelsize * self._params.binning
         lambda0 = self._params.wavelength
-        
+
         nx = E0.shape[1]  # Image width in pixels
         ny = E0.shape[0]  # Image height in pixels
         grid_size_x = ps * nx  # Grid size in x-direction
         grid_size_y = ps * ny  # Grid size in y-direction
-        
+
         # 1-D frequency grids
         fx = np.linspace(-(nx-1)/2*(1/grid_size_x), (nx-1)/2*(1/grid_size_x), nx)
         fy = np.linspace(-(ny-1)/2*(1/grid_size_y), (ny-1)/2*(1/grid_size_y), ny)
@@ -333,14 +331,14 @@ class InLineHoloController(LiveUpdatedController):
         G *= hfy[:, None]  # broadcasts along rows
 
         Ef = self._iFT(G)
-        
+
         return Ef
 
     def _apply_binning(self, image):
         """Apply binning to image if binning > 1"""
         if self._params.binning <= 1:
             return image
-        
+
         # subsakmple
         if len(image.shape) == 2:
             # Grayscale
@@ -352,32 +350,32 @@ class InLineHoloController(LiveUpdatedController):
     def _extract_roi(self, image):
         """Extract ROI from image based on current parameters"""
         h, w = image.shape[:2]
-        
+
         # Determine ROI center
         if self._params.roi_center is not None and self._params.roi_center[0] is not None and self._params.roi_center[1] is not None:
             cx, cy = self._params.roi_center
         else:
             cx, cy = w // 2, h // 2
-        
+
         # Calculate ROI bounds
         roi_size = np.min([self._params.roi_size, np.max([h, w])])
         half_size = roi_size // 2
-        
+
         x1 = max(0, cx - half_size)
         y1 = max(0, cy - half_size)
         x2 = min(w, cx + half_size)
         y2 = min(h, cy + half_size)
-        
+
         return image[y1:y2, x1:x2]
 
     def _extract_color_channel(self, image):
         """Extract specified color channel from RGB image"""
         if len(image.shape) == 2:
             return image  # Already grayscale
-        
+
         channel_map = {"red": 0, "green": 1, "blue": 2}
         channel_idx = channel_map.get(self._params.color_channel, 1)
-        
+
         return image[:, :, channel_idx]
 
     def _apply_transforms(self, image):
@@ -386,7 +384,7 @@ class InLineHoloController(LiveUpdatedController):
             image = np.fliplr(image)
         if self._params.flip_y:
             image = np.flipud(image)
-        
+
         # Apply rotation (counter-clockwise)
         if self._params.rotation == 90:
             image = np.rot90(image, k=1)
@@ -394,25 +392,25 @@ class InLineHoloController(LiveUpdatedController):
             image = np.rot90(image, k=2)
         elif self._params.rotation == 270:
             image = np.rot90(image, k=3)
-        
+
         return image
 
     def _process_inline(self, image):
         """Process inline hologram"""
         # Apply binning first
         binned = self._apply_binning(image)
-        
+
         # Extract ROI and color channel
         roi = self._extract_roi(binned)
         gray = self._extract_color_channel(roi)
         gray = self._apply_transforms(gray)
-        
+
         # Convert to complex field (E-field from intensity)
         E0 = np.sqrt(gray.astype(float))
-        
+
         # Propagate
         Ef = self._fresnel_propagator(E0, self._params.dz)
-        
+
         # Return intensity
         return self._abssqr(Ef)
 
@@ -448,7 +446,7 @@ class InLineHoloController(LiveUpdatedController):
         """
         if not hasCV2:
             return
-        
+
         try:
             # Normalize to uint8
             frame = np.array(image)
@@ -459,11 +457,11 @@ class InLineHoloController(LiveUpdatedController):
                     frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
                 else:
                     frame = np.zeros_like(frame, dtype=np.uint8)
-            
+
             # Encode as JPEG
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
             success, encoded = cv2.imencode('.jpg', frame, encode_params)
-            
+
             if success:
                 jpeg_bytes = encoded.tobytes()
                 # Build MJPEG frame with proper headers
@@ -473,7 +471,7 @@ class InLineHoloController(LiveUpdatedController):
                 )
                 content_length = f'Content-Length: {len(jpeg_bytes)}\r\n\r\n'.encode('ascii')
                 mjpeg_frame = header + content_length + jpeg_bytes + b'\r\n'
-                
+
                 # Put in queue, drop frame if full
                 try:
                     self._mjpeg_queue.put_nowait(mjpeg_frame)
@@ -504,31 +502,31 @@ class InLineHoloController(LiveUpdatedController):
         - sigHoloProcessed emits the result when done
         """
         sigHoloProcessed = Signal(np.ndarray)
-        
+
         def __init__(self, controller):
             super().__init__()
             self._controller = controller
             self._image = None
             self._numQueuedImages = 0
             self._numQueuedImagesMutex = Mutex()
-        
+
         def prepareForNewImage(self, image):
             """Must always be called before the worker receives a new image."""
             self._image = image
             self._numQueuedImagesMutex.lock()
             self._numQueuedImages += 1
             self._numQueuedImagesMutex.unlock()
-        
+
         def processHologram(self):
             """Process the hologram image."""
             try:
                 if self._numQueuedImages > 1:
                     # Skip this frame to catch up
                     return
-                
+
                 if self._image is None:
                     return
-                
+
                 # Use the controller's processing method
                 result = self._controller._process_frame(self._image)
                 if result is not None:
@@ -597,7 +595,7 @@ class InLineHoloController(LiveUpdatedController):
             for key, value in params.items():
                 if hasattr(self._params, key):
                     setattr(self._params, key, value)
-        
+
         self._emit_state_changed()
         return self._params.to_dict()
 
@@ -622,10 +620,10 @@ class InLineHoloController(LiveUpdatedController):
         Set ROI center and size
         example request:
             {"center": [512, 512], "size": 256}
-        """ 
+        """
         center = [center_x, center_y] if center_x is not None and center_y is not None else None
         return self.set_parameters_inlineholo({"roi_center": center, "roi_size": size})
-    
+
     @APIExport(runOnUIThread=True)
     def set_binning_inlineholo(self, binning: int) -> Dict[str, Any]:
         """
@@ -678,19 +676,19 @@ class InLineHoloController(LiveUpdatedController):
             self._state.is_paused = False
             self._state.frame_count = 0
             self._state.processed_count = 0
-        
+
         # Reset frame counter
         self._frame_counter = 0
-        
+
         # Ensure camera is running
         self._ensure_camera_running()
-        
+
         # Set update rate from params
         self.set_update_rate(self._params.update_freq)
-        
+
         self._logger.info(f"Started inline hologram processing ({self._params.update_freq} Hz)")
         self._emit_state_changed()
-        
+
         return self._state.to_dict()
 
     @APIExport(runOnUIThread=True)
@@ -704,10 +702,10 @@ class InLineHoloController(LiveUpdatedController):
         with self._processing_lock:
             self._state.is_processing = False
             self._state.is_paused = False
-        
+
         self._logger.info("Stopped hologram processing")
         self._emit_state_changed()
-        
+
         return self._state.to_dict()
 
     @APIExport(runOnUIThread=True)
@@ -721,10 +719,10 @@ class InLineHoloController(LiveUpdatedController):
         with self._processing_lock:
             if self._state.is_processing:
                 self._state.is_paused = True
-        
+
         self._logger.info("Paused hologram processing (processing last frame)")
         self._emit_state_changed()
-        
+
         return self._state.to_dict()
 
     @APIExport(runOnUIThread=True)
@@ -738,10 +736,10 @@ class InLineHoloController(LiveUpdatedController):
         with self._processing_lock:
             if self._state.is_processing:
                 self._state.is_paused = False
-        
+
         self._logger.info("Resumed hologram processing")
         self._emit_state_changed()
-        
+
         return self._state.to_dict()
 
     @APIExport(runOnUIThread=False)
@@ -763,10 +761,10 @@ class InLineHoloController(LiveUpdatedController):
             from fastapi.responses import StreamingResponse
         except ImportError:
             return {"status": "error", "message": "FastAPI not available"}
-        
+
         if not hasCV2:
             return {"status": "error", "message": "opencv-python required for MJPEG streaming"}
-        
+
         if not startStream:
             # Stop streaming
             with self._processing_lock:
@@ -780,21 +778,21 @@ class InLineHoloController(LiveUpdatedController):
             self._logger.info("Stopped MJPEG stream")
             self._emit_state_changed()
             return {"status": "success", "message": "stream stopped"}
-        
+
         # Update JPEG quality
         self._jpeg_quality = max(0, min(100, jpeg_quality))
-        
+
         # Start streaming
         with self._processing_lock:
             self._state.is_streaming = True
-        
+
         # Ensure processing is running
         if not self._state.is_processing:
             self.start_processing_inlineholo()
-        
+
         self._logger.info(f"Started MJPEG stream (quality={self._jpeg_quality})")
         self._emit_state_changed()
-        
+
         # Create generator for streaming response
         def frame_generator():
             """Generator that yields MJPEG frames."""
@@ -813,7 +811,7 @@ class InLineHoloController(LiveUpdatedController):
                 self._emit_state_changed()
             except Exception as e:
                 self._logger.error(f"Error in MJPEG frame generator: {e}")
-        
+
         # Return streaming response with proper headers
         headers = {
             "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -822,7 +820,7 @@ class InLineHoloController(LiveUpdatedController):
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         }
-        
+
         return StreamingResponse(
             frame_generator(),
             media_type="multipart/x-mixed-replace;boundary=frame",
@@ -843,12 +841,12 @@ class InLineHoloController(LiveUpdatedController):
         if image is None:
             # Capture from camera
             image = self._capture_camera_frame()
-        
+
         if image is None:
             return {"success": False, "error": "No image available"}
-        
+
         result = self._process_frame(image)
-        
+
         return {
             "success": result is not None,
             "frame_shape": result.shape if result is not None else None
@@ -902,7 +900,7 @@ class InLineHoloController(LiveUpdatedController):
         """Legacy: Display image in napari widget"""
         if IS_HEADLESS:
             return
-        
+
         if im.dtype == complex or np.iscomplexobj(im):
             self._widget.setImage(np.abs(im), name + "_abs")
             self._widget.setImage(np.angle(im), name + "_angle")

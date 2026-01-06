@@ -1,5 +1,4 @@
 from time import sleep
-import threading
 import numpy as np
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Mutex, Signal, SignalInterface, Thread, Timer, Worker
@@ -9,7 +8,7 @@ from .MultiManager import MultiManager
 class DetectorsManager(MultiManager, SignalInterface):
     """ DetectorsManager is an interface for dealing with DetectorManagers. It
     is a MultiManager for detectors. """
-    
+
     sigAcquisitionStarted = Signal()
     sigAcquisitionStopped = Signal()
     sigDetectorSwitched = Signal(str, str)  # (newDetectorName, oldDetectorName)
@@ -17,7 +16,7 @@ class DetectorsManager(MultiManager, SignalInterface):
     sigNewFrame = Signal()
 
     detectorParams = {}
-    
+
     def __init__(self, detectorInfos, updatePeriod, **lowLevelManagers):
         MultiManager.__init__(self, detectorInfos, 'detectors', **lowLevelManagers)
         SignalInterface.__init__(self)
@@ -72,7 +71,7 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._lvWorker.moveToThread(self._thread)
         self._thread.started.connect(self._lvWorker.run)
         self._thread.finished.connect(self._lvWorker.stop)
-        
+
         # Note: In headless mode, LVWorker is only started when live view acquisition is explicitly requested
         # This avoids unnecessary resource consumption. The LiveViewController handles explicit streaming.
 
@@ -84,7 +83,8 @@ class DetectorsManager(MultiManager, SignalInterface):
         return self.detectorParams
 
     def __del__(self):
-        self._lvWorker.stop()
+        if hasattr(self, '_lvWorker'):
+            self._lvWorker.stop()
         if hasattr(super(), '__del__'):
             super().__del__()
 
@@ -113,7 +113,7 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._currentDetectorName = detectorName
         self.sigDetectorSwitched.emit(detectorName, oldDetectorName)
 
-        if self._thread.isRunning():
+        if hasattr(self, '_thread') and self._thread.isRunning():
             self.execOnCurrent(lambda c: c.updateLatestFrame(True))
 
     def execOnCurrent(self, func):
@@ -215,7 +215,7 @@ class LVWorker(Worker):
 
     def run(self):
         print("start lvworker")
-        # for all available detectors with the "forAcquisition" flag start polling frames 
+        # for all available detectors with the "forAcquisition" flag start polling frames
         for detectorName in self._detectorsManager.getAllDeviceNames():
             if self._detectorsManager[detectorName]._DetectorManager__forAcquisition:
                 # initialize the latest frame acquisition

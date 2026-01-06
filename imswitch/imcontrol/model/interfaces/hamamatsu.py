@@ -528,7 +528,7 @@ class HamamatsuCamera:
     def getPropertyValue(self, property_name):
 
         # Check if the property exists.
-        if not (property_name in self.properties):
+        if property_name not in self.properties:
             self._logger.warning(f"Unknown property name: {property_name}")
             return False
         prop_id = self.properties[property_name]
@@ -650,7 +650,7 @@ class HamamatsuCamera:
     def setPropertyValue(self, property_name, property_value):
 
         # Check if the property exists.
-        if not (property_name in self.properties):
+        if property_name not in self.properties:
             self._logger.warning(f"Unknown property name: {property_name}")
             return False
 

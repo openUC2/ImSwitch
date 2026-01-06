@@ -1,7 +1,4 @@
 
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
-from imswitch.imcontrol.view import guitools
-from imswitch.imcommon.model import initLogger
 from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS
 

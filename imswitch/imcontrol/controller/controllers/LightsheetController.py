@@ -318,7 +318,7 @@ class LightsheetController(ImConWidgetController):
         maxPos = self._widget.getMaxPosition()
         speed = self._widget.getSpeed()
         illuSource = self._widget.getIlluminationSource()
-        stageAxis = self._widget.getStageAxis()
+        axis = self._widget.getStageAxis()
 
         self._widget.startButton.setEnabled(False)
         self._widget.stopButton.setEnabled(True)
@@ -331,8 +331,8 @@ class LightsheetController(ImConWidgetController):
         if axis not in ("A", "X", "Y", "Z"):
             axis = "A"
         # use default illumination source if not selected
-        if illusource is None or illusource==-1 or illusource not in self._master.lasersManager.getAllDeviceNames():
-            illusource = self._master.lasersManager.getAllDeviceNames()[0]
+        if illuSource is None or illuSource==-1 or illuSource not in self._master.lasersManager.getAllDeviceNames():
+            illuSource = self._master.lasersManager.getAllDeviceNames()[0]
 
         # Redirect to new method with default TIFF storage for backward compatibility
         return self.startContinuousScanWithZarr(
@@ -340,7 +340,7 @@ class LightsheetController(ImConWidgetController):
             maxPos=maxPos,
             speed=speed,
             axis=axis,
-            illuSource=illusource,
+            illuSource=illuSource,
             illuValue=0,
             storageFormat="tiff",  # Use TIFF for backward compatibility
             experimentName="lightsheet_scan_legacy"

@@ -51,7 +51,7 @@ _baseDataFilesDir = os.path.join(os.path.dirname(os.path.realpath(imswitch.__fil
 static_dir = os.path.join(_baseDataFilesDir,  'static')
 imswitchapp_dir = os.path.join(_baseDataFilesDir,  'static', 'imswitch')
 images_dir =  os.path.join(_baseDataFilesDir, 'images')
-app = FastAPI(docs_url=None, redoc_url=None)
+app = FastAPI(root_path="/imswitch", docs_url=None, redoc_url=None)
 
 # Mount Socket.IO app at root path for WebSocket connections
 # This allows Socket.IO to handle all socket.io/* paths

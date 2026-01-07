@@ -300,10 +300,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 # Redirect root URL "/" to "/imswitch"
-@api_router.get("/", include_in_schema=False)
+@app.get("/", include_in_schema=False)
 async def root_redirect():
     # Comments in English: Redirect to the React app
-    return RedirectResponse(url="/imswitch/index.html")
+    return RedirectResponse(url="/ui/index.html")
 
 
 class ServerThread(threading.Thread):

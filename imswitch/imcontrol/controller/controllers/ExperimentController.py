@@ -720,7 +720,6 @@ class ExperimentController(ImConWidgetController):
 
         # Generate Z-positions
         currentZ = self.mStage.getPosition()["Z"]
-        isZStack = p.zStack or (p.zStackStepSize > 0 and p.zStackMax > p.zStackMin)
         if isZStack:
             z_positions = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize) + currentZ
         else:

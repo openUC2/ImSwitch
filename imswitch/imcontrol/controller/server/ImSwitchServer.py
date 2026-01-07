@@ -289,7 +289,7 @@ def download_file(path: str):
 
 
 # Custom exception handler for validation errors
-@api_router.exception_handler(RequestValidationError)
+@app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
         status_code=422,

@@ -2,7 +2,7 @@ import threading
 from imswitch.imcommon.framework import Worker
 from imswitch.imcommon.model import dirtools, initLogger
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Form
 from pydantic import BaseModel
 from imswitch.imcontrol.model import Options
 from imswitch.imcommon.model import ostools
@@ -52,6 +52,8 @@ static_dir = os.path.join(_baseDataFilesDir,  'static')
 imswitchapp_dir = os.path.join(_baseDataFilesDir,  'static', 'imswitch')
 images_dir =  os.path.join(_baseDataFilesDir, 'images')
 app = FastAPI(root_path="/imswitch", docs_url=None, redoc_url=None)
+api_router = APIRouter(prefix="/api")
+app.include_router(api_router)
 
 # Mount Socket.IO app at root path for WebSocket connections
 # This allows Socket.IO to handle all socket.io/* paths
@@ -95,7 +97,7 @@ class CreateFolderRequest(BaseModel):
     name: str
     parentId: Optional[str] = None
 
-@app.get("/version")
+@api_router.get("/version")
 def get_version():
     """
     Returns the current version of the ImSwitch server.
@@ -108,7 +110,7 @@ def get_version():
 
 
 # Create a Folder
-@app.post("/folder")
+@api_router.post("/folder")
 def create_folder(request: CreateFolderRequest):
     """
     Create a folder using JSON payload.
@@ -168,7 +170,7 @@ def list_items(base_path: str) -> List[Dict]:
 
 
 
-@app.get("/FileManager/preview/{file_path:path}")
+@api_router.get("/FileManager/preview/{file_path:path}")
 def preview_file(file_path: str):
     """
     Provides file previews by serving the file from disk.
@@ -189,14 +191,14 @@ def preview_file(file_path: str):
     # Serve the file
     return FileResponse(absolute_path, filename=absolute_path.name)
 
-@app.get("/FileManager/")
+@api_router.get("/FileManager/")
 def get_items(path: str = ""):
     directory = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), path)
     if not os.path.exists(directory):
         raise HTTPException(status_code=404, detail="Path not found")
     return list_items(directory)
 
-@app.post("/FileManager/upload")
+@api_router.post("/FileManager/upload")
 def upload_file(file: UploadFile = File(...), target_path: Optional[str] = Form("")):
     """
     Upload a file to the specified target directory.
@@ -215,7 +217,7 @@ def upload_file(file: UploadFile = File(...), target_path: Optional[str] = Form(
     return {"message": f"File '{file.filename}' uploaded successfully", "path": str(file_location)}
 
 # 📋 Copy File(s) or Folder(s)
-@app.post("/FileManager/copy")
+@api_router.post("/FileManager/copy")
 def copy_item(source: str = Form(...), destination: str = Form(...)):
     src = dirtools.UserFileDirs.getValidatedDataPath() / source
     dest = dirtools.UserFileDirs.getValidatedDataPath() / destination / src.name
@@ -231,7 +233,7 @@ def copy_item(source: str = Form(...), destination: str = Form(...)):
 
 
 # 📤 Move File(s) or Folder(s)
-@app.put("/FileManager/move")
+@api_router.put("/FileManager/move")
 def move_item(source: str = Form(...), destination: str = Form(...)):
     src = dirtools.UserFileDirs.getValidatedDataPath() / source
     dest = dirtools.UserFileDirs.getValidatedDataPath() / destination / src.name
@@ -242,7 +244,7 @@ def move_item(source: str = Form(...), destination: str = Form(...)):
 
 
 # ✏️ Rename a File or Folder
-@app.patch("/FileManager/rename")
+@api_router.patch("/FileManager/rename")
 def rename_item(source: str = Form(...), new_name: str = Form(...)):
     src = dirtools.UserFileDirs.getValidatedDataPath() / source
     new_path = src.parent / new_name
@@ -253,7 +255,7 @@ def rename_item(source: str = Form(...), new_name: str = Form(...)):
 
 
 # 🗑️ Delete File(s) or Folder(s)
-@app.delete("/FileManager")
+@api_router.delete("/FileManager")
 def delete_item(paths: List[str]):
     for path in paths:
         target = dirtools.UserFileDirs.getValidatedDataPath() / path
@@ -267,7 +269,7 @@ def delete_item(paths: List[str]):
 
 
 # ⬇️ Download File(s) or Folder(s)
-@app.get("/FileManager/download/{path:path}")
+@api_router.get("/FileManager/download/{path:path}")
 def download_file(path: str):
     target = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), path.lstrip("/"))
     if not os.path.exists(target):
@@ -287,7 +289,7 @@ def download_file(path: str):
 
 
 # Custom exception handler for validation errors
-@app.exception_handler(RequestValidationError)
+@api_router.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
         status_code=422,
@@ -298,7 +300,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 # Redirect root URL "/" to "/imswitch"
-@app.get("/", include_in_schema=False)
+@api_router.get("/", include_in_schema=False)
 async def root_redirect():
     # Comments in English: Redirect to the React app
     return RedirectResponse(url="/imswitch/index.html")
@@ -407,7 +409,7 @@ class ImSwitchServer(Worker):
             s.close()
         return IP
 
-    @app.get("/docs", include_in_schema=False)
+    @api_router.get("/docs", include_in_schema=False)
     async def custom_swagger_ui_html():
         return get_swagger_ui_html(
             openapi_url=app.openapi_url,
@@ -417,12 +419,12 @@ class ImSwitchServer(Worker):
             swagger_css_url="/static/swagger-ui.css",
         )
 
-    @app.get("/jupyternotebookurl")
+    @api_router.get("/jupyternotebookurl")
     def get_jupyter_notebook_url():
         from imswitch import jupyternotebookurl # import it here to get the one after the notebook has been actually launched
         return {"url": jupyternotebookurl}
 
-    @app.get("/plugins")
+    @api_router.get("/plugins")
     def get_plugins():
         """
         Returns a list of available plugins
@@ -433,7 +435,7 @@ class ImSwitchServer(Worker):
             plugins.append(plugin)
         return {"plugins": plugins}
 
-    @app.get("/hostname")
+    @api_router.get("/hostname")
     def get_hostname():
         """
         Returns the hostname of the server.
@@ -448,23 +450,23 @@ class ImSwitchServer(Worker):
         def includeAPI(str, func):
             if hasattr(func, '_APIAsyncExecution') and func._APIAsyncExecution:
                 if hasattr(func, '_APIRequestType') and func._APIRequestType == "POST":
-                    @app.post(str)
+                    @api_router.post(str)
                     @wraps(func)
                     async def wrapper(*args, **kwargs):
                         return await func(*args, **kwargs)
                 else:
-                    @app.get(str) # TODO: Perhaps we want POST instead?
+                    @api_router.get(str) # TODO: Perhaps we want POST instead?
                     @wraps(func)
                     async def wrapper(*args, **kwargs):
                         return await func(*args, **kwargs) # sometimes we need to return a future
             else:
                 if hasattr(func, '_APIRequestType') and func._APIRequestType == "POST":
-                    @app.post(str)
+                    @api_router.post(str)
                     @wraps(func)
                     def wrapper(*args, **kwargs):
                         return func(*args, **kwargs)
                 else:
-                    @app.get(str) # TODO: Perhaps we want POST instead?
+                    @api_router.get(str) # TODO: Perhaps we want POST instead?
                     @wraps(func)
                     #@register
                     async def wrapper(*args, **kwargs):
@@ -528,7 +530,7 @@ class ImSwitchServer(Worker):
                 )
 
     # The reason why it's still called UC2ConfigController is because we don't want to change the API
-    @app.get("/UC2ConfigController/returnAvailableSetups")
+    @api_router.get("/UC2ConfigController/returnAvailableSetups")
     def returnAvailableSetups():
         """
         Returns a list of available setups in the config file.
@@ -539,7 +541,7 @@ class ImSwitchServer(Worker):
         setup_list.sort()
         return {"available_setups": setup_list}
 
-    @app.get("/UC2ConfigController/getCurrentSetupFilename")
+    @api_router.get("/UC2ConfigController/getCurrentSetupFilename")
     def getCurrentSetupFilename() -> Dict[str, str]:
         """
         Returns the current setup filename.
@@ -548,7 +550,7 @@ class ImSwitchServer(Worker):
         return {"current_setup": options}
 
 
-    @app.get("/UC2ConfigController/readSetupFile")
+    @api_router.get("/UC2ConfigController/readSetupFile")
     def readSetupFile(setupFileName: str=None) -> dict:
         '''Reads the setup file. If setupFileName is None, reads the current setup file.'''
         if setupFileName is None:
@@ -562,7 +564,7 @@ class ImSwitchServer(Worker):
         setup_dict = configfiletools.loadSetupInfo(mOptions, ViewSetupInfo)
         return setup_dict.to_dict()
 
-    @app.post("/UC2ConfigController/writeNewSetupFile")
+    @api_router.post("/UC2ConfigController/writeNewSetupFile")
     def writeNewSetupFile(setupFileName: str, setupDict: dict, setAsCurrentConfig: bool = True, restart: bool = False, overwrite: bool = False) -> str:
         '''Writes a new setup file. and set as new setup file if needed on next boot.'''
         if setupFileName is None:
@@ -586,7 +588,7 @@ class ImSwitchServer(Worker):
             ostools.restartSoftware(forceConfigFile=setAsCurrentConfig)
         return f"Setup file {setupFileName} written successfully."
 
-    @app.get("/UC2ConfigController/setSetupFileName")
+    @api_router.get("/UC2ConfigController/setSetupFileName")
     def setSetupFileName(setupFileName: str, restartSoftware: bool=False) -> str:
         '''Sets the setup file name in the options file.'''
         if setupFileName is  None:
@@ -602,7 +604,7 @@ class ImSwitchServer(Worker):
         return f"Setup file {setupFileName} set successfully."
 
     # Log file management endpoints
-    @app.get("/LogController/listLogFiles")
+    @api_router.get("/LogController/listLogFiles")
     def list_log_files() -> Dict[str, List[Dict[str, str]]]:
         """
         Returns a list of available log files in alphanumerical order.
@@ -630,7 +632,7 @@ class ImSwitchServer(Worker):
 
         return {"log_files": log_files}
 
-    @app.get("/LogController/downloadLogFile")
+    @api_router.get("/LogController/downloadLogFile")
     def download_log_file(filename: str):
         """
         Download a specific log file.

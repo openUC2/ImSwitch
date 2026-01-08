@@ -411,13 +411,14 @@ class ImSwitchServer(Worker):
         return IP
 
     @api_router.get("/docs", include_in_schema=False)
-    async def custom_swagger_ui_html():
+    async def custom_swagger_ui_html(request: Request):
+        root_path = request.scope.get("root_path")
         return get_swagger_ui_html(
             openapi_url=app.openapi_url,
             title=app.title + " - ImSwitch Swagger UI",
             oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
-            swagger_js_url="/static/swagger-ui-bundle.js",
-            swagger_css_url="/static/swagger-ui.css",
+            swagger_js_url=root_path+"/static/swagger-ui-bundle.js",
+            swagger_css_url=root_path+"/static/swagger-ui.css",
         )
 
     @api_router.get("/jupyternotebookurl")

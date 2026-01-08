@@ -172,11 +172,12 @@ class CameraHIK:
         if number > 9:
             self.__logger.info(f"Camera number {number} > 9, treating as unique identifier (serial checksum)")
             camera_index = None
-
+            serial_checksums = []
             # Search for camera with matching serial number checksum
             for i, info in enumerate(infos):
                 serial_checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
-                self.__logger.debug(f"Camera {i} serial checksum: {serial_checksum}")
+                serial_checksums.append(serial_checksum)
+                self.__logger.info(f"Camera {i} serial checksum: {serial_checksum}")
                 if serial_checksum == number:
                     camera_index = i
                     self.__logger.info(f"Found camera with matching serial checksum {number} at index {i}")
@@ -190,11 +191,20 @@ class CameraHIK:
                     f"Falling back to first available camera (index 0)."
                 )
                 # Log available cameras for diagnostic purposes
+                # TODO: Fallback -> We need to open another camera, but there may be a conflict with another instance needing that camera, currently we don't have any way to catch this/read this from the config
+                # FIXME: For now: iterate through list and check if opened, if not, use that index
                 for i, info in enumerate(infos):
-                    checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
-                    self.__logger.info(f"Available camera {i}: checksum {checksum}")
-                camera_index = 0
-
+                    tmpCamera = MvCamera()
+                    tmpCamera.MV_CC_CreateHandle(info)
+                    ret = tmpCamera.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
+                    if ret == 0:
+                        serial_checksum = np.sum(info.SpecialInfo.stUsb3VInfo.chSerialNumber)
+                        self.__logger.info(f"Camera {i} serial checksum is available and will be used: {serial_checksum}")
+                        camera_index = i                
+                        tmpCamera.MV_CC_CloseDevice()
+                        tmpCamera.MV_CC_DestroyHandle()
+                        del tmpCamera
+                        break
             number = camera_index  # Use the found index for the rest of the function
         else:
             # Traditional index-based selection
@@ -270,10 +280,6 @@ class CameraHIK:
 
     def reconnectCamera(self):
         # Safely close any existing handle
-
-        # Store the serial checksum before closing
-        old_checksum = getattr(self, '_serial_checksum', None)
-
         # todo: Need to store the current camerano and other settings and open it in case it's the hash/referenc enumber
         if self.camera is not None:
             try:
@@ -281,11 +287,6 @@ class CameraHIK:
                 if hasattr(self, '_callback_registered') and self._callback_registered:
                     self.camera.MV_CC_RegisterImageCallBackEx(None, None)
                     self._callback_registered = False
-
-                # Remove from opened cameras list
-                if old_checksum is not None and old_checksum in CameraHIK._opened_cameras:
-                    CameraHIK._opened_cameras.discard(old_checksum)
-                    self.__logger.debug(f"Removed camera with checksum {old_checksum} from opened cameras list during reconnect")
 
                 self.camera.MV_CC_CloseDevice()
                 self.camera.MV_CC_DestroyHandle()

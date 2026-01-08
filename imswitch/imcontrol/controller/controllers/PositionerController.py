@@ -156,8 +156,8 @@ class PositionerController(ImConWidgetController):
         if positionerName is None:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].doHome(axis, isBlocking=isBlocking, homeDirection=homeDirection, homeSpeed=homeSpeed, homeEndstoppolarity=homeEndstoppolarity, homeEndposRelease=homeEndposRelease, homeTimeout=homeTimeout)
-        self.updatePosition(positionerName, axis)
-        self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
+        #self.updatePosition(positionerName, axis)
+        #self._commChannel.sigUpdateMotorPosition.emit(self.getPos()) # Not needed as it will be pushed asynchronously from the esp via signal
 
     @APIExport()
     def stopAxis(self, positionerName=None, axis="X"):

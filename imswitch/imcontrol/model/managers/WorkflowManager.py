@@ -161,7 +161,7 @@ class WorkflowStep:
             post_time = metadata["post_time"]
             main_time = metadata["main_time"]
             total_time = pre_time + post_time + main_time
-            self.__logger.debug(f"Step {self.name} ({self.step_id}) completed in {total_time:.2f}s (pre: {pre_time:.2f}s, main: {main_time:.2f}s, post: {post_time:.2f}s)")
+            self.__logger.info(f"Step {self.name} ({self.step_id}) completed in {total_time:.2f}s (pre: {pre_time:.2f}s, main: {main_time:.2f}s, post: {post_time:.2f}s)")
 
         # Emit event that step completed
         context.emit_event("progress", {"status": "completed", "step_id": context.current_step_index, "name": self.name, "total_step_number": context.total_step_number})

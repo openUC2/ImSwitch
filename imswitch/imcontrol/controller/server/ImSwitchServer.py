@@ -414,7 +414,7 @@ class ImSwitchServer(Worker):
     async def custom_swagger_ui_html(request: Request):
         root_path = request.scope.get("root_path")
         return get_swagger_ui_html(
-            openapi_url=app.openapi_url,
+            openapi_url=root_path+app.openapi_url,
             title=app.title + " - ImSwitch Swagger UI",
             oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
             swagger_js_url=root_path+"/static/swagger-ui-bundle.js",

@@ -53,7 +53,6 @@ imswitchapp_dir = os.path.join(_baseDataFilesDir,  'static', 'imswitch')
 images_dir =  os.path.join(_baseDataFilesDir, 'images')
 app = FastAPI(root_path="/imswitch", docs_url=None, redoc_url=None)
 api_router = APIRouter(prefix="/api")
-app.include_router(api_router)
 
 # Mount Socket.IO app at root path for WebSocket connections
 # This allows Socket.IO to handle all socket.io/* paths
@@ -96,13 +95,6 @@ app.add_middleware(
 class CreateFolderRequest(BaseModel):
     name: str
     parentId: Optional[str] = None
-
-@app.get("/version")
-def get_version():
-    """
-    Returns the current version of the ImSwitch server.
-    """
-    return {"version": VERSION}
 
 @api_router.get("/version")
 def get_version():
@@ -386,6 +378,8 @@ class ImSwitchServer(Worker):
     def run(self):
         # serve the fastapi
         self.createAPI()
+        # Note(ethanjli): all FastAPI path operations must be added before we call `include_router`!
+        app.include_router(api_router)
 
         # To operate remotely we need to provide https
         # openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365

@@ -30,7 +30,7 @@ class Mutex(abstract.Mutex):
 
 # Initialize Socket.IO server
 sio = AsyncServer(async_mode="asgi", cors_allowed_origins="*")
-socket_app = ASGIApp(sio)  # Renamed to socket_app - will be mounted on FastAPI app
+socket_app = ASGIApp(sio, socketio_path=None)  # Renamed to socket_app - will be mounted on FastAPI app
 
 # Per-client frame acknowledgement tracking
 _client_sent_frame_id = {}  # sid -> last sent frame id (int or None)

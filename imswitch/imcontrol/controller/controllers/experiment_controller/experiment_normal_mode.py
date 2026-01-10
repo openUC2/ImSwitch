@@ -312,6 +312,24 @@ class ExperimentNormalMode(ExperimentModeBase):
                 main_params={"posX": m_point["x"], "posY": m_point["y"], "relative": False},
             ))
             step_id += 1
+            
+            # Perform autofocus if enabled
+            if is_auto_focus:
+                workflow_steps.append(WorkflowStep(
+                    name="Autofocus",
+                    step_id=step_id,
+                    main_func=self.controller.autofocus,
+                    main_params={
+                        "minZ": autofocus_min,
+                        "maxZ": autofocus_max,
+                        "stepSize": autofocus_step_size,
+                        "illuminationChannel": autofocus_illumination_channel,
+                        "max_attempts": autofocus_max_attempts,
+                        "target_focus_setpoint": autofocus_target_focus_setpoint,
+                        "mode": autofocus_mode
+                    },
+                ))
+                step_id += 1
 
             # Iterate over Z positions
             for index_z, i_z in enumerate(z_positions):
@@ -405,23 +423,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 ))
                 step_id += 1
 
-            # Perform autofocus if enabled
-            if is_auto_focus:
-                workflow_steps.append(WorkflowStep(
-                    name="Autofocus",
-                    step_id=step_id,
-                    main_func=self.controller.autofocus,
-                    main_params={
-                        "minZ": autofocus_min,
-                        "maxZ": autofocus_max,
-                        "stepSize": autofocus_step_size,
-                        "illuminationChannel": autofocus_illumination_channel,
-                        "max_attempts": autofocus_max_attempts,
-                        "target_focus_setpoint": autofocus_target_focus_setpoint,
-                        "mode": autofocus_mode
-                    },
-                ))
-                step_id += 1
+
 
         # Finalize OME writer for this tile (skip in single TIFF mode since we only have one writer)
         # Always finalize tile writers since each timepoint creates its own writers

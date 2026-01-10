@@ -41,6 +41,7 @@ class UC2ConfigController(ImConWidgetController):
     sigUC2SerialIsConnected = Signal(bool)
     sigOTAStatusUpdate = Signal(object)  # Emits OTA status updates
     sigUSBFlashStatusUpdate = Signal(object)  # Emits USB flash status updates
+    sigCameraTrigger = Signal(object)  # Emits camera trigger events from hardware
 
 
     def __init__(self, *args, **kwargs):
@@ -77,6 +78,9 @@ class UC2ConfigController(ImConWidgetController):
 
         # register CAN callback
         self.registerCANCallback()
+
+        # register camera trigger callback for performance mode
+        self.registerCameraTriggerCallback()
 
         # register the callbacks for emitting serial-related signals
         if hasattr(self._master.UC2ConfigManager, "ESP32"):
@@ -278,6 +282,42 @@ class UC2ConfigController(ImConWidgetController):
                 self.__logger.warning("ESP32 CAN not available - CAN scan callbacks won't work")
         except Exception as e:
             self.__logger.error(f"Could not register CAN callback: {e}")
+
+    def registerCameraTriggerCallback(self):
+        """
+        Register callback for camera trigger events from firmware.
+        
+        When the firmware sends {"cam":1}, this callback emits a signal
+        that can be used by the ExperimentController for software-triggered
+        acquisition in performance mode.
+        """
+        def camera_trigger_callback(trigger_info):
+            """
+            Handle camera trigger events from ESP32.
+            
+            :param trigger_info: Dictionary containing:
+                - trigger: Trigger signal (1 = trigger)
+                - frame_id: Frame number
+                - timestamp: Unix timestamp
+                - illumination: Optional illumination channel index
+            """
+            try:
+                self.__logger.debug(f"Camera trigger received: frame {trigger_info.get('frame_id')}")
+                
+                # Emit signal for ExperimentController or other listeners
+                self.sigCameraTrigger.emit(trigger_info)
+                
+            except Exception as e:
+                self.__logger.error(f"Error in camera trigger callback: {e}")
+
+        try:
+            if hasattr(self._master.UC2ConfigManager, "ESP32") and hasattr(self._master.UC2ConfigManager.ESP32, "camera_trigger"):
+                self._master.UC2ConfigManager.ESP32.camera_trigger.register_callback(0, camera_trigger_callback)
+                self.__logger.debug("Camera trigger callback registered successfully")
+            else:
+                self.__logger.debug("ESP32 camera_trigger module not available - hardware camera triggers won't work")
+        except Exception as e:
+            self.__logger.error(f"Could not register camera trigger callback: {e}")
 
 
     @APIExport(runOnUIThread=False)

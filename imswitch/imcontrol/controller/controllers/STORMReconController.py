@@ -1606,7 +1606,6 @@ class STORMReconController(LiveUpdatedController):
                         'dtype': sample_frame.dtype,
                         "experiment": {
                             "MicroscopeState": {
-                                "number_z_steps": 1,
                                 "timepoints": 10000,
                                 "channels": {
                                     "channel_1": {

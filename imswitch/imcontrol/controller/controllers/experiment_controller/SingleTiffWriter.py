@@ -88,7 +88,7 @@ class SingleTiffWriter:
                 'PhysicalSizeXUnit': 'µm',
                 'PhysicalSizeY': float(pixel_size),
                 'PhysicalSizeYUnit': 'µm'},
-
+                'axes': 'ZYX',
                 'Plane': {
                     'PositionX': float(pos_x),
                     'PositionY': float(pos_y)

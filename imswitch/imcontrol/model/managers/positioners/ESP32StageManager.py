@@ -577,26 +577,41 @@ class ESP32StageManager(PositionerManager):
             return 0
 
     def start_stage_scanning(self, xstart=0, xstep=1, nx=100,
-                             ystart=0, ystep=1, ny=100, tsettle=0.1, tExposure=50, illumination=None, led=None):
+                             ystart=0, ystep=1, ny=100,
+                             zstart=0, zstep=0, nz=1,
+                             tsettle=0.1, tExposure=50, illumination=None, led=None,
+                             speed=20000, acceleration=None):
         """
         Start a stage scanning operation with the given parameters.
+        
         :param xstart: Starting position in X direction.
         :param xstep: Step size in X direction.
         :param nx: Number of steps in X direction.
         :param ystart: Starting position in Y direction.
         :param ystep: Step size in Y direction.
         :param ny: Number of steps in Y direction.
-        :param settle: Settle time after each step.
-        :param illumination: Optional illumination settings.
-        :param led: Optional LED settings.
+        :param zstart: Starting position in Z direction.
+        :param zstep: Step size in Z direction (0 = no Z-stacking).
+        :param nz: Number of steps in Z direction (1 = single plane).
+        :param tsettle: Settle time after each step (ms).
+        :param tExposure: Exposure time at each position (ms).
+        :param illumination: Optional illumination settings tuple (4 values).
+        :param led: Optional LED intensity (0-255).
+        :param speed: Motor speed for scanning.
+        :param acceleration: Motor acceleration (None = default).
         """
         if illumination is None:
-            illumination = (0,0,0,0)  # Default to no illumination
+            illumination = (0, 0, 0, 0)  # Default to no illumination
         if led is None:
             led = 0
-        r = self._motor.start_stage_scanning(xstart=xstart, xstep=xstep, nx=nx,
-                                         ystart=ystart, ystep=ystep, ny=ny,
-                                         tsettle=tsettle, tExposure=tExposure, illumination=illumination, led=led)
+        r = self._motor.start_stage_scanning(
+            xstart=xstart, xstep=xstep, nx=nx,
+            ystart=ystart, ystep=ystep, ny=ny,
+            zstart=zstart, zstep=zstep, nz=nz,
+            tsettle=tsettle, tExposure=tExposure,
+            illumination=illumination, led=led,
+            speed=speed, acceleration=acceleration
+        )
         return r
 
     def stop_stage_scanning(self):

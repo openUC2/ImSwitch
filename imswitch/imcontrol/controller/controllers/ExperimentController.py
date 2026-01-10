@@ -87,7 +87,7 @@ class ScanArea(BaseModel):
     wellId: Optional[str] = None
     centerPosition: CenterPosition
     bounds: ScanBounds
-    scanPattern: str = "raster"  # snake or raster
+    scanPattern: str = "raster"  # snake or raster (calculated in frontend, positions already ordered)
     positions: List[ScanPosition]
 
 class ScanMetadata(BaseModel):
@@ -95,9 +95,9 @@ class ScanMetadata(BaseModel):
     totalPositions: int
     fovX: float
     fovY: float
-    overlapWidth: float = 0.0
-    overlapHeight: float = 0.0
-    scanPattern: str = "raster"
+    overlapWidth: float = 0.0  # Used by frontend for coordinate calculation
+    overlapHeight: float = 0.0  # Used by frontend for coordinate calculation
+    scanPattern: str = "raster"  # Positions are already ordered per this pattern from frontend
 
 class ParameterValue(BaseModel):
     illumination: Union[List[str], str] = None # X, Y, nX, nY
@@ -139,7 +139,6 @@ class Experiment(BaseModel):
     scanMetadata: Optional[ScanMetadata] = None
 
     # From your old "ExperimentModel":
-    number_z_steps: int = Field(0, description="Number of Z slices")
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
 
     # -----------------------------------------------------------
@@ -153,7 +152,6 @@ class Experiment(BaseModel):
         config = {
             "experiment": {
                 "MicroscopeState": {
-                    "number_z_steps": self.number_z_steps,
                     "timepoints": self.timepoints,
                 },
                 # TODO: Complete it again
@@ -1374,16 +1372,37 @@ class ExperimentController(ImConWidgetController):
     def startFastStageScanAcquisition(self,
                       xstart:float=0, xstep:float=500, nx:int=10,
                       ystart:float=0, ystep:float=500, ny:int=10,
+                      zstart:float=0, zstep:float=0, nz:int=1,
                       tsettle:float=90, tExposure:float=50,
                       illumination0:int=None, illumination1:int=None,
-                      illumination2:int=None, illumination3:int=None, led:float=None,
+                      illumination2:int=None, illumination3:int=None, 
+                      illumination4:int=None, led:float=None,
                       tPeriod:int=1, nTimes:int=1):
-        """Full workflow: arm camera ➔ launch writer ➔ execute scan."""
+        """Full workflow: arm camera ➔ launch writer ➔ execute scan.
+        
+        Args:
+            xstart: Starting X position
+            xstep: Step size in X direction
+            nx: Number of steps in X
+            ystart: Starting Y position  
+            ystep: Step size in Y direction
+            ny: Number of steps in Y
+            zstart: Starting Z position (for Z-stacking)
+            zstep: Step size in Z direction (0 = no Z-stacking)
+            nz: Number of Z planes (1 = single plane)
+            tsettle: Settle time after movement (ms)
+            tExposure: Exposure time (ms)
+            illumination0-3: Illumination channel intensities
+            led: LED intensity (0-255)
+            tPeriod: Period between time points (s)
+            nTimes: Number of time points
+        """
         self.fastStageScanIsRunning = True
         self._stop() # ensure all prior runs are stopped
         self.move_stage_xy(posX=xstart, posY=ystart, relative=False)
 
-
+        # Turn off all illumination channels before starting scan
+        self._switch_off_all_illumination()
 
         # compute the metadata for the stage scan (e.g. x/y coordinates and illumination channels)
         # stage will start at xstart, ystart and move in steps of xstep, ystep in snake scan logic
@@ -1393,56 +1412,59 @@ class ExperimentController(ImConWidgetController):
             "illumination1": illumination1,
             "illumination2": illumination2,
             "illumination3": illumination3,
+            "illumination4": illumination4,
             "led": led
         }
 
         # Count how many illumination entries are valid (not None)
         nIlluminations = sum(val is not None and val > 0 for val in illum_dict.values())
         nScan = max(nIlluminations, 1)
-        total_frames = nx * ny * nScan
-        self._logger.info(f"Stage-scan: {nx}×{ny} ({total_frames} frames)")
-        def addDataPoint(metadataList, x, y, illuminationChannel, illuminationValue, runningNumber):
+        total_frames = nx * ny * nz * nScan
+        self._logger.info(f"Stage-scan: {nx}×{ny}×{nz} ({total_frames} frames)")
+        
+        def addDataPoint(metadataList, x, y, z, illuminationChannel, illuminationValue, runningNumber):
             """Helper function to add metadata for each position."""
             metadataList.append({
                 "x": x,
                 "y": y,
+                "z": z,
                 "illuminationChannel": illuminationChannel,
                 "illuminationValue": illuminationValue,
                 "runningNumber": runningNumber
             })
             return metadataList
+            
         metadataList = []
         runningNumber = 0
-        for iy in range(ny):
-            for ix in range(nx):
-                x = xstart + ix * xstep
-                y = ystart + iy * ystep
-                # Snake pattern
-                if iy % 2 == 1:
-                    x = xstart + (nx - 1 - ix) * xstep
+        for iz in range(nz):
+            z = zstart + iz * zstep
+            for iy in range(ny):
+                for ix in range(nx):
+                    x = xstart + ix * xstep
+                    y = ystart + iy * ystep
+                    # Snake pattern
+                    if iy % 2 == 1:
+                        x = xstart + (nx - 1 - ix) * xstep
 
-                # If there's at least one valid illumination or LED set, take only one image as "default"
-                if nIlluminations == 0:
-                    runningNumber += 1
-                    addDataPoint(metadataList, x, y, "default", -1, runningNumber)
-                else:
-                    # Otherwise take an image for each illumination channel > 0
-                    for channel, value in illum_dict.items():
-                        if value is not None and value > 0:
-                            runningNumber += 1
-                            addDataPoint(metadataList, x, y, channel, value, runningNumber)
+                    # If there's at least one valid illumination or LED set, take only one image as "default"
+                    if nIlluminations == 0:
+                        runningNumber += 1
+                        addDataPoint(metadataList, x, y, z, "default", -1, runningNumber)
+                    else:
+                        # Otherwise take an image for each illumination channel > 0
+                        for channel, value in illum_dict.items():
+                            if value is not None and value > 0:
+                                runningNumber += 1
+                                addDataPoint(metadataList, x, y, z, channel, value, runningNumber)
         # 2. start writer thread ----------------------------------------------
         nLastTime = time.time()
         for iTime in range(nTimes):
             saveOMEZarr = True
-            nTimePoints = 1  # For now, we assume a single time point
-            nZPlanes = 1  # For now, we assume a single Z plane
+            nTimePoints = nTimes
+            nZPlanes = nz
 
             # 1. prepare camera ----------------------------------------------------
             self.mDetector.stopAcquisition()
-            #self.mDetector.NBuffer        = total_frames + 32   # head‑room
-            #self.mDetector.frame_buffer   = collections.deque(maxlen=self.mDetector.NBuffer)
-            #self.mDetector.frameid_buffer = collections.deque(maxlen=self.mDetector.NBuffer)
             self.mDetector.setTriggerSource("External trigger")
             self.mDetector.flushBuffers()
             self.mDetector.startAcquisition()
@@ -1471,19 +1493,49 @@ class ExperimentController(ImConWidgetController):
                     daemon=True
                 )
                 self._writer_thread_ome.start()
-            illumination=(illumination0, illumination1, illumination2, illumination3) if nIlluminations > 0 else (0,0,0,0)
+            
+            illumination=(illumination0, illumination1, illumination2, illumination3, illumination4) if nIlluminations > 0 else (0,0,0,0,0)
             # 3. execute stage scan (blocks until finished) ------------------------
             self.fastStageScanIsRunning = True  # Set flag to indicate scan is running
             self.mStage.start_stage_scanning(
                 xstart=0, xstep=xstep, nx=nx, # we choose xstart/ystart = 0 since this means we start from here in the positive direction with nsteps
                 ystart=0, ystep=ystep, ny=ny,
+                zstart=0, zstep=zstep, nz=nz,  # Z-stacking parameters
                 tsettle=tsettle, tExposure=tExposure,
                 illumination=illumination, led=led,
             )
-            #TODO: Make path more uniform - e.g. basetype
+            # Wait for time period or until scan is stopped
             while nLastTime + tPeriod < time.time() and self.fastStageScanIsRunning:
                 time.sleep(0.1)
         return self.getOmeZarrUrl()  # return relative path to the data directory
+
+    def _switch_off_all_illumination(self) -> None:
+        """
+        Turn off all illumination sources before starting scan.
+        This ensures clean state for hardware-controlled illumination.
+        """
+        try:
+            # Try to access laser manager
+            if hasattr(self, '_master') and hasattr(self._master, 'lasersManager'):
+                for laser_name in self._master.lasersManager.getAllDeviceNames():
+                    try:
+                        self._master.lasersManager[laser_name].setEnabled(False)
+                        self._master.lasersManager[laser_name].setValue(0)
+                    except Exception as e:
+                        self._logger.debug(f"Could not turn off laser {laser_name}: {e}")
+            
+            # Try to turn off LED via UC2 interface
+            if hasattr(self, 'mStage') and hasattr(self.mStage, '_rs232manager'):
+                try:
+                    esp32 = self.mStage._rs232manager._esp32
+                    if hasattr(esp32, 'led'):
+                        esp32.led.send_LEDMatrix_array(intensity=0, ids=[i for i in range(64)])
+                except Exception as e:
+                    self._logger.debug(f"Could not turn off LED matrix: {e}")
+                    
+            self._logger.debug("All illumination sources switched off before scan")
+        except Exception as e:
+            self._logger.warning(f"Error switching off illumination: {e}")
 
     # -------------------------------------------------------------------------
     # internal helpers

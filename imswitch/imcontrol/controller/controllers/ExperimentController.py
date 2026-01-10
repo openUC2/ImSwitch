@@ -1433,19 +1433,19 @@ class ExperimentController(ImConWidgetController):
                 "runningNumber": runningNumber
             })
             return metadataList
-            
+        # This corresponds to the metadataList in the UC2-ESP firmware e.g. here: https://github.com/youseetoo/uc2-esp32/blob/9addafaca538186e642e97f50c248df661a74637/main/src/motor/StageScan.cpp#L602
         metadataList = []
         runningNumber = 0
-        for iz in range(nz):
-            z = zstart + iz * zstep
+        for ix in range(nx):
             for iy in range(ny):
-                for ix in range(nx):
+                for iz in range(nz):
+                    z = zstart + iz * zstep
                     x = xstart + ix * xstep
                     y = ystart + iy * ystep
                     # Snake pattern
                     if iy % 2 == 1:
                         x = xstart + (nx - 1 - ix) * xstep
-
+                
                     # If there's at least one valid illumination or LED set, take only one image as "default"
                     if nIlluminations == 0:
                         runningNumber += 1
@@ -1462,12 +1462,6 @@ class ExperimentController(ImConWidgetController):
             saveOMEZarr = True
             nTimePoints = nTimes
             nZPlanes = nz
-
-            # 1. prepare camera ----------------------------------------------------
-            self.mDetector.stopAcquisition()
-            self.mDetector.setTriggerSource("External trigger")
-            self.mDetector.flushBuffers()
-            self.mDetector.startAcquisition()
 
             if saveOMEZarr:
                 # ------------------------------------------------------------------+
@@ -1506,7 +1500,7 @@ class ExperimentController(ImConWidgetController):
             )
             # Wait for time period or until scan is stopped
             while nLastTime + tPeriod < time.time() and self.fastStageScanIsRunning:
-                time.sleep(0.1)
+                time.sleep(0.1) # TODO: This fails / breaks immediately if there is no timealpse as the start_stage_scanning runs in the background and does not give a signal if it'S done
         return self.getOmeZarrUrl()  # return relative path to the data directory
 
     def _switch_off_all_illumination(self) -> None:
@@ -1647,12 +1641,6 @@ class ExperimentController(ImConWidgetController):
             self._current_ome_writer = ome_writer
             return  # Don't reset camera in normal mode
 
-        # bring camera back to continuous mode (performance mode only)
-        self.mDetector.stopAcquisition()
-        self.mDetector.setTriggerSource("Continuous")
-        self.mDetector.flushBuffers()
-        self.mDetector.startAcquisition()
-        self.fastStageScanIsRunning = False
 
     def write_frame_to_ome_writer(self, frame, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

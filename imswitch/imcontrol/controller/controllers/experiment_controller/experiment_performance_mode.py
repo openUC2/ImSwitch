@@ -130,7 +130,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 self._finalize_ome_writers(file_writers)
 
             # Reset camera to software triggering after scan
-            self._reset_camera_to_software_trigger()
+            self._reset_camera_to_continous_trigger()
 
             # Set LED status to idle when scan completes successfully
             self.controller.set_led_status("idle")
@@ -140,7 +140,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             # Set LED status to error
             self.controller.set_led_status("error")
             # Ensure camera is reset on error
-            self._reset_camera_to_software_trigger()
+            self._reset_camera_to_continous_trigger()
         finally:
             self._scan_running = False
 
@@ -255,7 +255,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         except Exception as e:
             self._logger.warning(f"Error switching off illumination: {e}")
 
-    def _reset_camera_to_software_trigger(self) -> None:
+    def _reset_camera_to_continous_trigger(self) -> None:
         """
         Reset camera to software/continuous triggering after scan completion.
         """
@@ -453,20 +453,12 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         else:
             t_exposure = 50
 
-        # Build illumination tuple
-        illumination = (
-            scan_params.get('illumination0') or 0,
-            scan_params.get('illumination1') or 0,
-            scan_params.get('illumination2') or 0,
-            scan_params.get('illumination3') or 0
-        )
-
         # Reset frame tracking
         self._last_frame_time = time.time()
         self._frame_count = 0
         self._expected_frames = scan_params['nx'] * scan_params['ny'] * scan_params['nz']
         
-        # Register camera trigger callback if using software trigger mode
+        # Register camera trigger callback if using software trigger mode 
         if self._use_software_trigger:
             self._register_camera_trigger_callback()
 
@@ -502,10 +494,15 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         """
         if self._camera_trigger_callback_registered:
             return
-            
+        
+        self.controller.mDetector.stopAcquisition()
+        self.controller.mDetector.setTriggerSource("Internal trigger") # should be Internal trigger for software trigger
+        self.controller.mDetector.flushBuffers()
+        self.controller.mDetector.startAcquisition()
+
         try:
             if hasattr(self.controller, 'mStage') and hasattr(self.controller.mStage, '_rs232manager'):
-                esp32 = self.controller.mStage._rs232manager._esp32
+                esp32 = self.controller._master.UC2ConfigManager.ESP32 # TODO: Hacky, but works
                 if hasattr(esp32, 'camera_trigger'):
                     esp32.camera_trigger.register_callback(0, self._on_camera_trigger)
                     self._camera_trigger_callback_registered = True
@@ -517,6 +514,13 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         """
         Unregister camera trigger callback.
         """
+        
+        # 1. prepare camera TODO: We should move this to performance mode class?
+        self.controller.mDetector.stopAcquisition()
+        self.controller.mDetector.setTriggerSource("External trigger")
+        self.controller.mDetector.flushBuffers()
+        self.controller.mDetector.startAcquisition()
+
         try:
             if hasattr(self.controller, 'mStage') and hasattr(self.controller.mStage, '_rs232manager'):
                 esp32 = self.controller.mStage._rs232manager._esp32
@@ -540,7 +544,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             # Trigger software capture
             try:
                 if hasattr(self.controller, 'mDetector'):
-                    self.controller.mDetector.softwareTrigger()
+                    self.controller.mDetector.sendSoftwareTrigger() # TODO: This function is not implemented  in all detectors
                     self._logger.debug(f"Software trigger sent for frame {self._frame_count}")
             except Exception as e:
                 self._logger.error(f"Error during software trigger: {e}")
@@ -557,7 +561,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         """
         self._use_software_trigger = enabled
         self._logger.info(f"Software trigger mode {'enabled' if enabled else 'disabled'}")
-        
+
         if enabled:
             self._register_camera_trigger_callback()
         else:
@@ -717,7 +721,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 self._scan_thread.join(timeout=5.0)  # Wait up to 5 seconds for thread to finish
 
             # Reset camera to software trigger
-            self._reset_camera_to_software_trigger()
+            self._reset_camera_to_continous_trigger()
 
             # Set LED status to idle
             self.controller.set_led_status("idle")
@@ -743,7 +747,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             self._logger.warning(f"Error force stopping scan: {e}")
         
         # Reset camera
-        self._reset_camera_to_software_trigger()
+        self._reset_camera_to_continous_trigger()
         
         if self._scan_thread and self._scan_thread.is_alive():
             # Don't wait for thread to finish gracefully in force stop

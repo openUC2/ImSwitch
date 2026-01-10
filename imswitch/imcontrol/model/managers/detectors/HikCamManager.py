@@ -147,6 +147,7 @@ class HikCamManager(DetectorManager):
 
     def setTriggerSource(self, source):
         # update camera safely and mirror value in GUI parameter list
+        self.__logger.debug(f'Setting trigger source to {source}')
         self._performSafeCameraAction(lambda: self._camera.setTriggerSource(source))
         self.parameters['trigger_source'].value = source
 

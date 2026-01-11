@@ -8,20 +8,24 @@ directly for time-critical operations with hardware triggering.
 import os
 import time
 import threading
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
 import numpy as np
 
-from .experiment_mode_base import ExperimentModeBase
-from .ome_writer import OMEWriter
+from .experiment_mode_base import ExperimentModeBase, OMEFileStorePaths
+from .ome_writer import OMEWriter, OMEWriterConfig
+from imswitch.imcommon.model import dirtools
 
 
 # Default timeout multiplier for scan operations
 SCAN_TIMEOUT_MULTIPLIER = 1.25
 # Default margin for exposure time calculations
 EXPOSURE_TIME_MARGIN = 1.25
-# Frame timeout - if no frames received within this time, abort scan
+# Frame timeout - if no frames received within this time, abort scan (only for hardware trigger)
 FRAME_TIMEOUT_SECONDS = 10.0
+# Default stagescan completion timeout in seconds
+STAGESCAN_COMPLETION_TIMEOUT = 300.0
 
 
 class ExperimentPerformanceMode(ExperimentModeBase):
@@ -42,6 +46,8 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         self._expected_frames = 0
         self._use_software_trigger = False  # Option to use software trigger via callback
         self._camera_trigger_callback_registered = False
+        self._stagescan_callback_registered = False
+        self._stagescan_complete_event = threading.Event()
 
     def execute_experiment(self,
                          snake_tiles: List[List[Dict]],
@@ -61,6 +67,13 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             Dictionary with execution results
         """
         self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
+        
+        # Extract trigger mode from experiment parameters
+        m_experiment = experiment_params.get('mExperiment')
+        if m_experiment and hasattr(m_experiment, 'parameterValue'):
+            trigger_mode = getattr(m_experiment.parameterValue, 'performanceTriggerMode', 'hardware')
+            self._use_software_trigger = (trigger_mode == 'software')
+            self._logger.info(f"Performance mode trigger: {trigger_mode} (software_trigger={self._use_software_trigger})")
 
         # Start the scan in a background thread to make it non-blocking
         if self._scan_running:
@@ -297,6 +310,55 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         # Default settle time if no exposure info available
         return 90
 
+    def _extract_timing_parameters(self, experiment_params: Dict[str, Any]) -> tuple:
+        """
+        Extract tPre (settle time) and tPost (exposure) from experiment parameters.
+        
+        Priority:
+        1. Use performanceTPreMs/performanceTPostMs from frontend if set
+        2. Fall back to calculated values from exposure times
+        3. Use defaults
+        
+        Args:
+            experiment_params: Dictionary containing experiment parameters
+            
+        Returns:
+            Tuple of (tPre, tPost) in milliseconds
+        """
+        m_experiment = experiment_params.get('mExperiment')
+        
+        # Default values
+        t_pre = 90.0
+        t_post = 50.0
+        
+        if m_experiment and hasattr(m_experiment, 'parameterValue'):
+            param_value = m_experiment.parameterValue
+            
+            # Check for frontend-provided values first
+            frontend_t_pre = getattr(param_value, 'performanceTPreMs', None)
+            frontend_t_post = getattr(param_value, 'performanceTPostMs', None)
+            
+            if frontend_t_pre is not None and frontend_t_pre > 0:
+                t_pre = frontend_t_pre
+                self._logger.debug(f"Using frontend tPre: {t_pre}ms")
+            else:
+                # Calculate from exposure times
+                t_pre = self._calculate_tpre_from_exposures(experiment_params)
+            
+            if frontend_t_post is not None and frontend_t_post > 0:
+                t_post = frontend_t_post
+                self._logger.debug(f"Using frontend tPost: {t_post}ms")
+            else:
+                # Use first exposure time as default
+                exposure_times = getattr(param_value, 'illuExposures', [50])
+                if isinstance(exposure_times, list) and exposure_times:
+                    t_post = exposure_times[0]
+                elif exposure_times:
+                    t_post = exposure_times
+        
+        self._logger.info(f"Timing parameters: tPre={t_pre}ms, tPost={t_post}ms")
+        return (t_pre, t_post)
+
     def _compute_scan_parameters(self,
                                 snake_tile: List[Dict],
                                 illumination_intensities: List[float],
@@ -328,8 +390,8 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         # Extract Z-stack parameters
         z_params = self._extract_z_stack_parameters(experiment_params)
         
-        # Calculate tPre from maximum exposure time
-        t_pre = self._calculate_tpre_from_exposures(experiment_params)
+        # Get tPre and tPost from experiment parameters or calculate defaults
+        t_pre, t_post = self._extract_timing_parameters(experiment_params)
 
         return {
             'xstart': xStart,
@@ -342,6 +404,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             'zstep': z_params['zstep'],
             'nz': z_params['nz'],
             'tsettle': t_pre,
+            'tExposure': t_post,
             'illumination0': illum_params['illumination0'],
             'illumination1': illum_params['illumination1'],
             'illumination2': illum_params['illumination2'],
@@ -425,16 +488,23 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                                experiment_params: Dict[str, Any]) -> str:
         """
         Execute the fast stage scan with hardware triggering.
+        
+        This method has been moved from ExperimentController.startFastStageScanAcquisition
+        to consolidate all performance mode logic in one place.
 
         Args:
             scan_params: Dictionary with scan parameters
-            t_period: Period between scans
+            t_period: Period between scans (for timelapse)
             n_times: Number of time points
             experiment_params: Full experiment parameters
 
         Returns:
             OME-Zarr URL for the saved data
         """
+        # Mark scan as running
+        self.controller.fastStageScanIsRunning = True
+        self.controller._stop()  # Ensure all prior runs are stopped
+        
         # Move to initial position first
         self.controller.move_stage_xy(
             posX=scan_params['xstart'],
@@ -442,57 +512,288 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             relative=False
         )
 
+        # Turn off all illumination channels before starting scan
+        self._switch_off_all_illumination()
+
+        # Build illumination dictionary
+        illum_dict = {
+            "illumination0": scan_params['illumination0'],
+            "illumination1": scan_params['illumination1'],
+            "illumination2": scan_params['illumination2'],
+            "illumination3": scan_params['illumination3'],
+            "illumination4": scan_params['illumination4'],
+            "led": scan_params['led']
+        }
+
+        # Count active illumination channels
+        nIlluminations = sum(val is not None and val > 0 for val in illum_dict.values())
+        nScan = max(nIlluminations, 1)
+        
+        nx, ny, nz = scan_params['nx'], scan_params['ny'], scan_params['nz']
+        xstart, ystart = scan_params['xstart'], scan_params['ystart']
+        xstep, ystep, zstep = scan_params['xstep'], scan_params['ystep'], scan_params['zstep']
+        zstart = scan_params.get('zstart', 0)
+        
+        total_frames = nx * ny * nz * nScan
+        self._logger.info(f"Stage-scan: {nx}×{ny}×{nz} ({total_frames} frames)")
+
+        # Build metadata list for writer thread
+        metadata_list = self._build_scan_metadata(
+            nx, ny, nz, xstart, ystart, zstart,
+            xstep, ystep, zstep, illum_dict, nIlluminations
+        )
+
+        # Reset frame tracking
+        self._last_frame_time = time.time()
+        self._frame_count = 0
+        self._expected_frames = total_frames
+        
+        # Configure camera trigger source based on mode
+        if self._use_software_trigger:
+            # Software trigger: camera uses internal trigger, we send software triggers
+            self._register_camera_trigger_callback()
+        else:
+            # Hardware trigger: camera receives external TTL signal from firmware
+            self._configure_camera_for_hardware_trigger()
+
         # Get exposure time
+        t_exposure = scan_params.get('tExposure', 50)
         m_experiment = experiment_params.get('mExperiment')
         if m_experiment and hasattr(m_experiment, 'parameterValue'):
             exposure_times = getattr(m_experiment.parameterValue, 'illuExposures', [50])
             if isinstance(exposure_times, list) and exposure_times:
                 t_exposure = exposure_times[0]
-            else:
-                t_exposure = exposure_times if exposure_times else 50
-        else:
-            t_exposure = 50
+            elif exposure_times:
+                t_exposure = exposure_times
 
-        # Reset frame tracking
-        self._last_frame_time = time.time()
-        self._frame_count = 0
-        self._expected_frames = scan_params['nx'] * scan_params['ny'] * scan_params['nz']
+        # Execute timelapse loop # TODO: check if we have the outer loop for different wells/areas .. should actually come AFTER time points
+        for iTime in range(n_times):
+            # Set up OME-Zarr writer for this time point
+            timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.controller.mFilePath = os.path.join(self.controller.save_dir, f"{timeStamp}_FastStageScan")
+            omezarr_store = OMEFileStorePaths(self.controller.mFilePath)
+            data_path = dirtools.UserFileDirs.getValidatedDataPath()
+            self.controller.setOmeZarrUrl(self.controller.mFilePath.split(data_path)[-1] + ".ome.zarr")
+            
+            # Start writer thread
+            self.controller._stop_writer_evt.clear()
+            self.controller._writer_thread_ome = threading.Thread(
+                target=self.controller._writer_loop_ome,
+                args=(omezarr_store, total_frames, metadata_list, xstart, ystart, 
+                      xstep, ystep, nx, ny, 0, n_times, nz, nIlluminations),
+                daemon=True
+            )
+            self.controller._writer_thread_ome.start()
+            
+            # Prepare illumination tuple
+            illumination = (
+                scan_params['illumination0'],
+                scan_params['illumination1'],
+                scan_params['illumination2'],
+                scan_params['illumination3'],
+                scan_params['illumination4']
+            ) if nIlluminations > 0 else (0, 0, 0, 0, 0)
+            
+            # Reset stagescan completion flag and register callback
+            self._register_stagescan_callback()
+            
+            # Execute stage scan (non-blocking call to firmware)
+            self.controller.mStage.start_stage_scanning(
+                xstart=0, xstep=xstep, nx=nx,  # Use 0 as we start from current position
+                ystart=0, ystep=ystep, ny=ny,
+                zstart=0, zstep=zstep, nz=nz,
+                tsettle=scan_params['tsettle'],
+                tExposure=t_exposure,
+                illumination=illumination,
+                led=scan_params['led'],
+            )
+            
+            # Wait for stagescan completion with timeout
+            scan_completed = self._wait_for_scan_completion(total_frames, t_period)
+            
+            if not scan_completed:
+                self._logger.warning(f"Scan timeout or incomplete at time point {iTime+1}/{n_times}")
+            
+            # Unregister stagescan callback
+            self._unregister_stagescan_callback()
+            
+            # If timelapse with multiple time points, wait for period
+            if n_times > 1 and iTime < n_times - 1:
+                time.sleep(max(0, t_period))
+
+        self.controller.fastStageScanIsRunning = False
+        return self.controller.getOmeZarrUrl()
+
+    def _build_scan_metadata(self, nx: int, ny: int, nz: int,
+                            xstart: float, ystart: float, zstart: float,
+                            xstep: float, ystep: float, zstep: float,
+                            illum_dict: Dict[str, Any], nIlluminations: int) -> List[Dict]:
+        """
+        Build metadata list for each scan position.
         
-        # Register camera trigger callback if using software trigger mode 
+        This corresponds to the metadataList in the UC2-ESP firmware.
+        
+        Args:
+            nx, ny, nz: Number of steps in each direction
+            xstart, ystart, zstart: Starting positions
+            xstep, ystep, zstep: Step sizes
+            illum_dict: Dictionary of illumination channels and values
+            nIlluminations: Number of active illumination channels
+            
+        Returns:
+            List of metadata dictionaries for each frame
+        """
+        metadata_list = []
+        running_number = 0
+        
+        for ix in range(nx):
+            for iy in range(ny):
+                for iz in range(nz):
+                    z = zstart + iz * zstep
+                    x = xstart + ix * xstep
+                    y = ystart + iy * ystep
+                    
+                    # Snake pattern: reverse X on odd Y rows
+                    if iy % 2 == 1:
+                        x = xstart + (nx - 1 - ix) * xstep
+                    
+                    if nIlluminations == 0:
+                        running_number += 1
+                        metadata_list.append({
+                            "x": x, "y": y, "z": z,
+                            "illuminationChannel": "default",
+                            "illuminationValue": -1,
+                            "runningNumber": running_number
+                        })
+                    else:
+                        for channel, value in illum_dict.items():
+                            if value is not None and value > 0:
+                                running_number += 1
+                                metadata_list.append({
+                                    "x": x, "y": y, "z": z,
+                                    "illuminationChannel": channel,
+                                    "illuminationValue": value,
+                                    "runningNumber": running_number
+                                })
+        
+        return metadata_list
+
+    def _register_stagescan_callback(self) -> None:
+        """Register callback for stagescan completion signal from firmware."""
+        if self._stagescan_callback_registered:
+            return
+        
+        self._stagescan_complete_event.clear()
+        
+        try:
+            if hasattr(self.controller, 'mStage'):
+                self.controller.mStage.reset_stagescan_complete()
+                self.controller.mStage.register_stagescan_callback(self._on_stagescan_complete)
+                self._stagescan_callback_registered = True
+                self._logger.debug("Stagescan callback registered")
+        except Exception as e:
+            self._logger.warning(f"Could not register stagescan callback: {e}")
+
+    def _unregister_stagescan_callback(self) -> None:
+        """Unregister stagescan completion callback."""
+        try:
+            if hasattr(self.controller, 'mStage') and self._stagescan_callback_registered:
+                self.controller.mStage.unregister_stagescan_callback(self._on_stagescan_complete)
+                self._stagescan_callback_registered = False
+                self._logger.debug("Stagescan callback unregistered")
+        except Exception as e:
+            self._logger.debug(f"Could not unregister stagescan callback: {e}")
+
+    def _on_stagescan_complete(self, data: Dict[str, Any]) -> None:
+        """
+        Callback function for stagescan completion signal from firmware.
+        
+        Expected JSON: {"stagescan": {}, "qid": 0, "success": 1}
+        
+        Args:
+            data: Dictionary with completion information
+        """
+        self._logger.info(f"Stagescan completion signal received: {data}")
+        self._stagescan_complete_event.set()
+
+    def _wait_for_scan_completion(self, expected_frames: int, timeout: float) -> bool:
+        """
+        Wait for scan completion using stagescan callback.
+        
+        In software trigger mode, we rely on the stagescan completion callback.
+        In hardware trigger mode, we also monitor frame count as backup.
+        
+        Args:
+            expected_frames: Number of frames expected
+            timeout: Maximum wait time in seconds (ignored for software trigger)
+            
+        Returns:
+            True if scan completed successfully, False if timeout
+        """
+        # Calculate a reasonable timeout based on expected frames
+        # For software trigger mode, use a longer timeout since we actively trigger # TODO or stop if we have collected all the frames 
+        '''
         if self._use_software_trigger:
-            self._register_camera_trigger_callback()
+            # Software trigger: wait for stagescan completion signal only
+            max_timeout = STAGESCAN_COMPLETION_TIMEOUT
+            self._logger.debug(f"Waiting for stagescan completion (software trigger mode, timeout={max_timeout}s)")
+            
+            completed = self._stagescan_complete_event.wait(timeout=max_timeout)
+            return completed
+        else:
+        '''
+        if 1:
+            # Hardware trigger mode: wait for stagescan completion OR frame timeout
+            max_timeout = max(STAGESCAN_COMPLETION_TIMEOUT, timeout * 2)
+            start_time = time.time()
+            
+            self._logger.debug(f"Waiting for stagescan completion (hardware trigger mode)")
+            
+            while not self._stagescan_complete_event.is_set():
+                elapsed = time.time() - start_time
+                
+                # Check for overall timeout
+                if elapsed > max_timeout:
+                    self._logger.warning(f"Stagescan timeout after {elapsed:.1f}s")
+                    return False
+                
+                # Check for frame timeout (no frames received for too long)
+                if self._last_frame_time and (time.time() - self._last_frame_time > FRAME_TIMEOUT_SECONDS):
+                    self._logger.warning(f"No frames received for {FRAME_TIMEOUT_SECONDS}s - possible hardware issue")
+                    # Don't abort yet, wait for completion signal
+                
+                # Check if we received all expected frames
+                if self._frame_count >= expected_frames:
+                    self._logger.info(f"All {expected_frames} frames received")
+                    return True
+                
+                time.sleep(0.1)
+            
+            return True
 
-        # Execute the fast stage scan acquisition with Z-stacking support
-        zarr_url = self.controller.startFastStageScanAcquisition(
-            xstart=scan_params['xstart'],
-            xstep=scan_params['xstep'],
-            nx=scan_params['nx'],
-            ystart=scan_params['ystart'],
-            ystep=scan_params['ystep'],
-            ny=scan_params['ny'],
-            zstart=scan_params.get('zstart', 0),
-            zstep=scan_params.get('zstep', 0),
-            nz=scan_params.get('nz', 1),
-            tsettle=scan_params['tsettle'],
-            tExposure=t_exposure,
-            illumination0=scan_params['illumination0'],
-            illumination1=scan_params['illumination1'],
-            illumination2=scan_params['illumination2'],
-            illumination3=scan_params['illumination3'],
-            illumination4=scan_params['illumination4'],
-            led=scan_params['led'],
-            tPeriod=t_period,
-            nTimes=n_times
-        )
-
-        return zarr_url
+    def _configure_camera_for_hardware_trigger(self) -> None:
+        """
+        Configure camera for hardware (external) trigger mode.
+        
+        In hardware trigger mode, the camera receives TTL pulses from the 
+        ESP32 firmware to trigger image acquisition.
+        """
+        try:
+            self._logger.debug("Configuring camera for hardware trigger mode")
+            self.controller.mDetector.stopAcquisition()
+            self.controller.mDetector.setTriggerSource("External trigger")
+            self.controller.mDetector.flushBuffers()
+            self.controller.mDetector.startAcquisition()
+            self._logger.debug("Camera configured for external trigger")
+        except Exception as e:
+            self._logger.warning(f"Could not configure camera for hardware trigger: {e}")
 
     def _register_camera_trigger_callback(self) -> None:
         """
         Register callback for camera trigger signal from firmware.
         This enables software-triggered acquisition based on hardware events.
         """
-        if self._camera_trigger_callback_registered:
+        if self._camera_trigger_callback_registered and False: # TODO:we don't derigster that properly yet
             return
         
         self.controller.mDetector.stopAcquisition()

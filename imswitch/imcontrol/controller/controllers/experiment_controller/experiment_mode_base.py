@@ -165,7 +165,7 @@ class ExperimentModeBase(ABC):
             "illumination1": illumination_intensities[1] if len(illumination_intensities) > 1 else None,
             "illumination2": illumination_intensities[2] if len(illumination_intensities) > 2 else None,
             "illumination3": illumination_intensities[3] if len(illumination_intensities) > 3 else None,
-            "illumination4": illumination_intensities[4] if len(illumination_intensities) > 4 else None,
+            "illumination4": illumination_intensities[-1] if len(illumination_intensities) > 4 else None, # TODO: We need to generalize this for all the channels
             "led": 0  # Default LED value
         }
         return illum_dict

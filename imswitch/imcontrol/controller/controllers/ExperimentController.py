@@ -123,6 +123,10 @@ class ParameterValue(BaseModel):
     gains: Union[List[float], float] = None
     speed: float = 20000.0
     performanceMode: bool = False
+    # Performance mode advanced settings
+    performanceTriggerMode: str = Field("hardware", description="Trigger mode: 'hardware' (external TTL) or 'software' (callback-based)")
+    performanceTPreMs: float = Field(90.0, description="Pre-exposure settle time in milliseconds")
+    performanceTPostMs: float = Field(50.0, description="Post-exposure/acquisition time in milliseconds")
     ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
     ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")

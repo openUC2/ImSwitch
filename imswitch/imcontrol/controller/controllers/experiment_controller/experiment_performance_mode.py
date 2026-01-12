@@ -646,8 +646,8 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         metadata_list = []
         running_number = 0
         
-        for ix in range(nx):
-            for iy in range(ny):
+        for iy in range(ny):
+            for ix in range(nx):
                 for iz in range(nz):
                     z = zstart + iz * zstep
                     x = xstart + ix * xstep

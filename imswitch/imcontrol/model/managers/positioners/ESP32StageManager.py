@@ -665,7 +665,15 @@ class ESP32StageManager(PositionerManager):
             homingThread = threading.Thread(target=homingThreadFunction, args=(self,))
             homingThread.start()
 
-
+    def register_stagescan_callback(self, on_stagescan_complete_fct):
+        self.motor.register_stagescan_callback(on_stagescan_complete_fct)
+        
+    
+    def unregister_stagescan_callback(self):
+        self.motor.unregister_stagescan_callback()
+    
+    def reset_stagescan_complete(self):
+        pass#
 
 # Copyright (C) 2020, 2021 The imswitch developers
 # This file is part of ImSwitch.

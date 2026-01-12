@@ -1526,6 +1526,162 @@ class UC2ConfigController(ImConWidgetController):
                 "reconnect_after": bool(reconnect_after),
             }
 
+    # Digital Input/Output API Methods
+    @APIExport(runOnUIThread=False)
+    def getDigitalIn(self, digitalinid=1, timeout=1, is_blocking=True):
+        """
+        Get the current value of a digital input.
+        
+        :param digitalinid: ID of the digital input (1, 2, or 3)
+        :param timeout: Timeout for the request in seconds
+        :param is_blocking: Whether to wait for a response
+        :return: Response from the device containing digitalin status
+        """
+        try:
+            return self._master.UC2ConfigManager._digitalIn.get_digitalin(
+                digitalinid=digitalinid,
+                timeout=timeout,
+                is_blocking=is_blocking
+            )
+        except Exception as e:
+            self.__logger.error(f"Error getting digital input: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def actDigitalIn(self, timeout=1, is_blocking=False):
+        """
+        Trigger the digitalin act function.
+        
+        :param timeout: Timeout for the request in seconds
+        :param is_blocking: Whether to wait for a response
+        :return: Response from the device
+        """
+        try:
+            return self._master.UC2ConfigManager._digitalIn.act_digitalin(
+                timeout=timeout,
+                is_blocking=is_blocking
+            )
+        except Exception as e:
+            self.__logger.error(f"Error acting digital input: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getDigitalOut(self, digitaloutid=1, timeout=1, is_blocking=True):
+        """
+        Get the current value and pin of a digital output.
+        
+        :param digitaloutid: ID of the digital output (1, 2, or 3)
+        :param timeout: Timeout for the request in seconds
+        :param is_blocking: Whether to wait for a response
+        :return: Response from the device containing digitalout status (id, val, pin)
+        """
+        try:
+            return self._master.UC2ConfigManager._digitalOut.get_digitalout(
+                digitaloutid=digitaloutid,
+                timeout=timeout,
+                is_blocking=is_blocking
+            )
+        except Exception as e:
+            self.__logger.error(f"Error getting digital output: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setDigitalOut(self, digitaloutid=1, digitaloutval=0, timeout=1, is_blocking=False):
+        """
+        Set the value of a digital output. Use digitaloutval=-1 to trigger a pulse (HIGH->LOW).
+        
+        :param digitaloutid: ID of the digital output (1, 2, or 3)
+        :param digitaloutval: Value to set (0=LOW, 1=HIGH, -1=pulse/trigger)
+        :param timeout: Timeout for the request in seconds
+        :param is_blocking: Whether to wait for a response
+        :return: Response from the device
+        """
+        try:
+            return self._master.UC2ConfigManager._digitalOut.set_digitalout(
+                digitaloutid=digitaloutid,
+                digitaloutval=digitaloutval,
+                timeout=timeout,
+                is_blocking=is_blocking
+            )
+        except Exception as e:
+            self.__logger.error(f"Error setting digital output: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setupDigitalOutPin(self, digitaloutid=1, pin=4):
+        """
+        Setup the pin for a digital output.
+        
+        :param digitaloutid: ID of the digital output (1, 2, or 3)
+        :param pin: GPIO pin number to use
+        :return: Response from the device
+        """
+        try:
+            return self._master.UC2ConfigManager._digitalOut.setup_digitaloutpin(
+                id=digitaloutid,
+                pin=pin
+            )
+        except Exception as e:
+            self.__logger.error(f"Error setting up digital output pin: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def resetTriggerTable(self):
+        """
+        Reset the trigger table for digital outputs.
+        
+        :return: Response from the device
+        """
+        try:
+            return self._master.UC2ConfigManager._digitalOut.reset_triggertable()
+        except Exception as e:
+            self.__logger.error(f"Error resetting trigger table: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def setTrigger(self, trigger1=False, delayOn1=0, delayOff1=0, 
+                   trigger2=False, delayOn2=0, delayOff2=0,
+                   trigger3=False, delayOn3=0, delayOff3=0):
+        """
+        Set up a trigger table with 3 triggers.
+        
+        :param trigger1: Enable trigger 1
+        :param delayOn1: Delay before turning on trigger 1 (ms)
+        :param delayOff1: Delay before turning off trigger 1 (ms)
+        :param trigger2: Enable trigger 2
+        :param delayOn2: Delay before turning on trigger 2 (ms)
+        :param delayOff2: Delay before turning off trigger 2 (ms)
+        :param trigger3: Enable trigger 3
+        :param delayOn3: Delay before turning on trigger 3 (ms)
+        :param delayOff3: Delay before turning off trigger 3 (ms)
+        :return: Response from the device
+        """
+        try:
+            return self._master.UC2ConfigManager._digitalOut.set_trigger(
+                trigger1=trigger1, delayOn1=delayOn1, delayOff1=delayOff1,
+                trigger2=trigger2, delayOn2=delayOn2, delayOff2=delayOff2,
+                trigger3=trigger3, delayOn3=delayOn3, delayOff3=delayOff3
+            )
+        except Exception as e:
+            self.__logger.error(f"Error setting trigger: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def sendTrigger(self, triggerId=0):
+        """
+        Send a trigger pulse on the specified digital output.
+        
+        :param triggerId: ID of the trigger to send (0, 1, 2, or 3)
+        :return: Response from the device
+        """
+        try:
+            return self._master.UC2ConfigManager._digitalOut.sendTrigger(
+                triggerId=triggerId
+            )
+        except Exception as e:
+            self.__logger.error(f"Error sending trigger: {e}")
+            return {"error": str(e)}
+
 
 
 

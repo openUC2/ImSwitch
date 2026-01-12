@@ -16,6 +16,10 @@ class UC2ConfigManager(SignalInterface):
         except Exception as e:
             self.__logger.error(f"Could not connect to ESP32 low level manager: {e}")
             return
+        
+        # Grab DigitalIn/Out Controller 
+        self._digitalIn = self.ESP32.digitalin
+        self._digitalOut = self.ESP32.digitalout
 
     def saveState(self, state_general=None, state_pos=None, state_aber=None):
         if state_general is not None:

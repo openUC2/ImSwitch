@@ -30,11 +30,13 @@ class ESP32InfoScreenController(ImConWidgetController):
         # get all Lasers
         self.lasers = self._master.lasersManager.getAllDeviceNames()
         self.laser = self.lasers[0]
+        '''
         try:
             self._master.lasersManager[self.laser].setGalvo(channel=1, frequency=10, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1)
         except  Exception as e:
             self._logger.error(e)
 
+        '''
         # get LEDMatrix # TODO: Improve
         allLEDMatrixNames = self._master.LEDMatrixsManager.getAllDeviceNames()
         if len(allLEDMatrixNames) == 0:

@@ -666,11 +666,11 @@ class ESP32StageManager(PositionerManager):
             homingThread.start()
 
     def register_stagescan_callback(self, on_stagescan_complete_fct):
-        self.motor.register_stagescan_callback(on_stagescan_complete_fct)
+        self._motor.register_stagescan_callback(on_stagescan_complete_fct)
         
     
     def unregister_stagescan_callback(self):
-        self.motor.unregister_stagescan_callback()
+        self._motor.unregister_stagescan_callback()
     
     def reset_stagescan_complete(self):
         pass#

@@ -1,4 +1,4 @@
-name: imswitch-bundle
+name: build-bundle-desktop
 
 on:
   workflow_dispatch:

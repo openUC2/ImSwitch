@@ -1,4 +1,4 @@
-name: Update submodules
+name: update-submodules
 
 # Controls when the action will run.
 on:

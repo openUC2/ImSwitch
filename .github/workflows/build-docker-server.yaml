@@ -1,4 +1,4 @@
-name: imswitch-docker-noqt
+name: build-docker-server
 
 on:
   push:

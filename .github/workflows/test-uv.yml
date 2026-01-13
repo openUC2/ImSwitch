@@ -1,4 +1,4 @@
-name: imswitch-uv-test
+name: test-uv
 
 on:
   pull_request:

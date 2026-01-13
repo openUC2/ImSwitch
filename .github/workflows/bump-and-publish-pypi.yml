@@ -1,4 +1,4 @@
-name: Auto Version Bump and PyPI Release
+name: bump-and-publish-pypi
 
 # This workflow automatically bumps the patch version and creates a git tag
 # when code is pushed to the master branch. The existing imswitch-pypi.yml workflow

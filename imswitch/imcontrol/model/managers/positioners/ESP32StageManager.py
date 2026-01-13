@@ -12,7 +12,7 @@ class ESP32StageManager(PositionerManager):
         self._rs232manager = lowLevelManagers['rs232sManager'][positionerInfo.managerProperties['rs232device']]
         self._commChannel = lowLevelManagers['commChannel']
         self.__logger = initLogger(self, instanceName=name)
-
+        self._name = name
         # Grab motor object
         self._motor = self._rs232manager._esp32.motor
         self._homeModule = self._rs232manager._esp32.home
@@ -162,16 +162,58 @@ class ESP32StageManager(PositionerManager):
         self.setupMotor(self.minA, self.maxA, self.stepSizes["A"], self.backlashA, "A")
 
         # Setup Motor drivers (TMC - if available)
-        #    def set_tmc_parameters(self, axis=0, msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
-        if 0:
-            if positionerInfo.managerProperties.get('mstepsX', 16) is not None:
-                self.setupMotorDriver(axis="X", msteps=positionerInfo.managerProperties.get('mstepsX', 16), rms_current=positionerInfo.managerProperties.get('rms_currentX', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsX', 10), semin=positionerInfo.managerProperties.get('seminX', 5), semax=positionerInfo.managerProperties.get('semaxX', 2), blank_time=positionerInfo.managerProperties.get('blank_timeX', 24), toff=positionerInfo.managerProperties.get('toffX', 3), timeout=1)
-            if positionerInfo.managerProperties.get('mstepsY', 16) is not None:
-                self.setupMotorDriver(axis="Y", msteps=positionerInfo.managerProperties.get('mstepsY', 16), rms_current=positionerInfo.managerProperties.get('rms_currentY', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsY', 10), semin=positionerInfo.managerProperties.get('seminY', 5), semax=positionerInfo.managerProperties.get('semaxY', 2), blank_time=positionerInfo.managerProperties.get('blank_timeY', 24), toff=positionerInfo.managerProperties.get('toffY', 3), timeout=1)
-            if positionerInfo.managerProperties.get('mstepsZ', 16) is not None:
-                self.setupMotorDriver(axis="Z", msteps=positionerInfo.managerProperties.get('mstepsZ', 16), rms_current=positionerInfo.managerProperties.get('rms_currentZ', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsZ', 10), semin=positionerInfo.managerProperties.get('seminZ', 5), semax=positionerInfo.managerProperties.get('semaxZ', 2), blank_time=positionerInfo.managerProperties.get('blank_timeZ', 24), toff=positionerInfo.managerProperties.get('toffZ', 3), timeout=1)
-            if positionerInfo.managerProperties.get('mstepsA', 16) is not None:
-                self.setupMotorDriver(axis="A", msteps=positionerInfo.managerProperties.get('mstepsA', 16), rms_current=positionerInfo.managerProperties.get('rms_currentA', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsA', 10), semin=positionerInfo.managerProperties.get('seminA', 5), semax=positionerInfo.managerProperties.get('semaxA', 2), blank_time=positionerInfo.managerProperties.get('blank_timeA', 24), toff=positionerInfo.managerProperties.get('toffA', 3), timeout=1)
+        # Load TMC settings from config and apply to device if configured
+        try:
+            if positionerInfo.managerProperties.get('mstepsX') is not None:
+                self.setupMotorDriver(
+                    axis="X",
+                    msteps=positionerInfo.managerProperties.get('mstepsX', 16),
+                    rms_current=positionerInfo.managerProperties.get('rms_currentX', 500),
+                    sgthrs=positionerInfo.managerProperties.get('sgthrsX', 10),
+                    semin=positionerInfo.managerProperties.get('seminX', 5),
+                    semax=positionerInfo.managerProperties.get('semaxX', 2),
+                    blank_time=positionerInfo.managerProperties.get('blank_timeX', 24),
+                    toff=positionerInfo.managerProperties.get('toffX', 3),
+                    timeout=1
+                )
+            if positionerInfo.managerProperties.get('mstepsY') is not None:
+                self.setupMotorDriver(
+                    axis="Y",
+                    msteps=positionerInfo.managerProperties.get('mstepsY', 16),
+                    rms_current=positionerInfo.managerProperties.get('rms_currentY', 500),
+                    sgthrs=positionerInfo.managerProperties.get('sgthrsY', 10),
+                    semin=positionerInfo.managerProperties.get('seminY', 5),
+                    semax=positionerInfo.managerProperties.get('semaxY', 2),
+                    blank_time=positionerInfo.managerProperties.get('blank_timeY', 24),
+                    toff=positionerInfo.managerProperties.get('toffY', 3),
+                    timeout=1
+                )
+            if positionerInfo.managerProperties.get('mstepsZ') is not None:
+                self.setupMotorDriver(
+                    axis="Z",
+                    msteps=positionerInfo.managerProperties.get('mstepsZ', 16),
+                    rms_current=positionerInfo.managerProperties.get('rms_currentZ', 500),
+                    sgthrs=positionerInfo.managerProperties.get('sgthrsZ', 10),
+                    semin=positionerInfo.managerProperties.get('seminZ', 5),
+                    semax=positionerInfo.managerProperties.get('semaxZ', 2),
+                    blank_time=positionerInfo.managerProperties.get('blank_timeZ', 24),
+                    toff=positionerInfo.managerProperties.get('toffZ', 3),
+                    timeout=1
+                )
+            if positionerInfo.managerProperties.get('mstepsA') is not None:
+                self.setupMotorDriver(
+                    axis="A",
+                    msteps=positionerInfo.managerProperties.get('mstepsA', 16),
+                    rms_current=positionerInfo.managerProperties.get('rms_currentA', 500),
+                    sgthrs=positionerInfo.managerProperties.get('sgthrsA', 10),
+                    semin=positionerInfo.managerProperties.get('seminA', 5),
+                    semax=positionerInfo.managerProperties.get('semaxA', 2),
+                    blank_time=positionerInfo.managerProperties.get('blank_timeA', 24),
+                    toff=positionerInfo.managerProperties.get('toffA', 3),
+                    timeout=1
+                )
+        except Exception as e:
+            self.__logger.warning(f"Could not load TMC settings from config: {e}")
 
         # Dummy move to get the motor to the right position
         for iAxis in positionerInfo.axes:
@@ -673,7 +715,374 @@ class ESP32StageManager(PositionerManager):
         self._motor.unregister_stagescan_callback()
     
     def reset_stagescan_complete(self):
-        pass#
+        pass
+
+    # ============================================================================
+    # Motor Settings API - Unified configuration interface
+    # ============================================================================
+    
+    def getMotorSettings(self) -> dict:
+        """
+        Get all motor settings in a unified format.
+        Returns a dictionary with settings for all axes plus global settings.
+        """
+        settings = {
+            'global': {
+                'axisOrder': self.axisOrder,
+                'isCoreXY': self.isCoreXY,
+                'isEnabled': self.is_enabled,
+                'enableAuto': self.enableauto,
+                'isDualAxis': self.isDualAxis,
+            },
+            'axes': {}
+        }
+        
+        for axis in ['X', 'Y', 'Z', 'A']:
+            settings['axes'][axis] = self.getMotorSettingsForAxis(axis)
+        
+        return settings
+    
+    def getMotorSettingsForAxis(self, axis: str) -> dict:
+        """
+        Get motor settings for a specific axis.
+        """
+        axis = axis.upper()
+        
+        # Motion settings
+        motion = {
+            'stepSize': self.stepSizes.get(axis, 1),
+            'maxSpeed': self.maxSpeed.get(axis, 10000),
+            'speed': self._speed.get(axis, 10000),
+            'acceleration': self.acceleration.get(axis, MAX_ACCEL),
+        }
+        
+        # Add min/max positions per axis
+        if axis == 'X':
+            motion['minPos'] = self.minX if self.minX != float('-inf') else None
+            motion['maxPos'] = self.maxX if self.maxX != float('inf') else None
+            motion['backlash'] = self.backlashX
+        elif axis == 'Y':
+            motion['minPos'] = self.minY if self.minY != float('-inf') else None
+            motion['maxPos'] = self.maxY if self.maxY != float('inf') else None
+            motion['backlash'] = self.backlashY
+        elif axis == 'Z':
+            motion['minPos'] = self.minZ if self.minZ != float('-inf') else None
+            motion['maxPos'] = self.maxZ if self.maxZ != float('inf') else None
+            motion['backlash'] = self.backlashZ
+        elif axis == 'A':
+            motion['minPos'] = self.minA if self.minA != float('-inf') else None
+            motion['maxPos'] = self.maxA if self.maxA != float('inf') else None
+            motion['backlash'] = self.backlashA
+        
+        # Homing settings
+        homing = {}
+        if axis == 'X':
+            homing = {
+                'enabled': self.homeXenabled,
+                'speed': self.homeSpeedX,
+                'direction': self.homeDirectionX,
+                'endstopPolarity': self.homeEndstoppolarityX,
+                'endposRelease': self.homeEndposReleaseX,
+                'timeout': self.homeTimeoutX,
+                'homeOnStart': self.homeOnStartX,
+                'homeSteps': self.homeStepsX,
+            }
+        elif axis == 'Y':
+            homing = {
+                'enabled': self.homeYenabled,
+                'speed': self.homeSpeedY,
+                'direction': self.homeDirectionY,
+                'endstopPolarity': self.homeEndstoppolarityY,
+                'endposRelease': self.homeEndposReleaseY,
+                'timeout': self.homeTimeoutY,
+                'homeOnStart': self.homeOnStartY,
+                'homeSteps': self.homeStepsY,
+            }
+        elif axis == 'Z':
+            homing = {
+                'enabled': self.homeZenabled,
+                'speed': self.homeSpeedZ,
+                'direction': self.homeDirectionZ,
+                'endstopPolarity': self.homeEndstoppolarityZ,
+                'endposRelease': self.homeEndposReleaseZ,
+                'timeout': self.homeTimeoutZ,
+                'homeOnStart': self.homeOnStartZ,
+                'homeSteps': self.homeStepsZ,
+            }
+        elif axis == 'A':
+            homing = {
+                'enabled': self.homeAenabled,
+                'speed': self.homeSpeedA,
+                'direction': self.homeDirectionA,
+                'endstopPolarity': self.homeEndstoppolarityA,
+                'endposRelease': self.homeEndposReleaseA,
+                'timeout': self.homeTimeoutA,
+                'homeOnStart': self.homeOnStartA,
+                'homeSteps': self.homeStepsA,
+            }
+        
+        # Limit settings
+        if axis == 'X':
+            limits = {'enabled': self.limitXenabled}
+        elif axis == 'Y':
+            limits = {'enabled': self.limitYenabled}
+        elif axis == 'Z':
+            limits = {'enabled': self.limitZenabled}
+        else:
+            limits = {'enabled': False}
+        
+        return {
+            'axis': axis,
+            'motion': motion,
+            'homing': homing,
+            'limits': limits,
+        }
+    
+    def setMotorSettingsForAxis(self, axis: str, settings: dict) -> dict:
+        """
+        Set motor settings for a specific axis.
+        Updates both in-memory values and sends to device if applicable.
+        """
+        axis = axis.upper()
+        result = {'axis': axis, 'updated': [], 'errors': []}
+        
+        try:
+            # Update motion settings
+            if 'motion' in settings:
+                motion = settings['motion']
+                
+                if 'stepSize' in motion:
+                    self.stepSizes[axis] = motion['stepSize']
+                    result['updated'].append('stepSize')
+                
+                if 'maxSpeed' in motion:
+                    self.maxSpeed[axis] = motion['maxSpeed']
+                    result['updated'].append('maxSpeed')
+                
+                if 'speed' in motion:
+                    self.setSpeed(motion['speed'], axis)
+                    result['updated'].append('speed')
+                
+                if 'acceleration' in motion:
+                    self.acceleration[axis] = motion['acceleration']
+                    result['updated'].append('acceleration')
+                
+                if 'backlash' in motion:
+                    backlash = motion['backlash']
+                    if axis == 'X': self.backlashX = backlash
+                    elif axis == 'Y': self.backlashY = backlash
+                    elif axis == 'Z': self.backlashZ = backlash
+                    elif axis == 'A': self.backlashA = backlash
+                    result['updated'].append('backlash')
+                
+                if 'minPos' in motion:
+                    minPos = motion['minPos'] if motion['minPos'] is not None else float('-inf')
+                    if axis == 'X': self.minX = minPos
+                    elif axis == 'Y': self.minY = minPos
+                    elif axis == 'Z': self.minZ = minPos
+                    elif axis == 'A': self.minA = minPos
+                    result['updated'].append('minPos')
+                
+                if 'maxPos' in motion:
+                    maxPos = motion['maxPos'] if motion['maxPos'] is not None else float('inf')
+                    if axis == 'X': self.maxX = maxPos
+                    elif axis == 'Y': self.maxY = maxPos
+                    elif axis == 'Z': self.maxZ = maxPos
+                    elif axis == 'A': self.maxA = maxPos
+                    result['updated'].append('maxPos')
+                
+                # Update motor setup on device
+                if any(k in motion for k in ['minPos', 'maxPos', 'stepSize', 'backlash']):
+                    try:
+                        self.setupMotor(
+                            getattr(self, f'min{axis}'),
+                            getattr(self, f'max{axis}'),
+                            self.stepSizes[axis],
+                            getattr(self, f'backlash{axis}'),
+                            axis
+                        )
+                    except Exception as e:
+                        result['errors'].append(f'Failed to update motor setup: {str(e)}')
+            
+            # Update homing settings
+            if 'homing' in settings:
+                homing = settings['homing']
+                
+                if 'enabled' in homing:
+                    if axis == 'X': self.homeXenabled = homing['enabled']
+                    elif axis == 'Y': self.homeYenabled = homing['enabled']
+                    elif axis == 'Z': self.homeZenabled = homing['enabled']
+                    elif axis == 'A': self.homeAenabled = homing['enabled']
+                    result['updated'].append('homing.enabled')
+                
+                if 'speed' in homing:
+                    if axis == 'X': self.homeSpeedX = homing['speed']
+                    elif axis == 'Y': self.homeSpeedY = homing['speed']
+                    elif axis == 'Z': self.homeSpeedZ = homing['speed']
+                    elif axis == 'A': self.homeSpeedA = homing['speed']
+                    result['updated'].append('homing.speed')
+                
+                if 'direction' in homing:
+                    direction = 1 if homing['direction'] > 0 else -1
+                    if axis == 'X': self.homeDirectionX = direction
+                    elif axis == 'Y': self.homeDirectionY = direction
+                    elif axis == 'Z': self.homeDirectionZ = direction
+                    elif axis == 'A': self.homeDirectionA = direction
+                    result['updated'].append('homing.direction')
+                
+                if 'endstopPolarity' in homing:
+                    if axis == 'X': self.homeEndstoppolarityX = homing['endstopPolarity']
+                    elif axis == 'Y': self.homeEndstoppolarityY = homing['endstopPolarity']
+                    elif axis == 'Z': self.homeEndstoppolarityZ = homing['endstopPolarity']
+                    elif axis == 'A': self.homeEndstoppolarityA = homing['endstopPolarity']
+                    result['updated'].append('homing.endstopPolarity')
+                
+                if 'endposRelease' in homing:
+                    if axis == 'X': self.homeEndposReleaseX = homing['endposRelease']
+                    elif axis == 'Y': self.homeEndposReleaseY = homing['endposRelease']
+                    elif axis == 'Z': self.homeEndposReleaseZ = homing['endposRelease']
+                    elif axis == 'A': self.homeEndposReleaseA = homing['endposRelease']
+                    result['updated'].append('homing.endposRelease')
+                
+                if 'timeout' in homing:
+                    if axis == 'X': self.homeTimeoutX = homing['timeout']
+                    elif axis == 'Y': self.homeTimeoutY = homing['timeout']
+                    elif axis == 'Z': self.homeTimeoutZ = homing['timeout']
+                    elif axis == 'A': self.homeTimeoutA = homing['timeout']
+                    result['updated'].append('homing.timeout')
+                
+                if 'homeOnStart' in homing:
+                    if axis == 'X': self.homeOnStartX = homing['homeOnStart']
+                    elif axis == 'Y': self.homeOnStartY = homing['homeOnStart']
+                    elif axis == 'Z': self.homeOnStartZ = homing['homeOnStart']
+                    elif axis == 'A': self.homeOnStartA = homing['homeOnStart']
+                    result['updated'].append('homing.homeOnStart')
+                
+                if 'homeSteps' in homing:
+                    if axis == 'X': self.homeStepsX = homing['homeSteps']
+                    elif axis == 'Y': self.homeStepsY = homing['homeSteps']
+                    elif axis == 'Z': self.homeStepsZ = homing['homeSteps']
+                    elif axis == 'A': self.homeStepsA = homing['homeSteps']
+                    result['updated'].append('homing.homeSteps')
+            
+            # Update limit settings
+            if 'limits' in settings:
+                limits = settings['limits']
+                if 'enabled' in limits:
+                    if axis == 'X': self.limitXenabled = limits['enabled']
+                    elif axis == 'Y': self.limitYenabled = limits['enabled']
+                    elif axis == 'Z': self.limitZenabled = limits['enabled']
+                    result['updated'].append('limits.enabled')
+            
+            result['success'] = True
+            self.__logger.info(f"Updated motor settings for axis {axis}: {result['updated']}")
+            
+        except Exception as e:
+            result['success'] = False
+            result['errors'].append(str(e))
+            self.__logger.error(f"Error updating motor settings for axis {axis}: {e}")
+        
+        return result
+    
+    def getTMCSettingsForAxis(self, axis: str) -> dict:
+        """
+        Get TMC stepper driver settings for a specific axis from the device.
+        """
+        axis = axis.upper()
+        result = {'axis': axis, 'success': False}
+        
+        try:
+            # Get TMC settings from device via UC2-REST motor module
+            tmc_settings = self._motor.getTMCSettings(axis=axis)
+            
+            if tmc_settings:
+                result['settings'] = {
+                    'msteps': tmc_settings.get('msteps', 16),
+                    'rmsCurrent': tmc_settings.get('rms_current', 500),
+                    'sgthrs': tmc_settings.get('sgthrs', 10),
+                    'semin': tmc_settings.get('semin', 5),
+                    'semax': tmc_settings.get('semax', 2),
+                    'blankTime': tmc_settings.get('blank_time', 24),
+                    'toff': tmc_settings.get('toff', 3),
+                }
+                result['success'] = True
+                self.__logger.debug(f"Retrieved TMC settings for axis {axis}")
+            else:
+                result['error'] = "No TMC settings returned from device"
+                
+        except Exception as e:
+            result['error'] = str(e)
+            self.__logger.error(f"Error getting TMC settings for axis {axis}: {e}")
+        
+        return result
+    
+    def setTMCSettingsForAxis(self, axis: str, settings: dict) -> dict:
+        """
+        Set TMC stepper driver settings for a specific axis.
+        Sends the settings directly to the device.
+        """
+        axis = axis.upper()
+        result = {'axis': axis, 'success': False}
+        
+        try:
+            self.setupMotorDriver(
+                axis=axis,
+                msteps=settings.get('msteps'),
+                rms_current=settings.get('rmsCurrent'),
+                sgthrs=settings.get('sgthrs'),
+                semin=settings.get('semin'),
+                semax=settings.get('semax'),
+                blank_time=settings.get('blankTime'),
+                toff=settings.get('toff'),
+                timeout=settings.get('timeout', 1)
+            )
+            result['success'] = True
+            self.__logger.info(f"Updated TMC settings for axis {axis}")
+        except Exception as e:
+            result['error'] = str(e)
+            self.__logger.error(f"Error updating TMC settings for axis {axis}: {e}")
+        
+        return result
+    
+    def setGlobalMotorSettings(self, settings: dict) -> dict:
+        """
+        Set global motor settings (axis order, CoreXY, enable, etc.)
+        """
+        result = {'updated': [], 'errors': []}
+        
+        try:
+            if 'axisOrder' in settings:
+                self.axisOrder = settings['axisOrder']
+                self.setAxisOrder(order=self.axisOrder)
+                result['updated'].append('axisOrder')
+            
+            if 'isCoreXY' in settings:
+                self.isCoreXY = settings['isCoreXY']
+                self._motor.setIsCoreXY(isCoreXY=self.isCoreXY)
+                result['updated'].append('isCoreXY')
+            
+            if 'isEnabled' in settings:
+                self.is_enabled = settings['isEnabled']
+                result['updated'].append('isEnabled')
+            
+            if 'enableAuto' in settings:
+                self.enableauto = settings['enableAuto']
+                self.enalbeMotors(enable=self.is_enabled, enableauto=self.enableauto)
+                result['updated'].append('enableAuto')
+            
+            if 'isDualAxis' in settings:
+                self.isDualAxis = settings['isDualAxis']
+                result['updated'].append('isDualAxis')
+            
+            result['success'] = True
+            self.__logger.info(f"Updated global motor settings: {result['updated']}")
+            
+        except Exception as e:
+            result['success'] = False
+            result['errors'].append(str(e))
+            self.__logger.error(f"Error updating global motor settings: {e}")
+        
+        return result
 
 # Copyright (C) 2020, 2021 The imswitch developers
 # This file is part of ImSwitch.

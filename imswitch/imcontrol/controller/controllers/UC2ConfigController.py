@@ -1682,7 +1682,345 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.error(f"Error sending trigger: {e}")
             return {"error": str(e)}
 
+    # ============================================================================
+    # Motor Settings API - Unified configuration interface for motor parameters
+    # ============================================================================
 
+    @APIExport(runOnUIThread=False)
+    def getMotorSettings(self):
+        """
+        Get all motor settings for all axes in a unified format.
+        
+        Returns a dictionary with global settings and per-axis configurations
+        including motion parameters, homing settings, and limit configurations.
+        
+        :return: Dictionary with motor settings
+        """
+        try:
+            if self.stages is None:
+                return {"error": "No stages configured", "settings": None}
+            return self.stages.getMotorSettings()
+        except Exception as e:
+            self.__logger.error(f"Error getting motor settings: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getMotorSettingsForAxis(self, axis: str = "X"):
+        """
+        Get motor settings for a specific axis.
+        
+        :param axis: Axis name (X, Y, Z, or A)
+        :return: Dictionary with axis-specific motor settings
+        """
+        try:
+            if self.stages is None:
+                return {"error": "No stages configured", "settings": None}
+            return self.stages.getMotorSettingsForAxis(axis.upper())
+        except Exception as e:
+            self.__logger.error(f"Error getting motor settings for axis {axis}: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=False)
+    def getTMCSettingsForAxis(self, axis: str = "X"):
+        """
+        Get TMC stepper driver settings for a specific axis from the device.
+        
+        :param axis: Axis name (X, Y, Z, or A)
+        :return: Dictionary with TMC settings
+        """
+        try:
+            if self.stages is None:
+                return {"error": "No stages configured", "settings": None}
+            return self.stages.getTMCSettingsForAxis(axis.upper())
+        except Exception as e:
+            self.__logger.error(f"Error getting TMC settings for axis {axis}: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setMotorSettingsForAxis(self, axis: str, settings: dict):
+        """
+        Set motor settings for a specific axis.
+        
+        Updates both in-memory values and device configuration.
+        Settings should include 'motion', 'homing', and/or 'limits' sub-dictionaries.
+        
+        Example settings:
+        {
+            "motion": {
+                "stepSize": 1.0,
+                "maxSpeed": 10000,
+                "acceleration": 1000000,
+                "backlash": 0
+            },
+            "homing": {
+                "enabled": true,
+                "speed": 15000,
+                "direction": -1,
+                "endstopPolarity": 1,
+                "endposRelease": 3000,
+                "timeout": 20000
+            }
+        }
+        
+        :param axis: Axis name (X, Y, Z, or A)
+        :param settings: Dictionary with settings to update
+        :return: Result dictionary with updated fields and any errors
+        """
+        try:
+            if self.stages is None:
+                return {"error": "No stages configured", "success": False}
+            result = self.stages.setMotorSettingsForAxis(axis.upper(), settings)
+            # Save to config after successful update
+            if result.get('success', False):
+                self.saveMotorSettings()
+            return result
+        except Exception as e:
+            self.__logger.error(f"Error setting motor settings for axis {axis}: {e}")
+            return {"error": str(e), "success": False}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setMotorSettings(self, settings: dict):
+        """
+        Set motor settings for all axes at once.
+        
+        Settings should include 'global' and/or 'axes' sub-dictionaries.
+        
+        Example settings:
+        {
+            "global": {
+                "axisOrder": [0, 1, 2, 3],
+                "isCoreXY": false,
+                "isEnabled": true,
+                "enableAuto": true
+            },
+            "axes": {
+                "X": { "motion": {...}, "homing": {...} },
+                "Y": { "motion": {...}, "homing": {...} },
+                ...
+            }
+        }
+        
+        :param settings: Dictionary with settings to update
+        :return: Result dictionary with updated fields and any errors
+        """
+        try:
+            if self.stages is None:
+                return {"error": "No stages configured", "success": False}
+            
+            result = {"success": True, "results": {}}
+            
+            # Update global settings
+            if 'global' in settings:
+                global_result = self.stages.setGlobalMotorSettings(settings['global'])
+                result['results']['global'] = global_result
+                if not global_result.get('success', False):
+                    result['success'] = False
+            
+            # Update per-axis settings
+            if 'axes' in settings:
+                for axis, axis_settings in settings['axes'].items():
+                    axis_result = self.stages.setMotorSettingsForAxis(axis.upper(), axis_settings)
+                    result['results'][axis] = axis_result
+                    if not axis_result.get('success', False):
+                        result['success'] = False
+            
+            return result
+            
+        except Exception as e:
+            self.__logger.error(f"Error setting motor settings: {e}")
+            return {"error": str(e), "success": False}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setTMCSettingsForAxis(self, axis: str, settings: dict):
+        """
+        Set TMC stepper driver settings for a specific axis.
+        
+        Example settings:
+        {
+            "msteps": 16,
+            "rmsCurrent": 500,
+            "sgthrs": 10,
+            "semin": 5,
+            "semax": 2,
+            "blankTime": 24,
+            "toff": 3
+        }
+        
+        :param axis: Axis name (X, Y, Z, or A)
+        :param settings: Dictionary with TMC settings
+        :return: Result dictionary
+        """
+        try:
+            if self.stages is None:
+                return {"error": "No stages configured", "success": False}
+            result = self.stages.setTMCSettingsForAxis(axis.upper(), settings)
+            # Save to config after successful update (including TMC settings from device)
+            if result.get('success', False):
+                self.saveMotorSettings(includeTMC=True)
+            return result
+        except Exception as e:
+            self.__logger.error(f"Error setting TMC settings for axis {axis}: {e}")
+            return {"error": str(e), "success": False}
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setGlobalMotorSettings(self, settings: dict):
+        """
+        Set global motor settings (axis order, CoreXY mode, enable settings).
+        
+        Example settings:
+        {
+            "axisOrder": [0, 1, 2, 3],
+            "isCoreXY": false,
+            "isEnabled": true,
+            "enableAuto": true,
+            "isDualAxis": false
+        }
+        
+        :param settings: Dictionary with global settings
+        :return: Result dictionary
+        """
+        try:
+            if self.stages is None:
+                return {"error": "No stages configured", "success": False}
+            return self.stages.setGlobalMotorSettings(settings)
+        except Exception as e:
+            self.__logger.error(f"Error setting global motor settings: {e}")
+            return {"error": str(e), "success": False}
+
+    @APIExport(runOnUIThread=False, requestType="POST") 
+    def applyMotorSettingsToDevice(self, axis: str = None):
+        """
+        Apply current in-memory motor settings to the device.
+        
+        This is useful after making multiple setting changes to push
+        all changes to the hardware at once.
+        
+        :param axis: Specific axis to apply (X, Y, Z, A), or None for all axes
+        :return: Result dictionary
+        """
+        try:
+            if self.stages is None:
+                return {"error": "No stages configured", "success": False}
+            
+            axes_to_apply = [axis.upper()] if axis else ['X', 'Y', 'Z', 'A']
+            results = {}
+            
+            for ax in axes_to_apply:
+                try:
+                    # Re-apply motor setup
+                    minPos = getattr(self.stages, f'min{ax}', float('-inf'))
+                    maxPos = getattr(self.stages, f'max{ax}', float('inf'))
+                    stepSize = self.stages.stepSizes.get(ax, 1)
+                    backlash = getattr(self.stages, f'backlash{ax}', 0)
+                    
+                    self.stages.setupMotor(minPos, maxPos, stepSize, backlash, ax)
+                    results[ax] = {"success": True}
+                except Exception as e:
+                    results[ax] = {"success": False, "error": str(e)}
+            
+            return {"success": all(r.get("success", False) for r in results.values()), "results": results}
+            
+        except Exception as e:
+            self.__logger.error(f"Error applying motor settings to device: {e}")
+            return {"error": str(e), "success": False}
+
+    def saveMotorSettings(self, includeTMC: bool = False):
+        """
+        Save current motor settings to the config file.
+        
+        This follows the same pattern as PositionerController.saveStageOffset for config persistence.
+        The controller has access to _setupInfo which the manager does not.
+        
+        Args:
+            includeTMC: If True, also fetch and save TMC settings from the device
+        """
+        try:
+            if self.stages is None:
+                self.__logger.warning("Cannot save motor settings: no stages configured")
+                return
+
+            positionerName = self.stages._name
+            
+            # Build motor settings dict from current manager state
+            axes = ["X", "Y", "Z", "A"]
+            motorSettings = {}
+            
+            # Save step sizes
+            for ax in axes:
+                motorSettings[f'stepsize{ax}'] = self.stages.stepSizes.get(ax, 1)
+            
+            # Save max speeds
+            for ax in axes:
+                motorSettings[f'maxSpeed{ax}'] = self.stages.maxSpeed.get(ax, 10000)
+            
+            # Save initial speeds (current speeds)
+            for ax in axes:
+                motorSettings[f'initialSpeed{ax}'] = self.stages._speed.get(ax, 10000)
+            
+            # Save min/max positions
+            motorSettings['minX'] = self.stages.minX if self.stages.minX != float('-inf') else None
+            motorSettings['maxX'] = self.stages.maxX if self.stages.maxX != float('inf') else None
+            motorSettings['minY'] = self.stages.minY if self.stages.minY != float('-inf') else None
+            motorSettings['maxY'] = self.stages.maxY if self.stages.maxY != float('inf') else None
+            motorSettings['minZ'] = self.stages.minZ if self.stages.minZ != float('-inf') else None
+            motorSettings['maxZ'] = self.stages.maxZ if self.stages.maxZ != float('inf') else None
+            motorSettings['minA'] = self.stages.minA if self.stages.minA != float('-inf') else None
+            motorSettings['maxA'] = self.stages.maxA if self.stages.maxA != float('inf') else None
+            
+            # Save backlash
+            motorSettings['backlashX'] = self.stages.backlashX
+            motorSettings['backlashY'] = self.stages.backlashY
+            motorSettings['backlashZ'] = self.stages.backlashZ
+            motorSettings['backlashA'] = self.stages.backlashA
+            
+            # Save homing parameters
+            for ax in axes:
+                motorSettings[f'homeSpeed{ax}'] = getattr(self.stages, f'homeSpeed{ax}', 15000)
+                motorSettings[f'homeDirection{ax}'] = getattr(self.stages, f'homeDirection{ax}', -1)
+                motorSettings[f'homeEndstoppolarity{ax}'] = getattr(self.stages, f'homeEndstoppolarity{ax}', 1)
+                motorSettings[f'homeEndposRelease{ax}'] = getattr(self.stages, f'homeEndposRelease{ax}', 1)
+                motorSettings[f'homeTimeout{ax}'] = getattr(self.stages, f'homeTimeout{ax}', 20000)
+            
+            # Save TMC settings if requested (fetch from device)
+            if includeTMC:
+                for ax in axes:
+                    try:
+                        tmc_result = self.stages.getTMCSettingsForAxis(ax)
+                        if tmc_result.get('success') and 'settings' in tmc_result:
+                            tmc = tmc_result['settings']
+                            motorSettings[f'msteps{ax}'] = tmc.get('msteps', 16)
+                            motorSettings[f'rms_current{ax}'] = tmc.get('rmsCurrent', 500)
+                            motorSettings[f'sgthrs{ax}'] = tmc.get('sgthrs', 10)
+                            motorSettings[f'semin{ax}'] = tmc.get('semin', 5)
+                            motorSettings[f'semax{ax}'] = tmc.get('semax', 2)
+                            motorSettings[f'blank_time{ax}'] = tmc.get('blankTime', 24)
+                            motorSettings[f'toff{ax}'] = tmc.get('toff', 3)
+                    except Exception as e:
+                        self.__logger.warning(f"Could not fetch TMC settings for axis {ax}: {e}")
+            
+            # Update setupInfo and save to config file
+            if hasattr(self, '_setupInfo') and self._setupInfo is not None:
+                # Update the positioner's managerProperties in setupInfo
+                if hasattr(self._setupInfo, 'positioners') and positionerName in self._setupInfo.positioners:
+                    # Update existing properties
+                    for key, value in motorSettings.items():
+                        if value is not None:
+                            self._setupInfo.positioners[positionerName].managerProperties[key] = value
+
+                    # Save the updated setupInfo to disk
+                    from imswitch.imcommon.model import configfiletools
+                    mOptions, _ = configfiletools.loadOptions()
+                    configfiletools.saveSetupInfo(mOptions, self._setupInfo)
+                    self.__logger.info(f"Saved motor settings for {positionerName}")
+                else:
+                    self.__logger.warning(f"Positioner {positionerName} not found in setupInfo.positioners")
+            else:
+                self.__logger.warning("Cannot save motor settings: _setupInfo not available")
+
+        except Exception as e:
+            self.__logger.error(f"Could not save motor settings: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 # Copyright (C) Benedict Diederich

@@ -1615,7 +1615,8 @@ class ExperimentController(ImConWidgetController):
                     meta = metadata_list[fid] if fid < len(metadata_list) else None
                     if not meta:
                         self._logger.warning(f"missing metadata for frame-id {fid}")
-                        continue
+                        self._stop_writer_evt.set()
+                        break # end experiment - TODO: should send a signal?
 
                     # Write frame using unified writer
                     chunk_info = ome_writer.write_frame(frame, meta)

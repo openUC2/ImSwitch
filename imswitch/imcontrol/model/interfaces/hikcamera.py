@@ -640,7 +640,7 @@ class CameraHIK:
     def getLast(self,
                 returnFrameNumber: bool = False,
                 timeout: float = 1.0,
-                auto_trigger: bool = True):
+                auto_trigger: bool = False): # TODO: This is weird; shall we use it or not?
         """
         Return the newest frame in the ring-buffer.
         If the buffer is empty *and* the camera is in **software-trigger**
@@ -802,15 +802,21 @@ class CameraHIK:
         try:
             if tlow.find("cont")>=0:
                 self.camera.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
-                self.__logger.debug("Trigger source set to continuous (free run)")
+                self.__logger.info("Trigger source set to continuous (free run)")
             elif tlow.find("soft")>=0 or tlow in ("internal trigger", "software", "software trigger"):
-                self.camera.MV_CC_SetEnumValue("TriggerMode",  MV_TRIGGER_MODE_ON)
-                self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER_SOURCE_SOFTWARE)
-                self.__logger.debug("Trigger source set to software trigger")
+                ret = self.camera.MV_CC_SetEnumValue("TriggerMode",  MV_TRIGGER_MODE_ON)
+                if ret != 0:
+                    self.__logger.error(f"Set TriggerMode failed! ret [0x{ret:x}]")
+                    return False
+                ret = self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER_SOURCE_SOFTWARE)
+                if ret != 0:
+                    self.__logger.error(f"Set TriggerSource failed! ret [0x{ret:x}]")
+                    return False
+                self.__logger.info("Trigger source set to software trigger")
             elif tlow.find("ext")>=0 or tlow in ("external trigger", "hardware", "line0"):
                 self.camera.MV_CC_SetEnumValue("TriggerMode",  MV_TRIGGER_MODE_ON)
                 self.camera.MV_CC_SetEnumValue("TriggerSource", MV_TRIGGER_SOURCE_LINE0)
-                self.__logger.debug("Trigger source set to external trigger (LINE0)")
+                self.__logger.info("Trigger source set to external trigger (LINE0)")
 
             else:
                 self.__logger.warning(f"Unknown trigger source: {trigger_source}")

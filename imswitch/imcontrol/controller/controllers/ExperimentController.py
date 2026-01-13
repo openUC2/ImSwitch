@@ -1604,7 +1604,7 @@ class ExperimentController(ImConWidgetController):
 
         if is_performance_mode:
             # Performance mode: get frames from camera buffer
-            while saved < n_expected and not self._stop_writer_evt.is_set():
+            while saved < n_expected and not self._stop_writer_evt.is_set(): # TODO: we have that already checked in the exerpiment_performance_mode
                 frames, ids = self.mDetector.getChunk()  # empties camera buffer
 
                 if frames.size == 0:

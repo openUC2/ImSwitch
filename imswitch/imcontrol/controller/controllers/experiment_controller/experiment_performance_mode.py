@@ -557,7 +557,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             self._configure_camera_for_hardware_trigger()
 
         # Get exposure time
-        t_exposure = scan_params.get('tExposure', 50)
+        t_exposure = scan_params["tExposure"]
         m_experiment = experiment_params.get('mExperiment')
         if m_experiment and hasattr(m_experiment, 'parameterValue'):
             exposure_times = getattr(m_experiment.parameterValue, 'illuExposures', [50])
@@ -714,6 +714,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             data: Dictionary with completion information
         """
         self._logger.info(f"Stagescan completion signal received: {data}")
+        time.sleep(0.5)  # Small delay to ensure all processing is done # TODO: 
         self._stagescan_complete_event.set()
 
     def _wait_for_scan_completion(self, expected_frames: int, timeout: float) -> bool:
@@ -748,7 +749,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             start_time = time.time()
             
             self._logger.debug(f"Waiting for stagescan completion (hardware trigger mode)")
-            
+            self._stagescan_complete_event.clear()
             while not self._stagescan_complete_event.is_set():
                 elapsed = time.time() - start_time
                 
@@ -764,6 +765,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 
                 # Check if we received all expected frames
                 if self._frame_count >= expected_frames:
+                    time.sleep(0.5)  # Small delay to ensure all processing is done # TODO: We should rather count stored frames not camera triggers? 
                     self._logger.info(f"All {expected_frames} frames received")
                     return True
                 
@@ -846,7 +848,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             try:
                 if hasattr(self.controller, 'mDetector'):
                     self.controller.mDetector.sendSoftwareTrigger() # TODO: This function is not implemented  in all detectors
-                    self._logger.debug(f"Software trigger sent for frame {self._frame_count}")
+                    self._logger.info(f"Software trigger sent for frame {self._frame_count}")
             except Exception as e:
                 self._logger.error(f"Error during software trigger: {e}")
 

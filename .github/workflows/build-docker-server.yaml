@@ -30,40 +30,6 @@ env:
   PUSH_IMAGE: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'push tag' }}
 
 jobs:
-  build-frontend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./frontend
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # This repo has tons of cruft in its history, so we try to only fetch files we actually need:
-          fetch-depth: 0
-          filter: 'blob:none'
-
-      - name: Use cached ~/.npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ matrix.variant }}-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: ${{ runner.os }}-node
-
-      - name: Install build dependencies
-        run: npm install
-
-      - name: Build
-        run: |
-          export NODE_OPTIONS=--max_old_space_size=4096
-          CI=false npm run build
-
-      - name: Upload build output
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend
-          path: build
-
   build-container-image:
     permissions:
       contents: read
@@ -77,8 +43,6 @@ jobs:
           - docker-platform: linux/arm64
             gha-runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.gha-runner }}
-    needs:
-      - build-frontend
     steps:
       - uses: actions/checkout@v4
         with:
@@ -87,8 +51,14 @@ jobs:
           fetch-depth: 0
           filter: 'blob:none'
 
-      - name: Upload built frontend
-        uses: actions/upload-artifact@v4
+      - name: Wait for frontend to build
+        uses: lucasssvaz/wait-on-workflow@v1
+        with:
+          workflow: build-frontend.yaml
+          sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download built frontend
+        uses: actions/download-artifact@v4
         with:
           name: frontend
           path: ./frontend/build

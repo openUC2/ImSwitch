@@ -1,10 +1,19 @@
 name: test
 
 on:
+  push:
+    branches:
+      - 'master'
+      - 'main'
+    tags:
+      - 'v*'
   pull_request:
+  merge_group:
   workflow_dispatch:
-  schedule:
-    - cron: '30 7 * * *'
+    inputs:
+      git-ref:
+        description: 'Git ref (optional)'
+        required: false
 
 jobs:
   build:
@@ -49,6 +58,18 @@ jobs:
         # Run all configured checks (exit-zero treats all errors as warnings)
         ruff check . --exit-zero --output-format=full
       shell: bash
+
+    - name: Wait for frontend to build
+      uses: lucasssvaz/wait-on-workflow@v1
+      with:
+        workflow: build-frontend.yaml
+        sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    - name: Download built frontend
+      uses: actions/download-artifact@v4
+      with:
+        name: frontend
+        path: ./frontend/build
       
     - name: Run Unit Tests
       run: |

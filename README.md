@@ -61,8 +61,15 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 Then install ImSwitch:
 
 ```bash
-uv pip install ImSwitchUC2
+git clone https://github.com/openuc2/ImSwitch
+cd ImSwitch
+uv pip install .
+# we may need to do the following step:
+uv pip uninstall psygnal
+uv pip install psygnal --no-binary :all:
 ```
+
+
 
 #### For developers working from source:
 
@@ -74,7 +81,7 @@ cd ImSwitch
 # Create a virtual environment and install with UV
 uv venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv pip install -e .[PyQt5,dev]
+uv pip install -e .[PyQt5,dev] # the e stands for editable mode, so you can change files in the working directory
 
 # UV automatically creates a uv.lock file for reproducible builds
 ```

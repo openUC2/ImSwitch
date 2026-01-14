@@ -42,17 +42,26 @@ sudo usermod -a -G dialout $USER
 # Then reboot your computer, or at least fully log out of your user account and then log back in
 ```
 
-For detailed UV usage instructions, see [docs/uv-guide.md](docs/uv-guide.md).
+Next, follow the setup instructions for the development environment for the frontend in
+[./frontend/README.md](./frontend/README.md#setup).
+
+For detailed UV usage instructions, refer to [docs/uv-guide.md](docs/uv-guide.md).
 
 ### Running
 
-To run ImSwitch, first activate the virtual environment:
+To run ImSwitch, first activate the virtual environment if you haven't already done so:
 
 ```bash
 source .venv/bin/activate
 ```
 
-and then run:
+and then make an up-to-date build of the frontend if you haven't already done so:
+
+```bash
+npm --prefix ./frontend run build
+```
+
+and then launch the ImSwitch server:
 
 ```bash
 # Yes, we should use `uv run` instead of `python`...but first we need to make `uv sync` work:

@@ -20,7 +20,7 @@ class ESP32LEDMatrixManager(LEDMatrixManager):
         self.I_max = 255
         self.intensity=0
         self.enabled = False
-        self.channel_index = "led"
+        self.channel_index = "LED"
 
         try:
             self.Nx = LEDMatrixInfo.managerProperties['Nx']

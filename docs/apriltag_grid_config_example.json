@@ -1,0 +1,58 @@
+{
+  "_comment": "AprilTag Grid Calibration Configuration Example",
+  "_usage": "Add this to your imcontrol_setups/XXX_config.json file under the main object",
+  
+  "PixelCalibration": {
+    "ObservationCamera": "ObservationCam",
+    "ObservationCameraFlip": {
+      "flipX": true,
+      "flipY": true
+    },
+    "aprilTagGrid": {
+      "rows": 17,
+      "cols": 25,
+      "start_id": 0,
+      "pitch_mm": 40.0,
+      "transform": null
+    },
+    "affineCalibrations": {}
+  },
+  
+  "_example_detector_config": {
+    "detectors": {
+      "ObservationCam": {
+        "analogChannel": null,
+        "digitalLine": null,
+        "managerName": "OpenCVCamManager",
+        "managerProperties": {
+          "cameraListIndex": 0,
+          "isRGB": false,
+          "opencvcam": {
+            "exposure": 10,
+            "gain": 1
+          }
+        },
+        "forAcquisition": false,
+        "forFocusLock": false
+      }
+    }
+  },
+  
+  "_notes": {
+    "pitch_mm": "Physical spacing between AprilTag centers in millimeters. Must match printed target (tag_size + margin).",
+    "transform": "Leave as null - will be auto-populated after running gridCalibrateTransform API endpoint.",
+    "ObservationCamera": "Name of detector to use for overhead observation (must exist in detectors config).",
+    "flipX_flipY": "Set based on your camera mounting orientation. Test with returnObservationCameraImage endpoint.",
+    "cameraListIndex": "OpenCV camera index (usually 0 for first USB camera, 1 for second, etc.)"
+  },
+  
+  "_calibration_workflow": [
+    "1. Generate AprilTag grid: python ImTools/apriltag/generateAprilTag.py",
+    "2. Print at 100% scale and mount rigidly on stage",
+    "3. Configure grid: GET /api/pixelcalibration/gridSetConfig?rows=17&cols=25&pitch_mm=40.0",
+    "4. Position stage with 10+ tags visible",
+    "5. Run calibration: GET /api/pixelcalibration/gridCalibrateTransform",
+    "6. Verify: Check residual_um < 5.0 in response",
+    "7. Navigate: GET /api/pixelcalibration/gridMoveToTag?target_id=101"
+  ]
+}

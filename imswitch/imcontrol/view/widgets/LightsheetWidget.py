@@ -1,16 +1,12 @@
 import numpy as np
-import pyqtgraph as pg
 from qtpy.QtCore import Signal
 # PyQt5 imports
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QGroupBox, QLabel, QSpinBox, QDoubleSpinBox, QHBoxLayout, QVBoxLayout, QGridLayout, QPushButton, QSizePolicy
+from PyQt5.QtWidgets import QGroupBox, QLabel, QSpinBox, QHBoxLayout, QVBoxLayout, QGridLayout, QPushButton, QSizePolicy
 from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtCore import QSize, QRect
-import numpy as np
 import pyqtgraph.opengl as gl
 
 
-from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
 
 class SquareButton(QPushButton):
@@ -145,7 +141,7 @@ class LightsheetWidget(NapariHybridWidget):
         # Create group boxes
         main_layout = QVBoxLayout(self)
         xyz_groupbox = self.createGroupbox('Sample Translation XY', 14)
-        focus_groupbox = self.createGroupbox('Focus \& Sample Z', 14)
+        focus_groupbox = self.createGroupbox(r'Focus \& Sample Z', 14)
         rotation_groupbox = self.createGroupbox('Rotation', 14)
         scan_groupbox = self.createGroupbox('Scan Parameters', 14)
 

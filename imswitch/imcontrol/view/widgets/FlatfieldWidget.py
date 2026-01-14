@@ -1,15 +1,8 @@
 import numpy as np
-import pyqtgraph as pg
-import cv2
-import copy
-from qtpy import QtCore, QtWidgets, QtGui, QtWidgets
-from PyQt5.QtGui import QPixmap, QImage
-from PyQt5 import QtGui, QtWidgets
-import PyQt5
+from qtpy import QtWidgets
+from PyQt5 import QtWidgets
 from imswitch.imcommon.model import initLogger
-from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
-import os
 
 
 class FlatfieldWidget(NapariHybridWidget):

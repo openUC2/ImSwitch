@@ -5,7 +5,9 @@ class LasersManager(MultiManager):
     """ LasersManager is an interface for dealing with LaserManagers. It is a
     MultiManager for lasers. """
 
-    def __init__(self, laserInfos, **lowLevelManagers):
+    def __init__(self, laserInfos, commChannel=None, **lowLevelManagers):
+        if commChannel is not None:
+            lowLevelManagers['commChannel'] = commChannel
         super().__init__(laserInfos, 'lasers', **lowLevelManagers)
 
 

@@ -1,10 +1,9 @@
-from typing import Dict, List
 from functools import partial
 
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcontrol.view import guitools as guitools
-from imswitch.imcommon.model import initLogger, APIExport
+from imswitch.imcommon.model import initLogger
 
 class WellPlateController(ImConWidgetController):
     """ Linked to PositionerWidget."""

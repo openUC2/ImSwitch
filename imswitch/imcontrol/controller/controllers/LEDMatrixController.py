@@ -1,12 +1,10 @@
-from typing import Dict, List
 from functools import partial
-import numpy as np
 
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcontrol.view import guitools as guitools
-from imswitch.imcommon.model import initLogger, APIExport
+from imswitch.imcommon.model import initLogger
 
 class LEDMatrixController(ImConWidgetController):
     """ Linked to LEDMatrixWidget."""
@@ -45,14 +43,15 @@ class LEDMatrixController(ImConWidgetController):
         self.setAllLED(state=(0,0,0),getReturn=getReturn)
 
     @APIExport()
-    def setAllLED(self, state:int=None, intensity:int=None, getReturn:bool=True):
-        if intensity is not None:
-            self.setIntensity(intensity=intensity)
-        self.ledMatrix.setAll(state=state,getReturn=getReturn)
-        if IS_HEADLESS: return
-        for coords, btn in self._widget.leds.items():
-            if isinstance(btn, guitools.BetterPushButton):
-                btn.setChecked(np.sum(state)>0)
+    def setAllLED(self, state:int=None, intensity:int=None, intensity_r:int=None, intensity_g:int=None, intensity_b:int=None, getReturn:bool=True):
+        if intensity_r is not None and intensity_g is not None and intensity_b is not None:
+            intensity = (intensity_r, intensity_g, intensity_b)
+            self.ledMatrix.setAll(intensity=intensity, state=(intensity_r>0, intensity_g>0, intensity_b>0),getReturn=getReturn)
+
+        else:
+            if intensity is not None:
+                self.setIntensity(intensity=intensity)
+            self.ledMatrix.setAll(state=state,getReturn=getReturn)
 
     @APIExport()
     def setIntensity(self, intensity:int=None):
@@ -93,24 +92,33 @@ class LEDMatrixController(ImConWidgetController):
         self.setAllLED(state=(1,1,1), intensity=value)
 
     @APIExport()
-    def setRing(self, ringRadius: int, intensity: int) -> None:
+    def setRing(self, ringRadius: int, intensity: int, intensity_r: int=None, intensity_g: int=None, intensity_b: int=None) -> None:
         """ Sets the value of the LEDMatrix. """
         #self.setIntensity(intensity=intensity)
-        self.ledMatrix.setRing(radius=ringRadius, intensity=intensity)
+        if intensity_r is not None and intensity_g is not None and intensity_b is not None:
+            self.ledMatrix.setRing(radius=ringRadius, intensity=(intensity_r, intensity_g, intensity_b))
+        else:
+            self.ledMatrix.setRing(radius=ringRadius, intensity=intensity)
         if not IS_HEADLESS: self._widget.leds[str(ringRadius)].setChecked(True)
 
     @APIExport()
-    def setCircle(self, circleRadius: int, intensity: int) -> None:
+    def setCircle(self, circleRadius: int, intensity: int, intensity_r: int=None, intensity_g: int=None, intensity_b: int=None) -> None:
         """ Sets the value of the LEDMatrix. """
         #self.setIntensity(intensity=intensity)
-        self.ledMatrix.setCircle(radius=circleRadius, intensity=intensity)
+        if intensity_r is not None and intensity_g is not None and intensity_b is not None:
+            self.ledMatrix.setCircle(radius=circleRadius, intensity=(intensity_r, intensity_g, intensity_b))
+        else:
+            self.ledMatrix.setCircle(radius=circleRadius, intensity=intensity)
         if not IS_HEADLESS: self._widget.leds[str(circleRadius)].setChecked(True)
 
     @APIExport()
-    def setHalves(self, intensity: int, direction: str) -> None:
+    def setHalves(self, intensity: int, direction: str, intensity_r: int=None, intensity_g: int=None, intensity_b: int=None) -> None:
         """ Sets the value of the LEDMatrix. """
         #self.setIntensity(intensity=intensity)
-        self.ledMatrix.setHalves(intensity=intensity, region=direction)
+        if intensity_r is not None and intensity_g is not None and intensity_b is not None:
+            self.ledMatrix.setHalves(intensity=(intensity_r, intensity_g, intensity_b), region=direction)
+        else:
+            self.ledMatrix.setHalves(intensity=intensity, region=direction)
         if not IS_HEADLESS: self._widget.leds[str(intensity)].setChecked(True)
 
     @APIExport()

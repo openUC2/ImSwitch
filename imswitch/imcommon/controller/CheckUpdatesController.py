@@ -9,7 +9,7 @@ import urllib.request
 import threading
 import datetime
 
-from imswitch import IS_HEADLESS, __version__
+from imswitch import __version__
 from imswitch.imcommon.framework import Signal, Thread
 from imswitch.imcommon.model import initLogger
 from .basecontrollers import WidgetController

@@ -1,10 +1,6 @@
-from qtpy import QtCore, QtWidgets
-import sys
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QLabel, QPushButton, QLineEdit, QComboBox, QTextEdit
+from PyQt5.QtWidgets import QLabel, QPushButton, QTextEdit
 from PyQt5.QtWidgets import QGridLayout
 
-from imswitch.imcommon.view.guitools import pyqtgraphtools
-from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
 
 

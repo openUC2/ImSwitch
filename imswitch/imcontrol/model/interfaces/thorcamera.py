@@ -1,14 +1,9 @@
-from logging import raiseExceptions
 import numpy as np
-import time
-import cv2
 from imswitch.imcommon.model import initLogger
 
 import collections
 
 
-import numpy as np
-import matplotlib.pyplot as plt
 
 # init devwraps
 #import devwraps

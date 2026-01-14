@@ -9,7 +9,6 @@
 #   SSL                - Enable SSL: "true" (default) or "false"/"0"
 #   HTTP_PORT          - HTTP port for the server (default: 8001)
 #   CONFIG_PATH        - Custom configuration directory path
-#   CONFIG_FILE        - Specific configuration file to use
 #   DATA_PATH          - Default data storage path
 #   SCAN_EXT_DATA_PATH - Enable external storage scanning: "true"/"1" or "false" (default)
 #   EXT_DATA_PATH      - Mount point directory for external drives (e.g., /media, /Volumes)
@@ -39,38 +38,37 @@
 #   -e MODE=terminal \
 #   ghcr.io/openuc2/imswitch-noqt:sha-5d54391
 
-
 check_pi_camera() {
-        log "Running libcamera-probe"
-        if command -v libcamera-probe >/dev/null 2>&1; then
-            libcamera-probe --verbose 2>&1 | tee /tmp/libcamera-probe.log
-            if grep -q "Found.*imx" /tmp/libcamera-probe.log; then
-                log "Pi camera detected via libcamera-probe"
-                return 0
-            else
-                log "libcamera-probe did not detect a Pi camera"
-            fi
-        else
-            log "libcamera-probe not installed"
-        fi
-
-        log "Checking dmesg for camera sensors"
-        if dmesg | grep -E "imx[0-9]{3}|ov5647|arducam|rpi_cam" >/dev/null 2>&1; then
-            log "Camera sensor driver detected in kernel logs"
+    log "Running libcamera-probe"
+    if command -v libcamera-probe >/dev/null 2>&1; then
+        libcamera-probe --verbose 2>&1 | tee /tmp/libcamera-probe.log
+        if grep -q "Found.*imx" /tmp/libcamera-probe.log; then
+            log "Pi camera detected via libcamera-probe"
             return 0
         else
-            log "No camera-related kernel messages found"
+            log "libcamera-probe did not detect a Pi camera"
         fi
+    else
+        log "libcamera-probe not installed"
+    fi
 
-        log "Checking for /dev/video* devices"
-        if ls /dev/video* >/dev/null 2>&1; then
-            log "Video devices present: $(ls /dev/video*)"
-            return 0
-        else
-            log "No /dev/video* devices found"
-        fi
+    log "Checking dmesg for camera sensors"
+    if dmesg | grep -E "imx[0-9]{3}|ov5647|arducam|rpi_cam" >/dev/null 2>&1; then
+        log "Camera sensor driver detected in kernel logs"
+        return 0
+    else
+        log "No camera-related kernel messages found"
+    fi
 
-        return 1
+    log "Checking for /dev/video* devices"
+    if ls /dev/video* >/dev/null 2>&1; then
+        log "Video devices present: $(ls /dev/video*)"
+        return 0
+    else
+        log "No /dev/video* devices found"
+    fi
+
+    return 1
 }
 
 log() { echo "[$(date +'%F %T')] $*"; }
@@ -87,11 +85,9 @@ SCAN_EXT_DATA_PATH=${SCAN_EXT_DATA_PATH:-false}
 # ============================================================================
 log 'Starting ImSwitch container in server mode'
 
-
 log 'Listing USB devices'
 lsusb || log 'lsusb not available'
 log 'Checking Raspberry Pi camera availability'
-
 
 if check_pi_camera; then
     log "Raspberry Pi camera: AVAILABLE"
@@ -99,11 +95,8 @@ else
     log "Raspberry Pi camera: NOT AVAILABLE"
 fi
 
-
 log 'Checking external storage mount points'
 ls /media 2>/dev/null || log 'No /media directory'
-
-
 
 # ============================================================================
 # Configuration Path Setup
@@ -118,16 +111,6 @@ fi
 if [[ ! -d "$CONFIG_PATH" ]]; then
     log "Error: Configuration path '$CONFIG_PATH' does not exist."
     exit 1
-fi
-
-# CONFIG_FILE is optional - if not provided, ImSwitch will use imcontrol_options.json
-if [[ -n "$CONFIG_FILE" ]]; then
-    log "Using CONFIG_FILE: $CONFIG_FILE"
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        log "Warning: Configuration file '$CONFIG_FILE' does not exist. Will try to use filename from CONFIG_PATH."
-    fi
-else
-    log "CONFIG_FILE not provided - will use default from imcontrol_options.json"
 fi
 
 # List available configuration files
@@ -192,11 +175,6 @@ params+=" --http-port ${HTTP_PORT:-8001}"
 # Path configuration
 # The storage manager will handle path resolution and validation
 params+=" --config-folder ${CONFIG_PATH}"
-
-# Only pass --config-file if CONFIG_FILE is set
-if [[ -n "$CONFIG_FILE" ]]; then
-    params+=" --config-file ${CONFIG_FILE}"
-fi
 
 params+=" --data-folder ${DATA_PATH}"
 

@@ -12,7 +12,7 @@ __email__ = "info@openuc2.com"
 
 __all__ = [
     "UC2SerialController",
-    "find_esp32_port", 
+    "find_esp32_port",
     "MotorPosition",
     "LEDState",
     "ObjectiveSlot",

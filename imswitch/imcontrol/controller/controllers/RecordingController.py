@@ -4,7 +4,7 @@ from typing import Optional, Union, List
 import numpy as np
 import datetime
 from fastapi.responses import StreamingResponse
-from fastapi import FastAPI, Response, HTTPException
+from fastapi import Response, HTTPException
 import cv2
 from PIL import Image
 import io
@@ -438,7 +438,7 @@ class RecordingController(ImConWidgetController):
 
     def getTimelapseFreq(self):
         return self._widget.getTimelapseFreq()
- 
+
     def setLiveStreamStart(self): # TODO: we need to connect that to the signal in the communication channel
         self.streamRunning = True
 
@@ -579,7 +579,7 @@ class RecordingController(ImConWidgetController):
         except Exception as e:
             self.__logger.warning(f"Could not use LiveViewController for video_feeder: {e}")
             # Fall back to legacy implementation
-        
+
         # Legacy implementation (kept for backward compatibility)
         if startStream:
             # start the live video feed

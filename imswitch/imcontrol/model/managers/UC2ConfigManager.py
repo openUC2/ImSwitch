@@ -1,16 +1,6 @@
-import enum
-import glob
-import math
-import os
-import threading
 
-import numpy as np
-from PIL import Image
-import uc2rest as uc2
-import json
 
-from imswitch.imcommon.model import dirtools
-from imswitch.imcommon.framework import Signal, SignalInterface
+from imswitch.imcommon.framework import SignalInterface
 from imswitch.imcommon.model import initLogger
 
 
@@ -26,6 +16,10 @@ class UC2ConfigManager(SignalInterface):
         except Exception as e:
             self.__logger.error(f"Could not connect to ESP32 low level manager: {e}")
             return
+        
+        # Grab DigitalIn/Out Controller 
+        self._digitalIn = self.ESP32.digitalin
+        self._digitalOut = self.ESP32.digitalout
 
     def saveState(self, state_general=None, state_pos=None, state_aber=None):
         if state_general is not None:

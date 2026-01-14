@@ -7,7 +7,7 @@ class ExperimentManager(SignalInterface):
         self.sigExperimentMaskUpdated = Signal(object)  # (maskCombined)  # (maskCombined)
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
-        
+
         # Initialize OMERO configuration from experimentInfo (similar to MCTManager pattern)
         if experimentInfo is not None:
             # OMERO configuration from setup
@@ -81,7 +81,7 @@ class ExperimentManager(SignalInterface):
             self.omeroConnectionTimeout = config_dict["connectionTimeout"]
         if "uploadTimeout" in config_dict:
             self.omeroUploadTimeout = config_dict["uploadTimeout"]
-        
+
         self.__logger.info("OMERO configuration updated")
 
     def isOmeroEnabled(self):
@@ -92,7 +92,7 @@ class ExperimentManager(SignalInterface):
         """Get OMERO connection parameters as a dictionary."""
         if not self.isOmeroEnabled():
             return None
-        
+
         return {
             "serverUrl": self.omeroServerUrl,
             "username": self.omeroUsername,
@@ -105,7 +105,7 @@ class ExperimentManager(SignalInterface):
         """Get OMERO upload parameters as a dictionary."""
         if not self.isOmeroEnabled():
             return None
-        
+
         return {
             "groupId": self.omeroGroupId,
             "projectId": self.omeroProjectId,

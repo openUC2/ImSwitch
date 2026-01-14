@@ -6,6 +6,7 @@ and normal mode experiment execution.
 """
 
 import os
+import json
 import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -13,22 +14,37 @@ import numpy as np
 from abc import ABC, abstractmethod
 
 from imswitch.imcommon.model import dirtools
-from ..experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
+from ..experiment_controller.ome_writer import OMEWriterConfig
 
 
 class OMEFileStorePaths:
     """Helper class for managing OME file storage paths."""
-    def __init__(self, base_dir):
+    def __init__(self, base_dir, shared_individual_tiffs_dir=None):
+        """
+        Initialize OME file storage paths.
+        
+        Args:
+            base_dir: Base directory for this writer's files (e.g., tiles, zarr)
+            shared_individual_tiffs_dir: Shared directory for individual TIFFs across all timepoints.
+                                        If None, creates one under base_dir.
+        """
         self.base_dir = base_dir
         self.tiff_dir = os.path.join(base_dir, "tiles")
         self.zarr_dir = os.path.join(base_dir + ".ome.zarr")
-        self.individual_tiffs_dir = os.path.join(base_dir, "individual_tiffs")
-        os.makedirs(self.tiff_dir) if not os.path.exists(self.tiff_dir) else None
-        os.makedirs(self.individual_tiffs_dir) if not os.path.exists(self.individual_tiffs_dir) else None
-    
+
+        # Use shared individual_tiffs directory or create one under base_dir
+        if shared_individual_tiffs_dir is not None:
+            self.individual_tiffs_dir = shared_individual_tiffs_dir
+        else:
+            self.individual_tiffs_dir = os.path.join(base_dir, "individual_tiffs")
+
+        os.makedirs(self.tiff_dir, exist_ok=True)
+        os.makedirs(self.individual_tiffs_dir, exist_ok=True)
+
     def get_timepoint_dir(self, timepoint_index: int):
         """Get or create directory for a specific timepoint."""
-        timepoint_dir = os.path.join(self.individual_tiffs_dir, f"timepoint_{timepoint_index:04d}")
+        time_now = time.strftime("%Y%m%d_%H%M%S")
+        timepoint_dir = os.path.join(self.individual_tiffs_dir, f"timepoint_{timepoint_index:04d}")#_{time_now}")
         os.makedirs(timepoint_dir, exist_ok=True)
         return timepoint_dir
 
@@ -41,12 +57,12 @@ class ExperimentModeBase(ABC):
     experiment execution, including parameter processing, scan range computation,
     and OME writer configuration.
     """
-    
+
     def __init__(self, experiment_controller):
         """Initialize the base mode with reference to the main controller."""
         self.controller = experiment_controller
         self._logger = experiment_controller._logger
-        
+
     def compute_scan_ranges(self, snake_tiles: List[List[Dict]]) -> Tuple[float, float, float, float, float, float]:
         """
         Compute scan ranges from snake tiles.
@@ -63,30 +79,39 @@ class ExperimentModeBase(ABC):
         maxX = max(pt["x"] for pt in all_points)
         minY = min(pt["y"] for pt in all_points)
         maxY = max(pt["y"] for pt in all_points)
-        
+
         # compute step between two adjacent points in X/Y
         uniqueX = np.unique([pt["x"] for pt in all_points])
         uniqueY = np.unique([pt["y"] for pt in all_points])
-        
+
         if len(uniqueX) == 1:
             diffX = 0
         else:
             diffX = np.diff(uniqueX).min()
-            
+
         if len(uniqueY) == 1:
             diffY = 0
         else:
             diffY = np.diff(uniqueY).min()
-            
+
         return minX, maxX, minY, maxY, diffX, diffY
-    
-    def create_ome_file_paths(self, base_path: str) -> 'OMEFileStorePaths':
-        """Create OME file storage paths."""
-        return OMEFileStorePaths(base_path)
-    
-    def create_writer_config(self, 
+
+    def create_ome_file_paths(self, base_path: str, shared_individual_tiffs_dir: str = None) -> 'OMEFileStorePaths':
+        """
+        Create OME file storage paths.
+        
+        Args:
+            base_path: Base path for the writer's files
+            shared_individual_tiffs_dir: Optional shared directory for individual TIFFs across all timepoints
+            
+        Returns:
+            OMEFileStorePaths instance
+        """
+        return OMEFileStorePaths(base_path, shared_individual_tiffs_dir)
+
+    def create_writer_config(self,
                            write_tiff: bool = False,
-                           write_zarr: bool = True, 
+                           write_zarr: bool = True,
                            write_stitched_tiff: bool = True,
                            write_tiff_single: bool = False,
                            write_individual_tiffs: bool = False,
@@ -112,7 +137,7 @@ class ExperimentModeBase(ABC):
             OMEWriterConfig instance
         """
         pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
-        
+
         return OMEWriterConfig(
             write_tiff=write_tiff,
             write_zarr=write_zarr,
@@ -125,26 +150,37 @@ class ExperimentModeBase(ABC):
             n_z_planes=n_z_planes,
             n_channels=n_channels
         )
-    
+
     def prepare_illumination_parameters(self, illumination_intensities: List[float]) -> Dict[str, Optional[float]]:
         """
         Prepare illumination parameters in the format expected by hardware.
         
+        Frontend sends pre-mapped intensities array where indices correspond to
+        channel_index values. This method simply formats them for hardware.
+        
         Args:
-            illumination_intensities: List of illumination intensities
+            illumination_intensities: List of illumination intensities pre-mapped by frontend
             
         Returns:
-            Dictionary with illumination0-3 and led parameters
+            Dictionary with illumination0-N and led parameters
         """
-        illum_dict = {
-            "illumination0": illumination_intensities[0] if len(illumination_intensities) > 0 else None,
-            "illumination1": illumination_intensities[1] if len(illumination_intensities) > 1 else None,
-            "illumination2": illumination_intensities[2] if len(illumination_intensities) > 2 else None,
-            "illumination3": illumination_intensities[3] if len(illumination_intensities) > 3 else None,
-            "led": 0  # Default LED value
-        }
+        illum_dict = {"led": 0}  # Default LED value
+        
+        # Simple direct mapping - frontend already handles channel_index matching
+        for i, intensity in enumerate(illumination_intensities):
+            if i < len(self.controller.availableIlluminations):
+                illum = self.controller.availableIlluminations[i]
+                
+                # Check if this is LED channel
+                if isinstance(illum.channel_index, str) and illum.channel_index.upper() == "LED":
+                    illum_dict["led"] = intensity
+                else:
+                    illum_dict[f"illumination{i}"] = intensity
+            else:
+                illum_dict[f"illumination{i}"] = intensity
+        
         return illum_dict
-    
+
     def create_experiment_directory(self, exp_name: str) -> Tuple[str, str, str]:
         """
         Create experiment directory and generate file paths.
@@ -161,9 +197,9 @@ class ExperimentModeBase(ABC):
         if not os.path.exists(dirPath):
             os.makedirs(dirPath)
         mFileName = f"{timeStamp}_{exp_name}"
-        
+
         return timeStamp, dirPath, mFileName
-    
+
     def calculate_grid_parameters(self, tiles: List[Dict]) -> Tuple[Tuple[int, int], Tuple[float, float, float, float]]:
         """
         Calculate grid parameters from tile list.
@@ -179,7 +215,7 @@ class ExperimentModeBase(ABC):
             if point is not None:
                 try:all_points.append([point["x"], point["y"]])
                 except Exception as e: self._logger.error(f"Error processing point {point}: {e}")
-        
+
         if all_points:
             x_coords = [p[0] for p in all_points]
             y_coords = [p[1] for p in all_points]
@@ -195,9 +231,9 @@ class ExperimentModeBase(ABC):
         else:
             grid_shape = (1, 1)
             grid_geometry = (0, 0, 100, 100)
-            
+
         return grid_shape, grid_geometry
-    
+
     @abstractmethod
     def execute_experiment(self, **kwargs) -> Dict[str, Any]:
         """
@@ -210,3 +246,73 @@ class ExperimentModeBase(ABC):
             Dictionary with execution results
         """
         pass
+
+    def save_experiment_protocol(self, 
+                                protocol_data: Dict[str, Any],
+                                file_path: str,
+                                mode: str = "unknown") -> str:
+        """
+        Save experiment protocol and parameters to JSON file.
+        
+        Args:
+            protocol_data: Dictionary containing experiment parameters and steps
+            file_path: Base path for the experiment data
+            mode: Experiment mode ('normal' or 'performance')
+            
+        Returns:
+            Path to the saved protocol JSON file
+        """
+        try:
+            # Create protocol filename
+            protocol_file = file_path + "_protocol.json"
+            
+            # Add timestamp and metadata
+            protocol_data["timestamp"] = datetime.now().isoformat()
+            protocol_data["mode"] = mode
+            protocol_data["imswitch_version"] = getattr(self.controller, 'version', 'unknown')
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(protocol_file), exist_ok=True)
+            
+            # Save to JSON with pretty printing
+            with open(protocol_file, 'w') as f:
+                json.dump(protocol_data, f, indent=2, default=self._json_serializer)
+                
+            self._logger.info(f"Experiment protocol saved to: {protocol_file}")
+            return protocol_file
+            
+        except Exception as e:
+            self._logger.error(f"Failed to save experiment protocol: {e}")
+            return None
+    
+    def _json_serializer(self, obj):
+        """
+        Custom JSON serializer for objects not serializable by default.
+        
+        Args:
+            obj: Object to serialize
+            
+        Returns:
+            JSON-serializable representation
+        """
+        # Handle numpy types
+        if isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        
+        # Handle datetime objects
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        
+        # Handle callable functions (store name only)
+        elif callable(obj):
+            return f"<function: {obj.__name__}>"
+        
+        # Handle objects with __dict__
+        elif hasattr(obj, '__dict__'):
+            return {k: v for k, v in obj.__dict__.items() if not k.startswith('_')}
+        
+        # Fallback to string representation
+        else:
+            return str(obj)

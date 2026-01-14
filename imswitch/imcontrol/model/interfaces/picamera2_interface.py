@@ -4,13 +4,12 @@ Provides a callback-based interface similar to HIK camera driver for scientific 
 Supports hardware encoding options while maintaining scientific camera features.
 """
 
-from logging import raiseExceptions
 import collections
 import numpy as np
 import time
 import cv2
 from imswitch.imcommon.model import initLogger
-from typing import List, Optional, Union, Callable
+from typing import List
 import threading
 
 # Try to import picamera2, fall back to mock if not available
@@ -30,12 +29,12 @@ class CameraPicamera2:
     Raspberry Pi camera wrapper using Picamera2 with callback-based frame delivery.
     Provides interface compatible with HIK camera driver for seamless integration.
     """
-    
+
     # Class-level tracking of opened cameras
     _opened_cameras = set()
 
     def __init__(
-        self, 
+        self,
         cameraNo: int = 0,
         exposure_time: float = 10000,  # microseconds
         gain: float = 1.0,
@@ -69,7 +68,7 @@ class CameraPicamera2:
         self.shape = (0, 0)
         self.is_connected = False
         self.is_streaming = False
-        
+
         # Camera settings
         self.exposure_time = exposure_time  # microseconds
         self.gain = gain
@@ -79,42 +78,42 @@ class CameraPicamera2:
         self.isRGB = isRGB
         self.binning = binning
         self.use_video_mode = use_video_mode
-        
+
         # Buffer management
         self.NBuffer = 5
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.flatfieldImage = None
         self.isFlatfielding = False
-        
+
         self.camera = None
         self.DEBUG = False
-        
+
         # Frame tracking
         self.lastFrameFromBuffer = None
         self.lastFrameId = -1
         self.frameNumber = -1
         self.timestamp = 0
-        
+
         # Thread management for frame grabbing
         self._grab_thread = None
         self._stop_event = threading.Event()
-        
+
         # Resolution
         self.SensorWidth = resolution[0]
         self.SensorHeight = resolution[1]
         self.frame = np.zeros((self.SensorHeight, self.SensorWidth, 3 if isRGB else 1), dtype=np.uint8)
-        
+
         # Auto exposure/white balance
         self.exposure_auto = False
         self.awb_auto = True
-        
+
         # Trigger mode
         self.trigger_source = "Continuous"
-        
+
         # Open camera
         self._open_camera(self.cameraNo)
-        
+
         self.__logger.info(f"Camera initialized: model={self.model}, RGB={self.isRGB}, resolution={self.SensorWidth}x{self.SensorHeight}")
 
     def _release_camera_from_other_processes(self, camera_index: int):
@@ -124,7 +123,7 @@ class CameraPicamera2:
         """
         import subprocess
         import os
-        
+
         # Camera device paths that might be locked
         device_paths = [
             f"/dev/video{camera_index}",
@@ -132,11 +131,11 @@ class CameraPicamera2:
             "/dev/media1",
             "/dev/media2",
         ]
-        
+
         for device_path in device_paths:
             if not os.path.exists(device_path):
                 continue
-            
+
             try:
                 # Find processes using the device
                 result = subprocess.run(
@@ -145,11 +144,11 @@ class CameraPicamera2:
                     text=True,
                     timeout=2
                 )
-                
+
                 if result.returncode == 0 and result.stdout.strip():
                     pids = result.stdout.strip().split()
                     self.__logger.warning(f"Device {device_path} is being used by PIDs: {pids}")
-                    
+
                     # Get process info
                     for pid in pids:
                         try:
@@ -161,7 +160,7 @@ class CameraPicamera2:
                             )
                             process_name = ps_result.stdout.strip()
                             self.__logger.warning(f"  PID {pid}: {process_name}")
-                            
+
                             # Kill the process if it's not our own process
                             current_pid = os.getpid()
                             if int(pid) != current_pid:
@@ -171,7 +170,7 @@ class CameraPicamera2:
                                 time.sleep(0.5)  # Give it time to release
                         except Exception as e:
                             self.__logger.debug(f"Could not process PID {pid}: {e}")
-                
+
             except subprocess.TimeoutExpired:
                 self.__logger.debug(f"Timeout checking {device_path}")
             except FileNotFoundError:
@@ -179,7 +178,7 @@ class CameraPicamera2:
                 break
             except Exception as e:
                 self.__logger.debug(f"Error checking {device_path}: {e}")
-        
+
         # Alternative: try to close all Picamera2 instances
         try:
             from picamera2 import Picamera2
@@ -194,30 +193,29 @@ class CameraPicamera2:
         """Open and configure the camera"""
         if not PICAMERA2_AVAILABLE:
             raise RuntimeError("Picamera2 not available")
-        
+
         # Initialize camera to None first to avoid issues in close()
         self.camera = None
-        
+
         try:
             # Try to release camera from other processes
             self._release_camera_from_other_processes(camera_index)
-            
+
             # Create camera instance
             self.camera = Picamera2() # sudo fuser -k /dev/video0 /dev/media0 /dev/media1 /dev/media2
-            
+
             # Get sensor resolution
             sensor_modes = self.camera.sensor_modes
             if sensor_modes:
                 max_mode = max(sensor_modes, key=lambda m: m['size'][0] * m['size'][1])
                 self.SensorWidth, self.SensorHeight = max_mode['size']
                 self.__logger.info(f"Max sensor resolution: {self.SensorWidth}x{self.SensorHeight}")
-            
+
             # Configure camera based on mode
             if self.isRGB:
                 # RGB mode - use RGB888 format (3 channels, 8-bit each)
                 config = self.camera.create_video_configuration(
                     main={"size": (self.SensorWidth, self.SensorHeight), "format": "RGB888"},
-                    buffer_count=1,
                     controls={
                         "FrameRate": self.frame_rate,
                     }
@@ -228,7 +226,6 @@ class CameraPicamera2:
                 try:
                     config = self.camera.create_video_configuration(
                         main={"size": (self.SensorWidth, self.SensorHeight), "format": "Y8"},
-                        buffer_count=1,
                         controls={
                             "FrameRate": self.frame_rate,
                         }
@@ -237,23 +234,22 @@ class CameraPicamera2:
                     self.__logger.warning(f"Y8 format not supported, using RGB888: {e}")
                     config = self.camera.create_video_configuration(
                         main={"size": (self.SensorWidth, self.SensorHeight), "format": "RGB888"},
-                        buffer_count=1,
                         controls={
                             "FrameRate": self.frame_rate,
                         }
                     )
-            
+
             self.camera.configure(config)
-            
+
             # Set initial controls
             self._apply_camera_controls()
-            
+
             self.is_connected = True
-            
+
             # Track this camera
             self._serial_checksum = camera_index  # Use index as identifier
             CameraPicamera2._opened_cameras.add(self._serial_checksum)
-            
+
         except Exception as e:
             self.__logger.error(f"Failed to open camera {camera_index}: {e}")
             # Clean up partial initialization
@@ -275,22 +271,22 @@ class CameraPicamera2:
         """Apply camera control settings"""
         if self.camera is None:
             return
-        
+
         controls = {}
-        
+
         # Exposure control
         if not self.exposure_auto:
             controls["ExposureTime"] = int(self.exposure_time)
             controls["AeEnable"] = False
         else:
             controls["AeEnable"] = True
-        
+
         # Gain control
         controls["AnalogueGain"] = float(self.gain)
-        
+
         # Auto white balance
         controls["AwbEnable"] = self.awb_auto
-        
+
         try:
             self.camera.set_controls(controls)
             self.__logger.debug(f"Applied camera controls: {controls}")
@@ -300,44 +296,49 @@ class CameraPicamera2:
     def _grab_frames(self):
         """Thread function to continuously grab frames"""
         self.__logger.debug("Frame grabbing thread started")
-        
+
         while not self._stop_event.is_set():
             try:
                 # Capture frame
                 request = self.camera.capture_request()
-                
+
                 try:
                     # Get frame data
                     array = request.make_array("main")
-                    
+
                     # Get metadata
                     metadata = request.get_metadata()
                     frame_id = metadata.get("FrameId", self.frameNumber + 1)
                     timestamp = metadata.get("SensorTimestamp", int(time.time() * 1e6))
-                    
+
                     # Process frame
                     frame = self._process_frame(array)
-                    
+
                     # Update frame number and timestamp
                     self.frameNumber = frame_id
                     self.timestamp = timestamp
-                    
+
                     # Add to buffer
                     self.frame_buffer.append(frame)
                     self.frameid_buffer.append(frame_id)
-                    
+
+                    # Always keep latest frame cached (not consumed by getLast)
+                    # This allows multiple consumers to access the same frame
+                    self.lastFrameFromBuffer = frame
+                    self.lastFrameId = frame_id
+
                     if self.DEBUG:
                         self.__logger.debug(f"Frame {frame_id} captured, buffer size: {len(self.frame_buffer)}")
-                
+
                 finally:
                     # Always release the request
                     request.release()
-                
+
             except Exception as e:
                 if not self._stop_event.is_set():
                     self.__logger.error(f"Error capturing frame: {e}")
                     time.sleep(0.01)  # Brief pause on error
-        
+
         self.__logger.debug("Frame grabbing thread stopped")
 
     def _process_frame(self, array: np.ndarray) -> np.ndarray:
@@ -354,13 +355,13 @@ class CameraPicamera2:
         if not self.isRGB and len(array.shape) == 3:
             # Convert RGB to grayscale
             array = np.dot(array[..., :3], [0.299, 0.587, 0.114]).astype(np.uint8)
-        
+
         # Apply flipping
         if self.flipImage[0]:  # Flip Y
             array = np.flipud(array)
         if self.flipImage[1]:  # Flip X
             array = np.fliplr(array)
-        
+
         # Apply flatfielding if enabled
         if self.isFlatfielding and self.flatfieldImage is not None:
             try:
@@ -368,29 +369,29 @@ class CameraPicamera2:
                 array = np.clip(array.astype(np.float32) / (self.flatfieldImage.astype(np.float32) + 1e-6) * 255, 0, 255).astype(np.uint8)
             except Exception as e:
                 self.__logger.error(f"Flatfield correction failed: {e}")
-        
+
         return array
 
     def reconnectCamera(self):
         """Reconnect the camera after disconnection"""
         self.__logger.info("Reconnecting camera...")
-        
+
         old_checksum = getattr(self, '_serial_checksum', None)
-        
+
         # Close existing camera
         if self.camera is not None:
             if self.is_streaming:
                 self.stop_live()
-            
+
             try:
                 self.camera.close()
             except Exception as e:
                 self.__logger.error(f"Error closing camera: {e}")
-            
+
             # Remove from opened cameras
             if old_checksum in CameraPicamera2._opened_cameras:
                 CameraPicamera2._opened_cameras.remove(old_checksum)
-        
+
         # Reopen camera
         try:
             self._open_camera(self.cameraNo)
@@ -420,7 +421,7 @@ class CameraPicamera2:
         """
         self.trigger_source = trigger_source
         self.__logger.info(f"Trigger source set to: {trigger_source}")
-        
+
         # Note: External trigger would require GPIO configuration
         # Software trigger is handled in getLast() method
 
@@ -437,7 +438,7 @@ class CameraPicamera2:
             "frame_rate": self.frame_rate,
             "trigger_source": self.trigger_source,
         }
-        
+
         # Get current metadata if available
         if self.camera is not None and self.is_streaming:
             try:
@@ -446,7 +447,7 @@ class CameraPicamera2:
                 param_dict["gain"] = metadata.get("AnalogueGain", self.gain)
             except Exception as e:
                 self.__logger.debug(f"Could not read metadata: {e}")
-        
+
         return param_dict
 
     def get_gain(self):
@@ -464,25 +465,25 @@ class CameraPicamera2:
         if self.is_streaming:
             self.__logger.warning("Camera already streaming")
             return
-        
+
         self.flushBuffer()
-        
+
         if self.camera is None:
             self.__logger.error("Camera not initialized")
-            self.reconnectCamera() # TODO: This will probably not work if camera wasn't connected on boot 
-        
+            self.reconnectCamera() # TODO: This will probably not work if camera wasn't connected on boot
+
         try:
             # Start camera
             self.camera.start()
-            
+
             # Start frame grabbing thread
             self._stop_event.clear()
             self._grab_thread = threading.Thread(target=self._grab_frames, daemon=True)
             self._grab_thread.start()
-            
+
             self.is_streaming = True
             self.__logger.info("Camera streaming started")
-            
+
         except Exception as e:
             self.__logger.error(f"Failed to start streaming: {e}")
             raise
@@ -492,19 +493,19 @@ class CameraPicamera2:
         if not self.is_streaming:
             self.__logger.warning("Camera not streaming")
             return
-        
+
         # Stop grabbing thread
         self._stop_event.set()
         if self._grab_thread is not None:
             self._grab_thread.join(timeout=2.0)
             self._grab_thread = None
-        
+
         # Stop camera
         try:
             self.camera.stop()
         except Exception as e:
             self.__logger.error(f"Error stopping camera: {e}")
-        
+
         self.is_streaming = False
         self.__logger.info("Camera streaming stopped")
 
@@ -520,11 +521,11 @@ class CameraPicamera2:
         """Close camera and clean up resources"""
         if self.is_streaming:
             self.stop_live()
-        
+
         # Remove from opened cameras
         if hasattr(self, '_serial_checksum') and self._serial_checksum in CameraPicamera2._opened_cameras:
             CameraPicamera2._opened_cameras.remove(self._serial_checksum)
-        
+
         # Close camera
         if self.camera is not None:
             try:
@@ -544,9 +545,9 @@ class CameraPicamera2:
                 self.__logger.warning(f"Camera close skipped due to incomplete initialization: {e}")
             except Exception as e:
                 self.__logger.error(f"Error closing camera: {e}")
-            
+
             self.camera = None
-        
+
         self.is_connected = False
         self.__logger.info("Camera closed")
 
@@ -569,7 +570,7 @@ class CameraPicamera2:
             exposure_mode: "manual", "auto", or "once"
         """
         exposure_mode = exposure_mode.lower()
-        
+
         if exposure_mode == "manual":
             self.exposure_auto = False
             if self.camera is not None:
@@ -674,11 +675,11 @@ class CameraPicamera2:
                 finally:
                     request.release()
                     self.camera.stop()
-                
+
                 if returnFrameNumber:
                     return frame, frame_id
                 return frame
-        
+
         # Wait for frame in buffer
         t0 = time.time()
         while not self.frame_buffer:
@@ -695,15 +696,15 @@ class CameraPicamera2:
                         return empty_frame, -1
                     return empty_frame
             time.sleep(0.001)
-        
+
         # Get latest frame
         latest_frame = self.frame_buffer.pop()
         latest_frame_id = self.frameid_buffer.pop()
-        
-        # Store as last frame
+
+        # Store as last frame (also updated in _grab_frames, but ensure consistency)
         self.lastFrameFromBuffer = latest_frame
         self.lastFrameId = latest_frame_id
-        
+
         if returnFrameNumber:
             return latest_frame, latest_frame_id
         return latest_frame
@@ -736,7 +737,7 @@ class CameraPicamera2:
             "exposure_mode": self.set_exposure_mode,
             "flat_fielding": self.set_flatfielding,
         }
-        
+
         if property_name in property_map:
             try:
                 property_map[property_name](property_value)
@@ -759,7 +760,7 @@ class CameraPicamera2:
             "flat_fielding": lambda: self.isFlatfielding,
             "frame_number": lambda: self.frameNumber,
         }
-        
+
         if property_name in property_map:
             try:
                 return property_map[property_name]()
@@ -784,32 +785,32 @@ class CameraPicamera2:
         if not self.is_streaming:
             self.__logger.error("Camera must be streaming to record flatfield")
             return
-        
+
         self.__logger.info(f"Recording flatfield image ({nFrames} frames)...")
-        
+
         frames = []
         for i in range(nFrames):
             frame = self.getLast(timeout=2.0)
             if frame is not None:
                 frames.append(frame.astype(np.float32))
             time.sleep(0.1)
-        
+
         if len(frames) < nFrames:
             self.__logger.warning(f"Only captured {len(frames)}/{nFrames} frames")
-        
+
         # Average frames
         flatfield = np.mean(frames, axis=0).astype(np.uint8)
-        
+
         # Apply smoothing if requested
         if nGauss > 0:
             from skimage.filters import gaussian
             flatfield = gaussian(flatfield, sigma=nGauss, preserve_range=True).astype(np.uint8)
-        
+
         if nMedian > 0:
             from skimage.filters import median
             from skimage.morphology import disk
             flatfield = median(flatfield, disk(nMedian)).astype(np.uint8)
-        
+
         self.setFlatfieldImage(flatfield, True)
         self.__logger.info("Flatfield image recorded")
 
@@ -829,7 +830,7 @@ class CameraPicamera2:
 # Mock camera for testing when picamera2 is not available
 class MockCameraPicamera2:
     """Mock camera for testing without real hardware"""
-    
+
     def __init__(self, *args, **kwargs):
         self.model = "MockPicamera2"
         self.SensorWidth = kwargs.get('resolution', (640, 480))[0]
@@ -837,45 +838,44 @@ class MockCameraPicamera2:
         self.isRGB = kwargs.get('isRGB', True)
         self.is_connected = True
         self.is_streaming = False
-        
+
         self.frame_buffer = collections.deque(maxlen=5)
         self.frameid_buffer = collections.deque(maxlen=5)
         self.frameNumber = 0
-        
+
         self.exposure_time = kwargs.get('exposure_time', 10000)
         self.gain = kwargs.get('gain', 1.0)
         self.frame_rate = kwargs.get('frame_rate', 30)
         self.trigger_source = "Continuous"
-        
+
         self.flatfieldImage = None
         self.isFlatfielding = False
-        
+
         self._grab_thread = None
         self._stop_event = threading.Event()
-        
-        # get last frame lock
-        self._get_last_frame_lock = threading.Lock()
-        
+
         print(f"Mock Picamera2 initialized: {self.SensorWidth}x{self.SensorHeight}, RGB={self.isRGB}")
-    
+
     def _generate_frame(self):
         """Generate a mock frame with pattern"""
         if self.isRGB:
             frame = np.random.randint(0, 255, (self.SensorHeight, self.SensorWidth, 3), dtype=np.uint8)
             # Add pattern
-            cv2.rectangle(frame, (self.SensorWidth//2-25, self.SensorHeight//2-25), 
+            import cv2 # TODO: this causes ruff to suffer - why?
+            cv2.rectangle(frame, (self.SensorWidth//2-25, self.SensorHeight//2-25),
                          (self.SensorWidth//2+25, self.SensorHeight//2+25), (255, 255, 255), -1)
         else:
+            import cv2 # TODO: this causes ruff to suffer - why?
             frame = np.random.randint(0, 255, (self.SensorHeight, self.SensorWidth), dtype=np.uint8)
-            cv2.rectangle(frame, (self.SensorWidth//2-25, self.SensorHeight//2-25), 
+            cv2.rectangle(frame, (self.SensorWidth//2-25, self.SensorHeight//2-25),
                          (self.SensorWidth//2+25, self.SensorHeight//2+25), 255, -1)
-        
+
         # Add frame number
         import cv2
-        cv2.putText(frame, f"Frame {self.frameNumber}", (10, 30), 
+        cv2.putText(frame, f"Frame {self.frameNumber}", (10, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0) if self.isRGB else 255, 2)
         return frame
-    
+
     def _grab_frames(self):
         """Mock frame grabbing"""
         while not self._stop_event.is_set():
@@ -884,7 +884,7 @@ class MockCameraPicamera2:
             self.frame_buffer.append(frame)
             self.frameid_buffer.append(self.frameNumber)
             time.sleep(1.0 / self.frame_rate)
-    
+
     def start_live(self):
         """Start mock streaming"""
         if not self.is_streaming:
@@ -892,7 +892,7 @@ class MockCameraPicamera2:
             self._grab_thread = threading.Thread(target=self._grab_frames, daemon=True)
             self._grab_thread.start()
             self.is_streaming = True
-    
+
     def stop_live(self):
         """Stop mock streaming"""
         if self.is_streaming:
@@ -900,34 +900,33 @@ class MockCameraPicamera2:
             if self._grab_thread:
                 self._grab_thread.join(timeout=1.0)
             self.is_streaming = False
-    
+
     def suspend_live(self):
         self.stop_live()
-    
+
     def prepare_live(self):
         pass
-    
+
     def close(self):
         self.stop_live()
-    
+
     def getLast(self, returnFrameNumber=False, timeout=1.0, auto_trigger=True):
-        with self._get_last_frame_lock:
-            """Get latest mock frame"""
-            if not self.frame_buffer:
-                frame = self._generate_frame()
-                frame_id = self.frameNumber
-            else:
-                frame = self.frame_buffer.pop()
-                frame_id = self.frameid_buffer.pop()
-            
-            if returnFrameNumber:
-                return frame, frame_id
-            return frame
-    
+        """Get latest mock frame"""
+        if not self.frame_buffer:
+            frame = self._generate_frame()
+            frame_id = self.frameNumber
+        else:
+            frame = self.frame_buffer.pop()
+            frame_id = self.frameid_buffer.pop()
+
+        if returnFrameNumber:
+            return frame, frame_id
+        return frame
+
     def flushBuffer(self):
         self.frame_buffer.clear()
         self.frameid_buffer.clear()
-    
+
     # Stub methods
     def getTriggerTypes(self): return ["Continuous", "Software Trigger"]
     def getTriggerSource(self): return self.trigger_source
@@ -941,7 +940,7 @@ class MockCameraPicamera2:
     def set_gain(self, g): self.gain = g
     def set_frame_rate(self, fr): self.frame_rate = fr
     def set_flatfielding(self, enabled): self.isFlatfielding = enabled
-    def setFlatfieldImage(self, img, enabled=True): 
+    def setFlatfieldImage(self, img, enabled=True):
         self.flatfieldImage = img
         self.isFlatfielding = enabled
     def set_blacklevel(self, level): pass

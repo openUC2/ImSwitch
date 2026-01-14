@@ -9,12 +9,12 @@ class MockCameraTucsen:
 
     def __init__(self, cameraNo=None, exposure_time=10000, gain=0, frame_rate=-1, blacklevel=100, isRGB=False, binning=1):
         self.__logger = initLogger(self, tryInheritParent=False)
-        
+
         self.model = "MockTucsen"
         self.shape = (0, 0)
         self.is_connected = True
         self.is_streaming = False
-        
+
         self.blacklevel = blacklevel
         self.exposure_time = exposure_time
         self.gain = gain
@@ -22,35 +22,35 @@ class MockCameraTucsen:
         self.cameraNo = cameraNo if cameraNo is not None else 0
         self.binning = binning
         self.isRGB = isRGB
-        
+
         # Mock sensor dimensions
         self.SensorHeight = 2048
         self.SensorWidth = 2048
-        
+
         # Frame buffer
         self.NBuffer = 5
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameNumber = 0
-        
+
         # Threading for mock frame generation
         self._thread = None
         self._stop_event = threading.Event()
         self.trigger_source = "Continuous"
-        
+
         self.__logger.info(f"Mock Tucsen camera initialized: {self.SensorWidth}x{self.SensorHeight}")
 
     def _generate_mock_frame(self):
         """Generate a mock frame with some pattern."""
         # Create a simple pattern with noise
         frame = np.random.randint(100, 4000, (self.SensorHeight, self.SensorWidth), dtype=np.uint16)
-        
+
         # Add some circular pattern
         y, x = np.ogrid[:self.SensorHeight, :self.SensorWidth]
         center_y, center_x = self.SensorHeight // 2, self.SensorWidth // 2
         mask = (x - center_x) ** 2 + (y - center_y) ** 2 < (min(self.SensorHeight, self.SensorWidth) // 4) ** 2
         frame[mask] += 1000
-        
+
         return frame
 
     def _frame_generation_thread(self):
@@ -61,7 +61,7 @@ class MockCameraTucsen:
                 self.frame_buffer.append(frame)
                 self.frameid_buffer.append(self.frameNumber)
                 self.frameNumber += 1
-                
+
             # Simulate frame rate
             if self.frame_rate > 0:
                 time.sleep(1.0 / self.frame_rate)
@@ -73,14 +73,14 @@ class MockCameraTucsen:
         if self.is_streaming:
             self.__logger.warning("Mock camera is already streaming")
             return
-            
+
         self.is_streaming = True
         self._stop_event.clear()
-        
+
         if self._thread is None or not self._thread.is_alive():
             self._thread = threading.Thread(target=self._frame_generation_thread, daemon=True)
             self._thread.start()
-            
+
         self.__logger.info("Mock Tucsen camera started streaming")
 
     def stop_live(self):
@@ -100,10 +100,10 @@ class MockCameraTucsen:
         """Close camera and cleanup."""
         self.is_streaming = False
         self._stop_event.set()
-        
+
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
-            
+
         self.__logger.info("Mock Tucsen camera closed")
 
     def getLast(self, returnFrameNumber: bool = False, timeout: float = 1.0, auto_trigger: bool = True):

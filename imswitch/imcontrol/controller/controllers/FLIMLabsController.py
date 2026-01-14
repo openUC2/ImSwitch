@@ -1,12 +1,9 @@
 import numpy as np
-from threading import Thread
 import requests
 import json
 import time
 
-from imswitch.imcommon.model import dirtools, modulesconfigtools, ostools, APIExport
-from imswitch.imcommon.framework import Signal, Worker, Mutex, Timer
-from imswitch.imcontrol.view import guitools
+from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from imswitch.imcontrol.controller.basecontrollers import LiveUpdatedController
 import imswitch
@@ -18,7 +15,6 @@ except:
     isFLIMLABS = False
 import struct
 import threading
-import time
 
 
 
@@ -51,10 +47,10 @@ class FLIMLabsController(LiveUpdatedController):
             offset_bottom=0,
             offset_left=0,
             offset_right=0,
-            offset_top=0, 
+            offset_top=0,
             host_url="http://localhost"
         )
-    
+
         # start the data receiving thread
         self.flim_ws = FLIMWebsocketClient()
         self.flim_ws.connect()
@@ -66,11 +62,11 @@ class FLIMLabsController(LiveUpdatedController):
         # Connect FLIMLabsWidget signals
         if not imswitch.IS_HEADLESS:
             # Connect CommunicationChannel signals
-            
+
             # scouting
             self._widget.start_button_scouting.clicked.connect(self.start_scouting)
             self._widget.stop_button_scouting.clicked.connect(self.stop_scouting)
-            
+
             # reference
             self._widget.start_button_reference.clicked.connect(self.start_reference)
             self._widget.stop_button_reference.clicked.connect(self.stop_reference)
@@ -80,7 +76,7 @@ class FLIMLabsController(LiveUpdatedController):
             self._widget.stop_button_imaging.clicked.connect(self.stop_imaging)
 
             self.sigImageReceived.connect(self.displayFLIMImageNapari)
-            
+
     def displayFLIMImage(self, image, name="FLIM Image", colormap='gray'):
         self.mImage = image
         self.mImageName = name
@@ -89,16 +85,16 @@ class FLIMLabsController(LiveUpdatedController):
 
     def displayFLIMImageNapari(self):
         self._widget.setImage(self.mImage, name=self.mImageName, colormap=self.mImageColormap)
-            
+
     def start_scouting(self):
         mParametersScouting = self._widget.getScoutingParameters()
         mParametersStageScanning = self._widget.getStageScanningParameters()
-        
+
         self.setFLIMLabsParameters(mParametersScouting)
         self.FLIMLabsC.start_scouting(
-        dwell_time=mParametersScouting["pixelDwelltime"], 
+        dwell_time=mParametersScouting["pixelDwelltime"],
         nFrames = mParametersScouting["nFrames"])
-        time.sleep(.5) # settle 
+        time.sleep(.5) # settle
         self.startStageScanning(mParametersStageScanning)
 
     def stop_scouting(self):
@@ -108,22 +104,22 @@ class FLIMLabsController(LiveUpdatedController):
                 self.positioner.stopStageScanning()
         except:
             pass
-        
+
     def start_reference(self):
         mParametersReference = self._widget.getReferenceParameters()
         mParametersStageScanning = self._widget.getStageScanningParameters()
-        
+
         self.setFLIMLabsParameters(mParametersReference)
         self.FLIMLabsC.start_calibration(
-            dwell_time=mParametersReference["pixelDwelltime"], 
-            tau_ns=mParametersReference["decayTime"], 
+            dwell_time=mParametersReference["pixelDwelltime"],
+            tau_ns=mParametersReference["decayTime"],
             max_frames=mParametersReference["nFrames"])
         time.sleep(.5)
         self.startStageScanning(mParametersStageScanning)
 
     def startStageScanning(self, mParametersStageScanning):
         try:
-            #  start scanner 
+            #  start scanner
             nStepsLine = mParametersStageScanning["nStepsLine"]
             dStepsLine = mParametersStageScanning["dStepsLine"]
             nTriggerLine = mParametersStageScanning["nTriggerLine"]
@@ -136,7 +132,7 @@ class FLIMLabsController(LiveUpdatedController):
                 self.positioner.startStageScanning(nStepsLine, dStepsLine, nTriggerLine, nStepsPixel, dStepsPixel, nTriggerPixel, delayTimeStep, nFrames)
         except:
             pass
-        
+
     def stop_reference(self):
         self.FLIMLabsC.stop_reference()
         try:
@@ -144,17 +140,17 @@ class FLIMLabsController(LiveUpdatedController):
                 self.positioner.stopStageScanning()
         except:
             pass
-        
+
     def start_imaging(self):
         mParametersImaging = self._widget.getImagingParameters()
         mParametersStageScanning = self._widget.getStageScanningParameters()
-        
+
         self.setFLIMLabsParameters(mParametersImaging)
         self.FLIMLabsC.start_imaging(
             max_frames=mParametersImaging["nFrames"])
         time.sleep(.5)
         self.startStageScanning(mParametersStageScanning)
-        
+
     def stop_imaging(self):
         self.FLIMLabsC.stop_imaging()
         try:
@@ -162,7 +158,7 @@ class FLIMLabsController(LiveUpdatedController):
                 self.positioner.stopStageScanning()
         except:
             pass
-        
+
     def setFLIMLabsParameters(self, mParameters):
         self.FLIMLabsC.setPixelX(mParameters["Npixel_x"])
         self.FLIMLabsC.setPixelY(mParameters["Npixel_y"])
@@ -172,11 +168,11 @@ class FLIMLabsController(LiveUpdatedController):
         self.FLIMLabsC.setPixelOffsetBottom(mParameters["pixelOffsetBottom"])
         self.FLIMLabsC.setPixelSize(mParameters["pixelsize"])
         self.flim_ws.setImageDimensions(mParameters["Npixel_x"], mParameters["Npixel_y"])
-                  
+
 
 class FLIMLabsREST:
     def __init__(self, firmware_selected="firmwares\\\\image_pattern_2.bit",
-                 laser_period=10, 
+                 laser_period=10,
                  channels=[True,False,False,False,False,False,False,False],
                  image_width=100,
                  image_height=100,
@@ -201,9 +197,9 @@ class FLIMLabsREST:
         headers = {'Content-Type': 'application/json'}
         if method not in ['GET', 'HEAD']:
             try: response = requests.request(method, url, headers=headers, data=json.dumps(payload), timeout=1) #
-            except: 
+            except:
                 print("Error: request timed out")
-                return None 
+                return None
         else:
             response = requests.request(method, url, headers=headers, timeout=1)
 
@@ -250,7 +246,7 @@ class FLIMLabsREST:
         path = "/stop"
         payload = {}
         self.make_request(payload=payload, path=path)
-        
+
     def start_calibration(self, reconstruction="PLF", dwell_time=1, harmonics=1, tau_ns=10, max_frames=10):
         payload = {
             "firmware": self.firmware_selected,
@@ -298,29 +294,29 @@ class FLIMLabsREST:
             }
         }
         self.make_request(payload)
-        
-    
+
+
     def setPixelX(self, Npixel_X):
         self.image_width = Npixel_X
-        
+
     def setPixelY(self, Npixel_Y):
         self.image_height = Npixel_Y
-    
+
     def setPixelOffsetLeft(self, offset_left):
         self.offset_left = offset_left
-    
+
     def setPixelOffsetRight(self, offset_right):
         self.offset_right = offset_right
-        
+
     def setPixelOffsetTop(self, offset_top):
         self.offset_top = offset_top
-        
+
     def setPixelOffsetBottom(self, offset_bottom):
         self.offset_bottom = offset_bottom
-        
+
     def setPixelSize(self, pixelsize):
         self.pixelsize = pixelsize
-    
+
     def checkCard(self):
         path = "/check"
         payload = {}
@@ -349,12 +345,12 @@ class FLIMLabsREST:
             print(data)
             print('Laser period detection failed!', data.error)
             return False
-        
-        
+
+
 
 
 if __name__ == '__main__':
-    
+
     # Assuming FLIMLabsREST class is defined as shown previously
 
     # Create an instance with the required initialization parameters
@@ -367,21 +363,16 @@ if __name__ == '__main__':
         offset_bottom=0,
         offset_left=0,
         offset_right=0,
-        offset_top=0, 
+        offset_top=0,
         host_url="http://localhost"
     )
-    
+
     imaging_control.start_scouting(
         dwell_time=1  # example dwell time
     )
-    
-    
+
+
 import websocket
-import struct
-import threading
-import time
-import numpy as np
-import cv2
 
 class FLIMWebsocketClient:
     def __init__(self, url='ws://localhost:3030/data', reconnect_interval=5):
@@ -397,7 +388,7 @@ class FLIMWebsocketClient:
         self.width = width
         self.height = height
         self.mImage = np.zeros((self.width, self.height))
-        
+
 
     def connect(self):
         def on_message(ws, message):
@@ -573,7 +564,7 @@ class ImagingExperimentEndData:
 
 
 
-    
+
 # Copyright (C) 2020-2023 ImSwitch developers
 # This file is part of ImSwitch.
 #

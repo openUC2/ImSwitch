@@ -1,6 +1,5 @@
 
 import os
-from imswitch.imcommon.model import UIExport
 
 class LightsheetReactWidget(object):
     """ Widget containing lightsheet interface. """

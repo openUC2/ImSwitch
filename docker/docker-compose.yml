@@ -1,6 +1,6 @@
 services:
   imswitch-docker-noqt:
-    image: ghcr.io/openuc2/imswitch-noqt:sha-907555f
+    image: ghcr.io/openuc2/imswitch-noqt:sha-540a0a6
     privileged: true
     ports:
       - "8001:8001" # frontend, HTTP API, WebSockets API
@@ -15,12 +15,12 @@ services:
       - /media:/media
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
       - /run/udev:/run/udev:ro
+      - /dev/dma_heap:/dev/dma_heap
 
     environment:
       - HEADLESS=1
       - HTTP_PORT=8001
       - CONFIG_PATH=/home/pi/ImSwitchConfig
-      # - CONFIG_FILE=example_virtual_microscope.json  # Optional: If not set, uses imcontrol_options.json
       - UPDATE_GIT=0
       - UPDATE_CONFIG=0
       - DATA_PATH=/home/pi/Datasets

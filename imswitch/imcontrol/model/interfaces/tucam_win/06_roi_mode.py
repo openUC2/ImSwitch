@@ -5,11 +5,8 @@ Created on 2024-01-03
 @author:fdy
 '''
 
-import ctypes
 from ctypes import *
 from TUCam import *
-from enum import Enum
-import time
 
 class Tucam():
     def __init__(self):
@@ -72,7 +69,7 @@ class Tucam():
         m_frformat = TUFRM_FORMATS
         m_capmode = TUCAM_CAPTURE_MODES
 
-        m_frame.pBuffer = 0;
+        m_frame.pBuffer = 0
         m_frame.ucFormatGet = m_frformat.TUFRM_FMT_USUAl.value
         m_frame.uiRsdSize = 1
 

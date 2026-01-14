@@ -10,7 +10,9 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "justMyCode": false
+            "justMyCode": false, 
+            "subProcess": true,
+
         },
         {
             "name": "Python: Pytest",
@@ -33,6 +35,7 @@
             ],
             "console": "integratedTerminal",
             "justMyCode": false, // Ensures you can debug library code as well
+            "subProcess": true,
             "env": {
                 // Add any environment variables needed for your tests
                 "IMSWITCH_HEADLESS": "1",

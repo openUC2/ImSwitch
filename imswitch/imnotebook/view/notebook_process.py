@@ -32,6 +32,9 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
             notebookp = subprocess.Popen([notebook_executable,
                                     "--port=%s" % port,
                                     "--allow-root",
+                                    "--IdentityProvider.token=",
+                                    "--ServerApp.base_url=/jupyter",
+                                    "--ServerApp.password=",
                                     "--no-browser",
                                     "--ip=0.0.0.0",
                                     "--config=%s" % configfile,
@@ -42,14 +45,17 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
             notebookp = subprocess.Popen([notebook_executable,
                                     "--port=%s" % port,
                                     "--allow-root",
+                                    "--IdentityProvider.token=",
+                                    "--ServerApp.base_url=/jupyter",
+                                    "--ServerApp.password=",
                                     "--no-browser",
                                     "--ip=0.0.0.0",
                                     "--config=%s" % configfile,
                                     "--notebook-dir=%s" % directory,
                                     ], bufsize=1, stderr=subprocess.PIPE)
-            
+
         print("Starting jupyter with: %s" % " ".join(notebookp.args))
-        # concat the string to have the full terminal command 
+        # concat the string to have the full terminal command
         print("Waiting for server to start...")
         webaddr = None
         time0 = time.time()
@@ -102,6 +108,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=__jupyter_port__, dire
         print("Starting jupyter with: %s" % " ".join([notebook_executable,
                                     "--port=%s" % port,
                                     "--allow-root",
+                                    "--ServerApp.base_url=/jupyter",
                                     "--no-browser",
                                     "--ip=0.0.0.0",
                                     "--config=%s" % configfile,
@@ -131,4 +138,3 @@ def stopnotebook():
     _process = None
     _monitor = None
     _webaddr = None
-

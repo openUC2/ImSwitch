@@ -12,6 +12,17 @@ if __name__ == '__main__':
     - data_folder: path to the data folder
     example:
     main(is_headless=True, data_folder="/Users/bene/Downloads")
+    
+    # Anythin firewall related
+    
+     sudo firewall-cmd --add-port=8001/tcp --permanent
+     sudo firewall-cmd --add-port=3232/tcp --permanent # for esp ota
+     sudo firewall-cmd --add-port=3333/tcp --permanent # for esp ota
+     sudo firewall-cmd --reload
+     sudo firewall-cmd --list-ports | grep 8001
+
+     # kill -9 $(lsof -ti:8001)
+
     '''
     # DON'T CHANGE THIS!!!!
     # This has to be maintained for DOCKER!

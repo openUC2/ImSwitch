@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 
 class PositionerManager(ABC):
@@ -123,7 +123,10 @@ class PositionerManager(ABC):
         """
         # result_pos = self._set_position(position, axis)
         # self._position[axis] = result_pos
+        pass
 
+    def getPosition(self, axis: str) -> float:
+        """ Returns the current position of the specified axis. """
         pass
 
     def finalize(self) -> None:
@@ -140,17 +143,18 @@ class PositionerManager(ABC):
 
     def resetStageOffsetAxis(self, axis="X"):
         """
-        Resets the stage offset for the given axis to 0.
+        Resets the stage offset for the given axis to 0 (in-memory only).
+        Persistence is handled by the controller.
         """
         if hasattr(self, '_logger'):
             self._logger.debug(f'Resetting stage offset for {axis} axis.')
         self.setStageOffsetAxis(knownOffset=0, axis=axis)
-        self.saveStageOffset(offsetValue=0, axis=axis)
 
     def setStageOffsetAxis(self, knownPosition=0, currentPosition=None, knownOffset=None, axis="X"):
         """
-        Sets the stage to a known offset aside from the home position.
-        knownPosition and currentPosition have to be in physical coordinates (i.e. prior to applying the stepsize)
+        Sets the stage to a known offset aside from the home position (in-memory only).
+        knownPosition and currentPosition have to be in physical coordinates (i.e. prior to applying the stepsize).
+        Persistence is handled by the controller.
         """
         if hasattr(self, '_logger'):
             self._logger.debug(f'Setting stage offset for {axis} axis.')
@@ -163,7 +167,6 @@ class PositionerManager(ABC):
         # Store the offset in the manager (implement this in your concrete manager)
         if hasattr(self, 'stageOffsetPositions'):
             self.stageOffsetPositions[axis] = offset
-        self.saveStageOffset(offsetValue=offset, axis=axis)
 
     def getStageOffsetAxis(self, axis="X"):
         """
@@ -175,32 +178,10 @@ class PositionerManager(ABC):
             return self.stageOffsetPositions.get(axis, 0)
         return 0
 
-    def saveStageOffset(self, offsetValue=None, axis="X"):
-        """ Save the current stage offset to the config file. """
-        try:
-            positionerName = getattr(self, 'name', None)
-            if not positionerName:
-                return
-            # Build stageOffsets dict
-            stageOffsets = {ax: 0 for ax in ["X", "Y", "Z", "A"]}
-            if hasattr(self, 'stageOffsetPositions'):
-                for ax in stageOffsets:
-                    stageOffsets["stageOffsetPosition"+ax] = self.stageOffsetPositions.get(ax, 0)
-            stageOffsets["stageOffsetPosition"+axis] = offsetValue
-            # Set in setup info (assume self._setupInfo exists or pass as arg)
-            if hasattr(self, '_setupInfo'):
-                self._setupInfo.setStageOffset(positionerName, stageOffsets)
-                import configfiletools
-                configfiletools.saveSetupInfo(configfiletools.loadOptions()[0], self._setupInfo)
-        except Exception as e:
-            if hasattr(self, '_logger'):
-                self._logger.error(f"Could not save stage offset: {e}")
-            return
-
     def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):
         """ Move to sample loading position. """
         pass
-   
+
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.
 #

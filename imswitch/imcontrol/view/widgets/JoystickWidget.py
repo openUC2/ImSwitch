@@ -1,8 +1,6 @@
-import pyqtgraph as pg
 from qtpy import QtCore, QtWidgets
 
-from imswitch.imcommon.view.guitools import pyqtgraphtools, joystick
-from imswitch.imcontrol.view import guitools
+from imswitch.imcommon.view.guitools import joystick
 from .basewidgets import NapariHybridWidget
 
 

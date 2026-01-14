@@ -1,7 +1,6 @@
 from qtpy import QtCore, QtWidgets
 
 
-from imswitch.imcommon.view.guitools import pyqtgraphtools
 from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
 
@@ -78,7 +77,7 @@ class FlowStopWidget(NapariHybridWidget):
         self.textEditGain = QtWidgets.QLineEdit("0")
 
         self.labelMovePump = QtWidgets.QLabel('Move Pump:')
-        self.labelMovePumpValue = QtWidgets.QLabel('Flowrate Pump 0 [stp\s]')
+        self.labelMovePumpValue = QtWidgets.QLabel(r'Flowrate Pump 0 [stp\s]')
         self.textEditMovePump = QtWidgets.QLineEdit("0")
         self.pumpMovePosButton = QtWidgets.QPushButton('Move Pump +')
         self.pumpMoveNegButton = QtWidgets.QPushButton('Move Pump -')

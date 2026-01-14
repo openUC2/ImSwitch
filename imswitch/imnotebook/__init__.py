@@ -15,6 +15,9 @@ def getMainViewAndController(moduleCommChannel, multiModuleWindowController, mod
         view = None
         notebookServer = LaunchNotebookServer()
         webaddr = notebookServer.startServer()
+        # add the webaddress to the global config
+        import imswitch
+        imswitch.config.ImSwitchConfig.jupyter_url = webaddr # TODO: review this!
         print(webaddr)
     else:
         view = ImScrMainView()

@@ -35,7 +35,7 @@ def loadSetupInfo(options, setupInfoType):
     - file exists and is valid => load it
     maybe there are more cases - this has to be tested more thoroughly thought through! @GokuGiant
     '''
-    
+
     # check the file exists
     if not os.path.isfile(mPath):
         # test if we can load the file from the setup folder
@@ -44,14 +44,14 @@ def loadSetupInfo(options, setupInfoType):
         else:
             # create a new file with default values
             print("Warning: The setup file does not exist. Creating a new file with default values from virtual microscope from the user defaults .")
-            # copy from ./_data/user_defaults/imcontrol_setups/example_virtual_microscope.json 
+            # copy from ./_data/user_defaults/imcontrol_setups/example_virtual_microscope.json
             defaultSetupFile = os.path.join(dirtools.DataFileDirs.UserDefaults, 'imcontrol_setups', 'example_virtual_microscope.json')
             if os.path.isfile(defaultSetupFile):
                 with open(defaultSetupFile, 'r') as src, open(mPath, 'w') as dst:
                     dst.write(src.read())
             else:
-                raise FileNotFoundError(f"Default setup file not found: {defaultSetupFile}") 
-    
+                raise FileNotFoundError(f"Default setup file not found: {defaultSetupFile}")
+
     with open(mPath) as setupFile:
         try:
             mFile = setupFile.read()

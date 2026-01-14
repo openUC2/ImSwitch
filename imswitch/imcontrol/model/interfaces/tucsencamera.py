@@ -85,7 +85,7 @@ class CameraTucsen:
             time.sleep(0.5)
         except Exception:
             pass
-        
+
         try:
             # Try to init and immediately uninit to reset state
             dummy_init = TUCAM_INIT(0, b'./')
@@ -95,7 +95,7 @@ class CameraTucsen:
             time.sleep(0.5)
         except Exception:
             pass
-        
+
         print("Emergency cleanup completed")
 
     @staticmethod
@@ -135,7 +135,7 @@ class CameraTucsen:
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.global_frameid = 0
-        
+
         self.SensorHeight = 0
         self.SensorWidth = 0
 
@@ -160,7 +160,7 @@ class CameraTucsen:
 
         if sys.platform.startswith('win'):
             self.force_cleanup()
-       
+
         self._open_camera(self.cameraNo)
         self.trigger_source = "Continuous"
         self.isFlatfielding = False
@@ -176,9 +176,9 @@ class CameraTucsen:
             CALL_BACK_FUN = BUFFER_CALLBACK(m_callback.OnCallbackBuffer)
             CALL_BACK_USER = CONTEXT_CALLBACK(m_callback.__class__)
             TUCAM_Buf_DataCallBack(self.camera_handle, CALL_BACK_FUN, CALL_BACK_USER)
-            
 
-            
+
+
 
         self._sdk_cb = self._wrap_callback(self._on_frame_callback)
         try:
@@ -197,7 +197,7 @@ class CameraTucsen:
                 # Get frame data using TUCAM_Buf_GetData like the example
                 m_rawHeader = TUCAM_RAWIMG_HEADER()
                 result = TUCAM_Buf_GetData(self.camera_handle, pointer(m_rawHeader))
-                
+
                 if result == TUCAMRET.TUCAMRET_SUCCESS:
                     # Convert to numpy array
                     frame = self._convert_raw_to_numpy(m_rawHeader)
@@ -205,10 +205,10 @@ class CameraTucsen:
                         user_cb(frame, m_rawHeader.uiIndex, m_rawHeader.dblTimeStamp)
                 else:
                     pass  # No frame available
-                    
+
             except Exception as e:
                 self.__logger.error(f"Callback error: {e}")
-        
+
         return BUFFER_CALLBACK(_callback)
 
     def _convert_raw_to_numpy(self, rawHeader):
@@ -219,10 +219,10 @@ class CameraTucsen:
             channels = rawHeader.ucChannels
             elem_bytes = rawHeader.ucElemBytes
             img_size = rawHeader.uiImgSize
-            
+
             if rawHeader.pImgData == 0 or img_size == 0:
                 return None
-                
+
             # Create buffer from raw data
             if elem_bytes == 1:
                 dtype = np.uint8
@@ -230,11 +230,11 @@ class CameraTucsen:
                 dtype = np.uint16
             else:
                 dtype = np.uint8
-                
+
             # Extract data from pointer
             data_ptr = cast(rawHeader.pImgData, POINTER(c_ubyte * img_size))
             buf = np.frombuffer(data_ptr.contents, dtype=dtype)
-            
+
             # Reshape based on channels
             if channels == 1:
                 frame = buf.reshape(height, width)
@@ -242,15 +242,15 @@ class CameraTucsen:
                 frame = buf.reshape(height, width, 3)
             else:
                 frame = buf.reshape(height, width)
-            
+
             # Apply flip if needed (zero-CPU operation using numpy)
             if self.flipImage[0]:  # flipY
                 frame = np.flip(frame, axis=0)
             if self.flipImage[1]:  # flipX
                 frame = np.flip(frame, axis=1)
-                
+
             return frame.copy()  # Make a copy to avoid memory issues
-            
+
         except Exception as e:
             self.__logger.error(f"Frame conversion error: {e}")
             return None
@@ -260,13 +260,13 @@ class CameraTucsen:
         try:
             self.frame_buffer.append(frame)
             self.global_frameid += 1
-            # interestingly the camera produces frames with number of 8bit rollovers, 
-            # hence we need to detect if the last frame is 255, so that we can increment 
+            # interestingly the camera produces frames with number of 8bit rollovers,
+            # hence we need to detect if the last frame is 255, so that we can increment
             # the frame id with the inverse modulo operation
             # in a way we need to unwrap the frame id
             self.frameid_buffer.append(self.global_frameid)
             self._current_frame = frame
-            
+
 
         except Exception as e:
             self.__logger.error(f"Frame handling error: {e}")
@@ -286,12 +286,12 @@ class CameraTucsen:
             raise
 
     def _open_camera_linux(self, camera_index: int):
-        self.Path = '/home/uc2/ImSwitch' #'./' # TODO: 
+        self.Path = '/home/uc2/ImSwitch' #'./' # TODO:
         self.TUCAMINIT = TUCAM_INIT(0, self.Path.encode('utf-8'))
         TUCAM_Api_Init(pointer(self.TUCAMINIT), 5000)
         print(self.TUCAMINIT.uiCamCount)
         print(self.TUCAMINIT.pstrConfigPath)
-        
+
         self.TUCAMOPEN = TUCAM_OPEN(0, 0)
         # ch:初始化相机枚举相机个数 | en:Initializing Cameras Enumerates the number of cameras
         if self.TUCAMINIT.uiCamCount == 0:
@@ -300,7 +300,7 @@ class CameraTucsen:
         print('Connect %d camera' % self.TUCAMINIT.uiCamCount)
         TUCAM_Dev_Open(pointer(self.TUCAMOPEN))  # TODO need camera connected
 
-        
+
         #ret = TUCAM_Api_Init()
         # Do not hard-fail on non-zero here; Linux bindings may return 0/None
         #opCam = TUCAM_OPEN(0, 0)
@@ -321,43 +321,43 @@ class CameraTucsen:
             self._shutdown_capture()
         except:
             pass  # May not have camera_handle yet
-            
-        # Try to close any existing handle  
+
+        # Try to close any existing handle
         if hasattr(self, 'TUCAMOPEN') and getattr(self.TUCAMOPEN, 'hIdxTUCam', 0) != 0:
             try:
                 TUCAM_Dev_Close(self.TUCAMOPEN.hIdxTUCam)
                 self.__logger.info("Closed existing camera handle")
             except Exception as e:
                 self.__logger.info(f"Error closing existing handle: {e}")
-                
+
         # Initialize exactly like working code
         self.TUCAMINIT = TUCAM_INIT(0, self.Path.encode('utf-8'))
         self.TUCAMOPEN = TUCAM_OPEN(0, 0)
         ret = TUCAM_Api_Init(pointer(self.TUCAMINIT), 2000)  # Match working code timeout
         self.__logger.info(f"API Init result: {ret}")
         self.__logger.info(f"Camera count: {self.TUCAMINIT.uiCamCount}")
-        
+
         if self.TUCAMINIT.uiCamCount == 0:
             raise Exception("No Tucsen cameras found")
         if camera_index >= self.TUCAMINIT.uiCamCount:
             raise Exception(f"Camera index {camera_index} not available. Found {self.TUCAMINIT.uiCamCount} cameras")
-        
+
         # Open camera exactly like working code
         self.TUCAMOPEN = TUCAM_OPEN(camera_index, 0)
         self.__logger.info(f"Opening camera index {camera_index}")
         TUCAM_Dev_Open(pointer(self.TUCAMOPEN))
-        
+
         if self.TUCAMOPEN.hIdxTUCam == 0:
             raise Exception(f"Failed to open Tucsen camera {camera_index}")
         else:
             self.__logger.info("Open the camera success!")
-            
+
         self.camera_handle = self.TUCAMOPEN.hIdxTUCam
         self.__logger.info(f"Camera handle set to: {self.camera_handle}")
-        
+
         # Skip immediate test - it interferes with threaded capture
         # The camera is working (was verified), go straight to normal operation
-        
+
         self._get_sensor_info()
         self.is_connected = True
         self.__logger.info(f"Opened Tucsen camera {camera_index} (Windows)")
@@ -365,7 +365,7 @@ class CameraTucsen:
     def _test_immediate_capture(self):
         """Test capture immediately after camera opens to verify handle works."""
         self.__logger.info("Testing immediate capture to verify camera handle...")
-        
+
         try:
             # Check current trigger mode first
             m_tgr = TUCAM_TRIGGER_ATTR()
@@ -375,7 +375,7 @@ class CameraTucsen:
                 self.__logger.info(f"Trigger buffer frames: {m_tgr.nBufFrames}")
             except Exception as e:
                 self.__logger.error(f"Failed to get trigger mode: {e}")
-            
+
             # Force set to continuous sequence mode like working example
             m_tgr.nTgrMode = TUCAM_CAPTURE_MODES.TUCCM_SEQUENCE.value
             m_tgr.nBufFrames = 10  # Like working examples
@@ -384,7 +384,7 @@ class CameraTucsen:
                 self.__logger.info(f"Set trigger mode result: {ret}")
             except Exception as e:
                 self.__logger.error(f"Failed to set trigger mode: {e}")
-            
+
             # Follow exact working pattern from the standalone code
             m_frame = TUCAM_FRAME()
             m_frformat = TUFRM_FORMATS
@@ -398,7 +398,7 @@ class CameraTucsen:
             self.__logger.info(f"Allocating buffer with handle: {self.camera_handle}")
             ret = TUCAM_Buf_Alloc(self.camera_handle, pointer(m_frame))
             self.__logger.info(f"Immediate test - Buffer allocation result: {ret}")
-            
+
             # Start capture
             self.__logger.info("Starting capture for immediate test...")
             ret = TUCAM_Cap_Start(self.camera_handle, m_tgr.nTgrMode)
@@ -431,9 +431,9 @@ class CameraTucsen:
                 TUCAM_Buf_Release(self.camera_handle)
             except:
                 pass
-            
+
             self.__logger.info("Immediate test completed")
-            
+
         except Exception as e:
             self.__logger.error(f"Immediate test failed: {e}")
             import traceback
@@ -453,7 +453,7 @@ class CameraTucsen:
             self.SensorHeight = 3000
         self.shape = (self.SensorHeight, self.SensorWidth)
 
-    def openPropertiesGUI(self): 
+    def openPropertiesGUI(self):
         """Open camera properties GUI (placeholder)."""
         self.__logger.info("Properties GUI not implemented for Tucsen camera")
 
@@ -534,10 +534,10 @@ class CameraTucsen:
         """Start streaming using callback approach - no threading needed"""
         if self.is_streaming:
             return
-            
+
         self.__logger.info("Starting Tucsen callback-based streaming...")
         self.flushBuffer()
-        
+
         try:
             # Configure trigger mode for continuous capture
             m_tgr = TUCAM_TRIGGER_ATTR()
@@ -561,18 +561,18 @@ class CameraTucsen:
             ret = TUCAM_Buf_Alloc(self.camera_handle, pointer(m_frame))
             if ret != TUCAMRET.TUCAMRET_SUCCESS:
                 raise Exception(f"Buffer allocation failed: {ret}")
-                
-            self.__logger.info(f"Buffer allocated successfully")
+
+            self.__logger.info("Buffer allocated successfully")
 
             # Start capture
             ret = TUCAM_Cap_Start(self.camera_handle, m_capmode.TUCCM_SEQUENCE.value)
             if ret != TUCAMRET.TUCAMRET_SUCCESS:
                 raise Exception(f"Capture start failed: {ret}")
-                
+
             self.__logger.info("Capture started successfully")
             self.is_streaming = True
             self.__logger.info("Tucsen callback-based streaming started")
-            
+
         except Exception as e:
             self.__logger.error(f"Failed to start streaming: {e}")
             self.is_streaming = False
@@ -582,9 +582,9 @@ class CameraTucsen:
         """Stop streaming"""
         if not self.is_streaming:
             return
-            
+
         self.__logger.info("Stopping Tucsen streaming...")
-        
+
         try:
             # Stop capture and release buffer
             try:
@@ -599,10 +599,10 @@ class CameraTucsen:
                 TUCAM_Buf_Release(self.camera_handle)
             except Exception:
                 pass
-                
+
             self.is_streaming = False
             self.__logger.info("Tucsen streaming stopped")
-            
+
         except Exception as e:
             self.__logger.error(f"Error stopping streaming: {e}")
 
@@ -680,7 +680,7 @@ class CameraTucsen:
     def set_exposure_time(self, exposure_time):
         try:
             self.exposure_time = exposure_time
-            exposure_ms = float(exposure_time) 
+            exposure_ms = float(exposure_time)
             ret = TUCAM_Prop_SetValue(self.camera_handle, TUCAM_IDPROP.TUIDP_EXPOSURETM.value, c_double(exposure_ms), 0)
             if not self._ok(ret):
                 self.__logger.warning(f"Set exposure returned {ret}")

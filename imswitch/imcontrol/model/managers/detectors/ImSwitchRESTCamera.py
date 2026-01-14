@@ -1,11 +1,9 @@
 import cv2
-import numpy as np
 from platform import system
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import (
     DetectorManager,
-    DetectorNumberParameter,
-    DetectorListParameter
+    DetectorNumberParameter
 )
 
 

@@ -5,11 +5,8 @@ Created on 2024-01-09
 @author:fdy
 '''
 
-import ctypes
 from ctypes import *
 from TUCam import *
-from enum import Enum
-import time
 
 class Tucam():
     def __init__(self):

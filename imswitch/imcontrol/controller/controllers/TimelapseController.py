@@ -2,22 +2,16 @@ from datetime import datetime
 import time
 from fastapi import HTTPException
 import numpy as np
-import scipy.ndimage as ndi
-import scipy.signal as signal
-import skimage.transform as transform
 import tifffile as tif
 from pydantic import BaseModel
-from typing import Any, List, Optional, Dict, Any
+from typing import List, Dict, Any
 import os
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcontrol.model.managers.WorkflowManager import Workflow, WorkflowContext, WorkflowStep, WorkflowsManager
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
-from imswitch import IS_HEADLESS
 
-import h5py
-import numpy as np
 
 class TimelapseWorkflowParams(BaseModel):
     nTimes: int = 1
@@ -54,14 +48,14 @@ class TimelapseController(ImConWidgetController):
 
         # select lasers
         self.allIlluNames = self._master.lasersManager.getAllDeviceNames()+ self._master.LEDMatrixsManager.getAllDeviceNames()
-        self.availableIlliminations = []
+        self.availableIlluminations = []
         for iDevice in self.allIlluNames:
             try:
                 # laser maanger
-                self.availableIlliminations.append(self._master.lasersManager[iDevice])
+                self.availableIlluminations.append(self._master.lasersManager[iDevice])
             except:
                 # lexmatrix manager
-                self.availableIlliminations.append(self._master.LEDMatrixsManager[iDevice])
+                self.availableIlluminations.append(self._master.LEDMatrixsManager[iDevice])
 
         # select stage
         self.allPositionerNames = self._master.positionersManager.getAllDeviceNames()[0]
@@ -110,7 +104,6 @@ class TimelapseController(ImConWidgetController):
         self._logger.error("Performing autofocus...NOT IMPLEMENTED")
 
     def wait_time(self, seconds: int, context: WorkflowContext, metadata: Dict[str, Any]):
-        import time
         time.sleep(seconds)
 
     def save_frame_tiff(self, context: WorkflowContext, metadata: Dict[str, Any]):
@@ -219,7 +212,7 @@ class TimelapseController(ImConWidgetController):
             for illu, intensity, exposure, gain in zip(illuSources, intensities, exposureTimes, gains):
                 # Set laser power (arbitrary, could be parameterized)
                 workflowSteps.append(WorkflowStep(
-                    name=f"Set laser power",
+                    name="Set laser power",
                     step_id=str(step_id),
                     main_func=self.set_laser_power,
                     main_params={"power": intensity, "channel": illu},
@@ -230,7 +223,7 @@ class TimelapseController(ImConWidgetController):
 
                 # Acquire frame with a short wait, process data, and save frame
                 workflowSteps.append(WorkflowStep(
-                    name=f"Acquire frame",
+                    name="Acquire frame",
                     step_id=str(step_id),
                     main_func=self.acquire_frame,
                     main_params={"channel": "Mono"},
@@ -241,7 +234,7 @@ class TimelapseController(ImConWidgetController):
 
                 # Set laser power off
                 workflowSteps.append(WorkflowStep(
-                    name=f"Set laser power",
+                    name="Set laser power",
                     step_id=str(step_id),
                     main_func=self.set_laser_power,
                     main_params={"power": 0, "channel": illu},
@@ -254,7 +247,7 @@ class TimelapseController(ImConWidgetController):
             # Add autofocus step every nth frame
             if autofocus_every_nth_frame > 0 and t % autofocus_every_nth_frame == 0:
                 workflowSteps.append(WorkflowStep(
-                    name=f"Autofocus",
+                    name="Autofocus",
                     step_id=str(step_id),
                     main_func=self.autofocus,
                     main_params={},
@@ -263,7 +256,7 @@ class TimelapseController(ImConWidgetController):
             # add delay between frames
             if isPreview:
                 workflowSteps.append(WorkflowStep(
-                    name=f"Display frame",
+                    name="Display frame",
                     step_id=str(step_id),
                     main_func=self.dummy_main_func,
                     main_params={},
@@ -272,7 +265,7 @@ class TimelapseController(ImConWidgetController):
                 ))
             else:
                 workflowSteps.append(WorkflowStep(
-                    name=f"Wait for next frame",
+                    name="Wait for next frame",
                     step_id=str(step_id),
                     main_func=self.dummy_main_func,
                     main_params={},
@@ -292,7 +285,7 @@ class TimelapseController(ImConWidgetController):
 
         # add final step to notify completion
         workflowSteps.append(WorkflowStep(
-                name=f"Done",
+                name="Done",
                 step_id=str(step_id),
                 main_func=self.dummy_main_func,
                 main_params={},

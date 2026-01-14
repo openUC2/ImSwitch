@@ -19,14 +19,14 @@ Run:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone the ImSwitch repository
-git clone https://github.com/openUC2/ImSwitch/
+git clone https://github.com/openUC2/ImSwitch
 cd ImSwitch
 
 # Create a virtual environment and install ImSwitch with UV
 uv venv
 source .venv/bin/activate
 # Yes, we need to start using `uv sync` instead for reproducible installs with our lockfile...but we're still ignoring the lockfile right now:
-uv pip install -e .
+uv pip install -e .[dev]
 
 # Run a workaround for some brokenness:
 uv pip uninstall psygnal
@@ -35,6 +35,11 @@ uv pip install psygnal --no-binary :all:
 # Download ImSwitch configurations (yes, this is a janky way of getting configurations)
 cd ~
 git clone https://github.com/openUC2/ImSwitchConfig
+
+# Set up permissions for the serial driver, if needed:
+newgrp dialout
+sudo usermod -a -G dialout $USER
+# Then reboot your computer, or at least fully log out of your user account and then log back in
 ```
 
 For detailed UV usage instructions, see [docs/uv-guide.md](docs/uv-guide.md).
@@ -76,3 +81,11 @@ ImSwitch provides comprehensive Docker support for containerized deployments, en
 
 ### End-to-End Operating System
 - **[rpi-imswitch-os](https://github.com/openUC2/rpi-imswitch-os)**: A complete Raspberry Pi-based operating system image with ImSwitch and all UC2 components pre-installed and configured. This is the officially-supported way to deploy and use ImSwitch.
+
+## Documentation
+
+Documentation for the upstream project is at
+[imswitch.readthedocs.io](https://imswitch.readthedocs.io/).
+For documentation about openUC2/ImSwitch, please refer to
+[openuc2.github.io](https://openuc2.github.io)
+and search for ImSwitch-related topics.

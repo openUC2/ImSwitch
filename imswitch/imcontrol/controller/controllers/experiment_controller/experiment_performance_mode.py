@@ -393,6 +393,15 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         # Get tPre and tPost from experiment parameters or calculate defaults
         t_pre, t_post = self._extract_timing_parameters(experiment_params)
 
+        # Build illumination list from dict
+        illumination_list = [
+            illum_params['illumination0'],
+            illum_params['illumination1'],
+            illum_params['illumination2'],
+            illum_params['illumination3'],
+            illum_params['illumination4']
+        ]
+
         return {
             'xstart': xStart,
             'xstep': xStep,
@@ -405,11 +414,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             'nz': z_params['nz'],
             'tsettle': t_pre,
             'tExposure': t_post,
-            'illumination0': illum_params['illumination0'],
-            'illumination1': illum_params['illumination1'],
-            'illumination2': illum_params['illumination2'],
-            'illumination3': illum_params['illumination3'],
-            'illumination4': illum_params['illumination4'],
+            'illumination': illumination_list,
             'led': led_value
         }
 
@@ -515,18 +520,18 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         # Turn off all illumination channels before starting scan
         self._switch_off_all_illumination()
 
-        # Build illumination dictionary
-        illum_dict = {
-            "illumination0": scan_params['illumination0'],
-            "illumination1": scan_params['illumination1'],
-            "illumination2": scan_params['illumination2'],
-            "illumination3": scan_params['illumination3'],
-            "illumination4": scan_params['illumination4'],
-            "led": scan_params['led']
-        }
+        # Get illumination list from scan params
+        illumination_list = scan_params.get('illumination', [])
+        led_value = scan_params['led']
+        
+        # Build illumination dict for metadata (backward compatibility)
+        illum_dict = {}
+        for i, val in enumerate(illumination_list[:5]):
+            illum_dict[f"illumination{i}"] = val
+        illum_dict["led"] = led_value
 
-        # Count active illumination channels
-        nIlluminations = sum(val is not None and val > 0 for val in illum_dict.values())
+        # Count active illumination channels (including LED)
+        nIlluminations = sum(val is not None and val > 0 for val in illumination_list) + (1 if led_value and led_value > 0 else 0)
         nScan = max(nIlluminations, 1)
         
         nx, ny, nz = scan_params['nx'], scan_params['ny'], scan_params['nz']
@@ -585,14 +590,9 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             )
             self.controller._writer_thread_ome.start()
             
-            # Prepare illumination tuple
-            illumination = (
-                scan_params['illumination0'],
-                scan_params['illumination1'],
-                scan_params['illumination2'],
-                scan_params['illumination3'],
-                scan_params['illumination4']
-            ) if nIlluminations > 0 else (0, 0, 0, 0, 0)
+            # Prepare illumination tuple - pad to 5 channels
+            illumination_padded = (illumination_list + [0] * 5)[:5]
+            illumination_tuple = tuple(illumination_padded) if nIlluminations > 0 else (0, 0, 0, 0, 0)
             
             # Reset stagescan completion flag and register callback
             self._register_stagescan_callback()
@@ -604,8 +604,8 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 zstart=0, zstep=zstep, nz=nz,
                 tsettle=scan_params['tsettle'],
                 tExposure=t_exposure,
-                illumination=illumination,
-                led=scan_params['led'],
+                illumination=illumination_tuple,
+                led=led_value,
             )
             
             # Wait for stagescan completion with timeout

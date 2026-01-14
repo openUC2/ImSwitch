@@ -154,20 +154,30 @@ class ExperimentModeBase(ABC):
         """
         Prepare illumination parameters in the format expected by hardware.
         
+        Frontend sends pre-mapped intensities array where indices correspond to
+        channel_index values. This method simply formats them for hardware.
+        
         Args:
-            illumination_intensities: List of illumination intensities
+            illumination_intensities: List of illumination intensities pre-mapped by frontend
             
         Returns:
-            Dictionary with illumination0-3 and led parameters
+            Dictionary with illumination0-N and led parameters
         """
-        illum_dict = {
-            "illumination0": illumination_intensities[0] if len(illumination_intensities) > 0 else None,
-            "illumination1": illumination_intensities[1] if len(illumination_intensities) > 1 else None,
-            "illumination2": illumination_intensities[2] if len(illumination_intensities) > 2 else None,
-            "illumination3": illumination_intensities[3] if len(illumination_intensities) > 3 else None,
-            "illumination4": illumination_intensities[-1] if len(illumination_intensities) > 4 else None, # TODO: We need to generalize this for all the channels
-            "led": 0  # Default LED value
-        }
+        illum_dict = {"led": 0}  # Default LED value
+        
+        # Simple direct mapping - frontend already handles channel_index matching
+        for i, intensity in enumerate(illumination_intensities):
+            if i < len(self.controller.availableIlluminations):
+                illum = self.controller.availableIlluminations[i]
+                
+                # Check if this is LED channel
+                if isinstance(illum.channel_index, str) and illum.channel_index.upper() == "LED":
+                    illum_dict["led"] = intensity
+                else:
+                    illum_dict[f"illumination{i}"] = intensity
+            else:
+                illum_dict[f"illumination{i}"] = intensity
+        
         return illum_dict
 
     def create_experiment_directory(self, exp_name: str) -> Tuple[str, str, str]:

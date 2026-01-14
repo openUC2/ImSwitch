@@ -87,7 +87,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         # Add finalization steps
         step_id = self._add_finalization_steps(
             workflow_steps, step_id, snake_tiles, illumination_sources,
-            illumination_intensities, t_period, t
+            illumination_intensities, t_period, t, n_times
         )
 
         # Add step to set LED status to idle when done
@@ -450,7 +450,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                               illumination_sources: List[str],
                               illumination_intensities: List[float],
                               t_period: float,
-                              t: int) -> int:
+                              t: int, n_times: int) -> int:
         """
         Add finalization workflow steps.
         
@@ -492,14 +492,15 @@ class ExperimentNormalMode(ExperimentModeBase):
             step_id += 1
 
         # Add timing calculation for proper period control (for all timepoints except implicit last)
-        workflow_steps.append(WorkflowStep(
-            name=f"Calculate and wait for proper time period (timepoint {t})",
-            step_id=step_id,
-            main_func=self.controller.dummy_main_func,
-            main_params={},
-            pre_funcs=[self.controller.wait_for_next_timepoint],
-            pre_params={"timepoint": t, "t_period": t_period}
-        ))
-        step_id += 1
+        if n_times > 1:
+            workflow_steps.append(WorkflowStep(
+                name=f"Calculate and wait for proper time period (timepoint {t})",
+                step_id=step_id,
+                main_func=self.controller.dummy_main_func,
+                main_params={},
+                pre_funcs=[self.controller.wait_for_next_timepoint],
+                pre_params={"timepoint": t, "t_period": t_period}
+            ))
+            step_id += 1
 
         return step_id

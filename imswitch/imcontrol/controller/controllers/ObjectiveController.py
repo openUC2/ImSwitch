@@ -97,7 +97,17 @@ class ObjectiveController(LiveUpdatedController):
                 self._currentObjective = 0
             else:
                 # Assume we're at slot 0 if not calibrating
-                self._currentObjective = 0
+                mPositionObjective = self._positioner.getPosition().get("A", 0)
+                if abs(mPositionObjective - self._objectivePositions[0]) < abs(mPositionObjective - self._objectivePositions[1]):
+                    self._currentObjective = 0
+                else:
+                    self._currentObjective = 1
+                    
+                # if difference is too large, calibrate again
+                if abs(mPositionObjective - self._objectivePositions[self._currentObjective]) > 500:
+                    self.calibrateObjective()
+                    self._moveMotorToSlot(0)
+                self._currentObjective = 0 # TODO: We should compare the position with the configured positions and decided if in slot 0/1
                 self._logger.info("Skipping calibration, assuming objective slot 0")
         else:
             # No motor, just set default slot

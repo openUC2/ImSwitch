@@ -33,6 +33,7 @@ jobs:
   build-container-image:
     permissions:
       contents: read
+      actions: read
       packages: write
     strategy:
       fail-fast: false
@@ -62,6 +63,8 @@ jobs:
         with:
           name: frontend
           path: ./frontend/build
+          github-token: ${{github.token}}
+          run-id: ${{ steps.wait-build-frontend.outputs.run-d }}
 
       # Work around a bug where capital letters in the GitHub username (e.g. "PlanktoScope") make it
       # impossible to push to GHCR. See https://github.com/macbre/push-to-ghcr/issues/12

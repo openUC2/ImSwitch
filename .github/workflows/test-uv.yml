@@ -17,12 +17,15 @@ on:
 
 jobs:
   test:
-    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -95,6 +98,8 @@ jobs:
         with:
           name: frontend
           path: ./frontend/build
+          github-token: ${{github.token}}
+          run-id: ${{ steps.wait-build-frontend.outputs.run-d }}
 
       - name: Run Unit Tests
         run: |

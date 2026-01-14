@@ -16,13 +16,16 @@ on:
         required: false
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
+  test:
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
@@ -60,6 +63,7 @@ jobs:
       shell: bash
 
     - name: Wait for frontend to build
+      id: wait-build-frontend
       uses: lucasssvaz/wait-on-workflow@v1
       with:
         workflow: build-frontend.yaml
@@ -70,6 +74,8 @@ jobs:
       with:
         name: frontend
         path: ./frontend/build
+        github-token: ${{github.token}}
+        run-id: ${{ steps.wait-build-frontend.outputs.run-d }}
       
     - name: Run Unit Tests
       run: |

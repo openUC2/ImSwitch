@@ -1,0 +1,36 @@
+.fm-button {
+  border-radius: 5px;
+  font-weight: 600;
+  border: none;
+
+  &:hover {
+    cursor: pointer;
+  }
+}
+
+.fm-button-primary {
+  background-color: #6155b4;
+  color: white;
+
+  &:hover {
+    background-color: #4b3f9f;
+  }
+}
+
+.fm-button-secondary {
+  background-color: #41ba77;
+  color: black;
+
+  &:hover {
+    background-color: #741f1f;
+  }
+}
+
+.fm-button-danger {
+  background-color: #f44336;
+  color: white;
+
+  &:hover {
+    background-color: #d32f2f;
+  }
+}

@@ -1,0 +1,158 @@
+//@import url("https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,200..1000;1,6..12,200..1000&display=swap");
+
+// MUI Dark Theme Variables
+$primary-color: #90caf9;
+$secondary-color: #f48fb1;
+$background-color: #121212;
+$surface-color: #1e1e1e;
+$border-color: #424242;
+$text-white: #ffffff;
+$text-secondary: #aaaaaa;
+
+.background-secondary {
+  background-color: $background-color !important;
+}
+
+.text-white {
+  color: $text-white !important;
+}
+
+.text-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+img,
+svg {
+  vertical-align: middle;
+}
+
+.fm-modal {
+  border: 1px solid $border-color;
+  border-radius: 5px;
+  width: fit-content;
+  overflow-x: hidden;
+  padding: 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.w-25 {
+  width: 25%;
+}
+
+.file-explorer {
+  min-height: 400px;
+  height: 100%;
+  width: 100%;
+  font-family: "Nunito Sans", sans-serif;
+  border: 1px solid $border-color;
+  border-radius: 8px;
+  position: relative;
+  background-color: $background-color;
+  color: $text-white;
+  cursor: default;
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+
+  button {
+    font-family: "Nunito Sans", sans-serif;
+    background-color: $surface-color;
+    color: $text-white;
+  }
+
+  .files-container {
+    display: flex;
+    height: calc(100% - 46px);
+
+    .navigation-pane {
+      z-index: 1;
+      padding-top: 8px;
+      position: relative;
+
+      .sidebar-resize {
+        position: absolute;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        width: 5px;
+        cursor: col-resize;
+        z-index: 10;
+        border-right: 1px solid $border-color;
+
+        &:hover {
+          border-right: 1px solid $primary-color;
+        }
+      }
+
+      .sidebar-dragging {
+        border-right: 1px solid $primary-color;
+      }
+    }
+
+    .folders-preview {
+      z-index: 2;
+      background-color: $surface-color;
+      padding-right: 0;
+      padding-left: 0;
+      border-bottom-right-radius: 8px;
+    }
+  }
+}
+
+.close-icon {
+  padding: 5px;
+  border-radius: 50%;
+
+  &:hover {
+    cursor: pointer;
+    background-color: rgba($text-white, 0.07);
+  }
+}
+
+.action-input {
+  border: none;
+  border-bottom: 1px solid grey;
+  border-top-left-radius: 5px;
+  border-top-right-radius: 5px;
+  transition: box-shadow 0.3s;
+  background-color: lighten($background-color, 5%);
+  padding: 6px 9px;
+  margin-right: 8px;
+  width: calc(100% - 18px);
+
+  &:focus {
+    outline: none;
+    border-bottom-color: $primary-color !important;
+    box-shadow: inset 0 -1px 0 0 $primary-color;
+  }
+}
+
+.fm-rename-folder-container {
+  padding: 8px 0;
+
+  .fm-rename-folder-input {
+    border-bottom: 1px solid $border-color;
+    padding: 8px 12px 12px;
+
+    .fm-rename-warning {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+  }
+
+  .fm-rename-folder-action {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    padding: 8px 8px 0 0;
+  }
+}
+
+.file-selcted {
+  .select-files {
+    width: 40%;
+  }
+}

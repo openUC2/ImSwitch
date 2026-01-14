@@ -1,0 +1,33 @@
+@import "../../styles/variables";
+
+.fm-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid $border-color;
+  padding: 0.3rem 1rem;
+
+  .fm-modal-heading {
+    margin: 0;
+    font-weight: bold;
+    color: black;
+  }
+}
+
+.dialog[open] {
+  animation: expand 0.4s forwards;
+
+  &::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+
+@keyframes expand {
+  from {
+    transform: scale(0.4);
+  }
+
+  to {
+    transform: scale(1);
+  }
+}

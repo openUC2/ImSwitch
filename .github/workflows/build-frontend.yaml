@@ -1,0 +1,50 @@
+name: build-frontend
+
+on:
+  push:
+    branches:
+      - 'master'
+      - 'main'
+    tags:
+      - 'v*'
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      git-ref:
+        description: 'Git ref (optional)'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # This repo has tons of cruft in its history, so we try to only fetch files we actually need:
+          fetch-depth: 0
+          filter: 'blob:none'
+
+      - name: Use cached ~/.npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ matrix.variant }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-node
+
+      - name: Install build dependencies
+        working-directory: ./frontend
+        run: npm install
+
+      - name: Build
+        working-directory: ./frontend
+        run: |
+          export NODE_OPTIONS=--max_old_space_size=4096
+          CI=false npm run build
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend
+          path: ./frontend/build

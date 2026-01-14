@@ -1,0 +1,4 @@
+/* ControlPanel2.css */
+.control-panel-grid .grid-item {
+    min-width: 400px; /* Set your minimum width here */
+  }

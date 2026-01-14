@@ -127,7 +127,7 @@ git clone https://github.com/beniroquai/ImSwitchConfig
 
 ### Installation of drivers:
 
-For this, please reffer to the bash files in this repo: https://github.com/openUC2/ImSwitchDockerInstall
+For this, please refer to the bash files in this repo: https://github.com/openUC2/ImSwitchDockerInstall
 
 
 ### Permissions for the serial driver

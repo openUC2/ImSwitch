@@ -49,13 +49,13 @@ For detailed UV usage instructions, refer to [docs/uv-guide.md](docs/uv-guide.md
 
 ### Running
 
-To run ImSwitch, first activate the virtual environment:
+To run ImSwitch, first activate the virtual environment if you haven't already done so:
 
 ```bash
 source .venv/bin/activate
 ```
 
-and then make an up-to-date build of the frontend:
+and then make an up-to-date build of the frontend if you haven't already done so:
 
 ```bash
 npm --prefix ./frontend run build

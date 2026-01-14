@@ -42,4 +42,5 @@ npm start
 
 ## Deployment
 
-The frontend is only meant to be deployed as part of ImSwitch.
+The frontend is only meant to be served from the ImSwitch backend. Refer to the information on
+deployment in [../README.md](../README.md#deployment).

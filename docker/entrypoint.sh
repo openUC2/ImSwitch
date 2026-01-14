@@ -148,7 +148,8 @@ fi
 # ============================================================================
 # Activate Python Environment
 # ============================================================================
-source /opt/conda/bin/activate imswitch
+export PATH="/root/.local/bin:$PATH"
+source /opt/imswitch/.venv/bin/activate
 
 # ============================================================================
 # Build ImSwitch Command Line Arguments

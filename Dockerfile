@@ -34,7 +34,7 @@
 # docker build -t ghcr.io/openuc2/imswitch-noqt-arm64:latest .
 # docker build -t imswitch-holo .
 
-# DOCKER_BUILDKIT=1 docker build -t imswitch-holo . 
+# DOCKER_BUILDKIT=1 docker build -t imswitch-holo .
 # sudo apt install docker-buildx-plugin
 
 
@@ -50,7 +50,7 @@
 # -v ~/Documents/imswitch_docker/imswitch_git:/tmp/ImSwitch-changes \
 # -v ~/Documents/imswitch_docker/imswitch_pip:/persistent_pip_packages \
 # -v /media/uc2/SD2/:/dataset \
-# -v ~/Downloads:/config 
+# -v ~/Downloads:/config
 
 
 # Use an appropriate base image for multi-arch support
@@ -67,8 +67,8 @@ ENV TZ=Etc/UTC
 # We split up the work into different scripts run at different stages to facilitate correct
 # container image caching.
 
-RUN --mount=type=bind,source=docker/build-conda.sh,target=/mnt/build/build-conda.sh /mnt/build/build-conda.sh
-ENV PATH=/opt/conda/bin:$PATH
+RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-uv.sh
+ENV PATH=/root/.local/bin:/opt/imswitch/.venv/bin:$PATH
 
 RUN --mount=type=bind,source=docker/build-drivers.sh,target=/mnt/build/build-drivers.sh /mnt/build/build-drivers.sh
 ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32:"$LD_LIBRARY_PATH"

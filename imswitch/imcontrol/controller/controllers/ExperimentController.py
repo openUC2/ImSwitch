@@ -254,14 +254,14 @@ class ExperimentController(ImConWidgetController):
 
         # select lasers
         self.allIlluNames = self._master.lasersManager.getAllDeviceNames()+ self._master.LEDMatrixsManager.getAllDeviceNames()
-        self.availableIlliminations = []
+        self.availableIlluminations = []
         for iDevice in self.allIlluNames:
             try:
                 # laser maanger
-                self.availableIlliminations.append(self._master.lasersManager[iDevice])
+                self.availableIlluminations.append(self._master.lasersManager[iDevice])
             except:
                 # lexmatrix manager
-                self.availableIlliminations.append(self._master.LEDMatrixsManager[iDevice])
+                self.availableIlluminations.append(self._master.LEDMatrixsManager[iDevice])
 
         # select stage
         self.allPositionerNames = self._master.positionersManager.getAllDeviceNames()[0]
@@ -285,7 +285,7 @@ class ExperimentController(ImConWidgetController):
         self.ExperimentParams.isDPCpossible = False
         self.ExperimentParams.isDarkfieldpossible = False
         self.ExperimentParams.performanceMode = False
-        for laserN in self.availableIlliminations:
+        for laserN in self.availableIlluminations:
             self.ExperimentParams.illuSourceMinIntensities.append(laserN.valueRangeMin)
             self.ExperimentParams.illuSourceMaxIntensities.append(laserN.valueRangeMax)
         '''
@@ -639,7 +639,7 @@ class ExperimentController(ImConWidgetController):
         else:
             # Check normal mode status
             workflow_status = self.workflow_manager.get_status()
-
+        #
         return workflow_status
 
     @APIExport(requestType="POST")
@@ -1378,9 +1378,7 @@ class ExperimentController(ImConWidgetController):
                       ystart:float=0, ystep:float=500, ny:int=10,
                       zstart:float=0, zstep:float=0, nz:int=1,
                       tsettle:float=90, tExposure:float=50,
-                      illumination0:int=None, illumination1:int=None,
-                      illumination2:int=None, illumination3:int=None, 
-                      illumination4:int=None, led:float=None,
+                      illumination:List[int]=None, led:float=None,
                       tPeriod:int=1, nTimes:int=1):
         """Full workflow: arm camera ➔ launch writer ➔ execute scan.
         
@@ -1396,7 +1394,7 @@ class ExperimentController(ImConWidgetController):
             nz: Number of Z planes (1 = single plane)
             tsettle: Settle time after movement (ms)
             tExposure: Exposure time (ms)
-            illumination0-3: Illumination channel intensities
+            illumination: List of illumination channel intensities (e.g., [100, 50, 0, 75, 0])
             led: LED intensity (0-255)
             tPeriod: Period between time points (s)
             nTimes: Number of time points
@@ -1411,17 +1409,18 @@ class ExperimentController(ImConWidgetController):
         # compute the metadata for the stage scan (e.g. x/y coordinates and illumination channels)
         # stage will start at xstart, ystart and move in steps of xstep, ystep in snake scan logic
 
-        illum_dict = {
-            "illumination0": illumination0,
-            "illumination1": illumination1,
-            "illumination2": illumination2,
-            "illumination3": illumination3,
-            "illumination4": illumination4,
-            "led": led
-        }
+        # Ensure illumination is a list
+        if illumination is None:
+            illumination = []
+        
+        # Build illumination dict for metadata (maintain backward compatibility)
+        illum_dict = {}
+        for i, val in enumerate(illumination[:5]):  # Take up to 5 channels
+            illum_dict[f"illumination{i}"] = val
+        illum_dict["led"] = led
 
-        # Count how many illumination entries are valid (not None)
-        nIlluminations = sum(val is not None and val > 0 for val in illum_dict.values())
+        # Count how many illumination entries are valid (not None and > 0)
+        nIlluminations = sum(val is not None and val > 0 for val in illumination) + (1 if led and led > 0 else 0)
         nScan = max(nIlluminations, 1)
         total_frames = nx * ny * nz * nScan
         self._logger.info(f"Stage-scan: {nx}×{ny}×{nz} ({total_frames} frames)")
@@ -1492,7 +1491,9 @@ class ExperimentController(ImConWidgetController):
                 )
                 self._writer_thread_ome.start()
             
-            illumination=(illumination0, illumination1, illumination2, illumination3, illumination4) if nIlluminations > 0 else (0,0,0,0,0)
+            # Pad illumination list to 5 channels if needed
+            illumination_padded = (illumination + [0] * 5)[:5] if illumination else [0, 0, 0, 0, 0]
+            
             # 3. execute stage scan (blocks until finished) ------------------------
             self.fastStageScanIsRunning = True  # Set flag to indicate scan is running
             self.mStage.start_stage_scanning(
@@ -1500,7 +1501,7 @@ class ExperimentController(ImConWidgetController):
                 ystart=0, ystep=ystep, ny=ny,
                 zstart=0, zstep=zstep, nz=nz,  # Z-stacking parameters
                 tsettle=tsettle, tExposure=tExposure,
-                illumination=illumination, led=led,
+                illumination=tuple(illumination_padded), led=led,
             )
             # Wait for time period or until scan is stopped
             while nLastTime + tPeriod < time.time() and self.fastStageScanIsRunning:
@@ -1604,7 +1605,7 @@ class ExperimentController(ImConWidgetController):
 
         if is_performance_mode:
             # Performance mode: get frames from camera buffer
-            while saved < n_expected and not self._stop_writer_evt.is_set():
+            while saved < n_expected and not self._stop_writer_evt.is_set(): # TODO: we have that already checked in the exerpiment_performance_mode
                 frames, ids = self.mDetector.getChunk()  # empties camera buffer
 
                 if frames.size == 0:

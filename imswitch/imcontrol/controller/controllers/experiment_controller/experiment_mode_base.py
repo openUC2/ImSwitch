@@ -6,6 +6,7 @@ and normal mode experiment execution.
 """
 
 import os
+import json
 import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -154,20 +155,30 @@ class ExperimentModeBase(ABC):
         """
         Prepare illumination parameters in the format expected by hardware.
         
+        Frontend sends pre-mapped intensities array where indices correspond to
+        channel_index values. This method simply formats them for hardware.
+        
         Args:
-            illumination_intensities: List of illumination intensities
+            illumination_intensities: List of illumination intensities pre-mapped by frontend
             
         Returns:
-            Dictionary with illumination0-3 and led parameters
+            Dictionary with illumination0-N and led parameters
         """
-        illum_dict = {
-            "illumination0": illumination_intensities[0] if len(illumination_intensities) > 0 else None,
-            "illumination1": illumination_intensities[1] if len(illumination_intensities) > 1 else None,
-            "illumination2": illumination_intensities[2] if len(illumination_intensities) > 2 else None,
-            "illumination3": illumination_intensities[3] if len(illumination_intensities) > 3 else None,
-            "illumination4": illumination_intensities[-1] if len(illumination_intensities) > 4 else None, # TODO: We need to generalize this for all the channels
-            "led": 0  # Default LED value
-        }
+        illum_dict = {"led": 0}  # Default LED value
+        
+        # Simple direct mapping - frontend already handles channel_index matching
+        for i, intensity in enumerate(illumination_intensities):
+            if i < len(self.controller.availableIlluminations):
+                illum = self.controller.availableIlluminations[i]
+                
+                # Check if this is LED channel
+                if isinstance(illum.channel_index, str) and illum.channel_index.upper() == "LED":
+                    illum_dict["led"] = intensity
+                else:
+                    illum_dict[f"illumination{i}"] = intensity
+            else:
+                illum_dict[f"illumination{i}"] = intensity
+        
         return illum_dict
 
     def create_experiment_directory(self, exp_name: str) -> Tuple[str, str, str]:
@@ -235,3 +246,73 @@ class ExperimentModeBase(ABC):
             Dictionary with execution results
         """
         pass
+
+    def save_experiment_protocol(self, 
+                                protocol_data: Dict[str, Any],
+                                file_path: str,
+                                mode: str = "unknown") -> str:
+        """
+        Save experiment protocol and parameters to JSON file.
+        
+        Args:
+            protocol_data: Dictionary containing experiment parameters and steps
+            file_path: Base path for the experiment data
+            mode: Experiment mode ('normal' or 'performance')
+            
+        Returns:
+            Path to the saved protocol JSON file
+        """
+        try:
+            # Create protocol filename
+            protocol_file = file_path + "_protocol.json"
+            
+            # Add timestamp and metadata
+            protocol_data["timestamp"] = datetime.now().isoformat()
+            protocol_data["mode"] = mode
+            protocol_data["imswitch_version"] = getattr(self.controller, 'version', 'unknown')
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(protocol_file), exist_ok=True)
+            
+            # Save to JSON with pretty printing
+            with open(protocol_file, 'w') as f:
+                json.dump(protocol_data, f, indent=2, default=self._json_serializer)
+                
+            self._logger.info(f"Experiment protocol saved to: {protocol_file}")
+            return protocol_file
+            
+        except Exception as e:
+            self._logger.error(f"Failed to save experiment protocol: {e}")
+            return None
+    
+    def _json_serializer(self, obj):
+        """
+        Custom JSON serializer for objects not serializable by default.
+        
+        Args:
+            obj: Object to serialize
+            
+        Returns:
+            JSON-serializable representation
+        """
+        # Handle numpy types
+        if isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        
+        # Handle datetime objects
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        
+        # Handle callable functions (store name only)
+        elif callable(obj):
+            return f"<function: {obj.__name__}>"
+        
+        # Handle objects with __dict__
+        elif hasattr(obj, '__dict__'):
+            return {k: v for k, v in obj.__dict__.items() if not k.startswith('_')}
+        
+        # Fallback to string representation
+        else:
+            return str(obj)

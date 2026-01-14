@@ -137,6 +137,9 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 # Execute fast stage scan
                 zarr_url = self._execute_fast_stage_scan(scan_params, t_period, n_times, experiment_params)
                 self._logger.info(f"Performance mode scan completed. Data saved to: {zarr_url}")
+                
+                # Save experiment protocol to JSON
+                self._save_performance_protocol(scan_params, experiment_params, zarr_url)
 
             # Finalize OME writers if they were created
             if file_writers:
@@ -393,6 +396,12 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         # Get tPre and tPost from experiment parameters or calculate defaults
         t_pre, t_post = self._extract_timing_parameters(experiment_params)
 
+        # Build illumination list from dict for each key 
+        illumination_list = [] # TODO: This is nonesense, we may change the order of the illumination sources again...
+        for ikey in illum_params.keys(): #
+            if ikey.startswith('illumination'):
+                illumination_list.append(illum_params.get(ikey, 0))
+
         return {
             'xstart': xStart,
             'xstep': xStep,
@@ -405,11 +414,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             'nz': z_params['nz'],
             'tsettle': t_pre,
             'tExposure': t_post,
-            'illumination0': illum_params['illumination0'],
-            'illumination1': illum_params['illumination1'],
-            'illumination2': illum_params['illumination2'],
-            'illumination3': illum_params['illumination3'],
-            'illumination4': illum_params['illumination4'],
+            'illumination': illumination_list,
             'led': led_value
         }
 
@@ -515,18 +520,18 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         # Turn off all illumination channels before starting scan
         self._switch_off_all_illumination()
 
-        # Build illumination dictionary
-        illum_dict = {
-            "illumination0": scan_params['illumination0'],
-            "illumination1": scan_params['illumination1'],
-            "illumination2": scan_params['illumination2'],
-            "illumination3": scan_params['illumination3'],
-            "illumination4": scan_params['illumination4'],
-            "led": scan_params['led']
-        }
+        # Get illumination list from scan params
+        illumination_list = scan_params.get('illumination', [])
+        led_value = scan_params['led']
+        
+        # Build illumination dict for metadata (backward compatibility)
+        illum_dict = {}
+        for i, val in enumerate(illumination_list[:5]):
+            illum_dict[f"illumination{i}"] = val
+        illum_dict["led"] = led_value
 
-        # Count active illumination channels
-        nIlluminations = sum(val is not None and val > 0 for val in illum_dict.values())
+        # Count active illumination channels (including LED)
+        nIlluminations = sum(val is not None and val > 0 for val in illumination_list) + (1 if led_value and led_value > 0 else 0)
         nScan = max(nIlluminations, 1)
         
         nx, ny, nz = scan_params['nx'], scan_params['ny'], scan_params['nz']
@@ -557,7 +562,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             self._configure_camera_for_hardware_trigger()
 
         # Get exposure time
-        t_exposure = scan_params.get('tExposure', 50)
+        t_exposure = scan_params["tExposure"]
         m_experiment = experiment_params.get('mExperiment')
         if m_experiment and hasattr(m_experiment, 'parameterValue'):
             exposure_times = getattr(m_experiment.parameterValue, 'illuExposures', [50])
@@ -585,14 +590,9 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             )
             self.controller._writer_thread_ome.start()
             
-            # Prepare illumination tuple
-            illumination = (
-                scan_params['illumination0'],
-                scan_params['illumination1'],
-                scan_params['illumination2'],
-                scan_params['illumination3'],
-                scan_params['illumination4']
-            ) if nIlluminations > 0 else (0, 0, 0, 0, 0)
+            # Prepare illumination tuple - pad to 5 channels
+            illumination_padded = (illumination_list + [0] * 5)[:5] # TODO: we need to keep the sequence proposed by the esp32 firmware here!  adding zeros will shift the channel information
+            illumination_tuple = tuple(illumination_padded) if nIlluminations > 0 else (0, 0, 0, 0, 0)
             
             # Reset stagescan completion flag and register callback
             self._register_stagescan_callback()
@@ -604,8 +604,8 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 zstart=0, zstep=zstep, nz=nz,
                 tsettle=scan_params['tsettle'],
                 tExposure=t_exposure,
-                illumination=illumination,
-                led=scan_params['led'],
+                illumination=illumination_tuple,
+                led=led_value,
             )
             
             # Wait for stagescan completion with timeout
@@ -714,6 +714,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             data: Dictionary with completion information
         """
         self._logger.info(f"Stagescan completion signal received: {data}")
+        time.sleep(0.5)  # Small delay to ensure all processing is done # TODO: 
         self._stagescan_complete_event.set()
 
     def _wait_for_scan_completion(self, expected_frames: int, timeout: float) -> bool:
@@ -748,7 +749,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             start_time = time.time()
             
             self._logger.debug(f"Waiting for stagescan completion (hardware trigger mode)")
-            
+            self._stagescan_complete_event.clear()
             while not self._stagescan_complete_event.is_set():
                 elapsed = time.time() - start_time
                 
@@ -764,6 +765,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 
                 # Check if we received all expected frames
                 if self._frame_count >= expected_frames:
+                    time.sleep(0.5)  # Small delay to ensure all processing is done # TODO: We should rather count stored frames not camera triggers? 
                     self._logger.info(f"All {expected_frames} frames received")
                     return True
                 
@@ -846,7 +848,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             try:
                 if hasattr(self.controller, 'mDetector'):
                     self.controller.mDetector.sendSoftwareTrigger() # TODO: This function is not implemented  in all detectors
-                    self._logger.debug(f"Software trigger sent for frame {self._frame_count}")
+                    self._logger.info(f"Software trigger sent for frame {self._frame_count}")
             except Exception as e:
                 self._logger.error(f"Error during software trigger: {e}")
 
@@ -1072,3 +1074,72 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             Dictionary indicating resume is not supported
         """
         return {"status": "not_supported", "message": "Resume is not supported in performance mode"}
+    
+    def _save_performance_protocol(self,
+                                  scan_params: Dict[str, Any],
+                                  experiment_params: Dict[str, Any],
+                                  zarr_url: str) -> None:
+        """
+        Save performance mode experiment protocol to JSON.
+        
+        Args:
+            scan_params: Dictionary with scan parameters
+            experiment_params: Dictionary with experiment parameters
+            zarr_url: URL/path to the saved OME-Zarr data
+        """
+        try:
+            # Extract experiment info
+            m_experiment = experiment_params.get('mExperiment')
+            illumination_sources = []
+            illumination_intensities = []
+            exposures = []
+            
+            if m_experiment and hasattr(m_experiment, 'parameterValue'):
+                param_value = m_experiment.parameterValue
+                illumination_sources = getattr(param_value, 'illumination', [])
+                illumination_intensities = getattr(param_value, 'illuIntensities', [])
+                exposures = getattr(param_value, 'illuExposures', [])
+            
+            # Build protocol data
+            protocol_data = {
+                "experiment_name": getattr(m_experiment, 'name', 'performance_scan') if m_experiment else 'performance_scan',
+                "experiment_mode": "performance",
+                "trigger_mode": "software" if self._use_software_trigger else "hardware",
+                "data_path": zarr_url,
+                "scan_parameters": {
+                    "xstart": scan_params['xstart'],
+                    "xstep": scan_params['xstep'],
+                    "nx": scan_params['nx'],
+                    "ystart": scan_params['ystart'],
+                    "ystep": scan_params['ystep'],
+                    "ny": scan_params['ny'],
+                    "zstart": scan_params['zstart'],
+                    "zstep": scan_params['zstep'],
+                    "nz": scan_params['nz'],
+                    "tsettle": scan_params['tsettle'],
+                    "tExposure": scan_params['tExposure'],
+                    "illumination": scan_params['illumination'],
+                    "led": scan_params['led']
+                },
+                "timelapse": {
+                    "tPeriod": experiment_params.get('tPeriod', 1),
+                    "nTimes": experiment_params.get('nTimes', 1)
+                },
+                "illumination_sources": illumination_sources,
+                "illumination_intensities": illumination_intensities,
+                "exposures": exposures,
+                "total_frames": scan_params['nx'] * scan_params['ny'] * scan_params['nz'] * max(sum(1 for i in scan_params['illumination'] if i > 0), 1)
+            }
+            
+            # Create protocol file path from controller's mFilePath
+            if hasattr(self.controller, 'mFilePath') and self.controller.mFilePath:
+                protocol_file_path = self.controller.mFilePath
+            else:
+                # Fallback to save_dir
+                timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                protocol_file_path = os.path.join(self.controller.save_dir, f"{timeStamp}_FastStageScan")
+            
+            self.save_experiment_protocol(protocol_data, protocol_file_path, mode="performance")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to save performance mode protocol: {e}")

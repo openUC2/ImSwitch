@@ -48,14 +48,14 @@ class TimelapseController(ImConWidgetController):
 
         # select lasers
         self.allIlluNames = self._master.lasersManager.getAllDeviceNames()+ self._master.LEDMatrixsManager.getAllDeviceNames()
-        self.availableIlliminations = []
+        self.availableIlluminations = []
         for iDevice in self.allIlluNames:
             try:
                 # laser maanger
-                self.availableIlliminations.append(self._master.lasersManager[iDevice])
+                self.availableIlluminations.append(self._master.lasersManager[iDevice])
             except:
                 # lexmatrix manager
-                self.availableIlliminations.append(self._master.LEDMatrixsManager[iDevice])
+                self.availableIlluminations.append(self._master.LEDMatrixsManager[iDevice])
 
         # select stage
         self.allPositionerNames = self._master.positionersManager.getAllDeviceNames()[0]

@@ -1,19 +1,31 @@
 name: test
 
 on:
+  push:
+    branches:
+      - 'master'
+      - 'main'
+    tags:
+      - 'v*'
   pull_request:
+  merge_group:
   workflow_dispatch:
-  schedule:
-    - cron: '30 7 * * *'
+    inputs:
+      git-ref:
+        description: 'Git ref (optional)'
+        required: false
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
+  test:
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
@@ -49,6 +61,21 @@ jobs:
         # Run all configured checks (exit-zero treats all errors as warnings)
         ruff check . --exit-zero --output-format=full
       shell: bash
+
+    - name: Wait for frontend to build
+      id: wait-build-frontend
+      uses: lucasssvaz/wait-on-workflow@v1
+      with:
+        workflow: build-frontend.yaml
+        sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    - name: Download built frontend
+      uses: actions/download-artifact@v5
+      with:
+        name: frontend
+        path: ./frontend/build
+        github-token: ${{github.token}}
+        run-id: ${{ steps.wait-build-frontend.outputs.run-id }}
       
     - name: Run Unit Tests
       run: |

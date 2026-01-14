@@ -17,7 +17,7 @@ on:
 
 env:
   IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
-  IMAGE_NAME: imswitch-noqt
+  IMAGE_NAME: imswitch
   MAIN_BRANCH: 'master' # pushing to this branch will update the "edge" tag on the image
   BETA_BRANCH: 'beta' # pushing to this branch will update the "beta" tag on the image
   STABLE_BRANCH: 'stable' # pushing to this branch will update the "stable" tag on the image
@@ -30,9 +30,10 @@ env:
   PUSH_IMAGE: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'push tag' }}
 
 jobs:
-  build-container-image:
+  build-ctr-img:
     permissions:
       contents: read
+      actions: read
       packages: write
     strategy:
       fail-fast: false
@@ -50,6 +51,21 @@ jobs:
           # actually need:
           fetch-depth: 0
           filter: 'blob:none'
+
+      - name: Wait for frontend to build
+        id: wait-build-frontend
+        uses: lucasssvaz/wait-on-workflow@v1
+        with:
+          workflow: build-frontend.yaml
+          sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download built frontend
+        uses: actions/download-artifact@v5
+        with:
+          name: frontend
+          path: ./frontend/build
+          github-token: ${{github.token}}
+          run-id: ${{ steps.wait-build-frontend.outputs.run-id }}
 
       # Work around a bug where capital letters in the GitHub username (e.g. "PlanktoScope") make it
       # impossible to push to GHCR. See https://github.com/macbre/push-to-ghcr/issues/12
@@ -116,13 +132,13 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  merge-container-images:
+  merge-ctr-imgs:
     permissions:
       contents: read
       packages: write
     runs-on: ubuntu-latest
     needs:
-      - build-container-image
+      - build-ctr-img
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4

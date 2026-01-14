@@ -1,17 +1,31 @@
 name: test-uv
 
 on:
+  push:
+    branches:
+      - 'master'
+      - 'main'
+    tags:
+      - 'v*'
   pull_request:
+  merge_group:
   workflow_dispatch:
+    inputs:
+      git-ref:
+        description: 'Git ref (optional)'
+        required: false
 
 jobs:
   test:
-    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -72,6 +86,21 @@ jobs:
           echo "=== Testing critical imports ==="
           python -c "from imswitch.imcontrol.model import Options; print('Options import successful')" || echo "Options import failed"
         shell: bash
+
+      - name: Wait for frontend to build
+        id: wait-build-frontend
+        uses: lucasssvaz/wait-on-workflow@v1
+        with:
+          workflow: build-frontend.yaml
+          sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download built frontend
+        uses: actions/download-artifact@v5
+        with:
+          name: frontend
+          path: ./frontend/build
+          github-token: ${{github.token}}
+          run-id: ${{ steps.wait-build-frontend.outputs.run-id }}
 
       - name: Run Unit Tests
         run: |

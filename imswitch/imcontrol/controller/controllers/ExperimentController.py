@@ -639,7 +639,7 @@ class ExperimentController(ImConWidgetController):
         else:
             # Check normal mode status
             workflow_status = self.workflow_manager.get_status()
-
+        #
         return workflow_status
 
     @APIExport(requestType="POST")

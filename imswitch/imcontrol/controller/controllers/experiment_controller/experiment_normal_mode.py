@@ -99,12 +99,67 @@ class ExperimentNormalMode(ExperimentModeBase):
         )
         step_id += 1
 
+        # Save experiment protocol to JSON
+        protocol_data = {
+            "experiment_name": exp_name,
+            "experiment_mode": "normal",
+            "directory": dir_path,
+            "filename": m_file_name,
+            "timepoint": t,
+            "total_timepoints": n_times,
+            "tile_count": len(snake_tiles),
+            "step_count": step_id,
+            "snake_tiles": snake_tiles,
+            "z_positions": z_positions,
+            "illumination_sources": illumination_sources,
+            "illumination_intensities": illumination_intensities,
+            "exposures": exposures,
+            "gains": gains,
+            "autofocus": {
+                "enabled": is_auto_focus,
+                "min": autofocus_min,
+                "max": autofocus_max,
+                "step_size": autofocus_step_size,
+                "channel": autofocus_illumination_channel,
+                "mode": autofocus_mode,
+                "max_attempts": autofocus_max_attempts,
+                "target_focus_setpoint": autofocus_target_focus_setpoint
+            },
+            "workflow_steps": [self._serialize_workflow_step(step) for step in workflow_steps]
+        }
+        
+        # Create protocol file path
+        protocol_file_path = os.path.join(dir_path, f"{m_file_name}_t{t:04d}")
+        self.save_experiment_protocol(protocol_data, protocol_file_path, mode="normal")
+
         return {
             "status": "workflow_created",
             "mode": "normal",
             "workflow_steps": workflow_steps,
             "file_writers": file_writers,
             "step_count": step_id
+        }
+    
+    def _serialize_workflow_step(self, step) -> Dict[str, Any]:
+        """
+        Serialize a WorkflowStep object to a dictionary for JSON export.
+        
+        Args:
+            step: WorkflowStep object
+            
+        Returns:
+            Dictionary representation of the workflow step
+        """
+        return {
+            "step_id": step.step_id,
+            "name": step.name,
+            "main_func": step.main_func.__name__ if hasattr(step.main_func, '__name__') else str(step.main_func),
+            "main_params": step.main_params,
+            "pre_funcs": [f.__name__ if hasattr(f, '__name__') else str(f) for f in step.pre_funcs],
+            "pre_params": step.pre_params,
+            "post_funcs": [f.__name__ if hasattr(f, '__name__') else str(f) for f in step.post_funcs],
+            "post_params": step.post_params,
+            "max_retries": step.max_retries
         }
 
     def _setup_ome_writers(self,
@@ -282,6 +337,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         active_sources_count = sum(np.array(illumination_intensities) > 0)
         is_first_tile = (position_center_index == 0)
 
+        '''
         if active_sources_count == 1 and is_first_tile:
             for illu_index, illu_source in enumerate(illumination_sources):
                 illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
@@ -296,7 +352,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     ))
                     step_id += 1
                     break  # Only one active source
-
+        '''
         # Iterate over positions in the tile
         for m_index, m_point in enumerate(tiles):
             try:
@@ -352,16 +408,15 @@ class ExperimentNormalMode(ExperimentModeBase):
                         continue
 
                     # Turn on illumination only for multiple sources (single source was turned on once at the beginning)
-                    if active_sources_count > 1 or True:
-                        workflow_steps.append(WorkflowStep(
-                            name="Turn on illumination",
-                            step_id=step_id,
-                            main_func=self.controller.set_laser_power,
-                            main_params={"power": illu_intensity, "channel": illu_source},
-                            post_funcs=[self.controller.wait_time],
-                            post_params={"seconds": 0.05},
-                        ))
-                        step_id += 1
+                    workflow_steps.append(WorkflowStep(
+                        name="Turn on illumination",
+                        step_id=step_id,
+                        main_func=self.controller.set_laser_power,
+                        main_params={"power": illu_intensity, "channel": illu_source},
+                        post_funcs=[self.controller.wait_time],
+                        post_params={"seconds": 0.1},
+                    ))
+                    step_id += 1
 
                     # Acquire frame
                     exposure_time = exposures[illu_index] if illu_index < len(exposures) else exposures[0]
@@ -402,14 +457,13 @@ class ExperimentNormalMode(ExperimentModeBase):
                     step_id += 1
 
                     # Turn off illumination only if multiple sources (for switching between them)
-                    if active_sources_count > 1 or True:
-                        workflow_steps.append(WorkflowStep(
-                            name="Turn off illumination",
-                            step_id=step_id,
-                            main_func=self.controller.set_laser_power,
-                            main_params={"power": 0, "channel": illu_source},
-                        ))
-                        step_id += 1
+                    workflow_steps.append(WorkflowStep(
+                        name="Turn off illumination",
+                        step_id=step_id,
+                        main_func=self.controller.set_laser_power,
+                        main_params={"power": 0, "channel": illu_source},
+                    ))
+                    step_id += 1
 
             # Move back to the current Z position after processing all points in the tile
             if len(z_positions) > 1 :

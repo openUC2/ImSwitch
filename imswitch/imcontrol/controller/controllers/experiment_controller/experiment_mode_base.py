@@ -6,6 +6,7 @@ and normal mode experiment execution.
 """
 
 import os
+import json
 import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -245,3 +246,73 @@ class ExperimentModeBase(ABC):
             Dictionary with execution results
         """
         pass
+
+    def save_experiment_protocol(self, 
+                                protocol_data: Dict[str, Any],
+                                file_path: str,
+                                mode: str = "unknown") -> str:
+        """
+        Save experiment protocol and parameters to JSON file.
+        
+        Args:
+            protocol_data: Dictionary containing experiment parameters and steps
+            file_path: Base path for the experiment data
+            mode: Experiment mode ('normal' or 'performance')
+            
+        Returns:
+            Path to the saved protocol JSON file
+        """
+        try:
+            # Create protocol filename
+            protocol_file = file_path + "_protocol.json"
+            
+            # Add timestamp and metadata
+            protocol_data["timestamp"] = datetime.now().isoformat()
+            protocol_data["mode"] = mode
+            protocol_data["imswitch_version"] = getattr(self.controller, 'version', 'unknown')
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(protocol_file), exist_ok=True)
+            
+            # Save to JSON with pretty printing
+            with open(protocol_file, 'w') as f:
+                json.dump(protocol_data, f, indent=2, default=self._json_serializer)
+                
+            self._logger.info(f"Experiment protocol saved to: {protocol_file}")
+            return protocol_file
+            
+        except Exception as e:
+            self._logger.error(f"Failed to save experiment protocol: {e}")
+            return None
+    
+    def _json_serializer(self, obj):
+        """
+        Custom JSON serializer for objects not serializable by default.
+        
+        Args:
+            obj: Object to serialize
+            
+        Returns:
+            JSON-serializable representation
+        """
+        # Handle numpy types
+        if isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        
+        # Handle datetime objects
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        
+        # Handle callable functions (store name only)
+        elif callable(obj):
+            return f"<function: {obj.__name__}>"
+        
+        # Handle objects with __dict__
+        elif hasattr(obj, '__dict__'):
+            return {k: v for k, v in obj.__dict__.items() if not k.startswith('_')}
+        
+        # Fallback to string representation
+        else:
+            return str(obj)

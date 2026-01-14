@@ -137,6 +137,9 @@ class ExperimentPerformanceMode(ExperimentModeBase):
                 # Execute fast stage scan
                 zarr_url = self._execute_fast_stage_scan(scan_params, t_period, n_times, experiment_params)
                 self._logger.info(f"Performance mode scan completed. Data saved to: {zarr_url}")
+                
+                # Save experiment protocol to JSON
+                self._save_performance_protocol(scan_params, experiment_params, zarr_url)
 
             # Finalize OME writers if they were created
             if file_writers:
@@ -393,14 +396,11 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         # Get tPre and tPost from experiment parameters or calculate defaults
         t_pre, t_post = self._extract_timing_parameters(experiment_params)
 
-        # Build illumination list from dict
-        illumination_list = [
-            illum_params['illumination0'],
-            illum_params['illumination1'],
-            illum_params['illumination2'],
-            illum_params['illumination3'],
-            illum_params['illumination4']
-        ]
+        # Build illumination list from dict for each key 
+        illumination_list = [] # TODO: This is nonesense, we may change the order of the illumination sources again...
+        for ikey in illum_params.keys(): #
+            if ikey.startswith('illumination'):
+                illumination_list.append(illum_params.get(ikey, 0))
 
         return {
             'xstart': xStart,
@@ -591,7 +591,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             self.controller._writer_thread_ome.start()
             
             # Prepare illumination tuple - pad to 5 channels
-            illumination_padded = (illumination_list + [0] * 5)[:5]
+            illumination_padded = (illumination_list + [0] * 5)[:5] # TODO: we need to keep the sequence proposed by the esp32 firmware here!  adding zeros will shift the channel information
             illumination_tuple = tuple(illumination_padded) if nIlluminations > 0 else (0, 0, 0, 0, 0)
             
             # Reset stagescan completion flag and register callback
@@ -1074,3 +1074,72 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             Dictionary indicating resume is not supported
         """
         return {"status": "not_supported", "message": "Resume is not supported in performance mode"}
+    
+    def _save_performance_protocol(self,
+                                  scan_params: Dict[str, Any],
+                                  experiment_params: Dict[str, Any],
+                                  zarr_url: str) -> None:
+        """
+        Save performance mode experiment protocol to JSON.
+        
+        Args:
+            scan_params: Dictionary with scan parameters
+            experiment_params: Dictionary with experiment parameters
+            zarr_url: URL/path to the saved OME-Zarr data
+        """
+        try:
+            # Extract experiment info
+            m_experiment = experiment_params.get('mExperiment')
+            illumination_sources = []
+            illumination_intensities = []
+            exposures = []
+            
+            if m_experiment and hasattr(m_experiment, 'parameterValue'):
+                param_value = m_experiment.parameterValue
+                illumination_sources = getattr(param_value, 'illumination', [])
+                illumination_intensities = getattr(param_value, 'illuIntensities', [])
+                exposures = getattr(param_value, 'illuExposures', [])
+            
+            # Build protocol data
+            protocol_data = {
+                "experiment_name": getattr(m_experiment, 'name', 'performance_scan') if m_experiment else 'performance_scan',
+                "experiment_mode": "performance",
+                "trigger_mode": "software" if self._use_software_trigger else "hardware",
+                "data_path": zarr_url,
+                "scan_parameters": {
+                    "xstart": scan_params['xstart'],
+                    "xstep": scan_params['xstep'],
+                    "nx": scan_params['nx'],
+                    "ystart": scan_params['ystart'],
+                    "ystep": scan_params['ystep'],
+                    "ny": scan_params['ny'],
+                    "zstart": scan_params['zstart'],
+                    "zstep": scan_params['zstep'],
+                    "nz": scan_params['nz'],
+                    "tsettle": scan_params['tsettle'],
+                    "tExposure": scan_params['tExposure'],
+                    "illumination": scan_params['illumination'],
+                    "led": scan_params['led']
+                },
+                "timelapse": {
+                    "tPeriod": experiment_params.get('tPeriod', 1),
+                    "nTimes": experiment_params.get('nTimes', 1)
+                },
+                "illumination_sources": illumination_sources,
+                "illumination_intensities": illumination_intensities,
+                "exposures": exposures,
+                "total_frames": scan_params['nx'] * scan_params['ny'] * scan_params['nz'] * max(sum(1 for i in scan_params['illumination'] if i > 0), 1)
+            }
+            
+            # Create protocol file path from controller's mFilePath
+            if hasattr(self.controller, 'mFilePath') and self.controller.mFilePath:
+                protocol_file_path = self.controller.mFilePath
+            else:
+                # Fallback to save_dir
+                timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                protocol_file_path = os.path.join(self.controller.save_dir, f"{timeStamp}_FastStageScan")
+            
+            self.save_experiment_protocol(protocol_data, protocol_file_path, mode="performance")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to save performance mode protocol: {e}")

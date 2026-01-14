@@ -2,9 +2,9 @@
 
 [![DOI](https://joss.theoj.org/papers/10.21105/joss.03394/status.svg)](https://doi.org/10.21105/joss.03394)
 
-``ImSwitch`` is a software solution in Python that aims at generalizing microscope control by using an architecture based on the model-view-presenter (MVP) to provide a solution for flexible control of multiple microscope modalities. Here is an intro video from Jacopo about ImSwitch: <https://www.youtube.com/watch?v=B54QCt5OQPI>
+ImSwitch is a Python program which aims at generalizing microscope control. Here is an intro video from Jacopo (developer of the original ImSwitch project) about ImSwitch: <https://www.youtube.com/watch?v=B54QCt5OQPI>
 
-The openUC2/ImSwitch repo is a hard fork of the original ImSwitch (which is no longer maintained) which provides a web browser GUI frontend to ImSwitch.
+The openUC2/ImSwitch repo is a hard fork of the upstream project at [ImSwitch/ImSwitch](https://github.com/ImSwitch/ImSwitch), which is no longer maintained; openUC2/ImSwitch runs ImSwitch as a server in headless mode with an HTTP API which used by a React single-page-app browser GUI (also served from the ImSwitch server). This fork does not maintain the upstream's Qt-based desktop GUI.
 
 ## Development
 
@@ -12,13 +12,7 @@ These instructions are for people developing and maintaining ImSwitch.
 
 ### Setup
 
-This version of ImSwitch is installed using UV, a fast Python package installer written in Rust which, in comparison to pip, is:
-
-- much faster for package installation and dependency resolution
-- more reliable in finding compatible package versions
-- more reproducible for software builds
-
-To set up your development environment, run:
+Run:
 
 ```bash
 # Install uv
@@ -31,6 +25,7 @@ cd ImSwitch
 # Create a virtual environment and install ImSwitch with UV
 uv venv
 source .venv/bin/activate
+# Yes, we need to start using `uv sync` instead for reproducible installs with our lockfile...but we're still ignoring the lockfile right now:
 uv pip install -e .
 
 # Run a workaround for some brokenness:
@@ -55,6 +50,7 @@ source .venv/bin/activate
 and then run:
 
 ```bash
+# Yes, we should use `uv run` instead of `python`...but first we need to make `uv sync` work:
 python main.py --headless --http-port 8001
 ```
 

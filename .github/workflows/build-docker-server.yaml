@@ -17,7 +17,7 @@ on:
 
 env:
   IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
-  IMAGE_NAME: imswitch-noqt
+  IMAGE_NAME: imswitch
   MAIN_BRANCH: 'master' # pushing to this branch will update the "edge" tag on the image
   BETA_BRANCH: 'beta' # pushing to this branch will update the "beta" tag on the image
   STABLE_BRANCH: 'stable' # pushing to this branch will update the "stable" tag on the image

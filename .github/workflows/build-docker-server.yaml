@@ -53,6 +53,7 @@ jobs:
           filter: 'blob:none'
 
       - name: Wait for frontend to build
+        id: wait-build-frontend
         uses: lucasssvaz/wait-on-workflow@v1
         with:
           workflow: build-frontend.yaml
@@ -64,7 +65,7 @@ jobs:
           name: frontend
           path: ./frontend/build
           github-token: ${{github.token}}
-          run-id: ${{ steps.wait-build-frontend.outputs.run-d }}
+          run-id: ${{ steps.wait-build-frontend.outputs.run-id }}
 
       # Work around a bug where capital letters in the GitHub username (e.g. "PlanktoScope") make it
       # impossible to push to GHCR. See https://github.com/macbre/push-to-ghcr/issues/12

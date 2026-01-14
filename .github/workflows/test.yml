@@ -75,7 +75,7 @@ jobs:
         name: frontend
         path: ./frontend/build
         github-token: ${{github.token}}
-        run-id: ${{ steps.wait-build-frontend.outputs.run-d }}
+        run-id: ${{ steps.wait-build-frontend.outputs.run-id }}
       
     - name: Run Unit Tests
       run: |

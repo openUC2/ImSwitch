@@ -88,6 +88,7 @@ jobs:
         shell: bash
 
       - name: Wait for frontend to build
+        id: wait-build-frontend
         uses: lucasssvaz/wait-on-workflow@v1
         with:
           workflow: build-frontend.yaml
@@ -99,7 +100,7 @@ jobs:
           name: frontend
           path: ./frontend/build
           github-token: ${{github.token}}
-          run-id: ${{ steps.wait-build-frontend.outputs.run-d }}
+          run-id: ${{ steps.wait-build-frontend.outputs.run-id }}
 
       - name: Run Unit Tests
         run: |

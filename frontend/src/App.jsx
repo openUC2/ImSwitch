@@ -1,8 +1,11 @@
 /* global __webpack_init_sharing__, __webpack_share_scopes__ */
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, useMemo } from "react";
 
 // ImSwitch Themes
 import { darkTheme, lightTheme } from "./themes";
+
+// Kiosk Mode
+import KioskLayout from "./kiosk/KioskLayout";
 
 import AboutPage from "./components/AboutPage.js";
 import BlocklyController from "./components/BlocklyController.js";
@@ -51,7 +54,7 @@ import { MCTProvider } from "./context/MCTContext.js";
 import AxonTabComponent from "./axon/AxonTabComponent.js";
 import WebSocketHandler from "./middleware/WebSocketHandler.js";
 import CompositeAcquisitionComponent from "./axon/CompositeAcquisitionComponent.js";
-import CompositeStreamViewer from "./axon/CompositeStreamViewer.js"
+import CompositeStreamViewer from "./axon/CompositeStreamViewer.js";
 
 //redux
 import { useDispatch, useSelector } from "react-redux";
@@ -79,6 +82,12 @@ import { Box, CssBaseline } from "@mui/material";
 import { ThemeProvider } from "@mui/material/styles";
 
 function App() {
+  // Detect Kiosk Mode from URL parameter
+  const isKioskMode = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("mode") === "kiosk";
+  }, []);
+
   // Notification state
   const notification = useSelector(getNotificationState);
   const dispatch = useDispatch();
@@ -227,13 +236,15 @@ function App() {
     // Construct the relative path for the Zarr file
     // The path from FileManager is like "/recordings/experiment.ome.zarr"
     const zarrPath = file.path || `/${file.name}`;
-    
+
     // Open the Vizarr viewer through Redux
-    dispatch(vizarrViewerSlice.openViewer({
-      url: zarrPath,
-      fileName: file.name
-    }));
-    
+    dispatch(
+      vizarrViewerSlice.openViewer({
+        url: zarrPath,
+        fileName: file.name,
+      })
+    );
+
     // Switch to the Vizarr viewer tab
     setSelectedPlugin("VizarrViewer");
   };
@@ -357,6 +368,26 @@ function App() {
   }
   const plugins = usePluginWidgets();
 
+  // Render Kiosk Layout if in kiosk mode
+  if (isKioskMode) {
+    return (
+      <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
+        <WebSocketHandler />
+        <CssBaseline />
+
+        {/* Global Status/Notification Message */}
+        <StatusMessage
+          message={notification.message}
+          type={notification.type}
+          onClose={() => dispatch(clearNotification())}
+        />
+
+        <KioskLayout />
+      </ThemeProvider>
+    );
+  }
+
+  // Normal layout
   return (
     <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
       <WebSocketHandler />
@@ -428,7 +459,9 @@ function App() {
           {selectedPlugin === "Stresstest" && <StresstestController />}
           {selectedPlugin === "FocusLock" && <FocusLockController />}
           {selectedPlugin === "AcceptanceTest" && <AcceptanceTestComponent />}
-          {selectedPlugin === "StageCenterCalibration" && <StageCenterCalibrationWizard />}
+          {selectedPlugin === "StageCenterCalibration" && (
+            <StageCenterCalibrationWizard />
+          )}
           {selectedPlugin === "HoloController" && <HoloController />}
           {selectedPlugin === "DPCController" && <DPCController />}
           {selectedPlugin === "JupyterNotebook" && (
@@ -481,7 +514,7 @@ function App() {
           )}
           {selectedPlugin === "VizarrViewer" && (
             <Box sx={{ width: "100%", height: "calc(100vh - 64px)" }}>
-              <VizarrViewer 
+              <VizarrViewer
                 zarrUrl={vizarrViewerState.currentUrl}
                 onClose={handleCloseVizarr}
                 height="100%"
@@ -503,8 +536,12 @@ function App() {
               )
           )}
           {selectedPlugin === "DemoController" && <DemoController />}
-          {selectedPlugin === "CompositeAcquisition" && <CompositeAcquisitionComponent />}
-          {selectedPlugin === "CompositeStreamViewer" && <CompositeStreamViewer />}
+          {selectedPlugin === "CompositeAcquisition" && (
+            <CompositeAcquisitionComponent />
+          )}
+          {selectedPlugin === "CompositeStreamViewer" && (
+            <CompositeStreamViewer />
+          )}
           {selectedPlugin === "FlowStop" && <FlowStopController />}
           {selectedPlugin === "StageOffsetCalibration" && (
             <StageOffsetCalibration />

@@ -66,8 +66,8 @@ class AVManager(DetectorManager):
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=True)
 
-    def getLatestFrame(self):
-        return self._camera.getLast()
+    def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
+        return self._camera.getLast(returnFrameNumber=returnFrameNumber)
 
 
 

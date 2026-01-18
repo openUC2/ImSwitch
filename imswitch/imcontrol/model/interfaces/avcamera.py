@@ -426,7 +426,7 @@ class CameraAV:
         self.frame_buffer.clear()
         self.__logger.debug(f"Set ROI to x={self.hpos}, y={self.vpos}, w={self.hsize}, h={self.vsize}")
 
-    def getLast(self):
+    def getLast(self, returnFrameNumber=False):
         # Return the most recent frame from buffer (streaming) or direct capture
         # The manager code uses is_resize, but we don't do anything with it here
         # (kept for compatibility).
@@ -435,7 +435,10 @@ class CameraAV:
                 # Use the latest frame from the streaming buffer
                 with self._frame_lock:
                     frame = self.frame_buffer[-1].copy()
-                    return frame.copy() if frame is not None else np.zeros((100, 100))
+                    if returnFrameNumber:
+                        return frame, self.frame_id
+                    else:
+                        return frame
             '''
             else:
                 # Fallback to direct frame capture if not streaming
@@ -456,10 +459,16 @@ class CameraAV:
             self.__logger.warning(f"Error getting frame: {e}")
             # Return last known good frame or a placeholder
             if hasattr(self, 'frame') and self.frame is not None:
-                return self.frame.copy()
+                if returnFrameNumber:
+                    return self.frame.copy(), self.frame_id
+                else:
+                    return self.frame.copy()
             else:
                 # Return a small placeholder frame to avoid crashes
-                return np.zeros((100, 100), dtype=np.uint8)
+                if returnFrameNumber:
+                    return np.zeros((100, 100)), -1
+                else:
+                    return np.zeros((100, 100))
 
     def getLastChunk(self):
         # Return all frames currently in buffer as a single 3D array if desired

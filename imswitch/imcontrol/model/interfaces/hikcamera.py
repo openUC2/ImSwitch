@@ -672,8 +672,8 @@ class CameraHIK:
             time.sleep(0.005)
 
         # Get the latest frame and remove it from the buffer to avoid repeated consumption
-        latest_frame = self.frame_buffer.pop()
-        latest_frame_id = self.frameid_buffer.pop()
+        latest_frame = self.frame_buffer[-1] # TODO: Does this cause any problems? if we do .pop() we remove the frames from the 
+        latest_frame_id = self.frameid_buffer[-1] 
 
         # Store as last frame from buffer for fallback scenarios
         self.lastFrameFromBuffer = latest_frame

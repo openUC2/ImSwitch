@@ -385,7 +385,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         ny = int((yEnd - yStart) // yStep) + 1 if yStep != 0 else 1
 
         # Prepare illumination parameters
-        illum_params = self.prepare_illumination_parameters(illumination_intensities)
+        illumination_list = self.prepare_illumination_parameters(illumination_intensities)
 
         # Handle LED parameter if present
         led_value = self._extract_led_value(experiment_params)
@@ -395,12 +395,6 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         
         # Get tPre and tPost from experiment parameters or calculate defaults
         t_pre, t_post = self._extract_timing_parameters(experiment_params)
-
-        # Build illumination list from dict for each key 
-        illumination_list = [] # TODO: This is nonesense, we may change the order of the illumination sources again...
-        for ikey in illum_params.keys(): #
-            if ikey.startswith('illumination'):
-                illumination_list.append(illum_params.get(ikey, 0))
 
         return {
             'xstart': xStart,

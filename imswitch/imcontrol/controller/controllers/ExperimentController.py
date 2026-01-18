@@ -253,15 +253,11 @@ class ExperimentController(ImConWidgetController):
         self.detectorPixelSize = self.mDetector.pixelSizeUm
 
         # select lasers
-        self.allIlluNames = self._master.lasersManager.getAllDeviceNames()+ self._master.LEDMatrixsManager.getAllDeviceNames()
+        self.allIlluNames = self._master.lasersManager.getAllDeviceNames()
         self.availableIlluminations = []
         for iDevice in self.allIlluNames:
-            try:
-                # laser maanger
-                self.availableIlluminations.append(self._master.lasersManager[iDevice])
-            except:
-                # lexmatrix manager
-                self.availableIlluminations.append(self._master.LEDMatrixsManager[iDevice])
+            # laser maanger
+            self.availableIlluminations.append(self._master.lasersManager[iDevice])
 
         # select stage
         self.allPositionerNames = self._master.positionersManager.getAllDeviceNames()[0]
@@ -1523,15 +1519,6 @@ class ExperimentController(ImConWidgetController):
                     except Exception as e:
                         self._logger.debug(f"Could not turn off laser {laser_name}: {e}")
             
-            # Try to turn off LED via UC2 interface
-            if hasattr(self, 'mStage') and hasattr(self.mStage, '_rs232manager'):
-                try:
-                    esp32 = self.mStage._rs232manager._esp32
-                    if hasattr(esp32, 'led'):
-                        esp32.led.send_LEDMatrix_array(intensity=0, ids=[i for i in range(64)])
-                except Exception as e:
-                    self._logger.debug(f"Could not turn off LED matrix: {e}")
-                    
             self._logger.debug("All illumination sources switched off before scan")
         except Exception as e:
             self._logger.warning(f"Error switching off illumination: {e}")

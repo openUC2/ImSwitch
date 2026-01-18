@@ -103,6 +103,13 @@ def get_version():
     """
     return {"version": VERSION}
 
+@api_router.get("/getAvailableControllers")
+def get_available_controllers():
+    """
+    Returns a list of available controllers in the ImSwitch server.
+    """
+    controllers = configfiletools.get_available_controllers()
+    return {"availableControllers": controllers}
 
 # Storage Management API Endpoints are now handled via APIExport in StorageController
 # The controller is automatically initialized by MasterController

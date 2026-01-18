@@ -162,24 +162,18 @@ class ExperimentModeBase(ABC):
             illumination_intensities: List of illumination intensities pre-mapped by frontend
             
         Returns:
-            Dictionary with illumination0-N and led parameters
+            List with illumination0-N and led parameters
         """
-        illum_dict = {"led": 0}  # Default LED value
+        intensity_list = [0]*len(illumination_intensities)  # Default LED value
         
         # Simple direct mapping - frontend already handles channel_index matching
         for i, intensity in enumerate(illumination_intensities):
-            if i < len(self.controller.availableIlluminations):
-                illum = self.controller.availableIlluminations[i]
-                
-                # Check if this is LED channel
-                if isinstance(illum.channel_index, str) and illum.channel_index.upper() == "LED":
-                    illum_dict["led"] = intensity
-                else:
-                    illum_dict[f"illumination{i}"] = intensity
-            else:
-                illum_dict[f"illumination{i}"] = intensity
+            intensity_list[self.controller.availableIlluminations[i].channel_index] = intensity
+            #print(self.controller.availableIlluminations[i].name)
+            #print(self.controller.availableIlluminations[i].channel_index)            
+            # order it by channel index
         
-        return illum_dict
+        return intensity_list
 
     def create_experiment_directory(self, exp_name: str) -> Tuple[str, str, str]:
         """

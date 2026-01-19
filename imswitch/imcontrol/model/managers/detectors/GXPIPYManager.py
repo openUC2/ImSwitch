@@ -119,6 +119,10 @@ class GXPIPYManager(DetectorManager):
                          model=model, parameters=parameters, actions=actions, croppable=True)
 
 
+    def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
+        """Set flatfield image for correction."""
+        self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)
+
     def _updatePropertiesFromCamera(self):
         self.setParameter('Real exposure time', self._camera.getPropertyValue('exposure_time')[0])
         self.setParameter('Internal frame interval',
@@ -138,13 +142,9 @@ class GXPIPYManager(DetectorManager):
             elif triggerSource == 2 and triggerMode == 1:
                 self.setParameter('Trigger source', 'External "frame-trigger"')
 
-    def getLatestFrame(self, is_save=None, is_resize=True, returnFrameNumber=False):
-        if returnFrameNumber:
-            frame, frameNumber = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame, frameNumber
-        else:
-            frame = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame
+    def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
+        """Get the latest frame from the camera."""
+        return self._camera.getLast(returnFrameNumber=returnFrameNumber)
 
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
@@ -195,9 +195,11 @@ class GXPIPYManager(DetectorManager):
 
 
     def getChunk(self):
+        """Get and clear the ring buffer as a numpy stack."""
         try:
             return self._camera.getLastChunk()
-        except:
+        except Exception as e:
+            self.__logger.error(f'Error getting chunk: {e}')
             return None
 
     def sendSoftwareTrigger(self):
@@ -207,6 +209,14 @@ class GXPIPYManager(DetectorManager):
         except Exception as e:
             self.__logger.error(f'Failed to send software trigger: {e}')
             return False
+
+    def getCurrentTriggerType(self):
+        """Get the current trigger type of the camera."""
+        return self._camera.getTriggerSource()
+
+    def getTriggerTypes(self):
+        """Get the available trigger types for the camera."""
+        return self._camera.getTriggerTypes()
 
     def flushBuffers(self):
         self._camera.flushBuffer()
@@ -322,6 +332,7 @@ class GXPIPYManager(DetectorManager):
         return camera
 
     def getFrameNumber(self):
+        """Get the current frame number from the camera."""
         return self._camera.getFrameNumber()
 
     def closeEvent(self):

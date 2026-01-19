@@ -38,14 +38,16 @@ class CameraGXIPY:
         self.flipImage = flipImage
 
         # reserve some space for the framebuffer
-        self.NBuffer = 10
+        self.NBuffer = 3  # Match HIK camera buffer size
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
         self.flatfieldImage = None
         self.isFlatfielding = False
+        self.lastFrameFromBuffer = None
         self.lastFrameId = -1
         self.frameNumber = -1
         self.frame = None
+        self.timestamp = 0  # Track hardware timestamp
 
         # For RGB
         self.contrast_lut = None
@@ -207,9 +209,14 @@ class CameraGXIPY:
         if self.isFlatfielding:
             self.recordFlatfieldImage()
 
-    def set_exposure_time(self,exposure_time):
+    def set_exposure_time(self, exposure_time):
+        """Set exposure time in milliseconds ."""
         self.exposure_time = exposure_time
-        self.camera.ExposureTime.set(self.exposure_time*1000)
+        try:
+            # GXIPY uses microseconds, convert from ms
+            self.camera.ExposureTime.set(self.exposure_time * 1000)
+        except Exception as e:
+            self.__logger.error(f"Failed to set exposure time: {e}")
 
     def set_exposure_mode(self, exposure_mode="manual"):
         """Set exposure mode to match HIK camera interface."""
@@ -236,22 +243,37 @@ class CameraGXIPY:
         exposure_mode = "auto" if str(isAutomatic).lower() in ('true', '1', 'automatic', 'auto') else "manual"
         return self.set_exposure_mode(exposure_mode)
 
-    def set_gain(self,gain):
+    def set_gain(self, gain):
+        """Set gain value ."""
         self.gain = gain
-        self.camera.Gain.set(self.gain)
+        try:
+            self.camera.Gain.set(self.gain)
+        except Exception as e:
+            self.__logger.error(f"Failed to set gain: {e}")
 
     def set_frame_rate(self, frame_rate):
-        if frame_rate == -1:
-            frame_rate = 10000 # go as fast as you can
-        self.frame_rate = frame_rate
+        """Set frame rate in fps ."""
+        try:
+            if frame_rate > 0:
+                self.frame_rate = frame_rate
+                self.camera.AcquisitionFrameRateMode.set(gx.GxSwitchEntry.ON)
+                self.camera.AcquisitionFrameRate.set(self.frame_rate)
+                self.__logger.debug(f"Set frame rate to {self.frame_rate} fps")
+            else:
+                # Disable frame rate limiting for maximum speed
+                self.frame_rate = -1
+                self.camera.AcquisitionFrameRateMode.set(gx.GxSwitchEntry.OFF)
+                self.__logger.debug("Frame rate limiting disabled")
+        except Exception as e:
+            self.__logger.error(f"Failed to set frame rate: {e}")
 
-        # temporary
-        self.camera.AcquisitionFrameRate.set(self.frame_rate)
-        self.camera.AcquisitionFrameRateMode.set(gx.GxSwitchEntry.ON)
-
-    def set_blacklevel(self,blacklevel):
+    def set_blacklevel(self, blacklevel):
+        """Set black level value ."""
         self.blacklevel = blacklevel
-        self.camera.BlackLevel.set(self.blacklevel)
+        try:
+            self.camera.BlackLevel.set(self.blacklevel)
+        except Exception as e:
+            self.__logger.error(f"Failed to set black level: {e}")
 
     def set_pixel_format(self,format):
         format = format.upper()
@@ -293,23 +315,67 @@ class CameraGXIPY:
         self.camera.BinningVertical.set(binning)
         self.binning = binning
 
-    def getLast(self, is_resize=True, returnFrameNumber=False, timeout=1):
-        # get frame and save
-        # only return fresh frames
-        # print(self.lastFrameId, self.frameNumber)
-        cTime = time.time()
-        while(self.lastFrameId > self.frameNumber and self.frame is None):
-            time.sleep(.01) # wait for fresh frame
-            if time.time()-cTime > timeout:
-                self.__logger.warning("Timeout in getLast")
+    def getLast(self, is_resize=True, returnFrameNumber=False, timeout=1.0, auto_trigger=False):
+        """
+        Return the newest frame in the ring-buffer.
+        If the buffer is empty *and* the camera is in **software-trigger**
+        mode, a trigger is fired automatically (once) so the caller does not
+        have to worry about it.
+
+        Parameters
+        ----------
+        is_resize : bool
+            Unused, kept for API compatibility.
+        returnFrameNumber : bool
+            If True return a tuple ``(frame, fid)``.
+        timeout : float
+            Seconds to wait for a frame before giving up.
+        auto_trigger : bool
+            Disable if you need manual control over the trigger pulse.
+        """
+        # one-shot trigger if necessary ---------------------------------------
+        if auto_trigger and getattr(self, "trigger_source", "").lower() in (
+            "internal trigger", "software", "software trigger"
+        ):
+            self.send_trigger()
+
+        # wait for a frame ----------------------------------------------------
+        t0 = time.time()
+        while not self.frame_buffer:
+            if time.time() - t0 > timeout:
                 if returnFrameNumber:
-                    return None, -1
+                    # Fallback to last frame if available
+                    if self.lastFrameFromBuffer is not None:
+                        return self.lastFrameFromBuffer, self.lastFrameId
+                    return None, None
+                # Fallback to last frame if available
+                if self.lastFrameFromBuffer is not None:
+                    return self.lastFrameFromBuffer
+                return None
+            if self.lastFrameFromBuffer is not None:  # in case we are in trigger mode
+                if returnFrameNumber:
+                    return self.lastFrameFromBuffer, self.lastFrameId
+                return self.lastFrameFromBuffer
+            time.sleep(0.005)
+
+        # Get the latest frame from the buffer
+        latest_frame = self.frame_buffer[-1]
+        latest_frame_id = self.frameid_buffer[-1]
+
+        # Apply flatfielding if enabled
         if self.isFlatfielding and self.flatfieldImage is not None:
-            self.frame = self.frame/self.flatfieldImage
-        self.lastFrameId = self.frameNumber
+            try:
+                latest_frame = latest_frame / self.flatfieldImage
+            except Exception as e:
+                self.__logger.warning(f"Flatfielding failed: {e}")
+
+        # Store as last frame from buffer for fallback scenarios
+        self.lastFrameFromBuffer = latest_frame
+        self.lastFrameId = latest_frame_id
+
         if returnFrameNumber:
-            return self.frame, self.frameNumber
-        return self.frame
+            return latest_frame, latest_frame_id
+        return latest_frame
 
     def getLatestFrame(self, returnFrameNumber=False):
         """Alias for getLast to match detector interface."""
@@ -324,11 +390,17 @@ class CameraGXIPY:
         self.flushBuffer()
 
     def getLastChunk(self):
-        chunk = np.array(self.frame_buffer)
-        frameids = np.array(self.frameid_buffer)
+        """Return *and clear* the entire ring-buffer as a numpy stack."""
+        frames = list(self.frame_buffer)
+        ids = list(self.frameid_buffer)
         self.flushBuffer()
-        self.__logger.debug("Buffer: "+str(chunk.shape)+" IDs: " + str(frameids))
-        return chunk
+
+        # Store last frame for fallback
+        if frames:
+            self.lastFrameFromBuffer = frames[-1]
+
+        self.__logger.debug("Buffer: " + str(len(frames)) + " frames, IDs: " + str(ids))
+        return np.array(frames), np.array(ids)
 
     def getChunk(self):
         """Alias for getLastChunk to match detector interface."""
@@ -477,7 +549,7 @@ class CameraGXIPY:
         try:
             self.camera.TriggerMode.set(gx.GxSwitchEntry.OFF)
             self.trigger_mode = TriggerMode.CONTINUOUS
-            self.__logger.debug("Continuous acquisition configured successfully")
+            self.__logger.info("Trigger source set to continuous (free run)")
         except Exception as e:
             self.__logger.error(f"Failed to configure continuous acquisition: {e}")
 
@@ -487,7 +559,7 @@ class CameraGXIPY:
             self.camera.TriggerMode.set(gx.GxSwitchEntry.ON)
             self.camera.TriggerSource.set(gx.GxTriggerSourceEntry.SOFTWARE)
             self.trigger_mode = TriggerMode.SOFTWARE
-            self.__logger.debug("Software trigger acquisition configured successfully")
+            self.__logger.info("Trigger source set to software trigger")
         except Exception as e:
             self.__logger.error(f"Failed to configure software trigger: {e}")
 
@@ -522,7 +594,7 @@ class CameraGXIPY:
 
             self.trigger_mode = TriggerMode.HARDWARE
             self.flushBuffer()
-            self.__logger.debug("Hardware trigger acquisition configured successfully")
+            self.__logger.info("Trigger source set to external trigger (LINE2)")
 
         except Exception as e:
             self.__logger.error(f"Failed to configure hardware trigger: {e}")
@@ -587,12 +659,15 @@ class CameraGXIPY:
         return self.send_trigger()
 
     def send_trigger(self):
-        """Fire software trigger pulse."""
-        if self.is_streaming:
+        """Fire one software trigger pulse when trigger source is set to software."""
+        try:
+            if not self.is_streaming:
+                self.__logger.warning('Trigger not sent - camera is not streaming')
+                return False
             self.camera.TriggerSoftware.send_command()
             return True
-        else:
-            self.__logger.debug('trigger not sent - camera is not streaming')
+        except Exception as e:
+            self.__logger.error(f"Software trigger failed: {e}")
             return False
 
     def openPropertiesGUI(self):
@@ -678,6 +753,16 @@ class CameraGXIPY:
     def setFlatfieldImage(self, flatfieldImage, isFlatfieldEnabeled=True):
         self.flatfieldImage = flatfieldImage
         self.isFlatfielding = isFlatfieldEnabeled
+
+    # ── Context manager support  ──────────────────
+    def __enter__(self):
+        """Context manager entry."""
+        self.start_live()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        """Context manager exit."""
+        self.close()
 
 
 # Copyright (C) ImSwitch developers 2021

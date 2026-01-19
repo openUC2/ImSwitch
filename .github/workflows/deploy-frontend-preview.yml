@@ -1,0 +1,71 @@
+name: deploy-frontend-preview/edge
+
+on:
+  push:
+    branches:
+      - 'master'
+      - 'main'
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-frontend-preview.yml'
+  workflow_dispatch:
+    inputs:
+      git-ref:
+        description: 'Git ref (optional)'
+        required: false
+
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest
+# queued. But do not cancel in-progress runs - we want these deploymeents to complete.
+concurrency:
+  group: 'deploy-frontend-preview/edge'
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+    permissions:
+      contents: read
+      pages: write
+      actions: read
+      id-token: write
+
+    environment:
+      name: frontend-preview-edge
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for frontend to build
+        id: wait-build-frontend
+        uses: lucasssvaz/wait-on-workflow@v1
+        with:
+          workflow: build-frontend.yaml
+          sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Download built frontend
+        uses: actions/download-artifact@v5
+        with:
+          name: frontend
+          path: ./frontend/build
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.wait-build-frontend.outputs.run-id }}
+
+      - name: Set up Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./frontend/build
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

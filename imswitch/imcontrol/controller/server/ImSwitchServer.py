@@ -62,7 +62,8 @@ print("Socket.IO app mounted at /socket.io")
 
 # Mount static files and other apps
 app.mount("/static", StaticFiles(directory=static_dir), name="static")  # serve static files such as the swagger UI
-app.mount("/ui", StaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
+try:app.mount("/ui", StaticFiles(directory=imswitchapp_dir), name="imswitch") # serve react app
+except:print("Could not mount /imcontrol ui static files since directory is missing/a symlink. Please copy the react build files to:", imswitchapp_dir)
 app.mount("/images", StaticFiles(directory=images_dir), name="images") # serve images for GUI
 # provide data path via static files
 app.mount("/data", StaticFiles(directory=dirtools.UserFileDirs.getValidatedDataPath()), name="data")  # serve user data files

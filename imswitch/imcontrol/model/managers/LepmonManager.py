@@ -22,7 +22,7 @@ class LepmonManager(SignalInterface):
                                  "lightStates", "lcdDisplay", "buttonStates"]
 
         # get default configs
-        self.defaultConfigPath = os.path.join(dirtools.UserFileDirs.Root, "flowStopController")
+        self.defaultConfigPath = os.path.join(dirtools.UserFileDirs.Root, "lepmon")
         if not os.path.exists(self.defaultConfigPath):
             os.makedirs(self.defaultConfigPath)
 

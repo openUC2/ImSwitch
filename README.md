@@ -17,6 +17,7 @@ Run:
 ```bash
 # Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
 
 # Clone the ImSwitch repository
 git clone https://github.com/openUC2/ImSwitch

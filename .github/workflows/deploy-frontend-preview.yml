@@ -53,19 +53,20 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           name: frontend
-          path: ./frontend/build
+          path: ./frontend/build/ui
           github-token: ${{ github.token }}
           run-id: ${{ steps.wait-build-frontend.outputs.run-id }}
 
-      - name: Set up Pages
-        id: pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Push to youseetoo.github.io
+        # Accessible at https://youseetoo.github.io/imswitch/ui/index.html
+        uses: cpina/github-action-push-to-another-repository@main
+        env:
+          SSH_DEPLOY_KEY: ${{ secrets.YOUSEETOO_SSH_DEPLOY_KEY }}
         with:
-          path: ./frontend/build
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          source-directory: ./frontend/build
+          destination-github-username: youseetoo
+          destination-repository-name: youseetoo.github.io
+          target-directory: imswitch
+          user-email: "bene.d@gmx.de"
+          target-branch: main
+          commit-message: Deploy React frontend

@@ -200,7 +200,7 @@ const OutputDimension = () => {
             <Box sx={{ display: "flex", gap: 2 }}>
               <Box sx={{ flex: 1 }}>
                 <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-                  tPre (Settle Time)
+                  tPre (Settle Time, time it takes to activate the trigger)
                 </Typography>
                 <TextField
                   type="number"
@@ -220,7 +220,7 @@ const OutputDimension = () => {
 
               <Box sx={{ flex: 1 }}>
                 <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-                  tPost (Exposure)
+                  tPost (Exposure, time until the next action)
                 </Typography>
                 <TextField
                   type="number"

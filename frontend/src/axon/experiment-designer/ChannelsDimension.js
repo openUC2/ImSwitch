@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import createAxiosInstance from '../../backendapi/createAxiosInstance';
 import {
@@ -20,6 +20,7 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
+  Checkbox,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -33,6 +34,7 @@ import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
 import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice";
+import * as laserSlice from "../../state/slices/LaserSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 import fetchLaserControllerCurrentValues from "../../middleware/fetchLaserControllerCurrentValues";
 
@@ -47,11 +49,13 @@ const ChannelBlock = ({
   gain,
   minIntensity,
   maxIntensity,
+  isEnabled,
   isExpanded,
   onToggleExpand,
   onIntensityChange,
   onExposureChange,
   onGainChange,
+  onEnabledChange,
   onRemove,
 }) => {
   const theme = useTheme();
@@ -105,9 +109,21 @@ const ChannelBlock = ({
             variant="caption"
             sx={{ color: theme.palette.text.secondary, flex: 1 }}
           >
-            {intensity} mW · {exposure} ms · Gain {gain}
+            {intensity} mW · {exposure} ms · Gain {gain} · {isEnabled ? "ON" : "OFF"}
           </Typography>
         )}
+
+        {/* Enable checkbox */}
+        <Checkbox
+          checked={isEnabled}
+          onChange={(e) => {
+            e.stopPropagation();
+            onEnabledChange(e.target.checked);
+          }}
+          onClick={(e) => e.stopPropagation()}
+          size="small"
+          sx={{ mr: 0.5 }}
+        />
 
         {/* Expand/collapse indicator */}
         <ExpandMoreIcon
@@ -211,9 +227,15 @@ const ChannelsDimension = () => {
   const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
   const connectionSettings = useSelector(connectionSettingsSlice.getConnectionSettingsState);
   const experimentUI = useSelector(experimentUISlice.getExperimentUIState);
+  const laserState = useSelector(laserSlice.getLaserState);
+  const lasers = laserState.lasers;
 
   // Local state for expanded channels
   const [expandedChannels, setExpandedChannels] = useState({});
+  
+  // Debounce refs for laser value updates to prevent serial overload
+  const laserTimeoutRefs = useRef({});
+  const LASER_UPDATE_DEBOUNCE_MS = 300;
 
   // Parameter values from experiment state
   const parameterValue = experimentState.parameterValue;
@@ -221,6 +243,30 @@ const ChannelsDimension = () => {
   const exposures = parameterValue.exposureTimes || [];
   const gains = parameterValue.gains || [];
   const illuSources = parameterRange.illuSources || [];
+  const laserMinValues = parameterRange.illuSourceMinIntensities || [];
+  const laserMaxValues = parameterRange.illuSourceMaxIntensities || [];
+
+  // Initialize timeout refs and cleanup
+  useEffect(() => {
+    if (illuSources.length > 0) {
+      illuSources.forEach(laserName => {
+        if (!laserTimeoutRefs.current[laserName]) {
+          laserTimeoutRefs.current[laserName] = null;
+        }
+        // Initialize laser state in Redux if not exists
+        if (!lasers[laserName]) {
+          dispatch(laserSlice.setLaserState({ laserName, power: 0, enabled: false }));
+        }
+      });
+    }
+    
+    return () => {
+      // Clear all pending timeouts on unmount
+      Object.values(laserTimeoutRefs.current).forEach(timeoutRef => {
+        if (timeoutRef) clearTimeout(timeoutRef);
+      });
+    };
+  }, [illuSources, dispatch]);
 
   // Initialize arrays if needed
   useEffect(() => {
@@ -266,51 +312,68 @@ const ChannelsDimension = () => {
     );
   }, [illuSources, dispatch]);
 
-  // Handler for intensity change
-  const handleIntensityChange = async (index, value) => {
+  // Debounced laser intensity update (copied from IlluminationController)
+  const debouncedSetLaserValue = useCallback((laserName, index, val) => {
+    // Update Redux state immediately for UI responsiveness
+    dispatch(laserSlice.setLaserPower({ laserName, power: val }));
+    
     const arr = [...intensities];
-    arr[index] = value;
+    arr[index] = val;
     dispatch(experimentSlice.setIlluminationIntensities(arr));
-
-    // Update backend immediately for real-time feedback
-    const laserName = illuSources[index];
-    if (laserName && connectionSettings.ip && connectionSettings.apiPort) {
-      try {
-        // First, turn off all other channels
-        const api = createAxiosInstance();
-        for (let i = 0; i < illuSources.length; i++) {
-          if (i !== index) {
-            const otherLaserName = illuSources[i];
-            const encodedOtherLaserName = encodeURIComponent(otherLaserName);
-            await api.get(
-              `/LaserController/setLaserValue?laserName=${encodedOtherLaserName}&value=0`
-            );
-          }
+    
+    // Clear existing timeout for this laser
+    if (laserTimeoutRefs.current[laserName]) {
+      clearTimeout(laserTimeoutRefs.current[laserName]);
+    }
+    
+    // Set new timeout to send to backend after user stops adjusting
+    laserTimeoutRefs.current[laserName] = setTimeout(async () => {
+      if (connectionSettings.ip && connectionSettings.apiPort) {
+        try {
+          const api = createAxiosInstance();
+          const encodedLaserName = encodeURIComponent(laserName);
+          await api.get(`/LaserController/setLaserValue?laserName=${encodedLaserName}&value=${val}`);
+          console.log(`${laserName} intensity updated to: ${val}`);
+        } catch (error) {
+          console.error("Failed to set laser value:", error);
         }
-
-        // Then set the selected channel with its intensity
-        const encodedLaserName = encodeURIComponent(laserName);
-        await api.get(
-          `/LaserController/setLaserValue?laserName=${encodedLaserName}&value=${value}`
-        );
-
-        // Also send exposure time and gain for this channel
-        const currentExposure = exposures[index] ?? 100;
-        const currentGain = gains[index] ?? 0;
-        
-        await api.get(
-          `/SettingsController/setDetectorExposureTime?exposureTime=${currentExposure}`
-        );
-        
-        await api.get(
-          `/SettingsController/setDetectorGain?gain=${currentGain}`
-        );
-      } catch (error) {
-        console.error("Failed to update laser intensity:", error);
       }
+    }, LASER_UPDATE_DEBOUNCE_MS);
+  }, [dispatch, connectionSettings, intensities]);
+
+  // Update laser active state (copied from IlluminationController)
+  const setLaserActive = useCallback(async (laserName, active) => {
+    // Update Redux state immediately
+    dispatch(laserSlice.setLaserEnabled({ laserName, enabled: active }));
+    
+    // Update backend
+    if (connectionSettings.ip && connectionSettings.apiPort) {
+      try {
+        const api = createAxiosInstance();
+        const encodedLaserName = encodeURIComponent(laserName);
+        await api.get(`/LaserController/setLaserActive?laserName=${encodedLaserName}&active=${active}`);
+        console.log(`${laserName} active state updated to: ${active}`);
+      } catch (error) {
+        console.error("Failed to set laser active state:", error);
+      }
+    }
+  }, [dispatch, connectionSettings]);
+
+  // Handler for intensity change - uses debounced update
+  const handleIntensityChange = (index, value) => {
+    const laserName = illuSources[index];
+    if (laserName) {
+      debouncedSetLaserValue(laserName, index, value);
     }
   };
 
+  // Handler for enabled/disabled change
+  const handleEnabledChange = (index, enabled) => {
+    const laserName = illuSources[index];
+    if (laserName) {
+      setLaserActive(laserName, enabled);
+    }
+  };
 
   // Handler for exposure change
   const handleExposureChange = (index, value) => {
@@ -414,23 +477,30 @@ const ChannelsDimension = () => {
           </Typography>
         </Box>
       ) : (
-        illuSources.map((source, idx) => (
-          <ChannelBlock
-            key={`channel-${source}-${idx}`}
-            channelName={source}
-            channelIndex={idx}
-            intensity={intensities[idx] ?? 0}
-            exposure={exposures[idx] ?? 100}
-            gain={gains[idx] ?? 0}
-            minIntensity={parameterRange.illuSourceMinIntensities?.[idx] ?? 0}
-            maxIntensity={parameterRange.illuSourceMaxIntensities?.[idx] ?? 1023}
-            isExpanded={expandedChannels[idx] ?? idx === 0}
-            onToggleExpand={() => toggleChannelExpand(idx)}
-            onIntensityChange={(val) => handleIntensityChange(idx, val)}
-            onExposureChange={(val) => handleExposureChange(idx, val)}
-            onGainChange={(val) => handleGainChange(idx, val)}
-          />
-        ))
+        illuSources.map((source, idx) => {
+          // Get laser state from Redux (updated via WebSocket)
+          const laserData = lasers[source] || { power: intensities[idx] ?? 0, enabled: false };
+          
+          return (
+            <ChannelBlock
+              key={`channel-${source}-${idx}`}
+              channelName={source}
+              channelIndex={idx}
+              intensity={intensities[idx] ?? 0}
+              exposure={exposures[idx] ?? 100}
+              gain={gains[idx] ?? 0}
+              minIntensity={laserMinValues[idx] ?? 0}
+              maxIntensity={laserMaxValues[idx] ?? 1023}
+              isEnabled={laserData.enabled}
+              isExpanded={expandedChannels[idx] ?? idx === 0}
+              onToggleExpand={() => toggleChannelExpand(idx)}
+              onIntensityChange={(val) => handleIntensityChange(idx, val)}
+              onExposureChange={(val) => handleExposureChange(idx, val)}
+              onGainChange={(val) => handleGainChange(idx, val)}
+              onEnabledChange={(enabled) => handleEnabledChange(idx, enabled)}
+            />
+          );
+        })
       )}
 
       {/* Advanced Settings */}

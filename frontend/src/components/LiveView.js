@@ -94,10 +94,40 @@ export default function LiveView({ setFileManagerInitialPath }) {
   const isMobile = useMediaQuery("(max-width:600px)");
   const [rightPanelOpen, setRightPanelOpen] = useState(!isMobile);
 
-  // Auto-close panel when switching to mobile view
+  // Track previous activeTab to detect changes
+  const prevActiveTabRef = React.useRef(activeTab);
+
+  // Handle detector tab switching - restart stream with new detector
   useEffect(() => {
-    setRightPanelOpen(!isMobile);
-  }, [isMobile]);
+    const prevTab = prevActiveTabRef.current;
+    prevActiveTabRef.current = activeTab;
+
+    // If tab changed and stream is running, restart stream with new detector
+    if (prevTab !== activeTab && isStreamRunning) {
+      console.log(`[LiveView] Tab changed from ${prevTab} to ${activeTab}, restarting stream...`);
+      
+      (async () => {
+        try {
+          // Stop current stream
+          await apiLiveViewControllerStopLiveView();
+          console.log("[LiveView] Stopped stream for previous detector");
+
+          // Small delay to ensure clean shutdown
+          await new Promise((resolve) => setTimeout(resolve, 200));
+
+          // Start new stream with new detector
+          const protocol = liveStreamState.imageFormat || "jpeg";
+          const newDetectorName = detectors[activeTab] || null;
+          await apiLiveViewControllerStartLiveView(newDetectorName, protocol);
+          console.log(`[LiveView] Started ${protocol} stream for new detector: ${newDetectorName}`);
+        } catch (error) {
+          console.error("[LiveView] Error switching detector stream:", error);
+          // Ensure Redux state reflects actual state
+          dispatch(liveViewSlice.setIsStreamRunning(false));
+        }
+      })();
+    }
+  }, [activeTab, isStreamRunning, detectors, liveStreamState.imageFormat, dispatch]);
 
   /* detectors */
   useEffect(() => {
@@ -214,8 +244,10 @@ export default function LiveView({ setFileManagerInitialPath }) {
         );
 
         // Start stream with current protocol (binary, jpeg, or webrtc)
-        await apiLiveViewControllerStartLiveView(null, protocol);
-        console.log(`Started ${protocol} stream`);
+        // Get detector name from active tab
+        const detectorName = detectors[activeTab] || null;
+        await apiLiveViewControllerStartLiveView(detectorName, protocol);
+        console.log(`Started ${protocol} stream for detector: ${detectorName}`);
       } else {
         // Stop stream
         await apiLiveViewControllerStopLiveView();

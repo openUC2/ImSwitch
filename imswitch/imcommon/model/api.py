@@ -80,7 +80,12 @@ def generateAPI(objs, *, missingAttributeErrorMsg=None):
     passed array objs. Must be called from the main thread. """
 
     from imswitch.imcommon.model import pythontools
-
+    from imswitch import __available_controllers__
+    for _controller in objs:
+        controller_name = _controller.__class__.__name__
+        #print("controller_name: ", controller_name)
+        if controller_name not in __available_controllers__:
+            __available_controllers__.append(controller_name)
     exportedFuncs = {}
     for obj in objs:
         for subObjName in dir(obj):

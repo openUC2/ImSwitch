@@ -16,7 +16,7 @@ __ssl__ = True
 __jupyter_port__ = 8888
 jupyternotebookurl = ""
 __argparse__ = None
-
+__available_controllers__ = []
 
 '''
 These are LEGACY flags for backward compatibility.

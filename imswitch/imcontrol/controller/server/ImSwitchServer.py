@@ -105,11 +105,12 @@ def get_version():
     return {"version": VERSION}
 
 @api_router.get("/getAvailableControllers")
-def get_available_controllers():
+def get_available_controllers() -> Dict[str, List[str]]:
     """
     Returns a list of available controllers in the ImSwitch server.
     """
-    controllers = configfiletools.get_available_controllers()
+    from imswitch import __available_controllers__
+    controllers = list(__available_controllers__)
     return {"availableControllers": controllers}
 
 # Storage Management API Endpoints are now handled via APIExport in StorageController
@@ -452,6 +453,7 @@ class ImSwitchServer(Worker):
         """
         hostname = socket.gethostname()
         return {"hostname": hostname}
+
 
     def createAPI(self):
         api_dict = self._api._asdict()

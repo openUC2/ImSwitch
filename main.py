@@ -26,4 +26,4 @@ if __name__ == '__main__':
     '''
     # DON'T CHANGE THIS!!!!
     # This has to be maintained for DOCKER!
-    main(is_headless=True)
+    main(is_headless=True, default_config = "./_data/user_defaults/imcontrol_setups/example_virtual_microscope.json", http_port=8001)

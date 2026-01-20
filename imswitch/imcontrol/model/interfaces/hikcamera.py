@@ -445,7 +445,7 @@ class CameraHIK:
             if param_dict["model_name"].find("UC")>0:
                 param_dict["isRGB"] = True
         # if isRGB switch off AWB
-        if param_dict["isRGB"] and False:
+        if param_dict["isRGB"] and False: # TODO: Review
             ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS)
             if ret != 0:
                 print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)

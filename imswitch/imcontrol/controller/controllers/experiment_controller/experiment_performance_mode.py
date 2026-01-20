@@ -388,7 +388,7 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         illumination_list = self.prepare_illumination_parameters(illumination_intensities)
 
         # Handle LED parameter if present
-        led_value = self._extract_led_value(experiment_params)
+        led_value = 0 * self._extract_led_value(experiment_params) # TODO: We have to rework the LED MAtrix interface as it's also not working properly on the microcontorller it seems
 
         # Extract Z-stack parameters
         z_params = self._extract_z_stack_parameters(experiment_params)

@@ -139,10 +139,8 @@ class LepmonController(LiveUpdatedController):
         
         # OLED Display
         self.lepmon_oled = LepmonOLED(
-            rotate=0,
-            font_path=None,
-            display_callback=self._on_display_updated,
-            language="de"
+            language="de",
+            display_callback=self._on_display_updated
         ) if HAS_LEPMON_MODULES else None
         
         # LED Control (UV + Visible)
@@ -624,9 +622,8 @@ class LepmonController(LiveUpdatedController):
 
     # ===================== Image Capture ===================== #
 
-    '''
     @APIExport(requestType="POST")
-    def snapImage(self, format: str = "jpg", exposure: float = None) -> dict:
+    def snapImage_unused(self, format: str = "jpg", exposure: float = None) -> dict:
         """Capture a single image"""
         try:
             if exposure:
@@ -646,8 +643,7 @@ class LepmonController(LiveUpdatedController):
             }
         except Exception as e:
             return {"success": False, "message": str(e)}
-    '''
-    
+
     @APIExport(runOnUIThread=True)
     def returnLastSnappedImage(self) -> Response:
         """Return the last captured image as PNG"""

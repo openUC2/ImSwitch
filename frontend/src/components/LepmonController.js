@@ -551,54 +551,50 @@ export default function LepmonController() {
             <AccordionDetails>
               <Grid container spacing={2}>
                 <Grid item xs={6}>
-                  <Typography>
-                    GPIO Available:
+                  <Box display="flex" alignItems="center" gap={1}>
+                    <Typography>GPIO Available:</Typography>
                     <Chip
                       label={hardwareStatus.gpio_available ? "Yes" : "No"}
                       color={
                         hardwareStatus.gpio_available ? "success" : "error"
                       }
                       size="small"
-                      style={{ marginLeft: 8 }}
                     />
-                  </Typography>
+                  </Box>
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography>
-                    OLED Available:
+                  <Box display="flex" alignItems="center" gap={1}>
+                    <Typography>OLED Available:</Typography>
                     <Chip
                       label={hardwareStatus.oled_available ? "Yes" : "No"}
                       color={
                         hardwareStatus.oled_available ? "success" : "error"
                       }
                       size="small"
-                      style={{ marginLeft: 8 }}
                     />
-                  </Typography>
+                  </Box>
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography>
-                    I2C Available:
+                  <Box display="flex" alignItems="center" gap={1}>
+                    <Typography>I2C Available:</Typography>
                     <Chip
                       label={hardwareStatus.i2c_available ? "Yes" : "No"}
                       color={hardwareStatus.i2c_available ? "success" : "error"}
                       size="small"
-                      style={{ marginLeft: 8 }}
                     />
-                  </Typography>
+                  </Box>
                 </Grid>
                 <Grid item xs={6}>
-                  <Typography>
-                    Simulation Mode:
+                  <Box display="flex" alignItems="center" gap={1}>
+                    <Typography>Simulation Mode:</Typography>
                     <Chip
                       label={hardwareStatus.simulation_mode ? "On" : "Off"}
                       color={
                         hardwareStatus.simulation_mode ? "warning" : "success"
                       }
                       size="small"
-                      style={{ marginLeft: 8 }}
                     />
-                  </Typography>
+                  </Box>
                 </Grid>
               </Grid>
             </AccordionDetails>
@@ -683,22 +679,30 @@ export default function LepmonController() {
                     Individual LED Controls
                   </Typography>
                 </Grid>
-                {availableLights.map((lightName) => (
-                  <Grid item xs={6} md={4} key={lightName}>
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          checked={lightStates[lightName] || false}
-                          onChange={(e) =>
-                            handleLightToggle(lightName, e.target.checked)
-                          }
-                          color="primary"
-                        />
-                      }
-                      label={`${lightName} LED`}
-                    />
+                {availableLights && availableLights.length > 0 ? (
+                  availableLights.map((lightName) => (
+                    <Grid item xs={6} md={4} key={lightName}>
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            checked={lightStates[lightName] || false}
+                            onChange={(e) =>
+                              handleLightToggle(lightName, e.target.checked)
+                            }
+                            color="primary"
+                          />
+                        }
+                        label={`${lightName} LED`}
+                      />
+                    </Grid>
+                  ))
+                ) : (
+                  <Grid item xs={12}>
+                    <Typography variant="body2" color="textSecondary">
+                      No lights available
+                    </Typography>
                   </Grid>
-                ))}
+                )}
               </Grid>
             </AccordionDetails>
           </Accordion>

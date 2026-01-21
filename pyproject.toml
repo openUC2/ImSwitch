@@ -46,7 +46,7 @@ dependencies = [
     "fastapi >= 0.86.0",
     "uvicorn[standard] >= 0.19.0",
     "matplotlib == 3.9.2",
-    "opencv-python",
+    "opencv-python-headless",
     "aiortc >= 1.9.0",
     "UC2-REST",
     "jupyter",

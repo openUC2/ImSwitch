@@ -134,6 +134,7 @@ class StreamWorker(Worker):
         self._running = True
         self._logger.info(f"StreamWorker started with update period {self._updatePeriod}s")
         frameReadAttempts = 0
+        last_detector_frame_number = -1
         while self._running:
             try:
                 self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it
@@ -155,10 +156,14 @@ class StreamWorker(Worker):
                     if frame is not None and self._broadcast_frames:
                         self.sigUpdateFrame.emit(self._detector.name, frame, False, False, self._detector.pixelSizeUm, True) # (str, np.ndarray, bool, bool, float, bool)
 
-                    if frame is None and frameReadAttempts > 3:
-                        self._logger.warning("Frame capture failed, stopping worker (Frame none)")
+                    if (frame is None and last_detector_frame_number == detector_frame_number) and frameReadAttempts > 3:
+                        self._logger.warning("Frame capture failed, stopping worker (Frame none or no new frame: {})".format(detector_frame_number==last_detector_frame_number))
                         self._running = False
                         break  # No frame available, but not an error - keep running
+                    else:
+                        frameReadAttempts = 0  # Reset attempts on successful read
+                    
+                    last_detector_frame_number = detector_frame_number
 
                     frameResult = self._captureAndEmit(frame, detector_frame_number)
                     self._last_frame_time = time.time()
@@ -168,6 +173,9 @@ class StreamWorker(Worker):
                         self._logger.warning("Frame capture failed, stopping worker")
                         self._running = False
                         break
+                    else:
+                        frameReadAttempts = 0  # Reset attempts on successful read
+                        
                     frameReadAttempts += 1
                 else:
                     # Sleep for a small amount to avoid busy waiting

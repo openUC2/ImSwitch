@@ -207,7 +207,7 @@ class ObjectiveController(LiveUpdatedController):
 
         try:
             # Home axis A using ESP32StageManager
-            self._positioner.home_a(isBlocking=True)
+            self._positioner.home_a(isBlocking=False)
             self._isHomed = True
             self._logger.info("Objective homing completed successfully")
         except Exception as e:

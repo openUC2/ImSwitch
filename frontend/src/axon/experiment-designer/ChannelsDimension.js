@@ -172,7 +172,7 @@ const ChannelBlock = ({
                   value={exposure}
                   onChange={(e) => onExposureChange(e.target.value)}
                 >
-                  {[10, 20, 50, 100, 200, 500, 1000, 2000].map((val) => (
+                  {[0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000].map((val) => (
                     <MenuItem key={val} value={val}>
                       {val} ms
                     </MenuItem>

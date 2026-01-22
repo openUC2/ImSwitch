@@ -8,6 +8,7 @@
 #   HEADLESS           - Run in headless mode: "true"/"1" (GUI disabled)
 #   SSL                - Enable SSL: "true" (default) or "false"/"0"
 #   HTTP_PORT          - HTTP port for the server (default: 8001)
+#   JUPYTER_PORT       - Jupyter notebook port (default: 8888)
 #   CONFIG_PATH        - Custom configuration directory path
 #   DATA_PATH          - Default data storage path
 #   SCAN_EXT_DATA_PATH - Enable external storage scanning: "true"/"1" or "false" (default)
@@ -171,6 +172,9 @@ fi
 
 # Network configuration
 params+=" --http-port ${HTTP_PORT:-8001}"
+
+# Jupyter configuration
+params+=" --jupyter-port ${JUPYTER_PORT:-8888}"
 
 # Path configuration
 # The storage manager will handle path resolution and validation

@@ -14,7 +14,6 @@ __version__ = "2.1.190"
 __httpport__ = 8001
 __ssl__ = True
 __jupyter_port__ = 8888
-jupyternotebookurl = ""
 __argparse__ = None
 __available_controllers__ = []
 
@@ -29,6 +28,7 @@ DEFAULT_DATA_PATH = None
 SOCKET_STREAM = True           # Stream Images via socket ?
 SCAN_EXT_DATA_PATH = False  # Scan external data folder for new data ?
 EXT_DATA_PATH = None
+WITH_KERNEL = False  # Start with embedded Jupyter kernel
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

@@ -12,7 +12,7 @@ from imswitch.config import get_config
 
 
 def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
-         data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None):
+         data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None, jupyter_port:int=None):
     '''
     is_headless: bool => start with or without qt
     default_config: str => path to the config file
@@ -23,6 +23,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
     scan_ext_data_folder: bool => if True, we will scan the ext_data_folder for usb drives and use this for data storage
     ext_data_folder: str => path to the directory of mount points for external drives (default: None, optionally pointing to e.g. /Volumes or /media)
     with_kernel: bool => start with embedded Jupyter kernel for external notebook connections
+    jupyter_port: int => Jupyter notebook port (default: 8888)
 
 
 
@@ -44,7 +45,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
             data_folder=data_folder,
             scan_ext_data_folder=scan_ext_data_folder,
             ext_data_folder=ext_data_folder,
-            with_kernel=with_kernel
+            with_kernel=with_kernel,
+            jupyter_port=jupyter_port
         )
 
         # Update legacy globals immediately for backward compatibility
@@ -54,7 +56,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         if (is_headless is None and default_config is None and http_port is None and
             ssl is None and config_folder is None and
             data_folder is None and scan_ext_data_folder is None and ext_data_folder is None and
-            with_kernel is None):
+            with_kernel is None and jupyter_port is None):
             # @ethanjli this is the actual code that parses the variables from commandline - needs a review probably?
             try: # TODO: Google Colab does not support argparse
                 parser = argparse.ArgumentParser(description='Process some integers.')
@@ -90,6 +92,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
 
                 parser.add_argument('--with-kernel', dest='with_kernel', default=False, action='store_true',
                                     help='start with embedded Jupyter kernel for external notebook connections')
+
+                parser.add_argument('--jupyter-port', dest='jupyter_port', type=int, default=8888,
+                                    help='specify Jupyter notebook port (default: 8888)')
 
                 # Add Jupyter/Colab specific arguments to prevent errors
                 parser.add_argument('-f', '--connection-file', dest='connection_file', type=str, default=None,
@@ -247,8 +252,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
                 # in case of the imnotebook, spread the notebook url
                 if moduleId == 'imnotebook':
                     config.jupyter_url = controller.webaddr
-                    # Update legacy global for backward compatibility
-                    imswitch.jupyternotebookurl = controller.webaddr
 
                 # Update loading progress
                 if not config.is_headless:

@@ -432,8 +432,17 @@ class ImSwitchServer(Worker):
 
     @api_router.get("/jupyternotebookurl")
     def get_jupyter_notebook_url():
-        from imswitch import jupyternotebookurl # import it here to get the one after the notebook has been actually launched
-        return {"url": jupyternotebookurl}
+        """
+        Returns the Jupyter notebook URL with proper IP and port.
+        The URL is constructed from the actual server configuration.
+        """
+        from imswitch.config import get_config
+        config = get_config()
+        
+        # Get the jupyter_url from config which is set when notebook starts
+        jupyter_url = f":{config.jupyter_port}/jupyter"
+        
+        return {"url": jupyter_url}
 
     @api_router.get("/plugins")
     def get_plugins():

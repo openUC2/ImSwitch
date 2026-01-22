@@ -20,6 +20,7 @@ services:
     environment:
       - HEADLESS=1
       - HTTP_PORT=8001
+      - JUPYTER_PORT=8888
       - CONFIG_PATH=/home/pi/ImSwitchConfig
       - UPDATE_GIT=0
       - UPDATE_CONFIG=0

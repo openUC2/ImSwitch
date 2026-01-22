@@ -77,7 +77,8 @@ class ImSwitchConfig:
             'data_folder': 'data_folder',
             'scan_ext_data_folder': 'scan_ext_data_folder',
             'ext_data_folder': 'ext_data_folder',
-            'with_kernel': 'with_kernel'
+            'with_kernel': 'with_kernel',
+            'jupyter_port': 'jupyter_port'
         }
 
         for arg_name, config_attr in arg_mapping.items():
@@ -99,6 +100,7 @@ class ImSwitchConfig:
         imswitch_module.EXT_DATA_PATH = self.ext_data_folder
         imswitch_module.WITH_KERNEL = self.with_kernel
         imswitch_module.SOCKET_STREAM = self.socket_stream
+        imswitch_module.__jupyter_port__ = self.jupyter_port
         imswitch_module.jupyternotebookurl = self.jupyter_url
 
 

@@ -129,10 +129,7 @@ class LightsheetController(ImConWidgetController):
         self.stages = self._master.positionersManager[self.stageName]
         self.isLightsheetRunning = False
 
-
-
         # connect signals
-        self.sigImageReceived.connect(self.displayImage)
         self._commChannel.sigStartLightSheet.connect(self.startContinuousScanWithZarr)
         self._commChannel.sigStopLightSheet.connect(self.stopLightsheet)
         self._commChannel.sigUpdateMotorPosition.connect(self.updateAllPositionGUI)

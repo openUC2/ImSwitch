@@ -189,8 +189,15 @@ class MockCameraTIS:
 
     # — continuous acquisition loop — ---------------------------------------
     def _continuous_loop(self):
-        interval = np.max([self.exposure_ms,200]) / 1000.0
-        while not self._stop_evt.wait(interval):
+        import time
+        time0 = time.time()
+        while not self._stop_evt.wait():
+            interval = np.max([self.exposure_ms,200]) / 1000.0
+            
+            if time.time() - time0 < interval:
+                time.sleep(0.01)
+                continue
+            time0 = time.time()
             self._emit_frame()
 
     # — frame emission — -----------------------------------------------------

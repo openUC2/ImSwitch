@@ -6,7 +6,7 @@ export const downloadFile = async (files, hostname, port) => {
   try {
     // build url based on api
     const fileQuery = files.map((file) => `${file.path}`).join("&");
-    const url = `${hostname}:${port}/FileManager/download/${fileQuery}`; //${import.meta.env.VITE_API_BASE_URL}/download?${fileQuery}`;
+    const url = `${hostname}:${port}/api/FileManager/download/${fileQuery}`; // TODO: Make part of axios instance
 
     const link = document.createElement("a");
     link.href = url;

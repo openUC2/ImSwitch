@@ -500,7 +500,7 @@ class LepmonController(LiveUpdatedController):
         return self._start_legacy_experiment()
 
     @APIExport(requestType="POST")
-    def stopExperiment(self) -> dict:
+    def stopExperimentLepmon(self) -> dict:
         """Stop the current experiment"""
         self._logger.info("Stopping experiment")
         

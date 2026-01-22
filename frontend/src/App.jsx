@@ -52,6 +52,8 @@ import AxonTabComponent from "./axon/AxonTabComponent.js";
 import WebSocketHandler from "./middleware/WebSocketHandler.js";
 import CompositeAcquisitionComponent from "./axon/CompositeAcquisitionComponent.js";
 import CompositeStreamViewer from "./axon/CompositeStreamViewer.js"
+import CompositeComponent from "./axon/CompositeComponent";
+
 
 //redux
 import { useDispatch, useSelector } from "react-redux";
@@ -505,6 +507,7 @@ function App() {
           {selectedPlugin === "DemoController" && <DemoController />}
           {selectedPlugin === "CompositeAcquisition" && <CompositeAcquisitionComponent />}
           {selectedPlugin === "CompositeStreamViewer" && <CompositeStreamViewer />}
+          {selectedPlugin === "CompositeComponent" && <CompositeComponent />}
           {selectedPlugin === "FlowStop" && <FlowStopController />}
           {selectedPlugin === "StageOffsetCalibration" && (
             <StageOffsetCalibration />

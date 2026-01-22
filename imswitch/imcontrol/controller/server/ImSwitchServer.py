@@ -440,8 +440,9 @@ class ImSwitchServer(Worker):
         config = get_config()
         
         # Get the jupyter_url from config which is set when notebook starts
-        jupyter_url = f":{config.jupyter_port}/jupyter"
+        jupyter_url = f"http://localhost:{config.jupyter_port}/jupyter" # this will be converted in the frontend to the correct HOSTIP
         
+
         return {"url": jupyter_url}
 
     @api_router.get("/plugins")

@@ -245,7 +245,7 @@ class CompositeController(ImConWidgetController):
                 if source_name in laser_names:
                     laser = self._lasers_manager[source_name]
                     if enabled:
-                        laser.setValue(intensity)
+                        laser.setValue(intensity*laser.valueRangeMax)
                         laser.setEnabled(True)
                     else:
                         laser.setEnabled(False)
@@ -261,7 +261,7 @@ class CompositeController(ImConWidgetController):
                 if source_name in led_names:
                     led = self._leds_manager[source_name]
                     if enabled:
-                        led.setValue(intensity)
+                        led.setValue(intensity*255)
                         led.setEnabled(True)
                     else:
                         led.setEnabled(False)
@@ -618,12 +618,13 @@ class CompositeController(ImConWidgetController):
         return self._params.to_dict()
 
     @APIExport(runOnUIThread=True, requestType="POST")
-    def set_parameters_composite(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def set_parameters_composite(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Update composite acquisition parameters.
+        Accepts JSON body or JSON-encoded query parameter.
         
         Args:
-            params: Dictionary with parameter updates (partial update supported)
+            params: Dictionary with parameter updates or JSON string (partial update supported)
             
         Returns:
             Updated parameters dictionary
@@ -638,14 +639,31 @@ class CompositeController(ImConWidgetController):
                 "fps_target": 3.0
             }
         """
+        import json
+        
+        # Handle JSON-string from query parameter
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except Exception as e:
+                self._logger.warning(f"Failed to parse params JSON string: {e}")
+                params = {}
+        
+        if params is None:
+            params = {}
+        
+        self._logger.info(f"set_parameters_composite received: {params}")
+        
         with self._processing_lock:
             # Update steps if provided
             if "steps" in params:
                 self._params.steps = [IlluminationStep.from_dict(s) for s in params["steps"]]
+                self._logger.info(f"Updated steps: {len(self._params.steps)} steps")
 
             # Update mapping if provided
             if "mapping" in params:
                 self._params.mapping.update(params["mapping"])
+                self._logger.info(f"Updated mapping: {self._params.mapping}")
 
             # Update scalar parameters
             if "fps_target" in params:

@@ -13,6 +13,7 @@ import {
 import { OpenInNew, Refresh, Edit } from "@mui/icons-material";
 import { useSelector } from "react-redux";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
+import { validateNotebookUrl, testNotebookUrl } from '../utils/notebookValidator';
 
 const JupyterExecutor = () => {
   // Get connection settings from Redux
@@ -28,17 +29,14 @@ const JupyterExecutor = () => {
   // Test if a URL is accessible
   const testUrl = async (url) => {
     try {
+      // the response is not used here because testNotebookUrl handles it
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000);
       
-      const response = await fetch(url, {
-        method: 'HEAD',
-        signal: controller.signal,
-        mode: 'no-cors' // Allow checking if server responds
-      });
-      
+      const isValid = await testNotebookUrl(url);
+      console.log(`Notebook valid: ${isValid}`);
       clearTimeout(timeoutId);
-      return true;
+      return isValid;
     } catch (error) {
       return false;
     }
@@ -59,14 +57,11 @@ const JupyterExecutor = () => {
         const jupyterPort = urlObj.port; // e.g., 8888
 
         // Construct both possible URLs:
-        // 1. Proxied URL through the ImSwitch API server (Caddy reverse proxy in Docker)
+        // 1. Proxied URL through the ImSwitch API server (Caddy reverse proxy in Docker) e.g. http://localhost:80/jupyter
         const proxiedUrl = `${hostIP}:${hostPort}${jupyterPath}`;
         
-        // 2. Direct URL to Jupyter server (for local development)
-        const directUrl = notebookUrl.replace(
-          /https?:\/\/[^:\/]+/,
-          hostIP.replace(/https?:\/\//, 'http://')
-        );
+        // 2. Direct URL to Jupyter server (for local development) e.g. http://localhost:8888/jupyter
+        const directUrl = `${hostIP}:${jupyterPort}${jupyterPath}`;
 
         // Test both URLs to see which one works
         console.log("Testing Jupyter URLs...");

@@ -531,6 +531,27 @@ export const APP_REGISTRY = {
     pluginId: "CompositeStreamViewer",
   },
 
+  compositeComponent:{
+    id: "compositeComponent",
+    name: "Composite Component",
+    description:
+      "Backend component for multi-illumination composite image acquisition and processing. Handles LED control and image fusion.",
+    category: APP_CATEGORIES.APPS,
+    icon: PhotoCameraIcon,
+    enabled: false,
+    essential: false,
+    keywords: [
+      "composite",
+      "component",
+      "multi-illumination",
+      "acquisition",
+      "processing",
+      "led",
+      "fusion",
+    ],
+    pluginId: "CompositeComponent",
+  },
+
   socketView: {
     id: "socketView",
     name: "Socket View Controller",

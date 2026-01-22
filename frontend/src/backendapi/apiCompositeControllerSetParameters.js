@@ -27,8 +27,8 @@ import createAxiosInstance from "./createAxiosInstance";
 const apiCompositeControllerSetParameters = async (params) => {
   const instance = createAxiosInstance();
   try {
-    const response = await instance.post("/CompositeController/set_parameters_composite", null, {
-      params: { params: JSON.stringify(params) }
+    const response = await instance.post("/CompositeController/set_parameters_composite", {
+      params: params
     });
     return response.data;
   } catch (error) {

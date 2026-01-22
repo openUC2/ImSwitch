@@ -132,7 +132,6 @@ class LightsheetController(ImConWidgetController):
         # connect signals
         self._commChannel.sigStartLightSheet.connect(self.startContinuousScanWithZarr)
         self._commChannel.sigStopLightSheet.connect(self.stopLightsheet)
-        self._commChannel.sigUpdateMotorPosition.connect(self.updateAllPositionGUI)
 
     @APIExport()
     def setGalvo(self, channel:int=1, frequency:float=10, offset:float=0, amplitude:float=1, clk_div:int=0, phase:int=0, invert:int=1):

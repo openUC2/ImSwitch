@@ -309,9 +309,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # Redirect root URL "/" to "/imswitch"
 @app.get("/", include_in_schema=False)
-async def root_redirect():
+async def root_redirect(request: Request):
+    root_path = request.scope.get("root_path")
     # Comments in English: Redirect to the React app
-    return RedirectResponse(url="/ui/index.html")
+    return RedirectResponse(url=root_path+"/ui/index.html")
 
 
 class ServerThread(threading.Thread):

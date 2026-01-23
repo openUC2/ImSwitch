@@ -1,6 +1,14 @@
 import json
+import time
 
 from imswitch.imcommon.framework import Signal, SignalInterface
+
+try:
+    from imswitch.imcontrol.model.metadata.schema import SharedAttrValue
+    HAS_METADATA_HUB = True
+except ImportError:
+    HAS_METADATA_HUB = False
+    SharedAttrValue = None
 
 
 class SharedAttributes(SignalInterface):
@@ -11,16 +19,37 @@ class SharedAttributes(SignalInterface):
         self._data = {}
 
     def getHDF5Attributes(self):
-        """ Returns a dictionary of HDF5 attributes representing this object.
+        """ 
+        Returns a dictionary of HDF5 attributes representing this object.
+        
+        If values are SharedAttrValue objects, extracts the actual value.
+        Also includes metadata as separate keys if available.
         """
         attrs = {}
         for key, value in self._data.items():
-            attrs[':'.join(key)] = value
+            key_str = ':'.join(key)
+            
+            # Check if value is a SharedAttrValue
+            if HAS_METADATA_HUB and isinstance(value, SharedAttrValue):
+                attrs[key_str] = value.value
+                # Add metadata as separate keys
+                if value.units:
+                    attrs[f"{key_str}:units"] = value.units
+                if value.timestamp:
+                    attrs[f"{key_str}:timestamp"] = value.timestamp
+                if value.source:
+                    attrs[f"{key_str}:source"] = value.source
+            else:
+                attrs[key_str] = value
 
         return attrs
 
     def getJSON(self):
-        """ Returns a JSON representation of this instance. """
+        """ 
+        Returns a JSON representation of this instance.
+        
+        If values are SharedAttrValue objects, includes full metadata.
+        """
         attrs = {}
         for key, value in self._data.items():
             parent = attrs
@@ -29,9 +58,20 @@ class SharedAttributes(SignalInterface):
                     parent[key[i]] = {}
                 parent = parent[key[i]]
 
-            parent[key[-1]] = value
+            # Check if value is a SharedAttrValue
+            if HAS_METADATA_HUB and isinstance(value, SharedAttrValue):
+                parent[key[-1]] = {
+                    'value': value.value,
+                    'timestamp': value.timestamp,
+                    'units': value.units,
+                    'dtype': value.dtype,
+                    'source': value.source,
+                    'valid': value.valid,
+                }
+            else:
+                parent[key[-1]] = value
 
-        return json.dumps(attrs)
+        return json.dumps(attrs, default=str)  # default=str handles numpy types
 
     def update(self, data):
         """ Updates this object with the data in the given dictionary or
@@ -44,12 +84,31 @@ class SharedAttributes(SignalInterface):
 
     def __getitem__(self, key):
         self._validateKey(key)
-        return self._data[key]
+        value = self._data[key]
+        # For backwards compatibility, return raw value if it's a SharedAttrValue
+        if HAS_METADATA_HUB and isinstance(value, SharedAttrValue):
+            return value.value
+        return value
+    
+    def get_typed(self, key):
+        """
+        Get the full typed value (SharedAttrValue) if available.
+        
+        Returns:
+            SharedAttrValue if available, otherwise raw value
+        """
+        self._validateKey(key)
+        return self._data.get(key)
 
     def __setitem__(self, key, value):
         self._validateKey(key)
+        # Store the value as-is (can be raw value or SharedAttrValue)
         self._data[key] = value
-        self.sigAttributeSet.emit(key, value)
+        # For signal emission, unwrap SharedAttrValue to maintain backwards compatibility
+        if HAS_METADATA_HUB and isinstance(value, SharedAttrValue):
+            self.sigAttributeSet.emit(key, value.value)
+        else:
+            self.sigAttributeSet.emit(key, value)
 
     def __iter__(self):
         yield from self._data.items()

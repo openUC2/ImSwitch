@@ -33,8 +33,8 @@ const initialCompositeState = {
   },
   
   // Acquisition parameters
-  fpsTarget: 5.0, // Target frames per second
-  jpegQuality: 85, // JPEG compression quality (0-100)
+  fpsTarget: 1.0, // Target frames per second
+  jpegQuality: 100, // JPEG compression quality (0-100)
   normalizeChannels: true, // Normalize each channel before fusion
   autoExposure: false, // Use per-step exposure overrides
   
@@ -180,7 +180,7 @@ const compositeAcquisitionSlice = createSlice({
           illumination: s.illumination || "",
           intensity: s.intensity ?? 0.5,
           exposureMs: s.exposure_ms ?? null,
-          settleMs: s.settle_ms ?? 10.0,
+          settleMs: s.settle_ms ?? 100.0,
           enabled: s.enabled ?? true,
         }));
       }

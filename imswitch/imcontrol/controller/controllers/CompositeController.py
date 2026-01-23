@@ -652,6 +652,10 @@ class CompositeController(ImConWidgetController):
         if params is None:
             params = {}
         
+        # Handle nested params dictionary (from frontend API)
+        if "params" in params and len(params) == 1:
+            params = params["params"]
+        
         self._logger.info(f"set_parameters_composite received: {params}")
         
         with self._processing_lock:

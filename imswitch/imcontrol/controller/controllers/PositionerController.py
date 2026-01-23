@@ -177,7 +177,7 @@ class PositionerController(ImConWidgetController):
 
     def attrChanged(self, key, value):
         """Handle shared attribute changes."""
-        if self.settingAttr or len(key) < 3:
+        if self.settingAttr or not key or len(key) < 3:
             return
         
         # Handle both legacy and schema-based keys

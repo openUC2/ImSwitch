@@ -401,23 +401,25 @@ class RecordingController(ImConWidgetController):
         # Add MetadataHub snapshot if available
         if hasattr(self._master, 'metadataHub') and self._master.metadataHub is not None:
             try:
+                import json
+                
                 # Get global metadata snapshot
                 global_snapshot = self._master.metadataHub.snapshot_global()
                 
                 # Get detector-specific snapshot
                 detector_snapshot = self._master.metadataHub.snapshot_detector(detector_name)
                 
-                # Flatten and add to attrs
+                # Serialize and add to attrs
                 if global_snapshot:
-                    attrs['_metadata_hub_global'] = str(global_snapshot)  # JSON-serialized
+                    attrs['_metadata_hub_global'] = json.dumps(global_snapshot, default=str)
                 
                 if detector_snapshot:
                     # Add detector context
                     if 'detector_context' in detector_snapshot:
                         ctx = detector_snapshot['detector_context']
                         attrs[f'{detector_name}:pixel_size_um'] = ctx.get('pixel_size_um')
-                        attrs[f'{detector_name}:shape_px'] = str(ctx.get('shape_px'))
-                        attrs[f'{detector_name}:fov_um'] = str(ctx.get('fov_um'))
+                        attrs[f'{detector_name}:shape_px'] = json.dumps(ctx.get('shape_px'))
+                        attrs[f'{detector_name}:fov_um'] = json.dumps(ctx.get('fov_um'))
                         if ctx.get('exposure_ms') is not None:
                             attrs[f'{detector_name}:exposure_ms'] = ctx.get('exposure_ms')
                         if ctx.get('gain') is not None:

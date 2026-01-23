@@ -21,7 +21,17 @@ try:
     HAS_OME_TYPES = True
 except ImportError:
     HAS_OME_TYPES = False
+    # Set all to None for consistency
     OME = None
+    Image = None
+    Pixels = None
+    Channel = None
+    Plane = None
+    Instrument = None
+    OMEObjective = None
+    UnitsLength = None
+    UnitsTime = None
+    PixelsType = None
 
 from .schema import SharedAttrValue, MetadataSchema
 
@@ -161,11 +171,20 @@ class DetectorContext:
                 samples_per_pixel=1,
             )
             if self.channel_color:
-                # Parse hex color to RGB
+                # Parse hex color to RGB with validation
                 try:
-                    color_int = int(self.channel_color, 16)
-                    channel.color = color_int
-                except (ValueError, TypeError):
+                    # Ensure it's a valid 6-character hex string
+                    color_str = str(self.channel_color).lstrip('#')
+                    if len(color_str) == 6 and all(c in '0123456789ABCDEFabcdef' for c in color_str):
+                        color_int = int(color_str, 16)
+                        channel.color = color_int
+                    else:
+                        # Invalid color format, skip silently
+                        pass
+                except (ValueError, TypeError) as e:
+                    # Log warning but don't fail
+                    import logging
+                    logging.getLogger(__name__).warning(f"Invalid channel color format: {self.channel_color}, error: {e}")
                     pass
             if self.wavelength_nm:
                 channel.emission_wavelength = self.wavelength_nm

@@ -1,5 +1,6 @@
 import json
 import time
+import numpy as np
 
 from imswitch.imcommon.framework import Signal, SignalInterface
 
@@ -71,7 +72,18 @@ class SharedAttributes(SignalInterface):
             else:
                 parent[key[-1]] = value
 
-        return json.dumps(attrs, default=str)  # default=str handles numpy types
+        # Custom serializer for numpy types and other special objects
+        def json_serializer(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, (np.integer, np.floating)):
+                return obj.item()
+            elif hasattr(obj, '__dict__'):
+                return str(obj)
+            else:
+                return str(obj)
+
+        return json.dumps(attrs, default=json_serializer)
 
     def update(self, data):
         """ Updates this object with the data in the given dictionary or

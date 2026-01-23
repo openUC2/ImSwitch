@@ -213,7 +213,19 @@ class MasterController:
                 
                 # Get detector properties
                 shape_px = detector.shape
-                pixel_size_um = detector.pixelSizeUm[1] if len(detector.pixelSizeUm) > 1 else 1.0
+                # Safely access pixelSizeUm with fallback
+                if hasattr(detector, 'pixelSizeUm') and detector.pixelSizeUm:
+                    if isinstance(detector.pixelSizeUm, (list, tuple)) and len(detector.pixelSizeUm) > 1:
+                        pixel_size_um = detector.pixelSizeUm[1]
+                    elif isinstance(detector.pixelSizeUm, (list, tuple)) and len(detector.pixelSizeUm) == 1:
+                        pixel_size_um = detector.pixelSizeUm[0]
+                    elif isinstance(detector.pixelSizeUm, (int, float)):
+                        pixel_size_um = float(detector.pixelSizeUm)
+                    else:
+                        pixel_size_um = 1.0
+                else:
+                    pixel_size_um = 1.0
+                
                 dtype = str(detector.fullChunk.dtype) if hasattr(detector, 'fullChunk') else 'uint16'
                 
                 # Create detector context

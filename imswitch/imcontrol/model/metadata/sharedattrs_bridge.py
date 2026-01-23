@@ -44,9 +44,12 @@ class SharedAttrsMetadataBridge:
         self.categories = set(categories) if categories else None
         
         # Subscribe to attribute changes
-        self.shared_attrs.sigAttributeSet.connect(self._on_attribute_set)
-        
-        logger.info("SharedAttrsMetadataBridge initialized")
+        try:
+            self.shared_attrs.sigAttributeSet.connect(self._on_attribute_set)
+            logger.info("SharedAttrsMetadataBridge initialized")
+        except Exception as e:
+            logger.error(f"Failed to connect to SharedAttributes signal: {e}")
+            raise
     
     def _on_attribute_set(self, key, value):
         """

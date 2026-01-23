@@ -119,6 +119,7 @@ class MetadataSchema:
         Args:
             key: Tuple like ('Positioner', 'Stage', 'X', 'PositionUm')
                  Format: (category, device, axis_or_sub, field)
+                 Minimum 2 elements for compatibility, but 4 is recommended.
         
         Returns:
             True if key is valid

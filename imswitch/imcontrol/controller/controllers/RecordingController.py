@@ -124,7 +124,7 @@ class RecordingController(ImConWidgetController):
         savename = os.path.join(folder, self.getFileName() + "_" + name)
 
         attrs = {
-            detectorName: self._commChannel.sharedAttrs.getHDF5Attributes()
+            detectorName: self._get_detector_attrs(detectorName)
             for detectorName in detectorNames
         }
 
@@ -141,7 +141,7 @@ class RecordingController(ImConWidgetController):
         self.updateRecAttrs(isSnapping=True)
         detectorNames = self.getDetectorNamesToCapture()
         attrs = {
-            detectorName: self._commChannel.sharedAttrs.getHDF5Attributes()
+            detectorName: self._get_detector_attrs(detectorName)
             for detectorName in detectorNames
         }
 
@@ -168,7 +168,7 @@ class RecordingController(ImConWidgetController):
         time.sleep(0.01)
 
         savename = os.path.join(folder, self.getFileName()) + "_snap_" + suffix
-        attrs = {detectorName: self._commChannel.sharedAttrs.getHDF5Attributes()}
+        attrs = {detectorName: self._get_detector_attrs(detectorName)}
 
         self._master.recordingManager.snapImagePrev(
             detectorName,
@@ -201,7 +201,7 @@ class RecordingController(ImConWidgetController):
                 "saveMode": SaveMode(self._widget.getRecSaveMode()),
                 "saveFormat": SaveFormat(self._widget.getsaveFormat()),
                 "attrs": {
-                    detectorName: self._commChannel.sharedAttrs.getHDF5Attributes()
+                    detectorName: self._get_detector_attrs(detectorName)
                     for detectorName in detectorsBeingCaptured
                 },
                 "singleMultiDetectorFile": (
@@ -254,7 +254,7 @@ class RecordingController(ImConWidgetController):
         if isFirstLapse:
             self._commChannel.sigScanStarting.emit()  # To get updated values from sharedAttrs
             self.recordingArgs["attrs"] = {  # Update
-                detectorName: self._commChannel.sharedAttrs.getHDF5Attributes()
+                detectorName: self._get_detector_attrs(detectorName)
                 for detectorName in self.recordingArgs["detectorNames"]
             }
             self.recordingArgs["recFrames"] = (
@@ -385,7 +385,52 @@ class RecordingController(ImConWidgetController):
             filename = time.strftime("%Hh%Mm%Ss")
         return filename
 
-    def attrChanged(self, key, value):
+    def _get_detector_attrs(self, detector_name):
+        """
+        Get attributes for a detector, combining SharedAttrs and MetadataHub.
+        
+        Args:
+            detector_name: Name of the detector
+            
+        Returns:
+            Dictionary of attributes for the detector
+        """
+        # Start with SharedAttrs (backwards compatible)
+        attrs = self._commChannel.sharedAttrs.getHDF5Attributes()
+        
+        # Add MetadataHub snapshot if available
+        if hasattr(self._master, 'metadataHub') and self._master.metadataHub is not None:
+            try:
+                # Get global metadata snapshot
+                global_snapshot = self._master.metadataHub.snapshot_global()
+                
+                # Get detector-specific snapshot
+                detector_snapshot = self._master.metadataHub.snapshot_detector(detector_name)
+                
+                # Flatten and add to attrs
+                if global_snapshot:
+                    attrs['_metadata_hub_global'] = str(global_snapshot)  # JSON-serialized
+                
+                if detector_snapshot:
+                    # Add detector context
+                    if 'detector_context' in detector_snapshot:
+                        ctx = detector_snapshot['detector_context']
+                        attrs[f'{detector_name}:pixel_size_um'] = ctx.get('pixel_size_um')
+                        attrs[f'{detector_name}:shape_px'] = str(ctx.get('shape_px'))
+                        attrs[f'{detector_name}:fov_um'] = str(ctx.get('fov_um'))
+                        if ctx.get('exposure_ms') is not None:
+                            attrs[f'{detector_name}:exposure_ms'] = ctx.get('exposure_ms')
+                        if ctx.get('gain') is not None:
+                            attrs[f'{detector_name}:gain'] = ctx.get('gain')
+                    
+                    # Add detector-specific metadata
+                    if 'metadata' in detector_snapshot:
+                        for key, value_dict in detector_snapshot['metadata'].items():
+                            attrs[f'{detector_name}:hub:{key}'] = value_dict.get('value')
+            except Exception as e:
+                self.__logger.warning(f"Error getting metadata hub snapshot: {e}")
+        
+        return attrs
         if (
             self.settingAttr
             or len(key) != 2

@@ -58,6 +58,25 @@ class MasterController:
         # Dictionary to hold controller references for inter-controller communication
         self._controllersRegistry = {}
 
+        # Initialize Metadata Hub
+        try:
+            from imswitch.imcontrol.model.metadata import (
+                MetadataHub, SharedAttrsMetadataBridge
+            )
+            self.metadataHub = MetadataHub()
+            self.__logger.info("Metadata Hub initialized")
+            
+            # Initialize bridge to connect SharedAttrs to MetadataHub
+            self.metadataBridge = SharedAttrsMetadataBridge(
+                shared_attrs=commChannel.sharedAttrs,
+                hub=self.metadataHub
+            )
+            self.__logger.info("SharedAttrs-MetadataHub bridge initialized")
+        except ImportError as e:
+            self.__logger.warning(f"Metadata Hub not available: {e}")
+            self.metadataHub = None
+            self.metadataBridge = None
+
         # Init managers
         self.rs232sManager = RS232sManager(self.__setupInfo.rs232devices)
 
@@ -179,6 +198,52 @@ class MasterController:
                     ' ["Base", "PointScan", "MoNaLISA"].'
                 )
                 return
+        
+        # Register detectors with MetadataHub
+        if self.metadataHub is not None:
+            self._register_detectors_with_hub()
+
+    def _register_detectors_with_hub(self):
+        """Register all detectors with the MetadataHub."""
+        try:
+            from imswitch.imcontrol.model.metadata import DetectorContext
+            
+            for detectorName in self.detectorsManager.getAllDeviceNames():
+                detector = self.detectorsManager[detectorName]
+                
+                # Get detector properties
+                shape_px = detector.shape
+                pixel_size_um = detector.pixelSizeUm[1] if len(detector.pixelSizeUm) > 1 else 1.0
+                dtype = str(detector.fullChunk.dtype) if hasattr(detector, 'fullChunk') else 'uint16'
+                
+                # Create detector context
+                context = DetectorContext(
+                    name=detectorName,
+                    shape_px=shape_px,
+                    pixel_size_um=pixel_size_um,
+                    dtype=dtype,
+                    binning=detector.binning,
+                    channel_name=detectorName,
+                )
+                
+                # Try to get additional properties if available
+                try:
+                    if hasattr(detector, 'parameters') and 'exposure' in detector.parameters:
+                        context.exposure_ms = detector.parameters['exposure'].value
+                except Exception:
+                    pass
+                
+                try:
+                    if hasattr(detector, 'parameters') and 'gain' in detector.parameters:
+                        context.gain = detector.parameters['gain'].value
+                except Exception:
+                    pass
+                
+                # Register with hub
+                self.metadataHub.register_detector(detectorName, context)
+                self.__logger.info(f"Registered detector '{detectorName}' with MetadataHub")
+        except Exception as e:
+            self.__logger.error(f"Error registering detectors with MetadataHub: {e}")
 
         # Connect signals
         cc = self.__commChannel

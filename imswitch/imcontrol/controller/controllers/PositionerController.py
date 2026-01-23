@@ -7,6 +7,15 @@ from imswitch.imcommon.model import initLogger
 from typing import Optional
 from imswitch.imcontrol.model import configfiletools
 
+# Import metadata schema for standardized keys
+try:
+    from imswitch.imcontrol.model.metadata import MetadataSchema, MetadataCategory
+    HAS_METADATA_HUB = True
+except ImportError:
+    HAS_METADATA_HUB = False
+    MetadataSchema = None
+    MetadataCategory = None
+
 
 class PositionerController(ImConWidgetController):
     """ Linked to PositionerWidget."""
@@ -167,18 +176,57 @@ class PositionerController(ImConWidgetController):
         self._master.positionersManager[positionerName].forceStop(axis)
 
     def attrChanged(self, key, value):
-        if self.settingAttr or len(key) != 4 or key[0] != _attrCategory:
+        """Handle shared attribute changes."""
+        if self.settingAttr or len(key) < 3:
             return
-
-        positionerName = key[1]
-        axis = key[2]
-        if key[3] == _positionAttr:
-            self.setPositioner(positionerName, axis, value)
+        
+        # Handle both legacy and schema-based keys
+        if HAS_METADATA_HUB and key[0] == MetadataCategory.POSITIONER.value:
+            # New schema-based key: ('Positioner', device, axis, field)
+            if len(key) != 4:
+                return
+            positionerName = key[1]
+            axis = key[2]
+            field = key[3]
+            if field == 'PositionUm':
+                self.setPositioner(positionerName, axis, value)
+        elif key[0] == _attrCategory:
+            # Legacy key format
+            if len(key) != 4:
+                return
+            positionerName = key[1]
+            axis = key[2]
+            if key[3] == _positionAttr:
+                self.setPositioner(positionerName, axis, value)
 
     def setSharedAttr(self, positionerName, axis, attr, value):
+        """
+        Set a shared attribute for a positioner axis.
+        
+        Uses standardized schema keys for metadata hub integration.
+        """
         self.settingAttr = True
         try:
-            self._commChannel.sharedAttrs[(_attrCategory, positionerName, axis, attr)] = value
+            # Map legacy attribute names to schema field names
+            if HAS_METADATA_HUB:
+                field_map = {
+                    _positionAttr: 'PositionUm',
+                    _speedAttr: 'SpeedUmS',
+                    _homeAttr: 'IsHomed',
+                    _stopAttr: 'IsMoving',
+                }
+                field_name = field_map.get(attr, attr)
+                key = MetadataSchema.make_key(
+                    MetadataCategory.POSITIONER,
+                    positionerName,
+                    axis,
+                    field_name
+                )
+            else:
+                # Fallback to legacy key format
+                key = (_attrCategory, positionerName, axis, attr)
+            
+            self._commChannel.sharedAttrs[key] = value
         finally:
             self.settingAttr = False
 

@@ -67,6 +67,11 @@ class DetectorContext:
     temperature_c: Optional[float] = None
     bit_depth: Optional[int] = None
     
+    # Frame info from camera hardware
+    frame_number: Optional[int] = None  # Hardware frame number
+    frame_timestamp: Optional[float] = None  # Hardware frame timestamp
+    is_rgb: bool = False  # Whether detector outputs RGB images
+    
     # Transforms and calibration
     affine_transform: Optional[np.ndarray] = None  # 3x3 affine matrix
     objective_name: Optional[str] = None
@@ -113,6 +118,9 @@ class DetectorContext:
             'gain': self.gain,
             'temperature_c': self.temperature_c,
             'bit_depth': self.bit_depth,
+            'frame_number': self.frame_number,
+            'frame_timestamp': self.frame_timestamp,
+            'is_rgb': self.is_rgb,
             'objective_name': self.objective_name,
             'objective_magnification': self.objective_magnification,
             'objective_na': self.objective_na,
@@ -487,6 +495,111 @@ class MetadataHub:
         with self._lock:
             self._frame_events[detector_name].clear()
             self._frame_counters[detector_name] = 0
+    
+    def create_pre_trigger_snapshot(self, detector_name: str) -> Dict[str, Any]:
+        """
+        Create a pre-trigger snapshot of the current hardware state.
+        
+        This method should be called BEFORE triggering image acquisition
+        to capture the hardware state at the moment of trigger, avoiding
+        race conditions where state changes between trigger and frame receipt.
+        
+        Following the pattern from octopi-research (CaptureInfo set before trigger).
+        
+        Args:
+            detector_name: Detector name
+            
+        Returns:
+            Dictionary with current hardware state (positions, illumination, etc.)
+        """
+        with self._lock:
+            snapshot = {
+                'timestamp': time.time(),
+                'detector_name': detector_name,
+                'global_metadata': {},
+                'detector_context': None,
+            }
+            
+            # Capture global metadata (positioners, illumination, objective)
+            for key, attr_value in self._global_metadata.items():
+                key_str = ':'.join(key)
+                snapshot['global_metadata'][key_str] = {
+                    'value': attr_value.value,
+                    'timestamp': attr_value.timestamp,
+                    'units': attr_value.units,
+                }
+            
+            # Capture detector context
+            if detector_name in self._detector_contexts:
+                snapshot['detector_context'] = self._detector_contexts[detector_name].to_dict()
+            
+            return snapshot
+    
+    def create_frame_event_from_snapshot(self, snapshot: Dict[str, Any], 
+                                          frame_number: int = None,
+                                          hw_frame_number: int = None) -> FrameEvent:
+        """
+        Create a FrameEvent from a pre-trigger snapshot.
+        
+        This method should be called when a frame is received, using the
+        snapshot that was captured before the trigger. This ensures metadata
+        alignment with actual image data.
+        
+        Args:
+            snapshot: Pre-trigger snapshot from create_pre_trigger_snapshot
+            frame_number: Optional override for frame number
+            hw_frame_number: Hardware frame number from camera
+            
+        Returns:
+            FrameEvent with aligned metadata
+        """
+        with self._lock:
+            detector_name = snapshot.get('detector_name')
+            
+            if frame_number is None:
+                frame_number = self._frame_counters[detector_name]
+                self._frame_counters[detector_name] += 1
+            
+            # Extract position from global metadata
+            global_meta = snapshot.get('global_metadata', {})
+            
+            # Find stage positions (look for Positioner:*:*:Position keys)
+            stage_x = None
+            stage_y = None
+            stage_z = None
+            
+            for key, value_dict in global_meta.items():
+                parts = key.split(':')
+                if len(parts) >= 4 and parts[0] == 'Positioner' and parts[3] == 'Position':
+                    axis = parts[2]
+                    pos = value_dict.get('value')
+                    if axis == 'X':
+                        stage_x = pos
+                    elif axis == 'Y':
+                        stage_y = pos
+                    elif axis == 'Z':
+                        stage_z = pos
+            
+            # Get exposure from detector context
+            ctx = snapshot.get('detector_context', {})
+            exposure_ms = ctx.get('exposure_ms')
+            
+            # Create event
+            event = FrameEvent(
+                frame_number=frame_number,
+                timestamp=snapshot.get('timestamp', time.time()),
+                detector_name=detector_name,
+                stage_x_um=stage_x,
+                stage_y_um=stage_y,
+                stage_z_um=stage_z,
+                exposure_ms=exposure_ms,
+                metadata={
+                    'hw_frame_number': hw_frame_number,
+                    'pre_trigger_snapshot': True,
+                }
+            )
+            
+            return event
     
     def to_ome(self, detector_names: Optional[List[str]] = None) -> Optional['OME']:
         """

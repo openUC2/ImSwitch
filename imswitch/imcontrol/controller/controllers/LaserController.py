@@ -35,6 +35,10 @@ class LaserController(ImConWidgetController):
                     lManager.valueRangeStep if lManager.valueRangeStep is not None else None,
                     (lManager.freqRangeMin, lManager.freqRangeMax, lManager.freqRangeInit) if lManager.isModulated else (0, 0, 0))
 
+            # Set wavelength metadata (static property from config)
+            if lManager.wavelength:
+                self.setSharedAttr(lName, _wavelengthAttr, lManager.wavelength)
+            
             if not lManager.isBinary:
                 self.valueChanged(lName, lManager.valueRangeMin)
 
@@ -443,6 +447,8 @@ _valueAttr = 'Value'
 _freqEnAttr = "ModulationEnabled"
 _freqAttr = "Frequency"
 _dcAttr = "DutyCycle"
+_wavelengthAttr = "WavelengthNm"
+_powerMwAttr = "PowerMw"
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

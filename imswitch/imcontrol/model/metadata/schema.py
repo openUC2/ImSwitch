@@ -50,9 +50,13 @@ class MetadataSchema:
     
     # Standard field definitions: (units, dtype, description)
     POSITIONER_FIELDS = {
-        'PositionUm': ('um', 'float', 'Position in micrometers'),
-        'SpeedUmS': ('um/s', 'float', 'Speed in micrometers per second'),
+        'Position': ('um', 'float', 'Position in micrometers'),
+        'PositionUm': ('um', 'float', 'Position in micrometers (alias)'),
+        'Speed': ('um/s', 'float', 'Speed in micrometers per second'),
+        'SpeedUmS': ('um/s', 'float', 'Speed in micrometers per second (alias)'),
         'IsHomed': ('', 'bool', 'Whether axis is homed'),
+        'Home': ('', 'bool', 'Homing status'),
+        'Stop': ('', 'bool', 'Stop status'),
         'IsMoving': ('', 'bool', 'Whether axis is moving'),
         'SetpointUm': ('um', 'float', 'Target position in micrometers'),
         'AccelerationUmS2': ('um/s^2', 'float', 'Acceleration'),
@@ -65,6 +69,10 @@ class MetadataSchema:
         'CurrentMa': ('mA', 'float', 'Current in milliamps'),
         'Mode': ('', 'str', 'Operating mode'),
         'IntensityPercent': ('%', 'float', 'Intensity as percentage'),
+        'Value': ('', 'float', 'Current value (units depend on device)'),
+        'ModulationEnabled': ('', 'bool', 'Whether modulation is enabled'),
+        'Frequency': ('Hz', 'float', 'Modulation frequency'),
+        'DutyCycle': ('%', 'float', 'Modulation duty cycle'),
     }
     
     OBJECTIVE_FIELDS = {
@@ -86,6 +94,10 @@ class MetadataSchema:
         'ShapePx': ('px', 'tuple', 'Detector shape in pixels (width, height)'),
         'BitDepth': ('', 'int', 'Bit depth'),
         'ReadoutMode': ('', 'str', 'Readout mode'),
+        'IsRGB': ('', 'bool', 'Whether detector outputs RGB images'),
+        'FrameNumber': ('', 'int', 'Frame number from camera hardware'),
+        'FrameTimestamp': ('s', 'float', 'Frame timestamp from camera'),
+        'FOVUm': ('um', 'tuple', 'Field of view in micrometers (width, height)'),
     }
     
     ENVIRONMENT_FIELDS = {

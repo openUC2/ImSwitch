@@ -242,9 +242,6 @@ class ObjectiveInfo:
     calibrateOnStart: bool = True
     active: bool = True
 
-@dataclass(frozen=False)
-class MCTInfo:
-    tWait: int
 
 class ROIScanInfo:
     pass
@@ -663,9 +660,6 @@ class SetupInfo:
     objective: Optional[ObjectiveInfo] = field(default_factory=lambda: None)
     """ Objective settings. Required to be defined to use Objective functionality. """
 
-    mct: Optional[MCTInfo] = field(default_factory=lambda: None)
-    """ MCT settings. Required to be defined to use MCT functionality. """
-
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """
 
@@ -673,7 +667,7 @@ class SetupInfo:
     """ ROIScan settings. Required to be defined to use ROIScan functionality. """
 
     lightsheet: Optional[LightsheetInfo] = field(default_factory=lambda: None)
-    """ MCT settings. Required to be defined to use Lightsheet functionality. """
+    """ lighthseet settings. Required to be defined to use Lightsheet functionality. """
 
     webrtc: Optional[WebRTCInfo] = field(default_factory=lambda: None)
     """ WebRTC settings. Required to be defined to use WebRTC functionality. """

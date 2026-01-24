@@ -1118,6 +1118,34 @@ class ExperimentController(ImConWidgetController):
             "z_index": kwargs.get("z_index", 0),
             "channel_index": kwargs.get("channel_index", 0),
         }
+        
+        # Enrich metadata with MetadataHub data if available
+        try:
+            if hasattr(self._master, 'metadataHub') and self._master.metadataHub is not None:
+                detector_name = self._master.detectorsManager.getAllDeviceNames()[0]
+                
+                # Get objective info from hub
+                hub_global = self._master.metadataHub.get_latest(flat=True, filter_category='Objective')
+                for key, value_dict in hub_global.items():
+                    if 'PixelSizeUm' in key:
+                        ome_metadata['objective_pixel_size_um'] = value_dict.get('value')
+                    elif 'Name' in key:
+                        ome_metadata['objective_name'] = value_dict.get('value')
+                    elif 'Magnification' in key:
+                        ome_metadata['objective_magnification'] = value_dict.get('value')
+                    elif 'NA' in key:
+                        ome_metadata['objective_na'] = value_dict.get('value')
+                
+                # Get detector context (includes isRGB, exposure, etc.)
+                detector_ctx = self._master.metadataHub.get_detector(detector_name)
+                if detector_ctx:
+                    ome_metadata['detector_is_rgb'] = detector_ctx.is_rgb
+                    if detector_ctx.exposure_ms:
+                        ome_metadata['exposure_ms'] = detector_ctx.exposure_ms
+                    if detector_ctx.pixel_size_um:
+                        ome_metadata['pixel_size_um'] = detector_ctx.pixel_size_um
+        except Exception as e:
+            self._logger.debug(f"Could not enrich OME metadata from MetadataHub: {e}")
 
         try:
             # Get file_writers list from context

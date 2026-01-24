@@ -14,7 +14,6 @@ from imswitch.imcontrol.model import (
     SIMManager,
     DPCManager,
     LEDMatrixsManager,
-    MCTManager,
     ROIScanManager,
     WebRTCManager,
     HyphaManager,
@@ -110,8 +109,6 @@ class MasterController:
             self.simManager = SIMManager(self.__setupInfo.sim)
         if "DPC" in self.__setupInfo.availableWidgets:
             self.dpcManager = DPCManager(self.__setupInfo.dpc)
-        if "MCT" in self.__setupInfo.availableWidgets:
-            self.mctManager = MCTManager(self.__setupInfo.mct)
         if "NIDAQ" in self.__setupInfo.availableWidgets:
             self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
         if "Hypha" in self.__setupInfo.availableWidgets:
@@ -236,6 +233,7 @@ class MasterController:
                     dtype=dtype,
                     binning=detector.binning,
                     channel_name=detectorName,
+                    is_rgb=getattr(detector, '_isRGB', False),  # Add isRGB flag
                 )
                 
                 # Try to get additional properties if available
@@ -248,6 +246,13 @@ class MasterController:
                 try:
                     if hasattr(detector, 'parameters') and 'gain' in detector.parameters:
                         context.gain = detector.parameters['gain'].value
+                except Exception:
+                    pass
+                
+                # Try to get bit depth
+                try:
+                    if hasattr(detector, 'bitDepth'):
+                        context.bit_depth = detector.bitDepth
                 except Exception:
                     pass
                 

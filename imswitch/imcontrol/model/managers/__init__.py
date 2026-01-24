@@ -20,7 +20,6 @@ from .RotatorsManager import RotatorsManager
 from .UC2ConfigManager import UC2ConfigManager
 from .SIMManager import SIMManager
 from .DPCManager import DPCManager
-from .MCTManager import MCTManager
 from .TimelapseManager import TimelapseManager
 from .ExperimentManager import ExperimentManager
 from .ROIScanManager import ROIScanManager

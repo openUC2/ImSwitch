@@ -40,7 +40,6 @@ if not IS_HEADLESS:
     from .UC2ConfigWidget import UC2ConfigWidget
     from .SIMWidget import SIMWidget
     from .DPCWidget import DPCWidget
-    from .MCTWidget import MCTWidget
     from .LepmonWidget import LepmonWidget
     from .ExperimentWidget import ExperimentWidget
     from .TimelapseWidget import TimelapseWidget

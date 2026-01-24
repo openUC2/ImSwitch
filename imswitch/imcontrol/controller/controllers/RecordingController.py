@@ -431,6 +431,8 @@ class RecordingController(ImConWidgetController):
                 self.__logger.warning(f"Error getting metadata hub snapshot: {e}")
         
         return attrs
+    
+    def attrChanged(self, key, value):
         if (
             self.settingAttr
             or len(key) != 2

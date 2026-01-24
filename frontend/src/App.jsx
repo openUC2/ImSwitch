@@ -45,7 +45,6 @@ import StageCenterCalibrationWizard from "./components/StageCenterCalibrationWiz
 import { NavigationDrawer, TopBar } from "./components/navigation";
 import AppManagerPage from "./components/AppManagerPage.jsx";
 
-import { MCTProvider } from "./context/MCTContext.js";
 
 //axon
 import AxonTabComponent from "./axon/AxonTabComponent.js";
@@ -440,11 +439,6 @@ function App() {
           )}
           {selectedPlugin === "Infinity Scanning" && <LargeFovScanController />}
           {selectedPlugin === "Blockly" && <BlocklyController />}
-          {selectedPlugin === "Timelapse" && (
-            <MCTProvider>
-              <TimelapseController />
-            </MCTProvider>
-          )}
           {selectedPlugin === "Objective" && <ObjectiveController />}
           {selectedPlugin === "About" && <AboutPage />}
           {selectedPlugin === "SystemSettings" && <SystemSettings />}

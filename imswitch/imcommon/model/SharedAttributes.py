@@ -4,12 +4,29 @@ import numpy as np
 
 from imswitch.imcommon.framework import Signal, SignalInterface
 
-try:
-    from imswitch.imcontrol.model.metadata.schema import SharedAttrValue
-    HAS_METADATA_HUB = True
-except ImportError:
-    HAS_METADATA_HUB = False
-    SharedAttrValue = None
+# Lazy import to avoid circular import issues
+# The import chain imcommon.model -> SharedAttributes -> imcontrol.model.metadata
+# -> imcontrol.model.managers -> initLogger -> imcommon.model creates a cycle
+HAS_METADATA_HUB = False
+SharedAttrValue = None
+
+def _get_shared_attr_value_class():
+    """Lazy import of SharedAttrValue to avoid circular imports."""
+    global HAS_METADATA_HUB, SharedAttrValue
+    if SharedAttrValue is None:
+        try:
+            from imswitch.imcontrol.model.metadata.schema import SharedAttrValue as _SharedAttrValue
+            SharedAttrValue = _SharedAttrValue
+            HAS_METADATA_HUB = True
+        except ImportError:
+            HAS_METADATA_HUB = False
+    return SharedAttrValue
+
+
+def _is_shared_attr_value(value):
+    """Check if value is a SharedAttrValue instance (with lazy import)."""
+    cls = _get_shared_attr_value_class()
+    return cls is not None and isinstance(value, cls)
 
 
 class SharedAttributes(SignalInterface):
@@ -31,7 +48,7 @@ class SharedAttributes(SignalInterface):
             key_str = ':'.join(key)
             
             # Check if value is a SharedAttrValue
-            if HAS_METADATA_HUB and isinstance(value, SharedAttrValue):
+            if _is_shared_attr_value(value):
                 attrs[key_str] = value.value
                 # Add metadata as separate keys
                 if value.units:
@@ -60,7 +77,7 @@ class SharedAttributes(SignalInterface):
                 parent = parent[key[i]]
 
             # Check if value is a SharedAttrValue
-            if HAS_METADATA_HUB and isinstance(value, SharedAttrValue):
+            if _is_shared_attr_value(value):
                 parent[key[-1]] = {
                     'value': value.value,
                     'timestamp': value.timestamp,
@@ -98,7 +115,7 @@ class SharedAttributes(SignalInterface):
         self._validateKey(key)
         value = self._data[key]
         # For backwards compatibility, return raw value if it's a SharedAttrValue
-        if HAS_METADATA_HUB and isinstance(value, SharedAttrValue):
+        if _is_shared_attr_value(value):
             return value.value
         return value
     
@@ -117,7 +134,7 @@ class SharedAttributes(SignalInterface):
         # Store the value as-is (can be raw value or SharedAttrValue)
         self._data[key] = value
         # For signal emission, unwrap SharedAttrValue to maintain backwards compatibility
-        if HAS_METADATA_HUB and isinstance(value, SharedAttrValue):
+        if _is_shared_attr_value(value):
             self.sigAttributeSet.emit(key, value.value)
         else:
             self.sigAttributeSet.emit(key, value)

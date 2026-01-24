@@ -1,7 +1,6 @@
-import numpy as np
 
 from imswitch.imcommon.model import initLogger
-from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter
+from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter
 
 
 class AVManager(DetectorManager):
@@ -67,9 +66,9 @@ class AVManager(DetectorManager):
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=True)
 
-    def getLatestFrame(self):
-        return self._camera.getLast()
-        
+    def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
+        return self._camera.getLast(returnFrameNumber=returnFrameNumber)
+
 
 
     def setParameter(self, name, value):

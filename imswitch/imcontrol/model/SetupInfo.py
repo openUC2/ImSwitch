@@ -296,6 +296,14 @@ class FlatfieldInfo:
     pass
 
 @dataclass(frozen=False)
+class StorageInfo:
+    """Storage configuration for data paths."""
+
+    activeDataPath: Optional[str] = None
+    """ Active data storage path. If set, ImSwitch will use this path for saving data. 
+    This is typically set via the Storage API when user selects external drives. """
+
+@dataclass(frozen=False)
 class PixelCalibrationInfo:
     """
     Configuration for stage-to-camera affine calibration.
@@ -304,7 +312,7 @@ class PixelCalibrationInfo:
     to stage micron coordinates. The affine matrix handles rotation, scaling, shear,
     and translation between camera and stage coordinate systems.
     """
-    
+
     affineCalibrations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     """ Per-objective affine calibration data. 
     Format: {
@@ -334,40 +342,64 @@ class PixelCalibrationInfo:
     [[1, 0, 0], [0, 1, 0]] means 1:1 mapping with no rotation. """
 
     ObservationCamera: str = None
+    """ Name of the observation/overview camera used for calibration. """
+
+    overviewCalibration: Dict[str, Any] = field(default_factory=dict)
+    """ Overview camera calibration data.
+    Format: {
+        "axes": {
+            "mapping": {"stageX_to_cam": "width"|"height", "stageY_to_cam": "width"|"height"},
+            "sign": {"X": +1|-1, "Y": +1|-1}
+        },
+        "homing": {
+            "X": {"inverted": bool, "lastCheck": "ISO8601"},
+            "Y": {"inverted": bool, "lastCheck": "ISO8601"}
+        },
+        "illuminationMap": [
+            {"channel": str, "wavelength_nm": float, "color": str},
+            ...
+        ],
+        "objectiveImages": {
+            "slot1": "path/to/image.png",
+            ...
+        }
+    }
+    """
+    ObservationCameraFlip: Dict[str, bool] = field(default_factory=lambda: {"flipX": True, "flipY": True}) # should be True for the ESP32 Xiao camera used as overview camera in FRAME
 
 
 @dataclass(frozen=False)
 class ExperimentInfo:
     """Configuration for experiment management, including OMERO integration."""
-    
+
     # OMERO configuration
     omeroServerUrl: Optional[str] = "localhost"
     """ OMERO server URL. """
-    
+
     omeroUsername: Optional[str] = ""
     """ OMERO username for authentication. """
-    
+
     omeroPassword: Optional[str] = ""
     """ OMERO password for authentication. """
-    
+
     omeroPort: Optional[int] = 4064
     """ OMERO server port. """
-    
+
     omeroGroupId: Optional[int] = -1
     """ OMERO group ID for uploads. -1 for default group. """
-    
+
     omeroProjectId: Optional[int] = -1
     """ OMERO project ID for uploads. -1 for no specific project. """
-    
+
     omeroDatasetId: Optional[int] = -1
     """ OMERO dataset ID for uploads. -1 for no specific dataset. """
-    
+
     omeroEnabled: bool = False
     """ Whether OMERO integration is enabled. """
-    
+
     omeroConnectionTimeout: int = 30
     """ Connection timeout for OMERO in seconds. """
-    
+
     omeroUploadTimeout: int = 300
     """ Upload timeout for OMERO in seconds. """
 
@@ -399,10 +431,10 @@ class FocusLockInfo:
     updateFreq: int
     """ Update frequency, in milliseconds. """
 
-    cropCenter: list 
+    cropCenter: list
     """ Center point for cropping the camera image. """
 
-    cropSize: int 
+    cropSize: int
     """ Size of the cropped camera image. """
 
     piKp: float
@@ -410,22 +442,27 @@ class FocusLockInfo:
 
     piKi: float
     """ Default ki value of feedback loop. """
-    
+
     focusLockMetric: str
     """ Method to use for focus lock. Options: 'astigmatism', 'phase', 'defocus'. """
-    
+
     laserName: str
     """ Name of the laser to use for focus lock. """
-    
+
     laserValue: int
     """ Value of the laser to use for focus lock. This is usually a wavelength in nm. """
 
     fovWidth: int = 512
     """ Width of the field of view for focus lock, in pixels. """
-    
+
     fovCenter: list = field(default_factory=lambda: [None, None])
     """ Center of the field of view for focus lock, in pixels. [x, y] """
-    
+
+    calibrationData: Optional[dict] = None
+    """ Stored calibration data from previous calibration runs. 
+    Contains position_data, focus_data, polynomial_coeffs, sensitivity, r_squared, 
+    linear_range, timestamp, and lookup_table. """
+
 @dataclass(frozen=False)
 class ArkitektInfo:
     enabled: bool = True
@@ -652,7 +689,7 @@ class SetupInfo:
 
     Stresstest: Optional[StresstestInfo] = field(default_factory=lambda: None)
     """ Stresstest settings. Required to be defined to use Stresstest functionality. """
-    
+
     HistoScan: Optional[HistoScanInfo] = field(default_factory=lambda: None)
     """ HistoScan settings. Required to be defined to use HistoScan functionality. """
 
@@ -707,6 +744,9 @@ class SetupInfo:
 
     microscopeStand: Optional[MicroscopeStandInfo] = field(default_factory=lambda: None)
     """ Microscope stand settings. Required to be defined to use MotCorr widget. """
+
+    storage: Optional[StorageInfo] = field(default_factory=lambda: None)
+    """ Storage configuration for data paths. Contains persistent storage settings. """
 
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """
@@ -786,9 +826,9 @@ class SetupInfo:
         """
         if self.PixelCalibration is None:
             self.PixelCalibration = PixelCalibrationInfo()
-        
+
         self.PixelCalibration.affineCalibrations[objectiveId] = calibrationData
-    
+
     def getAffineCalibration(self, objectiveId: str = "default"):
         """
         Get affine calibration data for a specific objective.
@@ -801,9 +841,9 @@ class SetupInfo:
         """
         if self.PixelCalibration is None:
             return None
-        
+
         return self.PixelCalibration.affineCalibrations.get(objectiveId, None)
-    
+
     def getAffineMatrix(self, objectiveId: str = "default"):
         """
         Get the affine transformation matrix for a specific objective.
@@ -816,19 +856,19 @@ class SetupInfo:
             2x3 numpy array representing the affine transformation
         """
         import numpy as np
-        
+
         # Try to get calibration
         calib = self.getAffineCalibration(objectiveId)
         if calib and "affine_matrix" in calib:
             return np.array(calib["affine_matrix"])
-        
+
         # Return default identity matrix
         if self.PixelCalibration and self.PixelCalibration.defaultAffineMatrix:
             return np.array(self.PixelCalibration.defaultAffineMatrix)
-        
+
         # Fallback to identity
         return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-    
+
     def getFlipFromAffineMatrix(self, objectiveId: str = "default"):
         """
         Extract flip information from affine matrix.
@@ -843,20 +883,19 @@ class SetupInfo:
         Returns:
             Tuple (flipX, flipY) where each is a boolean
         """
-        import numpy as np
-        
+
         matrix = self.getAffineMatrix(objectiveId)
-        
+
         # Extract scale components (diagonal elements)
         scale_x = matrix[0, 0]
         scale_y = matrix[1, 1]
-        
+
         # Flip is indicated by negative scale
         flipX = bool(scale_x < 0)
         flipY = bool(scale_y < 0)
-        
+
         return (flipY, flipX)  # Return as (flipY, flipX) to match axis convention
-    
+
     def getPixelSizeFromAffineMatrix(self, objectiveId: str = "default"):
         """
         Extract pixel size from affine calibration metrics.
@@ -872,11 +911,11 @@ class SetupInfo:
             metrics = calib["metrics"]
             scale_x = metrics.get("scale_x_um_per_pixel", None)
             scale_y = metrics.get("scale_y_um_per_pixel", None)
-            
+
             if scale_x is not None and scale_y is not None:
                 # Return average pixel size (for isotropic pixels)
                 return (abs(scale_x) + abs(scale_y)) / 2.0
-        
+
         return None
 
 # Copyright (C) 2020-2024 ImSwitch developers

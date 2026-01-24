@@ -1,4 +1,3 @@
-import numpy as np
 
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter, DetectorBooleanParameter
@@ -148,6 +147,7 @@ class HikCamManager(DetectorManager):
 
     def setTriggerSource(self, source):
         # update camera safely and mirror value in GUI parameter list
+        self.__logger.debug(f'Setting trigger source to {source}')
         self._performSafeCameraAction(lambda: self._camera.setTriggerSource(source))
         self.parameters['trigger_source'].value = source
 
@@ -284,6 +284,37 @@ class HikCamManager(DetectorManager):
         record n images and average them before subtracting from the latest frame
         '''
         self._camera.recordFlatfieldImage()
+
+    def getCameraStatus(self):
+        """ Returns comprehensive HIK camera status information. """
+        # Get base status from parent class
+        status = super().getCameraStatus()
+
+        # Add HIK-specific information
+        status['cameraType'] = 'HIK'
+        status['isMock'] = self._mocktype != "normal" if hasattr(self, '_mocktype') else False
+        status['isConnected'] = self._camera is not None and hasattr(self._camera, 'cam')
+
+        # Add acquisition status
+        status['isAcquiring'] = self._running
+        status['isAdjustingParameters'] = self._adjustingParameters
+
+        # Try to get additional camera parameters if available
+        try:
+            camera_params = self._camera.get_camera_parameters()
+            if camera_params:
+                status['hardwareParameters'] = camera_params
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve hardware parameters: {e}")
+
+        # Add current trigger source if available
+        try:
+            status['currentTriggerSource'] = self._camera.getTriggerSource()
+            status['availableTriggerTypes'] = self._camera.getTriggerTypes()
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve trigger information: {e}")
+
+        return status
 
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.

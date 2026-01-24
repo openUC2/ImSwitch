@@ -78,7 +78,7 @@ class SingleMultiscaleZarrWriter:
         else:
             # Direct path usage for newer Zarr versions
             store = self.file_name
-        
+
         self.root_group = zarr.group(store=store, overwrite=True)
         self._store = store
 

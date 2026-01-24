@@ -1,6 +1,6 @@
 from qtpy import QtCore, QtWidgets
 
-from imswitch import IS_HEADLESS, __version__
+from imswitch import __version__
 
 class CheckUpdatesDialog(QtWidgets.QDialog):
     """ Dialog for checking for ImSwitch updates. """

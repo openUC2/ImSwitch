@@ -54,7 +54,7 @@ class MasterController:
         self.__setupInfo = setupInfo
         self.__commChannel = commChannel
         self.__moduleCommChannel = moduleCommChannel
-        
+
         # Dictionary to hold controller references for inter-controller communication
         self._controllersRegistry = {}
 
@@ -66,7 +66,9 @@ class MasterController:
         self.detectorsManager = DetectorsManager(
             self.__setupInfo.detectors, updatePeriod=100, **lowLevelManagers
         )
-        self.lasersManager = LasersManager(self.__setupInfo.lasers, **lowLevelManagers)
+        self.lasersManager = LasersManager(
+            self.__setupInfo.lasers, self.__commChannel, **lowLevelManagers
+        )
         self.positionersManager = PositionersManager(
             self.__setupInfo.positioners, self.__commChannel, **lowLevelManagers
         )
@@ -134,7 +136,7 @@ class MasterController:
         # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the
         # MasterController Class
 
-        for entry_point in pkg_resources.iter_entry_points(f"imswitch.implugins"):
+        for entry_point in pkg_resources.iter_entry_points("imswitch.implugins"):
             InfoClass = None
             print(f"entry_point: {entry_point.name}")
             try:
@@ -146,7 +148,7 @@ class MasterController:
                         InfoClass = pkg_resources.load_entry_point(
                             "imswitch", "imswitch.implugins", InfoClassName
                         )
-                    except Exception as e:
+                    except Exception:
                         InfoClass = None
                     ManagerClass = entry_point.load(InfoClass)  # Load the manager class
                     # self.__setupInfo.add_attribute(attr_name=entry_point.name.split("_manager")[0], attr_value={})
@@ -184,7 +186,7 @@ class MasterController:
         self.detectorsManager.sigAcquisitionStarted.connect(cc.sigAcquisitionStarted)
         self.detectorsManager.sigAcquisitionStopped.connect(cc.sigAcquisitionStopped)
         self.detectorsManager.sigDetectorSwitched.connect(cc.sigDetectorSwitched)
-        self.detectorsManager.sigImageUpdated.connect(cc.sigUpdateImage) # TODO: why do we need to map a signal into a signal and cannot direclty use it ?! 
+        self.detectorsManager.sigImageUpdated.connect(cc.sigUpdateImage) # TODO: why do we need to map a signal into a signal and cannot direclty use it ?!
         self.detectorsManager.sigNewFrame.connect(cc.sigNewFrame)
 
         self.recordingManager.sigRecordingStarted.connect(cc.sigRecordingStarted)
@@ -202,7 +204,7 @@ class MasterController:
         self.__moduleCommChannel.memoryRecordings[name] = VFileItem(
             data=file, filePath=filePath, savedToDisk=savedToDisk
         )
-    
+
     def registerController(self, name, controller):
         """Register a controller for inter-controller communication.
         
@@ -215,7 +217,7 @@ class MasterController:
         """
         self._controllersRegistry[name] = controller
         self.__logger.debug(f"Registered controller: {name}")
-    
+
     def getController(self, name):
         """Get a registered controller by name.
         
@@ -234,7 +236,7 @@ class MasterController:
             List of controller names
         """
         return list(self._controllersRegistry.keys())
-    
+
     def closeEvent(self):
         self.recordingManager.endRecording(emitSignal=False, wait=True)
 

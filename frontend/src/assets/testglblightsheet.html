@@ -1,0 +1,207 @@
+<!-- index.html
+Put this file + your .glb into the same folder.
+Run:  python -m http.server 8080
+Open: http://localhost:8080
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>GLB Assembly Sliders</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
+      #hint {
+        position: fixed; left: 10px; bottom: 10px; color: #bbb; font: 12px/1.4 system-ui, sans-serif;
+        background: rgba(0,0,0,0.35); padding: 8px 10px; border-radius: 8px;
+      }
+    </style>
+
+    <!-- Import maps for CDN modules -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+          "lil-gui": "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.min.js"
+        }
+      }
+    </script>
+  </head>
+
+  <body>
+    <div id="hint">
+      Mouse: orbit / pan / zoom<br/>
+      Console logs missing node names if any
+    </div>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+      import GUI from "lil-gui";
+
+      // ===== basic scene =====
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x111111);
+
+      const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100000);
+      camera.position.set(200, 120, 200);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+      const key = new THREE.DirectionalLight(0xffffff, 1.2);
+      key.position.set(2, 3, 4);
+      scene.add(key);
+
+      scene.add(new THREE.AxesHelper(50));
+
+      // ===== assembly root + subgroups =====
+      const assemblyRoot = new THREE.Group();
+      scene.add(assemblyRoot);
+
+      const groups = {
+        lightsheet: new THREE.Group(),
+        sample: new THREE.Group(),
+        objective4x: new THREE.Group(),
+        objective20x: new THREE.Group(),
+        chamberFixed: new THREE.Group()
+      };
+
+      // Keep everything under the same root so scaling/rotation stays consistent
+      Object.values(groups).forEach(g => assemblyRoot.add(g));
+
+      // ===== helpers =====
+      function warnMissing(name) {
+        console.warn(`[GLB] missing node: ${name}`);
+      }
+
+      // Moves an object from its current parent into `targetGroup` while preserving world transform
+      function attachByName(model, nodeName, targetGroup) {
+        const obj = model.getObjectByName(nodeName);
+        if (!obj) return warnMissing(nodeName);
+        targetGroup.attach(obj);
+      }
+
+      function makeNameList(prefix, from, to) {
+        const out = [];
+        for (let i = from; i <= to; i++) out.push(`${prefix}${i}`);
+        return out;
+      }
+
+      // GUI: sliders that directly write group.position
+      function addXYZ(gui, label, group, opts = {}) {
+        const range = opts.range ?? 50;     // model looks like mm-scale; adjust as needed
+        const step  = opts.step  ?? 0.1;
+
+        const p0 = group.position.clone();  // current base (usually 0,0,0 here)
+        const state = { x: 0, y: 0, z: 0 };
+
+        const folder = gui.addFolder(label);
+
+        const apply = () => {
+          group.position.set(p0.x + state.x, p0.y + state.y, p0.z + state.z);
+        };
+
+        if (opts.x !== false) folder.add(state, "x", -range, range, step).onChange(apply);
+        if (opts.y !== false) folder.add(state, "y", -range, range, step).onChange(apply);
+        if (opts.z !== false) folder.add(state, "z", -range, range, step).onChange(apply);
+
+        folder.add({
+          reset: () => {
+            state.x = 0; state.y = 0; state.z = 0;
+            apply();
+            folder.controllersRecursive().forEach(c => c.updateDisplay());
+          }
+        }, "reset");
+
+        folder.open();
+      }
+
+      // ===== load GLB =====
+      const glbUrl = "./Assembly_lightsheet_objective_sample_arrangement.glb"; // rename if needed
+      const loader = new GLTFLoader();
+
+      loader.load(glbUrl, (gltf) => {
+        const model = gltf.scene;
+        assemblyRoot.add(model);
+
+        // Optional: list top-level names once (useful for debugging)
+        console.log("[GLB] children:", model.children.map(c => c.name));
+
+        // --- your mapping ---
+        // Körper1_9 => lightsheet
+        attachByName(model, "Körper1_9", groups.lightsheet);
+
+        // Körper2_1 + Körper1_8 => sample (xyz)
+        ["Körper2_1", "Körper1_8"].forEach(n => attachByName(model, n, groups.sample));
+
+        // Körper1_7 => objective 4x (x only)
+        attachByName(model, "Körper1_7", groups.objective4x);
+
+        // Körper1 .. Körper1_5 (+ Körper1_6 found in file) => chamber fixed
+        ["Körper1", ...makeNameList("Körper1_", 1, 6)].forEach(n => attachByName(model, n, groups.chamberFixed));
+
+        // Körper2 .. Körper7 => objective 20x (z only)
+        makeNameList("Körper", 2, 7).forEach(n => attachByName(model, n, groups.objective20x));
+        // add Körper1_6   as well (found in file)  
+        attachByName(model, "Körper1_6", groups.objective20x);
+        // Center camera/controls nicely
+        const box = new THREE.Box3().setFromObject(assemblyRoot);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+
+        controls.target.copy(center);
+
+        const maxDim = Math.max(size.x, size.y, size.z);
+        camera.near = Math.max(0.1, maxDim / 1000);
+        camera.far  = maxDim * 50;
+        camera.position.copy(center).add(new THREE.Vector3(maxDim * 1.2, maxDim * 0.6, maxDim * 1.2));
+        camera.updateProjectionMatrix();
+        controls.update();
+
+        // GUI sliders
+        const gui = new GUI({ title: "Transforms (model units)" });
+
+        addXYZ(gui, "Lightsheet (Körper1_9)", groups.lightsheet, { range: 80, step: 0.1 });
+        addXYZ(gui, "Sample (Körper2_1 + Körper1_8) [XYZ]", groups.sample, { range: 80, step: 0.1 });
+
+        // constrain to X only
+        addXYZ(gui, "Objective 4x (Körper1_7) [X]", groups.objective4x, { range: 80, step: 0.1, y: false, z: false });
+
+        // constrain to Z only
+        addXYZ(gui, "Objective 20x (Körper2..Körper7) [Z]", groups.objective20x, { range: 80, step: 0.1, x: false, z: false });
+
+        // fixed group left as-is; you can still add visibility toggle if you want:
+        const vis = { chamber: true };
+        const f = gui.addFolder("Visibility");
+        f.add(vis, "chamber").name("Sample chamber").onChange(v => groups.chamberFixed.visible = v);
+        f.open();
+      }, undefined, (err) => {
+        console.error("Failed to load GLB:", err);
+      });
+
+      // ===== render loop =====
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    </script>
+  </body>
+</html>
+

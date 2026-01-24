@@ -1,0 +1,96 @@
+name: test
+
+on:
+  push:
+    branches:
+      - 'master'
+      - 'main'
+    tags:
+      - 'v*'
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      git-ref:
+        description: 'Git ref (optional)'
+        required: false
+
+jobs:
+  test:
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.ref }}
+        
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Install dependencies
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          sudo apt install -y xvfb libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+              libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0
+        fi
+
+        python3 -m pip install --upgrade pip
+        python3 -m pip install .
+        # hacky workaround to ensure we get the right psygnal version: otherwise error: INTERNALERROR> TypeError: interpreted classes cannot inherit from compiled
+        python3 -m pip uninstall psygnal -y || echo "psygnal uninstall failed (not installed)"
+        python3 -m pip install psygnal --no-binary :all:                
+        python3 -m pip install ruff pytest
+      shell: bash
+      
+    - name: Lint with ruff
+      run: |
+        # Check for critical errors that should fail the build
+        # E9: Runtime/syntax errors
+        # F821-F823: Undefined names (most critical Pyflakes errors)
+        ruff check . --select=E9,F821,F822,F823 --output-format=full
+        # Run all configured checks (exit-zero treats all errors as warnings)
+        ruff check . --exit-zero --output-format=full
+      shell: bash
+
+    - name: Wait for frontend to build
+      id: wait-build-frontend
+      uses: lucasssvaz/wait-on-workflow@v1
+      with:
+        workflow: build-frontend.yaml
+        sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    - name: Download built frontend
+      uses: actions/download-artifact@v5
+      with:
+        name: frontend
+        path: ./frontend/build
+        github-token: ${{github.token}}
+        run-id: ${{ steps.wait-build-frontend.outputs.run-id }}
+      
+    - name: Run Unit Tests
+      run: |
+        # Run unit tests using --pyargs to find the installed package
+        # The -p no:arkitekt_next disables the arkitekt pytest plugin which requires arkitekt_server
+        # Note: pytest.ini already configures this, but we add it explicitly for clarity
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          xvfb-run --server-args "-screen 0 1920x1080x24" python3 -m pytest \
+            --pyargs imswitch.imcontrol._test.unit \
+            -p no:arkitekt_next \
+            -v --tb=short
+        else
+          python3 -m pytest \
+            --pyargs imswitch.imcontrol._test.unit \
+            -p no:arkitekt_next \
+            -v --tb=short
+        fi
+      shell: bash

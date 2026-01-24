@@ -1,0 +1,100 @@
+{
+  "name": "microscope-app",
+  "version": "1.4.0",
+  "private": true,
+  "homepage": "/imswitch/ui",
+  "dependencies": {
+    "@blockly/theme-dark": "^8.0.1",
+    "@deck.gl/core": "^9.2.1",
+    "@deck.gl/react": "9.1.15",
+    "@deck.gl/widgets": "9.1.15",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@hms-dbmi/viv": "^0.18.0",
+    "@msgpack/msgpack": "^3.0.0",
+    "@mui/icons-material": "^5.15.6",
+    "@mui/material": "^5.16.14",
+    "@reduxjs/toolkit": "^1.8.0",
+    "@testing-library/jest-dom": "^5.17.0",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^13.5.0",
+    "ace-builds": "^1.39.0",
+    "axios": "^1.7.7",
+    "blockly": "^12.3.1",
+    "chart.js": "^4.5.0",
+    "chartjs-adapter-date-fns": "^3.0.0",
+    "date-fns": "^4.1.0",
+    "deck.gl": "^9.2.1",
+    "eslint-config-react-app": "^7.0.1",
+    "json-edit-react": "^1.23.1",
+    "lz4js": "^0.2.0",
+    "ol": "^10.3.1",
+    "plotly.js": "^2.35.3",
+    "prop-types": "^15.8.1",
+    "react": "^18.3.1",
+    "react-ace": "^14.0.1",
+    "react-blockly": "^9.0.0",
+    "react-chartjs-2": "^5.2.0",
+    "react-collapsible": "^2.10.0",
+    "react-dom": "^18.3.1",
+    "react-icons": "^5.2.1",
+    "react-loading": "^2.0.3",
+    "react-plotly.js": "^2.6.0",
+    "react-redux": "^8.0.5",
+    "react-rnd": "^10.4.13",
+    "react-scripts": "5.0.1",
+    "react-sortablejs": "^6.1.4",
+    "react-zoom-pan-pinch": "^3.6.1",
+    "redux": "^4.2.1",
+    "redux-persist": "^6.0.0",
+    "socket.io-client": "^4.8.1",
+    "sortablejs": "^1.6.1",
+    "three": "^0.160.1",
+    "uuid": "^13.0.0",
+    "vtk.js": "^34.13.1",
+    "web-vitals": "^2.1.4",
+    "webpack": "^5.99.7",
+    "zarrita": "^0.5.4"
+  },
+  "devDependencies": {
+    "@babel/plugin-transform-private-property-in-object": "^7.27.1",
+    "@craco/craco": "^7.1.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "axios": "^1.7.7",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.34.2",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "eslint-plugin-react-refresh": "^0.4.7",
+    "sass": "^1.93.2"
+  },
+  "scripts": {
+    "start": "craco start",
+    "build": "craco build",
+    "test": "craco test"
+  },
+  "scripts_old": {
+    "start": "react-scripts start",
+    "build": "CI=false && react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}

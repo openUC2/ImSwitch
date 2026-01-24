@@ -1,6 +1,5 @@
 from imswitch.imcommon.model import initLogger
 from .LEDMatrixManager import LEDMatrixManager
-import numpy as np
 
 
 class ESP32LEDMatrixManager(LEDMatrixManager):
@@ -21,6 +20,7 @@ class ESP32LEDMatrixManager(LEDMatrixManager):
         self.I_max = 255
         self.intensity=0
         self.enabled = False
+        self.channel_index = "led"
 
         try:
             self.Nx = LEDMatrixInfo.managerProperties['Nx']
@@ -85,11 +85,11 @@ class ESP32LEDMatrixManager(LEDMatrixManager):
     # ----------------------------------------------------------------
     # Additional convenience methods you can add:
     # ----------------------------------------------------------------
-    def setHalves(self, region="left", intensity=(255,255,255)):
+    def setHalves(self, region="left", intensity=(255,255,255), getReturn=True, timeout=1):
         """
         Light up only left/right/top/bottom in 'color'.
         """
-        self.mLEDmatrix.send_LEDMatrix_halves(region=region, intensity=intensity)
+        self.mLEDmatrix.send_LEDMatrix_halves(region=region, intensity=intensity, getReturn=getReturn, timeout=timeout)
 
     def setRing(self, radius=4, intensity=(255,255,255), getReturn=True, timeout=1):
         """
@@ -97,11 +97,11 @@ class ESP32LEDMatrixManager(LEDMatrixManager):
         """
         self.mLEDmatrix.send_LEDMatrix_rings(radius=radius, intensity=intensity, getReturn=getReturn, timeout=timeout)
 
-    def setCircle(self, radius=4, intensity=(255,255,255)):
+    def setCircle(self, radius=4, intensity=(255,255,255), getReturn=True, timeout=1):
         """
         Draw filled circle of radius.
         """
-        self.mLEDmatrix.send_LEDMatrix_circles(radius=radius, intensity=intensity)
+        self.mLEDmatrix.send_LEDMatrix_circles(radius=radius, intensity=intensity, getReturn=getReturn, timeout=timeout)
 
     def setStatus(self, status:str="idle") -> None:
         """ Sets the value of the LEDMatrix. """

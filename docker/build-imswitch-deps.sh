@@ -10,31 +10,44 @@ apt-get install -y \
   mesa-utils \
   libhdf5-dev \
   usbutils \
-  libglib2.0-0
+  libglib2.0-0 \
+  git
+# TODO(ethanjli): find a way to not rely on git inside a container image
 
-/opt/conda/bin/conda install -n imswitch -y -c conda-forge \
-  h5py
-/opt/conda/bin/conda install \
-  numcodecs=0.15.0 \
-  numpy=2.1.2
-/bin/bash -c "source /opt/conda/bin/activate imswitch && \
-  conda install -c conda-forge scikit-image=0.19.3"
+# Install system picamera2 which pulls in compatible libcamera dependencies
+# Note: python3-picamera2 will automatically install the correct libcamera version
+apt-get update && apt install -y --no-install-recommends \
+         python3-picamera2 \
+     && apt-get clean \
+     && apt-get autoremove \
+     && rm -rf /var/cache/apt/archives/* \
+     && rm -rf /var/lib/apt/lists/*
 
-# Install nmcli
-# TODO(ethanjli): can we interact with the host's NetworkManager API without installing and running
-# nmcli in the container?
-apt-get install -y \
-  network-manager \
-  dbus \
-  systemd \
-  sudo
+# Activate UV environment and install dependencies
+export PATH="/root/.local/bin:$PATH"
+source /opt/imswitch/.venv/bin/activate
 
-# we want psygnal to be installed without binaries - so first remove it
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip uninstall psygnal -y"
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install psygnal --no-binary :all:"
+# Install core scientific packages using UV # TODO: probably not necessary
+uv pip install \
+  h5py \
+  numpy \
+  scikit-image
 
-# fix the version of OME-ZARR
-/bin/bash -c "source /opt/conda/bin/activate imswitch && pip install zarr==2.11.3"
+# Install psygnal without binaries
+uv pip install psygnal --no-binary :all:
+
+# Fix the version of OME-ZARR
+uv pip install zarr==2.11.3
+
+# Install deps listed in pyproject.toml, but don't install ImSwitch yet:
+mkdir -p /tmp/ImSwitch/imswitch
+cat >/tmp/ImSwitch/imswitch/__init__.py <<EOF
+# temporary placeholder to be overwritten
+__version__ = "0.0.0"
+EOF
+cp /mnt/ImSwitch/pyproject.toml /tmp/ImSwitch/pyproject.toml
+cd /tmp/ImSwitch
+uv pip install /tmp/ImSwitch
 
 # Clean up build-only tools
 
@@ -47,8 +60,6 @@ apt-get remove -y \
 apt -y autoremove
 apt-get clean
 rm -rf /var/lib/apt/lists/*
-/opt/conda/bin/conda clean --all -f -y
-rm -rf /opt/conda/pkgs/*
-pip3 cache purge || true
+rm -rf /root/.cache/uv
 rm -rf /root/.cache/pip
 rm -rf /tmp/*

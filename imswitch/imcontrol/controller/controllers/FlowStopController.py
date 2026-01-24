@@ -2,19 +2,15 @@ import numpy as np
 import datetime
 import tifffile as tif
 import os
-import platform
-import subprocess
 import cv2
 from threading import Thread, Event
 try:
-    import NanoImagingPack as nip
     isNIP = True
 except:
     isNIP = False
 import time
 from imswitch.imcommon.model import dirtools, APIExport
-from imswitch.imcommon.framework import Signal, Worker, Mutex, Timer
-from imswitch.imcontrol.view import guitools
+from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from ..basecontrollers import LiveUpdatedController
 from imswitch import IS_HEADLESS
@@ -266,7 +262,7 @@ class FlowStopController(LiveUpdatedController):
         self.is_measure = True
         if numImages < 0: numImages = np.inf
         self.imagesTaken = 0
-        drivePath = dirtools.UserFileDirs.Data
+        drivePath = dirtools.UserFileDirs.getValidatedDataPath()
         dirPath = os.path.join(drivePath, 'recordings', timeStamp)
         self._logger.debug(dirPath)
         if not os.path.exists(dirPath):

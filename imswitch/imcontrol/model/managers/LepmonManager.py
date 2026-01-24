@@ -1,12 +1,8 @@
-import enum
-import glob
-import cv2
 import os
 
 import numpy as np
-from PIL import Image
 
-from imswitch.imcommon.framework import Signal, SignalInterface
+from imswitch.imcommon.framework import SignalInterface
 from imswitch.imcommon.model import initLogger
 from imswitch.imcommon.model import dirtools
 import json
@@ -22,11 +18,11 @@ class LepmonManager(SignalInterface):
                                  "experimentName","frameRate","savePath",
                                  "fileFormat", "axisFocus",
                                  "axisFlow", "delayTimeAfterRestart", "isRecordVideo", "numImages", "uniqueId",
-                                 "volumePerImage", "timeToStabilize", "pumpSpeed", "timingConfig", 
+                                 "volumePerImage", "timeToStabilize", "pumpSpeed", "timingConfig",
                                  "lightStates", "lcdDisplay", "buttonStates"]
 
         # get default configs
-        self.defaultConfigPath = os.path.join(dirtools.UserFileDirs.Root, "flowStopController")
+        self.defaultConfigPath = os.path.join(dirtools.UserFileDirs.Root, "lepmon")
         if not os.path.exists(self.defaultConfigPath):
             os.makedirs(self.defaultConfigPath)
 
@@ -75,9 +71,9 @@ class LepmonManager(SignalInterface):
     def updateConfig(self, parameterName, value):
         with open(os.path.join(self.defaultConfigPath, self.flowStopConfigFilename), "r") as infile:
             mDict = json.load(infile)
-        
+
         mDict[parameterName] = value
-        
+
         with open(os.path.join(self.defaultConfigPath, self.flowStopConfigFilename), "w") as outfile:
             json.dump(mDict, outfile, indent=4)
 

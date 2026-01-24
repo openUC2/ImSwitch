@@ -2,8 +2,6 @@ from imswitch.imcommon.model import initLogger
 from .PositionerManager import PositionerManager
 import time
 import numpy as np
-import os
-import json
 
 MAX_ACCEL = 1000000
 PHYS_FACTOR = 1
@@ -14,7 +12,7 @@ class ESP32StageManager(PositionerManager):
         self._rs232manager = lowLevelManagers['rs232sManager'][positionerInfo.managerProperties['rs232device']]
         self._commChannel = lowLevelManagers['commChannel']
         self.__logger = initLogger(self, instanceName=name)
-
+        self._name = name
         # Grab motor object
         self._motor = self._rs232manager._esp32.motor
         self._homeModule = self._rs232manager._esp32.home
@@ -68,9 +66,9 @@ class ESP32StageManager(PositionerManager):
         self.sampleLoadingPositions["Y"] = positionerInfo.managerProperties.get('sampleLoadingPositionY', 0)
         self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
 
-        # move z before homing? 
-        self._safeDistanceZHoming = positionerInfo.stageOffsets.get('safeDistanceZHoming',0)
-        
+        # move z before homing?
+        self._safeDistanceZHoming = positionerInfo.managerProperties.get('safeDistanceZHoming',0)
+
         self.stageOffsetPositions = {}
         self.stageOffsetPositions["X"] = positionerInfo.stageOffsets.get('stageOffsetPositionX',0)
         self.stageOffsetPositions["Y"] = positionerInfo.stageOffsets.get('stageOffsetPositionY',0)
@@ -127,7 +125,7 @@ class ESP32StageManager(PositionerManager):
         self.limitYenabled = positionerInfo.managerProperties.get('limitYenabled', False)
         self.limitZenabled = positionerInfo.managerProperties.get('limitZenabled', False)
 
-        # retreive position coordinates for sample loading 
+        # retreive position coordinates for sample loading
         self.sampleLoadingPositions["X"] = positionerInfo.managerProperties.get('sampleLoadingPositionX', 0)
         self.sampleLoadingPositions["Y"] = positionerInfo.managerProperties.get('sampleLoadingPositionY', 0)
         self.sampleLoadingPositions["Z"] = positionerInfo.managerProperties.get('sampleLoadingPositionZ', 0)
@@ -158,22 +156,64 @@ class ESP32StageManager(PositionerManager):
         self._motor.setIsCoreXY(isCoreXY=self.isCoreXY)
 
         # Setup motors
-        self.setupMotor(self.minX, self.maxX, self.stepSizes["X"], self.backlashX, self.stageOffsetPositions["X"], "X")
-        self.setupMotor(self.minY, self.maxY, self.stepSizes["Y"], self.backlashY, self.stageOffsetPositions["Y"], "Y")
-        self.setupMotor(self.minZ, self.maxZ, self.stepSizes["Z"], self.backlashZ, self.stageOffsetPositions["Z"], "Z")
-        self.setupMotor(self.minA, self.maxA, self.stepSizes["A"], self.backlashA, self.stageOffsetPositions["A"], "A")
+        self.setupMotor(self.minX, self.maxX, self.stepSizes["X"], self.backlashX, "X")
+        self.setupMotor(self.minY, self.maxY, self.stepSizes["Y"], self.backlashY, "Y")
+        self.setupMotor(self.minZ, self.maxZ, self.stepSizes["Z"], self.backlashZ, "Z")
+        self.setupMotor(self.minA, self.maxA, self.stepSizes["A"], self.backlashA, "A")
 
         # Setup Motor drivers (TMC - if available)
-        #    def set_tmc_parameters(self, axis=0, msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
-        if 0:
-            if positionerInfo.managerProperties.get('mstepsX', 16) is not None:
-                self.setupMotorDriver(axis="X", msteps=positionerInfo.managerProperties.get('mstepsX', 16), rms_current=positionerInfo.managerProperties.get('rms_currentX', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsX', 10), semin=positionerInfo.managerProperties.get('seminX', 5), semax=positionerInfo.managerProperties.get('semaxX', 2), blank_time=positionerInfo.managerProperties.get('blank_timeX', 24), toff=positionerInfo.managerProperties.get('toffX', 3), timeout=1)
-            if positionerInfo.managerProperties.get('mstepsY', 16) is not None:
-                self.setupMotorDriver(axis="Y", msteps=positionerInfo.managerProperties.get('mstepsY', 16), rms_current=positionerInfo.managerProperties.get('rms_currentY', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsY', 10), semin=positionerInfo.managerProperties.get('seminY', 5), semax=positionerInfo.managerProperties.get('semaxY', 2), blank_time=positionerInfo.managerProperties.get('blank_timeY', 24), toff=positionerInfo.managerProperties.get('toffY', 3), timeout=1)
-            if positionerInfo.managerProperties.get('mstepsZ', 16) is not None:
-                self.setupMotorDriver(axis="Z", msteps=positionerInfo.managerProperties.get('mstepsZ', 16), rms_current=positionerInfo.managerProperties.get('rms_currentZ', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsZ', 10), semin=positionerInfo.managerProperties.get('seminZ', 5), semax=positionerInfo.managerProperties.get('semaxZ', 2), blank_time=positionerInfo.managerProperties.get('blank_timeZ', 24), toff=positionerInfo.managerProperties.get('toffZ', 3), timeout=1)
-            if positionerInfo.managerProperties.get('mstepsA', 16) is not None:
-                self.setupMotorDriver(axis="A", msteps=positionerInfo.managerProperties.get('mstepsA', 16), rms_current=positionerInfo.managerProperties.get('rms_currentA', 500), sgthrs=positionerInfo.managerProperties.get('sgthrsA', 10), semin=positionerInfo.managerProperties.get('seminA', 5), semax=positionerInfo.managerProperties.get('semaxA', 2), blank_time=positionerInfo.managerProperties.get('blank_timeA', 24), toff=positionerInfo.managerProperties.get('toffA', 3), timeout=1)
+        # Load TMC settings from config and apply to device if configured
+        try:
+            if positionerInfo.managerProperties.get('mstepsX') is not None:
+                self.setupMotorDriver(
+                    axis="X",
+                    msteps=positionerInfo.managerProperties.get('mstepsX', 16),
+                    rms_current=positionerInfo.managerProperties.get('rms_currentX', 500),
+                    sgthrs=positionerInfo.managerProperties.get('sgthrsX', 10),
+                    semin=positionerInfo.managerProperties.get('seminX', 5),
+                    semax=positionerInfo.managerProperties.get('semaxX', 2),
+                    blank_time=positionerInfo.managerProperties.get('blank_timeX', 24),
+                    toff=positionerInfo.managerProperties.get('toffX', 3),
+                    timeout=1
+                )
+            if positionerInfo.managerProperties.get('mstepsY') is not None:
+                self.setupMotorDriver(
+                    axis="Y",
+                    msteps=positionerInfo.managerProperties.get('mstepsY', 16),
+                    rms_current=positionerInfo.managerProperties.get('rms_currentY', 500),
+                    sgthrs=positionerInfo.managerProperties.get('sgthrsY', 10),
+                    semin=positionerInfo.managerProperties.get('seminY', 5),
+                    semax=positionerInfo.managerProperties.get('semaxY', 2),
+                    blank_time=positionerInfo.managerProperties.get('blank_timeY', 24),
+                    toff=positionerInfo.managerProperties.get('toffY', 3),
+                    timeout=1
+                )
+            if positionerInfo.managerProperties.get('mstepsZ') is not None:
+                self.setupMotorDriver(
+                    axis="Z",
+                    msteps=positionerInfo.managerProperties.get('mstepsZ', 16),
+                    rms_current=positionerInfo.managerProperties.get('rms_currentZ', 500),
+                    sgthrs=positionerInfo.managerProperties.get('sgthrsZ', 10),
+                    semin=positionerInfo.managerProperties.get('seminZ', 5),
+                    semax=positionerInfo.managerProperties.get('semaxZ', 2),
+                    blank_time=positionerInfo.managerProperties.get('blank_timeZ', 24),
+                    toff=positionerInfo.managerProperties.get('toffZ', 3),
+                    timeout=1
+                )
+            if positionerInfo.managerProperties.get('mstepsA') is not None:
+                self.setupMotorDriver(
+                    axis="A",
+                    msteps=positionerInfo.managerProperties.get('mstepsA', 16),
+                    rms_current=positionerInfo.managerProperties.get('rms_currentA', 500),
+                    sgthrs=positionerInfo.managerProperties.get('sgthrsA', 10),
+                    semin=positionerInfo.managerProperties.get('seminA', 5),
+                    semax=positionerInfo.managerProperties.get('semaxA', 2),
+                    blank_time=positionerInfo.managerProperties.get('blank_timeA', 24),
+                    toff=positionerInfo.managerProperties.get('toffA', 3),
+                    timeout=1
+                )
+        except Exception as e:
+            self.__logger.warning(f"Could not load TMC settings from config: {e}")
 
         # Dummy move to get the motor to the right position
         for iAxis in positionerInfo.axes:
@@ -198,7 +238,7 @@ class ESP32StageManager(PositionerManager):
 
         # save z-position prior to homing
         self._zPositionPriorHoming = self._position["Z"]
-        
+
         # try to register the callback
         try:
             # if event "0" is triggered, the callback function to update the stage positions
@@ -206,6 +246,10 @@ class ESP32StageManager(PositionerManager):
             self._motor.register_callback(0,callbackfct=self.setPositionFromDevice)
         except Exception as e:
             self.__logger.error(f"Could not register callback: {e}")
+
+        # do frame homing if enabled
+        if positionerInfo.managerProperties.get('frameHomeOnStart', 0):
+            self.frameHomingProcedure(False)
 
     def setHomeParametersAxis(self, axis, speed, direction, endstoppolarity, endposrelease, timeout=None):
         if axis == "X":
@@ -244,8 +288,8 @@ class ESP32StageManager(PositionerManager):
         """
         self._motor.set_motor_enable(enable=enable, enableauto=enableauto)
 
-    def setupMotor(self, minPos, maxPos, stepSize, backlash, offset, axis):
-        self._motor.setup_motor(axis=axis, minPos=minPos, maxPos=maxPos, stepSize=stepSize, backlash=backlash, offset=offset)
+    def setupMotor(self, minPos, maxPos, stepSize, backlash, axis):
+        self._motor.setup_motor(axis=axis, minPos=minPos, maxPos=maxPos, stepSize=stepSize, backlash=backlash)
 
     def setupMotorDriver(self, axis="X", msteps=None, rms_current=None, stall_value=None, sgthrs=None, semin=None, semax=None, blank_time=None, toff=None, timeout=1):
         self._motor.set_tmc_parameters(axis=axis, msteps=msteps, rms_current=rms_current, stall_value=stall_value, sgthrs=sgthrs, semin=semin, semax=semax, blank_time=blank_time, toff=toff, timeout=timeout)
@@ -285,7 +329,9 @@ class ESP32StageManager(PositionerManager):
             if not is_absolute and value == 0: return
             if self.limitXenabled and is_absolute and value < 0: return
             elif self.limitXenabled and not is_absolute and self._position[axis] + value < 0: return
-            self._motor.move_x(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value + self.stageOffsetPositions["X"] if is_absolute else value
+            self._motor.move_x(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
         elif axis == 'Y' and speed >0:
@@ -293,7 +339,9 @@ class ESP32StageManager(PositionerManager):
             if not is_absolute and value == 0: return
             if self.limitYenabled and is_absolute and value < 0: return
             elif self.limitYenabled and not is_absolute and self._position[axis] + value < 0: return
-            self._motor.move_y(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value + self.stageOffsetPositions["Y"] if is_absolute else value
+            self._motor.move_y(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
         elif axis == 'Z' and speed >0:
@@ -301,7 +349,9 @@ class ESP32StageManager(PositionerManager):
             if not is_absolute and value == 0: return
             if self.limitZenabled and is_absolute and value < 0: return
             elif self.limitZenabled and not is_absolute and self._position[axis] + value < 0: return
-            self._motor.move_z(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, is_dualaxis=self.isDualAxis, timeout=timeout, is_reduced=is_reduced)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value + self.stageOffsetPositions["Z"] if is_absolute else value
+            self._motor.move_z(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, is_dualaxis=self.isDualAxis, timeout=timeout, is_reduced=is_reduced)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
         elif axis == 'A' and speed >0:
@@ -309,21 +359,33 @@ class ESP32StageManager(PositionerManager):
             #if is_absolute and value < 0: return
             #elif not is_absolute and self._position[axis] + value < 0: return
             if not is_absolute and value == 0: return
-            self._motor.move_a(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value + self.stageOffsetPositions["A"] if is_absolute else value
+            self._motor.move_a(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
         elif axis == 'XY':
             # don't move to negative positions
             if (self.limitXenabled and self.limitYenabled) and is_absolute and (value[0] < 0 or value[1] < 0): return
             elif (self.limitXenabled and self.limitYenabled) and not is_absolute and (self._position["X"] + value[0] < 0 or self._position["Y"] + value[1] < 0): return
-            self._motor.move_xy(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value
+            if is_absolute:
+                deviceValue = (value[0] + self.stageOffsetPositions["X"], value[1] + self.stageOffsetPositions["Y"])
+            self._motor.move_xy(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
             for i, iaxis in enumerate(("X", "Y")):
                 if not is_absolute:
                     self._position[iaxis] = self._position[iaxis] + value[i]
                 else:
                     self._position[iaxis] = value[i]
         elif axis == 'XYZ':
-            self._motor.move_xyz(value, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
+            # Apply offset for absolute moves: convert from user position to device position
+            deviceValue = value
+            if is_absolute:
+                deviceValue = (value[0] + self.stageOffsetPositions["X"],
+                               value[1] + self.stageOffsetPositions["Y"],
+                               value[2] + self.stageOffsetPositions["Z"])
+            self._motor.move_xyz(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
             for i, iaxis in enumerate(("X", "Y", "Z")):
                 if not is_absolute: self._position[iaxis] = self._position[iaxis] + value[i]
                 else: self._position[iaxis] = value[i]
@@ -379,8 +441,9 @@ class ESP32StageManager(PositionerManager):
         If new positions are coming from the device they will be updated in ImSwitch too'''
         posDict = {"ESP32Stage": {}}
         for iAxis, axisName in enumerate(["A", "X", "Y", "Z"]):
-            self.setPosition(positionArray[iAxis] , axisName)
-            posDict["ESP32Stage"][axisName] = positionArray[iAxis]
+            positionOffsetCorrected = positionArray[iAxis] - self.getStageOffsetAxis(axisName)
+            self.setPosition(positionOffsetCorrected, axisName)
+            posDict["ESP32Stage"][axisName] = positionOffsetCorrected
         self._commChannel.sigUpdateMotorPosition.emit(posDict)
 
     def closeEvent(self):
@@ -389,9 +452,13 @@ class ESP32StageManager(PositionerManager):
     def getPosition(self):
         # load position from device
         # t,x,y,z
+        posDict = {}
         try:
             allPositions = 1.*self._motor.get_position()
-            return {"X": allPositions[1], "Y": allPositions[2], "Z": allPositions[3], "A": allPositions[0]}
+            for i, iaxis in enumerate(("A","X","Y","Z")):
+                positionOffsetCorrected = allPositions[i] - self.getStageOffsetAxis(iaxis)
+                posDict[iaxis] = positionOffsetCorrected
+            return posDict
         except Exception as e:
             self.__logger.error(e)
             return self._position
@@ -427,17 +494,17 @@ class ESP32StageManager(PositionerManager):
     def stopAll(self):
         self._motor.stop()
 
-    def doHome(self, axis, isBlocking=False):
+    def doHome(self, axis, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         if axis == "X" and (self.homeXenabled or abs(self.homeStepsX)>0):
-            self.home_x(isBlocking)
+            self.home_x(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
         if axis == "Y" and (self.homeYenabled or abs(self.homeStepsY)>0):
-            self.home_y(isBlocking)
+            self.home_y(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
         if axis == "Z" and (self.homeZenabled or abs(self.homeStepsZ)>0):
-            self.home_z(isBlocking)
+            self.home_z(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
         if axis == "A" and (self.homeAenabled or abs(self.homeStepsA)>0):
-            self.home_a(isBlocking)
+            self.home_a(isBlocking, homeDirection, homeSpeed, homeEndstoppolarity, homeEndposRelease, homeTimeout)
 
-    def home_x(self, isBlocking=False):
+    def home_x(self, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         # move z prior to homing?
         if self._safeDistanceZHoming !=0:
             self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
@@ -451,12 +518,12 @@ class ESP32StageManager(PositionerManager):
         else:
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
-        self.setPosition(axis="X", value=0)
+        # self.setPosition(axis="X", value=0)  # TODO: Not necessary as we get the position asynchronusly?
 
-    def home_y(self,isBlocking=False):
+    def home_y(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         if self._safeDistanceZHoming !=0:
             self.move(value=self._zPositionPriorHoming + self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
-        # TODO: Wehave to go back after we are done with the homing        
+        # TODO: Wehave to go back after we are done with the homing
         if abs(self.homeStepsY)>0:
             self.move(value=self.homeStepsY, speed=self.homeSpeedY, axis="Y", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsY)*np.abs(self.homeEndposReleaseY), speed=self.homeSpeedY, axis="Y", is_absolute=False, is_blocking=True)
@@ -467,9 +534,9 @@ class ESP32StageManager(PositionerManager):
         else:
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
-        self.setPosition(axis="Y", value=0)
+        # self.setPosition(axis="Y", value=0)  # TODO: Not necessary as we get the position asynchronusly?
 
-    def home_z(self,isBlocking=False):
+    def home_z(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         if abs(self.homeStepsZ)>0:
             self.move(value=self.homeStepsZ, speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsZ)*np.abs(self.homeEndposReleaseZ), speed=self.homeSpeedZ, axis="Z", is_absolute=False, is_blocking=True)
@@ -480,9 +547,10 @@ class ESP32StageManager(PositionerManager):
         else:
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
-        self.setPosition(axis="Z", value=0)
+        # self.setPosition(axis="Z", value=0) # TODO: Not necessary as we get the position asynchronusly?
+        self._zPositionPriorHoming = 0
 
-    def home_a(self,isBlocking=False):
+    def home_a(self,isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
         if abs(self.homeStepsA)>0:
             self.move(value=self.homeStepsA, speed=self.homeSpeedA, axis="A", is_absolute=False, is_blocking=True)
             self.move(value=-np.sign(self.homeStepsA)*np.abs(self.homeEndposReleaseA), speed=self.homeSpeedA, axis="A", is_absolute=False, is_blocking=True)
@@ -493,7 +561,7 @@ class ESP32StageManager(PositionerManager):
         else:
             self.__logger.info("No homing parameters set for X axis or not enabled in settings.")
             return
-        self.setPosition(axis="A", value=0)
+        # self.setPosition(axis="A", value=0) # TODO: Not necessary as we get the position asynchronusly?
 
     def home_xyz(self):
         if self.homeXenabled and self.homeYenabled and self.homeZenabled:
@@ -512,13 +580,33 @@ class ESP32StageManager(PositionerManager):
         value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
 
-    def setStageOffsetAxis(self, knownOffset:float=None, axis="X"):
-        try:
-            self.stageOffsetPositions[axis] = knownOffset
-        except KeyError:
-            self.__logger.error(f"Axis {axis} not found in stageOffsetPositions.")
-        self.__logger.info(f"Set offset for {axis} axis to {knownOffset} mum.")
-        self._motor.set_offset(axis=axis, offset=knownOffset)
+    def setStageOffsetAxis(self, knownPosition=0, currentPosition=None, knownOffset=None, axis="X"):
+        """
+        Sets the stage offset for calibration purposes (in-memory only).
+        knownPosition and currentPosition are in physical (user) coordinates.
+        Persistence is handled by the controller.
+        """
+        if currentPosition is None:
+            currentPosition = self._position[axis]
+        if knownOffset is None:
+            # Calculate offset: offset = current_device_pos - known_user_pos
+            # Get raw device position
+            devicePositions = self._motor.get_position()
+            axisIndex = {"A": 0, "X": 1, "Y": 2, "Z": 3}[axis]
+            currentDevicePosition = devicePositions[axisIndex]
+            offset = currentDevicePosition - knownPosition
+        else:
+            offset = knownOffset
+
+        self.stageOffsetPositions[axis] = offset
+        self.__logger.info(f"Set offset for {axis} axis to {offset} µm.")
+
+    def resetStageOffsetAxis(self, axis="X"):
+        """
+        Resets the stage offset for the given axis to 0.
+        """
+        self.__logger.info(f"Resetting stage offset for {axis} axis.")
+        self.setStageOffsetAxis(knownOffset=0, axis=axis)
 
     def getStageOffsetAxis(self, axis:str="X"):
         """ Get the current stage offset for a given axis.
@@ -531,26 +619,41 @@ class ESP32StageManager(PositionerManager):
             return 0
 
     def start_stage_scanning(self, xstart=0, xstep=1, nx=100,
-                             ystart=0, ystep=1, ny=100, tsettle=0.1, tExposure=50, illumination=None, led=None):
+                             ystart=0, ystep=1, ny=100,
+                             zstart=0, zstep=0, nz=1,
+                             tsettle=0.1, tExposure=50, illumination=None, led=None,
+                             speed=20000, acceleration=None):
         """
         Start a stage scanning operation with the given parameters.
+        
         :param xstart: Starting position in X direction.
         :param xstep: Step size in X direction.
         :param nx: Number of steps in X direction.
         :param ystart: Starting position in Y direction.
         :param ystep: Step size in Y direction.
         :param ny: Number of steps in Y direction.
-        :param settle: Settle time after each step.
-        :param illumination: Optional illumination settings.
-        :param led: Optional LED settings.
+        :param zstart: Starting position in Z direction.
+        :param zstep: Step size in Z direction (0 = no Z-stacking).
+        :param nz: Number of steps in Z direction (1 = single plane).
+        :param tsettle: Settle time after each step (ms).
+        :param tExposure: Exposure time at each position (ms).
+        :param illumination: Optional illumination settings tuple (4 values).
+        :param led: Optional LED intensity (0-255).
+        :param speed: Motor speed for scanning.
+        :param acceleration: Motor acceleration (None = default).
         """
         if illumination is None:
-            illumination = (0,0,0,0)  # Default to no illumination
+            illumination = (0, 0, 0, 0)  # Default to no illumination
         if led is None:
             led = 0
-        r = self._motor.start_stage_scanning(xstart=xstart, xstep=xstep, nx=nx,
-                                         ystart=ystart, ystep=ystep, ny=ny,
-                                         tsettle=tsettle, tExposure=tExposure, illumination=illumination, led=led)
+        r = self._motor.start_stage_scanning(
+            xstart=xstart, xstep=xstep, nx=nx,
+            ystart=ystart, ystep=ystep, ny=ny,
+            zstart=zstart, zstep=zstep, nz=nz,
+            tsettle=tsettle, tExposure=tExposure,
+            illumination=illumination, led=led,
+            speed=speed, acceleration=acceleration
+        )
         return r
 
     def stop_stage_scanning(self):
@@ -563,7 +666,423 @@ class ESP32StageManager(PositionerManager):
     def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):
         value = (self.sampleLoadingPositions["X"], self.sampleLoadingPositions["Y"], self.sampleLoadingPositions["Z"])
         self._motor.move_xyz(value, speed, is_absolute=True, is_blocking=is_blocking)
+
+
+    def frameHomingProcedure(self, is_blocking=False):
+        '''
+        1. Store Z-position
+        2. Home Z 
+        3. Move Z to Safe position 
+        4. Home X 
+        5. Home Y 
+        6. Move Z to previous position (safeposition + previous position
+        7. Ready 
         
+        Optionally: in a thread
+        '''
+
+        def homingThreadFunction(self):
+            # Step 1: Store Z-position
+            self._zPositionPriorHoming = self.getPosition()["Z"]
+            # Step 2: Home Z
+            self.home_z(isBlocking=True)
+            # Step 3: Move Z to Safe position # Assuming Z will be 0 now!
+            if self._safeDistanceZHoming !=0:
+                self.move(value=self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
+            # Step 4: Home X
+            self.home_x(isBlocking=True)
+            self.move(value=1000, speed=self.homeSpeedX, axis="X", is_absolute=True, is_blocking=False)
+            # Step 5: Home Y
+            self.home_y(isBlocking=True)
+            self.move(value=1000, speed=self.homeSpeedY, axis="Y", is_absolute=True, is_blocking=False)
+            # Step 6: Move Z to previous position (safeposition + previous position
+            self.move(value=self._zPositionPriorHoming-self._safeDistanceZHoming, speed=self.homeSpeedZ, axis="Z", is_absolute=True, is_blocking=True)
+            # Step 7: Ready
+            self.__logger.info("Frame homing procedure completed.")
+
+        if is_blocking:
+            homingThreadFunction(self)
+        else:
+            import threading
+            homingThread = threading.Thread(target=homingThreadFunction, args=(self,))
+            homingThread.start()
+
+    def register_stagescan_callback(self, on_stagescan_complete_fct):
+        self._motor.register_stagescan_callback(on_stagescan_complete_fct)
+        
+    
+    def unregister_stagescan_callback(self):
+        self._motor.unregister_stagescan_callback()
+    
+    def reset_stagescan_complete(self):
+        pass
+
+    # ============================================================================
+    # Motor Settings API - Unified configuration interface
+    # ============================================================================
+    
+    def getMotorSettings(self) -> dict:
+        """
+        Get all motor settings in a unified format.
+        Returns a dictionary with settings for all axes plus global settings.
+        """
+        settings = {
+            'global': {
+                'axisOrder': self.axisOrder,
+                'isCoreXY': self.isCoreXY,
+                'isEnabled': self.is_enabled,
+                'enableAuto': self.enableauto,
+                'isDualAxis': self.isDualAxis,
+            },
+            'axes': {}
+        }
+        
+        for axis in ['X', 'Y', 'Z', 'A']:
+            settings['axes'][axis] = self.getMotorSettingsForAxis(axis)
+        
+        return settings
+    
+    def getMotorSettingsForAxis(self, axis: str) -> dict:
+        """
+        Get motor settings for a specific axis.
+        """
+        axis = axis.upper()
+        
+        # Motion settings
+        motion = {
+            'stepSize': self.stepSizes.get(axis, 1),
+            'maxSpeed': self.maxSpeed.get(axis, 10000),
+            'speed': self._speed.get(axis, 10000),
+            'acceleration': self.acceleration.get(axis, MAX_ACCEL),
+        }
+        
+        # Add min/max positions per axis
+        if axis == 'X':
+            motion['minPos'] = self.minX if self.minX != float('-inf') else None
+            motion['maxPos'] = self.maxX if self.maxX != float('inf') else None
+            motion['backlash'] = self.backlashX
+        elif axis == 'Y':
+            motion['minPos'] = self.minY if self.minY != float('-inf') else None
+            motion['maxPos'] = self.maxY if self.maxY != float('inf') else None
+            motion['backlash'] = self.backlashY
+        elif axis == 'Z':
+            motion['minPos'] = self.minZ if self.minZ != float('-inf') else None
+            motion['maxPos'] = self.maxZ if self.maxZ != float('inf') else None
+            motion['backlash'] = self.backlashZ
+        elif axis == 'A':
+            motion['minPos'] = self.minA if self.minA != float('-inf') else None
+            motion['maxPos'] = self.maxA if self.maxA != float('inf') else None
+            motion['backlash'] = self.backlashA
+        
+        # Homing settings
+        homing = {}
+        if axis == 'X':
+            homing = {
+                'enabled': self.homeXenabled,
+                'speed': self.homeSpeedX,
+                'direction': self.homeDirectionX,
+                'endstopPolarity': self.homeEndstoppolarityX,
+                'endposRelease': self.homeEndposReleaseX,
+                'timeout': self.homeTimeoutX,
+                'homeOnStart': self.homeOnStartX,
+                'homeSteps': self.homeStepsX,
+            }
+        elif axis == 'Y':
+            homing = {
+                'enabled': self.homeYenabled,
+                'speed': self.homeSpeedY,
+                'direction': self.homeDirectionY,
+                'endstopPolarity': self.homeEndstoppolarityY,
+                'endposRelease': self.homeEndposReleaseY,
+                'timeout': self.homeTimeoutY,
+                'homeOnStart': self.homeOnStartY,
+                'homeSteps': self.homeStepsY,
+            }
+        elif axis == 'Z':
+            homing = {
+                'enabled': self.homeZenabled,
+                'speed': self.homeSpeedZ,
+                'direction': self.homeDirectionZ,
+                'endstopPolarity': self.homeEndstoppolarityZ,
+                'endposRelease': self.homeEndposReleaseZ,
+                'timeout': self.homeTimeoutZ,
+                'homeOnStart': self.homeOnStartZ,
+                'homeSteps': self.homeStepsZ,
+            }
+        elif axis == 'A':
+            homing = {
+                'enabled': self.homeAenabled,
+                'speed': self.homeSpeedA,
+                'direction': self.homeDirectionA,
+                'endstopPolarity': self.homeEndstoppolarityA,
+                'endposRelease': self.homeEndposReleaseA,
+                'timeout': self.homeTimeoutA,
+                'homeOnStart': self.homeOnStartA,
+                'homeSteps': self.homeStepsA,
+            }
+        
+        # Limit settings
+        if axis == 'X':
+            limits = {'enabled': self.limitXenabled}
+        elif axis == 'Y':
+            limits = {'enabled': self.limitYenabled}
+        elif axis == 'Z':
+            limits = {'enabled': self.limitZenabled}
+        else:
+            limits = {'enabled': False}
+        
+        return {
+            'axis': axis,
+            'motion': motion,
+            'homing': homing,
+            'limits': limits,
+        }
+    
+    def setMotorSettingsForAxis(self, axis: str, settings: dict) -> dict:
+        """
+        Set motor settings for a specific axis.
+        Updates both in-memory values and sends to device if applicable.
+        """
+        axis = axis.upper()
+        result = {'axis': axis, 'updated': [], 'errors': []}
+        
+        try:
+            # Update motion settings
+            if 'motion' in settings:
+                motion = settings['motion']
+                
+                if 'stepSize' in motion:
+                    self.stepSizes[axis] = motion['stepSize']
+                    result['updated'].append('stepSize')
+                
+                if 'maxSpeed' in motion:
+                    self.maxSpeed[axis] = motion['maxSpeed']
+                    result['updated'].append('maxSpeed')
+                
+                if 'speed' in motion:
+                    self.setSpeed(motion['speed'], axis)
+                    result['updated'].append('speed')
+                
+                if 'acceleration' in motion:
+                    self.acceleration[axis] = motion['acceleration']
+                    result['updated'].append('acceleration')
+                
+                if 'backlash' in motion:
+                    backlash = motion['backlash']
+                    if axis == 'X': self.backlashX = backlash
+                    elif axis == 'Y': self.backlashY = backlash
+                    elif axis == 'Z': self.backlashZ = backlash
+                    elif axis == 'A': self.backlashA = backlash
+                    result['updated'].append('backlash')
+                
+                if 'minPos' in motion:
+                    minPos = motion['minPos'] if motion['minPos'] is not None else float('-inf')
+                    if axis == 'X': self.minX = minPos
+                    elif axis == 'Y': self.minY = minPos
+                    elif axis == 'Z': self.minZ = minPos
+                    elif axis == 'A': self.minA = minPos
+                    result['updated'].append('minPos')
+                
+                if 'maxPos' in motion:
+                    maxPos = motion['maxPos'] if motion['maxPos'] is not None else float('inf')
+                    if axis == 'X': self.maxX = maxPos
+                    elif axis == 'Y': self.maxY = maxPos
+                    elif axis == 'Z': self.maxZ = maxPos
+                    elif axis == 'A': self.maxA = maxPos
+                    result['updated'].append('maxPos')
+                
+                # Update motor setup on device
+                if any(k in motion for k in ['minPos', 'maxPos', 'stepSize', 'backlash']):
+                    try:
+                        self.setupMotor(
+                            getattr(self, f'min{axis}'),
+                            getattr(self, f'max{axis}'),
+                            self.stepSizes[axis],
+                            getattr(self, f'backlash{axis}'),
+                            axis
+                        )
+                    except Exception as e:
+                        result['errors'].append(f'Failed to update motor setup: {str(e)}')
+            
+            # Update homing settings
+            if 'homing' in settings:
+                homing = settings['homing']
+                
+                if 'enabled' in homing:
+                    if axis == 'X': self.homeXenabled = homing['enabled']
+                    elif axis == 'Y': self.homeYenabled = homing['enabled']
+                    elif axis == 'Z': self.homeZenabled = homing['enabled']
+                    elif axis == 'A': self.homeAenabled = homing['enabled']
+                    result['updated'].append('homing.enabled')
+                
+                if 'speed' in homing:
+                    if axis == 'X': self.homeSpeedX = homing['speed']
+                    elif axis == 'Y': self.homeSpeedY = homing['speed']
+                    elif axis == 'Z': self.homeSpeedZ = homing['speed']
+                    elif axis == 'A': self.homeSpeedA = homing['speed']
+                    result['updated'].append('homing.speed')
+                
+                if 'direction' in homing:
+                    direction = 1 if homing['direction'] > 0 else -1
+                    if axis == 'X': self.homeDirectionX = direction
+                    elif axis == 'Y': self.homeDirectionY = direction
+                    elif axis == 'Z': self.homeDirectionZ = direction
+                    elif axis == 'A': self.homeDirectionA = direction
+                    result['updated'].append('homing.direction')
+                
+                if 'endstopPolarity' in homing:
+                    if axis == 'X': self.homeEndstoppolarityX = homing['endstopPolarity']
+                    elif axis == 'Y': self.homeEndstoppolarityY = homing['endstopPolarity']
+                    elif axis == 'Z': self.homeEndstoppolarityZ = homing['endstopPolarity']
+                    elif axis == 'A': self.homeEndstoppolarityA = homing['endstopPolarity']
+                    result['updated'].append('homing.endstopPolarity')
+                
+                if 'endposRelease' in homing:
+                    if axis == 'X': self.homeEndposReleaseX = homing['endposRelease']
+                    elif axis == 'Y': self.homeEndposReleaseY = homing['endposRelease']
+                    elif axis == 'Z': self.homeEndposReleaseZ = homing['endposRelease']
+                    elif axis == 'A': self.homeEndposReleaseA = homing['endposRelease']
+                    result['updated'].append('homing.endposRelease')
+                
+                if 'timeout' in homing:
+                    if axis == 'X': self.homeTimeoutX = homing['timeout']
+                    elif axis == 'Y': self.homeTimeoutY = homing['timeout']
+                    elif axis == 'Z': self.homeTimeoutZ = homing['timeout']
+                    elif axis == 'A': self.homeTimeoutA = homing['timeout']
+                    result['updated'].append('homing.timeout')
+                
+                if 'homeOnStart' in homing:
+                    if axis == 'X': self.homeOnStartX = homing['homeOnStart']
+                    elif axis == 'Y': self.homeOnStartY = homing['homeOnStart']
+                    elif axis == 'Z': self.homeOnStartZ = homing['homeOnStart']
+                    elif axis == 'A': self.homeOnStartA = homing['homeOnStart']
+                    result['updated'].append('homing.homeOnStart')
+                
+                if 'homeSteps' in homing:
+                    if axis == 'X': self.homeStepsX = homing['homeSteps']
+                    elif axis == 'Y': self.homeStepsY = homing['homeSteps']
+                    elif axis == 'Z': self.homeStepsZ = homing['homeSteps']
+                    elif axis == 'A': self.homeStepsA = homing['homeSteps']
+                    result['updated'].append('homing.homeSteps')
+            
+            # Update limit settings
+            if 'limits' in settings:
+                limits = settings['limits']
+                if 'enabled' in limits:
+                    if axis == 'X': self.limitXenabled = limits['enabled']
+                    elif axis == 'Y': self.limitYenabled = limits['enabled']
+                    elif axis == 'Z': self.limitZenabled = limits['enabled']
+                    result['updated'].append('limits.enabled')
+            
+            result['success'] = True
+            self.__logger.info(f"Updated motor settings for axis {axis}: {result['updated']}")
+            
+        except Exception as e:
+            result['success'] = False
+            result['errors'].append(str(e))
+            self.__logger.error(f"Error updating motor settings for axis {axis}: {e}")
+        
+        return result
+    
+    def getTMCSettingsForAxis(self, axis: str) -> dict:
+        """
+        Get TMC stepper driver settings for a specific axis from the device.
+        """
+        axis = axis.upper()
+        result = {'axis': axis, 'success': False}
+        
+        try:
+            # Get TMC settings from device via UC2-REST motor module
+            tmc_settings = self._motor.getTMCSettings(axis=axis)
+            
+            if tmc_settings:
+                result['settings'] = {
+                    'msteps': tmc_settings.get('msteps', 16),
+                    'rmsCurrent': tmc_settings.get('rms_current', 500),
+                    'sgthrs': tmc_settings.get('sgthrs', 10),
+                    'semin': tmc_settings.get('semin', 5),
+                    'semax': tmc_settings.get('semax', 2),
+                    'blankTime': tmc_settings.get('blank_time', 24),
+                    'toff': tmc_settings.get('toff', 3),
+                }
+                result['success'] = True
+                self.__logger.debug(f"Retrieved TMC settings for axis {axis}")
+            else:
+                result['error'] = "No TMC settings returned from device"
+                
+        except Exception as e:
+            result['error'] = str(e)
+            self.__logger.error(f"Error getting TMC settings for axis {axis}: {e}")
+        
+        return result
+    
+    def setTMCSettingsForAxis(self, axis: str, settings: dict) -> dict:
+        """
+        Set TMC stepper driver settings for a specific axis.
+        Sends the settings directly to the device.
+        """
+        axis = axis.upper()
+        result = {'axis': axis, 'success': False}
+        
+        try:
+            self.setupMotorDriver(
+                axis=axis,
+                msteps=settings.get('msteps'),
+                rms_current=settings.get('rmsCurrent'),
+                sgthrs=settings.get('sgthrs'),
+                semin=settings.get('semin'),
+                semax=settings.get('semax'),
+                blank_time=settings.get('blankTime'),
+                toff=settings.get('toff'),
+                timeout=settings.get('timeout', 1)
+            )
+            result['success'] = True
+            self.__logger.info(f"Updated TMC settings for axis {axis}")
+        except Exception as e:
+            result['error'] = str(e)
+            self.__logger.error(f"Error updating TMC settings for axis {axis}: {e}")
+        
+        return result
+    
+    def setGlobalMotorSettings(self, settings: dict) -> dict:
+        """
+        Set global motor settings (axis order, CoreXY, enable, etc.)
+        """
+        result = {'updated': [], 'errors': []}
+        
+        try:
+            if 'axisOrder' in settings:
+                self.axisOrder = settings['axisOrder']
+                self.setAxisOrder(order=self.axisOrder)
+                result['updated'].append('axisOrder')
+            
+            if 'isCoreXY' in settings:
+                self.isCoreXY = settings['isCoreXY']
+                self._motor.setIsCoreXY(isCoreXY=self.isCoreXY)
+                result['updated'].append('isCoreXY')
+            
+            if 'isEnabled' in settings:
+                self.is_enabled = settings['isEnabled']
+                result['updated'].append('isEnabled')
+            
+            if 'enableAuto' in settings:
+                self.enableauto = settings['enableAuto']
+                self.enalbeMotors(enable=self.is_enabled, enableauto=self.enableauto)
+                result['updated'].append('enableAuto')
+            
+            if 'isDualAxis' in settings:
+                self.isDualAxis = settings['isDualAxis']
+                result['updated'].append('isDualAxis')
+            
+            result['success'] = True
+            self.__logger.info(f"Updated global motor settings: {result['updated']}")
+            
+        except Exception as e:
+            result['success'] = False
+            result['errors'].append(str(e))
+            self.__logger.error(f"Error updating global motor settings: {e}")
+        
+        return result
 
 # Copyright (C) 2020, 2021 The imswitch developers
 # This file is part of ImSwitch.

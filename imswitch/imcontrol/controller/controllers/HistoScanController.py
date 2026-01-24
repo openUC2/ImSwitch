@@ -1,49 +1,38 @@
 import json
 import os
 import base64
-from fastapi import FastAPI, Response, HTTPException
+from fastapi import Response, HTTPException
 from imswitch import IS_HEADLESS, __file__
-from imswitch.imcommon.model import initLogger, ostools
+from imswitch.imcommon.model import initLogger
 import numpy as np
 import time
 import tifffile
 import threading
 from datetime import datetime
 import cv2
-import numpy as np
 from skimage.io import imsave
-from scipy.ndimage import gaussian_filter
 from collections import deque
 import ast
 import skimage.transform
 import skimage.util
 import skimage
 import datetime
-import numpy as np
-from imswitch.imcommon.model import dirtools, initLogger, APIExport
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
-import time
+from imswitch.imcommon.model import dirtools, APIExport
+from imswitch.imcommon.framework import Signal, Timer
 from ..basecontrollers import LiveUpdatedController
 from pydantic import BaseModel
 from typing import List, Optional, Union
 from PIL import Image
 import io
-from fastapi import Header
-import os
-from tempfile import TemporaryDirectory
-import numpy as np
-import zarr
 from fastapi.responses import StreamingResponse
-import numpy as np
 from io import BytesIO
-from PIL import Image
 isZARR=False
 
 try:
     from ashlarUC2 import utils
     from ashlarUC2.scripts.ashlar import process_images
     IS_ASHLAR_AVAILABLE = True
-except Exception as e:
+except Exception:
     IS_ASHLAR_AVAILABLE = False
 
 class ScanParameters(object):
@@ -55,8 +44,7 @@ class ScanParameters(object):
         self.physOffsetY =  physOffsetY
         self.imagePath = imagePath
 
-from pydantic import BaseModel
-from typing import List, Optional, Union, Tuple
+from typing import Tuple
 
 class HistoStatus(BaseModel):
     currentPosition: Optional[Tuple[float, float, int, int, int]] = None # X, Y, nX, nY
@@ -1257,7 +1245,7 @@ class HistoScanController(LiveUpdatedController):
 
     def getSaveFilePath(self, date, filename, extension):
         mFilename =  f"{date}_{filename}.{extension}"
-        dirPath  = os.path.join(dirtools.UserFileDirs.Data, 'recordings', date)
+        dirPath  = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'recordings', date)
         newPath = os.path.join(dirPath,mFilename)
 
         if not os.path.exists(dirPath):
@@ -1495,19 +1483,19 @@ class ImageStitcher:
                     time.sleep(.02) # unload CPU
                     continue
                 img, coords, metadata = self.queue.popleft()
-                
+
                 # flip image if needed
                 if self.flipX:
                     img = np.fliplr(img)
                 if self.flipY:
                     img = np.flipud(img)
                 #
-                
+
                 self._place_on_canvas(img, coords)
                 # write image to disk
                 #metadata e.g. {"Pixels": {"PhysicalSizeX": 0.2, "PhysicalSizeXUnit": "\\u00b5m", "PhysicalSizeY": 0.2, "PhysicalSizeYUnit": "\\u00b5m"}, "Plane": {"PositionX": -100, "PositionY": -100, "IndexX": 0, "IndexY": 0}}
                 tif.write(data=img, metadata=metadata)
-                
+
     def _place_on_canvas(self, img, coords):
         if self.isStitchAshlar and IS_ASHLAR_AVAILABLE:
             # in case we want to process it with ASHLAR later on

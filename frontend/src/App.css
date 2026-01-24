@@ -1,0 +1,136 @@
+.App {
+  text-align: center;
+  /* Touch optimization */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.MuiButton-root {
+  font-size: 0.65rem;
+  line-height: 1;
+  /* Touch-friendly sizing */
+  min-height: 48px;
+  min-width: 48px;
+  padding: 8px 16px;
+  touch-action: manipulation;
+}
+
+/* Mobile and tablet specific button sizing */
+@media (max-width: 768px) {
+  .MuiButton-root {
+    font-size: 0.8rem;
+    min-height: 56px;
+    min-width: 56px;
+    padding: 12px 20px;
+  }
+}
+
+@media (max-width: 480px) {
+  .MuiButton-root {
+    font-size: 0.9rem;
+    min-height: 60px;
+    min-width: 60px;
+    padding: 14px 24px;
+  }
+}
+
+.MuiInputBase-input {
+  font-size: 0.7rem;
+  padding: 4px 6px;
+}
+
+/* Responsive input sizing for mobile */
+@media (max-width: 768px) {
+  .MuiInputBase-input {
+    font-size: 1rem;
+    padding: 12px 16px;
+    min-height: 48px;
+  }
+}
+
+/* Touch-friendly interactive elements */
+.MuiIconButton-root {
+  min-height: 48px;
+  min-width: 48px;
+  padding: 12px;
+  touch-action: manipulation;
+}
+
+@media (max-width: 768px) {
+  .MuiIconButton-root {
+    min-height: 56px;
+    min-width: 56px;
+    padding: 16px;
+  }
+}
+
+/* Drawer and sidebar responsiveness */
+.MuiDrawer-paper {
+  transition: width 0.3s ease-in-out !important;
+}
+
+/* Main content responsive padding */
+@media (max-width: 768px) {
+  .MuiBox-root[component="main"] {
+    padding: 16px 8px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .MuiBox-root[component="main"] {
+    padding: 12px 4px !important;
+  }
+}
+
+/* Responsive typography */
+@media (max-width: 768px) {
+  .MuiTypography-h6 {
+    font-size: 1.1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .MuiTypography-h6 {
+    font-size: 1rem;
+  }
+}

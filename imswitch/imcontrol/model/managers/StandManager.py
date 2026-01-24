@@ -18,7 +18,7 @@ class StandManager(ABC):
                 manager = getattr(package, deviceInfo.managerName)
                 self._subManager = manager(deviceInfo, **lowLevelManagers)
             except:
-                self.__logger.error(f'Failed to load LeicaDMIManager (not provided due to NDA). Loading mocker.')
+                self.__logger.error('Failed to load LeicaDMIManager (not provided due to NDA). Loading mocker.')
                 package = importlib.import_module(
                     pythontools.joinModulePath(f'{currentPackage}.{"stands"}',f'{deviceInfo.managerName}_mock'))
                 manager = getattr(package, f'Mock{deviceInfo.managerName}')

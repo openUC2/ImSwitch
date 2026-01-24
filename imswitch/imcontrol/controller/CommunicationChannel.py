@@ -1,4 +1,3 @@
-import asyncio
 from typing import Mapping
 
 import numpy as np
@@ -6,18 +5,15 @@ from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import pythontools, APIExport, SharedAttributes
 from imswitch.imcommon.model import initLogger
 
-import numpy as np
-from PIL import Image
-from io import BytesIO
-from fastapi.responses import StreamingResponse
-from fastapi import FastAPI, Response
-import cv2
 
 class CommunicationChannel(SignalInterface):
     """
     Communication Channel is a class that handles the communication between Master Controller
     and Widgets, or between Widgets.
     """
+
+    sigUpdateStreamFrame = Signal()
+
 
     sigUpdateImage = Signal(
         str, np.ndarray, bool, list, bool
@@ -101,7 +97,7 @@ class CommunicationChannel(SignalInterface):
     sigAutoFocusRunning = Signal(bool) # indicate if autofocus is running or not
     sigAutoFocusLiveValue = Signal(object) # live focus value during monitoring mode {"focus_value": float, "timestamp": float}
 
-    # Objective 
+    # Objective
     sigToggleObjective = Signal(int) # objective slot number 1,2
     sigSetObjectiveByName = Signal(str) # objective name (e.g., "10x", "20x")
     sigSetObjectiveByID = Signal(str) # objective ID
@@ -119,6 +115,10 @@ class CommunicationChannel(SignalInterface):
     sigUpdateRotatorPosition = Signal(str, str)  # (rotatorName)
 
     sigUpdateMotorPosition = Signal(list)  # # TODO: Just forcely update the positoin in the GUI
+
+    sigUpdateLaserPower = Signal(dict)  # (laserPowerDict) - updates laser power values from device callbacks
+
+    sigUpdateCANDevices = Signal(list)  # (canDevicesList) - updates CAN device scan results from callbacks
 
     sigSetSyncInMovementSettings = Signal(str, float)  # (rotatorName, position)
 

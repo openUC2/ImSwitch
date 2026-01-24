@@ -1,4 +1,3 @@
-import numpy as np
 
 from imswitch.imcommon.model import initLogger
 from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberParameter, DetectorListParameter, DetectorBooleanParameter
@@ -120,6 +119,10 @@ class GXPIPYManager(DetectorManager):
                          model=model, parameters=parameters, actions=actions, croppable=True)
 
 
+    def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
+        """Set flatfield image for correction."""
+        self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)
+
     def _updatePropertiesFromCamera(self):
         self.setParameter('Real exposure time', self._camera.getPropertyValue('exposure_time')[0])
         self.setParameter('Internal frame interval',
@@ -139,13 +142,9 @@ class GXPIPYManager(DetectorManager):
             elif triggerSource == 2 and triggerMode == 1:
                 self.setParameter('Trigger source', 'External "frame-trigger"')
 
-    def getLatestFrame(self, is_save=None, is_resize=True, returnFrameNumber=False):
-        if returnFrameNumber:
-            frame, frameNumber = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame, frameNumber
-        else:
-            frame = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-            return frame
+    def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
+        """Get the latest frame from the camera."""
+        return self._camera.getLast(returnFrameNumber=returnFrameNumber)
 
     def setParameter(self, name, value):
         """Sets a parameter value and returns the value.
@@ -175,7 +174,7 @@ class GXPIPYManager(DetectorManager):
 
 
     def setTriggerSource(self, source):
-        """Set trigger source using the improved camera interface.""" 
+        """Set trigger source using the improved camera interface."""
         try:
             if source in ['Continuous', 'Continous']:  # Handle both old and new spellings
                 self._performSafeCameraAction(
@@ -196,9 +195,11 @@ class GXPIPYManager(DetectorManager):
 
 
     def getChunk(self):
+        """Get and clear the ring buffer as a numpy stack."""
         try:
             return self._camera.getLastChunk()
-        except:
+        except Exception as e:
+            self.__logger.error(f'Error getting chunk: {e}')
             return None
 
     def sendSoftwareTrigger(self):
@@ -209,29 +210,19 @@ class GXPIPYManager(DetectorManager):
             self.__logger.error(f'Failed to send software trigger: {e}')
             return False
 
+    def getCurrentTriggerType(self):
+        """Get the current trigger type of the camera."""
+        return self._camera.getTriggerSource()
+
+    def getTriggerTypes(self):
+        """Get the available trigger types for the camera."""
+        return self._camera.getTriggerTypes()
+
     def flushBuffers(self):
         self._camera.flushBuffer()
 
     def startAcquisition(self, liveView=False):
-        if self._camera.model == "mock":
-
-            # reconnect? Not sure if this is smart..
-            del self._camera
-            self._camera = self._getGXObj(self.cameraId, self.binningValue)
-
-            for propertyName, propertyValue in self.detectorInfo.managerProperties['gxipycam'].items():
-                self._camera.setPropertyValue(propertyName, propertyValue)
-
-            fullShape = (self._camera.SensorWidth,
-                        self._camera.SensorHeight)
-
-            model = self._camera.model
-            self._running = False
-            self._adjustingParameters = False
-
-            # TODO: Not implemented yet
-            self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
-
+        # Camera is already initialized, just start streaming
         if not self._running:
             self._camera.start_live()
             self._running = True
@@ -341,6 +332,7 @@ class GXPIPYManager(DetectorManager):
         return camera
 
     def getFrameNumber(self):
+        """Get the current frame number from the camera."""
         return self._camera.getFrameNumber()
 
     def closeEvent(self):
@@ -351,6 +343,36 @@ class GXPIPYManager(DetectorManager):
         record n images and average them before subtracting from the latest frame
         '''
         self._camera.recordFlatfieldImage()
+
+    def getCameraStatus(self):
+        """ Returns comprehensive GXIPY camera status information. """
+        # Get base status from parent class
+        status = super().getCameraStatus()
+
+        # Add GXIPY-specific information
+        status['cameraType'] = 'GXIPY'
+        status['isMock'] = False  # GXIPY cameras are always real hardware
+        status['isConnected'] = self._camera is not None and hasattr(self._camera, 'camera')
+
+        # Add acquisition status
+        status['isAcquiring'] = self._running
+        status['isAdjustingParameters'] = self._adjustingParameters
+
+        # Try to get additional camera information
+        try:
+            if hasattr(self._camera, 'camera') and self._camera.camera is not None:
+                status['isStreaming'] = self._camera.camera.is_streaming()
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve streaming status: {e}")
+
+        # Add current trigger source if available
+        try:
+            status['currentTriggerSource'] = self._camera.getTriggerSource()
+            status['availableTriggerTypes'] = self._camera.getTriggerTypes()
+        except Exception as e:
+            self.__logger.debug(f"Could not retrieve trigger information: {e}")
+
+        return status
 
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.

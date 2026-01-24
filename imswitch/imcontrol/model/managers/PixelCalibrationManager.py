@@ -1,10 +1,4 @@
-import enum
-import glob
-import cv2
-import os
 
-import numpy as np
-from PIL import Image
 
 from imswitch.imcommon.framework import Signal, SignalInterface
 from imswitch.imcommon.model import initLogger
@@ -23,7 +17,7 @@ class PixelCalibrationManager(SignalInterface):
         self.update()
 
     def update(self):
-        return None 
+        return None
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

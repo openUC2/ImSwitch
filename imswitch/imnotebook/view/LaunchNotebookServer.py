@@ -1,13 +1,12 @@
 
 from imswitch import IS_HEADLESS
+from imswitch.config import get_config
 import os
 from imswitch.imcommon.model import dirtools
 import sys
 if not IS_HEADLESS:
     from PyQt5.QtWidgets import QMessageBox
 from .notebook_process import testnotebook, startnotebook, stopnotebook
-import os
-import sys
 
 class LaunchNotebookServer:
 
@@ -15,7 +14,8 @@ class LaunchNotebookServer:
         pass
 
     def startServer(self):
-
+        config = get_config()
+        
         python_exec_path = os.path.dirname(sys.executable)
         execname = os.path.join(python_exec_path, 'jupyter-lab')
 
@@ -34,8 +34,8 @@ class LaunchNotebookServer:
         if not os.path.exists(directory):
             os.makedirs(directory)
 
-        # start the notebook process
-        webaddr = startnotebook(execname, directory=directory)
+        # start the notebook process with configured port
+        webaddr = startnotebook(execname, port=config.jupyter_port, directory=directory)
         return webaddr
 
     def stopServer(self):

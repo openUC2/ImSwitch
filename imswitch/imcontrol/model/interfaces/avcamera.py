@@ -3,7 +3,6 @@ import time
 import numpy as np
 import threading
 
-from typing import Optional
 from imswitch.imcommon.model import initLogger
 
 # Try VmbPy first (official Allied Vision SDK), then fallback to legacy Vimba
@@ -66,7 +65,7 @@ class CameraAV:
         self.model = "AlliedVisionCamera"
         self.sensor_width = 0
         self.sensor_height = 0
-        
+
         # Add isRGB property for compatibility with MCTController
         self.isRGB = False
 
@@ -84,7 +83,7 @@ class CameraAV:
             # VmbPy camera discovery and opening with persistent context managers
             self._vmb_system = VmbSystem.get_instance()
             self._vmb_system.__enter__()
-            
+
             try:
                 cams = self._vmb_system.get_all_cameras()
                 if not cams:
@@ -110,10 +109,10 @@ class CameraAV:
                     self._camera.close()
                 except:
                     pass  # Ignore if camera wasn't open
-                    
+
                 # Enter camera context and keep it persistent
                 self._camera_context = self._camera.__enter__()
-                
+
                 # Try to adjust GeV packet size. This Feature is only available for GigE cameras.
                 try:
                     streams = self._camera.get_streams()
@@ -125,19 +124,19 @@ class CameraAV:
                                 time.sleep(0.001)  # Small delay
                 except (AttributeError, VmbFeatureError):
                     pass  # Not a GigE camera or feature not available
-                
+
                 # Set acquisition mode
                 try:
                     self._camera.get_feature_by_name("AcquisitionMode").set("Continuous")
                 except Exception as e:
                     self.__logger.warning(f"Could not set AcquisitionMode: {e}")
-                
+
                 # Get camera model name
                 try:
                     self.model = self._camera.get_name()
                 except:
                     self.model = "AlliedVisionCamera"
-                    
+
                 try:
                     # Read sensor dimensions
                     self.sensor_width = self._camera.get_feature_by_name("SensorWidth").get()
@@ -145,10 +144,10 @@ class CameraAV:
                 except Exception:
                     self.sensor_width = 0
                     self.sensor_height = 0
-                    
+
                 # Auto-detect RGB capability based on pixel format
                 self._detect_rgb()
-                
+
             except Exception as e:
                 self._cleanup_context_managers()
                 raise e
@@ -178,7 +177,7 @@ class CameraAV:
                 self._camera.close()
             except:
                 pass  # Ignore if camera wasn't open
-                
+
             self._camera._open()
             self._camera.get_feature_by_name("AcquisitionMode").set("Continuous")
             self.model = self._camera.get_name()
@@ -207,7 +206,7 @@ class CameraAV:
                 # Common color formats: Bayer patterns, RGB, YUV
                 color_formats = ['RGB', 'BGR', 'Bayer', 'YUV', 'Color']
                 self.isRGB = any(fmt in str(pixel_format) for fmt in color_formats)
-                
+
                 # Also check model name for UC or color indicators
                 model_name = self.model.upper()
                 if 'UC' in model_name or 'COLOR' in model_name or 'C' in model_name:
@@ -223,7 +222,7 @@ class CameraAV:
         except Exception as e:
             self.__logger.warning(f"Could not detect RGB capability: {e}")
             self.isRGB = False
-            
+
         self.__logger.debug(f"Detected isRGB: {self.isRGB}")
 
     def _cleanup_context_managers(self):
@@ -235,7 +234,7 @@ class CameraAV:
                     self._camera_context = None
             except Exception as e:
                 self.__logger.warning(f"Error exiting camera context: {e}")
-            
+
             try:
                 if hasattr(self, '_vmb_system') and self._vmb_system:
                     self._vmb_system.__exit__(None, None, None)
@@ -273,7 +272,7 @@ class CameraAV:
                 print(f"Warning: Error during legacy camera cleanup: {e}")
 
 
-    
+
     def _frame_handler(self, cam: Camera, stream: Stream, frame: Frame):
         """Frame handler for asynchronous streaming"""
         if isVmbPy:
@@ -374,7 +373,7 @@ class CameraAV:
                 self._streaming = False
             except Exception as e:
                 self.__logger.warning(f"Error stopping streaming during close: {e}")
-                
+
         # Close camera
         try:
             if isVmbPy:
@@ -385,7 +384,7 @@ class CameraAV:
                 self._camera.close()
         except Exception as e:
             self.__logger.warning(f"Error closing camera: {e}")
-            
+
         # Cleanup SDK context
         try:
             if isVmbPy:
@@ -398,7 +397,7 @@ class CameraAV:
                     self._vimba = None
         except Exception as e:
             self.__logger.warning(f"Error during SDK cleanup: {e}")
-            
+
         self.__logger.debug("Camera closed and SDK context cleaned up.")
 
     def setROI(self, hpos=None, vpos=None, hsize=None, vsize=None):
@@ -427,7 +426,7 @@ class CameraAV:
         self.frame_buffer.clear()
         self.__logger.debug(f"Set ROI to x={self.hpos}, y={self.vpos}, w={self.hsize}, h={self.vsize}")
 
-    def getLast(self):
+    def getLast(self, returnFrameNumber=False):
         # Return the most recent frame from buffer (streaming) or direct capture
         # The manager code uses is_resize, but we don't do anything with it here
         # (kept for compatibility).
@@ -436,7 +435,10 @@ class CameraAV:
                 # Use the latest frame from the streaming buffer
                 with self._frame_lock:
                     frame = self.frame_buffer[-1].copy()
-                    return frame.copy() if frame is not None else np.zeros((100, 100))
+                    if returnFrameNumber:
+                        return frame, self.frame_id
+                    else:
+                        return frame
             '''
             else:
                 # Fallback to direct frame capture if not streaming
@@ -457,10 +459,16 @@ class CameraAV:
             self.__logger.warning(f"Error getting frame: {e}")
             # Return last known good frame or a placeholder
             if hasattr(self, 'frame') and self.frame is not None:
-                return self.frame.copy()
+                if returnFrameNumber:
+                    return self.frame.copy(), self.frame_id
+                else:
+                    return self.frame.copy()
             else:
                 # Return a small placeholder frame to avoid crashes
-                return np.zeros((100, 100), dtype=np.uint8)
+                if returnFrameNumber:
+                    return np.zeros((100, 100)), -1
+                else:
+                    return np.zeros((100, 100))
 
     def getLastChunk(self):
         # Return all frames currently in buffer as a single 3D array if desired

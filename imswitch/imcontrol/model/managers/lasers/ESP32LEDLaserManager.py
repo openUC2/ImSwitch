@@ -5,7 +5,7 @@ import numpy as np
 class ESP32LEDLaserManager(LaserManager):
     """ LaserManager for controlling LEDs and LAsers connected to an
     ESP32 exposing a REST API
-    Each LaserManager instance controls one LED.
+    Each LaserManager instance controls one LED/Laser channel on the ESP32.
 
     Manager properties:
 
@@ -19,7 +19,16 @@ class ESP32LEDLaserManager(LaserManager):
         self._rs232manager = lowLevelManagers['rs232sManager'][
             laserInfo.managerProperties['rs232device']
         ]
+        if type(laserInfo.managerProperties['channel_index']) != int:
+            # In older Versions we allowed the Ledmatrix to be accessible via the name 'LED', this is now deprecated
+            raise ValueError("channel_index must be an integer")
+        
         self.__logger = initLogger(self, instanceName=name)
+
+        # Try to get commChannel if available (for emitting signals)
+        self._commChannel = lowLevelManagers.get('commChannel', None)
+        if self._commChannel is None:
+            self.__logger.warning("Communication channel not available - laser status updates won't emit signals")
 
         self._esp32 = self._rs232manager._esp32
         self._laser = self._rs232manager._esp32.laser
@@ -27,10 +36,6 @@ class ESP32LEDLaserManager(LaserManager):
         self._led = self._rs232manager._esp32.led
 
         # preset the pattern
-        self._led.ledpattern = np.ones(self._led.ledpattern.shape)
-        self.ledIntesity = 0
-        self._led.Intensity = self.ledIntesity
-
         self.power = 0
         self.channel_index = laserInfo.managerProperties['channel_index']
 
@@ -48,19 +53,50 @@ class ESP32LEDLaserManager(LaserManager):
         self.enabled = False
         self.setEnabled(self.enabled)
 
+        # Register callback for laser status updates
+        try:
+            # Register callback with key 0 (similar to motor callback registration)
+            self._laser.register_callback(0, callbackfct=self._callback_laser_status)
+            self.__logger.debug(f"Laser status callback registered for channel {self.channel_index}")
+        except Exception as e:
+            self.__logger.error(f"Could not register laser status callback: {e}")
+
+    def _callback_laser_status(self, laserValues):
+        """ Callback function to handle laser status updates from the ESP32.
+        Updates the internal state of the laser manager based on the received laser values array.
+        
+        Args:
+            laserValues: numpy array containing the laser values for all channels
+                         [laser0, laser1, laser2, laser3]
+        """
+        try:
+            self.__logger.debug(f"Received laser status update: {laserValues}")
+
+            # Update power for this specific laser channel
+            if 0 <= self.channel_index < len(laserValues):
+                new_power = laserValues[self.channel_index]
+                if new_power != self.power:
+                    self.power = new_power
+                    self.__logger.info(f"Laser channel {self.channel_index} power updated to {self.power} mW")
+                    # Update enabled state based on power value
+                    self.enabled = (self.power > 0)
+
+                    # Emit signal to update GUI if commChannel is available
+                    if self._commChannel is not None:
+                        laserDict = {self.name: {"power": self.power, "enabled": bool(self.enabled)}}
+                        self._commChannel.sigUpdateLaserPower.emit(laserDict)
+
+        except Exception as e:
+            self.__logger.error(f"Error in _callback_laser_status: {e}")
+
     def setEnabled(self, enabled,  getReturn=False):
         """Turn on (N) or off (F) laser emission"""
         self.enabled = enabled
-        if self.channel_index == "LED":
-            #self._led.send_LEDMatrix_full(intensity = (self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
-            #self._led.setIntensity(intensity=(self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
-            self._led.setAll(state=self.enabled, intensity=(self.power, self.power, self.power), getReturn=getReturn)
-        else:
-            self._laser.set_laser(self.channel_index,
-                                                int(self.power*self.enabled),
-                                                despeckleAmplitude = self.laser_despeckle_amplitude,
-                                                despecklePeriod = self.laser_despeckle_period,
-                                                is_blocking=getReturn)
+        self._laser.set_laser(self.channel_index,
+                                            int(self.power*self.enabled),
+                                            despeckleAmplitude = self.laser_despeckle_amplitude,
+                                            despecklePeriod = self.laser_despeckle_period,
+                                            is_blocking=getReturn)
 
     def setValue(self, power, getReturn=False):
         """Handles output power.
@@ -68,21 +104,11 @@ class ESP32LEDLaserManager(LaserManager):
         """
         self.power = power
         if self.enabled:
-
-            if self.channel_index == "LED":
-                # ensure that in case it's not initialized yet, we display an all-on pattern
-                if self._led.ledpattern[0,0]==-1:
-                    self._led.ledpattern[:]=1
-                self._led.setAll(state=1, intensity=(self.power*0, self.power, self.power*0), getReturn=getReturn)
-                #self._led.setAll(intensity=(self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
-                self.ledIntesity=self.power
-                #self._led.send_LEDMatrix_full(intensity = (self.power*self.enabled,self.power*self.enabled,self.power*self.enabled), getReturn=getReturn)
-            else:
-                self._laser.set_laser(self.channel_index,
-                                    int(self.power),
-                                    despeckleAmplitude = self.laser_despeckle_amplitude,
-                                    despecklePeriod = self.laser_despeckle_period,
-                                    is_blocking=getReturn)
+            self._laser.set_laser(self.channel_index,
+                                int(self.power),
+                                despeckleAmplitude = self.laser_despeckle_amplitude,
+                                despecklePeriod = self.laser_despeckle_period,
+                                is_blocking=getReturn)
 
     def sendTrigger(self, triggerId):
         self._esp32.digital.sendTrigger(triggerId)
@@ -91,6 +117,7 @@ class ESP32LEDLaserManager(LaserManager):
         self._rs232manager._esp32.galvo.set_dac(
             channel=channel, frequency=frequency, offset=offset, amplitude=amplitude, clk_div=clk_div,
             phase=phase, invert=invert, timeout=timeout)
+
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

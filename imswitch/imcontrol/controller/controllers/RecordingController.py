@@ -4,7 +4,7 @@ from typing import Optional, Union, List
 import numpy as np
 import datetime
 from fastapi.responses import StreamingResponse
-from fastapi import FastAPI, Response, HTTPException
+from fastapi import Response, HTTPException
 import cv2
 from PIL import Image
 import io
@@ -113,7 +113,7 @@ class RecordingController(ImConWidgetController):
 
         timeStampDay = datetime.datetime.now().strftime("%Y_%m_%d")
         relativeFolder = os.path.join("recordings", timeStampDay)
-        folder = os.path.join(dirtools.UserFileDirs.Data, relativeFolder)
+        folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), relativeFolder)
         if not os.path.exists(folder):
             os.makedirs(folder)
             time.sleep(0.01)
@@ -438,7 +438,7 @@ class RecordingController(ImConWidgetController):
 
     def getTimelapseFreq(self):
         return self._widget.getTimelapseFreq()
- 
+
     def setLiveStreamStart(self): # TODO: we need to connect that to the signal in the communication channel
         self.streamRunning = True
 
@@ -579,7 +579,7 @@ class RecordingController(ImConWidgetController):
         except Exception as e:
             self.__logger.warning(f"Could not use LiveViewController for video_feeder: {e}")
             # Fall back to legacy implementation
-        
+
         # Legacy implementation (kept for backward compatibility)
         if startStream:
             # start the live video feed
@@ -634,8 +634,14 @@ class RecordingController(ImConWidgetController):
             return HTTPException(detail="Variable not found", status_code=404)
 
     @APIExport(runOnUIThread=True)
-    def snapImageToPath(self, fileName: str = ".", saveFormat:SaveFormat = SaveFormat.TIFF) -> dict:
-        """Take a snap and save it to a .tiff file at the given fileName."""
+    def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: SaveFormat = SaveFormat.TIFF) -> dict:
+        """Take a snap and save it to a file at the given fileName.
+
+        Parameters:
+        - fileName: Optional suffix or filename to append to the generated name. If None,
+            the default naming used by `snap()` will be applied.
+        - saveFormat: Desired `SaveFormat` enum value (default: `SaveFormat.TIFF`).
+        """
         '''
         numpy_array = list(self.snapNumpy().values())[0]
         deconvoled_image = self._master.arkitekt_controller.upload_and_deconvolve_image(
@@ -753,7 +759,7 @@ class RecordingController(ImConWidgetController):
                 return
 
             timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-            folder = os.path.join(dirtools.UserFileDirs.Data, "recordings", timeStamp)
+            folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "recordings", timeStamp)
             if not os.path.exists(folder):
                 os.makedirs(folder)
             time.sleep(0.01)

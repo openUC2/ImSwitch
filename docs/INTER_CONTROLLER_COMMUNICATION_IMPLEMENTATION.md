@@ -14,7 +14,7 @@ For use cases like "call autofocus from ExperimentController" or "call autofocus
 Implemented a **Controller Registry** in `MasterController` that allows any controller to access any other controller via:
 
 ```python
-otherController = self._master.getController('ControllerName')
+otherController = self._master.getController("ControllerName")
 if otherController:
     result = otherController.someMethod(params)
 ```
@@ -46,7 +46,6 @@ class MasterController:
 
 **Modified:**
 - Controller creation loop now registers each controller after instantiation
-- WiFiController registration also added
 
 ```python
 # Register controller in MasterController for inter-controller communication
@@ -81,12 +80,11 @@ def runTileScan(self, performAutofocus: bool = False, ...):
 - Handles missing controller gracefully
 
 ```python
-def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0):
-    autofocusController = self._master.getController('Autofocus')
+def autofocus(self, minZ: float = 0, maxZ: float = 0, stepSize: float = 0):
+    autofocusController = self._master.getController("Autofocus")
     if autofocusController:
         result = autofocusController.autoFocus(
-            rangez=abs(maxZ - minZ) / 2.0,
-            resolutionz=stepSize
+            rangez=abs(maxZ - minZ) / 2.0, resolutionz=stepSize
         )
         return result
 ```
@@ -127,7 +125,7 @@ def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0):
 
 ```python
 # In ArkitektController
-autofocusController = self._master.getController('Autofocus')
+autofocusController = self._master.getController("Autofocus")
 if autofocusController:
     autofocusController.autoFocus(rangez=100, resolutionz=10)
 ```
@@ -137,11 +135,10 @@ if autofocusController:
 ```python
 # In ExperimentController workflow
 def autofocus(self, minZ, maxZ, stepSize):
-    autofocusController = self._master.getController('Autofocus')
+    autofocusController = self._master.getController("Autofocus")
     if autofocusController:
         return autofocusController.autoFocus(
-            rangez=abs(maxZ - minZ) / 2.0,
-            resolutionz=stepSize
+            rangez=abs(maxZ - minZ) / 2.0, resolutionz=stepSize
         )
 ```
 
@@ -149,7 +146,7 @@ def autofocus(self, minZ, maxZ, stepSize):
 
 ```python
 # Pause live view, run experiment, resume live view
-liveViewController = self._master.getController('LiveView')
+liveViewController = self._master.getController("LiveView")
 if liveViewController:
     liveViewController.stopLiveView()
 
@@ -166,8 +163,8 @@ if liveViewController:
 1. **Always check for None**:
    ```python
    controller = self._master.getController('Name')
-   if controller is not None:
-       controller.method()
+      if controller is not None:
+          controller.method()
    ```
 
 2. **Only call @APIExport methods** - These are the stable public API
@@ -193,7 +190,7 @@ registered = self._master._controllersRegistry.keys()
 self._logger.debug(f"Available controllers: {list(registered)}")
 
 # Test calling autofocus:
-autofocusController = self._master.getController('Autofocus')
+autofocusController = self._master.getController("Autofocus")
 if autofocusController:
     result = autofocusController.autoFocus(rangez=100, resolutionz=10)
     print(f"Autofocus result: {result}")
@@ -209,6 +206,7 @@ self._commChannel.sigAutoFocus.connect(self.onAutoFocus)
 # Emit signal
 self._commChannel.sigAutoFocus.emit(100, 10, 0)
 
+
 # Wait for callback
 def onAutoFocus(self, result):
     # Handle result
@@ -218,7 +216,7 @@ def onAutoFocus(self, result):
 ### New Code (Direct Call):
 ```python
 # Direct call
-autofocusController = self._master.getController('Autofocus')
+autofocusController = self._master.getController("Autofocus")
 if autofocusController:
     result = autofocusController.autoFocus(rangez=100, resolutionz=10)
     # Use result immediately!

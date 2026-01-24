@@ -3,24 +3,17 @@ import os
 import threading
 from datetime import datetime
 import time
-import cv2
-import matplotlib.pyplot as plt
 import numpy as np
-import scipy.ndimage as ndi
-import scipy.signal as signal
 import skimage.transform as transform
-import tifffile as tif
 from pydantic import BaseModel
 from typing import Optional
 
-from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex, Timer
+from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
-from skimage.registration import phase_cross_correlation
 from ..basecontrollers import ImConWidgetController
 from imswitch import IS_HEADLESS
 
 import h5py
-import numpy as np
 
 
 
@@ -76,7 +69,7 @@ class MCTController(ImConWidgetController):
         self.Illu3Value = 0
         self.MCTFilename = ""
         self.activeIlluminations = []
-        self.availableIlliminations = []
+        self.availableIlluminations = []
         self.MCTFilePath = " "
 
         # time to let hardware settle
@@ -104,10 +97,10 @@ class MCTController(ImConWidgetController):
         for iDevice in allIlluNames:
             try:
                 # laser maanger
-                self.availableIlliminations.append(self._master.lasersManager[iDevice])
+                self.availableIlluminations.append(self._master.lasersManager[iDevice])
             except:
                 # lexmatrix manager
-                self.availableIlliminations.append(self._master.LEDMatrixsManager[iDevice])
+                self.availableIlluminations.append(self._master.LEDMatrixsManager[iDevice])
 
         # select stage
         try:
@@ -129,15 +122,15 @@ class MCTController(ImConWidgetController):
             self._widget.mctShowLastButton.setEnabled(False)
 
             # setup gui limits for sliders
-            if len(self.availableIlliminations) > 0:
-                self._widget.sliderIllu1.setMaximum(self.availableIlliminations[0].valueRangeMax)
-                self._widget.sliderIllu1.setMinimum(self.availableIlliminations[0].valueRangeMin)
-            if len(self.availableIlliminations) > 1:
-                self._widget.sliderIllu2.setMaximum(self.availableIlliminations[1].valueRangeMax)
-                self._widget.sliderIllu2.setMinimum(self.availableIlliminations[1].valueRangeMin)
-            if len(self.availableIlliminations) > 2:
-                self._widget.sliderIllu3.setMaximum(self.availableIlliminations[2].valueRangeMax)
-                self._widget.sliderIllu3.setMinimum(self.availableIlliminations[2].valueRangeMin)
+            if len(self.availableIlluminations) > 0:
+                self._widget.sliderIllu1.setMaximum(self.availableIlluminations[0].valueRangeMax)
+                self._widget.sliderIllu1.setMinimum(self.availableIlluminations[0].valueRangeMin)
+            if len(self.availableIlluminations) > 1:
+                self._widget.sliderIllu2.setMaximum(self.availableIlluminations[1].valueRangeMax)
+                self._widget.sliderIllu2.setMinimum(self.availableIlluminations[1].valueRangeMin)
+            if len(self.availableIlluminations) > 2:
+                self._widget.sliderIllu3.setMaximum(self.availableIlluminations[2].valueRangeMax)
+                self._widget.sliderIllu3.setMinimum(self.availableIlluminations[2].valueRangeMin)
 
 
     def startMCT(self):
@@ -298,9 +291,9 @@ class MCTController(ImConWidgetController):
 
             # get active illuminations
             self.activeIlluminations = []
-            if self.Illu1Value>0: self.activeIlluminations.append(self.availableIlliminations[0])
-            if self.Illu2Value>0 and len(self.availableIlliminations)>1: self.activeIlluminations.append(self.availableIlliminations[1])
-            if self.Illu3Value>0 and len(self.availableIlliminations)>2: self.activeIlluminations.append(self.availableIlliminations[2])
+            if self.Illu1Value>0: self.activeIlluminations.append(self.availableIlluminations[0])
+            if self.Illu2Value>0 and len(self.availableIlluminations)>1: self.activeIlluminations.append(self.availableIlluminations[1])
+            if self.Illu3Value>0 and len(self.availableIlluminations)>2: self.activeIlluminations.append(self.availableIlluminations[2])
 
 
             # this should decouple the hardware-related actions from the GUI
@@ -530,11 +523,11 @@ class MCTController(ImConWidgetController):
                 allChannelFrames = []
                 allPositions = []
                 for illuIndex, mIllumination in enumerate(self.activeIlluminations):
-                    if mIllumination.name==self.availableIlliminations[0].name:
+                    if mIllumination.name==self.availableIlluminations[0].name:
                         illuValue = self.Illu1Value
-                    elif mIllumination.name==self.availableIlliminations[1].name:
+                    elif mIllumination.name==self.availableIlluminations[1].name:
                         illuValue = self.Illu2Value
-                    elif mIllumination.name==self.availableIlliminations[2].name:
+                    elif mIllumination.name==self.availableIlluminations[2].name:
                         illuValue = self.Illu3Value
 
                     # change illumination
@@ -634,16 +627,16 @@ class MCTController(ImConWidgetController):
             time.sleep(0.1)
 
     def changeValueIlluSlider(self, currIllu, value):
-        allIllus = np.arange(len(self.availableIlliminations))
+        allIllus = np.arange(len(self.availableIlluminations))
         # turn on current illumination
-        if not self.availableIlliminations[currIllu].enabled: self.availableIlliminations[currIllu].setEnabled(1)
-        self.availableIlliminations[currIllu].setValue(value)
+        if not self.availableIlluminations[currIllu].enabled: self.availableIlluminations[currIllu].setEnabled(1)
+        self.availableIlluminations[currIllu].setValue(value)
 
         # switch off other illus
         for illuIndex in allIllus:
-            if illuIndex != currIllu and self.availableIlliminations[illuIndex].power>0:
-                self.availableIlliminations[illuIndex].setValue(0)
-                self.availableIlliminations[illuIndex].setEnabled(0)
+            if illuIndex != currIllu and self.availableIlluminations[illuIndex].power>0:
+                self.availableIlluminations[illuIndex].setValue(0)
+                self.availableIlluminations[illuIndex].setEnabled(0)
 
     def valueIllu1Changed(self, value):
         # turn on current illumination based on slider value
@@ -669,7 +662,7 @@ class MCTController(ImConWidgetController):
 
     def getSaveFilePath(self, date, filename, extension):
         mFilename =  f"{date}_{filename}.{extension}"
-        dirPath  = os.path.join(dirtools.UserFileDirs.Data, 'recordings', date)
+        dirPath  = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'recordings', date)
         newPath = os.path.join(dirPath,mFilename)
 
         if not os.path.exists(dirPath):

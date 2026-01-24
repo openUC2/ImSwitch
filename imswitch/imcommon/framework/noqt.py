@@ -5,27 +5,16 @@ from psygnal import emit_queued
 import psygnal
 import asyncio
 import threading
-import os
-import json
 from functools import lru_cache
 import numpy as np
 from socketio import AsyncServer, ASGIApp
-import uvicorn
 import imswitch.imcommon.framework.base as abstract
-import cv2
-import base64
-from imswitch import SOCKET_STREAM
 import time
-import queue
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Union
-import imswitch
-from imswitch import __ssl__, __socketport__
-import logging
 import msgpack  # MessagePack for efficient binary serialization
 
-# Try to import config and binary streaming - handle gracefully if not available
-from imswitch.config import get_config
+
 HAS_BINARY_STREAMING = True
 class Mutex(abstract.Mutex):
     """Wrapper around the `threading.Lock` class."""
@@ -41,13 +30,12 @@ class Mutex(abstract.Mutex):
 
 # Initialize Socket.IO server
 sio = AsyncServer(async_mode="asgi", cors_allowed_origins="*")
-socket_app = ASGIApp(sio)  # Renamed to socket_app - will be mounted on FastAPI app
+socket_app = ASGIApp(sio, socketio_path=None)  # Renamed to socket_app - will be mounted on FastAPI app
 
 # Per-client frame acknowledgement tracking
 _client_sent_frame_id = {}  # sid -> last sent frame id (int or None)
 _client_ack_frame_id = {}  # sid -> last acked frame id
 _client_frame_lock = threading.Lock()
-_frame_drop_counter = 0  # Track how many frames we've dropped
 
 # Event loop reference - will be set by ImSwitchServer
 _shared_event_loop = None
@@ -76,9 +64,27 @@ class SignalInstance(psygnal.SignalInstance):
         if not args:
             return
 
+        # Handle log signal specially
+        if self.name == "sigLog":
+            # For log signals, args[0] should be a dict with log data
+            try:
+                log_data = args[0] if args else {}
+                message = {
+                    "signal": "sigLog",
+                    "args": log_data
+                }
+                self._safe_broadcast_message(message)
+            except Exception as e:
+                print(f"Error broadcasting log message: {e}")
+            return
+
         # Handle pre-formatted stream messages from LiveViewController
-        if self.name == "sigUpdateImage":
+        elif self.name == "sigUpdateImage" or self.name == "sigUpdateFrame" or self.name == "sigImageReceived" or self.name == "sigHoloImageComputed" or self.name == "sigHoloProcessed": # both stemp from the liveviewcontroller
+            return
+        elif self.name == "sigUpdateStreamFrame":
+            # this can be binary or jpeg frame
             self._handle_stream_frame(args[0])
+
             return
         elif self.name in ["sigImageUpdated", "sigStreamFrame"]:
             # These signals are internal to the streaming pipeline:
@@ -103,7 +109,7 @@ class SignalInstance(psygnal.SignalInstance):
         Uses explicit frame_ack event from frontend for flow control.
         Implements proper backpressure - only sends to clients that are ready.
         Thread-safe using asyncio.run_coroutine_threadsafe for cross-thread calls.
-        
+
         UNIFIED HANDLING: Both binary and JPEG frames use the same 'frame' event
         with MessagePack-encoded metadata for efficiency and consistency.
         """
@@ -120,26 +126,26 @@ class SignalInstance(psygnal.SignalInstance):
                 """
                 FRAME_ID_MODULO = 256  # Small value to test rollover frequently
                 MAX_FRAME_LAG = 1  # Allow client to be 1 frame behind
-                
+
                 next_id = {}
                 for sid, sent_id in last_sent.items():
                     # Initialize: client is ready for first frame
                     if sent_id is None or last_ack[sid] is None:
                         next_id[sid] = 0
                         continue
-                    
+
                     # Calculate distance between sent and ack with rollover awareness
                     # Distance = (sent - ack) mod MODULO
                     # If distance <= MAX_FRAME_LAG, client is ready
                     distance = (sent_id - last_ack[sid]) % FRAME_ID_MODULO
-                    
+
                     if distance <= MAX_FRAME_LAG:
                         # Client is ready for next frame
                         next_id[sid] = (sent_id + 1) % FRAME_ID_MODULO
                     else:
                         # Client is lagging too much - apply backpressure
                         pass # print(f"Client {sid} not ready for new frame (last sent: {sent_id}, last ack: {last_ack[sid]}, distance: {distance})")
-                
+
                 return next_id
 
             # Get ready clients
@@ -162,16 +168,16 @@ class SignalInstance(psygnal.SignalInstance):
                         # Create a copy of metadata for each client to avoid race conditions
                         client_metadata = metadata.copy()
                         client_metadata['frame_id'] = next_frame_id
-                        
+
                         # Pack entire frame (metadata + data) with MessagePack
                         frame_payload = msgpack.packb({
                             'metadata': client_metadata,
                             'data': data
                         }, use_bin_type=True)
-                        
+
                         # print(f"Sending binary frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
                         _client_sent_frame_id[sid] = next_frame_id
-                        
+
                         # Emit using socket.io's native binary support
                         asyncio.run_coroutine_threadsafe(
                             sio.emit(event, frame_payload, to=sid),
@@ -185,23 +191,22 @@ class SignalInstance(psygnal.SignalInstance):
                         # Create a copy of metadata for each client to avoid race conditions
                         client_metadata = data.get('metadata', {}).copy()
                         client_metadata['frame_id'] = next_frame_id
-                        
+
                         # Pack entire frame (metadata + image) with MessagePack
                         frame_payload = msgpack.packb({
                             'metadata': client_metadata,
                             'image': data['image']
                         }, use_bin_type=True)
-                        
-                        #print(f"Sending JPEG frame #{next_frame_id} to client {sid} (total: {len(frame_payload)} bytes)")
+
                         _client_sent_frame_id[sid] = next_frame_id
-                        
+
                         # Emit on same 'frame' event as binary for unified frontend handling
                         asyncio.run_coroutine_threadsafe(
                             sio.emit(event, frame_payload, to=sid),
                             _shared_event_loop
                         )
-                        
-                        
+
+
         except Exception as e:
             print(f"Error handling stream frame: {e}")
 
@@ -241,7 +246,7 @@ class SignalInstance(psygnal.SignalInstance):
             if _shared_event_loop and _shared_event_loop.is_running():
                 async def emit_signal():
                     await sio.emit(event_name, message_bytes)
-                
+
                 # Schedule the coroutine in the shared event loop from any thread
                 asyncio.run_coroutine_threadsafe(emit_signal(), _shared_event_loop)
             else:
@@ -261,7 +266,7 @@ class Signal(psygnal.Signal):
     def connect(self, func: 'Union[Callable, abstract.Signal]') -> None:
         if isinstance(func, abstract.Signal):
             if any([t1 != t2 for t1, t2 in zip(self.types, func.types)]):
-                raise TypeError(f"Source and destination must have the same signature.")
+                raise TypeError("Source and destination must have the same signature.")
             func = func.emit
         super().connect(func)
 
@@ -282,6 +287,11 @@ class Signal(psygnal.Signal):
     @property
     def info(self) -> str:
         return self._info
+
+
+# Global signal for log messages
+sigLog = Signal(dict)
+
 
 # Threaded workers for async tasks
 class Worker(abstract.Worker):
@@ -398,7 +408,7 @@ async def connect(sid, environ):
     with _client_frame_lock:
         _client_sent_frame_id[sid] = None
         _client_ack_frame_id[sid] = None
-    
+
     # Send server capabilities to client
     capabilities = {
         "messagepack": True,
@@ -416,7 +426,7 @@ async def disconnect(sid):
     with _client_frame_lock:
         _client_sent_frame_id.pop(sid, None)
         _client_ack_frame_id.pop(sid, None)
-        
+
 @sio.event
 async def frame_ack(sid, data):
     """Client explicitly acknowledges frame processing complete"""
@@ -437,4 +447,3 @@ def set_shared_event_loop(loop):
 def get_socket_app():
     """Returns the Socket.IO ASGI app to be mounted on FastAPI."""
     return socket_app
-

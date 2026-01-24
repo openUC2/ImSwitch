@@ -1,6 +1,5 @@
-from PyQt5.QtCore import pyqtSlot, QSettings, QTimer, QUrl, Qt
-from PyQt5.QtGui import QCloseEvent
-from PyQt5.QtWidgets import QMainWindow, QMessageBox, QDockWidget, QPlainTextEdit, QTabWidget
+from PyQt5.QtCore import pyqtSlot, QTimer, QUrl
+from PyQt5.QtWidgets import QMessageBox
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView as QWebView, QWebEnginePage as QWebPage
     from PyQt5.QtWebEngineCore import QWebEngineUrlRequestInterceptor
@@ -8,8 +7,6 @@ try:
     IS_QTWEBENGINE = True
 except:
     IS_QTWEBENGINE = False
-from PyQt5.QtCore import QSettings, QDir, QObject, pyqtSignal, QUrl
-from PyQt5.QtWidgets import QFileDialog, QMessageBox, QApplication
 SETTING_BASEDIR = "io.github.openuc2/JupyterQt/basedir"
 SETTING_EXECUTABLE = "io.github.openuc2/JupyterQt/executable"
 DEBUG = True

@@ -4,13 +4,9 @@ try:
     from PyQt5 import QtWebEngineWidgets
 except:
     QtWebEngineWidgets = None
-import numpy as np
-import pyqtgraph as pg
-from imswitch.imcontrol.view import guitools
 from qtpy import QtCore, QtWidgets
 from imswitch.imcommon.model import initLogger
 from .basewidgets import Widget
-from imjoy_rpc.hypha.sync import login
 
 
 class HyphaWidget(Widget):

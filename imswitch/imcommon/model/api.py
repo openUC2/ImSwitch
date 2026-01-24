@@ -2,8 +2,6 @@ import inspect
 import asyncio
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Mutex, Signal, SignalInterface
-from importlib.resources import files
-from fastapi.staticfiles import StaticFiles
 
 
 class APIExport:
@@ -82,7 +80,12 @@ def generateAPI(objs, *, missingAttributeErrorMsg=None):
     passed array objs. Must be called from the main thread. """
 
     from imswitch.imcommon.model import pythontools
-
+    from imswitch import __available_controllers__
+    for _controller in objs:
+        controller_name = _controller.__class__.__name__
+        #print("controller_name: ", controller_name)
+        if controller_name not in __available_controllers__:
+            __available_controllers__.append(controller_name)
     exportedFuncs = {}
     for obj in objs:
         for subObjName in dir(obj):
@@ -98,7 +101,7 @@ def generateAPI(objs, *, missingAttributeErrorMsg=None):
 
             runOnUIThread = hasattr(subObj, '_APIRunOnUIThread') and subObj._APIRunOnUIThread
 
-            if runOnUIThread and not IS_HEADLESS:
+            if runOnUIThread and not IS_HEADLESS: # TODO: I think we could make use of it, but not as of now
                 wrapper = _UIThreadExecWrapper(subObj)
                 exportedFuncs[subObjName] = wrapper
                 wrapper.module = subObj.__module__.split('.')[-1]

@@ -1,0 +1,35 @@
+---
+name: merge-gatekeeper
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - auto_merge_enabled  # needed for PRs opened via CI workflows without PATs
+  merge_group:
+
+jobs:
+  merge-gatekeeper:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      statuses: read
+    steps:
+      - name: Run Merge Gatekeeper
+        if: github.event_name != 'merge_group'
+        uses: upsidr/merge-gatekeeper@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          timeout: 900 # 15-minute timeout, since checks may take 8 minutes to run
+          interval: 15
+
+      - name: Run Merge Gatekeeper in Merge Queue
+        if: github.event_name == 'merge_group'
+        uses: upsidr/merge-gatekeeper@v1
+        with:
+          ref: ${{github.ref}}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          timeout: 900 # 15-minute timeout, since checks may take 8 minutes to run
+          interval: 15

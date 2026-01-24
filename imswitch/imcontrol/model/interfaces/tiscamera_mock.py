@@ -1,5 +1,4 @@
 import threading
-import time
 import collections
 from enum import Enum
 from pathlib import Path
@@ -94,8 +93,8 @@ class MockCameraTIS:
         self.SensorWidth  = w
         self.SensorHeight = h
         self.flushBuffer()
-        
-        
+
+
     def getTriggerSource(self):
         """Match CameraHIK interface."""
         return self.trigger_source.value
@@ -190,8 +189,15 @@ class MockCameraTIS:
 
     # — continuous acquisition loop — ---------------------------------------
     def _continuous_loop(self):
-        interval = self.exposure_ms / 1000.0
-        while not self._stop_evt.wait(interval):
+        import time
+        time0 = time.time()
+        while not self._stop_evt.wait():
+            interval = np.max([self.exposure_ms,200]) / 1000.0
+            
+            if time.time() - time0 < interval:
+                time.sleep(0.01)
+                continue
+            time0 = time.time()
             self._emit_frame()
 
     # — frame emission — -----------------------------------------------------

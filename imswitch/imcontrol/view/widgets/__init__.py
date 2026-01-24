@@ -11,7 +11,6 @@ if not IS_HEADLESS:
     from .ConsoleWidget import ConsoleWidget
     from .EtSTEDWidget import EtSTEDWidget
     from .FFTWidget import FFTWidget
-    from .HoloWidget import HoloWidget
     from .JoystickWidget import JoystickWidget
     from .HistogrammWidget import HistogrammWidget
     from .STORMReconWidget import STORMReconWidget
@@ -57,9 +56,7 @@ if not IS_HEADLESS:
     from .SquidStageScanWidget import SquidStageScanWidget
     from .ISMWidget import ISMWidget
     from .SettingsWidget import SettingsWidget
-    from .SLMWidget import SLMWidget
     from .TilingWidget import TilingWidget
-    from .basewidgets import WidgetFactory
     from .ULensesWidget import ULensesWidget
     from .ViewWidget import ViewWidget
     from .WatcherWidget import WatcherWidget

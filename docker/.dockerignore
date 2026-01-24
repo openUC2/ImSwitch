@@ -32,3 +32,11 @@
 **/values.dev.yaml
 LICENSE
 README.md
+
+# UV and Python cache directories
+**/.cache
+**/uv.lock
+**/.uv-cache
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache

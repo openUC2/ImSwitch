@@ -140,7 +140,7 @@ class STORMReconController(LiveUpdatedController):
         self._arkitekt_handle = None
         if IS_ARKITEKT:
             self._initializeArkitekt()
-            
+
         # Initialize processing parameters via pydantic models
         self._initializeProcessingParameters()
 
@@ -155,7 +155,7 @@ class STORMReconController(LiveUpdatedController):
             # Initialize reconstruction storage
             self._last_reconstruction_path = ""
             self._session_directory = ""
-            
+
             # Create modern worker without thread-based approach
             self.imageComputationWorker = STORMReconImageComputationWorker(parent_controller=self)
 
@@ -703,7 +703,7 @@ class STORMReconController(LiveUpdatedController):
         self._current_session_id = session_id
         self._frame_count = 0
         self._local_processing_enabled = process_locally
-        
+
         # Update processing parameters if provided
         if processing_parameters and process_locally:
             self._updateProcessingParametersFromDict(processing_parameters)
@@ -960,7 +960,7 @@ class STORMReconController(LiveUpdatedController):
         try:
             # Use the pydantic model from the request
             new_params = request.processing_parameters
-            
+
             # Update the stored parameters
             self._processing_params = new_params
 
@@ -1367,7 +1367,7 @@ class STORMReconController(LiveUpdatedController):
     def _setupLocalDataDirectory(self):
         """Setup local data directory following experimentcontroller pattern."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_path = dirtools.UserFileDirs.Data
+        base_path = dirtools.UserFileDirs.getValidatedDataPath()
 
         # Create STORM-specific directory structure similar to experimentcontroller
         storm_base = Path(base_path) / "STORMController"
@@ -1428,7 +1428,7 @@ class STORMReconController(LiveUpdatedController):
 
         return None
 
-    
+
     def _initializeSaving(self, saveDirectory: str, save_format: str):
         """Initialize saving mechanism based on format."""
         try:
@@ -1573,7 +1573,7 @@ class STORMReconController(LiveUpdatedController):
         try:
             # Use standard data directory structure
             timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            drivePath = dirtools.UserFileDirs.Data
+            drivePath = dirtools.UserFileDirs.getValidatedDataPath()
             dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
             saveDirectory = os.path.join(dirPath, saveDirectory)
 
@@ -1606,7 +1606,6 @@ class STORMReconController(LiveUpdatedController):
                         'dtype': sample_frame.dtype,
                         "experiment": {
                             "MicroscopeState": {
-                                "number_z_steps": 1,
                                 "timepoints": 10000,
                                 "channels": {
                                     "channel_1": {
@@ -1640,7 +1639,7 @@ class STORMReconController(LiveUpdatedController):
         """Initialize single TIFF saving following ExperimentController pattern."""
         # Use standard data directory structure
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        drivePath = dirtools.UserFileDirs.Data
+        drivePath = dirtools.UserFileDirs.getValidatedDataPath()
         dirPath = os.path.join(drivePath, 'STORMController', timeStamp)
 
         # Ensure directory exists
@@ -1752,7 +1751,7 @@ class STORMReconImageComputationWorker:
                 preFilter, peakDetector, rel_threshold,
                 PSFparam, roiSize, method
             )
-            self.frameIterator += 1 
+            self.frameIterator += 1
 
             # Create simple reconstruction visualization
             frameLocalized = np.zeros_like(frame, dtype=np.float32)
@@ -1764,15 +1763,15 @@ class STORMReconImageComputationWorker:
                 except Exception as e:
                     self._logger.warning(f"Error creating localization visualization: {e}")
 
-            # accumulate reconstructed localization maps 
+            # accumulate reconstructed localization maps
             try:
-                if self.accumulatedReconstruction is None: 
+                if self.accumulatedReconstruction is None:
                     self.accumulatedReconstruction = frameLocalized
                 else:
                     self.accumulatedReconstruction += frameLocalized
             except Exception as e:
                 self._logger.error(f"Error in accumulating frames:  {e}")
-                
+
             # emit current frame reconstruction signal through parent controller
             if self._parent_controller is not None:
                 if self.frameIterator % self.update_rate == 0:
@@ -1806,7 +1805,7 @@ class STORMReconImageComputationWorker:
     def setFitRoiSize(self, roiSize):
         """Set fitting ROI size."""
         self.fit_roi_size = roiSize
-        
+
     def setUpdateRate(self, updateRate):
         """Set update rate for displaying / trigger signal"""
         self.update_rate = updateRate
@@ -1866,7 +1865,7 @@ class STORMReconImageComputationWorker:
     def getSaveFilePath(self, date, filename, extension):
         """Get save file path following data directory structure."""
         mFilename = f"{date}_{filename}.{extension}"
-        dirPath = os.path.join(dirtools.UserFileDirs.Data, 'STORMController', 'reconstructions', date)
+        dirPath = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), 'STORMController', 'reconstructions', date)
 
         if not os.path.exists(dirPath):
             os.makedirs(dirPath)

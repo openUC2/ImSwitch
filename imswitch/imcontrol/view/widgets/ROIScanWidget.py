@@ -1,9 +1,6 @@
-import numpy as np
-import pyqtgraph as pg
-from qtpy import QtCore, QtWidgets
-from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QListWidget, QWidget
+from qtpy import QtCore
+from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit, QListWidget
 
-from imswitch.imcontrol.view import guitools
 from .basewidgets import NapariHybridWidget
 
 

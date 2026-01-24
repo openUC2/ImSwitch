@@ -3,27 +3,27 @@ import traceback
 import logging
 import argparse
 import os
-# TODO: This file needs a heavy re-write! 
+# TODO: This file needs a heavy re-write!
 import imswitch
-from imswitch.config import get_config, update_config
+from imswitch.config import get_config
 
 # python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes
-# python -m imswitch --headless --http-port 8001 --socket-port 8002 --config-folder /Users/bene --config-file None 
+# python -m imswitch --headless --http-port 8001 --config-folder /Users/bene --config-file None
 
 
-def main(is_headless:bool=None, default_config:str=None, http_port:int=None, socket_port:int=None, ssl:bool=None, config_folder:str=None,
-         data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None):
+def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
+         data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None, jupyter_port:int=None):
     '''
     is_headless: bool => start with or without qt
     default_config: str => path to the config file
     http_port: int => port number (default: 8001)
-    socket_port: int => port number (default: 8002)
     ssl: bool => use ssl (default: True)
     config_folder: str => path to the config folder (default: None, pointing to Documents/ImSwitch)
     data_folder: str => path to the data folder (default: None, pointing to Documents/ImSwitchConfig)
     scan_ext_data_folder: bool => if True, we will scan the ext_data_folder for usb drives and use this for data storage
     ext_data_folder: str => path to the directory of mount points for external drives (default: None, optionally pointing to e.g. /Volumes or /media)
     with_kernel: bool => start with embedded Jupyter kernel for external notebook connections
+    jupyter_port: int => Jupyter notebook port (default: 8888)
 
 
 
@@ -34,31 +34,31 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
     try:
         # Get the global configuration instance
         config = get_config()
-        
-        # Update configuration immediately with any provided parameters
+
+        # Update configuration immediately with any provided parameters # @ethanjli this needs a review since we load this from docker - is there a better way to load from the compose file?
         config.update_from_args(
             is_headless=is_headless,
             default_config=default_config,
             http_port=http_port,
-            socket_port=socket_port,
             ssl=ssl,
             config_folder=config_folder,
             data_folder=data_folder,
             scan_ext_data_folder=scan_ext_data_folder,
             ext_data_folder=ext_data_folder,
-            with_kernel=with_kernel
+            with_kernel=with_kernel,
+            jupyter_port=jupyter_port
         )
-        
+
         # Update legacy globals immediately for backward compatibility
         config.to_legacy_globals(imswitch)
         # Only parse command line arguments if no parameters were passed to main()
         # This prevents argparse conflicts when called from test threads
-        if (is_headless is None and default_config is None and http_port is None and 
-            socket_port is None and ssl is None and config_folder is None and 
+        if (is_headless is None and default_config is None and http_port is None and
+            ssl is None and config_folder is None and
             data_folder is None and scan_ext_data_folder is None and ext_data_folder is None and
-            with_kernel is None):
-            
-            try: # Google Colab does not support argparse
+            with_kernel is None and jupyter_port is None):
+            # @ethanjli this is the actual code that parses the variables from commandline - needs a review probably?
+            try: # TODO: Google Colab does not support argparse
                 parser = argparse.ArgumentParser(description='Process some integers.')
 
                 # specify if run in headless mode
@@ -73,9 +73,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 parser.add_argument('--http-port', dest='http_port', type=int, default=8001,
                                     help='specify http port')
 
-                # specify socket port
-                parser.add_argument('--socket-port', dest='socket_port', type=int, default=8002,
-                                    help='specify socket port')
                 # specify ssl
                 parser.add_argument('--no-ssl', dest='ssl', default=True, action='store_false',
                                     help='specify ssl')
@@ -96,6 +93,9 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 parser.add_argument('--with-kernel', dest='with_kernel', default=False, action='store_true',
                                     help='start with embedded Jupyter kernel for external notebook connections')
 
+                parser.add_argument('--jupyter-port', dest='jupyter_port', type=int, default=8888,
+                                    help='specify Jupyter notebook port (default: 8888)')
+
                 # Add Jupyter/Colab specific arguments to prevent errors
                 parser.add_argument('-f', '--connection-file', dest='connection_file', type=str, default=None,
                                     help='Jupyter connection file (ignored)')
@@ -109,7 +109,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
 
                 # Update configuration from parsed arguments
                 config.update_from_argparse(args)
-                
+
                 # Handle special config file validation
                 if hasattr(args, 'config_file') and args.config_file:
                     if isinstance(args.config_file, str) and args.config_file.find("json") >= 0:
@@ -122,14 +122,14 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                     config.config_folder = args.config_folder
                 if hasattr(args, 'data_folder') and args.data_folder and os.path.isdir(args.data_folder):
                     config.data_folder = args.data_folder
-                
+
                 # Update legacy globals
-                config.to_legacy_globals(imswitch)
+                config.to_legacy_globals(imswitch) # TODO @ethanjli review if this is necessary here?
 
             except Exception as e:
                 print(f"Argparse error: {e}")
                 pass
-        
+
         # Apply final configuration update to legacy globals (ensures consistency)
         config.to_legacy_globals(imswitch)
 
@@ -137,6 +137,24 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         from imswitch.imcommon import prepareApp, launchApp
         from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
         from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
+
+        # Setup logging system with configuration
+        # Import after framework is loaded to avoid circular dependencies
+        from imswitch.imcommon.model.logging import setup_logging, enable_signal_emission
+        setup_logging(
+            log_level=config.log_level,
+            log_to_file=config.log_to_file,
+            log_folder=config.log_folder,
+            config_folder=config.config_folder
+        )
+
+        # Enable signal emission for log messages if in headless mode
+        if config.is_headless:
+            try:
+                from imswitch.imcommon.framework.noqt import sigLog
+                enable_signal_emission(sigLog)
+            except Exception as e:
+                logging.warning(f"Could not enable signal emission for logging: {e}")
 
         logger = initLogger('main')
         logger.info(f'Starting ImSwitch {config.version}')
@@ -146,8 +164,14 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
         logger.info(f'Config folder: {config.config_folder}')
         logger.info(f'Data folder: {config.data_folder}')
 
+        logger.info(f'Log level: {config.log_level}')
+        logger.info(f'Log to file: {config.log_to_file}')
+        if config.scan_ext_data_folder:
+            logger.info(f'External mount paths: {config.ext_data_folder}')
+
+
         # TODO: check if port is already in use
-        
+
         if config.is_headless:
             app = None
         else:
@@ -228,16 +252,14 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, soc
                 # in case of the imnotebook, spread the notebook url
                 if moduleId == 'imnotebook':
                     config.jupyter_url = controller.webaddr
-                    # Update legacy global for backward compatibility
-                    imswitch.jupyternotebookurl = controller.webaddr
 
                 # Update loading progress
                 if not config.is_headless:
                     multiModuleWindow.updateLoadingProgress(i / len(modulePkgs))
                     app.processEvents()  # Draw window before continuing
-        logger.info(f'init done')
+        logger.info('init done')
         launchApp(app, multiModuleWindow, moduleMainControllers.values())
-    except Exception as e:
+    except Exception:
         logging.error(traceback.format_exc())
 
 

@@ -101,7 +101,6 @@ main(
     default_config=config_file,  
     is_headless=True,
     http_port=8001,
-    socket_port=8002
 )
 ```
 

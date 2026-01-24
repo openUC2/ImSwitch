@@ -2,7 +2,7 @@ import os
 import cv2
 import math
 import time
-from imswitch import IS_HEADLESS, __file__
+from imswitch import __file__
 import threading
 import numpy as np
 import matplotlib.pyplot as plt
@@ -38,9 +38,6 @@ End-to-end astigmatism autofocus simulation:
 - Plots + saves stack (NPZ) and metrics (CSV)
 """
 
-import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
 from math import cos, sin
 
 # ----------------------- Simulation -----------------------
@@ -127,7 +124,7 @@ class VirtualMicroscopeManager:
 
         try:
             self._imagePath = rs232Info.managerProperties["imagePath"]
-            if self._imagePath not in ["simplant", "smlm", "astigmatism", "wellplatecalib"]:
+            if self._imagePath not in ["simplant", "smlm", "astigmatism", "wellplatecalib", "april_tag"]:
                 raise NameError
         except:
             package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -214,7 +211,7 @@ class Positioner:
 
     def compute_psf(self, dz):
         dz = np.float32(dz)
-        print("Defocus:" + str(dz))
+        # print("Defocus:" + str(dz))
         if IS_NIP and dz != 0:
             obj = nip.image(np.zeros(self.mDimensions))
             obj.pixelsize = (100.0, 100.0) # TODO: adjust based on objective
@@ -253,11 +250,11 @@ class VirtualMicroscopy:
         self.positioner = Positioner(self)
         self.illuminator = Illuminator(self)
         self.objective = Objective(self)
-    
+
     def startAcquisition(self):
         """Start continuous frame acquisition"""
         self.camera.startAcquisition()
-    
+
     def stopAcquisition(self):
         """Stop continuous frame acquisition"""
         self.camera.stopAcquisition()
@@ -365,6 +362,23 @@ class Camera:
             self._image /= np.max(self._image)
             self.SensorHeight = 300  # self._image.shape[1]
             self.SensorWidth = 400  # self._image.shape[0]
+        elif self.filePath == "april_tag":
+            ''' load april_tag_36h11_01.svg '''
+            package_dir = os.path.dirname(os.path.abspath(__file__))
+            self._imagePath = os.path.join(
+                package_dir, "_data/images/april_tag_fromscreen.jpg" # apriltag_grid.png"
+            )
+            self._image = cv2.imread(self._imagePath, cv2.IMREAD_GRAYSCALE)
+            # downscale for performance
+            subsamplingfactor = 3
+            self._image = cv2.resize(self._image, (self._image.shape[1]//subsamplingfactor, self._image.shape[0]//subsamplingfactor), interpolation=cv2.INTER_AREA)
+            # flip top/bottom
+            #self._image = cv2.flip(self._image, 0)
+            # invert image
+            self._image = 255 - self._image
+            self._image = self._image / np.max(self._image)
+            self.SensorHeight = 300  # self._image.shape[1]
+            self.SensorWidth = 400  # self._image.shape[0]
         elif self.filePath == "clock":
             pass # TODO: IMPLEMENT
         elif self.filePath == "wellplatecalib":
@@ -379,8 +393,8 @@ class Camera:
             self._image = self._image / np.max(self._image)
             self.SensorHeight = 300  # self._image.shape[1]
             self.SensorWidth = 400  # self._image.shape[0]
-            
-        
+
+
         elif self.filePath == "astigmatism":
             self.SensorHeight = 512  # self._image.shape[1]
             self.SensorWidth = 512  # self._image.shape[0]
@@ -390,7 +404,7 @@ class Camera:
         elif self.filePath == "smlm":
             self.SensorHeight = 300  # self._image.shape[1]
             self.SensorWidth = 400  # self._image.shape[0]
-            
+
             tmp = createBranchingTree(width=5000, height=5000)
             tmp_min = np.min(tmp)
             tmp_max = np.max(tmp)
@@ -402,26 +416,26 @@ class Camera:
             self._image /= np.max(self._image)
             self.SensorHeight = 300  # self._image.shape[1]
             self.SensorWidth = 400  # self._image.shape[0]
-            
+
         self.lock = threading.Lock()
         self.model = "VirtualCamera"
         self.PixelSize = 1.0
         self.isRGB = False
         self.flipX = False
         self.flipY = False
-        self.flipImage = (self.flipY, self.flipX)        
+        self.flipImage = (self.flipY, self.flipX)
         self.frameNumber = 0
         # precompute noise so that we will save energy and trees
         self.noiseStack = np.abs(
             np.random.randn(self.SensorHeight, self.SensorWidth, 100) * 2
         )
-        
+
         # Thread-safe frame queue and acquisition thread
         self.frame_queue = Queue(maxsize=5)  # Limit queue size to prevent memory overflow
         self.acquisition_active = False
         self.acquisition_thread = None
         self.acquisition_lock = threading.Lock()
-        
+
         # Cached parameters to avoid locking parent constantly
         self._cached_position = {"X": 0, "Y": 0, "Z": 0, "A": 0}
         self._cached_intensity = 1.0
@@ -435,7 +449,7 @@ class Camera:
                 self.acquisition_active = True
                 self.acquisition_thread = threading.Thread(target=self._frame_producer_loop, daemon=True)
                 self.acquisition_thread.start()
-                
+
     def stopAcquisition(self):
         """Stop the continuous frame production thread"""
         with self.acquisition_lock:
@@ -450,7 +464,7 @@ class Camera:
                         self.frame_queue.get_nowait()
                     except Empty:
                         break
-    
+
     def _update_cached_parameters(self):
         """Update cached parameters from parent to minimize locking overhead"""
         try:
@@ -460,7 +474,7 @@ class Camera:
         except Exception:
             # In case parent doesn't have these methods yet
             pass
-    
+
     def _frame_producer_loop(self):
         """Continuous frame production loop running in separate thread"""
         while self.acquisition_active:
@@ -475,7 +489,7 @@ class Camera:
                     light_intensity=self._cached_intensity,
                     defocusPSF=self._cached_psf,
                 )
-                
+
                 self.frameNumber += 1
                 # Try to put frame in queue (non-blocking to avoid backlog)
                 try:
@@ -518,13 +532,13 @@ class Camera:
             # Adjust illumination
             frame = image.astype(np.uint16)
             # Removed sleep here - controlled in producer loop
-        
+
         # Apply flip if needed (zero-CPU operation using numpy)
         if self.flipImage[0]:  # flipY
             frame = np.flip(frame, axis=0)
         if self.flipImage[1]:  # flipX
             frame = np.flip(frame, axis=1)
-            
+
         return frame
 
     def produce_astigmatism_frame(self, z_offset=0):
@@ -598,13 +612,13 @@ class Camera:
             except Empty:
                 # Queue is empty, fall back to direct generation
                 pass
-        
+
         # Fallback: generate frame directly (legacy behavior for non-acquisition mode)
         position = self._parent.positioner.get_position()
         defocusPSF = np.squeeze(self._parent.positioner.get_psf())
         intensity = self._parent.illuminator.get_intensity(1)
         self.frameNumber += 1
-        
+
         frame = self.produce_frame(
             x_offset=position["X"],
             y_offset=position["Y"],
@@ -612,10 +626,10 @@ class Camera:
             light_intensity=intensity,
             defocusPSF=defocusPSF,
         )
-        
+
         if self.binning:
             frame = self._apply_binning(frame)
-            
+
         if returnFrameNumber:
             return frame, self.frameNumber
         else:
@@ -632,7 +646,7 @@ class Camera:
         """Get the latest frame chunk"""
         mFrame = self.getLast()
         return np.expand_dims(mFrame, axis=0), [self.frameNumber]
-    
+
     def setPropertyValue(self, propertyName, propertyValue):
         pass
 

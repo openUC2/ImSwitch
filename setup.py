@@ -42,7 +42,7 @@ setup(
     ],
     packages=find_packages(),
     include_package_data=True,
-    python_requires=">=3.10",
+    python_requires=">=3.11",
     install_requires=[
         "pydantic==2.11.4",
         "coloredlogs >= 15",
@@ -53,7 +53,7 @@ setup(
         "lantzdev >= 0.5.2",
         "luddite >= 1",
         "nidaqmx >= 0.5.7",
-        "numpy==2.0.2",
+        "numpy==2.1.2",
         "packaging >= 19",
         "psutil >= 5.4.8",
         "pyserial >= 3.4",
@@ -82,11 +82,12 @@ setup(
         "zarr>=3",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
-        "numba>=0.61.2", 
-        "mikro-next>=0.18.0", 
-        "arkitekt-next>=0.29.0", 
-        "koil>=2.0.5", 
-        "msgpack>=1.0.4"
+        "numba>=0.61.2",
+        "mikro-next>=0.18.0",
+        "arkitekt-next[all]==0.35.0",
+        "koil>=2.0.5",
+        "msgpack>=1.0.4",
+        "esptool"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
@@ -113,7 +114,7 @@ setup(
         'arkitekt':
             [
             "arkitekt==0.7.8",
-            "arkitekt_next>=0.8.6"
+            "arkitekt_next>=0.35.0"
         ],
         'imjoy':[
             "imjoy-rpc==0.5.59",

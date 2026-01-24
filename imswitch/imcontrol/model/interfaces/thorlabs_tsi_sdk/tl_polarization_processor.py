@@ -2,15 +2,13 @@
 tl_mono_to_color_processor.py ***BETA***
 """
 
-from ctypes import cdll, POINTER, c_int, c_ushort, c_void_p, c_char_p, c_float, c_ubyte
-from typing import Any
+from ctypes import cdll, POINTER, c_int, c_ushort, c_void_p, c_float
 from traceback import format_exception
 import logging
 import platform
 import os
 import numpy as np
 
-from .tl_polarization_enums import POLAR_PHASE
 
 """ Setup logger """
 logging.basicConfig(level=logging.ERROR,

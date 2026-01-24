@@ -496,7 +496,7 @@ class SettingsController(ImConWidgetController):
     @APIExport()
     def getDetectorGlobalParameters(self):
         return self._master.detectorsManager.getGlobalDetectorParams()
-    
+
     @APIExport(requestType="POST")
     def setStreamParams(self, compression: dict = None, subsampling: dict = None, throttle_ms: int = None):
         """Set streaming parameters for binary frame streaming.
@@ -527,12 +527,12 @@ class SettingsController(ImConWidgetController):
                             params['subsampling_factor'] = subsampling['factor']
                     if throttle_ms is not None:
                         params['throttle_ms'] = throttle_ms
-                    
+
                     return main_controller.controllers['LiveView'].setStreamParams('binary', params)
-        except Exception as e:
+        except Exception:
             # If LiveViewController not available, fall back to legacy behavior
             pass
-        
+
         # Fallback to legacy behavior
         update_params = {}
         # TODO: We need to be able to switch to JPEG streaming as well e.g. compression={'type':'jpeg', 'level': 80}
@@ -541,19 +541,19 @@ class SettingsController(ImConWidgetController):
                 update_params['stream_compression_algorithm'] = compression['algorithm']
             if 'level' in compression:
                 update_params['stream_compression_level'] = compression['level']
-        
+
         if subsampling:
             if 'factor' in subsampling:
                 update_params['stream_subsampling_factor'] = subsampling['factor']
-        
+
         if throttle_ms is not None:
             update_params['stream_throttle_ms'] = throttle_ms
-            
+
         # Update using the same mechanism as compressionlevel
         self._master.detectorsManager.updateGlobalDetectorParams(update_params)
-        
+
         return {"status": "success", "updated": update_params}
-    
+
     @APIExport()
     def getStreamParams(self):
         """Get current streaming parameters.
@@ -572,7 +572,7 @@ class SettingsController(ImConWidgetController):
                         protocols = result['protocols']
                         binary_params = protocols.get('binary', {})
                         jpeg_params = protocols.get('jpeg', {})
-                        
+
                         return {
                             "current_compression_algorithm": binary_params.get('compression_algorithm', 'lz4'),
                             "binary": {
@@ -589,13 +589,13 @@ class SettingsController(ImConWidgetController):
                                 "compression_level": jpeg_params.get('jpeg_quality', 80)
                             }
                         }
-        except Exception as e:
+        except Exception:
             # If LiveViewController not available, fall back to legacy behavior
             pass
-        
+
         # Fallback to legacy behavior
         global_params = self._master.detectorsManager.getGlobalDetectorParams()
-        
+
         return {
             "current_compression_algorithm": global_params.get('stream_compression_algorithm', 'lz4'),
             "binary": {
@@ -703,11 +703,40 @@ class SettingsController(ImConWidgetController):
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         try:
             self.setDetectorParameter(detectorName, 'mode', 'Auto' if isAuto else 'Manual')
-        except Exception as e:
+        except Exception:
             pass
 
+    @APIExport()
+    def getCameraStatus(self, detectorName: str = None) -> dict:
+        """ Returns comprehensive camera status information for the specified detector.
+        If no detector name is provided, returns status for the current detector.
+        
+        Args:
+            detectorName: Optional detector name. If None, uses current detector.
+            
+        Returns:
+            Dictionary containing comprehensive camera status including:
+            - Hardware specifications (model, sensor size, pixel size)
+            - Connection and operational status
+            - Current settings (exposure, gain, binning, ROI, etc.)
+            - Supported features and capabilities
+        """
+        try:
+            if detectorName is None:
+                detector = self._master.detectorsManager.getCurrentDetector()
+            else:
+                detector = self._master.detectorsManager[detectorName]
+
+            return detector.getCameraStatus()
+        except Exception as e:
+            return {
+                'error': str(e),
+                'detectorName': detectorName,
+                'status': 'error'
+            }
+
     @APIExport(runOnUIThread=True)
-    def setDetectorExposureTime(self, detectorName: str=None, exposureTime: float=1) -> None:
+    def setDetectorExposureTime(self, detectorName: str=None, exposureTime: float=None) -> None:
         """ Sets the exposure time for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
@@ -732,14 +761,16 @@ class SettingsController(ImConWidgetController):
         """ Returns the available trigger types for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
-        return self._master.detectorsManager[detectorName].getTriggerTypes()
+        triggerTypes = self._master.detectorsManager[detectorName].getTriggerTypes()
+        return triggerTypes if triggerTypes is not None else []
 
     @APIExport(runOnUIThread=True)
     def getDetectorCurrentTriggerType(self, detectorName: str=None) -> str:
         """ Returns the current trigger type for the specified detector. """
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
-        return self._master.detectorsManager[detectorName].getCurrentTriggerType()
+        currentTrigger = self._master.detectorsManager[detectorName].getCurrentTriggerType()
+        return currentTrigger if currentTrigger is not None else "Software"
 
     @APIExport(runOnUIThread=True)
     def setDetectorPreviewMinMaxValue(self, detectorName: str=None, minValue: int=0, maxValue: int = 1024) -> None:

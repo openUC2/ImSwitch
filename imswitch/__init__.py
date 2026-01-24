@@ -10,14 +10,12 @@ if 'pytest' in sys.modules or any('pytest' in arg for arg in sys.argv):
 from .config import get_config
 
 # used to be, but actions will replace this with the current release TAG -> >2.1.0
-__version__ = "2.1.150"
+__version__ = "2.1.190"
 __httpport__ = 8001
-__socketport__ = 8002
 __ssl__ = True
 __jupyter_port__ = 8888
-jupyternotebookurl = ""
 __argparse__ = None
-
+__available_controllers__ = []
 
 '''
 These are LEGACY flags for backward compatibility.
@@ -30,6 +28,7 @@ DEFAULT_DATA_PATH = None
 SOCKET_STREAM = True           # Stream Images via socket ?
 SCAN_EXT_DATA_PATH = False  # Scan external data folder for new data ?
 EXT_DATA_PATH = None
+WITH_KERNEL = False  # Start with embedded Jupyter kernel
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

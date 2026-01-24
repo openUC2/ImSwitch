@@ -14,8 +14,7 @@ import queue
 import time
 from pydantic import BaseModel
 
-from imswitch import IS_HEADLESS
-from imswitch.imcommon.framework import Signal, Timer, Worker
+from imswitch.imcommon.framework import Signal, Worker
 from imswitch.imcommon.model import APIExport, initLogger
 from ..basecontrollers import LiveUpdatedController
 
@@ -23,25 +22,28 @@ from ..basecontrollers import LiveUpdatedController
 @dataclass
 class StreamParams:
     """Unified dataclass for stream parameters that can be interpreted by frontend/backend."""
-    
+
     # Common parameters
     detector_name: Optional[str] = None  # None means use first available detector
     protocol: str = "jpeg"  # binary, jpeg, mjpeg, webrtc
-    
+
     # Binary stream parameters
     compression_algorithm: str = "lz4"  # lz4, zstandard
     compression_level: int = 0
     subsampling_factor: int = 4
     throttle_ms: int = 50
-    
+
+    # Crop parameters (applied before subsampling)
+    crop_size: int = 0  # 0 means no crop (full FOV), >0 crops quadratic region around center
+
     # JPEG/MJPEG parameters
     jpeg_quality: int = 80
-    
+
     # WebRTC parameters
     stun_servers: list = field(default_factory=list)  # Empty by default - works without internet!
     turn_servers: list = field(default_factory=list)
     max_width: int = 1280  # Maximum frame width in pixels, 0 = no limit
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
         return {
@@ -56,11 +58,47 @@ class StreamParams:
             "turn_servers": self.turn_servers,
             "max_width": self.max_width,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'StreamParams':
         """Create StreamParams from dictionary."""
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+def apply_center_crop(frame: np.ndarray, crop_size: int) -> np.ndarray:
+    """
+    Apply quadratic (square) center crop to frame.
+    
+    Args:
+        frame: Input image (2D or 3D array)
+        crop_size: Size of the square crop region. If 0 or >= min(height, width), returns original frame.
+    
+    Returns:
+        Cropped frame
+    """
+    if crop_size <= 0:
+        return frame
+
+    height, width = frame.shape[:2]
+    min_dim = min(height, width)
+
+    # Clamp crop_size to image dimensions
+    crop_size = min(crop_size, min_dim)
+
+    # Calculate center crop coordinates
+    center_y, center_x = height // 2, width // 2
+    half_crop = crop_size // 2
+
+    y_start = center_y - half_crop
+    y_end = y_start + crop_size
+    x_start = center_x - half_crop
+    x_end = x_start + crop_size
+
+    # Crop the frame
+    if len(frame.shape) == 2:
+        return frame[y_start:y_end, x_start:x_end]
+    else:
+        return frame[y_start:y_end, x_start:x_end, :]
 
 
 class StreamWorker(Worker):
@@ -69,10 +107,13 @@ class StreamWorker(Worker):
     Each worker runs in its own thread and waits for new frames without using a timer.
     This avoids skipping frames and ensures consistent frame rate.
     Workers do the actual encoding and emit encoded bytes that match socket.io message format.
+    
+    In headless mode, this worker is responsible for broadcasting frames to other controllers
+    via sigUpdateFrame, which should be connected to CommunicationChannel.sigUpdateImage.
     """
-    
+
     sigStreamFrame = Signal(dict)  # Emits pre-formatted message dict ready for socket.io emission
-    
+    sigUpdateFrame = Signal(str, np.ndarray, bool, bool, float, bool)  # (detectorName, image, init, scale, isCurrentDetector) - for broadcasting to other controllers
     def __init__(self, detectorManager, updatePeriodMs: int, streamParams: StreamParams):
         super().__init__()
         self._detector = detectorManager
@@ -83,56 +124,106 @@ class StreamWorker(Worker):
         self._logger = initLogger(self)
         self._last_frame_time = 0
         self._was_running = False
-    
+
+        # Frame broadcasting is disabled by default to avoid performance issues
+        # Enable via enableFrameBroadcast() if controllers need frame updates
+        self._broadcast_frames = True
+
     def run(self):
         """Start polling frames without timer - wait and push immediately."""
         self._running = True
         self._logger.info(f"StreamWorker started with update period {self._updatePeriod}s")
+        frameReadAttempts = 0
+        last_detector_frame_number = -1
         while self._running:
             try:
-                self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it 
+                self._updatePeriod = self._params.throttle_ms / 1000.0  # Update in case params changed # TODO: This is a weird place to change it
                 # Check if enough time has passed since last frame
                 if (time.time() - self._last_frame_time) >= self._updatePeriod:  # TODO: and  imswitch.__is_stream_ready_for_sending__
                     # Capture and emit frame
-                    frameResult = self._captureAndEmit()
-                    self._last_frame_time = time.time()
+
+                    # Get frame with actual detector frame number
+                    result = self._detector.getLatestFrame(returnFrameNumber=True)
+                    if isinstance(result, tuple) and len(result) == 2:
+                        frame, detector_frame_number = result
+                    else:
+                        frame = result
+                        detector_frame_number = None
+
+                    # Broadcast frame to other controllers (HistogrammController, InLineHoloController, etc.)
+                    # This is DISABLED by default for performance - enable via enableFrameBroadcast()
+                    # Controllers that need frames should use getCachedFrame() or subscribe explicitly
+                    if frame is not None and self._broadcast_frames:
+                        self.sigUpdateFrame.emit(self._detector.name, frame, False, False, self._detector.pixelSizeUm, True) # (str, np.ndarray, bool, bool, float, bool)
+
+                    if (frame is None and last_detector_frame_number == detector_frame_number) and frameReadAttempts > 3:
+                        self._logger.warning("Frame capture failed, stopping worker (Frame none or no new frame: {})".format(detector_frame_number==last_detector_frame_number))
+                        self._running = False
+                        break  # No frame available, but not an error - keep running
+                    else:
+                        frameReadAttempts = 0  # Reset attempts on successful read
                     
+                    last_detector_frame_number = detector_frame_number
+
+                    frameResult = self._captureAndEmit(frame, detector_frame_number)
+                    self._last_frame_time = time.time()
+
                     # Only stop on explicit failure, not on None frames
-                    if frameResult is False:  # Explicitly check for False, not None
+                    if frameResult is False and frameReadAttempts > 3:  # Explicitly check for False, not None
                         self._logger.warning("Frame capture failed, stopping worker")
                         self._running = False
                         break
+                    else:
+                        frameReadAttempts = 0  # Reset attempts on successful read
+                        
+                    frameReadAttempts += 1
                 else:
                     # Sleep for a small amount to avoid busy waiting
                     time.sleep(0.01)
-                    
+
             except Exception as e:
                 self._logger.error(f"Error in StreamWorker loop: {e}")
                 time.sleep(0.1)  # Brief pause on error
                 # Continue running unless explicitly stopped
-        
+
         self._logger.info("StreamWorker run loop exited")
-    
+
     def stop(self):
         """Stop polling frames."""
         self._running = False
         self._logger.info("StreamWorker stopped")
-    
+
+    def enableFrameBroadcast(self, enable: bool = True):
+        """
+        Enable or disable frame broadcasting to other controllers.
+        
+        When enabled, sigUpdateFrame is emitted for each captured frame,
+        allowing controllers like HistogrammController to receive updates.
+        
+        WARNING: This can significantly impact performance if many controllers
+        are connected. Consider using getCachedFrame() instead for on-demand access.
+        
+        Args:
+            enable: True to enable broadcasting, False to disable
+        """
+        self._broadcast_frames = enable
+        self._logger.info(f"Frame broadcasting {'enabled' if enable else 'disabled'}")
+
     @abstractmethod
-    def _captureAndEmit(self):
+    def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame from detector, encode it, and emit processed data."""
         pass
 
 
 class BinaryStreamWorker(StreamWorker):
     """Worker for binary frame streaming with LZ4/Zstandard compression."""
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._frame_id = 0  # Unified frame counter (will sync with detector frame number)
         # Import compression libraries on demand
         self._encoder = None
-        
+
     def _get_encoder(self):
         """Get or create encoder with current parameters."""
         try:
@@ -145,21 +236,17 @@ class BinaryStreamWorker(StreamWorker):
         except ImportError:
             self._logger.error("BinaryFrameEncoder not available")
             return None
-    
-    def _captureAndEmit(self):
+
+    def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame from detector, compress it, and emit pre-formatted socket.io message."""
         try:
-            # Get frame with actual detector frame number
-            frame, detector_frame_number = self._detector.getLatestFrame(returnFrameNumber=True)
-            if frame is None:
-                return None  # No frame available, but not an error - keep running
-            
+
             # Use detector frame number if available, otherwise use our counter
             if detector_frame_number is not None:
                 self._frame_id = detector_frame_number
             else:
                 self._frame_id = (self._frame_id + 1) % 65536  # Handle rollover at 16-bit boundary
-            
+
             # Get detector info
             detector_name = self._detector.name
             pixel_size = 1.0
@@ -167,23 +254,27 @@ class BinaryStreamWorker(StreamWorker):
                 pixel_size = self._detector.pixelSizeUm[-1]
             except:
                 pass
-            
+
             # Ensure frame is contiguous and proper type
             frame = np.ascontiguousarray(frame)
             if frame.dtype == np.float32 or frame.dtype == np.float64:
                 frame = np.uint8(frame * 255)
             if frame.dtype not in [np.uint8, np.uint16]:
                 frame = np.uint8(frame)
-            
+
+            # Apply center crop if specified (before subsampling)
+            if self._params.crop_size > 0:
+                frame = apply_center_crop(frame, self._params.crop_size)
+
             # Get encoder
             encoder = self._get_encoder()
             if encoder is None:
                 self._logger.error("Failed to get encoder")
                 return False  # This is a real error
-            
+
             # Encode frame
             packet, encoding_metadata = encoder.encode_frame(frame)
-            
+
             # Create unified metadata structure
             metadata = {
                 'server_timestamp': time.time(),
@@ -195,7 +286,7 @@ class BinaryStreamWorker(StreamWorker):
             }
             # Merge encoding metadata (compression info, etc.)
             metadata.update(encoding_metadata)
-            
+
             # Create pre-formatted message for socket.io
             message = {
                 'type': 'binary_frame',
@@ -203,12 +294,12 @@ class BinaryStreamWorker(StreamWorker):
                 'data': packet,
                 'metadata': metadata
             }
-            
+
             # Emit pre-formatted message
             self.sigStreamFrame.emit(message)
-            
-            return True 
-        
+
+            return True
+
         except Exception as e:
             self._logger.error(f"Error in BinaryStreamWorker: {e}")
             return False  # Real error - stop worker
@@ -216,7 +307,7 @@ class BinaryStreamWorker(StreamWorker):
 
 class JPEGStreamWorker(StreamWorker):
     """Worker for JPEG frame streaming with compression."""
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._frame_id = 0  # Unified frame counter (will sync with detector frame number)
@@ -226,30 +317,19 @@ class JPEGStreamWorker(StreamWorker):
         except ImportError:
             self._logger.error("opencv-python required for JPEG streaming")
             self._cv2 = None
-    
-    def _captureAndEmit(self):
+
+    def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame from detector, encode as JPEG, and emit pre-formatted socket.io message."""
         if self._cv2 is None:
             return False  # This is a configuration error
-        
+
         try:
-            # Get frame with actual detector frame number
-            result = self._detector.getLatestFrame(returnFrameNumber=True)
-            if isinstance(result, tuple) and len(result) == 2:
-                frame, detector_frame_number = result
-            else:
-                frame = result
-                detector_frame_number = None
-                
-            if frame is None:
-                return None  # No frame available, but not an error - keep running
-            
             # Use detector frame number if available, otherwise use our counter
             if detector_frame_number is not None:
                 self._frame_id = detector_frame_number
             else:
                 self._frame_id = (self._frame_id + 1) % 65536  # Handle rollover at 16-bit boundary
-            
+
             # Get detector info
             detector_name = self._detector.name
             pixel_size = 1.0
@@ -257,14 +337,24 @@ class JPEGStreamWorker(StreamWorker):
                 pixel_size = self._detector.pixelSizeUm[-1]
             except:
                 pass
-            
+
             # Normalize to uint8 if needed
-            if frame.dtype == np.uint16:
-                frame = np.uint8(frame/2**4) # assuming we have a 12bit camera
+            if frame.dtype != np.uint8:
+                vmin = float(np.min(frame))
+                vmax = float(np.max(frame))
+                if vmax > vmin:
+                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
+                else:
+                    frame = np.zeros_like(frame, dtype=np.uint8)
+
+            # Apply center crop if specified (before subsampling)
+            if self._params.crop_size > 0:
+                frame = apply_center_crop(frame, self._params.crop_size)
+
             # Apply subsampling if needed
             if self._params.subsampling_factor > 1:
                 frame = frame[::self._params.subsampling_factor, ::self._params.subsampling_factor]
-            
+
             # Encode as JPEG
             encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
             success, encoded = self._cv2.imencode('.jpg', frame, encode_params)
@@ -273,7 +363,7 @@ class JPEGStreamWorker(StreamWorker):
                 import base64
                 jpeg_bytes = encoded.tobytes()
                 encoded_image = base64.b64encode(jpeg_bytes).decode('utf-8')
-                
+
                 # Create unified metadata structure
                 metadata = {
                     'server_timestamp': time.time(),
@@ -284,7 +374,7 @@ class JPEGStreamWorker(StreamWorker):
                     'protocol': 'jpeg',
                     'jpeg_quality': self._params.jpeg_quality
                 }
-                
+
                 # Create pre-formatted message for socket.io
                 # Use unified 'frame' event for consistency with binary
                 message = {
@@ -295,15 +385,15 @@ class JPEGStreamWorker(StreamWorker):
                         'metadata': metadata
                     }
                 }
-                
+
                 # Emit pre-formatted message
                 self.sigStreamFrame.emit(message)
-                
+
                 return True
             else:
                 self._logger.warning("JPEG encoding failed")
                 return None  # Encoding failed, but keep trying
-                
+
         except Exception as e:
             self._logger.error(f"Error in JPEGStreamWorker: {e}")
             return False  # Real error - stop worker
@@ -314,7 +404,7 @@ class MJPEGStreamWorker(StreamWorker):
     Worker for MJPEG HTTP streaming.
     Replaces RecordingController.video_feeder functionality.
     """
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._frame_queue = queue.Queue(maxsize=10)
@@ -324,17 +414,15 @@ class MJPEGStreamWorker(StreamWorker):
         except ImportError:
             self._logger.error("opencv-python required for MJPEG streaming")
             self._cv2 = None
-    
-    def _captureAndEmit(self):
+
+    def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame and put in queue for MJPEG streaming."""
         if self._cv2 is None:
             return False  # This is a configuration error
-        
+
         try:
-            frame = self._detector.getLatestFrame()
-            if frame is None:
-                return None  # No frame available, but not an error - keep running
-            
+
+
             # Normalize to uint8 if needed
             if frame.dtype != np.uint8:
                 vmin = float(np.min(frame))
@@ -343,11 +431,15 @@ class MJPEGStreamWorker(StreamWorker):
                     frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
                 else:
                     frame = np.zeros_like(frame, dtype=np.uint8)
-            
+
+            # Apply center crop if specified (before encoding)
+            if self._params.crop_size > 0:
+                frame = apply_center_crop(frame, self._params.crop_size)
+
             # Encode as JPEG
             encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
             success, encoded = self._cv2.imencode('.jpg', frame, encode_params)
-            
+
             if success:
                 jpeg_bytes = encoded.tobytes()
                 # Build MJPEG frame with proper headers
@@ -357,7 +449,7 @@ class MJPEGStreamWorker(StreamWorker):
                 )
                 content_length = f'Content-Length: {len(jpeg_bytes)}\r\n\r\n'.encode('ascii')
                 mjpeg_frame = header + content_length + jpeg_bytes + b'\r\n'
-                
+
                 # Put in queue, drop frame if full
                 try:
                     self._frame_queue.put_nowait(mjpeg_frame)
@@ -367,11 +459,11 @@ class MJPEGStreamWorker(StreamWorker):
             else:
                 self._logger.warning("MJPEG encoding failed")
                 return None  # Encoding failed, but keep trying
-                
+
         except Exception as e:
             self._logger.error(f"Error in MJPEGStreamWorker: {e}")
             return False  # Real error - stop worker
-    
+
     def get_frame(self, timeout=1.0):
         """Get next frame from queue (for HTTP streaming)."""
         try:
@@ -385,12 +477,12 @@ class WebRTCStreamWorker(StreamWorker):
     Worker for WebRTC streaming using aiortc.
     Provides low-latency real-time streaming using WebRTC protocol.
     """
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._video_track = None
         self._frame_queue = queue.Queue(maxsize=2)  # Small queue for latest frames
-        
+
         try:
             from aiortc import VideoStreamTrack
             import av
@@ -400,21 +492,17 @@ class WebRTCStreamWorker(StreamWorker):
         except ImportError:
             self._logger.error("aiortc and av required for WebRTC streaming")
             self._has_webrtc = False
-    
-    def _captureAndEmit(self):
+
+    def _captureAndEmit(self, frame, detector_frame_number=None):
         """Capture frame and put in queue for WebRTC streaming."""
         if not self._has_webrtc:
             return False  # This is a configuration error
-        
+
         try:
-            frame = np.array(self._detector.getLatestFrame())
-            if frame is None:
-                return None  # No frame available, but not an error - keep running
-            
             # Apply basic preprocessing based on throttle setting
             # For WebRTC, we want to minimize processing latency
             throttle_ms = getattr(self._params, 'throttle_ms', 50)
-            
+
             # Normalize to uint8 efficiently
             if frame.dtype != np.uint8:
                 if throttle_ms < 33:  # ~30 FPS or higher - use fast conversion
@@ -431,7 +519,11 @@ class WebRTCStreamWorker(StreamWorker):
                         frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
                     else:
                         frame = np.zeros_like(frame, dtype=np.uint8)
-            
+
+            # Apply center crop if specified (before streaming)
+            if self._params.crop_size > 0:
+                frame = apply_center_crop(frame, self._params.crop_size)
+
             # Put frame in queue, replacing old frame if full
             try:
                 # Clear the queue to keep only the latest frame (reduces latency)
@@ -440,11 +532,11 @@ class WebRTCStreamWorker(StreamWorker):
                         self._frame_queue.get_nowait()
                     except queue.Empty:
                         break
-                        
+
                 # Add the new frame
                 self._frame_queue.put_nowait(frame)
                 return True
-                
+
             except queue.Full:
                 # This shouldn't happen since we clear the queue, but just in case
                 try:
@@ -453,16 +545,16 @@ class WebRTCStreamWorker(StreamWorker):
                     return True
                 except (queue.Empty, queue.Full):
                     return None  # Queue issues, but not a fatal error
-                
+
         except Exception as e:
             self._logger.error(f"Error in WebRTCStreamWorker: {e}")
             return False  # Real error - stop worker
-    
+
     def get_video_track(self):
         """Get or create video track for WebRTC."""
         if self._video_track is None and self._has_webrtc:
             track_wrapper = DetectorVideoTrack(
-                self._frame_queue, 
+                self._frame_queue,
                 self._detector.name,
                 self._VideoStreamTrack,
                 self._av,
@@ -475,14 +567,14 @@ class WebRTCStreamWorker(StreamWorker):
 
 class DetectorVideoTrack:
     """Custom video track that reads frames from detector queue."""
-    
+
     def __init__(self, frame_queue, detector_name, VideoStreamTrack, av, stream_params=None):
         self._queue = frame_queue
         self._detector_name = detector_name
         self._av = av
         self._stream_params = stream_params or StreamParams(protocol='webrtc')
         self._logger = initLogger(self)
-               
+
         # Create custom track class that inherits from VideoStreamTrack
         class CustomVideoTrack(VideoStreamTrack):
             def __init__(inner_self):
@@ -496,15 +588,15 @@ class DetectorVideoTrack:
                 # time_base must be a Fraction, not a float
                 from fractions import Fraction
                 inner_self._time_base = Fraction(1, 30)  # 30 fps
-            
+
             async def recv(inner_self):
                 """Receive next video frame."""
-                
+
                 # Try to get frame from queue with shorter timeout for faster response
                 frame = None
                 start_time = asyncio.get_event_loop().time()
                 timeout = 0.1  # Reduced from 0.5 to 0.1 seconds for faster response
-                
+
                 # Try to get the latest frame immediately
                 try:
                     frame = inner_self._queue.get_nowait()
@@ -517,7 +609,7 @@ class DetectorVideoTrack:
                             break
                         except queue.Empty:
                             continue
-                
+
                 if frame is None:
                     # Use last frame if available, otherwise create a small placeholder frame
                     if hasattr(inner_self, '_last_frame') and inner_self._last_frame is not None:
@@ -529,7 +621,7 @@ class DetectorVideoTrack:
                 else:
                     # Store the frame as last frame for fallback
                     inner_self._last_frame = frame
-                
+
                 # Ensure frame is the right shape and size
                 if len(frame.shape) == 2:
                     # Grayscale - convert to RGB
@@ -539,24 +631,24 @@ class DetectorVideoTrack:
                 elif len(frame.shape) == 3 and frame.shape[2] == 4:
                     # Remove alpha channel if present
                     frame = frame[:, :, :3]
-                
+
                 # Get original dimensions
                 original_height, original_width = frame.shape[:2]
-                
+
                 # Get max dimensions from stream parameters
                 max_width = getattr(inner_self._stream_params, 'max_width', 1280)  # Default to 1280 if not set
                 if max_width == 0:  # 0 means no limit
                     max_width = original_width
-                
+
                 # Calculate max_height based on aspect ratio
                 aspect_ratio = original_width / original_height
                 max_height = int(max_width / aspect_ratio)
-                
+
                 # Apply subsampling factor if configured
                 if hasattr(inner_self._stream_params, 'subsampling_factor') and inner_self._stream_params.subsampling_factor > 1:
                     max_width = max_width // inner_self._stream_params.subsampling_factor
                     max_height = max_height // inner_self._stream_params.subsampling_factor
-                
+
                 # Resize while preserving aspect ratio if frame is larger than limits
                 if original_width > max_width or original_height > max_height:
                     import cv2
@@ -564,14 +656,14 @@ class DetectorVideoTrack:
                     scale_width = max_width / original_width
                     scale_height = max_height / original_height
                     scale = min(scale_width, scale_height)
-                    
+
                     new_width = int(original_width * scale)
                     new_height = int(original_height * scale)
-                    
+
                     # Ensure dimensions are even (required for some video codecs)
                     new_width = new_width - (new_width % 2)
                     new_height = new_height - (new_height % 2)
-                    
+
                     frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
                     # inner_self._logger.info(f"Resized frame from {original_width}x{original_height} to {new_width}x{new_height} (max: {max_width}x{max_height})")
                 elif hasattr(inner_self._stream_params, 'subsampling_factor') and inner_self._stream_params.subsampling_factor > 1:
@@ -579,17 +671,17 @@ class DetectorVideoTrack:
                     import cv2
                     new_width = original_width // inner_self._stream_params.subsampling_factor
                     new_height = original_height // inner_self._stream_params.subsampling_factor
-                    
+
                     # Ensure dimensions are even
                     new_width = new_width - (new_width % 2)
                     new_height = new_height - (new_height % 2)
-                    
+
                     frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
                     inner_self._logger.info(f"Subsampled frame from {original_width}x{original_height} to {new_width}x{new_height} (factor: {inner_self._stream_params.subsampling_factor})")
-                
+
                 # Ensure frame is contiguous and optimize for WebRTC
                 frame = np.ascontiguousarray(frame)
-                
+
                 # Ensure frame dimensions are even (required by some codecs)
                 height, width = frame.shape[:2]
                 if width % 2 != 0:
@@ -598,7 +690,7 @@ class DetectorVideoTrack:
                 if height % 2 != 0:
                     height -= 1
                     frame = frame[:height, :]
-                
+
                 # Create av.VideoFrame with error handling and timeout protection
                 try:
                     # Use a smaller frame if the original is too large (reduces encoding time)
@@ -611,7 +703,7 @@ class DetectorVideoTrack:
                         target_width = target_width - (target_width % 2)
                         target_height = target_height - (target_height % 2)
                         frame = cv2.resize(frame, (target_width, target_height), interpolation=cv2.INTER_AREA)
-                    
+
                     new_frame = inner_self._av.VideoFrame.from_ndarray(frame, format="rgb24")
                     new_frame.pts = inner_self._timestamp
                     new_frame.time_base = inner_self._time_base
@@ -626,9 +718,9 @@ class DetectorVideoTrack:
                     new_frame.time_base = inner_self._time_base
                     inner_self._timestamp += 1
                     return new_frame
-        
+
         self._track = CustomVideoTrack()
-        
+
     def __getattr__(self, name):
         """Delegate attribute access to the underlying track."""
         return getattr(self._track, name)
@@ -648,26 +740,26 @@ class LiveViewController(LiveUpdatedController):
     Manages per-detector streaming with dedicated worker threads.
     Only one protocol can be active per detector at a time.
     """
-    
+
     sigStreamStarted = Signal(str, str)      # (detectorName, protocol)
     sigStreamStopped = Signal(str, str)      # (detectorName, protocol)
     sigStreamFrame = Signal(dict)            # Pre-formatted socket.io message
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
-        
+
         # Active streams: {detectorName: (protocol, StreamWorker)}
         # Only one protocol per detector allowed
         self._activeStreams: Dict[str, tuple] = {}
         self._streamThreads: Dict[str, threading.Thread] = {}
         self._streamIsRunning = False
-        
+
         # WebRTC peer connections: {detectorName: RTCPeerConnection}
         self._webrtc_peers: Dict[str, Any] = {}
         self._webrtc_loop = None
         self._webrtc_loop_thread = None
-        
+
         # Global stream parameters per protocol
         self._streamParams: Dict[str, StreamParams] = {
             'binary': StreamParams(protocol='binary'),
@@ -675,7 +767,7 @@ class LiveViewController(LiveUpdatedController):
             'mjpeg': StreamParams(protocol='mjpeg'),
             'webrtc': StreamParams(protocol='webrtc'),
         }
-        
+
         # Connect to communication channel signals
         self._commChannel.sigStartLiveAcquistion.connect(self._onStartLiveAcquisition)
         self._commChannel.sigStopLiveAcquisition.connect(self._onStopLiveAcquisition)
@@ -688,31 +780,31 @@ class LiveViewController(LiveUpdatedController):
             self.sigAcquisitionStarted.emit()
             '''
         self._logger.info("LiveViewController initialized")
-    
+
     def _get_or_create_webrtc_loop(self):
         """Get or create a persistent event loop for WebRTC in a separate thread."""
         if self._webrtc_loop is None or not self._webrtc_loop.is_running():
             import asyncio
-            
+
             def run_loop():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 self._webrtc_loop = loop
                 self._logger.info("WebRTC event loop started")
                 loop.run_forever()
-            
+
             self._webrtc_loop_thread = threading.Thread(target=run_loop, daemon=True)
             self._webrtc_loop_thread.start()
-            
+
             # Wait for loop to be ready
             import time
             max_wait = 2.0
             start = time.time()
             while self._webrtc_loop is None and (time.time() - start) < max_wait:
                 time.sleep(0.01)
-        
+
         return self._webrtc_loop
-    
+
     def _stop_webrtc_loop(self):
         """Stop the WebRTC event loop."""
         if self._webrtc_loop and self._webrtc_loop.is_running():
@@ -722,7 +814,7 @@ class LiveViewController(LiveUpdatedController):
             self._webrtc_loop = None
             self._webrtc_loop_thread = None
             self._logger.info("WebRTC event loop stopped")
-    
+
     def _onStartLiveAcquisition(self, start: bool):
         """Handle start live acquisition signal."""
         if start:
@@ -731,7 +823,7 @@ class LiveViewController(LiveUpdatedController):
             # For now, streaming is explicitly controlled via API
         else:
             self._logger.info("Received stop live acquisition signal")
-    
+
     def _onStopLiveAcquisition(self, stop: bool):
         """Handle stop live acquisition signal."""
         if stop:
@@ -739,13 +831,14 @@ class LiveViewController(LiveUpdatedController):
             # Stop all active streams
             for detector_name in list(self._activeStreams.keys()):
                 self.stopLiveView(detector_name, stopCamera=False)
-    
+
     @APIExport()
     def getLiveViewActive(self) -> bool:
         """Check if any live view stream is currently active."""
-        return len(self._activeStreams) > 0
-    
-    @APIExport(requestType="POST") 
+
+        return bool(len(self._activeStreams) > 0)
+
+    @APIExport(requestType="POST")
     def startLiveView(self, detectorName: Optional[str] = None, protocol: str = "jpeg",
                       params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -778,8 +871,8 @@ class LiveViewController(LiveUpdatedController):
 
             # ensure the detector is actually started
             if not detector._running:
-                detector.startAcquisition()           
-            
+                detector.startAcquisition()
+
             # Check if detector already has an active stream
             if detectorName in self._activeStreams:
                 old_protocol, old_worker = self._activeStreams[detectorName]
@@ -789,7 +882,7 @@ class LiveViewController(LiveUpdatedController):
                     "protocol": old_protocol,
                     "message": f"Stream already active for {detectorName} with protocol {old_protocol}. Stop it first."
                 }
-            
+
             # Get stream parameters and update global params
             stream_params = self._streamParams.get(protocol, StreamParams(protocol=protocol))
             if params:
@@ -797,7 +890,7 @@ class LiveViewController(LiveUpdatedController):
                 for key, value in params.items():
                     if hasattr(stream_params, key):
                         setattr(stream_params, key, value)
-            
+
             # Update DetectorsManager global params for streaming configuration
             update_params = {}
             if protocol in ["binary", "jpeg"]:
@@ -807,9 +900,9 @@ class LiveViewController(LiveUpdatedController):
                 update_params['stream_throttle_ms'] = stream_params.throttle_ms
                 if protocol == "jpeg":
                     update_params['compressionlevel'] = stream_params.jpeg_quality
-                
+
                 # self._master.detectorsManager.updateGlobalDetectorParams(update_params) # TOOD: I think this is still not needed anymore
-            
+
             # Create appropriate worker
             worker = self._createWorker(detector, protocol, stream_params)
             if worker is None:
@@ -817,26 +910,32 @@ class LiveViewController(LiveUpdatedController):
                     "status": "error",
                     "message": f"Failed to create worker for protocol {protocol}"
                 }
-            
+
             # Connect worker signal to controller's signal, which is then handled by noqt
             # The worker emits pre-formatted messages ready for socket.io emission
-            worker.sigStreamFrame.connect(self._commChannel.sigUpdateImage)
-            
+            worker.sigStreamFrame.connect(self._commChannel.sigUpdateStreamFrame)
+
+            # Frame broadcasting to other controllers is DISABLED by default for performance
+            # Controllers should use getCachedFrame() for on-demand frame access
+            # Uncomment below if you need real-time frame updates to all controllers:
+            worker.sigUpdateFrame.connect(self._commChannel.sigUpdateImage)
+            worker.enableFrameBroadcast(True)
+
             # Start worker in thread
             # mThread = Thread
             # worker.moveToThread()
             thread = threading.Thread(target=worker.run, daemon=True)
             thread.start()
-            
+
             # Store worker and thread (only protocol and worker, not tuple key)
             self._activeStreams[detectorName] = (protocol, worker)
             self._streamThreads[detectorName] = thread
-            
+
             # Emit signal
             self.sigStreamStarted.emit(detectorName, protocol)
-            
+
             self._logger.info(f"Started {protocol} stream for detector {detectorName}")
-            
+
             return {
                 "status": "success",
                 "detector": detectorName,
@@ -849,7 +948,7 @@ class LiveViewController(LiveUpdatedController):
                 "status": "error",
                 "message": str(e)
             }
-    
+
     @APIExport()
     def stopLiveView(self, detectorName: Optional[str] = None, stopCamera: bool=True) -> Dict[str, Any]:
         """
@@ -880,41 +979,41 @@ class LiveViewController(LiveUpdatedController):
                     "detector": detectorName,
                     "message": f"No active stream for detector {detectorName}"
                 }
-            
+
             # Get protocol and worker
             protocol, worker = self._activeStreams[detectorName]
-            
+
             # Stop worker
             worker.stop()
-            
+
             # If it's WebRTC, close the peer connection
             if protocol == "webrtc" and detectorName in self._webrtc_peers:
                 import asyncio
                 loop = self._get_or_create_webrtc_loop()
-                
+
                 async def close_pc():
                     pc = self._webrtc_peers[detectorName]
                     await pc.close()
                     del self._webrtc_peers[detectorName]
                     self._logger.info(f"Closed WebRTC peer connection for {detectorName}")
-                
+
                 # Schedule close on the event loop
                 future = asyncio.run_coroutine_threadsafe(close_pc(), loop)
                 try:
                     future.result(timeout=5.0)
                 except Exception as e:
                     self._logger.error(f"Error closing WebRTC peer: {e}")
-            
+
             # Clean up
             del self._activeStreams[detectorName]
             if detectorName in self._streamThreads:
                 del self._streamThreads[detectorName]
-            
+
             # Emit signal
             self.sigStreamStopped.emit(detectorName, protocol)
-            
+
             self._logger.info(f"Stopped {protocol} stream for detector {detectorName}")
-            
+
             # Optionally stop camera acquisition
             if stopCamera:
                 detector = self._master.detectorsManager[detectorName]
@@ -930,14 +1029,14 @@ class LiveViewController(LiveUpdatedController):
                 "status": "error",
                 "message": str(e)
             }
-    
+
     def detectorIsRunning(self, detectorName: str=None) -> bool:
         """Check if a detector is currently running acquisition."""
         if detectorName is None:
             detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
         detector = self._master.detectorsManager[detectorName]
         return detector._running
-    
+
     @APIExport(requestType="POST")
     def setStreamParameters(self, protocol: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -963,13 +1062,13 @@ class LiveViewController(LiveUpdatedController):
         try:
             if protocol not in self._streamParams:
                 self._streamParams[protocol] = StreamParams(protocol=protocol)
-            
+
             # Update global parameters
             stream_params = self._streamParams[protocol]
             for key, value in params.items():
                 if hasattr(stream_params, key):
                     setattr(stream_params, key, value)
-            
+                    print(f"Set {protocol} param {key} to {value}")
             # Check if any detector is currently streaming with this protocol
             # and restart it if necessary to apply the new parameters
             detectors_to_restart = []
@@ -977,41 +1076,41 @@ class LiveViewController(LiveUpdatedController):
                 # close any streams with this protocol
                 if active_protocol != protocol:
                     detectors_to_restart.append(detector_name)
-            
+
             # Restart streams with updated parameters
             restarted_streams = []
             for detector_name in detectors_to_restart:
                 self._logger.info(f"Restarting {protocol} stream for {detector_name} with updated parameters")
                 # Stop the current stream
                 self.stopLiveView(detectorName=detector_name, stopCamera=False)
-                    
+
                 # Start with new parameters
                 result = self.startLiveView(detector_name, protocol, params)
                 if result['status'] == 'success':
                     restarted_streams.append(detector_name)
-            
-            
+
+
             response = {
                 "status": "success",
                 "protocol": protocol,
                 "params": stream_params.to_dict()
             }
-            
+
             if restarted_streams:
                 response["restarted_detectors"] = restarted_streams
                 response["message"] = f"Parameters updated and {len(restarted_streams)} stream(s) restarted"
             else:
                 response["message"] = "Parameters updated (no active streams to restart)"
-            
+
             return response
-            
+
         except Exception as e:
             self._logger.error(f"Error setting stream params: {e}")
             return {
                 "status": "error",
                 "message": str(e)
             }
-    
+
     @APIExport()
     def getStreamParameters(self, protocol: Optional[str] = None, detectorName: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -1040,13 +1139,13 @@ class LiveViewController(LiveUpdatedController):
             active_protocols = {
                 det_name: prot for det_name, (prot, worker) in self._activeStreams.items()
             }
-            
+
             if protocol:
                 # Return specific protocol parameters
                 if protocol in self._streamParams:
                     # Check which detectors are using this protocol
                     active_detectors = [det for det, prot in active_protocols.items() if prot == protocol]
-                    
+
                     return {
                         "status": "success",
                         "protocol": protocol,
@@ -1067,7 +1166,7 @@ class LiveViewController(LiveUpdatedController):
                 elif active_protocols:
                     # Use first active protocol if no detector specified
                     current_protocol = next(iter(active_protocols.values()))
-                
+
                 return {
                     "status": "success",
                     "current_active_protocols": active_protocols,
@@ -1088,7 +1187,7 @@ class LiveViewController(LiveUpdatedController):
                 "status": "error",
                 "message": str(e)
             }
-    
+
     @APIExport()
     def getActiveStreams(self) -> Dict[str, Any]:
         """
@@ -1107,7 +1206,7 @@ class LiveViewController(LiveUpdatedController):
                 for detector_name, (protocol, worker) in self._activeStreams.items()
             ]
         }
-    
+
     @APIExport()
     def getCurrentStreamProtocol(self, detectorName: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -1126,7 +1225,7 @@ class LiveViewController(LiveUpdatedController):
                     detectorName = list(self._activeStreams.keys())[0]
                 else:
                     detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
-            
+
             # Check if detector has active stream
             if detectorName in self._activeStreams:
                 protocol, worker = self._activeStreams[detectorName]
@@ -1153,7 +1252,7 @@ class LiveViewController(LiveUpdatedController):
                 "status": "error",
                 "message": str(e)
             }
-    
+
     @APIExport()
     def getStreamStatus(self) -> Dict[str, Any]:
         """
@@ -1165,7 +1264,7 @@ class LiveViewController(LiveUpdatedController):
         try:
             all_detectors = self._master.detectorsManager.getAllDeviceNames()
             detector_status = {}
-            
+
             for detector_name in all_detectors:
                 if detector_name in self._activeStreams:
                     protocol, worker = self._activeStreams[detector_name]
@@ -1180,7 +1279,7 @@ class LiveViewController(LiveUpdatedController):
                         "protocol": None,
                         "params": {}
                     }
-            
+
             return {
                 "status": "success",
                 "total_detectors": len(all_detectors),
@@ -1194,11 +1293,11 @@ class LiveViewController(LiveUpdatedController):
                 "status": "error",
                 "message": str(e)
             }
-    
+
     def _createWorker(self, detector, protocol: str, params: StreamParams) -> Optional[StreamWorker]:
         """Create appropriate worker for the given protocol."""
         update_period = params.throttle_ms
-        
+
         if protocol == "binary":
             return BinaryStreamWorker(detector, update_period, params)
         elif protocol == "jpeg":
@@ -1210,7 +1309,7 @@ class LiveViewController(LiveUpdatedController):
         else:
             self._logger.error(f"Unknown protocol: {protocol}")
             return None
-    
+
     def getMJPEGWorker(self, detectorName: str) -> Optional[MJPEGStreamWorker]:
         """Get MJPEG worker for HTTP streaming (used by video_feeder endpoint)."""
         if detectorName in self._activeStreams:
@@ -1218,7 +1317,7 @@ class LiveViewController(LiveUpdatedController):
             if protocol == "mjpeg" and isinstance(worker, MJPEGStreamWorker):
                 return worker
         return None
-    
+
     @APIExport(runOnUIThread=False)
     def mjpeg_stream(self, startStream: bool = True, detectorName: Optional[str] = None):
         """
@@ -1236,28 +1335,28 @@ class LiveViewController(LiveUpdatedController):
             from fastapi.responses import StreamingResponse
         except ImportError:
             return {"status": "error", "message": "FastAPI not available"}
-        
+
         if not startStream:
             # Stop the stream - only care about detector
             self.stopLiveView(detectorName=detectorName, stopCamera=False)
             return {"status": "success", "message": "stream stopped"}
-        
+
         # Start streaming
         if detectorName is None:
             detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
-        
+
         # Check if stream already exists for this detector
         if detectorName not in self._activeStreams:
             # Start the MJPEG stream
             result = self.startLiveView(detectorName, "mjpeg")
             if result['status'] != 'success':
                 return result
-        
+
         # Get the worker
         worker = self.getMJPEGWorker(detectorName)
         if worker is None:
             return {"status": "error", "message": "Failed to get MJPEG worker"}
-        
+
         # Create generator for streaming response
         def frame_generator():
             """Generator that yields MJPEG frames."""
@@ -1270,7 +1369,7 @@ class LiveViewController(LiveUpdatedController):
                 self._logger.info("MJPEG stream connection closed by client")
             except Exception as e:
                 self._logger.error(f"Error in MJPEG frame generator: {e}")
-        
+
         # Return streaming response with proper headers
         headers = {
             "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -1279,13 +1378,13 @@ class LiveViewController(LiveUpdatedController):
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         }
-        
+
         return StreamingResponse(
             frame_generator(),
             media_type="multipart/x-mixed-replace;boundary=frame",
             headers=headers
         )
-    
+
     def getWebRTCWorker(self, detectorName: str) -> Optional[WebRTCStreamWorker]:
         """Get WebRTC worker for signaling (used by WebRTC endpoints)."""
         if detectorName in self._activeStreams:
@@ -1293,7 +1392,7 @@ class LiveViewController(LiveUpdatedController):
             if protocol == "webrtc" and isinstance(worker, WebRTCStreamWorker):
                 return worker
         return None
-    
+
     @APIExport(runOnUIThread=False, requestType="POST")
     def webrtc_offer(self, request: WebRTCOfferRequest):
         """
@@ -1308,30 +1407,30 @@ class LiveViewController(LiveUpdatedController):
         import time
         start_time = time.time()
         timing = {}
-        
+
         try:
             from aiortc import RTCPeerConnection, RTCSessionDescription
             import asyncio
             import json
         except ImportError:
             return {"status": "error", "message": "aiortc not available"}
-        
+
         timing['imports'] = time.time() - start_time
-        self._logger.info(f"⚡ WebRTC offer processing started")
-        
+        self._logger.info("⚡ WebRTC offer processing started")
+
         # Extract parameters from request
         sdp = request.sdp
         sdp_type = request.sdp_type
         detectorName = request.detectorName
         params = request.params or {}
-        
+
         timing['params_extracted'] = time.time() - start_time
         self._logger.info(f"Received WebRTC offer: type={sdp_type}, sdp length={len(sdp)}, params={params}")
-        
+
         # Get detector name
         if detectorName is None:
             detectorName = self._master.detectorsManager.getAllDeviceNames()[0]
-        
+
         # Update stream parameters if provided
         if params:
             try:
@@ -1345,7 +1444,7 @@ class LiveViewController(LiveUpdatedController):
                 timing['params_updated'] = time.time() - start_time
             except Exception as e:
                 self._logger.warning(f"Failed to update stream parameters: {e}")
-        
+
         # Start WebRTC stream if not already active
         if detectorName not in self._activeStreams:
             self._logger.info(f"🚀 Starting WebRTC stream for {detectorName}")
@@ -1356,23 +1455,23 @@ class LiveViewController(LiveUpdatedController):
         else:
             timing['stream_started'] = time.time() - start_time
             self._logger.info(f"🔄 WebRTC stream already active for {detectorName}")
-        
+
         # Get the worker
         worker = self.getWebRTCWorker(detectorName)
         if worker is None:
             return {"status": "error", "message": "Failed to get WebRTC worker"}
-        
+
         timing['worker_ready'] = time.time() - start_time
-        
+
         # Get or create persistent event loop
         loop = self._get_or_create_webrtc_loop()
         timing['loop_ready'] = time.time() - start_time
-        
+
         # Handle offer and create answer in async context
         async def process_offer():
             offer_start = time.time()
             offer_timing = {}
-            
+
             # Close existing peer connection for this detector if any
             if detectorName in self._webrtc_peers:
                 old_pc = self._webrtc_peers[detectorName]
@@ -1381,26 +1480,26 @@ class LiveViewController(LiveUpdatedController):
                     self._logger.info(f"Closed old peer connection for {detectorName}")
                 except Exception as e:
                     self._logger.warning(f"Error closing old peer: {e}")
-            
+
             offer_timing['cleanup'] = time.time() - offer_start
-            
+
             # Create new peer connection with ICE servers
-            from aiortc import RTCConfiguration, RTCIceServer
-            
+            from aiortc import RTCConfiguration
+
             # For local connections, we don't need STUN servers (works without internet)
             # Explicitly disable ICE servers to prevent STUN timeouts
             stream_params = self._streamParams.get('webrtc', StreamParams(protocol='webrtc'))
-            
+
             # Force empty ICE servers list for local connections to prevent STUN timeouts
             self._logger.info("✅ Disabling ICE servers for local connection (prevents STUN timeouts)")
             config = RTCConfiguration(iceServers=[])  # Only iceServers parameter supported
             pc = RTCPeerConnection(configuration=config)
-            
+
             # Store PC for this detector
             self._webrtc_peers[detectorName] = pc
-            
+
             offer_timing['pc_created'] = time.time() - offer_start
-            
+
             @pc.on("connectionstatechange")
             async def on_connectionstatechange():
                 self._logger.info(f"WebRTC connection state for {detectorName}: {pc.connectionState}")
@@ -1410,11 +1509,11 @@ class LiveViewController(LiveUpdatedController):
                     self._logger.info(f"WebRTC connection closed for {detectorName}")
                     if detectorName in self._webrtc_peers and self._webrtc_peers[detectorName] == pc:
                         del self._webrtc_peers[detectorName]
-            
+
             @pc.on("iceconnectionstatechange")
             async def on_iceconnectionstatechange():
                 self._logger.info(f"ICE connection state for {detectorName}: {pc.iceConnectionState}")
-            
+
             # Add video track
             video_track = worker.get_video_track()
             offer_timing['got_track'] = time.time() - offer_start
@@ -1424,8 +1523,8 @@ class LiveViewController(LiveUpdatedController):
                 if hasattr(video_track, 'recv'):
                     self._logger.info(f"Video track has recv method: {video_track.recv}")
                 else:
-                    self._logger.error(f"Video track missing recv method!")
-                
+                    self._logger.error("Video track missing recv method!")
+
                 pc.addTrack(video_track)
                 offer_timing['track_added'] = time.time() - offer_start
                 self._logger.info(f"Added video track to peer connection for {detectorName}")
@@ -1433,61 +1532,61 @@ class LiveViewController(LiveUpdatedController):
             else:
                 self._logger.error("Failed to get video track from worker")
                 raise Exception("No video track available")
-            
+
             # Process offer
             try:
-                self._logger.info(f"🔄 Processing SDP offer...")
+                self._logger.info("🔄 Processing SDP offer...")
                 offer_desc = RTCSessionDescription(sdp=sdp, type=sdp_type)
                 await pc.setRemoteDescription(offer_desc)
                 offer_timing['remote_desc_set'] = time.time() - offer_start
                 self._logger.info(f"Set remote description for {detectorName}")
-                
+
                 # Create and set answer
-                self._logger.info(f"🔄 Creating SDP answer...")
+                self._logger.info("🔄 Creating SDP answer...")
                 answer = await pc.createAnswer()
                 offer_timing['answer_created'] = time.time() - offer_start
-                
+
                 # Pre-warm the video track by getting a frame
-                self._logger.info(f"🔄 Pre-warming video track...")
+                self._logger.info("🔄 Pre-warming video track...")
                 try:
                     if video_track and hasattr(video_track, 'recv'):
                         # Try to get a frame to ensure the track is ready
                         await asyncio.wait_for(video_track.recv(), timeout=0.5)
-                        self._logger.info(f"✅ Video track pre-warmed successfully")
+                        self._logger.info("✅ Video track pre-warmed successfully")
                 except (asyncio.TimeoutError, Exception) as e:
                     self._logger.warning(f"⚠️ Video track pre-warm failed (continuing anyway): {e}")
-                
+
                 offer_timing['track_prewarmed'] = time.time() - offer_start
-                
+
                 # Set local description with timeout to prevent hanging
-                self._logger.info(f"🔄 Setting local description...")
+                self._logger.info("🔄 Setting local description...")
                 local_desc_success = True
                 try:
                     await asyncio.wait_for(pc.setLocalDescription(answer), timeout=2.0)
                     offer_timing['local_desc_set'] = time.time() - offer_start
-                    self._logger.info(f"✅ Local description set successfully")
+                    self._logger.info("✅ Local description set successfully")
                 except asyncio.TimeoutError:
-                    self._logger.error(f"❌ Timeout setting local description - using answer SDP directly")
+                    self._logger.error("❌ Timeout setting local description - using answer SDP directly")
                     local_desc_success = False
                     offer_timing['local_desc_set'] = time.time() - offer_start
                 except Exception as local_desc_error:
                     self._logger.error(f"❌ Error setting local description: {local_desc_error}")
                     local_desc_success = False
                     offer_timing['local_desc_set'] = time.time() - offer_start
-                
+
                 # Check if we have a valid local description, otherwise use the answer directly
                 if pc.localDescription and pc.localDescription.type:
                     self._logger.info(f"WebRTC answer created for {detectorName}: type={pc.localDescription.type}")
                     answer_sdp = pc.localDescription.sdp
                     answer_type = pc.localDescription.type
                 else:
-                    self._logger.warning(f"⚠️ Local description not available, using answer SDP directly")
+                    self._logger.warning("⚠️ Local description not available, using answer SDP directly")
                     answer_sdp = answer.sdp
                     answer_type = answer.type
-                
+
                 # Log detailed timing breakdown
                 total_offer_time = time.time() - offer_start
-                self._logger.info(f"🕐 Backend SDP processing timing:")
+                self._logger.info("🕐 Backend SDP processing timing:")
                 self._logger.info(f"   Cleanup: {offer_timing.get('cleanup', 0)*1000:.1f}ms")
                 self._logger.info(f"   PC created: {offer_timing.get('pc_created', 0)*1000:.1f}ms")
                 self._logger.info(f"   Got track: {(offer_timing.get('got_track', 0) - offer_timing.get('pc_created', 0))*1000:.1f}ms")
@@ -1497,7 +1596,7 @@ class LiveViewController(LiveUpdatedController):
                 self._logger.info(f"   Track prewarmed: {(offer_timing.get('track_prewarmed', 0) - offer_timing.get('answer_created', 0))*1000:.1f}ms")
                 self._logger.info(f"   Local desc: {(offer_timing.get('local_desc_set', 0) - offer_timing.get('track_prewarmed', 0))*1000:.1f}ms")
                 self._logger.info(f"   Total SDP processing: {total_offer_time*1000:.1f}ms")
-                
+
                 return {
                     "status": "success",
                     "sdp": answer_sdp,
@@ -1512,26 +1611,26 @@ class LiveViewController(LiveUpdatedController):
                         del self._webrtc_peers[detectorName]
                 except Exception as close_error:
                     self._logger.warning(f"Error closing peer connection: {close_error}")
-                
+
                 # Return a fallback error response
                 return {
-                    "status": "error", 
+                    "status": "error",
                     "message": f"SDP processing failed: {str(offer_error)}"
                 }
-        
+
         # Run async function on persistent event loop
         try:
-            self._logger.info(f"🔄 Running async SDP processing...")
+            self._logger.info("🔄 Running async SDP processing...")
             timing['async_start'] = time.time() - start_time
-            
+
             future = asyncio.run_coroutine_threadsafe(process_offer(), loop)
             result = future.result(timeout=15.0)  # Increased timeout for better reliability
-            
+
             timing['async_complete'] = time.time() - start_time
             total_time = time.time() - start_time
-            
+
             # Log complete backend timing breakdown
-            self._logger.info(f"🕐 Complete backend timing breakdown:")
+            self._logger.info("🕐 Complete backend timing breakdown:")
             self._logger.info(f"   Total backend time: {total_time*1000:.1f}ms")
             self._logger.info(f"   Imports: {timing.get('imports', 0)*1000:.1f}ms")
             self._logger.info(f"   Params extracted: {timing.get('params_extracted', 0)*1000:.1f}ms")
@@ -1541,10 +1640,10 @@ class LiveViewController(LiveUpdatedController):
             self._logger.info(f"   Loop ready: {(timing.get('loop_ready', 0) - timing.get('worker_ready', 0))*1000:.1f}ms")
             self._logger.info(f"   Async setup: {(timing.get('async_start', 0) - timing.get('loop_ready', 0))*1000:.1f}ms")
             self._logger.info(f"   Async processing: {(timing.get('async_complete', 0) - timing.get('async_start', 0))*1000:.1f}ms")
-            
+
             self._logger.info(f"✅ WebRTC offer processed successfully in {total_time*1000:.1f}ms")
             return result
-            
+
         except asyncio.TimeoutError:
             total_time = time.time() - start_time
             self._logger.error(f"❌ Timeout processing WebRTC offer for {detectorName} after {total_time*1000:.1f}ms")
@@ -1555,7 +1654,7 @@ class LiveViewController(LiveUpdatedController):
             full_error = traceback.format_exc()
             self._logger.error(f"❌ Error processing WebRTC offer after {total_time*1000:.1f}ms: {e}\n{full_error}")
             return {"status": "error", "message": str(e)}
-    
+
     @APIExport(runOnUIThread=False)
     def webrtc_ice_candidate(self, detectorName: Optional[str] = None, candidate: dict = None):
         """

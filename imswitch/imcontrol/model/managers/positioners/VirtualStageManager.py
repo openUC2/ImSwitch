@@ -1,9 +1,6 @@
 from imswitch.imcommon.model import initLogger
 from .PositionerManager import PositionerManager
 import time
-import numpy as np
-from imswitch.imcommon.model import APIExport, generateAPI, initLogger
-import threading
 
 class VirtualStageManager(PositionerManager):
     def __init__(self, positionerInfo, name, **lowLevelManagers):
@@ -11,6 +8,10 @@ class VirtualStageManager(PositionerManager):
         self.__logger = initLogger(self, instanceName=name)
         self._commChannel = lowLevelManagers['commChannel']
 
+        self.stepsizeX = positionerInfo.managerProperties.get("stepsizeX")
+        self.stepsizeY = positionerInfo.managerProperties.get("stepsizeY")
+        self.stepsizeZ = positionerInfo.managerProperties.get("stepsizeZ")
+        self.stepsizeA = positionerInfo.managerProperties.get("stepsizeA")
         self.offset_x = 0.
         self.offset_y = 0.
         self.offset_z = 0.
@@ -28,17 +29,17 @@ class VirtualStageManager(PositionerManager):
 
     def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=1):
         if axis == "X":
-            self._positioner.move(x=value+self.offset_x, is_absolute=is_absolute)
+            self._positioner.move(x=self.stepsizeX*(value+self.offset_x), is_absolute=is_absolute)
         if axis == "Y":
-            self._positioner.move(y=value+self.offset_y, is_absolute=is_absolute)
+            self._positioner.move(y=self.stepsizeY*(value+self.offset_y), is_absolute=is_absolute)
         if axis == "Z":
-            self._positioner.move(z=value+self.offset_z, is_absolute=is_absolute)
+            self._positioner.move(z=self.stepsizeZ*(value+self.offset_z), is_absolute=is_absolute)
         if axis == "A":
-            self._positioner.move(a=value+self.offset_a, is_absolute=is_absolute)
+            self._positioner.move(a=self.stepsizeA*(value+self.offset_a), is_absolute=is_absolute)
         if axis == "XYZ":
-            self._positioner.move(x=value[0]+self.offset_x, y=value[1]+self.offset_y, z=value[2]+self.offset_z, is_absolute=is_absolute)
+            self._positioner.move(x=self.stepsizeX*(value[0]+self.offset_x), y=self.stepsizeY*(value[1]+self.offset_y), z=self.stepsizeZ*(value[2]+self.offset_z), is_absolute=is_absolute)
         if axis == "XY":
-            self._positioner.move(x=value[0]+self.offset_x, y=value[1]+self.offset_y, is_absolute=is_absolute)
+            self._positioner.move(x=self.stepsizeX*(value[0]+self.offset_x), y=self.stepsizeY*(value[1]+self.offset_y), is_absolute=is_absolute)
         for axes in ["A","X","Y","Z"]:
             self._position[axes] = self._positioner.position[axes]
 
@@ -163,18 +164,18 @@ class VirtualStageManager(PositionerManager):
         self.__logger.info(f"X: start={xstart}, step={xstep}, count={nx}")
         self.__logger.info(f"Y: start={ystart}, step={ystep}, count={ny}")
         self.__logger.info(f"Timing: settle={tsettle}ms, exposure={tExposure}ms")
-        
+
         # Set default values for optional parameters
         if illumination is None:
             illumination = (0, 0, 0, 0)  # Default to no illumination
         if led is None:
             led = 0
-            
+
         # For virtual stage, we simulate the scanning by updating positions
         # The actual movement will be handled by the experiment controller
         scan_params = {
             'xstart': xstart,
-            'xstep': xstep, 
+            'xstep': xstep,
             'nx': nx,
             'ystart': ystart,
             'ystep': ystep,
@@ -185,14 +186,14 @@ class VirtualStageManager(PositionerManager):
             'led': led,
             'status': 'started'
         }
-        
+
         # Store scan parameters for tracking
         self._scan_params = scan_params
-        
+
         # Move to starting position
         self.move(value=xstart, axis="X", is_absolute=True)
         self.move(value=ystart, axis="Y", is_absolute=True)
-        
+
         self.__logger.info("Virtual stage scanning started successfully")
         return {"success": True, "message": "Virtual stage scanning started", "params": scan_params}
 
@@ -202,14 +203,14 @@ class VirtualStageManager(PositionerManager):
         Virtual implementation that stops the scanning simulation.
         """
         self.__logger.info("Stopping virtual stage scanning")
-        
+
         # Clear scan parameters
         if hasattr(self, '_scan_params'):
             self._scan_params['status'] = 'stopped'
             self.__logger.info("Virtual stage scanning stopped successfully")
         else:
             self.__logger.warning("No active stage scanning to stop")
-            
+
         return {"success": True, "message": "Virtual stage scanning stopped"}
 
     def get_stage_scan_status(self):
@@ -221,7 +222,7 @@ class VirtualStageManager(PositionerManager):
             return self._scan_params
         else:
             return {"status": "idle", "message": "No active scanning"}
-            
+
     def simulate_scan_position(self, tile_x, tile_y):
         """
         Simulate moving to a specific tile position during scanning.
@@ -232,17 +233,17 @@ class VirtualStageManager(PositionerManager):
         if hasattr(self, '_scan_params') and self._scan_params:
             x_pos = self._scan_params['xstart'] + tile_x * self._scan_params['xstep']
             y_pos = self._scan_params['ystart'] + tile_y * self._scan_params['ystep']
-            
+
             self.__logger.debug(f"Simulating move to tile ({tile_x}, {tile_y}) -> position ({x_pos}, {y_pos})")
-            
+
             # Move to the calculated position
             self.move(value=x_pos, axis="X", is_absolute=True)
             self.move(value=y_pos, axis="Y", is_absolute=True)
-            
+
             # Simulate settle time
             if self._scan_params['tsettle'] > 0:
                 time.sleep(self._scan_params['tsettle'] / 1000.0)  # Convert ms to seconds
-                
+
             return {"x": x_pos, "y": y_pos, "tile_x": tile_x, "tile_y": tile_y}
         else:
             self.__logger.warning("No active scan parameters for position simulation")

@@ -1,6 +1,5 @@
 from imswitch.imcommon.model import initLogger
 from .PositionerManager import PositionerManager
-import time
 
 from threading import Thread
 

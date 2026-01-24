@@ -52,8 +52,9 @@ class MinimalZarrDataSource:
         # Get "MicroscopeState" or return an empty dict if missing
         ms = config.get("experiment", {}).get("MicroscopeState", {})
 
-        # Provide default values if dictionary keys don't exist
-        self.shape_z = ms.get("number_z_steps", 1)
+        # Z-steps are calculated from actual Z-stack parameters during scanning
+        # Default to 1 if no Z-stack is configured
+        self.shape_z = 1
         self.shape_t = ms.get("timepoints", 1)
 
         channels_dict = ms.get("channels", {})
@@ -97,7 +98,7 @@ class MinimalZarrDataSource:
         else:
             # Direct path usage for newer Zarr versions
             store = self.file_name
-        
+
         self.image = zarr.group(store=store, overwrite=True)
         self._store = store
         self.image.attrs["description"] = "OME-Zarr from MinimalZarrDataSource"

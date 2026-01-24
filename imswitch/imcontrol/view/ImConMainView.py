@@ -19,7 +19,6 @@ else:
 
 
 class ImConMainView(QMainWindow):
-    sigLoadParamsFromHDF5 = Signal()
     sigPickSetup = Signal()
     sigClosing = Signal()
 
@@ -46,10 +45,7 @@ class ImConMainView(QMainWindow):
         configuration = menuBar.addMenu('&Configuration')
         self.shortcuts = menuBar.addMenu('&Shortcuts')
 
-        self.loadParamsAction = QtWidgets.QAction('Load parameters from saved HDF5 file…', self)
-        self.loadParamsAction.setShortcut('Ctrl+P')
-        self.loadParamsAction.triggered.connect(self.sigLoadParamsFromHDF5)
-        file.addAction(self.loadParamsAction)
+
 
         self.pickSetupAction = QtWidgets.QAction('Pick hardware setup…', self)
         self.pickSetupAction.triggered.connect(self.sigPickSetup)

@@ -66,9 +66,7 @@ class RecordingController(ImConWidgetController):
         self._widget.setSnapSaveModeVisible(self._setupInfo.hasWidget("Image"))
 
         self._widget.setRecSaveMode(SaveMode.Disk.value)
-        self._widget.setRecSaveModeVisible(
-            self._moduleCommChannel.isModuleRegistered("imreconstruct")
-        )
+
 
         # Connect RecordingWidget signals
         self._widget.sigDetectorModeChanged.connect(self.detectorChanged)
@@ -396,7 +394,7 @@ class RecordingController(ImConWidgetController):
             Dictionary of attributes for the detector
         """
         # Start with SharedAttrs (backwards compatible)
-        attrs = self._commChannel.sharedAttrs.getHDF5Attributes()
+        attrs = self._commChannel.sharedAttrs.getHDF5Attributes() # TODO: HDF5 doesn't exist anymore
         
         # Add MetadataHub snapshot if available
         if hasattr(self._master, 'metadataHub') and self._master.metadataHub is not None:
@@ -821,7 +819,7 @@ class RecordingController(ImConWidgetController):
                 "saveMode": SaveMode(1),  # Disk
                 "saveFormat": mSaveFormat,  # TIFF
                 "attrs": {
-                    detectorName: self._commChannel.sharedAttrs.getHDF5Attributes()
+                    detectorName: self._commChannel.sharedAttrs.getHDF5Attributes() # TODO: HDF5 doesn't exist anymore
                     for detectorName in detectorsBeingCaptured
                 },
             }

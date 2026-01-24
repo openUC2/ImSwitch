@@ -96,7 +96,7 @@ class CameraWebcam:
         return
 
     def getLastChunk(self):
-        # get frames from camera'S buffer => e.g. for Hdf5 saving
+        # get frames from camera'S buffer 
         frame = self.camera.read()
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         chunk = np.expand_dims(frame, 0)

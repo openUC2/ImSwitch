@@ -9,9 +9,7 @@ if not IS_HEADLESS:
     from .basewidgets import WidgetFactory
     from .BeadRecWidget import BeadRecWidget
     from .ConsoleWidget import ConsoleWidget
-    from .EtSTEDWidget import EtSTEDWidget
     from .FFTWidget import FFTWidget
-    from .JoystickWidget import JoystickWidget
     from .HistogrammWidget import HistogrammWidget
     from .STORMReconWidget import STORMReconWidget
     from .HoliSheetWidget import HoliSheetWidget

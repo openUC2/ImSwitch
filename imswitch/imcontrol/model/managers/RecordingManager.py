@@ -103,15 +103,119 @@ class ZarrStorer(Storer):
 
 
 class TiffStorer(Storer):
-    """ A storer that stores the images in a series of tiff files """
+    """ A storer that stores the images in a series of tiff files with OME metadata """
+    
     def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
         for channel, image in images.items():
-            with AsTemporayFile(f'{self.filepath}_{channel}.tiff') as path:
-                if hasattr(image, "shape"):
-                    tiff.imwrite(path, image,) # TODO: Parse metadata to tiff meta data
-                    logger.info(f"Saved image to tiff file {path}")
+            path = f'{self.filepath}_{channel}.tiff'
+            if not hasattr(image, "shape"):
+                logger.error(f"Could not save image to tiff file {path}")
+                continue
+            
+            try:
+                # Build OME-TIFF metadata from attrs
+                ome_metadata = self._build_ome_metadata(channel, image, attrs)
+                
+                if ome_metadata:
+                    # Save as OME-TIFF with metadata
+                    tiff.imwrite(
+                        path, 
+                        image,
+                        metadata=ome_metadata,
+                        imagej=False,  # Use OME metadata, not ImageJ
+                    )
                 else:
-                    logger.error(f"Could not save image to tiff file {path}")
+                    # Fallback to basic TIFF
+                    tiff.imwrite(path, image)
+                
+                logger.info(f"Saved image to tiff file {path}")
+            except Exception as e:
+                logger.error(f"Error saving tiff file {path}: {e}")
+                # Fallback to basic save
+                tiff.imwrite(path, image)
+    
+    def _build_ome_metadata(self, channel: str, image: np.ndarray, attrs: Dict[str, str]) -> Optional[Dict]:
+        """
+        Build OME-TIFF metadata dictionary from attributes.
+        
+        Args:
+            channel: Channel/detector name
+            image: Image array
+            attrs: Attributes dictionary (may contain SharedAttrValue objects)
+            
+        Returns:
+            Dictionary with OME metadata or None if attrs is empty
+        """
+        if not attrs:
+            return None
+        
+        metadata = {}
+        
+        try:
+            # Get channel-specific attrs
+            channel_attrs = attrs.get(channel, attrs)
+            
+            # Extract pixel size
+            pixel_size = None
+            for key in ['PixelSizeUm', 'Detector:PixelSizeUm', f'Detector:{channel}:PixelSizeUm']:
+                if key in channel_attrs:
+                    val = channel_attrs[key]
+                    pixel_size = val.value if hasattr(val, 'value') else val
+                    break
+            
+            # Build resolution info
+            if pixel_size:
+                # Physical size in micrometers
+                metadata['PhysicalSizeX'] = float(pixel_size)
+                metadata['PhysicalSizeY'] = float(pixel_size)
+                metadata['PhysicalSizeXUnit'] = 'µm'
+                metadata['PhysicalSizeYUnit'] = 'µm'
+            
+            # Extract exposure
+            for key in ['ExposureMs', 'Detector:ExposureMs', f'Detector:{channel}:ExposureMs']:
+                if key in channel_attrs:
+                    val = channel_attrs[key]
+                    exposure = val.value if hasattr(val, 'value') else val
+                    metadata['ExposureTime'] = float(exposure) / 1000.0  # Convert to seconds
+                    metadata['ExposureTimeUnit'] = 's'
+                    break
+            
+            # Extract stage positions
+            for axis in ['X', 'Y', 'Z']:
+                for key_pattern in [f'Positioner:Stage:{axis}:Position', f'Stage:{axis}:Position']:
+                    matching_keys = [k for k in channel_attrs.keys() if key_pattern in str(k)]
+                    for key in matching_keys:
+                        val = channel_attrs[key]
+                        pos = val.value if hasattr(val, 'value') else val
+                        metadata[f'Position{axis}'] = float(pos)
+                        metadata[f'Position{axis}Unit'] = 'µm'
+                        break
+            
+            # Add objective info if available
+            for key in ['Objective:Name', 'ObjectiveName']:
+                if key in channel_attrs:
+                    val = channel_attrs[key]
+                    metadata['Objective'] = val.value if hasattr(val, 'value') else str(val)
+                    break
+            
+            for key in ['Objective:Magnification', 'ObjectiveMagnification']:
+                if key in channel_attrs:
+                    val = channel_attrs[key]
+                    metadata['Magnification'] = float(val.value if hasattr(val, 'value') else val)
+                    break
+            
+            # Add channel name
+            metadata['Channel'] = channel
+            
+            # Add timestamp
+            import datetime
+            metadata['DateTime'] = datetime.datetime.now().isoformat()
+            
+            return metadata if metadata else None
+            
+        except Exception as e:
+            logger.warning(f"Error building OME metadata: {e}")
+            return None
 
 class PNGStorer(Storer):
     """ A storer that stores the images in a series of png files """

@@ -358,7 +358,7 @@ def test_shared_attributes_hdf5_with_metadata():
     shared_attrs[key] = typed_value
     
     # Export to HDF5 format
-    hdf5_attrs = shared_attrs.getHDF5Attributes()
+    hdf5_attrs = shared_attrs.getSharedAttributes()
     
     # Should have main value and metadata keys
     key_str = 'Positioner:Stage:X:PositionUm'

@@ -37,11 +37,7 @@ class PositionerController(ImConWidgetController):
                     self.setSharedAttr(pName, axis, _stopAttr, pManager.stop[axis])
 
         # Connect CommunicationChannel signals
-        if 0: #IS_HEADLESS:IS_HEADLESS:
-            self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged, check_nargs=False)
-        else:
-            self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
-
+        self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
 
         # Connect PositionerWidget signals
         if not IS_HEADLESS:
@@ -187,13 +183,10 @@ class PositionerController(ImConWidgetController):
         positionerY = self.getPositionerNames()[1]
         self.__logger.debug(f"Move {positionerX}, axis X, dist {str(x)}")
         self.__logger.debug(f"Move {positionerY}, axis Y, dist {str(y)}")
-        # self.move(positionerX, 'X', x)
-        # self.move(positionerY, 'Y', y)
 
     def setZPosition(self, z):
         positionerZ = self.getPositionerNames()[2]
         self.__logger.debug(f"Move {positionerZ}, axis Z, dist {str(z)}")
-        # self.move(self.getPositionerNames[2], 'Z', z)
 
     @APIExport(runOnUIThread=True)
     def enalbeMotors(self, enable=None, enableauto=None):

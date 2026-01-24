@@ -129,7 +129,7 @@ class RecordingController(ImConWidgetController):
         if not IS_HEADLESS:
             saveMode = SaveMode(self._widget.getSnapSaveMode())
         else:
-            saveMode = SaveMode(1)  # TODO: Assuming we want to save the image
+            saveMode = SaveMode.Disk  # TODO: Assuming we want to save the image
         self._master.recordingManager.snap(
             detectorNames, savename, saveMode, mSaveFormat, attrs
         )
@@ -394,7 +394,7 @@ class RecordingController(ImConWidgetController):
             Dictionary of attributes for the detector
         """
         # Start with SharedAttrs (backwards compatible)
-        attrs = self._commChannel.sharedAttrs.getHDF5Attributes() # TODO: HDF5 doesn't exist anymore
+        attrs = self._commChannel.sharedAttrs.getSharedAttributes() # TODO: HDF5 doesn't exist anymore
         
         # Add MetadataHub snapshot if available
         if hasattr(self._master, 'metadataHub') and self._master.metadataHub is not None:
@@ -821,7 +821,7 @@ class RecordingController(ImConWidgetController):
                 "saveMode": SaveMode(1),  # Disk
                 "saveFormat": mSaveFormat,  # TIFF
                 "attrs": {
-                    detectorName: self._commChannel.sharedAttrs.getHDF5Attributes() # TODO: HDF5 doesn't exist anymore
+                    detectorName: self._commChannel.sharedAttrs.getSharedAttributes() # TODO: HDF5 doesn't exist anymore
                     for detectorName in detectorsBeingCaptured
                 },
             }

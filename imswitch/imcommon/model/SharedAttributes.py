@@ -36,7 +36,7 @@ class SharedAttributes(SignalInterface):
         super().__init__()
         self._data = {}
 
-    def getHDF5Attributes(self):
+    def getSharedAttributes(self):
         """ 
         Returns a dictionary of HDF5 attributes representing this object.
         

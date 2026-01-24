@@ -259,14 +259,8 @@ class JPEGStreamWorker(StreamWorker):
                 pass
             
             # Normalize to uint8 if needed
-            if frame.dtype != np.uint8:
-                vmin = float(np.min(frame))
-                vmax = float(np.max(frame))
-                if vmax > vmin:
-                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
-                else:
-                    frame = np.zeros_like(frame, dtype=np.uint8)
-            
+            if frame.dtype == np.uint16:
+                frame = np.uint8(frame/2**4) # assuming we have a 12bit camera
             # Apply subsampling if needed
             if self._params.subsampling_factor > 1:
                 frame = frame[::self._params.subsampling_factor, ::self._params.subsampling_factor]

@@ -14,8 +14,6 @@ from .RecordingManager import RecordingManager, RecMode, SaveMode, SaveFormat
 from .SLMManager import SLMManager
 from .ScanManagerPointScan import ScanManagerPointScan
 from .ScanManagerBase import ScanManagerBase
-from .ScanManagerMoNaLISA import ScanManagerMoNaLISA
-from .StandManager import StandManager
 from .RotatorsManager import RotatorsManager
 from .UC2ConfigManager import UC2ConfigManager
 from .SIMManager import SIMManager

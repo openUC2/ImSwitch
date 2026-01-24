@@ -25,12 +25,10 @@ from imswitch.imcontrol.model import (
     LightsheetManager,
     NidaqManager,
     FOVLockManager,
-    StandManager,
     RotatorsManager,
     LEDsManager,
     ScanManagerBase,
     ScanManagerPointScan,
-    ScanManagerMoNaLISA,
     FlatfieldManager,
     FlowStopManager,
     WorkflowManager,
@@ -152,6 +150,9 @@ class MasterController:
         # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the
         # MasterController Class
 
+        ###################################################################################################
+        # PLUGIN SYSTEM FOR MANAGERS
+        ###################################################################################################
         for entry_point in pkg_resources.iter_entry_points("imswitch.implugins"):
             InfoClass = None
             print(f"entry_point: {entry_point.name}")
@@ -176,19 +177,17 @@ class MasterController:
             except Exception as e:
                 self.__logger.error(e)
 
-        if self.__setupInfo.microscopeStand:
-            self.standManager = StandManager(
-                self.__setupInfo.microscopeStand, **lowLevelManagers
-            )
 
+
+        ###################################################################################################
+        # PLUGIN SYSTEM FOR MANAGERS
+        ###################################################################################################
         # Generate scanManager type according to setupInfo
         if self.__setupInfo.scan:
             if self.__setupInfo.scan.scanWidgetType == "PointScan":
                 self.scanManager = ScanManagerPointScan(self.__setupInfo)
             elif self.__setupInfo.scan.scanWidgetType == "Base":
                 self.scanManager = ScanManagerBase(self.__setupInfo)
-            elif self.__setupInfo.scan.scanWidgetType == "MoNaLISA":
-                self.scanManager = ScanManagerMoNaLISA(self.__setupInfo)
             else:
                 self.__logger.error(
                     'ScanWidgetType in SetupInfo["scan"] not recognized, choose one of the following:'

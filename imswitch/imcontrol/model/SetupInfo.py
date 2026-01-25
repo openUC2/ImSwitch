@@ -288,6 +288,60 @@ class FlowStopInfo:
 class LepmonInfo:
     pass
 
+
+@dataclass(frozen=False)
+class InstrumentInfo:
+    """
+    Microscope instrument metadata for OME-types integration.
+    
+    This configuration is loaded from the setup JSON and provides
+    static instrument information that doesn't change during operation.
+    Dynamic values (firmware version, etc.) are updated at runtime.
+    """
+    
+    # Microscope identification
+    name: str = "openUC2 Microscope"
+    """ Instrument display name. """
+    
+    microscopeType: str = "Inverted"
+    """ Microscope type: 'Inverted', 'Upright', or 'Other'. """
+    
+    manufacturer: str = "openUC2"
+    """ Instrument manufacturer. """
+    
+    model: str = "UC2 Frame"
+    """ Instrument model. """
+    
+    serialNumber: str = ""
+    """ Instrument serial number. """
+    
+    # Optical configuration
+    tubeLensFocalLengthMm: float = 180.0
+    """ Tube lens focal length in millimeters. Standard Nikon = 180mm. """
+    
+    tubeLensMagnification: float = 1.0
+    """ Tube lens magnification factor. """
+    
+    # UC2 specific metadata
+    uc2FrameName: str = ""
+    """ Name of the UC2 frame configuration. """
+    
+    uc2FrameAuthor: str = ""
+    """ Author of the UC2 frame configuration. """
+    
+    uc2FrameVersion: str = "1.0.0"
+    """ Version of the UC2 frame configuration. """
+    
+    uc2Verified: bool = False
+    """ Whether the UC2 frame is verified. """
+    
+    uc2OptiKitConfigPath: Optional[str] = None
+    """ Path to UC2 OptiKit JSON configuration file. """
+    
+    # Filter configuration (static filters defined in setup)
+    filters: List[Dict[str, Any]] = field(default_factory=list)
+    """ List of optical filters. Each entry: {name, filterType, wavelengthNm, bandwidthNm}. """
+
 @dataclass(frozen=False)
 class FlatfieldInfo:
     pass
@@ -741,6 +795,10 @@ class SetupInfo:
 
     storage: Optional[StorageInfo] = field(default_factory=lambda: None)
     """ Storage configuration for data paths. Contains persistent storage settings. """
+
+    instrument: Optional[InstrumentInfo] = field(default_factory=lambda: None)
+    """ Instrument metadata for OME-types integration. Contains microscope identification,
+    optical configuration, and UC2-specific metadata. """
 
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """

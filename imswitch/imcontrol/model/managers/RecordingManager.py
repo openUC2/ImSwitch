@@ -1,8 +1,10 @@
 import enum
 import os
 import time
+import queue
+import threading
 from io import BytesIO
-from typing import Dict, Optional, Type, List
+from typing import Dict, Optional, Type, List, Callable, Any, Tuple
 import h5py
 try:
     import zarr
@@ -30,7 +32,251 @@ except ImportError:
     IS_OME_ZARR = False
 
 
+# =============================================================================
+# Background Storage Queue - Asynchronous File I/O
+# =============================================================================
+
+class StorageTask:
+    """
+    A task to be executed by the background storage worker.
+    
+    Encapsulates all data needed for a file I/O operation.
+    """
+    def __init__(self, 
+                 task_type: str,
+                 filepath: str,
+                 data: Any = None,
+                 attrs: Dict[str, Any] = None,
+                 callback: Callable[[bool, str], None] = None,
+                 priority: int = 0):
+        """
+        Args:
+            task_type: Type of task ('snap', 'append', 'finalize')
+            filepath: Target file path
+            data: Image data (numpy array or dict of arrays)
+            attrs: Metadata attributes
+            callback: Optional callback(success: bool, message: str)
+            priority: Task priority (lower = higher priority)
+        """
+        self.task_type = task_type
+        self.filepath = filepath
+        self.data = data
+        self.attrs = attrs
+        self.callback = callback
+        self.priority = priority
+        self.timestamp = time.time()
+    
+    def __lt__(self, other):
+        """For priority queue ordering."""
+        return (self.priority, self.timestamp) < (other.priority, other.timestamp)
+
+
+class BackgroundStorageWorker:
+    """
+    Background worker that handles file I/O operations asynchronously.
+    
+    Uses a priority queue to manage storage tasks without blocking
+    the main acquisition thread. This ensures that image acquisition
+    continues smoothly while files are being written.
+    
+    Features:
+    - Priority-based task queue
+    - Non-blocking snap/append operations
+    - Automatic error handling with callbacks
+    - Graceful shutdown with queue drain
+    """
+    
+    def __init__(self, max_queue_size: int = 100):
+        """
+        Args:
+            max_queue_size: Maximum number of pending tasks (0 = unlimited)
+        """
+        self._logger = initLogger(self)
+        self._task_queue = queue.PriorityQueue(maxsize=max_queue_size)
+        self._worker_thread = None
+        self._stop_event = threading.Event()
+        self._is_running = False
+        self._pending_tasks = 0
+        self._lock = threading.Lock()
+        
+        # Statistics
+        self._tasks_completed = 0
+        self._tasks_failed = 0
+    
+    def start(self):
+        """Start the background worker thread."""
+        if self._is_running:
+            return
+        
+        self._stop_event.clear()
+        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self._worker_thread.start()
+        self._is_running = True
+        self._logger.info("BackgroundStorageWorker started")
+    
+    def stop(self, wait: bool = True, timeout: float = 5.0):
+        """
+        Stop the background worker.
+        
+        Args:
+            wait: If True, wait for pending tasks to complete
+            timeout: Maximum time to wait for shutdown (seconds)
+        """
+        if not self._is_running:
+            return
+        
+        self._stop_event.set()
+        
+        if wait and self._worker_thread:
+            self._worker_thread.join(timeout=timeout)
+        
+        self._is_running = False
+        self._logger.info(f"BackgroundStorageWorker stopped. Completed: {self._tasks_completed}, Failed: {self._tasks_failed}")
+    
+    def submit_task(self, task: StorageTask) -> bool:
+        """
+        Submit a storage task to the queue.
+        
+        Args:
+            task: StorageTask to execute
+            
+        Returns:
+            True if task was queued, False if queue is full
+        """
+        if not self._is_running:
+            self._logger.warning("Cannot submit task: worker not running")
+            return False
+        
+        try:
+            self._task_queue.put_nowait(task)
+            with self._lock:
+                self._pending_tasks += 1
+            return True
+        except queue.Full:
+            self._logger.warning("Storage queue is full, task dropped")
+            if task.callback:
+                task.callback(False, "Queue full")
+            return False
+    
+    def get_queue_size(self) -> int:
+        """Get current number of pending tasks."""
+        with self._lock:
+            return self._pending_tasks
+    
+    def _worker_loop(self):
+        """Main worker loop - processes tasks from queue."""
+        while not self._stop_event.is_set():
+            try:
+                # Get task with timeout to allow checking stop event
+                task = self._task_queue.get(timeout=0.1)
+                
+                try:
+                    self._execute_task(task)
+                    with self._lock:
+                        self._pending_tasks -= 1
+                        self._tasks_completed += 1
+                except Exception as e:
+                    self._logger.error(f"Task execution failed: {e}")
+                    with self._lock:
+                        self._pending_tasks -= 1
+                        self._tasks_failed += 1
+                    if task.callback:
+                        task.callback(False, str(e))
+                finally:
+                    self._task_queue.task_done()
+                    
+            except queue.Empty:
+                continue
+        
+        # Drain remaining tasks on shutdown
+        while not self._task_queue.empty():
+            try:
+                task = self._task_queue.get_nowait()
+                self._execute_task(task)
+                self._task_queue.task_done()
+            except:
+                break
+    
+    def _execute_task(self, task: StorageTask):
+        """Execute a single storage task."""
+        success = True
+        message = "OK"
+        
+        try:
+            if task.task_type == 'snap_tiff':
+                self._snap_tiff(task.filepath, task.data, task.attrs)
+            elif task.task_type == 'snap_png':
+                self._snap_png(task.filepath, task.data)
+            elif task.task_type == 'snap_jpg':
+                self._snap_jpg(task.filepath, task.data)
+            elif task.task_type == 'append_tiff':
+                self._append_tiff(task.filepath, task.data)
+            else:
+                message = f"Unknown task type: {task.task_type}"
+                success = False
+                
+        except Exception as e:
+            success = False
+            message = str(e)
+            raise
+        finally:
+            if task.callback:
+                task.callback(success, message)
+    
+    def _snap_tiff(self, filepath: str, data: np.ndarray, attrs: Dict[str, Any] = None):
+        """Write TIFF file with optional OME metadata."""
+        if attrs:
+            tiff.imwrite(filepath, data, metadata=attrs, imagej=False)
+        else:
+            tiff.imwrite(filepath, data)
+        self._logger.debug(f"Saved TIFF: {filepath}")
+    
+    def _snap_png(self, filepath: str, data: np.ndarray):
+        """Write PNG file."""
+        if data.dtype == np.float32 or data.dtype == np.float64:
+            data = cv2.convertScaleAbs(data)
+        if data.ndim == 2:
+            data = cv2.cvtColor(data, cv2.COLOR_GRAY2RGB)
+        cv2.imwrite(filepath, data)
+        self._logger.debug(f"Saved PNG: {filepath}")
+    
+    def _snap_jpg(self, filepath: str, data: np.ndarray):
+        """Write JPEG file."""
+        if data.ndim == 2:
+            data = cv2.cvtColor(data, cv2.COLOR_GRAY2RGB)
+        cv2.imwrite(filepath, data)
+        self._logger.debug(f"Saved JPG: {filepath}")
+    
+    def _append_tiff(self, filepath: str, data: np.ndarray):
+        """Append to existing TIFF file."""
+        tiff.imwrite(filepath, data, append=True) # TODO: Add metadata
+        self._logger.debug(f"Appended to TIFF: {filepath}")
+
+    
+
+# Global background storage worker instance
+_background_storage_worker: Optional[BackgroundStorageWorker] = None
+
+
+def get_background_storage_worker() -> BackgroundStorageWorker:
+    """Get or create the global background storage worker."""
+    global _background_storage_worker
+    if _background_storage_worker is None:
+        _background_storage_worker = BackgroundStorageWorker()
+        _background_storage_worker.start()
+    return _background_storage_worker
+
+
+def shutdown_background_storage():
+    """Shutdown the global background storage worker."""
+    global _background_storage_worker
+    if _background_storage_worker is not None:
+        _background_storage_worker.stop(wait=True)
+        _background_storage_worker = None
+
+
 def _create_zarr_store(path):
+    # TODO: REmove 
     """
     Create a Zarr store compatible with both Zarr 2.x and 3.x
     
@@ -49,9 +295,25 @@ def _create_zarr_store(path):
     else:
         # Zarr 3.x with direct path usage
         return path
+
+
+# NOTE: AsTemporaryFile is deprecated and should not be used for new code.
+# Direct file writing is preferred with proper error handling.
+# This class is kept for backwards compatibility but will be removed in a future version.
 class AsTemporayFile(object):
-    """ A temporary file that when exiting the context manager is renamed to its original name. """
+    # TODO: REmove 
+    """ 
+    DEPRECATED: A temporary file that when exiting the context manager is renamed to its original name.
+    
+    This pattern is no longer recommended. Use direct file writing with try/except instead.
+    """
     def __init__(self, filepath, tmp_extension='.tmp'):
+        import warnings
+        warnings.warn(
+            "AsTemporayFile is deprecated. Use direct file writing with error handling.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         if os.path.exists(filepath):
             raise FileExistsError(f'File {filepath} already exists.')
         self.path = filepath
@@ -80,12 +342,15 @@ class Storer(abc.ABC):
 
 
 class ZarrStorer(Storer):
+    # TODO: REmove 
     """ A storer that stores the images in a zarr file store """
     def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
         if not IS_OME_ZARR:
             logger.error("OME Zarr is not installed. Please install ome-zarr.")
             return
-        with AsTemporayFile(f'{self.filepath}.zarr') as path:
+        
+        path = f'{self.filepath}.zarr'
+        try:
             datasets: List[dict] = []
             store = _create_zarr_store(path)
             root = zarr.group(store=store)
@@ -93,11 +358,16 @@ class ZarrStorer(Storer):
             for channel, image in images.items():
                 shape = self.detectorManager[channel].shape
                 root.create_dataset(channel, data=image, shape=tuple(reversed(shape)),
-                                        chunks=(512, 512), dtype='i2') #TODO: why not dynamic chunking?
+                                        chunks=(512, 512), dtype='i2')
 
                 datasets.append({"path": channel, "transformation": None})
-            write_multiscales_metadata(root, datasets, format_from_version("0.2"), shape, **attrs)
+            
+            # Write metadata
+            metadata_kwargs = attrs if attrs else {}
+            write_multiscales_metadata(root, datasets, format_from_version("0.2"), shape, **metadata_kwargs)
             logger.info(f"Saved image to zarr file {path}")
+        except Exception as e:
+            logger.error(f"Error saving zarr file {path}: {e}")
 
 
 
@@ -134,14 +404,23 @@ class TiffStorer(Storer):
                 # Fallback to basic save
                 tiff.imwrite(path, image)
     
-    def _build_ome_metadata(self, channel: str, image: np.ndarray, attrs: Dict[str, str]) -> Optional[Dict]:
+    def _build_ome_metadata(self, detector_name: str, image: np.ndarray, attrs: Dict[str, str]) -> Optional[Dict]:
         """
-        Build OME-TIFF metadata dictionary from attributes.
+        Build OME-TIFF metadata dictionary from shared attributes.
+        
+        IMPORTANT: The 'detector_name' parameter refers to the camera/detector used.
+        The actual imaging channel is defined by the active illumination (laser/LED).
+        We extract this from the shared attributes.
+        
+        OME Channel Concept:
+        - In OME-TIFF, a "channel" represents a specific imaging condition
+        - This is typically defined by the excitation wavelength (laser/LED)
+        - The detector (camera) is separate from the channel
         
         Args:
-            channel: Channel/detector name
+            detector_name: Name of the detector/camera (e.g., "WidefieldCamera")
             image: Image array
-            attrs: Attributes dictionary (may contain SharedAttrValue objects)
+            attrs: Shared attributes dictionary (may contain SharedAttrValue objects)
             
         Returns:
             Dictionary with OME metadata or None if attrs is empty
@@ -151,98 +430,171 @@ class TiffStorer(Storer):
         
         metadata = {}
         
+        def _get_value(val):
+            """Extract value from SharedAttrValue or return raw value."""
+            return val.value if hasattr(val, 'value') else val
+        
+        def _search_attr(patterns: list, search_dict: dict):
+            """Search for attribute using multiple key patterns."""
+            for pattern in patterns:
+                # Direct match
+                if pattern in search_dict:
+                    return _get_value(search_dict[pattern])
+                # Substring match
+                for key in search_dict.keys():
+                    if pattern in str(key):
+                        return _get_value(search_dict[key])
+            return None
+        
         try:
-            # Get channel-specific attrs
-            channel_attrs = attrs.get(channel, attrs)
+            # === Detector/Camera Information ===
+            metadata['Detector'] = detector_name
             
             # Extract pixel size
-            pixel_size = None
-            for key in ['PixelSizeUm', 'Detector:PixelSizeUm', f'Detector:{channel}:PixelSizeUm']:
-                if key in channel_attrs:
-                    val = channel_attrs[key]
-                    pixel_size = val.value if hasattr(val, 'value') else val
-                    break
+            pixel_size = _search_attr([
+                f'Detector:{detector_name}:PixelSizeUm',
+                'Detector:PixelSizeUm', 
+                'PixelSizeUm'
+            ], attrs)
             
-            # Build resolution info
             if pixel_size:
-                # Physical size in micrometers
                 metadata['PhysicalSizeX'] = float(pixel_size)
                 metadata['PhysicalSizeY'] = float(pixel_size)
                 metadata['PhysicalSizeXUnit'] = 'µm'
                 metadata['PhysicalSizeYUnit'] = 'µm'
             
             # Extract exposure
-            for key in ['ExposureMs', 'Detector:ExposureMs', f'Detector:{channel}:ExposureMs']:
-                if key in channel_attrs:
-                    val = channel_attrs[key]
-                    exposure = val.value if hasattr(val, 'value') else val
-                    metadata['ExposureTime'] = float(exposure) / 1000.0  # Convert to seconds
-                    metadata['ExposureTimeUnit'] = 's'
-                    break
+            exposure = _search_attr([
+                f'Detector:{detector_name}:ExposureMs',
+                'Detector:ExposureMs',
+                'ExposureMs'
+            ], attrs)
             
-            # Extract stage positions
+            if exposure:
+                metadata['ExposureTime'] = float(exposure) / 1000.0  # Convert to seconds
+                metadata['ExposureTimeUnit'] = 's'
+            
+            # === Stage Position Information ===
+            # Search for positioner positions using various key patterns
             for axis in ['X', 'Y', 'Z']:
-                for key_pattern in [f'Positioner:Stage:{axis}:Position', f'Stage:{axis}:Position']:
-                    matching_keys = [k for k in channel_attrs.keys() if key_pattern in str(k)]
-                    for key in matching_keys:
-                        val = channel_attrs[key]
-                        pos = val.value if hasattr(val, 'value') else val
-                        metadata[f'Position{axis}'] = float(pos)
-                        metadata[f'Position{axis}Unit'] = 'µm'
+                position = None
+                # Try different key patterns
+                for key, val in attrs.items():
+                    key_str = str(key)
+                    # Match patterns like 'Positioner:ESP32Stage:X:Position' or 'Positioner:Stage:X:Position'
+                    if 'Positioner:' in key_str and f':{axis}:Position' in key_str:
+                        position = _get_value(val)
                         break
+                
+                if position is not None:
+                    metadata[f'Position{axis}'] = float(position)
+                    metadata[f'Position{axis}Unit'] = 'µm'
             
-            # Add objective info if available
-            for key in ['Objective:Name', 'ObjectiveName']:
-                if key in channel_attrs:
-                    val = channel_attrs[key]
-                    metadata['Objective'] = val.value if hasattr(val, 'value') else str(val)
-                    break
+            # === Illumination / Channel Information ===
+            # The imaging channel is defined by active illumination sources
+            active_lasers = []
+            active_leds = []
             
-            for key in ['Objective:Magnification', 'ObjectiveMagnification']:
-                if key in channel_attrs:
-                    val = channel_attrs[key]
-                    metadata['Magnification'] = float(val.value if hasattr(val, 'value') else val)
-                    break
-            
-            ''' lasers metadata
-            e.g.:
-            'Laser:LED:WavelengthNm' = 635
-            'Laser:LED:Value' =  25538
-            'Laser:LASER:WavelengthNm' = 488
-            'Laser:LASER:Value' =  0
-            '''
-            laser_infos = []
-            for key in channel_attrs.keys():
-                if 'Laser:' in key and 'WavelengthNm' in key:
-                    parts = key.split(':')
+            # Find all laser sources and check if they are active
+            laser_sources = {}  # {laser_name: {wavelength, value, enabled}}
+            for key, val in attrs.items():
+                key_str = str(key)
+                if key_str.startswith('Laser:'):
+                    parts = key_str.split(':')
                     if len(parts) >= 3:
                         laser_name = parts[1]
-                        wavelength_key = key
-                        value_key = f'Laser:{laser_name}:Value'
+                        attr_name = parts[2]
                         
-                        wavelength_val = channel_attrs[wavelength_key]
-                        wavelength = wavelength_val.value if hasattr(wavelength_val, 'value') else wavelength_val
+                        if laser_name not in laser_sources:
+                            laser_sources[laser_name] = {}
                         
-                        power = None
-                        if value_key in channel_attrs:
-                            power_val = channel_attrs[value_key]
-                            power = power_val.value if hasattr(power_val, 'value') else power_val
-                        
-                        laser_info = {
-                            'Name': laser_name,
-                            'WavelengthNm': float(wavelength),
-                        }
-                        if power is not None:
-                            laser_info['Power'] = float(power)
-                        laser_infos.append(laser_info)
-
-            if laser_infos:
-                metadata['Lasers'] = laser_infos
-
-            # Add channel name
-            metadata['Channel'] = channel
+                        laser_sources[laser_name][attr_name] = _get_value(val)
             
-            # Add timestamp
+            # Determine which lasers are active (Enabled=True AND Value>0)
+            for laser_name, laser_data in laser_sources.items():
+                is_enabled = laser_data.get('Enabled', False)
+                value = laser_data.get('Value', 0)
+                wavelength = laser_data.get('WavelengthNm', 0)
+                
+                # Consider laser active if enabled AND has non-zero power
+                if is_enabled and value and float(value) > 0:
+                    active_lasers.append({
+                        'Name': laser_name,
+                        'WavelengthNm': float(wavelength) if wavelength else None,
+                        'Power': float(value),
+                        'IsActive': True,
+                    })
+            
+            # Similarly for LEDs
+            led_sources = {}
+            for key, val in attrs.items():
+                key_str = str(key)
+                if key_str.startswith('LED:'):
+                    parts = key_str.split(':')
+                    if len(parts) >= 3:
+                        led_name = parts[1]
+                        attr_name = parts[2]
+                        
+                        if led_name not in led_sources:
+                            led_sources[led_name] = {}
+                        
+                        led_sources[led_name][attr_name] = _get_value(val)
+            
+            for led_name, led_data in led_sources.items():
+                is_enabled = led_data.get('Enabled', False)
+                value = led_data.get('Value', 0)
+                
+                if is_enabled and value and float(value) > 0:
+                    active_leds.append({
+                        'Name': led_name,
+                        'Value': float(value),
+                        'IsActive': True,
+                    })
+            
+            # Store all illumination info
+            if active_lasers:
+                metadata['ActiveLasers'] = active_lasers
+                # Set primary channel based on first active laser's wavelength
+                if active_lasers[0].get('WavelengthNm'):
+                    metadata['ExcitationWavelength'] = active_lasers[0]['WavelengthNm']
+                    metadata['ExcitationWavelengthUnit'] = 'nm'
+                    # Build a descriptive channel name
+                    metadata['Channel'] = f"{int(active_lasers[0]['WavelengthNm'])}nm"
+                else:
+                    metadata['Channel'] = active_lasers[0]['Name']
+            elif active_leds:
+                metadata['ActiveLEDs'] = active_leds
+                metadata['Channel'] = active_leds[0]['Name']
+            else:
+                # No active illumination - use detector name as fallback
+                metadata['Channel'] = f"Brightfield_{detector_name}"
+            
+            # Store all laser sources (including inactive) for reference
+            all_lasers = []
+            for laser_name, laser_data in laser_sources.items():
+                all_lasers.append({
+                    'Name': laser_name,
+                    'WavelengthNm': float(laser_data.get('WavelengthNm', 0)) if laser_data.get('WavelengthNm') else None,
+                    'Power': float(laser_data.get('Value', 0)) if laser_data.get('Value') else 0,
+                    'Enabled': laser_data.get('Enabled', False),
+                })
+            if all_lasers:
+                metadata['Lasers'] = all_lasers
+            
+            # === Objective Information ===
+            objective_name = _search_attr(['Objective:Name', 'ObjectiveName'], attrs)
+            if objective_name:
+                metadata['Objective'] = str(objective_name)
+            
+            magnification = _search_attr(['Objective:Magnification', 'ObjectiveMagnification'], attrs)
+            if magnification:
+                metadata['Magnification'] = float(magnification)
+            
+            na = _search_attr(['Objective:NA', 'ObjectiveNA'], attrs)
+            if na:
+                metadata['NumericalAperture'] = float(na)
+            
+            # === Timestamp ===
             import datetime
             metadata['DateTime'] = datetime.datetime.now().isoformat()
             
@@ -250,9 +602,12 @@ class TiffStorer(Storer):
             
         except Exception as e:
             logger.warning(f"Error building OME metadata: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return None
 
 class PNGStorer(Storer):
+    # TODO: Is redudant with the BackgroundStorageWorker implementation? If so, merge! 
     """ A storer that stores the images in a series of png files """
     def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
         for channel, image in images.items():
@@ -269,6 +624,7 @@ class PNGStorer(Storer):
 
 
 class JPGStorer(Storer):
+    # TODO: Is redudant with the BackgroundStorageWorker implementation? If so, merge!
     """ A storer that stores the images in a series of jpg files """
     def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
         for channel, image in images.items():
@@ -288,6 +644,7 @@ class MP4Storer(Storer):
 
 
 class SaveMode(enum.Enum):
+    # TODO: Move up/ make modular
     Disk = 1
     RAM = 2
     DiskAndRAM = 3
@@ -295,6 +652,7 @@ class SaveMode(enum.Enum):
 
 
 class SaveFormat(enum.Enum):
+    # TODO: Move up/ make modular
     TIFF = 1
     ZARR = 3
     MP4 = 4
@@ -303,7 +661,8 @@ class SaveFormat(enum.Enum):
 
 
 DEFAULT_STORER_MAP: Dict[str, Type[Storer]] = {
-    SaveFormat.ZARR: ZarrStorer,
+    # TODO: Move up/ make modular
+    SaveFormat.ZARR: ZarrStorer, # TODO: REmove
     SaveFormat.TIFF: TiffStorer,
     SaveFormat.MP4: MP4Storer,
     SaveFormat.PNG: PNGStorer,
@@ -315,6 +674,7 @@ class RecordingManager(SignalInterface):
     """ RecordingManager handles single frame captures as well as continuous
     recordings of detector data. """
 
+    # TODO: This needs a full rework - I'm not sure if the signals are still needed and used in the IS_HEADLESS Mode anywhere anymore, probalby we should remove it entireely
     sigRecordingStarted = Signal()
     sigRecordingEnded = Signal()
     sigRecordingFrameNumUpdated = Signal(int)  # (frameNumber)
@@ -345,6 +705,8 @@ class RecordingManager(SignalInterface):
 
     def __del__(self):
         self.endRecording(emitSignal=False, wait=True)
+        # Wait for any pending background I/O to complete
+        self.wait_for_io_complete(timeout=10.0)
         if hasattr(super(), '__del__'):
             super().__del__()
 
@@ -365,7 +727,7 @@ class RecordingManager(SignalInterface):
         In SpecFrames mode, recFrames (the number of frames) must be specified,
         and in SpecTime mode, recTime (the recording time in seconds) must be
         specified. """
-
+        # TODO: This is not used in most cases other than recording MP4, so I guess it would be wise to entirely remove this part and create a new way for saving videos by copying the existing implementation into a new place; Also we want to merge it with the 
         self.__logger.info('Starting recording')
         self.__record = True
         self.__recordingWorker.detectorNames = detectorNames
@@ -401,10 +763,23 @@ class RecordingManager(SignalInterface):
         if wait:
             self._thread.wait()
 
-    def snap(self, detectorNames=None, savename="", saveMode=SaveMode.Disk, saveFormat=SaveFormat.TIFF, attrs=None):
+    def snap(self, detectorNames=None, savename="", saveMode=SaveMode.Disk, saveFormat=SaveFormat.TIFF, attrs=None,
+             use_background_io: bool = True, io_callback: Callable[[bool, str], None] = None):
         """ Saves an image with the specified detectors to a file
         with the specified name prefix, save mode, file format and attributes
-        to save to the capture per detector. """
+        to save to the capture per detector.
+        
+        Args:
+            detectorNames: List of detector names to capture. If None, all detectors.
+            savename: File path prefix for saving.
+            saveMode: SaveMode.Disk, SaveMode.RAM, SaveMode.DiskAndRAM, or SaveMode.Numpy
+            saveFormat: SaveFormat.TIFF, SaveFormat.PNG, SaveFormat.JPG, etc.
+            attrs: Dictionary of metadata attributes to save.
+            use_background_io: If True (default), use background queue for non-blocking I/O.
+                              Set to False for synchronous writes (blocks until complete).
+            io_callback: Optional callback(success: bool, message: str) called when
+                        background I/O completes. Only used when use_background_io=True.
+        """
         acqHandle = self.__detectorsManager.startAcquisition()
 
         if detectorNames is None:
@@ -419,12 +794,15 @@ class RecordingManager(SignalInterface):
                 image = images[detectorName]
 
             if saveFormat:
-                storer = self.__storerMap[saveFormat]
-
                 if saveMode == SaveMode.Disk or saveMode == SaveMode.DiskAndRAM:
-                    # Save images to disk
-                    store = storer(savename, self.__detectorsManager)
-                    store.snap(images, attrs)
+                    if use_background_io:
+                        # Use background queue for non-blocking I/O
+                        self._snap_background(images, savename, saveFormat, attrs, io_callback)
+                    else:
+                        # Synchronous write (original behavior)
+                        storer = self.__storerMap[saveFormat]
+                        store = storer(savename, self.__detectorsManager)
+                        store.snap(images, attrs)
 
                 if saveMode == SaveMode.RAM or saveMode == SaveMode.DiskAndRAM:
                     for channel, image in images.items():
@@ -438,6 +816,88 @@ class RecordingManager(SignalInterface):
             # self.__detectorsManager.stopAcquisition(acqHandle)
             if saveMode == SaveMode.Numpy:
                 return images
+
+    def _snap_background(self, images: Dict[str, np.ndarray], savename: str, 
+                         saveFormat: SaveFormat, attrs: Dict[str, str] = None,
+                         callback: Callable[[bool, str], None] = None):
+        """
+        Queue images for background saving.
+        
+        This method is non-blocking - it submits tasks to the background
+        storage worker and returns immediately.
+        """
+        worker = get_background_storage_worker()
+        
+        for channel, image in images.items():
+            # Build OME metadata for each image
+            ome_attrs = self._build_ome_metadata(channel, image, attrs)
+            
+            # Determine task type and filepath based on format
+            if saveFormat == SaveFormat.TIFF:
+                task_type = 'snap_tiff'
+                filepath = f'{savename}_{channel}.tiff'
+                task_attrs = ome_attrs
+            elif saveFormat == SaveFormat.PNG:
+                task_type = 'snap_png'
+                filepath = f'{savename}_{channel}.png'
+                task_attrs = None  # PNG doesn't support metadata
+            elif saveFormat == SaveFormat.JPG:
+                task_type = 'snap_jpg'
+                filepath = f'{savename}_{channel}.jpg'
+                task_attrs = None  # JPG doesn't support metadata
+            else:
+                # Unsupported format for background I/O, fall back to sync
+                self.__logger.warning(f"Format {saveFormat} not supported for background I/O, using sync write")
+                storer = self.__storerMap[saveFormat]
+                store = storer(savename, self.__detectorsManager)
+                store.snap({channel: image}, attrs)
+                continue
+            
+            # Make a copy of the image data for thread safety
+            image_copy = image.copy()
+            
+            task = StorageTask(
+                task_type=task_type,
+                filepath=filepath,
+                data=image_copy,
+                attrs=task_attrs,
+                callback=callback,
+                priority=0  # Normal priority
+            )
+            
+            if not worker.submit_task(task):
+                self.__logger.warning(f"Failed to queue storage task for {filepath}")
+    
+    def get_pending_io_count(self) -> int:
+        """
+        Get the number of pending background I/O operations.
+        
+        Useful for checking if all writes have completed before
+        ending an experiment or closing the application.
+        """
+        try:
+            worker = get_background_storage_worker()
+            return worker.get_queue_size()
+        except:
+            return 0
+    
+    def wait_for_io_complete(self, timeout: float = 30.0) -> bool:
+        """
+        Wait for all pending background I/O operations to complete.
+        
+        Args:
+            timeout: Maximum time to wait in seconds.
+            
+        Returns:
+            True if all I/O completed, False if timeout reached.
+        """
+        start = time.time()
+        while self.get_pending_io_count() > 0:
+            if time.time() - start > timeout:
+                self.__logger.warning(f"Timeout waiting for I/O completion, {self.get_pending_io_count()} tasks pending")
+                return False
+            time.sleep(0.1)
+        return True
 
 
     def snapImagePrev(self, detectorName, savename, saveFormat, image, attrs):

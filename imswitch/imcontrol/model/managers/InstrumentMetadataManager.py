@@ -147,22 +147,59 @@ class InstrumentMetadataManager(SignalInterface):
         self.__logger.info(f"InstrumentMetadataManager initialized: {self._instrument_info.name}")
     
     def _load_from_config(self, config):
-        """Load instrument info from configuration."""
+        """
+        Load instrument info from SetupInfo.InstrumentInfo configuration.
+        
+        Handles the new config.json format with camelCase field names.
+        """
         try:
-            if hasattr(config, 'name'):
+            # Map SetupInfo.InstrumentInfo fields (camelCase) to InstrumentInfo fields (snake_case)
+            if hasattr(config, 'name') and config.name:
                 self._instrument_info.name = config.name
-            if hasattr(config, 'manufacturer'):
+            if hasattr(config, 'microscopeType') and config.microscopeType:
+                self._instrument_info.microscope_type = config.microscopeType
+            if hasattr(config, 'manufacturer') and config.manufacturer:
                 self._instrument_info.manufacturer = config.manufacturer
-            if hasattr(config, 'model'):
+            if hasattr(config, 'model') and config.model:
                 self._instrument_info.model = config.model
-            if hasattr(config, 'serial_number'):
-                self._instrument_info.serial_number = config.serial_number
-            if hasattr(config, 'microscope_type'):
-                self._instrument_info.microscope_type = config.microscope_type
-            if hasattr(config, 'tube_lens_focal_length_mm'):
-                self._instrument_info.tube_lens_focal_length_mm = config.tube_lens_focal_length_mm
-            if hasattr(config, 'configuration_uuid'):
-                self._instrument_info.configuration_uuid = config.configuration_uuid
+            if hasattr(config, 'serialNumber') and config.serialNumber:
+                self._instrument_info.serial_number = config.serialNumber
+            
+            # Optical configuration
+            if hasattr(config, 'tubeLensFocalLengthMm') and config.tubeLensFocalLengthMm:
+                self._instrument_info.tube_lens_focal_length_mm = config.tubeLensFocalLengthMm
+            if hasattr(config, 'tubeLensMagnification') and config.tubeLensMagnification:
+                self._instrument_info.tube_lens_magnification = config.tubeLensMagnification
+            
+            # UC2 specific
+            if hasattr(config, 'uc2FrameName') and config.uc2FrameName:
+                self._instrument_info.uc2_frame_name = config.uc2FrameName
+            if hasattr(config, 'uc2FrameAuthor') and config.uc2FrameAuthor:
+                self._instrument_info.uc2_frame_author = config.uc2FrameAuthor
+            if hasattr(config, 'uc2FrameVersion') and config.uc2FrameVersion:
+                self._instrument_info.uc2_frame_version = config.uc2FrameVersion
+            if hasattr(config, 'uc2Verified'):
+                self._instrument_info.uc2_verified = config.uc2Verified
+            
+            # Load filters from config
+            if hasattr(config, 'filters') and config.filters:
+                for f in config.filters:
+                    filter_info = FilterInfo(
+                        name=f.get('name', ''),
+                        filter_type=f.get('filterType', 'Emission'),
+                        wavelength_nm=f.get('wavelengthNm'),
+                        bandwidth_nm=f.get('bandwidthNm'),
+                        manufacturer=f.get('manufacturer', ''),
+                        model=f.get('model', ''),
+                    )
+                    self._instrument_info.filters.append(filter_info)
+            
+            # Load UC2 OptiKit config if path specified
+            if hasattr(config, 'uc2OptiKitConfigPath') and config.uc2OptiKitConfigPath:
+                self.load_uc2_optikit_config(config.uc2OptiKitConfigPath)
+            
+            self.__logger.info(f"Loaded instrument config: {self._instrument_info.name}")
+            
         except Exception as e:
             self.__logger.warning(f"Error loading instrument config: {e}")
     

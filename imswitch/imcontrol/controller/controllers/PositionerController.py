@@ -38,10 +38,13 @@ class PositionerController(ImConWidgetController):
 
         # Connect CommunicationChannel signals
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
+        
+        # Connect position update signal - this updates shared attributes for all modes
+        # This is the primary mechanism for keeping metadata in sync with hardware state
+        self._commChannel.sigUpdateMotorPosition.connect(self._onMotorPositionUpdate)
 
         # Connect PositionerWidget signals
         if not IS_HEADLESS:
-            self._commChannel.sigUpdateMotorPosition.connect(self.updateAllPositionGUI) # force update position in GUI
             self._widget.sigStepUpClicked.connect(self.stepUp)
             self._widget.sigStepDownClicked.connect(self.stepDown)
             self._widget.sigStepAbsoluteClicked.connect(self.moveAbsolute)
@@ -134,23 +137,44 @@ class PositionerController(ImConWidgetController):
         self.setSharedAttr(positionerName, axis, _speedAttr, speed)
         if not IS_HEADLESS: self._widget.setSpeedSize(positionerName, axis, speed)
 
-    def updateAllPositionGUI(self):
-        # update all positions for all axes in GUI
+    def _onMotorPositionUpdate(self, positionData: Dict = None):
+        """
+        Handler for sigUpdateMotorPosition signal.
+        Updates shared attributes and GUI for all positioners.
+        
+        This is the central point where motor positions are synced to the metadata system.
+        Called both from blocking moves and asynchronous position updates from hardware.
+        
+        Args:
+            positionData: Optional position data dict. If None, positions are read from managers.
+        """
         for positionerName in self._master.positionersManager.getAllDeviceNames():
-            for axis in self._master.positionersManager[positionerName].axes:
+            positioner = self._master.positionersManager[positionerName]
+            for axis in positioner.axes:
                 self.updatePosition(positionerName, axis)
-                self.updateSpeed(positionerName, axis)
+            # Also update speed if available
+            if hasattr(positioner, 'speed'):
+                for axis in positioner.axes:
+                    self.updateSpeed(positionerName, axis)
+    
+    def updateAllPositionGUI(self):
+        """Legacy method - calls _onMotorPositionUpdate for backwards compatibility."""
+        self._onMotorPositionUpdate()
 
     def updatePosition(self, positionerName, axis):
+        """Update position for a single axis and sync to shared attributes."""
         if axis == "XY":
-            for axis in (("X", "Y")):
-                newPos = self._master.positionersManager[positionerName].position[axis]
-                self.setSharedAttr(positionerName, axis, _positionAttr, newPos)
-                if not IS_HEADLESS: self._widget.updatePosition(positionerName, axis, newPos)
+            # Handle combined XY axis by updating both X and Y
+            for single_axis in ("X", "Y"):
+                newPos = self._master.positionersManager[positionerName].position[single_axis]
+                self.setSharedAttr(positionerName, single_axis, _positionAttr, newPos)
+                if not IS_HEADLESS: 
+                    self._widget.updatePosition(positionerName, single_axis, newPos)
         else:
             newPos = self._master.positionersManager[positionerName].position[axis]
             self.setSharedAttr(positionerName, axis, _positionAttr, newPos)
-            if not IS_HEADLESS: self._widget.updatePosition(positionerName, axis, newPos)
+            if not IS_HEADLESS: 
+                self._widget.updatePosition(positionerName, axis, newPos)
 
     def updateSpeed(self, positionerName, axis):
         newSpeed = self._master.positionersManager[positionerName].speed[axis]

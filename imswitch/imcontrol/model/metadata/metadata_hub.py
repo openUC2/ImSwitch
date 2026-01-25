@@ -601,6 +601,62 @@ class MetadataHub:
             
             return event
     
+    def get_frame_events(self, detector_name: str, limit: int = None) -> List[FrameEvent]:
+        """
+        Get frame events for a detector without removing them.
+        
+        Args:
+            detector_name: Detector name
+            limit: Maximum number of events to return (None = all)
+        
+        Returns:
+            List of FrameEvent objects
+        """
+        return self.peek_frame_events(detector_name, n=limit)
+    
+    def export_detector_contexts(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Export all detector contexts as dictionaries.
+        
+        Returns:
+            Dictionary mapping detector names to their context dicts
+        """
+        with self._lock:
+            return {
+                name: ctx.to_dict() 
+                for name, ctx in self._detector_contexts.items()
+            }
+    
+    def to_json(self) -> str:
+        """
+        Export complete metadata state as JSON string.
+        
+        Returns:
+            JSON string with global metadata and detector contexts
+        """
+        import json
+        import numpy as np
+        
+        def json_serializer(obj):
+            """Custom JSON serializer for special types."""
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, (np.integer, np.floating)):
+                return obj.item()
+            elif hasattr(obj, '__dict__'):
+                return str(obj)
+            else:
+                return str(obj)
+        
+        with self._lock:
+            data = {
+                'timestamp': time.time(),
+                'global_metadata': self.get_latest(flat=True),
+                'detector_contexts': self.export_detector_contexts(),
+                'frame_counts': dict(self._frame_counters),
+            }
+            return json.dumps(data, default=json_serializer, indent=2)
+    
     def to_ome(self, detector_names: Optional[List[str]] = None) -> Optional['OME']:
         """
         Generate OME metadata object for registered detectors.

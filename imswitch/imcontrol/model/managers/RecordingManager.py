@@ -107,7 +107,7 @@ class TiffStorer(Storer):
     
     def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
         for channel, image in images.items():
-            path = f'{self.filepath}_{channel}.tiff'
+            path = f'{self.filepath}_{channel}.ome.tiff'
             if not hasattr(image, "shape"):
                 logger.error(f"Could not save image to tiff file {path}")
                 continue
@@ -204,6 +204,41 @@ class TiffStorer(Storer):
                     metadata['Magnification'] = float(val.value if hasattr(val, 'value') else val)
                     break
             
+            ''' lasers metadata
+            e.g.:
+            'Laser:LED:WavelengthNm' = 635
+            'Laser:LED:Value' =  25538
+            'Laser:LASER:WavelengthNm' = 488
+            'Laser:LASER:Value' =  0
+            '''
+            laser_infos = []
+            for key in channel_attrs.keys():
+                if 'Laser:' in key and 'WavelengthNm' in key:
+                    parts = key.split(':')
+                    if len(parts) >= 3:
+                        laser_name = parts[1]
+                        wavelength_key = key
+                        value_key = f'Laser:{laser_name}:Value'
+                        
+                        wavelength_val = channel_attrs[wavelength_key]
+                        wavelength = wavelength_val.value if hasattr(wavelength_val, 'value') else wavelength_val
+                        
+                        power = None
+                        if value_key in channel_attrs:
+                            power_val = channel_attrs[value_key]
+                            power = power_val.value if hasattr(power_val, 'value') else power_val
+                        
+                        laser_info = {
+                            'Name': laser_name,
+                            'WavelengthNm': float(wavelength),
+                        }
+                        if power is not None:
+                            laser_info['Power'] = float(power)
+                        laser_infos.append(laser_info)
+
+            if laser_infos:
+                metadata['Lasers'] = laser_infos
+
             # Add channel name
             metadata['Channel'] = channel
             

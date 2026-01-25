@@ -33,3 +33,4 @@ from .LepmonManager import LepmonManager
 from .FlatfieldManager import FlatfieldManager
 from .PixelCalibrationManager import PixelCalibrationManager
 from .ArkitektManager import ArkitektManager
+from .InstrumentMetadataManager import InstrumentMetadataManager

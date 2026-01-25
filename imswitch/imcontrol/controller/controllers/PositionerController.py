@@ -64,7 +64,11 @@ class PositionerController(ImConWidgetController):
         return self._master.positionersManager.execOnAll(lambda p: p.speed)
 
     def move(self, positionerName, axis, dist, isAbsolute=None, isBlocking=False, speed=None):
-        """ Moves positioner by dist micrometers in the specified axis. """
+        """ Moves positioner by dist micrometers in the specified axis. 
+        
+        For non-blocking moves, the position will be updated asynchronously via 
+        sigUpdateMotorPosition signal from the positioner manager.
+        """
         if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
 
@@ -79,6 +83,10 @@ class PositionerController(ImConWidgetController):
                 speed = 5000 # FIXME: default speed for headless mode
         # set speed for the positioner
         self.setSpeed(positionerName=positionerName, speed=speed, axis=axis)
+        
+        # Set "IsMoving" attribute before move starts
+        self.setSharedAttr(positionerName, axis, _isMovingAttr, True)
+        
         try:
             # special case for UC2 positioner that takes more arguments
             self._master.positionersManager[positionerName].move(dist, axis, isAbsolute, isBlocking)
@@ -89,9 +97,12 @@ class PositionerController(ImConWidgetController):
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)
             self._master.positionersManager[positionerName].move(dist, axis)
-        if isBlocking: # push signal immediately
+        
+        if isBlocking:
+            # For blocking moves, update position and metadata immediately
             self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
-        #self.updatePosition(positionerName, axis)
+        self.setSharedAttr(positionerName, axis, _isMovingAttr, False)
+        # For non-blocking moves, position will be updated via sigUpdateMotorPosition signal
 
     def moveForever(self, positionerName: str=None, axis="X", speed=0, is_stop:bool=False):
         """ Moves positioner forever. """
@@ -422,6 +433,7 @@ _positionAttr = 'Position'
 _speedAttr = "Speed"
 _homeAttr = "Home"
 _stopAttr = "Stop"
+_isMovingAttr = "IsMoving"
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

@@ -37,6 +37,7 @@ from imswitch.imcontrol.model import (
     ExperimentManager,
     ObjectiveManager,
     ArkitektManager,
+    InstrumentMetadataManager,
 )
 
 
@@ -103,6 +104,14 @@ class MasterController:
         self.UC2ConfigManager = UC2ConfigManager(
             self.__setupInfo.uc2Config, lowLevelManagers
         )
+        
+        # Initialize InstrumentMetadataManager for OME instrument metadata
+        self.instrumentMetadataManager = InstrumentMetadataManager(
+            instrumentInfo=getattr(self.__setupInfo, 'instrument', None),
+            setupInfo=self.__setupInfo,
+            lowLevelManagers=lowLevelManagers,
+        )
+        
         if "SIM" in self.__setupInfo.availableWidgets:
             self.simManager = SIMManager(self.__setupInfo.sim)
         if "DPC" in self.__setupInfo.availableWidgets:

@@ -288,6 +288,107 @@ class MetadataController(ImConWidgetController):
         except Exception as e:
             self.__logger.error(f"Error getting shared attributes: {e}")
             return {}
+    
+    # === Session Discovery API (Multi-instance access) ===
+    
+    @APIExport()
+    def listActiveSessions(self, basePath: str = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        List active and recent acquisition sessions.
+        
+        This enables multi-instance access: another ImSwitch can query
+        available sessions and open them read-only.
+        
+        Args:
+            basePath: Base directory to search (defaults to user data dir)
+            limit: Maximum number of sessions to return
+        
+        Returns:
+            List of session summaries with path, status, and basic metadata
+        """
+        from imswitch.imcontrol.model.io import SessionManager
+        from imswitch.imcommon.model import dirtools
+        
+        if basePath is None:
+            basePath = dirtools.UserFileDirs.Data
+        
+        try:
+            manager = SessionManager(basePath)
+            return manager.list_sessions(limit=limit)
+        except Exception as e:
+            self.__logger.error(f"Error listing sessions: {e}")
+            return []
+    
+    @APIExport()
+    def getSessionMetadata(self, sessionId: str, basePath: str = None) -> Dict[str, Any]:
+        """
+        Get full metadata for a specific session.
+        
+        Args:
+            sessionId: Session UUID
+            basePath: Base directory to search
+        
+        Returns:
+            Full session metadata including hub snapshot and detector contexts
+        """
+        from imswitch.imcontrol.model.io import SessionManager
+        from imswitch.imcommon.model import dirtools
+        
+        if basePath is None:
+            basePath = dirtools.UserFileDirs.Data
+        
+        try:
+            manager = SessionManager(basePath)
+            return manager.get_session(sessionId) or {"error": f"Session {sessionId} not found"}
+        except Exception as e:
+            self.__logger.error(f"Error getting session: {e}")
+            return {"error": str(e)}
+    
+    @APIExport()
+    def getZarrStoreUrl(self, sessionPath: str) -> str:
+        """
+        Get the URL/path to a session's OME-Zarr store.
+        
+        Useful for opening the Zarr store in another ImSwitch instance
+        or external viewers like napari.
+        
+        Args:
+            sessionPath: Path to session directory
+        
+        Returns:
+            Path to the OME-Zarr store
+        """
+        from pathlib import Path
+        from imswitch.imcontrol.model.io.session import SessionManager
+        
+        zarr_path = Path(sessionPath) / SessionManager.ZARR_DIR
+        if zarr_path.exists():
+            return str(zarr_path)
+        return ""
+    
+    @APIExport()
+    def getCurrentSessionInfo(self) -> Dict[str, Any]:
+        """
+        Get info about the current acquisition session if one is active.
+        
+        Returns:
+            Current session info or empty dict if no active session
+        """
+        # Check if RecordingManager has an active session
+        try:
+            rec_manager = self._master.recordingManager
+            if rec_manager and hasattr(rec_manager, '_active_data_store'):
+                store = rec_manager._active_data_store
+                if store:
+                    return {
+                        'session_path': str(store.get_session_path()),
+                        'zarr_path': str(store.get_zarr_path()),
+                        'statistics': store.get_statistics(),
+                    }
+        except Exception as e:
+            self.__logger.debug(f"Error getting current session: {e}")
+        
+        return {}
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

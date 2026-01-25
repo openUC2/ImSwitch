@@ -86,10 +86,7 @@ class PositionerController(ImConWidgetController):
                 speed = 5000 # FIXME: default speed for headless mode
         # set speed for the positioner
         self.setSpeed(positionerName=positionerName, speed=speed, axis=axis)
-        
-        # Set "IsMoving" attribute before move starts
-        self.setSharedAttr(positionerName, axis, _isMovingAttr, True)
-        
+                
         try:
             # special case for UC2 positioner that takes more arguments
             self._master.positionersManager[positionerName].move(dist, axis, isAbsolute, isBlocking)
@@ -100,12 +97,7 @@ class PositionerController(ImConWidgetController):
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)
             self._master.positionersManager[positionerName].move(dist, axis)
-        
-        if isBlocking:
-            # For blocking moves, update position and metadata immediately
-            self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
-        self.setSharedAttr(positionerName, axis, _isMovingAttr, False)
-        # For non-blocking moves, position will be updated via sigUpdateMotorPosition signal
+        self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
 
     def moveForever(self, positionerName: str=None, axis="X", speed=0, is_stop:bool=False):
         """ Moves positioner forever. """
@@ -157,9 +149,7 @@ class PositionerController(ImConWidgetController):
                 for axis in positioner.axes:
                     self.updateSpeed(positionerName, axis)
     
-    def updateAllPositionGUI(self):
-        """Legacy method - calls _onMotorPositionUpdate for backwards compatibility."""
-        self._onMotorPositionUpdate()
+
 
     def updatePosition(self, positionerName, axis):
         """Update position for a single axis and sync to shared attributes."""
@@ -457,7 +447,6 @@ _positionAttr = 'Position'
 _speedAttr = "Speed"
 _homeAttr = "Home"
 _stopAttr = "Stop"
-_isMovingAttr = "IsMoving"
 
 # Copyright (C) 2020-2024 ImSwitch developers
 # This file is part of ImSwitch.

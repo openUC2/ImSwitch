@@ -13,8 +13,8 @@ from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
 import numpy as np
 
-from .experiment_mode_base import ExperimentModeBase, OMEFileStorePaths
-from .ome_writer import OMEWriter, OMEWriterConfig
+from .experiment_mode_base import ExperimentModeBase
+from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
 from imswitch.imcommon.model import dirtools
 
 

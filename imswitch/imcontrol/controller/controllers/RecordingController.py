@@ -36,6 +36,7 @@ class RecordingController(ImConWidgetController):
         self.streamstarted = False
 
         # Connect CommunicationChannel signals
+        # TODO: Remove unused signals 
         self._commChannel.sigRecordingStarted.connect(self.recordingStarted)
         self._commChannel.sigRecordingEnded.connect(self.recordingEnded)
         self._commChannel.sigScanDone.connect(self.scanDone)
@@ -479,206 +480,6 @@ class RecordingController(ImConWidgetController):
                 self.setSharedAttr(_lapseTimeAttr, self._widget.getTimelapseTime())
                 self.setSharedAttr(_freqAttr, self._widget.getTimelapseFreq())
 
-    def sendScanFreq(self):
-        freq = self.getTimelapseFreq()
-        self._commChannel.sigSendScanFreq.emit(freq)
-
-    def getTimelapseFreq(self):
-        return self._widget.getTimelapseFreq()
-
-    def setLiveStreamStart(self): # TODO: we need to connect that to the signal in the communication channel
-        self.streamRunning = True
-
-    def setLiveStreamStop(self): # TODO: we need to connect that to the signal in the communication channel
-        self.streamRunning = False
-
-    def stopStream(self): # TODO: we need to connect that to the signal in the communication channel
-        self.streamRunning = False
-        self.streamstarted = False
-        self.streamQueue = None
-
-    def startStream(self):
-        """
-        return a generator that converts frames into jpeg's reads to stream
-        """
-        detectorManager = self._master.detectorsManager
-        detectorNum1Name = detectorManager.getAllDeviceNames()[0]
-        detectorNum1 = detectorManager[detectorNum1Name]
-        detectorNum1.startAcquisition()
-
-        # Wait for first valid frame (up to 2s); fall back to a black frame
-        # This avoids crashing on output_frame is None at startup.
-        deadline = time.time() + 2.0
-        output_frame = None
-        while self.streamRunning and output_frame is None and time.time() < deadline:
-            try:
-                output_frame = detectorNum1.getLatestFrame()
-            except Exception:
-                output_frame = None
-            if output_frame is None:
-                time.sleep(0.05)
-
-        if output_frame is None:
-            # Default black frame if nothing available (grayscale)
-            output_frame = np.zeros((480, 640), dtype=np.uint8)
-
-        # adaptive resize: Keep them below 640x480
-        try:
-            if output_frame.shape[0] > 640 or output_frame.shape[1] > 480:
-                everyNthsPixel = int(
-                    np.min(
-                        [
-                            max(1, output_frame.shape[0] // 480),
-                            max(1, output_frame.shape[1] // 640),
-                        ]
-                    )
-                )
-            else:
-                everyNthsPixel = 1
-        except Exception:
-            everyNthsPixel = 1
-
-        try:
-            while self.streamRunning:
-                output_frame = detectorNum1.getLatestFrame()
-                if output_frame is None:
-                    time.sleep(0.01)
-                    continue
-                try:
-                    output_frame = output_frame[::everyNthsPixel, ::everyNthsPixel]
-                except Exception:
-                    output_frame = np.zeros((480, 640), dtype=np.uint8)
-
-                # Ensure uint8 image for JPEG; normalize if needed
-                if output_frame.dtype != np.uint8:
-                    try:
-                        vmin = float(np.min(output_frame))
-                        vmax = float(np.max(output_frame))
-                        if vmax > vmin:
-                            output_frame = (
-                                (output_frame - vmin) / (vmax - vmin) * 255.0
-                            ).astype(np.uint8)
-                        else:
-                            output_frame = np.zeros_like(output_frame, dtype=np.uint8)
-                    except Exception:
-                        output_frame = np.zeros_like(output_frame, dtype=np.uint8)
-                # adjust the parameters of the jpeg compression
-                quality = 90  # Set the desired quality level (0-100)
-                encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
-                flag, encodedImage = cv2.imencode(".jpg", output_frame, encode_params)
-                if not flag:
-                    continue
-                # Put raw JPEG bytes into queue; avoid blocking forever if queue is full
-                try:
-                    self.streamQueue.put(encodedImage.tobytes(), timeout=0.5)
-                except Exception:
-                    # Drop frame if queue is full or unavailable
-                    pass
-                time.sleep(0.1)  # 10 fps
-        except Exception:
-            self.streamRunning = False
-
-    def streamer(self):
-        # Start the streaming worker thread once and create a thread-safe queue
-        if not self.streamstarted: # TODO: This has to be connected to the signal in the communication channel and also check if the thrad is still running
-            import threading
-
-            self.streamQueue = queue.Queue(maxsize=10)
-            self.streamRunning = True
-            self.streamstarted = True
-            t = threading.Thread(target=self.startStream, daemon=True)
-            t.start()
-
-        try:
-            while self.streamRunning:
-                try:
-                    # Use timeout to allow graceful shutdown
-                    jpeg_bytes = self.streamQueue.get(timeout=1.0)
-                except queue.Empty:
-                    continue
-
-                # Build a proper MJPEG part with Content-Length for better client compatibility
-                header = (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n"
-                    + f"Content-Length: {len(jpeg_bytes)}\r\n\r\n".encode("ascii")
-                )
-                yield header + jpeg_bytes + b"\r\n"
-        except GeneratorExit:
-            self.__logger.debug("Stream connection closed by client.")
-            self.stopStream()  # Ensure stream is stopped when client disconnects
-
-    @APIExport(runOnUIThread=False)
-    def video_feeder(self, startStream: bool = True) -> StreamingResponse:
-        """
-        Return a generator that converts frames into jpeg's ready to stream.
-        
-        This method is maintained for backward compatibility but now delegates to LiveViewController.
-        If LiveViewController is not available, falls back to legacy implementation.
-        """
-        # Try to use LiveViewController if available
-        try:
-            if hasattr(self._commChannel, '_CommunicationChannel__main'):
-                main_controller = self._commChannel._CommunicationChannel__main
-                if 'LiveView' in main_controller.controllers:
-                    # Delegate to LiveViewController
-                    return main_controller.controllers['LiveView'].video_feeder(startStream)
-        except Exception as e:
-            self.__logger.warning(f"Could not use LiveViewController for video_feeder: {e}")
-            # Fall back to legacy implementation
-
-        # Legacy implementation (kept for backward compatibility)
-        if startStream:
-            # start the live video feed
-            self._commChannel.sigStartLiveAcquistion.emit(True)
-            headers = {
-                # Disable buffering and caching to reduce latency in various proxies/servers
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            }
-            return StreamingResponse(
-                self.streamer(),
-                media_type="multipart/x-mixed-replace;boundary=frame",
-                headers=headers,
-            )
-        else:
-            self.stopStream()
-            self._commChannel.sigStartLiveAcquistion.emit(False)
-            return "stream stopped"
-
-    #
-
-    # @app.post("/execute-function/")
-    """ TODO: Maybe a little bit of a security risk, but it's a nice feature
-    @APIExport(runOnUIThread=False)
-    def executeFunction(self, code: str):
-        try:
-            # Create a new dictionary for local variables
-            local_variables = {'self': self}
-            global_variables = {'self': self}
-
-            # Execute the provided code within the context of the current FastAPI runtime
-            exec(code, globals(), local_variables)
-
-            # Add the local variables to the shared dictionary
-            self.shared_variables.update(local_variables)
-
-            return {"message": "Function executed successfully", "result": local_variables}
-        except Exception as e:
-            self._logger.error(e)
-            return HTTPException(detail=str(e), status_code=400)
-    """
-
-    @APIExport(runOnUIThread=False)
-    # @app.get("/get-variable/{variable_name}")
-    def getVariable(self, variable_name: str):
-        if variable_name in self.shared_variables:
-            return {"variable_value": self.shared_variables[variable_name]}
-        else:
-            return HTTPException(detail="Variable not found", status_code=404)
 
     @APIExport(runOnUIThread=True)
     def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: SaveFormat = SaveFormat.TIFF) -> dict:
@@ -796,7 +597,8 @@ class RecordingController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def startRecording(self, mSaveFormat: int = SaveFormat.TIFF) -> None:
-        """Starts recording with the set settings to the set file path."""
+        """Starts recording with the set settings to the set file path.""" 
+        # TODO: This should also be part of the io/writer 
         mSaveFormat = SaveFormat(mSaveFormat)
         if not IS_HEADLESS:
             self._widget.setRecButtonChecked(True)

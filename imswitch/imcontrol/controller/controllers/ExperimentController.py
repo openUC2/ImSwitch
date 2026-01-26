@@ -25,11 +25,11 @@ try:
 except Exception:
     IS_OMEZARR_AVAILABLE = False
 
-from imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
+# Import OME writers from new io location
+from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
 from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ExperimentPerformanceMode,
     ExperimentNormalMode,
-    OMEFileStorePaths
 )
 
 from pydantic import Field

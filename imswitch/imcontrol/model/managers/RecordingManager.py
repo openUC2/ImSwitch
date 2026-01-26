@@ -1,8 +1,46 @@
+"""
+Recording Manager for ImSwitch.
+
+DEPRECATION NOTICE:
+===================
+This module is DEPRECATED and will be removed in a future version.
+Please use the new unified io module instead:
+
+    from imswitch.imcontrol.model.io import (
+        RecordingService,
+        SaveMode,
+        SaveFormat,
+        get_recording_service
+    )
+    
+    # Create service
+    service = get_recording_service()
+    service.set_detectors_manager(detectors_manager)
+    
+    # Snap images
+    results = service.snap(format=SaveFormat.TIFF)
+    
+    # Video recording
+    service.start_video_recording('/path/to/video.mp4')
+    service.add_video_frame(frame)
+    service.stop_video_recording()
+
+The new io module provides:
+- Unified snap/recording/streaming operations
+- MetadataHub integration for OME-compliant metadata
+- OME-Zarr and OME-TIFF writers
+- 2D stitched mosaic support
+- MP4 video recording
+
+This module remains for backwards compatibility only.
+"""
+
 import enum
 import os
 import time
 import queue
 import threading
+import warnings
 from io import BytesIO
 from typing import Dict, Optional, Type, List, Callable, Any, Tuple
 import h5py
@@ -276,7 +314,6 @@ def shutdown_background_storage():
 
 
 def _create_zarr_store(path):
-    # TODO: REmove 
     """
     Create a Zarr store compatible with both Zarr 2.x and 3.x
     
@@ -297,53 +334,242 @@ def _create_zarr_store(path):
         return path
 
 
-# NOTE: AsTemporaryFile is deprecated and should not be used for new code.
-# Direct file writing is preferred with proper error handling.
-# This class is kept for backwards compatibility but will be removed in a future version.
-class AsTemporayFile(object):
-    # TODO: REmove 
-    """ 
-    DEPRECATED: A temporary file that when exiting the context manager is renamed to its original name.
-    
-    This pattern is no longer recommended. Use direct file writing with try/except instead.
+def _build_snap_metadata(detector_name: str, image: np.ndarray, 
+                         attrs: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
     """
-    def __init__(self, filepath, tmp_extension='.tmp'):
+    Build OME-TIFF compatible metadata from attributes.
+    
+    This is a shared function used by both _snap_background and TiffStorer.
+    For new code, prefer using SnapService from imswitch.imcontrol.model.io
+    which has the same logic.
+    
+    Args:
+        detector_name: Name of the detector
+        image: Image array
+        attrs: Dictionary of metadata attributes
+        
+    Returns:
+        Dictionary of OME metadata or None
+    """
+    if not attrs:
+        return None
+    
+    metadata = {}
+    
+    def _get_value(val):
+        """Extract value from SharedAttrValue or return raw value."""
+        return val.value if hasattr(val, 'value') else val
+    
+    def _search_attr(patterns: list, search_dict: dict):
+        """Search for attribute using multiple key patterns."""
+        for pattern in patterns:
+            if pattern in search_dict:
+                return _get_value(search_dict[pattern])
+            for key in search_dict.keys():
+                if pattern in str(key):
+                    return _get_value(search_dict[key])
+        return None
+    
+    try:
+        import datetime
+        
+        # Detector info
+        metadata['Detector'] = detector_name
+        
+        # Pixel size
+        pixel_size = _search_attr([
+            f'Detector:{detector_name}:PixelSizeUm',
+            'Detector:PixelSizeUm',
+            'PixelSizeUm'
+        ], attrs)
+        if pixel_size:
+            metadata['PhysicalSizeX'] = float(pixel_size)
+            metadata['PhysicalSizeY'] = float(pixel_size)
+            metadata['PhysicalSizeXUnit'] = 'µm'
+            metadata['PhysicalSizeYUnit'] = 'µm'
+        
+        # Exposure
+        exposure = _search_attr([
+            f'Detector:{detector_name}:ExposureMs',
+            'Detector:ExposureMs',
+            'ExposureMs'
+        ], attrs)
+        if exposure:
+            metadata['ExposureTime'] = float(exposure) / 1000.0
+            metadata['ExposureTimeUnit'] = 's'
+        
+        # Stage positions
+        for axis in ['X', 'Y', 'Z']:
+            for key, val in attrs.items():
+                key_str = str(key)
+                if 'Positioner:' in key_str and f':{axis}:Position' in key_str:
+                    metadata[f'Position{axis}'] = float(_get_value(val))
+                    metadata[f'Position{axis}Unit'] = 'µm'
+                    break
+        
+        # Active lasers
+        laser_sources = {}
+        for key, val in attrs.items():
+            key_str = str(key)
+            if key_str.startswith('Laser:'):
+                parts = key_str.split(':')
+                if len(parts) >= 3:
+                    laser_name = parts[1]
+                    attr_name = parts[2]
+                    if laser_name not in laser_sources:
+                        laser_sources[laser_name] = {}
+                    laser_sources[laser_name][attr_name] = _get_value(val)
+        
+        active_lasers = []
+        for laser_name, laser_data in laser_sources.items():
+            is_enabled = laser_data.get('Enabled', False)
+            value = laser_data.get('Value', 0)
+            wavelength = laser_data.get('WavelengthNm', 0)
+            if is_enabled and value and float(value) > 0:
+                active_lasers.append({
+                    'Name': laser_name,
+                    'WavelengthNm': float(wavelength) if wavelength else None,
+                    'Power': float(value),
+                })
+        
+        if active_lasers:
+            metadata['ActiveLasers'] = active_lasers
+            if active_lasers[0].get('WavelengthNm'):
+                metadata['ExcitationWavelength'] = active_lasers[0]['WavelengthNm']
+                metadata['Channel'] = f"{int(active_lasers[0]['WavelengthNm'])}nm"
+            else:
+                metadata['Channel'] = active_lasers[0]['Name']
+        else:
+            metadata['Channel'] = f"Brightfield_{detector_name}"
+        
+        # Objective
+        objective_name = _search_attr(['Objective:Name', 'ObjectiveName'], attrs)
+        if objective_name:
+            metadata['Objective'] = str(objective_name)
+        
+        magnification = _search_attr(['Objective:Magnification'], attrs)
+        if magnification:
+            metadata['Magnification'] = float(magnification)
+        
+        na = _search_attr(['Objective:NA'], attrs)
+        if na:
+            metadata['NumericalAperture'] = float(na)
+        
+        # Timestamp
+        metadata['DateTime'] = datetime.datetime.now().isoformat()
+        
+        return metadata if metadata else None
+        
+    except Exception as e:
+        logger.warning(f"Error building snap metadata: {e}")
+        return None
+
+
+# =============================================================================
+# DEPRECATED: Legacy Storer classes - Kept for backwards compatibility only
+# These are replaced by the unified io/writers and io/snap_service modules.
+# =============================================================================
+
+class Storer(abc.ABC):
+    """
+    DEPRECATED: Base class for storing data.
+    Use imswitch.imcontrol.model.io.SnapService for snap operations.
+    """
+    def __init__(self, filepath, detectorManager):
         import warnings
         warnings.warn(
-            "AsTemporayFile is deprecated. Use direct file writing with error handling.",
+            "Storer classes are deprecated. Use model.io.SnapService instead.",
             DeprecationWarning,
             stacklevel=2
         )
-        if os.path.exists(filepath):
-            raise FileExistsError(f'File {filepath} already exists.')
-        self.path = filepath
-        self.tmp_path = filepath + tmp_extension
-
-    def __enter__(self):
-        return self.tmp_path
-
-    def __exit__(self, *args, **kwargs):
-        os.rename(self.tmp_path, self.path)
-
-
-class Storer(abc.ABC):
-    """ Base class for storing data"""
-    def __init__(self, filepath, detectorManager):
         self.filepath = filepath
         self.detectorManager: DetectorsManager = detectorManager
 
     def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
-        """ Stores images and attributes according to the spec of the storer """
         raise NotImplementedError
 
-    def stream(self, data = None, **kwargs):
-        """ Stores data in a streaming fashion. """
+    def stream(self, data=None, **kwargs):
         raise NotImplementedError
 
 
+
+
+class TiffStorer(Storer):
+    """
+    DEPRECATED: A storer that stores the images in TIFF files with OME metadata.
+    Use imswitch.imcontrol.model.io.SnapService for new code.
+    """
+    
+    def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
+        for channel, image in images.items():
+            path = f'{self.filepath}_{channel}.ome.tiff'
+            if not hasattr(image, "shape"):
+                logger.error(f"Could not save image to tiff file {path}")
+                continue
+            
+            try:
+                # Use the shared metadata building function
+                ome_metadata = _build_snap_metadata(channel, image, attrs)
+                
+                if ome_metadata:
+                    tiff.imwrite(path, image, metadata=ome_metadata, imagej=False)
+                else:
+                    tiff.imwrite(path, image)
+                
+                logger.info(f"Saved image to tiff file {path}")
+            except Exception as e:
+                logger.error(f"Error saving tiff file {path}: {e}")
+                tiff.imwrite(path, image)
+
+
+class PNGStorer(Storer):
+    """
+    DEPRECATED: A storer that stores images in PNG format.
+    Use imswitch.imcontrol.model.io.SnapService for new code.
+    """
+    def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
+        for channel, image in images.items():
+            path = f'{self.filepath}_{channel}.png'
+            # if image is BW only, we have to convert it to RGB
+            if image.dtype == np.float32 or image.dtype == np.float64:
+                image = cv2.convertScaleAbs(image)
+            if image.ndim == 2:
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            cv2.imwrite(path, image)
+            del image
+            logger.info(f"Saved image to png file {path}")
+
+
+class JPGStorer(Storer):
+    """
+    DEPRECATED: A storer that stores images in JPG format.
+    Use imswitch.imcontrol.model.io.SnapService for new code.
+    """
+    def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
+        for channel, image in images.items():
+            path = f'{self.filepath}_{channel}.jpg'
+            if image.ndim == 2:
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            cv2.imwrite(path, image)
+            logger.info(f"Saved image to jpg file {path}")
+
+
+class MP4Storer(Storer):
+    """
+    DEPRECATED: A storer that writes frames to MP4 format.
+    Video recording should use a dedicated video writer module.
+    """
+    def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
+        # not yet implemented
+        pass
+
+
+# ZarrStorer is deprecated - use io/writers/OMEZarrWriter instead
 class ZarrStorer(Storer):
-    # TODO: REmove 
-    """ A storer that stores the images in a zarr file store """
+    """
+    DEPRECATED: A storer that stores images in Zarr format.
+    Use imswitch.imcontrol.model.io.OMEZarrWriter for new code.
+    """
     def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
         if not IS_OME_ZARR:
             logger.error("OME Zarr is not installed. Please install ome-zarr.")
@@ -359,10 +585,8 @@ class ZarrStorer(Storer):
                 shape = self.detectorManager[channel].shape
                 root.create_dataset(channel, data=image, shape=tuple(reversed(shape)),
                                         chunks=(512, 512), dtype='i2')
-
                 datasets.append({"path": channel, "transformation": None})
             
-            # Write metadata
             metadata_kwargs = attrs if attrs else {}
             write_multiscales_metadata(root, datasets, format_from_version("0.2"), shape, **metadata_kwargs)
             logger.info(f"Saved image to zarr file {path}")
@@ -370,281 +594,10 @@ class ZarrStorer(Storer):
             logger.error(f"Error saving zarr file {path}: {e}")
 
 
-
-
-class TiffStorer(Storer):
-    """ A storer that stores the images in a series of tiff files with OME metadata """
-    
-    def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
-        for channel, image in images.items():
-            path = f'{self.filepath}_{channel}.ome.tiff'
-            if not hasattr(image, "shape"):
-                logger.error(f"Could not save image to tiff file {path}")
-                continue
-            
-            try:
-                # Build OME-TIFF metadata from attrs
-                ome_metadata = self._build_ome_metadata(channel, image, attrs)
-                
-                if ome_metadata:
-                    # Save as OME-TIFF with metadata
-                    tiff.imwrite(
-                        path, 
-                        image,
-                        metadata=ome_metadata,
-                        imagej=False,  # Use OME metadata, not ImageJ
-                    )
-                else:
-                    # Fallback to basic TIFF
-                    tiff.imwrite(path, image)
-                
-                logger.info(f"Saved image to tiff file {path}")
-            except Exception as e:
-                logger.error(f"Error saving tiff file {path}: {e}")
-                # Fallback to basic save
-                tiff.imwrite(path, image)
-    
-    def _build_ome_metadata(self, detector_name: str, image: np.ndarray, attrs: Dict[str, str]) -> Optional[Dict]:
-        """
-        Build OME-TIFF metadata dictionary from shared attributes.
-        
-        IMPORTANT: The 'detector_name' parameter refers to the camera/detector used.
-        The actual imaging channel is defined by the active illumination (laser/LED).
-        We extract this from the shared attributes.
-        
-        OME Channel Concept:
-        - In OME-TIFF, a "channel" represents a specific imaging condition
-        - This is typically defined by the excitation wavelength (laser/LED)
-        - The detector (camera) is separate from the channel
-        
-        Args:
-            detector_name: Name of the detector/camera (e.g., "WidefieldCamera")
-            image: Image array
-            attrs: Shared attributes dictionary (may contain SharedAttrValue objects)
-            
-        Returns:
-            Dictionary with OME metadata or None if attrs is empty
-        """
-        if not attrs:
-            return None
-        
-        metadata = {}
-        
-        def _get_value(val):
-            """Extract value from SharedAttrValue or return raw value."""
-            return val.value if hasattr(val, 'value') else val
-        
-        def _search_attr(patterns: list, search_dict: dict):
-            """Search for attribute using multiple key patterns."""
-            for pattern in patterns:
-                # Direct match
-                if pattern in search_dict:
-                    return _get_value(search_dict[pattern])
-                # Substring match
-                for key in search_dict.keys():
-                    if pattern in str(key):
-                        return _get_value(search_dict[key])
-            return None
-        
-        try:
-            # === Detector/Camera Information ===
-            metadata['Detector'] = detector_name
-            
-            # Extract pixel size
-            pixel_size = _search_attr([
-                f'Detector:{detector_name}:PixelSizeUm',
-                'Detector:PixelSizeUm', 
-                'PixelSizeUm'
-            ], attrs)
-            
-            if pixel_size:
-                metadata['PhysicalSizeX'] = float(pixel_size)
-                metadata['PhysicalSizeY'] = float(pixel_size)
-                metadata['PhysicalSizeXUnit'] = 'µm'
-                metadata['PhysicalSizeYUnit'] = 'µm'
-            
-            # Extract exposure
-            exposure = _search_attr([
-                f'Detector:{detector_name}:ExposureMs',
-                'Detector:ExposureMs',
-                'ExposureMs'
-            ], attrs)
-            
-            if exposure:
-                metadata['ExposureTime'] = float(exposure) / 1000.0  # Convert to seconds
-                metadata['ExposureTimeUnit'] = 's'
-            
-            # === Stage Position Information ===
-            # Search for positioner positions using various key patterns
-            for axis in ['X', 'Y', 'Z']:
-                position = None
-                # Try different key patterns
-                for key, val in attrs.items():
-                    key_str = str(key)
-                    # Match patterns like 'Positioner:ESP32Stage:X:Position' or 'Positioner:Stage:X:Position'
-                    if 'Positioner:' in key_str and f':{axis}:Position' in key_str:
-                        position = _get_value(val)
-                        break
-                
-                if position is not None:
-                    metadata[f'Position{axis}'] = float(position)
-                    metadata[f'Position{axis}Unit'] = 'µm'
-            
-            # === Illumination / Channel Information ===
-            # The imaging channel is defined by active illumination sources
-            active_lasers = []
-            active_leds = []
-            
-            # Find all laser sources and check if they are active
-            laser_sources = {}  # {laser_name: {wavelength, value, enabled}}
-            for key, val in attrs.items():
-                key_str = str(key)
-                if key_str.startswith('Laser:'):
-                    parts = key_str.split(':')
-                    if len(parts) >= 3:
-                        laser_name = parts[1]
-                        attr_name = parts[2]
-                        
-                        if laser_name not in laser_sources:
-                            laser_sources[laser_name] = {}
-                        
-                        laser_sources[laser_name][attr_name] = _get_value(val)
-            
-            # Determine which lasers are active (Enabled=True AND Value>0)
-            for laser_name, laser_data in laser_sources.items():
-                is_enabled = laser_data.get('Enabled', False)
-                value = laser_data.get('Value', 0)
-                wavelength = laser_data.get('WavelengthNm', 0)
-                
-                # Consider laser active if enabled AND has non-zero power
-                if is_enabled and value and float(value) > 0:
-                    active_lasers.append({
-                        'Name': laser_name,
-                        'WavelengthNm': float(wavelength) if wavelength else None,
-                        'Power': float(value),
-                        'IsActive': True,
-                    })
-            
-            # Similarly for LEDs
-            led_sources = {}
-            for key, val in attrs.items():
-                key_str = str(key)
-                if key_str.startswith('LED:'):
-                    parts = key_str.split(':')
-                    if len(parts) >= 3:
-                        led_name = parts[1]
-                        attr_name = parts[2]
-                        
-                        if led_name not in led_sources:
-                            led_sources[led_name] = {}
-                        
-                        led_sources[led_name][attr_name] = _get_value(val)
-            
-            for led_name, led_data in led_sources.items():
-                is_enabled = led_data.get('Enabled', False)
-                value = led_data.get('Value', 0)
-                
-                if is_enabled and value and float(value) > 0:
-                    active_leds.append({
-                        'Name': led_name,
-                        'Value': float(value),
-                        'IsActive': True,
-                    })
-            
-            # Store all illumination info
-            if active_lasers:
-                metadata['ActiveLasers'] = active_lasers
-                # Set primary channel based on first active laser's wavelength
-                if active_lasers[0].get('WavelengthNm'):
-                    metadata['ExcitationWavelength'] = active_lasers[0]['WavelengthNm']
-                    metadata['ExcitationWavelengthUnit'] = 'nm'
-                    # Build a descriptive channel name
-                    metadata['Channel'] = f"{int(active_lasers[0]['WavelengthNm'])}nm"
-                else:
-                    metadata['Channel'] = active_lasers[0]['Name']
-            elif active_leds:
-                metadata['ActiveLEDs'] = active_leds
-                metadata['Channel'] = active_leds[0]['Name']
-            else:
-                # No active illumination - use detector name as fallback
-                metadata['Channel'] = f"Brightfield_{detector_name}"
-            
-            # Store all laser sources (including inactive) for reference
-            all_lasers = []
-            for laser_name, laser_data in laser_sources.items():
-                all_lasers.append({
-                    'Name': laser_name,
-                    'WavelengthNm': float(laser_data.get('WavelengthNm', 0)) if laser_data.get('WavelengthNm') else None,
-                    'Power': float(laser_data.get('Value', 0)) if laser_data.get('Value') else 0,
-                    'Enabled': laser_data.get('Enabled', False),
-                })
-            if all_lasers:
-                metadata['Lasers'] = all_lasers
-            
-            # === Objective Information ===
-            objective_name = _search_attr(['Objective:Name', 'ObjectiveName'], attrs)
-            if objective_name:
-                metadata['Objective'] = str(objective_name)
-            
-            magnification = _search_attr(['Objective:Magnification', 'ObjectiveMagnification'], attrs)
-            if magnification:
-                metadata['Magnification'] = float(magnification)
-            
-            na = _search_attr(['Objective:NA', 'ObjectiveNA'], attrs)
-            if na:
-                metadata['NumericalAperture'] = float(na)
-            
-            # === Timestamp ===
-            import datetime
-            metadata['DateTime'] = datetime.datetime.now().isoformat()
-            
-            return metadata if metadata else None
-            
-        except Exception as e:
-            logger.warning(f"Error building OME metadata: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
-            return None
-
-class PNGStorer(Storer):
-    # TODO: Is redudant with the BackgroundStorageWorker implementation? If so, merge! 
-    """ A storer that stores the images in a series of png files """
-    def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
-        for channel, image in images.items():
-            #with AsTemporayFile(f'{self.filepath}_{channel}.png') as path:
-            path = f'{self.filepath}_{channel}.png'
-            # if image is BW only, we have to convert it to RGB
-            if image.dtype == np.float32 or image.dtype == np.float64:
-                image = cv2.convertScaleAbs(image)
-            if image.ndim == 2:
-                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-            cv2.imwrite(path, image)
-            del image
-            logger.info(f"Saved image to png file {path}")
-
-
-class JPGStorer(Storer):
-    # TODO: Is redudant with the BackgroundStorageWorker implementation? If so, merge!
-    """ A storer that stores the images in a series of jpg files """
-    def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
-        for channel, image in images.items():
-            #with AsTemporayFile(f'{self.filepath}_{channel}.jpg') as path:
-            path = f'{self.filepath}_{channel}.jpg'
-            # if image is BW only, we have to convert it to RGB
-            if image.ndim == 2:
-                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-            cv2.imwrite(path, image)
-            logger.info(f"Saved image to jpg file {path}")
-class MP4Storer(Storer):
-    """ A storer that writes the frames to an MP4 file """
-
-    def snap(self, images: Dict[str, np.ndarray], attrs: Dict[str, str] = None):
-        # not yet implemented
-        pass
-
-
 class SaveMode(enum.Enum):
-    # TODO: Move up/ make modular
+    """
+    DEPRECATED: Use imswitch.imcontrol.model.io.SaveMode instead.
+    """
     Disk = 1
     RAM = 2
     DiskAndRAM = 3
@@ -652,7 +605,9 @@ class SaveMode(enum.Enum):
 
 
 class SaveFormat(enum.Enum):
-    # TODO: Move up/ make modular
+    """
+    DEPRECATED: Use imswitch.imcontrol.model.io.SaveFormat instead.
+    """
     TIFF = 1
     ZARR = 3
     MP4 = 4
@@ -660,9 +615,9 @@ class SaveFormat(enum.Enum):
     JPG = 6
 
 
+# DEPRECATED: Use io/writers directly
 DEFAULT_STORER_MAP: Dict[str, Type[Storer]] = {
-    # TODO: Move up/ make modular
-    SaveFormat.ZARR: ZarrStorer, # TODO: REmove
+    SaveFormat.ZARR: ZarrStorer,
     SaveFormat.TIFF: TiffStorer,
     SaveFormat.MP4: MP4Storer,
     SaveFormat.PNG: PNGStorer,
@@ -671,10 +626,17 @@ DEFAULT_STORER_MAP: Dict[str, Type[Storer]] = {
 
 
 class RecordingManager(SignalInterface):
-    """ RecordingManager handles single frame captures as well as continuous
-    recordings of detector data. """
+    """
+    DEPRECATED: Use RecordingService from imswitch.imcontrol.model.io instead.
+    
+    This class is kept for backwards compatibility only.
+    For new code, use:
+    
+        from imswitch.imcontrol.model.io import RecordingService
+        service = RecordingService(detectors_manager)
+        service.snap(format=SaveFormat.TIFF)
+    """
 
-    # TODO: This needs a full rework - I'm not sure if the signals are still needed and used in the IS_HEADLESS Mode anywhere anymore, probalby we should remove it entireely
     sigRecordingStarted = Signal()
     sigRecordingEnded = Signal()
     sigRecordingFrameNumUpdated = Signal(int)  # (frameNumber)
@@ -821,16 +783,18 @@ class RecordingManager(SignalInterface):
                          saveFormat: SaveFormat, attrs: Dict[str, str] = None,
                          callback: Callable[[bool, str], None] = None):
         """
-        Queue images for background saving.
+        Queue images for background saving using BackgroundStorageWorker.
         
         This method is non-blocking - it submits tasks to the background
         storage worker and returns immediately.
+        
+        Note: For new code, prefer using SnapService from imswitch.imcontrol.model.io
         """
         worker = get_background_storage_worker()
         
         for channel, image in images.items():
-            # Build OME metadata for each image
-            ome_attrs = self._build_ome_metadata(channel, image, attrs)
+            # Build OME metadata using the shared metadata building function
+            ome_attrs = _build_snap_metadata(channel, image, attrs)
             
             # Determine task type and filepath based on format
             if saveFormat == SaveFormat.TIFF:

@@ -32,6 +32,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes --with-kernel
     '''
     try:
+        print("Starting ImSwitch using version: ", imswitch.__version__)
         # Get the global configuration instance
         config = get_config()
 

@@ -14,39 +14,8 @@ import numpy as np
 from abc import ABC, abstractmethod
 
 from imswitch.imcommon.model import dirtools
-from ..experiment_controller.ome_writer import OMEWriterConfig
-
-
-class OMEFileStorePaths:
-    """Helper class for managing OME file storage paths."""
-    def __init__(self, base_dir, shared_individual_tiffs_dir=None):
-        """
-        Initialize OME file storage paths.
-        
-        Args:
-            base_dir: Base directory for this writer's files (e.g., tiles, zarr)
-            shared_individual_tiffs_dir: Shared directory for individual TIFFs across all timepoints.
-                                        If None, creates one under base_dir.
-        """
-        self.base_dir = base_dir
-        self.tiff_dir = os.path.join(base_dir, "tiles")
-        self.zarr_dir = os.path.join(base_dir + ".ome.zarr")
-
-        # Use shared individual_tiffs directory or create one under base_dir
-        if shared_individual_tiffs_dir is not None:
-            self.individual_tiffs_dir = shared_individual_tiffs_dir
-        else:
-            self.individual_tiffs_dir = os.path.join(base_dir, "individual_tiffs")
-
-        os.makedirs(self.tiff_dir, exist_ok=True)
-        os.makedirs(self.individual_tiffs_dir, exist_ok=True)
-
-    def get_timepoint_dir(self, timepoint_index: int):
-        """Get or create directory for a specific timepoint."""
-        time_now = time.strftime("%Y%m%d_%H%M%S")
-        timepoint_dir = os.path.join(self.individual_tiffs_dir, f"timepoint_{timepoint_index:04d}")#_{time_now}")
-        os.makedirs(timepoint_dir, exist_ok=True)
-        return timepoint_dir
+# Import OMEWriterConfig from the new io location
+from imswitch.imcontrol.model.io import OMEWriterConfig, OMEFileStorePaths
 
 
 class ExperimentModeBase(ABC):

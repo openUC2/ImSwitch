@@ -10,8 +10,8 @@ from typing import List, Dict, Any
 import numpy as np
 
 from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowStep
+from imswitch.imcontrol.model.io import OMEWriter
 from .experiment_mode_base import ExperimentModeBase
-from .ome_writer import OMEWriter
 
 
 class ExperimentNormalMode(ExperimentModeBase):

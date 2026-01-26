@@ -8,7 +8,7 @@ from imswitch.imcontrol.model import (
     LasersManager,
     MultiManager,
     PositionersManager,
-    RecordingManager,
+    RecordingManager,  # DEPRECATED - kept for backwards compatibility
     RS232sManager,
     SLMManager,
     SIMManager,
@@ -39,6 +39,9 @@ from imswitch.imcontrol.model import (
     ArkitektManager,
     InstrumentMetadataManager,
 )
+
+# New unified I/O service
+from imswitch.imcontrol.model.io import RecordingService
 
 
 class MasterController:
@@ -98,7 +101,18 @@ class MasterController:
 
         self.LEDsManager = LEDsManager(self.__setupInfo.LEDs)
         # self.scanManager = ScanManager(self.__setupInfo)
+        
+        # Initialize unified I/O service (new API)
+        self.recordingService = RecordingService(self.detectorsManager)
+        # Connect RecordingService to MetadataHub if available
+        if self.metadataHub is not None:
+            self.recordingService.set_metadata_hub(self.metadataHub)
+            self.__logger.info("RecordingService connected to MetadataHub")
+        
+        # DEPRECATED: RecordingManager kept for backwards compatibility
+        # New code should use self.recordingService instead
         self.recordingManager = RecordingManager(self.detectorsManager)
+        
         if "SLM" in self.__setupInfo.availableWidgets:
             self.slmManager = SLMManager(self.__setupInfo.slm)
         self.UC2ConfigManager = UC2ConfigManager(

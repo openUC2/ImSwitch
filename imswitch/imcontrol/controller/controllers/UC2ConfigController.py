@@ -920,7 +920,7 @@ class UC2ConfigController(ImConWidgetController):
                 "can_id": can_id,
                 "upload_status": "command_sent",
                 "message": f"OTA command sent to device {can_id}, waiting for WiFi connection..."
-            }
+            } 
 
         # Emit initial status to frontend
         self.sigOTAStatusUpdate.emit(self._ota_status[can_id])

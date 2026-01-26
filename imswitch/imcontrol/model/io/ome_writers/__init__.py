@@ -41,6 +41,8 @@ Migration Notes:
 from .ome_tiff_stitcher import OmeTiffStitcher
 from .single_tiff_writer import SingleTiffWriter
 from .ome_writer import OMEWriter, OMEWriterConfig, OMEFileStorePaths
+from .metadata import MinimalMetadata
+from .minimal_zarr_source import MinimalZarrDataSource
 
 __all__ = [
     # Primary unified writer
@@ -50,4 +52,8 @@ __all__ = [
     # Specialized writers
     'OmeTiffStitcher',
     'SingleTiffWriter',
+    # Zarr streaming
+    'MinimalZarrDataSource',
+    # Metadata utilities
+    'MinimalMetadata',
 ]

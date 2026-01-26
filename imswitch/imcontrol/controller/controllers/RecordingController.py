@@ -13,6 +13,7 @@ from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Timer
 from imswitch.imcommon.model import ostools, APIExport, initLogger, dirtools
 from imswitch.imcontrol.model import RecMode, SaveMode, SaveFormat
+from imswitch.imcontrol.model.io import RecordingService, SaveFormat as IOSaveFormat
 from ..basecontrollers import ImConWidgetController
 
 
@@ -45,53 +46,7 @@ class RecordingController(ImConWidgetController):
         self._commChannel.sigSnapImg.connect(self.snap)
         self._commChannel.sigSnapImgPrev.connect(self.snapImagePrev)
         self._commChannel.sigStartRecordingExternal.connect(self.startRecording)
-        self._commChannel.sigRequestScanFreq.connect(self.sendScanFreq)
-        self._commChannel.sigStartLiveAcquistion.connect(self.setLiveStreamStart)
-        self._commChannel.sigAcquisitionStopped.connect(self.setLiveStreamStop)
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
-
-        if IS_HEADLESS:
-            self._widget = None
-            return
-
-        self.untilStop()
-
-        # ADD GUI elements just in case
-        self._widget.setDetectorList(
-            self._master.detectorsManager.execOnAll(
-                lambda c: c.model, condition=lambda c: c.forAcquisition
-            )
-        )
-        self._widget.setsaveFormat(SaveFormat.TIFF.value)
-        self._widget.setSnapSaveMode(SaveMode.Disk.value)
-        self._widget.setSnapSaveModeVisible(self._setupInfo.hasWidget("Image"))
-
-        self._widget.setRecSaveMode(SaveMode.Disk.value)
-
-
-        # Connect RecordingWidget signals
-        self._widget.sigDetectorModeChanged.connect(self.detectorChanged)
-        self._widget.sigDetectorSpecificChanged.connect(self.detectorChanged)
-        self._widget.sigOpenRecFolderClicked.connect(self.openFolder)
-        self._widget.sigSpecFileToggled.connect(self._widget.setCustomFilenameEnabled)
-
-        self._widget.sigSnapSaveModeChanged.connect(self.snapSaveModeChanged)
-
-        self._widget.sigSpecFramesPicked.connect(self.specFrames)
-        self._widget.sigSpecTimePicked.connect(self.specTime)
-        self._widget.sigScanOncePicked.connect(self.recScanOnce)
-        self._widget.sigScanLapsePicked.connect(self.recScanLapse)
-        self._widget.sigUntilStopPicked.connect(self.untilStop)
-
-        self._widget.sigSnapRequested.connect(self.snap)
-        self._widget.sigRecToggled.connect(self.toggleREC)
-
-    def openFolder(self):
-        """Opens current folder in File Explorer."""
-        folder = self._widget.getRecFolder()
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-        ostools.openFolderInOS(folder)
 
     def snapSaveModeChanged(self):
         saveMode = SaveMode(self._widget.getSnapSaveMode())
@@ -131,6 +86,7 @@ class RecordingController(ImConWidgetController):
             saveMode = SaveMode(self._widget.getSnapSaveMode())
         else:
             saveMode = SaveMode.Disk  # TODO: Assuming we want to save the image
+            # TODO: This should be part of the io/writers
         self._master.recordingManager.snap(
             detectorNames, savename, saveMode, mSaveFormat, attrs
         )

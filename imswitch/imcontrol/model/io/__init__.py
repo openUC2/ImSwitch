@@ -108,6 +108,8 @@ from .ome_writers import (
     OMEFileStorePaths,
     OmeTiffStitcher,
     SingleTiffWriter,
+    MinimalMetadata,
+    MinimalZarrDataSource,
 )
 
 __all__ = [
@@ -167,6 +169,8 @@ __all__ = [
     'OMEFileStorePaths',
     'OmeTiffStitcher',
     'SingleTiffWriter',
+    'MinimalMetadata',
+    'MinimalZarrDataSource',
 ]
 
 

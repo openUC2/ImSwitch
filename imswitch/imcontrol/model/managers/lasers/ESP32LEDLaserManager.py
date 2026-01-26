@@ -21,7 +21,7 @@ class ESP32LEDLaserManager(LaserManager):
         ]
         if type(laserInfo.managerProperties['channel_index']) != int:
             # In older Versions we allowed the Ledmatrix to be accessible via the name 'LED', this is now deprecated
-            raise ValueError("channel_index must be an integer")
+            raise ValueError("channel_index must be an integer. Most likely you have an old config file, please update it to use the channel index (0-3...) instead of the name 'LED'.")
         
         self.__logger = initLogger(self, instanceName=name)
 

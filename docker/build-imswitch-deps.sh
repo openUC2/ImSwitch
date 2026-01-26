@@ -27,12 +27,6 @@ apt-get update && apt install -y --no-install-recommends \
 export PATH="/root/.local/bin:$PATH"
 source /opt/imswitch/.venv/bin/activate
 
-# Install core scientific packages using UV # TODO: probably not necessary
-uv pip install \
-  h5py \
-  numpy \
-  scikit-image
-
 # Install psygnal without binaries
 uv pip install psygnal --no-binary :all:
 

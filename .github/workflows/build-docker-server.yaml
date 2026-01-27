@@ -22,12 +22,7 @@ env:
   BETA_BRANCH: 'beta' # pushing to this branch will update the "beta" tag on the image
   STABLE_BRANCH: 'stable' # pushing to this branch will update the "stable" tag on the image
   TAG_PREFIX: 'v' # pushing tags with this prefix will add a version tag to the image and update the "latest" tag on the image
-  # Because openUC2/ImSwitch is a fork of an upstream repo, we can't suppress attempts to push
-  # container images for forks of the openUC2/ImSwitch repo. That's is probably acceptable for how
-  # we develop this project (i.e. with PRs from branches on the openUC2/ImSwitch repo, rather than
-  # PRs from user-created forks of openUC2/ImSwitch).
-  # PUSH_IMAGE: ${{ (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork) || github.event_name == 'push' || github.event_name == 'push tag' }}
-  PUSH_IMAGE: ${{ github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'push tag' }}
+  PUSH_IMAGE: ${{ (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork) || github.event_name == 'push' || github.event_name == 'push tag' }}
 
 jobs:
   build-ctr-img:
@@ -47,8 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The entire repo gets copied into the Docker container, so we try to only fetch files we
-          # actually need:
+          # Don't download unnecessary data:
           fetch-depth: 0
           filter: 'blob:none'
 

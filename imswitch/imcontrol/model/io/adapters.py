@@ -267,7 +267,7 @@ class StreamingDataStoreAdapter:
         
         # Get detector contexts
         detector_contexts = {}
-        for det_name in self._detectors_manager.detectorNames:
+        for det_name in self._detectors_manager.getAllDeviceNames():
             if detector_names and det_name not in detector_names:
                 continue
             

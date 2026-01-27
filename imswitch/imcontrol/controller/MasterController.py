@@ -102,16 +102,16 @@ class MasterController:
         self.LEDsManager = LEDsManager(self.__setupInfo.LEDs)
         # self.scanManager = ScanManager(self.__setupInfo)
         
-        # Initialize unified I/O service (new API)
+        # Initialize unified I/O service (RecordingService from io module)
         self.recordingService = RecordingService(self.detectorsManager)
         # Connect RecordingService to MetadataHub if available
         if self.metadataHub is not None:
             self.recordingService.set_metadata_hub(self.metadataHub)
             self.__logger.info("RecordingService connected to MetadataHub")
         
-        # DEPRECATED: RecordingManager kept for backwards compatibility
-        # New code should use self.recordingService instead
-        self.recordingManager = RecordingManager(self.detectorsManager)
+        # Alias for backwards compatibility - recordingManager now points to recordingService
+        # Legacy RecordingManager has been removed, all functionality is now in RecordingService
+        self.recordingManager = self.recordingService
         
         if "SLM" in self.__setupInfo.availableWidgets:
             self.slmManager = SLMManager(self.__setupInfo.slm)
@@ -292,7 +292,7 @@ class MasterController:
         self.detectorsManager.sigDetectorSwitched.connect(cc.sigDetectorSwitched)
         self.detectorsManager.sigImageUpdated.connect(cc.sigUpdateImage) # TODO: why do we need to map a signal into a signal and cannot direclty use it ?!
         self.detectorsManager.sigNewFrame.connect(cc.sigNewFrame)
-
+        ''' # TODO: Potentially not used anymore 
         self.recordingManager.sigRecordingStarted.connect(cc.sigRecordingStarted)
         self.recordingManager.sigRecordingEnded.connect(cc.sigRecordingEnded)
         self.recordingManager.sigRecordingFrameNumUpdated.connect(
@@ -303,6 +303,7 @@ class MasterController:
         self.recordingManager.sigMemoryRecordingAvailable.connect(
             self.memoryRecordingAvailable
         )
+        '''
 
     def memoryRecordingAvailable(self, name, file, filePath, savedToDisk):
         self.__moduleCommChannel.memoryRecordings[name] = VFileItem(

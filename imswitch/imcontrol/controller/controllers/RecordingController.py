@@ -2,9 +2,10 @@
 Recording Controller - API Interface for recording operations.
 
 This controller provides the API interface (via APIExport) for all recording
-operations. Snap operations are now delegated to RecordingService from the io module.
-Complex recording operations (timelapse, video) still use the legacy RecordingManager
-for backwards compatibility.
+operations. All operations are delegated to RecordingService from the io module.
+
+The legacy RecordingManager has been removed - all recording functionality
+is now provided by the centralized io/writers ecosystem.
 """
 
 import os
@@ -14,20 +15,19 @@ import numpy as np
 import datetime
 from fastapi.responses import StreamingResponse
 from fastapi import Response, HTTPException
-import cv2
 from PIL import Image
-import io
+import io as python_io
 import queue  # thread-safe queue for streamer
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Timer
 from imswitch.imcommon.model import ostools, APIExport, initLogger, dirtools
-from imswitch.imcontrol.model import RecMode, SaveMode, SaveFormat
+from imswitch.imcontrol.model import RecMode
 from imswitch.imcontrol.model.io import (
     RecordingService, 
-    SaveFormat as IOSaveFormat,
-    SaveMode as IOSaveMode,
+    SaveFormat,
+    SaveMode,
     get_recording_service,
     StreamingDataStoreAdapter,
+    SnapResult,
 )
 from ..basecontrollers import ImConWidgetController
 
@@ -36,8 +36,8 @@ class RecordingController(ImConWidgetController):
     """
     Recording Controller - API interface for snap and recording operations.
     
-    Snap operations are delegated to RecordingService from the io module.
-    Complex recording operations use the legacy RecordingManager.
+    All operations are delegated to RecordingService from the io module.
+    This controller serves as a thin API layer for the centralized io/writers ecosystem.
     """
 
     def __init__(self, *args, **kwargs):
@@ -51,8 +51,7 @@ class RecordingController(ImConWidgetController):
         self.recording = False
         self.doneScan = False
         self.endedRecording = False
-        self.lapseCurrent = -1
-        self.lapseTotal = 0
+
 
         self.streamstarted = False
         
@@ -63,6 +62,7 @@ class RecordingController(ImConWidgetController):
         self._streaming_adapter: Optional[StreamingDataStoreAdapter] = None
 
         # Connect CommunicationChannel signals
+        '''
         self._commChannel.sigRecordingStarted.connect(self.recordingStarted)
         self._commChannel.sigRecordingEnded.connect(self.recordingEnded)
         self._commChannel.sigScanDone.connect(self.scanDone)
@@ -72,7 +72,7 @@ class RecordingController(ImConWidgetController):
         self._commChannel.sigSnapImgPrev.connect(self.snapImagePrev)
         self._commChannel.sigStartRecordingExternal.connect(self.startRecording)
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
-
+        '''
     @property
     def recording_service(self) -> RecordingService:
         """Get or create the recording service (lazy initialization)."""
@@ -126,30 +126,6 @@ class RecordingController(ImConWidgetController):
             self._streaming_adapter = None
             return False
     
-    def write_streaming_frame(self, detector_name: str, frame: np.ndarray,
-                               t_index: int = None, z_index: int = 0) -> bool:
-        """
-        Write a frame to the active streaming session.
-        
-        Args:
-            detector_name: Name of the detector
-            frame: Image data
-            t_index: Time index (auto-incremented if None)
-            z_index: Z plane index
-            
-        Returns:
-            True if frame written successfully
-        """
-        if self._streaming_adapter is None or not self._streaming_adapter._is_open:
-            self.__logger.warning("No active streaming session")
-            return False
-        
-        try:
-            self._streaming_adapter.write_frame(detector_name, frame, t_index, z_index)
-            return True
-        except Exception as e:
-            self.__logger.error(f"Failed to write streaming frame: {e}")
-            return False
     
     def stop_streaming_recording(self) -> Dict[str, Any]:
         """
@@ -173,49 +149,18 @@ class RecordingController(ImConWidgetController):
         
         return stats
 
-    def _convert_save_format(self, save_format: SaveFormat) -> IOSaveFormat:
-        """Convert legacy SaveFormat to io module SaveFormat."""
-        format_mapping = {
-            SaveFormat.TIFF: IOSaveFormat.TIFF,
-            SaveFormat.HDF5: IOSaveFormat.HDF5,
-            SaveFormat.PNG: IOSaveFormat.PNG,
-            SaveFormat.JPEG: IOSaveFormat.JPEG,
-            SaveFormat.MP4: IOSaveFormat.MP4,
-        }
-        return format_mapping.get(save_format, IOSaveFormat.TIFF)
-
-    def _convert_save_mode(self, save_mode: SaveMode) -> IOSaveMode:
-        """Convert legacy SaveMode to io module SaveMode."""
-        mode_mapping = {
-            SaveMode.Disk: IOSaveMode.Disk,
-            SaveMode.RAM: IOSaveMode.RAM,
-            SaveMode.Numpy: IOSaveMode.Numpy,
-            SaveMode.Streaming: IOSaveMode.Streaming,
-            SaveMode.DiskAndRAM: IOSaveMode.DiskAndRAM,
-        }
-        return mode_mapping.get(save_mode, IOSaveMode.Disk)
-
-    def snapSaveModeChanged(self):
-        saveMode = SaveMode(self._widget.getSnapSaveMode())
-        self._widget.setsaveFormatEnabled(saveMode != SaveMode.RAM)
-        if saveMode == SaveMode.RAM:
-            self._widget.setsaveFormat(SaveFormat.TIFF.value)
-
     def snap(self, name=None, mSaveFormat=None) -> dict:
         """
         Take a snap and save it to a file using RecordingService.
         
-        This method now delegates to RecordingService from the io module for
+        This method delegates to RecordingService from the io module for
         all snap operations.
         """
         self.updateRecAttrs(isSnapping=True)
 
-        # by default save as it's noted in the widget
+        # by default
         if mSaveFormat is None:
-            if not IS_HEADLESS:
-                mSaveFormat = SaveFormat(self._widget.getsaveFormat())
-            else:
-                mSaveFormat = SaveFormat(1)  # TIFF
+                mSaveFormat = SaveFormat.TIFF
 
         timeStampDay = datetime.datetime.now().strftime("%Y_%m_%d")
         relativeFolder = os.path.join("recordings", timeStampDay)
@@ -235,31 +180,16 @@ class RecordingController(ImConWidgetController):
             for detectorName in detectorNames
         }
 
-        if not IS_HEADLESS:
-            saveMode = SaveMode(self._widget.getSnapSaveMode())
-        else:
-            saveMode = SaveMode.Disk
-
-        # Convert to io module types
-        io_save_format = self._convert_save_format(mSaveFormat)
-        io_save_mode = self._convert_save_mode(saveMode)
 
         # Use RecordingService for snap operations
-        try:
-            result = self.recording_service.snap(
-                detector_names=detectorNames,
-                savepath=savename,
-                save_mode=io_save_mode,
-                format=io_save_format,
-                attrs=attrs,
-            )
-            self.__logger.debug(f"Snap completed: {result}")
-        except Exception as e:
-            self.__logger.error(f"Error during snap with RecordingService: {e}")
-            # Fallback to legacy RecordingManager
-            self._master.recordingManager.snap(
-                detectorNames, savename, saveMode, mSaveFormat, attrs
-            )
+        result = self.recording_service.snap(
+            detector_names=detectorNames,
+            savepath=savename,
+            save_mode=SaveMode.Disk,
+            format=mSaveFormat,
+            attrs=attrs,
+        )
+        self.__logger.debug(f"Snap completed: {result}")
         
         return {"fullPath": savename, "relativePath": relativeFolder}
 
@@ -267,243 +197,68 @@ class RecordingController(ImConWidgetController):
         """
         Take a snap and return numpy arrays.
         
-        This method now delegates to RecordingService.snap_numpy() for
+        This method delegates to RecordingService.snap_numpy() for
         memory-only snap operations.
         """
         self.updateRecAttrs(isSnapping=True)
         detectorNames = self.getDetectorNamesToCapture()
+        return self.recording_service.snap_numpy(detector_names=detectorNames)
 
-        try:
-            # Use RecordingService for numpy snap
-            return self.recording_service.snap_numpy(
-                detector_names=detectorNames,
+    def _start_frame_recording(self, save_format: SaveFormat):
+        """Start recording for a specific number of frames."""
+        if save_format == SaveFormat.MP4:
+            self.recording_service.start_video_recording(
+                filepath=f"{self.savename}.mp4",
+                fps=30.0
             )
-        except Exception as e:
-            self.__logger.error(f"Error during snapNumpy with RecordingService: {e}")
-            # Fallback to legacy RecordingManager
-            attrs = {
-                detectorName: self._get_detector_attrs(detectorName)
-                for detectorName in detectorNames
-            }
-            return self._master.recordingManager.snap(
-                detectorNames,
-                "",
-                SaveMode(4),  # for Numpy
-                "",
-                attrs,
-            )
-
-    def snapImagePrev(self, *args):
-        """Snap an already taken image and save it to a file."""
-        self.updateRecAttrs(isSnapping=True)
-
-        args = list(args)
-        detectorName = args[0]
-        image = args[1]
-        suffix = args[2]
-
-        folder = self._widget.getRecFolder()
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-        time.sleep(0.01)
-
-        savename = os.path.join(folder, self.getFileName()) + "_snap_" + suffix
-        attrs = {detectorName: self._get_detector_attrs(detectorName)}
-
-        self._master.recordingManager.snapImagePrev(
-            detectorName,
-            savename,
-            SaveFormat(self._widget.getSnapSaveFormat()),
-            image,
-            attrs,
-        )
-
-    def toggleREC(self, checked):
-        """Start or end recording."""
-        if checked and not self.recording:
-            self.updateRecAttrs(isSnapping=False)
-
-            folder = self._widget.getRecFolder()
-            if not os.path.exists(folder):
-                os.makedirs(folder)
-            time.sleep(0.01)
-            self.savename = os.path.join(folder, self.getFileName()) + "_rec"
-
-            if self.recMode == RecMode.ScanOnce:
-                self._commChannel.sigScanStarting.emit()  # To get correct values from sharedAttrs
-
-            detectorsBeingCaptured = self.getDetectorNamesToCapture()
-
-            self.recordingArgs = {
-                "detectorNames": detectorsBeingCaptured,
-                "recMode": self.recMode,
-                "savename": self.savename,
-                "saveMode": SaveMode(self._widget.getRecSaveMode()),
-                "saveFormat": SaveFormat(self._widget.getsaveFormat()),
-                "attrs": {
-                    detectorName: self._get_detector_attrs(detectorName)
-                    for detectorName in detectorsBeingCaptured
-                },
-                "singleMultiDetectorFile": (
-                    len(detectorsBeingCaptured) > 1
-                    and self._widget.getMultiDetectorSingleFile()
-                ),
-            }
-
-            if self.recMode == RecMode.SpecFrames:
-                self.recordingArgs["recFrames"] = self._widget.getNumExpositions()
-                self._master.recordingManager.startRecording(**self.recordingArgs)
-            elif self.recMode == RecMode.SpecTime:
-                self.recordingArgs["recTime"] = self._widget.getTimeToRec()
-                self._master.recordingManager.startRecording(**self.recordingArgs)
-            elif self.recMode == RecMode.ScanOnce:
-                self.recordingArgs["recFrames"] = (
-                    self._commChannel.getNumScanPositions()
-                )
-                self._master.recordingManager.startRecording(**self.recordingArgs)
-                time.sleep(0.3)
-                self._commChannel.sigRunScan.emit(True, False)
-            elif self.recMode == RecMode.ScanLapse:
-                self.recordingArgs["singleLapseFile"] = (
-                    self._widget.getTimelapseSingleFile()
-                )
-                self.lapseTotal = self._widget.getTimelapseTime()
-                self.lapseCurrent = 0
-                self.nextLapse()
-            else:
-                self._master.recordingManager.startRecording(**self.recordingArgs)
-
-            self.recording = True
-            self.endedRecording = False
         else:
-            if self.recMode == RecMode.ScanLapse and self.lapseCurrent != -1:
-                self._commChannel.sigAbortScan.emit()
-            self._master.recordingManager.endRecording()
+            # Use streaming for TIFF/other formats
+            self.start_streaming_recording(
+                folder=self.savename,
+                detector_names=self.recordingArgs["detectorNames"],
+                n_time_points=self.recordingArgs.get("recFrames", 1000),
+                write_zarr=True,
+                write_tiff=(save_format == SaveFormat.TIFF),
+            )
+        self._commChannel.sigRecordingStarted.emit()
+    
+    
+    def _start_continuous_recording(self, save_format: SaveFormat):
+        """Start continuous recording until stopped."""
+        if save_format == SaveFormat.MP4:
+            self.recording_service.start_video_recording(
+                filepath=f"{self.savename}.mp4",
+                fps=30.0
+            )
+        elif save_format == SaveFormat.TIFF:
+            self.start_streaming_recording(
+                folder=self.savename,
+                detector_names=self.recordingArgs["detectorNames"],
+                n_time_points=10000,  # Large buffer for continuous recording
+                write_zarr=True,
+                write_tiff=(save_format == SaveFormat.TIFF),
+            )
+        # TODO: Implement other formats if needed
+        self._commChannel.sigRecordingStarted.emit()
+    
+    def _stop_recording(self):
+        """Stop any active recording."""
+        if self.recording_service.is_video_recording:
+            self.recording_service.stop_video_recording()
+        if self._streaming_adapter is not None:
+            self.stop_streaming_recording()
+        self._commChannel.sigRecordingEnded.emit()
 
-    def nextLapse(self):
-        self.endedRecording = False
-        self.doneScan = False
-
-        isFirstLapse = self.lapseCurrent == 0
-        isFinalLapse = self.lapseCurrent + 1 == self.lapseTotal
-
-        if not self.recordingArgs["singleLapseFile"]:
-            lapseCurrentStr = str(self.lapseCurrent).zfill(len(str(self.lapseTotal)))
-            self.recordingArgs["savename"] = f"{self.savename}_scan{lapseCurrentStr}"
-
-        if isFirstLapse:
-            self._commChannel.sigScanStarting.emit()  # To get updated values from sharedAttrs
-            self.recordingArgs["attrs"] = {  # Update
-                detectorName: self._get_detector_attrs(detectorName)
-                for detectorName in self.recordingArgs["detectorNames"]
-            }
-            self.recordingArgs["recFrames"] = (
-                self._commChannel.getNumScanPositions()
-            )  # Update
-
-        self._master.recordingManager.startRecording(**self.recordingArgs)
-        time.sleep(0.3)
-
-        self._commChannel.sigRunScan.emit(isFirstLapse, not isFinalLapse)
 
     def recordingStarted(self):
-        if not IS_HEADLESS:
-            self._widget.setFieldsEnabled(False)
-
-    def recordingCycleEnded(self):
-        if (
-            self.recording
-            and self.recMode == RecMode.ScanLapse
-            and 0 < self.lapseCurrent + 1 < self.lapseTotal
-        ):
-            self.lapseCurrent += 1
-            if not IS_HEADLESS:
-                self._widget.updateRecLapseNum(self.lapseCurrent)
-            self.timer = Timer(singleShot=True)
-            self.timer.timeout.connect(self.nextLapse)
-            self.timer.start(int(self._widget.getTimelapseFreq() * 1000))
-        else:
-            self.recording = False
-            self.lapseCurrent = -1
-            if not IS_HEADLESS:
-                self._widget.updateRecFrameNum(0)
-                self._widget.updateRecTime(0)
-                self._widget.updateRecLapseNum(0)
-                self._widget.setRecButtonChecked(False)
-                self._widget.setFieldsEnabled(True)
-
-    def scanDone(self):
-        self.doneScan = True
-        if not self.endedRecording and (
-            self.recMode == RecMode.ScanLapse or self.recMode == RecMode.ScanOnce
-        ):
-            self.recordingCycleEnded()
+        pass
 
     def recordingEnded(self):
         self.endedRecording = True
-        if not self.doneScan or not (
-            self.recMode == RecMode.ScanLapse or self.recMode == RecMode.ScanOnce
-        ):
-            self.recordingCycleEnded()
 
-    def updateRecFrameNum(self, recFrameNum):
-        if self.recMode == RecMode.SpecFrames:
-            self._widget.updateRecFrameNum(recFrameNum)
-
-    def updateRecTime(self, recTime):
-        if self.recMode == RecMode.SpecTime:
-            self._widget.updateRecTime(recTime)
-
-    def specFrames(self):
-        self._widget.checkSpecFrames()
-        self._widget.setEnabledParams(specFrames=True)
-        self.recMode = RecMode.SpecFrames
-
-    def specTime(self):
-        self._widget.checkSpecTime()
-        self._widget.setEnabledParams(specTime=True)
-        self.recMode = RecMode.SpecTime
-
-    def recScanOnce(self):
-        self._widget.checkScanOnce()
-        self._widget.setEnabledParams()
-        self.recMode = RecMode.ScanOnce
-
-    def recScanLapse(self):
-        self._widget.checkScanLapse()
-        self._widget.setEnabledParams(scanLapse=True)
-        self.recMode = RecMode.ScanLapse
-
-    def untilStop(self):
-        self._widget.checkUntilStop()
-        self._widget.setEnabledParams()
-        self.recMode = RecMode.UntilStop
-
-    def setRecMode(self, recMode):
-        if recMode == RecMode.SpecFrames:
-            self.specFrames()
-        elif recMode == RecMode.SpecTime:
-            self.specTime()
-        elif recMode == RecMode.ScanOnce:
-            self.recScanOnce()
-        elif recMode == RecMode.ScanLapse:
-            self.recScanLapse()
-        elif recMode == RecMode.UntilStop:
-            self.untilStop()
-        else:
-            raise ValueError(f"Invalid RecMode {recMode} specified")
-
-    def detectorChanged(self):
-        detectorMode = self._widget.getDetectorMode()
-        self._widget.setSpecificDetectorListVisible(detectorMode == -3)
-        self._widget.setMultiDetectorSingleFileVisible(detectorMode in [-2, -3])
-
-    def getDetectorNamesToCapture(self):
+    def getDetectorNamesToCapture(self, detectorMode = -1 ):
         """Returns a list of which detectors the user has selected to be captured."""
-        if not IS_HEADLESS:
-            detectorMode = self._widget.getDetectorMode()
-        else:
-            detectorMode = -2
+        # TODO: Later wfor multicamera modify this! 
         if detectorMode == -1:  # Current detector at start
             return [self._master.detectorsManager.getCurrentDetectorName()]
         elif detectorMode == -2:  # All acquisition detectors
@@ -513,16 +268,12 @@ class RecordingController(ImConWidgetController):
                 ).values()
             )
         elif detectorMode == -3:  # A specific detector
-            return self._widget.getSelectedSpecificDetectors()
+            pass 
+            #return self._widget.getSelectedSpecificDetectors()
 
     def getFileName(self):
         """Gets the filename of the data to save."""
-        if IS_HEADLESS:
-            filename = time.strftime("%Hh%Mm%Ss") + "_ImSwitch_ImageFile"
-        else:
-            filename = self._widget.getCustomFilename()
-        if filename is None:
-            filename = time.strftime("%Hh%Mm%Ss")
+        filename = time.strftime("%Hh%Mm%Ss")
         return filename
 
     def _get_detector_attrs(self, detector_name):
@@ -575,27 +326,8 @@ class RecordingController(ImConWidgetController):
         return attrs
     
     def attrChanged(self, key, value):
-        if (
-            self.settingAttr
-            or len(key) != 2
-            or key[0] != _attrCategory
-            or value == "null"
-        ):
-            return
-
-        if key[1] == _recModeAttr:
-            if value == "Snap":
-                return
-            self.setRecMode(RecMode[value])
-        elif key[1] == _framesAttr:
-            self._widget.setNumExpositions(value)
-        elif key[1] == _timeAttr:
-            self._widget.setTimeToRec(value)
-        elif key[1] == _lapseTimeAttr:
-            self._widget.setTimelapseTime(value)
-        elif key[1] == _freqAttr:
-            self._widget.setTimelapseFreq(value)
-
+        pass # TODO: Not needed anymore 
+    
     def setSharedAttr(self, attr, value):
         self.settingAttr = True
         try:
@@ -606,20 +338,11 @@ class RecordingController(ImConWidgetController):
     def updateRecAttrs(self, *, isSnapping):
         self.setSharedAttr(_framesAttr, "null")
         self.setSharedAttr(_timeAttr, "null")
-        self.setSharedAttr(_lapseTimeAttr, "null")
-        self.setSharedAttr(_freqAttr, "null")
 
         if isSnapping:
             self.setSharedAttr(_recModeAttr, "Snap")
         else:
             self.setSharedAttr(_recModeAttr, self.recMode.name)
-            if self.recMode == RecMode.SpecFrames:
-                self.setSharedAttr(_framesAttr, self._widget.getNumExpositions())
-            elif self.recMode == RecMode.SpecTime:
-                self.setSharedAttr(_timeAttr, self._widget.getTimeToRec())
-            elif self.recMode == RecMode.ScanLapse:
-                self.setSharedAttr(_lapseTimeAttr, self._widget.getTimelapseTime())
-                self.setSharedAttr(_freqAttr, self._widget.getTimelapseFreq())
 
 
     @APIExport(runOnUIThread=True)
@@ -703,8 +426,8 @@ class RecordingController(ImConWidgetController):
                 height, width = img.shape[:2]
 
                 if is_rgb and len(img.shape) == 2:
-                    # Convert grayscale to RGB if needed
-                    img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+                    # Convert grayscale to RGB if needed using numpy
+                    img = np.stack([img, img, img], axis=-1)
 
                 image[:height, current_x : current_x + width] = img
                 current_x += width
@@ -727,8 +450,7 @@ class RecordingController(ImConWidgetController):
         im = Image.fromarray(image)
 
         # save image to an in-memory bytes buffer
-        # save image to an in-memory bytes buffer
-        with io.BytesIO() as buf:
+        with python_io.BytesIO() as buf:
             im = im.convert("L")  # convert image to 'L' mode
             im.save(buf, format="PNG")
             im_bytes = buf.getvalue()
@@ -738,117 +460,45 @@ class RecordingController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def startRecording(self, mSaveFormat: int = SaveFormat.TIFF) -> None:
-        """Starts recording with the set settings to the set file path.""" 
-        # TODO: This should also be part of the io/writer 
+        """Starts recording with the set settings to the set file path using RecordingService.""" 
         mSaveFormat = SaveFormat(mSaveFormat)
-        if not IS_HEADLESS:
-            self._widget.setRecButtonChecked(True)
-        else:
-            # we probably call from the FASTAPI server
-            if self.recording:  # Already recording
-                return
 
-            timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-            folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "recordings", timeStamp)
-            if not os.path.exists(folder):
-                os.makedirs(folder)
-            time.sleep(0.01)
-            self.savename = os.path.join(folder, self.getFileName()) + "_rec"
+        # we probably call from the FASTAPI server
+        if self.recording:  # Already recording
+            return
 
-            detectorsBeingCaptured = self.getDetectorNamesToCapture()
-            self.recMode = RecMode.UntilStop
-            self.recordingArgs = {
-                "detectorNames": detectorsBeingCaptured,
-                "recMode": self.recMode,
-                "savename": self.savename,
-                "saveMode": SaveMode(1),  # Disk
-                "saveFormat": mSaveFormat,  # TIFF
-                "attrs": {
-                    detectorName: self._commChannel.sharedAttrs.getSharedAttributes() # TODO: HDF5 doesn't exist anymore
-                    for detectorName in detectorsBeingCaptured
-                },
-            }
-            self._master.recordingManager.startRecording(**self.recordingArgs)
-            self.recording = True
-            self.endedRecording = False
+        timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
+        folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "recordings", timeStamp)
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        time.sleep(0.01)
+        self.savename = os.path.join(folder, self.getFileName()) + "_rec"
+
+        detectorsBeingCaptured = self.getDetectorNamesToCapture()
+        self.recMode = RecMode.UntilStop
+        self.recordingArgs = {
+            "detectorNames": detectorsBeingCaptured,
+            "recMode": self.recMode,
+            "savename": self.savename,
+            "saveMode": SaveMode.Disk,
+            "saveFormat": mSaveFormat,
+            "attrs": {
+                detectorName: self._commChannel.sharedAttrs.getSharedAttributes()
+                for detectorName in detectorsBeingCaptured
+            },
+        }
+        # Use RecordingService for recording
+        self._start_continuous_recording(mSaveFormat)
+        self.recording = True
+        self.endedRecording = False
 
     @APIExport(runOnUIThread=True)
     def stopRecording(self) -> None:
-        """Stops recording."""
-        if not IS_HEADLESS:
-            self._widget.setRecButtonChecked(True)
-        else:
-            self.recording = False
-            self.endedRecording = True
-            if self.recMode == RecMode.ScanLapse and self.lapseCurrent != -1:
-                self._commChannel.sigAbortScan.emit()
-            self._master.recordingManager.endRecording()
+        """Stops recording using RecordingService."""
+        self.recording = False
+        self.endedRecording = True
+        self._stop_recording()
 
-    @APIExport(runOnUIThread=True)
-    def setRecModeSpecFrames(self, numFrames: int) -> None:
-        """Sets the recording mode to record a specific number of frames."""
-        self.specFrames()
-        self._widget.setNumExpositions(numFrames)
-
-    @APIExport(runOnUIThread=True)
-    def setRecModeSpecTime(self, secondsToRec: Union[int, float]) -> None:
-        """Sets the recording mode to record for a specific amount of time."""
-        self.specTime()
-        self._widget.setTimeToRec(secondsToRec)
-
-    @APIExport(runOnUIThread=True)
-    def setRecModeScanOnce(self) -> None:
-        """Sets the recording mode to record a single scan."""
-        self.recScanOnce()
-
-    @APIExport(runOnUIThread=True)
-    def setRecModeScanTimelapse(
-        self, lapsesToRec: int, freqSeconds: float, timelapseSingleFile: bool = False
-    ) -> None:
-        """Sets the recording mode to record a timelapse of scans."""
-        self.recScanLapse()
-        self._widget.setTimelapseTime(lapsesToRec)
-        self._widget.setTimelapseFreq(freqSeconds)
-        self._widget.setTimelapseSingleFile(timelapseSingleFile)
-
-    @APIExport(runOnUIThread=True)
-    def setRecModeUntilStop(self) -> None:
-        """Sets the recording mode to record until recording is manually
-        stopped."""
-        self.untilStop()
-
-    @APIExport(runOnUIThread=True)
-    def setDetectorToRecord(
-        self,
-        detectorName: Union[List[str], str, int],
-        multiDetectorSingleFile: bool = False,
-    ) -> None:
-        """Sets which detectors to record. One can also pass -1 as the
-        argument to record the current detector, or -2 to record all detectors.
-        """
-        if isinstance(detectorName, int):
-            self._widget.setDetectorMode(detectorName)
-        else:
-            if isinstance(detectorName, str):
-                detectorName = [detectorName]
-            self._widget.setDetectorMode(-3)
-            self._widget.setSelectedSpecificDetectors(detectorName)
-            self._widget.setMultiDetectorSingleFile(multiDetectorSingleFile)
-
-    @APIExport(runOnUIThread=True)
-    def setRecFilename(self, filename: Optional[str]) -> None:
-        """Sets the name of the file to record to. This only sets the name of
-        the file, not the full path. One can also pass None as the argument to
-        use a default time-based filename."""
-        if filename is not None:
-            self._widget.setCustomFilename(filename)
-        else:
-            self._widget.setCustomFilenameEnabled(False)
-
-    @APIExport(runOnUIThread=True)
-    def setRecFolder(self, folderPath: str) -> None:
-        """Sets the folder to save recordings into."""
-        self._widget.setRecFolder(folderPath)
 
     def resizeImage(self, image, scale_factor):
         """
@@ -873,10 +523,10 @@ class RecordingController(ImConWidgetController):
 
         new_height, new_width = int(height * scale_factor), int(width * scale_factor)
 
-        # Use OpenCV's resize function with nearest neighbor interpolation
-        resized_image = cv2.resize(
-            image, (new_width, new_height), interpolation=cv2.INTER_NEAREST
-        )
+        # Use PIL's resize function with nearest neighbor interpolation
+        pil_image = Image.fromarray(image)
+        resized_pil = pil_image.resize((new_width, new_height), Image.Resampling.NEAREST)
+        resized_image = np.array(resized_pil)
 
         return resized_image
 
@@ -885,8 +535,6 @@ _attrCategory = "Rec"
 _recModeAttr = "Mode"
 _framesAttr = "Frames"
 _timeAttr = "Time"
-_lapseTimeAttr = "LapseTime"
-_freqAttr = "LapseFreq"
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

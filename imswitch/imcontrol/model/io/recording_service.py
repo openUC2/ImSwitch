@@ -317,7 +317,7 @@ class MP4Writer:
         self._is_recording = True
         self._frame_count = 0
         self._logger.info(f"MP4 recording started: {self._filepath}")
-    
+        # TODO: In MP4Writer We would need to actually start the recording of frames here! by continously calling frames 
     def stop(self):
         """Stop recording and finalize file."""
         if not self._is_recording:
@@ -531,8 +531,8 @@ class RecordingService(SignalInterface):
         if save_mode in (SaveMode.Disk, SaveMode.DiskAndRAM):
             for det_name, image in images.items():
                 filepath = self._generate_filepath(savepath, det_name, format)
+                # TODO: We essentially loose all our metadta: {'WidefieldCamera': {'Detector:WidefieldCamera:Model': 'VirtualCamera', 'Detector:WidefieldCamera:Pixel size': [...], 'Detector:WidefieldCamera:Binning': 1, 'Detector:WidefieldCamera:ROI': [...], 'Detector:WidefieldCamera:Param:exposure': 0, 'Detector:WidefieldCamera:Param:exposure_mode': 'Auto', 'Detector:WidefieldCamera:Param:gain': 0, 'Detector:WidefieldCamera:Param:blacklevel': 100, 'Detector:WidefieldCamera:Param:binning': 1, 'Detector:WidefieldCamera:Param:image_width': 1000, 'Detector:WidefieldCamera:Param:image_height': 1000, 'Detector:WidefieldCamera:Param:frame_rate': -1, 'Detector:WidefieldCamera:Param:mode': True, 'Detector:WidefieldCamera:Param:flat_fielding': True, 'Detector:WidefieldCamera:Param:trigger_source': 'Continous', 'Detector:WidefieldCamera:Param:Camera pixel size': 1.0, 'Detector:FocusLock:Model': 'VirtualCamera', 'Detector:FocusLock:Pixel size': [...], 'Detector:FocusLock:Binning': 1, ...}} to  {'Detector': 'WidefieldCamera', 'Channel': 'Brightfield_WidefieldCamera', 'DateTime': '2026-01-27T14:12:22.757871'}
                 metadata = self._build_metadata(det_name, image, attrs)
-                
                 if async_write:
                     result = self._snap_async(det_name, image, filepath, format, metadata, callback)
                 else:
@@ -565,6 +565,34 @@ class RecordingService(SignalInterface):
             detector_names=detector_names,
             save_mode=SaveMode.Numpy
         )
+    
+    def save_image(self, detector_name: str, image: np.ndarray,
+                   savepath: str, format: SaveFormat = SaveFormat.TIFF,
+                   attrs: Dict[str, Any] = None, async_write: bool = True) -> SnapResult:
+        """
+        Save a pre-captured image to disk.
+        
+        This method saves an already captured image (not from detector)
+        using the same infrastructure as snap operations.
+        
+        Args:
+            detector_name: Name of the detector (for metadata)
+            image: The image data to save
+            savepath: Base path for saving (without extension)
+            format: Output format (TIFF, PNG, JPG)
+            attrs: Metadata attributes
+            async_write: If True, write in background
+            
+        Returns:
+            SnapResult with save status
+        """
+        filepath = self._generate_filepath(savepath, detector_name, format)
+        metadata = self._build_metadata(detector_name, image, attrs)
+        
+        if async_write:
+            return self._snap_async(detector_name, image, filepath, format, metadata)
+        else:
+            return self._snap_sync(detector_name, image, filepath, format, metadata)
     
     def _snap_async(self, detector_name: str, image: np.ndarray,
                     filepath: str, format: SaveFormat,

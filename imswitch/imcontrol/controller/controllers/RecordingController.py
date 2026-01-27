@@ -73,6 +73,7 @@ class RecordingController(ImConWidgetController):
         self._commChannel.sigStartRecordingExternal.connect(self.startRecording)
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
         '''
+    
     @property
     def recording_service(self) -> RecordingService:
         """Get or create the recording service (lazy initialization)."""
@@ -81,6 +82,8 @@ class RecordingController(ImConWidgetController):
             self._recording_service.set_detectors_manager(self._master.detectorsManager)
             if hasattr(self._master, 'metadataHub') and self._master.metadataHub is not None:
                 self._recording_service.set_metadata_hub(self._master.metadataHub)
+            # Set comm_channel for frame callbacks
+            self._recording_service.set_comm_channel(self._commChannel)
         return self._recording_service
 
     def start_streaming_recording(self, folder: str, detector_names: List[str] = None,
@@ -91,6 +94,7 @@ class RecordingController(ImConWidgetController):
         Start a streaming recording session using StreamingDataStoreAdapter.
         
         This is the modern approach for continuous recordings with OME-Zarr support.
+        Uses automatic frame capture via signal callback for continuous recording.
         
         Args:
             folder: Base path for recording data
@@ -119,7 +123,14 @@ class RecordingController(ImConWidgetController):
             )
             
             self._streaming_adapter.open(detector_names)
-            self.__logger.info(f"Streaming recording started: {folder}")
+            
+            # Configure recording service for automatic frame capture
+            self.recording_service.set_streaming_adapter(self._streaming_adapter)
+            self.recording_service._streaming_start_time = time.time()
+            self.recording_service._streaming_detector_names = detector_names or []
+            self.recording_service._connect_frame_callback()
+            
+            self.__logger.info(f"Streaming recording started with auto-capture: {folder}")
             return True
         except Exception as e:
             self.__logger.error(f"Failed to start streaming recording: {e}")
@@ -138,6 +149,12 @@ class RecordingController(ImConWidgetController):
             return {}
         
         try:
+            # Disconnect frame callback first
+            self.recording_service._disconnect_frame_callback()
+            self.recording_service._streaming_adapter = None
+            self.recording_service._streaming_start_time = None
+            self.recording_service._streaming_detector_names = []
+            
             stats = self._streaming_adapter.get_statistics()
             self._streaming_adapter.close()
             self.__logger.info(f"Streaming recording stopped. Stats: {stats}")
@@ -499,6 +516,50 @@ class RecordingController(ImConWidgetController):
         self.endedRecording = True
         self._stop_recording()
 
+    @APIExport(runOnUIThread=False)
+    def isRecording(self) -> bool:
+        """
+        Check if any recording is currently in progress.
+        
+        Returns:
+            True if video or streaming recording is active
+        """
+        return self.recording_service.is_recording or self.recording
+
+    @APIExport(runOnUIThread=False)
+    def getRecordingDuration(self) -> float:
+        """
+        Get the current recording duration in seconds.
+        
+        Returns:
+            Duration in seconds, or 0.0 if not recording
+        """
+        return self.recording_service.recording_duration
+
+    @APIExport(runOnUIThread=False)
+    def getRecordingFrameCount(self) -> int:
+        """
+        Get the number of frames recorded so far.
+        
+        Returns:
+            Number of frames recorded
+        """
+        return self.recording_service.recording_frame_count
+
+    @APIExport(runOnUIThread=False)
+    def getRecordingStatus(self) -> Dict[str, Any]:
+        """
+        Get comprehensive recording status information.
+        
+        Returns:
+            Dictionary containing:
+            - is_recording: bool - whether recording is active
+            - format: str - recording format (e.g., 'MP4', 'OME_ZARR')
+            - duration_seconds: float - recording duration
+            - frame_count: int - number of frames recorded
+            - filepath: str - output file path (if available)
+        """
+        return self.recording_service.get_status_dict()
 
     def resizeImage(self, image, scale_factor):
         """

@@ -192,6 +192,7 @@ class MockCameraTIS:
         import time
         time0 = time.time()
         while True:
+            # TODO: I think this is not very smart or blocking the mainloop weird!
             interval = np.max([self.exposure_ms,200]) / 1000.0
             if self._stop_evt.is_set():
                 break

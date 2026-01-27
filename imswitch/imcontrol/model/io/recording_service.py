@@ -248,7 +248,11 @@ class BackgroundStorageWorker:
         """Write TIFF file with optional metadata."""
         os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
         if metadata:
-            tiff.imwrite(filepath, data, metadata=metadata, imagej=False)
+            try:
+                tiff.imwrite(filepath, data, description=metadata)
+            except Exception as e:
+                logger.warning(f"Failed to write metadata to TIFF: {e}")
+                tiff.imwrite(filepath, data)
         else:
             tiff.imwrite(filepath, data)
     
@@ -305,6 +309,7 @@ class MP4Writer:
         self._writer = None
         self._is_recording = False
         self._frame_count = 0
+        self._start_time: Optional[float] = None
         self._lock = threading.Lock()
         self._logger = logging.getLogger(self.__class__.__name__)
     
@@ -316,8 +321,9 @@ class MP4Writer:
         # Writer is created on first frame to auto-detect size
         self._is_recording = True
         self._frame_count = 0
+        self._start_time = time.time()
         self._logger.info(f"MP4 recording started: {self._filepath}")
-        # TODO: In MP4Writer We would need to actually start the recording of frames here! by continously calling frames 
+    
     def stop(self):
         """Stop recording and finalize file."""
         if not self._is_recording:
@@ -335,18 +341,22 @@ class MP4Writer:
         """Write a frame to the video."""
         if not self._is_recording:
             return
-        
+        # apparently, opencv swaps axes, so we do that here too 
+        if len(frame.shape) >=2:
+            frame = frame.transpose(1,0,2) if frame.ndim ==3 else frame.T
+        else:
+            frame = frame.T
         with self._lock:
             # Initialize writer on first frame
             if self._writer is None:
                 h, w = frame.shape[:2]
                 if self._frame_size is None:
-                    self._frame_size = (w, h)
+                    self._frame_size = (h, w)
                 
                 os.makedirs(os.path.dirname(self._filepath), exist_ok=True) if os.path.dirname(self._filepath) else None
                 fourcc = cv2.VideoWriter_fourcc(*self._codec)
                 self._writer = cv2.VideoWriter(
-                    self._filepath, fourcc, self._fps, self._frame_size
+                    self._filepath, fourcc, self._fps, self._frame_size # requieres height, width
                 )
             
             # Convert grayscale to BGR
@@ -370,6 +380,17 @@ class MP4Writer:
     @property
     def frame_count(self) -> int:
         return self._frame_count
+    
+    @property
+    def elapsed_time(self) -> float:
+        """Get elapsed recording time in seconds."""
+        if self._start_time is None:
+            return 0.0
+        return time.time() - self._start_time
+    
+    @property
+    def filepath(self) -> str:
+        return self._filepath
 
 
 # =============================================================================
@@ -431,12 +452,20 @@ class RecordingService(SignalInterface):
         
         # Video recording state
         self._video_writer: Optional[MP4Writer] = None
+        self._video_detector_name: Optional[str] = None  # Detector to capture from
         
         # Streaming recording state
         self._is_streaming = False
         self._streaming_format: Optional[SaveFormat] = None
         self._streaming_writer = None
         self._streaming_frame_count = 0
+        self._streaming_start_time: Optional[float] = None
+        self._streaming_detector_names: List[str] = []
+        self._streaming_adapter = None  # StreamingDataStoreAdapter
+        
+        # Frame callback connection
+        self._frame_callback_connected = False
+        self._comm_channel = None  # Will be set externally
         
         # Memory recordings (RAM mode)
         self._mem_recordings: Dict[str, Any] = {}
@@ -461,6 +490,79 @@ class RecordingService(SignalInterface):
     def set_metadata_hub(self, metadata_hub):
         """Set or update the metadata hub."""
         self._metadata_hub = metadata_hub
+    
+    def set_comm_channel(self, comm_channel):
+        """
+        Set the communication channel for frame callbacks.
+        
+        This enables automatic frame capture during recording by connecting
+        to sigNewFrame or sigUpdateImage signals.
+        """
+        self._comm_channel = comm_channel
+    
+    def set_streaming_adapter(self, adapter):
+        """Set the streaming adapter for continuous recordings."""
+        self._streaming_adapter = adapter
+    
+    # =========================================================================
+    # Frame Callback for Continuous Recording
+    # =========================================================================
+    
+    def _on_new_frame(self, detector_name: str, frame: np.ndarray, init: bool, scale: list, is_current_detector: bool):
+        """
+        (
+            str, np.ndarray, bool, list, bool
+        )  # (detectorName, image, init, scale, isCurrentDetector)
+        
+        Callback for new frames - writes to active recording.
+        
+        This is called by the signal connection when a new frame is available.
+        """
+        if frame is None:
+            return
+        
+        # Write to video recording if active
+        if self._video_writer is not None and self._video_writer.is_recording:
+            if self._video_detector_name is None or self._video_detector_name == detector_name:
+                self._video_writer.write_frame(frame)
+                self.sigRecordingFrameNumUpdated.emit(self._video_writer.frame_count)
+        
+        # Write to streaming adapter if active
+        if self._streaming_adapter is not None and hasattr(self._streaming_adapter, '_is_open'):
+            if self._streaming_adapter._is_open:
+                if not self._streaming_detector_names or detector_name in self._streaming_detector_names:
+                    try:
+                        self._streaming_adapter.write_frame(detector_name, frame)
+                        self._streaming_frame_count += 1
+                        self.sigRecordingFrameNumUpdated.emit(self._streaming_frame_count)
+                    except Exception as e:
+                        self._logger.error(f"Error writing frame to streaming adapter: {e}")
+    
+    def _connect_frame_callback(self):
+        """Connect to frame signal for continuous recording."""
+        if self._frame_callback_connected:
+            return
+        
+        if self._comm_channel is not None and hasattr(self._comm_channel, 'sigUpdateImage'):
+            try:
+                self._comm_channel.sigUpdateImage.connect(self._on_new_frame)
+                self._frame_callback_connected = True
+                self._logger.info("Frame callback connected for continuous recording")
+            except Exception as e:
+                self._logger.error(f"Failed to connect frame callback: {e}")
+    
+    def _disconnect_frame_callback(self):
+        """Disconnect frame signal callback."""
+        if not self._frame_callback_connected:
+            return
+        
+        if self._comm_channel is not None and hasattr(self._comm_channel, 'sigUpdateImage'):
+            try:
+                self._comm_channel.sigUpdateImage.disconnect(self._on_new_frame)
+                self._frame_callback_connected = False
+                self._logger.info("Frame callback disconnected")
+            except Exception as e:
+                self._logger.debug(f"Error disconnecting frame callback: {e}")
     
     # =========================================================================
     # Snap Operations (Single Image Capture)
@@ -692,14 +794,16 @@ class RecordingService(SignalInterface):
     # =========================================================================
     
     def start_video_recording(self, filepath: str, fps: float = 30.0,
-                               detector_name: str = None) -> bool:
+                               detector_name: str = None,
+                               auto_capture: bool = True) -> bool:
         """
         Start MP4 video recording.
         
         Args:
             filepath: Output file path
             fps: Frames per second
-            detector_name: Detector to record from (optional, for auto-capture mode)
+            detector_name: Detector to record from (None = first detector or all)
+            auto_capture: If True, automatically capture frames via signal callback
             
         Returns:
             True if started successfully
@@ -709,7 +813,13 @@ class RecordingService(SignalInterface):
             return False
         
         self._video_writer = MP4Writer(filepath, fps=fps)
+        self._video_detector_name = detector_name
         self._video_writer.start()
+        
+        # Connect frame callback for automatic frame capture
+        if auto_capture:
+            self._connect_frame_callback()
+        
         self.sigRecordingStarted.emit()
         self._logger.info(f"Video recording started: {filepath}")
         return True
@@ -732,9 +842,13 @@ class RecordingService(SignalInterface):
         if self._video_writer is None:
             return 0
         
+        # Disconnect frame callback
+        self._disconnect_frame_callback()
+        
         frame_count = self._video_writer.frame_count
         self._video_writer.stop()
         self._video_writer = None
+        self._video_detector_name = None
         self.sigRecordingEnded.emit()
         return frame_count
     
@@ -742,6 +856,20 @@ class RecordingService(SignalInterface):
     def is_video_recording(self) -> bool:
         """Check if video recording is in progress."""
         return self._video_writer is not None and self._video_writer.is_recording
+    
+    @property
+    def video_recording_duration(self) -> float:
+        """Get current video recording duration in seconds."""
+        if self._video_writer is None:
+            return 0.0
+        return self._video_writer.elapsed_time
+    
+    @property
+    def video_recording_frame_count(self) -> int:
+        """Get current video recording frame count."""
+        if self._video_writer is None:
+            return 0
+        return self._video_writer.frame_count
     
     # =========================================================================
     # Streaming Recording (OME-Zarr, OME-TIFF)
@@ -835,6 +963,47 @@ class RecordingService(SignalInterface):
         """Check if streaming is in progress."""
         return self._is_streaming
     
+    @property
+    def streaming_duration(self) -> float:
+        """Get current streaming recording duration in seconds."""
+        if self._streaming_start_time is None:
+            return 0.0
+        return time.time() - self._streaming_start_time
+    
+    @property
+    def streaming_frame_count(self) -> int:
+        """Get current streaming frame count."""
+        return self._streaming_frame_count
+    
+    # =========================================================================
+    # Combined Recording State
+    # =========================================================================
+    
+    @property
+    def is_recording(self) -> bool:
+        """Check if any recording (video or streaming) is in progress."""
+        return self.is_video_recording or self.is_streaming or (
+            self._streaming_adapter is not None and 
+            hasattr(self._streaming_adapter, '_is_open') and 
+            self._streaming_adapter._is_open
+        )
+    
+    @property
+    def recording_duration(self) -> float:
+        """Get duration of current recording in seconds."""
+        if self.is_video_recording:
+            return self.video_recording_duration
+        elif self._streaming_start_time is not None:
+            return self.streaming_duration
+        return 0.0
+    
+    @property
+    def recording_frame_count(self) -> int:
+        """Get frame count of current recording."""
+        if self.is_video_recording:
+            return self.video_recording_frame_count
+        return self._streaming_frame_count
+    
     # =========================================================================
     # Metadata Building
     # =========================================================================
@@ -842,19 +1011,41 @@ class RecordingService(SignalInterface):
     def _build_metadata(self, detector_name: str, image: np.ndarray,
                         attrs: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
         """
-        Build OME-compatible metadata from attributes.
+        Build comprehensive metadata from attributes.
         
-        If MetadataHub is set, uses it for comprehensive metadata.
-        Otherwise falls back to basic attribute extraction.
+        Preserves ALL original attributes while also extracting key OME-compatible fields.
+        The full attrs dictionary is stored under 'AcquisitionAttributes' to prevent data loss.
         """
-        if not attrs:
-            return None
-        
         metadata = {}
+        
+        # Always add basic info
+        metadata['Detector'] = detector_name
+        metadata['DateTime'] = datetime.datetime.now().isoformat()
+        
+        # Add image shape info
+        if image is not None:
+            metadata['ImageShape'] = list(image.shape)
+            metadata['ImageDtype'] = str(image.dtype)
+        
+        if not attrs:
+            return metadata
         
         def _get_value(val):
             """Extract value from SharedAttrValue or return raw value."""
             return val.value if hasattr(val, 'value') else val
+        
+        def _serialize_value(val):
+            """Serialize value for JSON-compatible storage."""
+            val = _get_value(val)
+            if isinstance(val, np.ndarray):
+                return val.tolist()
+            elif isinstance(val, (list, tuple)):
+                return [_serialize_value(v) for v in val]
+            elif isinstance(val, dict):
+                return {k: _serialize_value(v) for k, v in val.items()}
+            elif isinstance(val, (np.integer, np.floating)):
+                return float(val)
+            return val
         
         def _search_attr(patterns: list, search_dict: dict):
             """Search for attribute using multiple key patterns."""
@@ -867,16 +1058,36 @@ class RecordingService(SignalInterface):
             return None
         
         try:
-            # Detector info
-            metadata['Detector'] = detector_name
+            # PRESERVE ALL ORIGINAL ATTRIBUTES
+            # Store full attrs dictionary to prevent data loss
+            # Handle nested dict structure (e.g., {detector_name: {attrs...}})
+            if detector_name in attrs and isinstance(attrs[detector_name], dict):
+                # Attrs are nested under detector name
+                detector_attrs = attrs[detector_name]
+                metadata['AcquisitionAttributes'] = {
+                    k: _serialize_value(v) for k, v in detector_attrs.items()
+                }
+                # Use detector-specific attrs for extraction
+                flat_attrs = detector_attrs
+            else:
+                # Flat attrs structure
+                metadata['AcquisitionAttributes'] = {
+                    k: _serialize_value(v) for k, v in attrs.items()
+                }
+                flat_attrs = attrs
             
+            # Extract key OME-compatible fields for quick access
             # Pixel size
             pixel_size = _search_attr([
+                f'Detector:{detector_name}:Pixel size',
                 f'Detector:{detector_name}:PixelSizeUm',
                 'Detector:PixelSizeUm',
-                'PixelSizeUm'
-            ], attrs)
+                'PixelSizeUm',
+                'Param:Camera pixel size'
+            ], flat_attrs)
             if pixel_size:
+                if isinstance(pixel_size, (list, tuple)) and len(pixel_size) > 0:
+                    pixel_size = pixel_size[0] if len(pixel_size) == 1 else pixel_size[1]
                 metadata['PhysicalSizeX'] = float(pixel_size)
                 metadata['PhysicalSizeY'] = float(pixel_size)
                 metadata['PhysicalSizeXUnit'] = 'µm'
@@ -884,21 +1095,70 @@ class RecordingService(SignalInterface):
             
             # Exposure
             exposure = _search_attr([
+                f'Detector:{detector_name}:Param:exposure',
                 f'Detector:{detector_name}:ExposureMs',
-                'Detector:ExposureMs',
+                'Param:exposure',
                 'ExposureMs'
-            ], attrs)
-            if exposure:
-                metadata['ExposureTime'] = float(exposure) / 1000.0
-                metadata['ExposureTimeUnit'] = 's'
+            ], flat_attrs)
+            if exposure is not None:
+                try:
+                    exp_val = float(exposure)
+                    if exp_val > 0:
+                        metadata['ExposureTime'] = exp_val / 1000.0  # Convert ms to s
+                        metadata['ExposureTimeUnit'] = 's'
+                except (ValueError, TypeError):
+                    pass
             
-            # Stage positions
+            # Gain
+            gain = _search_attr([
+                f'Detector:{detector_name}:Param:gain',
+                'Param:gain',
+                'Gain'
+            ], flat_attrs)
+            if gain is not None:
+                try:
+                    metadata['Gain'] = float(gain)
+                except (ValueError, TypeError):
+                    pass
+            
+            # Binning
+            binning = _search_attr([
+                f'Detector:{detector_name}:Binning',
+                f'Detector:{detector_name}:Param:binning',
+                'Binning'
+            ], flat_attrs)
+            if binning is not None:
+                try:
+                    metadata['Binning'] = int(binning)
+                except (ValueError, TypeError):
+                    pass
+            
+            # ROI
+            roi = _search_attr([
+                f'Detector:{detector_name}:ROI',
+                'ROI'
+            ], flat_attrs)
+            if roi is not None:
+                metadata['ROI'] = _serialize_value(roi)
+            
+            # Model
+            model = _search_attr([
+                f'Detector:{detector_name}:Model',
+                'Model'
+            ], flat_attrs)
+            if model:
+                metadata['DetectorModel'] = str(model)
+            
+            # Stage positions (search in full attrs, not detector-specific)
             for axis in ['X', 'Y', 'Z']:
                 for key, val in attrs.items():
                     key_str = str(key)
                     if 'Positioner:' in key_str and f':{axis}:Position' in key_str:
-                        metadata[f'Position{axis}'] = float(_get_value(val))
-                        metadata[f'Position{axis}Unit'] = 'µm'
+                        try:
+                            metadata[f'Position{axis}'] = float(_get_value(val))
+                            metadata[f'Position{axis}Unit'] = 'µm'
+                        except (ValueError, TypeError):
+                            pass
                         break
             
             # Illumination (lasers/LEDs)
@@ -919,12 +1179,16 @@ class RecordingService(SignalInterface):
                 is_enabled = laser_data.get('Enabled', False)
                 value = laser_data.get('Value', 0)
                 wavelength = laser_data.get('WavelengthNm', 0)
-                if is_enabled and value and float(value) > 0:
-                    active_lasers.append({
-                        'Name': laser_name,
-                        'WavelengthNm': float(wavelength) if wavelength else None,
-                        'Power': float(value),
-                    })
+                if is_enabled and value:
+                    try:
+                        if float(value) > 0:
+                            active_lasers.append({
+                                'Name': laser_name,
+                                'WavelengthNm': float(wavelength) if wavelength else None,
+                                'Power': float(value),
+                            })
+                    except (ValueError, TypeError):
+                        pass
             
             if active_lasers:
                 metadata['ActiveLasers'] = active_lasers
@@ -978,15 +1242,44 @@ class RecordingService(SignalInterface):
     
     def get_status(self) -> RecordingStatus:
         """Get current recording status."""
+        is_rec = self.is_recording
+        
+        # Determine format and filepath
+        if self.is_video_recording:
+            format_type = SaveFormat.MP4
+            filepath = self._video_writer.filepath if self._video_writer else None
+            start_time = self._video_writer._start_time if self._video_writer else None
+        elif self._is_streaming:
+            format_type = self._streaming_format
+            filepath = None
+            start_time = self._streaming_start_time
+        elif self._streaming_adapter is not None:
+            format_type = SaveFormat.OME_ZARR
+            filepath = getattr(self._streaming_adapter, 'base_path', None)
+            start_time = self._streaming_start_time
+        else:
+            format_type = None
+            filepath = None
+            start_time = None
+        
         return RecordingStatus(
-            is_recording=self.is_video_recording or self.is_streaming,
-            format=self._streaming_format if self._is_streaming else (
-                SaveFormat.MP4 if self.is_video_recording else None
-            ),
-            frame_count=(
-                self._video_writer.frame_count if self._video_writer else self._streaming_frame_count
-            ),
+            is_recording=is_rec,
+            format=format_type,
+            start_time=start_time,
+            frame_count=self.recording_frame_count,
+            filepath=filepath,
         )
+    
+    def get_status_dict(self) -> Dict[str, Any]:
+        """Get recording status as a dictionary (for API responses)."""
+        status = self.get_status()
+        return {
+            'is_recording': status.is_recording,
+            'format': status.format.name if status.format else None,
+            'duration_seconds': status.elapsed_time,
+            'frame_count': status.frame_count,
+            'filepath': status.filepath,
+        }
 
 
 # =============================================================================

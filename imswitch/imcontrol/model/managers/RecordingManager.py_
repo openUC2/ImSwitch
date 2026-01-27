@@ -727,7 +727,10 @@ class RecordingManager(SignalInterface):
 
     def snap(self, detectorNames=None, savename="", saveMode=SaveMode.Disk, saveFormat=SaveFormat.TIFF, attrs=None,
              use_background_io: bool = True, io_callback: Callable[[bool, str], None] = None):
-        """ Saves an image with the specified detectors to a file
+        """ 
+        DEPRECATED: Use RecordingService.snap() from imswitch.imcontrol.model.io instead.
+        
+        Saves an image with the specified detectors to a file
         with the specified name prefix, save mode, file format and attributes
         to save to the capture per detector.
         
@@ -742,8 +745,15 @@ class RecordingManager(SignalInterface):
             io_callback: Optional callback(success: bool, message: str) called when
                         background I/O completes. Only used when use_background_io=True.
         """
-        acqHandle = self.__detectorsManager.startAcquisition()
-
+        import warnings
+        warnings.warn(
+            "RecordingManager.snap() is deprecated. Use RecordingService.snap() from "
+            "imswitch.imcontrol.model.io instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        
+        # TODO: Move to central io module using RecordingService.snap()
         if detectorNames is None:
             detectorNames = self.__detectorsManager.detectorNames
 

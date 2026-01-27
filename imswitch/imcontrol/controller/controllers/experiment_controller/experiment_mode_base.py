@@ -14,8 +14,13 @@ import numpy as np
 from abc import ABC, abstractmethod
 
 from imswitch.imcommon.model import dirtools
-# Import OMEWriterConfig from the new io location
-from imswitch.imcontrol.model.io import OMEWriterConfig, OMEFileStorePaths
+# Import OME writers from the new io location
+from imswitch.imcontrol.model.io import (
+    OMEWriterConfig,
+    OMEFileStorePaths,
+    OMEROConnectionParams,
+    is_omero_available,
+)
 
 
 class ExperimentModeBase(ABC):
@@ -84,6 +89,8 @@ class ExperimentModeBase(ABC):
                            write_stitched_tiff: bool = True,
                            write_tiff_single: bool = False,
                            write_individual_tiffs: bool = False,
+                           write_omero: bool = False,
+                           omero_queue_size: int = 100,
                            min_period: float = 0.2,
                            n_time_points: int = 1,
                            n_z_planes: int = 1,
@@ -97,6 +104,8 @@ class ExperimentModeBase(ABC):
             write_stitched_tiff: Whether to write stitched TIFF
             write_tiff_single: Whether to append tiles to a single TIFF file
             write_individual_tiffs: Whether to write individual TIFF files with position-based naming
+            write_omero: Whether to stream tiles to OMERO server
+            omero_queue_size: Max tiles to queue for OMERO upload
             min_period: Minimum period between writes
             n_time_points: Number of time points
             n_z_planes: Number of Z planes
@@ -113,11 +122,51 @@ class ExperimentModeBase(ABC):
             write_stitched_tiff=write_stitched_tiff,
             write_tiff_single=write_tiff_single,
             write_individual_tiffs=write_individual_tiffs,
+            write_omero=write_omero,
+            omero_queue_size=omero_queue_size,
             min_period=min_period,
             pixel_size=pixel_size,
             n_time_points=n_time_points,
             n_z_planes=n_z_planes,
             n_channels=n_channels
+        )
+
+    def prepare_omero_connection_params(self) -> Optional[OMEROConnectionParams]:
+        """
+        Prepare OMERO connection parameters from ExperimentManager config.
+        
+        Returns:
+            OMEROConnectionParams if OMERO is enabled and available, None otherwise.
+        """
+        if not is_omero_available():
+            self._logger.debug("OMERO not available (omero-py not installed)")
+            return None
+
+        exp_manager = self.controller.experimentManager
+        if exp_manager is None:
+            self._logger.debug("ExperimentManager not available")
+            return None
+
+        if not getattr(exp_manager, 'omeroEnabled', False):
+            self._logger.debug("OMERO not enabled in ExperimentManager config")
+            return None
+
+        # Get OMERO connection parameters from ExperimentManager
+        host = getattr(exp_manager, 'omeroServerUrl', None)
+        if not host:
+            self._logger.warning("OMERO enabled but no server URL configured")
+            return None
+
+        return OMEROConnectionParams(
+            host=host,
+            port=getattr(exp_manager, 'omeroPort', 4064),
+            username=getattr(exp_manager, 'omeroUsername', ''),
+            password=getattr(exp_manager, 'omeroPassword', ''),
+            group_id=getattr(exp_manager, 'omeroGroupId', None),
+            project_id=getattr(exp_manager, 'omeroProjectId', None),
+            dataset_id=getattr(exp_manager, 'omeroDatasetId', None),
+            connection_timeout=getattr(exp_manager, 'omeroConnectionTimeout', 30),
+            upload_timeout=getattr(exp_manager, 'omeroUploadTimeout', 300),
         )
 
     def prepare_illumination_parameters(self, illumination_intensities: List[float]) -> Dict[str, Optional[float]]:

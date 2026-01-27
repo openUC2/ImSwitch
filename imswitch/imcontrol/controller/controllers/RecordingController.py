@@ -1,6 +1,15 @@
+"""
+Recording Controller - API Interface for recording operations.
+
+This controller provides the API interface (via APIExport) for all recording
+operations. Snap operations are now delegated to RecordingService from the io module.
+Complex recording operations (timelapse, video) still use the legacy RecordingManager
+for backwards compatibility.
+"""
+
 import os
 import time
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Dict, Any
 import numpy as np
 import datetime
 from fastapi.responses import StreamingResponse
@@ -13,12 +22,23 @@ from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Timer
 from imswitch.imcommon.model import ostools, APIExport, initLogger, dirtools
 from imswitch.imcontrol.model import RecMode, SaveMode, SaveFormat
-from imswitch.imcontrol.model.io import RecordingService, SaveFormat as IOSaveFormat
+from imswitch.imcontrol.model.io import (
+    RecordingService, 
+    SaveFormat as IOSaveFormat,
+    SaveMode as IOSaveMode,
+    get_recording_service,
+    StreamingDataStoreAdapter,
+)
 from ..basecontrollers import ImConWidgetController
 
 
 class RecordingController(ImConWidgetController):
-    """Linked to RecordingWidget."""
+    """
+    Recording Controller - API interface for snap and recording operations.
+    
+    Snap operations are delegated to RecordingService from the io module.
+    Complex recording operations use the legacy RecordingManager.
+    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -35,9 +55,14 @@ class RecordingController(ImConWidgetController):
         self.lapseTotal = 0
 
         self.streamstarted = False
+        
+        # Recording service (lazy initialization)
+        self._recording_service: Optional[RecordingService] = None
+        
+        # Streaming adapter for continuous recordings (lazy initialization)
+        self._streaming_adapter: Optional[StreamingDataStoreAdapter] = None
 
         # Connect CommunicationChannel signals
-        # TODO: Remove unused signals 
         self._commChannel.sigRecordingStarted.connect(self.recordingStarted)
         self._commChannel.sigRecordingEnded.connect(self.recordingEnded)
         self._commChannel.sigScanDone.connect(self.scanDone)
@@ -48,6 +73,128 @@ class RecordingController(ImConWidgetController):
         self._commChannel.sigStartRecordingExternal.connect(self.startRecording)
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
 
+    @property
+    def recording_service(self) -> RecordingService:
+        """Get or create the recording service (lazy initialization)."""
+        if self._recording_service is None:
+            self._recording_service = get_recording_service()
+            self._recording_service.set_detectors_manager(self._master.detectorsManager)
+            if hasattr(self._master, 'metadataHub') and self._master.metadataHub is not None:
+                self._recording_service.set_metadata_hub(self._master.metadataHub)
+        return self._recording_service
+
+    def start_streaming_recording(self, folder: str, detector_names: List[str] = None,
+                                   n_time_points: int = 1000, 
+                                   write_zarr: bool = True, 
+                                   write_tiff: bool = False) -> bool:
+        """
+        Start a streaming recording session using StreamingDataStoreAdapter.
+        
+        This is the modern approach for continuous recordings with OME-Zarr support.
+        
+        Args:
+            folder: Base path for recording data
+            detector_names: List of detectors to record (None = all)
+            n_time_points: Expected number of frames
+            write_zarr: Write OME-Zarr format
+            write_tiff: Write OME-TIFF format
+            
+        Returns:
+            True if session started successfully
+        """
+        if self._streaming_adapter is not None and self._streaming_adapter._is_open:
+            self.__logger.warning("Streaming session already active")
+            return False
+        
+        try:
+            metadata_hub = getattr(self._master, 'metadataHub', None)
+            
+            self._streaming_adapter = StreamingDataStoreAdapter(
+                base_path=folder,
+                detectors_manager=self._master.detectorsManager,
+                metadata_hub=metadata_hub,
+                write_zarr=write_zarr,
+                write_tiff=write_tiff,
+                n_time_points=n_time_points,
+            )
+            
+            self._streaming_adapter.open(detector_names)
+            self.__logger.info(f"Streaming recording started: {folder}")
+            return True
+        except Exception as e:
+            self.__logger.error(f"Failed to start streaming recording: {e}")
+            self._streaming_adapter = None
+            return False
+    
+    def write_streaming_frame(self, detector_name: str, frame: np.ndarray,
+                               t_index: int = None, z_index: int = 0) -> bool:
+        """
+        Write a frame to the active streaming session.
+        
+        Args:
+            detector_name: Name of the detector
+            frame: Image data
+            t_index: Time index (auto-incremented if None)
+            z_index: Z plane index
+            
+        Returns:
+            True if frame written successfully
+        """
+        if self._streaming_adapter is None or not self._streaming_adapter._is_open:
+            self.__logger.warning("No active streaming session")
+            return False
+        
+        try:
+            self._streaming_adapter.write_frame(detector_name, frame, t_index, z_index)
+            return True
+        except Exception as e:
+            self.__logger.error(f"Failed to write streaming frame: {e}")
+            return False
+    
+    def stop_streaming_recording(self) -> Dict[str, Any]:
+        """
+        Stop the active streaming recording session.
+        
+        Returns:
+            Statistics about the recording session
+        """
+        if self._streaming_adapter is None:
+            return {}
+        
+        try:
+            stats = self._streaming_adapter.get_statistics()
+            self._streaming_adapter.close()
+            self.__logger.info(f"Streaming recording stopped. Stats: {stats}")
+        except Exception as e:
+            self.__logger.error(f"Error stopping streaming recording: {e}")
+            stats = {}
+        finally:
+            self._streaming_adapter = None
+        
+        return stats
+
+    def _convert_save_format(self, save_format: SaveFormat) -> IOSaveFormat:
+        """Convert legacy SaveFormat to io module SaveFormat."""
+        format_mapping = {
+            SaveFormat.TIFF: IOSaveFormat.TIFF,
+            SaveFormat.HDF5: IOSaveFormat.HDF5,
+            SaveFormat.PNG: IOSaveFormat.PNG,
+            SaveFormat.JPEG: IOSaveFormat.JPEG,
+            SaveFormat.MP4: IOSaveFormat.MP4,
+        }
+        return format_mapping.get(save_format, IOSaveFormat.TIFF)
+
+    def _convert_save_mode(self, save_mode: SaveMode) -> IOSaveMode:
+        """Convert legacy SaveMode to io module SaveMode."""
+        mode_mapping = {
+            SaveMode.Disk: IOSaveMode.Disk,
+            SaveMode.RAM: IOSaveMode.RAM,
+            SaveMode.Numpy: IOSaveMode.Numpy,
+            SaveMode.Streaming: IOSaveMode.Streaming,
+            SaveMode.DiskAndRAM: IOSaveMode.DiskAndRAM,
+        }
+        return mode_mapping.get(save_mode, IOSaveMode.Disk)
+
     def snapSaveModeChanged(self):
         saveMode = SaveMode(self._widget.getSnapSaveMode())
         self._widget.setsaveFormatEnabled(saveMode != SaveMode.RAM)
@@ -55,7 +202,12 @@ class RecordingController(ImConWidgetController):
             self._widget.setsaveFormat(SaveFormat.TIFF.value)
 
     def snap(self, name=None, mSaveFormat=None) -> dict:
-        """Take a snap and save it to a file."""
+        """
+        Take a snap and save it to a file using RecordingService.
+        
+        This method now delegates to RecordingService from the io module for
+        all snap operations.
+        """
         self.updateRecAttrs(isSnapping=True)
 
         # by default save as it's noted in the widget
@@ -77,6 +229,7 @@ class RecordingController(ImConWidgetController):
             name = "_snap"
         savename = os.path.join(folder, self.getFileName() + "_" + name)
 
+        # Collect metadata attributes
         attrs = {
             detectorName: self._get_detector_attrs(detectorName)
             for detectorName in detectorNames
@@ -85,28 +238,60 @@ class RecordingController(ImConWidgetController):
         if not IS_HEADLESS:
             saveMode = SaveMode(self._widget.getSnapSaveMode())
         else:
-            saveMode = SaveMode.Disk  # TODO: Assuming we want to save the image
-            # TODO: This should be part of the io/writers
-        self._master.recordingManager.snap(
-            detectorNames, savename, saveMode, mSaveFormat, attrs
-        )
+            saveMode = SaveMode.Disk
+
+        # Convert to io module types
+        io_save_format = self._convert_save_format(mSaveFormat)
+        io_save_mode = self._convert_save_mode(saveMode)
+
+        # Use RecordingService for snap operations
+        try:
+            result = self.recording_service.snap(
+                detector_names=detectorNames,
+                savepath=savename,
+                save_mode=io_save_mode,
+                format=io_save_format,
+                attrs=attrs,
+            )
+            self.__logger.debug(f"Snap completed: {result}")
+        except Exception as e:
+            self.__logger.error(f"Error during snap with RecordingService: {e}")
+            # Fallback to legacy RecordingManager
+            self._master.recordingManager.snap(
+                detectorNames, savename, saveMode, mSaveFormat, attrs
+            )
+        
         return {"fullPath": savename, "relativePath": relativeFolder}
 
-    def snapNumpy(self):
+    def snapNumpy(self) -> Dict[str, np.ndarray]:
+        """
+        Take a snap and return numpy arrays.
+        
+        This method now delegates to RecordingService.snap_numpy() for
+        memory-only snap operations.
+        """
         self.updateRecAttrs(isSnapping=True)
         detectorNames = self.getDetectorNamesToCapture()
-        attrs = {
-            detectorName: self._get_detector_attrs(detectorName)
-            for detectorName in detectorNames
-        }
 
-        return self._master.recordingManager.snap(
-            detectorNames,
-            "",
-            SaveMode(4),  # for Numpy
-            "",
-            attrs,
-        )
+        try:
+            # Use RecordingService for numpy snap
+            return self.recording_service.snap_numpy(
+                detector_names=detectorNames,
+            )
+        except Exception as e:
+            self.__logger.error(f"Error during snapNumpy with RecordingService: {e}")
+            # Fallback to legacy RecordingManager
+            attrs = {
+                detectorName: self._get_detector_attrs(detectorName)
+                for detectorName in detectorNames
+            }
+            return self._master.recordingManager.snap(
+                detectorNames,
+                "",
+                SaveMode(4),  # for Numpy
+                "",
+                attrs,
+            )
 
     def snapImagePrev(self, *args):
         """Snap an already taken image and save it to a file."""

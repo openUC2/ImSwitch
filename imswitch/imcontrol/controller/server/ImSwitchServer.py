@@ -251,7 +251,7 @@ def move_item(source: str = Form(...), destination: str = Form(...)):
     return {"message": "Item moved successfully", "destination": str(dest)}
 
 
-# ✏️ Rename a File or Folder
+# Rename a File or Folder
 @api_router.patch("/FileManager/rename")
 def rename_item(source: str = Form(...), new_name: str = Form(...)):
     src = dirtools.UserFileDirs.getValidatedDataPath() / source

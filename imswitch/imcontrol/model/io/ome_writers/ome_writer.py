@@ -3,7 +3,8 @@ Unified OME writer for both TIFF and OME-Zarr formats.
 
 This module provides a comprehensive writer that handles both individual TIFF files
 and OME-Zarr mosaics, supporting multi-dimensional data (time, channel, z-stack).
-It includes proper OME-NGFF metadata for both formats.
+It includes proper OME-NGFF metadata for both formats, as well as optional
+streaming to OMERO servers.
 
 Migrated from: imswitch/imcontrol/controller/controllers/experiment_controller/ome_writer.py
 
@@ -15,12 +16,13 @@ Features:
     - Multi-dimensional support (TCZYX)
     - Physical coordinate transformations
     - Channel metadata (names, colors)
+    - OMERO streaming upload for real-time server storage
 """
 
 import os
 import time
 import threading
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from dataclasses import dataclass
 
 import numpy as np
@@ -30,6 +32,15 @@ import tifffile as tif
 # Import from local writers module
 from .ome_tiff_stitcher import OmeTiffStitcher
 from .single_tiff_writer import SingleTiffWriter
+from .omero_uploader import (
+    OMEROUploader,
+    OMEROConnectionParams,
+    TileMetadata,
+    is_omero_available,
+)
+
+# Global registry for shared OMERO uploaders (for timelapse experiments)
+_shared_omero_uploaders: Dict[str, OMEROUploader] = {}
 
 
 @dataclass
@@ -45,6 +56,8 @@ class OMEWriterConfig:
         write_stitched_tiff: Write stitched OME-TIFF mosaic
         write_tiff_single: Append tiles to a single TIFF file
         write_individual_tiffs: Write individual TIFFs with position naming
+        write_omero: Stream tiles to OMERO server
+        omero_queue_size: Max tiles to queue for OMERO upload
         min_period: Minimum time between writes (throttling)
         compression: Compression algorithm for TIFF files
         zarr_compressor: Compressor for Zarr arrays
@@ -66,6 +79,8 @@ class OMEWriterConfig:
     write_stitched_tiff: bool = False
     write_tiff_single: bool = False
     write_individual_tiffs: bool = False
+    write_omero: bool = False
+    omero_queue_size: int = 100
     min_period: float = 0.2
     compression: str = "zlib"
     zarr_compressor = None
@@ -178,17 +193,22 @@ class OMEWriter:
     - Stitched OME-TIFF mosaics
     - Single TIFF files with appended tiles
     - Individual TIFF files with position-based naming
+    - OMERO streaming upload for real-time server storage
     
     The writer supports multi-dimensional data (TCZYX) with proper physical
     coordinate transformations and channel metadata.
     
     Example:
-        >>> from imswitch.imcontrol.model.io.writers import OMEWriter, OMEWriterConfig, OMEFileStorePaths
+        >>> from imswitch.imcontrol.model.io.ome_writers import (
+        ...     OMEWriter, OMEWriterConfig, OMEFileStorePaths,
+        ...     OMEROConnectionParams
+        ... )
         >>> 
         >>> # Configure output formats
         >>> config = OMEWriterConfig(
         ...     write_zarr=True,
         ...     write_stitched_tiff=True,
+        ...     write_omero=True,
         ...     pixel_size=0.325,
         ...     n_channels=2,
         ...     channel_names=["DAPI", "GFP"]
@@ -197,20 +217,28 @@ class OMEWriter:
         >>> # Setup file paths
         >>> file_paths = OMEFileStorePaths("/path/to/experiment")
         >>> 
+        >>> # OMERO connection (optional)
+        >>> omero_params = OMEROConnectionParams(
+        ...     host="omero.server.com",
+        ...     username="user",
+        ...     password="pass"
+        ... )
+        >>> 
         >>> # Create writer
         >>> writer = OMEWriter(
         ...     file_paths=file_paths,
         ...     tile_shape=(512, 512),
         ...     grid_shape=(10, 10),
         ...     grid_geometry=(0, 0, 500, 500),  # x_start, y_start, x_step, y_step
-        ...     config=config
+        ...     config=config,
+        ...     omero_connection_params=omero_params
         ... )
         >>> 
         >>> # Write frames
         >>> for i, frame in enumerate(frames):
         ...     writer.write_frame(frame, {"x": ..., "y": ..., ...})
         >>> 
-        >>> # Finalize (builds pyramids)
+        >>> # Finalize (builds pyramids, waits for OMERO upload)
         >>> writer.finalize()
     """
 
@@ -222,7 +250,9 @@ class OMEWriter:
         grid_geometry: tuple, 
         config: OMEWriterConfig, 
         logger=None, 
-        isRGB: bool = False
+        isRGB: bool = False,
+        omero_connection_params: Optional[OMEROConnectionParams] = None,
+        shared_omero_key: Optional[str] = None,
     ):
         """
         Initialize the OME writer.
@@ -235,6 +265,9 @@ class OMEWriter:
             config: OMEWriterConfig for writer behavior
             logger: Logger instance for debugging
             isRGB: Whether images are RGB format
+            omero_connection_params: OMERO connection parameters (required if write_omero=True)
+            shared_omero_key: Key for shared OMERO uploader (for timelapse experiments).
+                             If provided, reuses an existing uploader or creates one to share.
         """
         self.file_paths = file_paths
         self.tile_h, self.tile_w = tile_shape
@@ -243,6 +276,8 @@ class OMEWriter:
         self.config = config
         self.logger = logger
         self.isRGB = isRGB
+        self.omero_connection_params = omero_connection_params
+        self.shared_omero_key = shared_omero_key
 
         # Zarr components
         self.store = None
@@ -252,6 +287,10 @@ class OMEWriter:
         # TIFF writers
         self.tiff_stitcher: Optional[OmeTiffStitcher] = None
         self.single_tiff_writer: Optional[SingleTiffWriter] = None
+
+        # OMERO uploader
+        self.omero_uploader: Optional[OMEROUploader] = None
+        self._owns_omero_uploader = False  # Track if we own the uploader
 
         # Timing for throttling
         self.t_last = time.time()
@@ -265,6 +304,9 @@ class OMEWriter:
 
         if config.write_tiff_single:
             self._setup_single_tiff_writer()
+
+        if config.write_omero:
+            self._setup_omero_uploader()
 
     def _setup_zarr_store(self):
         """Set up the OME-Zarr store and canvas with proper OME-NGFF metadata."""
@@ -374,6 +416,70 @@ class OMEWriter:
         if self.logger:
             self.logger.debug(f"Single TIFF writer initialized: {single_tiff_path}")
 
+    def _setup_omero_uploader(self):
+        """
+        Set up the OMERO uploader for streaming tiles to OMERO server.
+        
+        If shared_omero_key is provided, attempts to reuse an existing uploader
+        or creates a new one that can be shared with subsequent writers.
+        """
+        global _shared_omero_uploaders
+
+        if not is_omero_available():
+            if self.logger:
+                self.logger.warning("OMERO upload requested but omero-py not available. Disabling.")
+            self.config.write_omero = False
+            return
+
+        if self.omero_connection_params is None:
+            if self.logger:
+                self.logger.warning("OMERO upload requested but no connection params provided. Disabling.")
+            self.config.write_omero = False
+            return
+
+        # Check for shared uploader
+        if self.shared_omero_key and self.shared_omero_key in _shared_omero_uploaders:
+            self.omero_uploader = _shared_omero_uploaders[self.shared_omero_key]
+            self._owns_omero_uploader = False
+            if self.logger:
+                self.logger.debug(f"Reusing shared OMERO uploader: {self.shared_omero_key}")
+            return
+
+        try:
+            self.omero_uploader = OMEROUploader(
+                connection_params=self.omero_connection_params,
+                image_name=os.path.basename(self.file_paths.base_dir),
+                dtype=np.uint16,
+                size_x=self.nx * self.tile_w,
+                size_y=self.ny * self.tile_h,
+                size_z=self.config.n_z_planes,
+                size_c=self.config.n_channels,
+                size_t=self.config.n_time_points,
+                tile_width=self.tile_w,
+                tile_height=self.tile_h,
+                pixel_size_um=self.config.pixel_size,
+                channel_names=self.config.channel_names,
+                logger=self.logger,
+                queue_maxsize=self.config.omero_queue_size,
+            )
+            self.omero_uploader.start()
+            self._owns_omero_uploader = True
+
+            # Register shared uploader if key provided
+            if self.shared_omero_key:
+                _shared_omero_uploaders[self.shared_omero_key] = self.omero_uploader
+                if self.logger:
+                    self.logger.debug(f"Registered shared OMERO uploader: {self.shared_omero_key}")
+
+            if self.logger:
+                self.logger.info(f"OMERO uploader initialized for {self.omero_connection_params.host}")
+
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to initialize OMERO uploader: {e}")
+            self.config.write_omero = False
+            self.omero_uploader = None
+
     def write_frame(self, frame, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Write a single frame to enabled output formats.
@@ -411,6 +517,10 @@ class OMEWriter:
         # Write individual TIFF files with position-based naming if requested
         if self.config.write_individual_tiffs:
             self._write_individual_tiff(frame, metadata)
+
+        # Write to OMERO if requested
+        if self.config.write_omero and self.omero_uploader is not None:
+            self._write_omero_tile(frame, metadata)
 
         # Throttle writes if needed
         self._throttle_writes()
@@ -516,6 +626,39 @@ class OMEWriter:
 
         tif.imwrite(filepath, frame, compression=self.config.compression)
 
+    def _write_omero_tile(self, frame, metadata: Dict[str, Any]):
+        """
+        Write tile to OMERO server via the uploader queue.
+        
+        Creates TileMetadata from the frame metadata and queues it for upload.
+        """
+        if self.omero_uploader is None:
+            return
+
+        # Calculate grid position
+        ix = int(round((metadata["x"] - self.x_start) / max(self.x_step, 1)))
+        iy = int(round((metadata["y"] - self.y_start) / max(self.y_step, 1)))
+
+        # Get dimension indices
+        t_idx = metadata.get("time_index", 0)
+        c_idx = metadata.get("channel_index", 0)
+        z_idx = metadata.get("z_index", 0)
+
+        # Create tile metadata
+        tile_meta = TileMetadata(
+            ix=ix,
+            iy=iy,
+            z=z_idx,
+            c=c_idx,
+            t=t_idx,
+            tile_data=frame,
+            pixel_size_um=self.config.pixel_size,
+            channel_name=metadata.get("illuminationChannel", f"Channel_{c_idx}"),
+        )
+
+        # Queue the tile for upload
+        self.omero_uploader.queue_tile(tile_meta)
+
     def _throttle_writes(self):
         """Throttle disk writes if needed."""
         t_now = time.time()
@@ -529,6 +672,7 @@ class OMEWriter:
         
         - Builds pyramid levels for OME-Zarr
         - Closes all TIFF writers
+        - Waits for OMERO upload to complete (if owned)
         """
         if self.config.write_zarr and self.store is not None:
             try:
@@ -548,6 +692,16 @@ class OMEWriter:
             self.single_tiff_writer.close()
             if self.logger:
                 self.logger.info("Single TIFF file completed")
+
+        # Finalize OMERO uploader if we own it
+        if self.config.write_omero and self.omero_uploader is not None and self._owns_omero_uploader:
+            try:
+                self.omero_uploader.stop_and_wait()
+                if self.logger:
+                    self.logger.info("OMERO upload completed")
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"OMERO finalization error: {e}")
 
         if self.logger:
             self.logger.info(f"OME writer finalized for {self.file_paths.base_dir}")
@@ -682,4 +836,62 @@ class OMEWriter:
         """Get the Zarr store path for frontend streaming."""
         if self.config.write_zarr:
             return str(self.file_paths.zarr_dir)
+        return None
+
+    @classmethod
+    def cleanup_shared_omero_uploaders(cls, key: Optional[str] = None, logger=None):
+        """
+        Clean up shared OMERO uploaders.
+        
+        Call this after all timepoints in a timelapse experiment are complete.
+        
+        Args:
+            key: Specific key to clean up. If None, cleans up all shared uploaders.
+            logger: Logger for status messages.
+        """
+        global _shared_omero_uploaders
+
+        if key is not None:
+            if key in _shared_omero_uploaders:
+                try:
+                    _shared_omero_uploaders[key].stop_and_wait()
+                    if logger:
+                        logger.info(f"Cleaned up shared OMERO uploader: {key}")
+                except Exception as e:
+                    if logger:
+                        logger.error(f"Error cleaning up OMERO uploader {key}: {e}")
+                finally:
+                    del _shared_omero_uploaders[key]
+        else:
+            # Clean up all shared uploaders
+            for k in list(_shared_omero_uploaders.keys()):
+                try:
+                    _shared_omero_uploaders[k].stop_and_wait()
+                    if logger:
+                        logger.info(f"Cleaned up shared OMERO uploader: {k}")
+                except Exception as e:
+                    if logger:
+                        logger.error(f"Error cleaning up OMERO uploader {k}: {e}")
+            _shared_omero_uploaders.clear()
+
+    def get_omero_image_id(self) -> Optional[int]:
+        """
+        Get the OMERO image ID created by this writer.
+        
+        Returns:
+            Image ID if available, None otherwise.
+        """
+        if self.omero_uploader is not None:
+            return self.omero_uploader.get_image_id()
+        return None
+
+    def get_omero_dataset_id(self) -> Optional[int]:
+        """
+        Get the OMERO dataset ID used by this writer.
+        
+        Returns:
+            Dataset ID if available, None otherwise.
+        """
+        if self.omero_uploader is not None:
+            return self.omero_uploader.get_dataset_id()
         return None

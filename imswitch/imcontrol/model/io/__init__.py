@@ -58,9 +58,6 @@ Alternative APIs:
        writer.add_tile(tile_info, image)
        writer.close()
 
-Legacy Compatibility:
-=====================
-RecordingManager still works but is DEPRECATED. Use RecordingService for new code.
 """
 
 from .data_store import AcquisitionDataStore, create_data_store
@@ -110,6 +107,11 @@ from .ome_writers import (
     SingleTiffWriter,
     MinimalMetadata,
     MinimalZarrDataSource,
+    # OMERO uploader
+    OMEROUploader,
+    OMEROConnectionParams,
+    TileMetadata,
+    is_omero_available,
 )
 
 __all__ = [
@@ -171,6 +173,11 @@ __all__ = [
     'SingleTiffWriter',
     'MinimalMetadata',
     'MinimalZarrDataSource',
+    # OMERO uploader
+    'OMEROUploader',
+    'OMEROConnectionParams',
+    'TileMetadata',
+    'is_omero_available',
 ]
 
 

@@ -42,8 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The entire repo gets copied into the Docker container, so we try to only fetch files we
-          # actually need:
+          # Don't download unnecessary data:
           fetch-depth: 0
           filter: 'blob:none'
 

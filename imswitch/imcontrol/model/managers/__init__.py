@@ -14,7 +14,7 @@ from .RS232sManager import RS232sManager
 # Importing RecMode, SaveMode, SaveFormat from io module for backwards compatibility
 from imswitch.imcontrol.model.io import RecordingService, RecMode, SaveMode, SaveFormat
 # Create alias for backwards compatibility (will be removed in future versions)
-RecordingManager = RecordingService
+# RecordingManager = RecordingService
 from .SLMManager import SLMManager
 from .ScanManagerPointScan import ScanManagerPointScan
 from .ScanManagerBase import ScanManagerBase

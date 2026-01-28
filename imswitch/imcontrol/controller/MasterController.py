@@ -8,7 +8,7 @@ from imswitch.imcontrol.model import (
     LasersManager,
     MultiManager,
     PositionersManager,
-    RecordingManager,  # DEPRECATED - kept for backwards compatibility
+    #RecordingManager,  # DEPRECATED - kept for backwards compatibility
     RS232sManager,
     SLMManager,
     SIMManager,
@@ -111,7 +111,7 @@ class MasterController:
         
         # Alias for backwards compatibility - recordingManager now points to recordingService
         # Legacy RecordingManager has been removed, all functionality is now in RecordingService
-        self.recordingManager = self.recordingService
+        # self.recordingManager = self.recordingService
         
         if "SLM" in self.__setupInfo.availableWidgets:
             self.slmManager = SLMManager(self.__setupInfo.slm)
@@ -343,7 +343,7 @@ class MasterController:
         return list(self._controllersRegistry.keys())
 
     def closeEvent(self):
-        self.recordingManager.endRecording(emitSignal=False, wait=True)
+        # self.recordingManager.endRecording(emitSignal=False, wait=True)
 
         for attrName in dir(self):
             attr = getattr(self, attrName)

@@ -181,16 +181,14 @@ class ExperimentModeBase(ABC):
             
         Returns:
             List with illumination0-N and led parameters
-        """
-        intensity_list = [0]*len(illumination_intensities)  # Default LED value
+        """ # TODO: This is still correct?!! 
+
+        intensity_list = [0]*5 # This maps to the 5 avaiable channels on the eps32 side 
         
         # Simple direct mapping - frontend already handles channel_index matching
         for i, intensity in enumerate(illumination_intensities):
             intensity_list[self.controller.availableIlluminations[i].channel_index] = intensity
-            #print(self.controller.availableIlluminations[i].name)
-            #print(self.controller.availableIlluminations[i].channel_index)            
-            # order it by channel index
-        
+            
         return intensity_list
 
     def create_experiment_directory(self, exp_name: str) -> Tuple[str, str, str]:

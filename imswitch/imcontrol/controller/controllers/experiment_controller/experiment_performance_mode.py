@@ -744,14 +744,14 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             
             self._logger.debug(f"Waiting for stagescan completion (hardware trigger mode)")
             self._stagescan_complete_event.clear()
-            while not self._stagescan_complete_event.is_set():
+            while not self._stagescan_complete_event.is_set():  # TODO: We need to set this event from the ExperimentController when a new experiment is started or stopped
                 elapsed = time.time() - start_time
                 
                 # Check for overall timeout
                 if elapsed > max_timeout:
                     self._logger.warning(f"Stagescan timeout after {elapsed:.1f}s")
                     return False
-                
+                # TODO: We need to listen to the stop flag from the Experimentcontroller here, too
                 # Check for frame timeout (no frames received for too long)
                 if self._last_frame_time and (time.time() - self._last_frame_time > FRAME_TIMEOUT_SECONDS):
                     self._logger.warning(f"No frames received for {FRAME_TIMEOUT_SECONDS}s - possible hardware issue")

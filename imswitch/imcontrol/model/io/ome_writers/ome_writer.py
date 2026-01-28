@@ -162,7 +162,7 @@ class OMEFileStorePaths:
         else:
             self.individual_tiffs_dir = os.path.join(base_dir, "individual_tiffs")
 
-        #os.makedirs(self.tiff_dir, exist_ok=True)
+        os.makedirs(self.tiff_dir, exist_ok=True)
         os.makedirs(self.individual_tiffs_dir, exist_ok=True)
 
     def get_timepoint_dir(self, timepoint_index: int) -> str:

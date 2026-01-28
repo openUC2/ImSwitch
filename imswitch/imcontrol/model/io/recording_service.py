@@ -264,7 +264,7 @@ class BackgroundStorageWorker:
                     # Build OME-XML string
                     ome_xml = build_ome_metadata_from_dict(metadata_with_dims)
                     if ome_xml:
-                        tiff.imwrite(filepath, data, description=ome_xml)
+                        tiff.imwrite(filepath, data, description=ome_xml.encode("ascii", "xmlcharrefreplace").decode("ascii"))
                     else:
                         # Fallback to simple metadata as ImageJ description
                         import json

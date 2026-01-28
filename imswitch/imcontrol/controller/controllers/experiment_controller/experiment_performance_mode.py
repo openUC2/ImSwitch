@@ -13,8 +13,8 @@ from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
 import numpy as np
 
-from .experiment_mode_base import ExperimentModeBase, OMEFileStorePaths
-from .ome_writer import OMEWriter, OMEWriterConfig
+from .experiment_mode_base import ExperimentModeBase
+from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths
 from imswitch.imcommon.model import dirtools
 
 
@@ -744,14 +744,14 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             
             self._logger.debug(f"Waiting for stagescan completion (hardware trigger mode)")
             self._stagescan_complete_event.clear()
-            while not self._stagescan_complete_event.is_set():
+            while not self._stagescan_complete_event.is_set():  # TODO: We need to set this event from the ExperimentController when a new experiment is started or stopped
                 elapsed = time.time() - start_time
                 
                 # Check for overall timeout
                 if elapsed > max_timeout:
                     self._logger.warning(f"Stagescan timeout after {elapsed:.1f}s")
                     return False
-                
+                # TODO: We need to listen to the stop flag from the Experimentcontroller here, too
                 # Check for frame timeout (no frames received for too long)
                 if self._last_frame_time and (time.time() - self._last_frame_time > FRAME_TIMEOUT_SECONDS):
                     self._logger.warning(f"No frames received for {FRAME_TIMEOUT_SECONDS}s - possible hardware issue")
@@ -883,6 +883,9 @@ class ExperimentPerformanceMode(ExperimentModeBase):
             List of OMEWriter instances
         """
         file_writers = []
+        
+        # shared_individual_tiffs_dir is no longer needed - OMEFileStorePaths handles it internally
+        shared_individual_tiffs_dir = None
 
         # Only create writers if single TIFF mode is enabled
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
@@ -894,16 +897,12 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         # Create experiment directory and file paths
         timeStamp, dirPath, mFileName = self.create_experiment_directory("performance_scan")
 
-        # Create shared individual_tiffs directory at the experiment root level
-        shared_individual_tiffs_dir = os.path.join(dirPath, "individual_tiffs")
-        os.makedirs(shared_individual_tiffs_dir, exist_ok=True)
-
         # Create a single OME writer for all tiles in single TIFF mode
         experiment_name = "0_performance_scan"
         m_file_path = os.path.join(dirPath, f"{mFileName}_{experiment_name}.ome.tif")
         self._logger.debug(f"Performance mode single TIFF path: {m_file_path}")
 
-        # Create file paths with shared individual_tiffs directory
+        # Create file paths
         file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
 
         # Calculate combined tile and grid parameters for all positions

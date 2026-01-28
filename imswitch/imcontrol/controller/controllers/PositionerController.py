@@ -37,15 +37,14 @@ class PositionerController(ImConWidgetController):
                     self.setSharedAttr(pName, axis, _stopAttr, pManager.stop[axis])
 
         # Connect CommunicationChannel signals
-        if 0: #IS_HEADLESS:IS_HEADLESS:
-            self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged, check_nargs=False)
-        else:
-            self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
-
+        self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
+        
+        # Connect position update signal - this updates shared attributes for all modes
+        # This is the primary mechanism for keeping metadata in sync with hardware state
+        self._commChannel.sigUpdateMotorPosition.connect(self._onMotorPositionUpdate)
 
         # Connect PositionerWidget signals
         if not IS_HEADLESS:
-            self._commChannel.sigUpdateMotorPosition.connect(self.updateAllPositionGUI) # force update position in GUI
             self._widget.sigStepUpClicked.connect(self.stepUp)
             self._widget.sigStepDownClicked.connect(self.stepDown)
             self._widget.sigStepAbsoluteClicked.connect(self.moveAbsolute)
@@ -68,7 +67,11 @@ class PositionerController(ImConWidgetController):
         return self._master.positionersManager.execOnAll(lambda p: p.speed)
 
     def move(self, positionerName, axis, dist, isAbsolute=None, isBlocking=False, speed=None):
-        """ Moves positioner by dist micrometers in the specified axis. """
+        """ Moves positioner by dist micrometers in the specified axis. 
+        
+        For non-blocking moves, the position will be updated asynchronously via 
+        sigUpdateMotorPosition signal from the positioner manager.
+        """
         if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
 
@@ -83,6 +86,7 @@ class PositionerController(ImConWidgetController):
                 speed = 5000 # FIXME: default speed for headless mode
         # set speed for the positioner
         self.setSpeed(positionerName=positionerName, speed=speed, axis=axis)
+                
         try:
             # special case for UC2 positioner that takes more arguments
             self._master.positionersManager[positionerName].move(dist, axis, isAbsolute, isBlocking)
@@ -93,9 +97,7 @@ class PositionerController(ImConWidgetController):
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)
             self._master.positionersManager[positionerName].move(dist, axis)
-        if isBlocking: # push signal immediately
-            self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
-        #self.updatePosition(positionerName, axis)
+        self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
 
     def moveForever(self, positionerName: str=None, axis="X", speed=0, is_stop:bool=False):
         """ Moves positioner forever. """
@@ -127,23 +129,42 @@ class PositionerController(ImConWidgetController):
         self.setSharedAttr(positionerName, axis, _speedAttr, speed)
         if not IS_HEADLESS: self._widget.setSpeedSize(positionerName, axis, speed)
 
-    def updateAllPositionGUI(self):
-        # update all positions for all axes in GUI
+    def _onMotorPositionUpdate(self, positionData: Dict = None):
+        """
+        Handler for sigUpdateMotorPosition signal.
+        Updates shared attributes and GUI for all positioners.
+        
+        This is the central point where motor positions are synced to the metadata system.
+        Called both from blocking moves and asynchronous position updates from hardware.
+        
+        Args:
+            positionData: Optional position data dict. If None, positions are read from managers.
+        """
         for positionerName in self._master.positionersManager.getAllDeviceNames():
-            for axis in self._master.positionersManager[positionerName].axes:
+            positioner = self._master.positionersManager[positionerName]
+            for axis in positioner.axes:
                 self.updatePosition(positionerName, axis)
-                self.updateSpeed(positionerName, axis)
+            # Also update speed if available
+            if hasattr(positioner, 'speed'):
+                for axis in positioner.axes:
+                    self.updateSpeed(positionerName, axis)
+    
+
 
     def updatePosition(self, positionerName, axis):
+        """Update position for a single axis and sync to shared attributes."""
         if axis == "XY":
-            for axis in (("X", "Y")):
-                newPos = self._master.positionersManager[positionerName].position[axis]
-                self.setSharedAttr(positionerName, axis, _positionAttr, newPos)
-                if not IS_HEADLESS: self._widget.updatePosition(positionerName, axis, newPos)
+            # Handle combined XY axis by updating both X and Y
+            for single_axis in ("X", "Y"):
+                newPos = self._master.positionersManager[positionerName].position[single_axis]
+                self.setSharedAttr(positionerName, single_axis, _positionAttr, newPos)
+                if not IS_HEADLESS: 
+                    self._widget.updatePosition(positionerName, single_axis, newPos)
         else:
             newPos = self._master.positionersManager[positionerName].position[axis]
             self.setSharedAttr(positionerName, axis, _positionAttr, newPos)
-            if not IS_HEADLESS: self._widget.updatePosition(positionerName, axis, newPos)
+            if not IS_HEADLESS: 
+                self._widget.updatePosition(positionerName, axis, newPos)
 
     def updateSpeed(self, positionerName, axis):
         newSpeed = self._master.positionersManager[positionerName].speed[axis]
@@ -187,13 +208,10 @@ class PositionerController(ImConWidgetController):
         positionerY = self.getPositionerNames()[1]
         self.__logger.debug(f"Move {positionerX}, axis X, dist {str(x)}")
         self.__logger.debug(f"Move {positionerY}, axis Y, dist {str(y)}")
-        # self.move(positionerX, 'X', x)
-        # self.move(positionerY, 'Y', y)
 
     def setZPosition(self, z):
         positionerZ = self.getPositionerNames()[2]
         self.__logger.debug(f"Move {positionerZ}, axis Z, dist {str(z)}")
-        # self.move(self.getPositionerNames[2], 'Z', z)
 
     @APIExport(runOnUIThread=True)
     def enalbeMotors(self, enable=None, enableauto=None):

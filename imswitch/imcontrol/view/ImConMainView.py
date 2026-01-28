@@ -19,7 +19,6 @@ else:
 
 
 class ImConMainView(QMainWindow):
-    sigLoadParamsFromHDF5 = Signal()
     sigPickSetup = Signal()
     sigClosing = Signal()
 
@@ -46,10 +45,7 @@ class ImConMainView(QMainWindow):
         configuration = menuBar.addMenu('&Configuration')
         self.shortcuts = menuBar.addMenu('&Shortcuts')
 
-        self.loadParamsAction = QtWidgets.QAction('Load parameters from saved HDF5 file…', self)
-        self.loadParamsAction.setShortcut('Ctrl+P')
-        self.loadParamsAction.triggered.connect(self.sigLoadParamsFromHDF5)
-        file.addAction(self.loadParamsAction)
+
 
         self.pickSetupAction = QtWidgets.QAction('Pick hardware setup…', self)
         self.pickSetupAction.triggered.connect(self.sigPickSetup)
@@ -72,7 +68,6 @@ class ImConMainView(QMainWindow):
             'SLM': _DockInfo(name='SLM', yPosition=0),
             'SIM': _DockInfo(name='SIM', yPosition=0),
             'DPC': _DockInfo(name='DPC', yPosition=0),
-            'MCT': _DockInfo(name='MCT', yPosition=0),
             'Lepmon': _DockInfo(name='Lepmon', yPosition=0),
             'Experiment': _DockInfo(name='Experiment', yPosition=0),
             'Timelapse': _DockInfo(name='Timelapse', yPosition=0),
@@ -105,7 +100,6 @@ class ImConMainView(QMainWindow):
             'ULenses': _DockInfo(name='uLenses Tool', yPosition=3),
             'FFT': _DockInfo(name='FFT Tool', yPosition=3),
             'Holo': _DockInfo(name='Holo Tool', yPosition=3),
-            'Joystick': _DockInfo(name='Joystick Tool', yPosition=3),
             'Histogramm': _DockInfo(name='Histogramm Tool', yPosition=3),
             'STORMRecon': _DockInfo(name='STORM Recon Tool', yPosition=2),
             'HoliSheet': _DockInfo(name='HoliSheet Tool', yPosition=3),

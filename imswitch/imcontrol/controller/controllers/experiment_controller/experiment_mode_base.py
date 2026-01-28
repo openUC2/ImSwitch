@@ -14,39 +14,13 @@ import numpy as np
 from abc import ABC, abstractmethod
 
 from imswitch.imcommon.model import dirtools
-from ..experiment_controller.ome_writer import OMEWriterConfig
-
-
-class OMEFileStorePaths:
-    """Helper class for managing OME file storage paths."""
-    def __init__(self, base_dir, shared_individual_tiffs_dir=None):
-        """
-        Initialize OME file storage paths.
-        
-        Args:
-            base_dir: Base directory for this writer's files (e.g., tiles, zarr)
-            shared_individual_tiffs_dir: Shared directory for individual TIFFs across all timepoints.
-                                        If None, creates one under base_dir.
-        """
-        self.base_dir = base_dir
-        self.tiff_dir = os.path.join(base_dir, "tiles")
-        self.zarr_dir = os.path.join(base_dir + ".ome.zarr")
-
-        # Use shared individual_tiffs directory or create one under base_dir
-        if shared_individual_tiffs_dir is not None:
-            self.individual_tiffs_dir = shared_individual_tiffs_dir
-        else:
-            self.individual_tiffs_dir = os.path.join(base_dir, "individual_tiffs")
-
-        os.makedirs(self.tiff_dir, exist_ok=True)
-        os.makedirs(self.individual_tiffs_dir, exist_ok=True)
-
-    def get_timepoint_dir(self, timepoint_index: int):
-        """Get or create directory for a specific timepoint."""
-        time_now = time.strftime("%Y%m%d_%H%M%S")
-        timepoint_dir = os.path.join(self.individual_tiffs_dir, f"timepoint_{timepoint_index:04d}")#_{time_now}")
-        os.makedirs(timepoint_dir, exist_ok=True)
-        return timepoint_dir
+# Import OME writers from the new io location
+from imswitch.imcontrol.model.io import (
+    OMEWriterConfig,
+    OMEFileStorePaths,
+    OMEROConnectionParams,
+    is_omero_available,
+)
 
 
 class ExperimentModeBase(ABC):
@@ -115,6 +89,8 @@ class ExperimentModeBase(ABC):
                            write_stitched_tiff: bool = True,
                            write_tiff_single: bool = False,
                            write_individual_tiffs: bool = False,
+                           write_omero: bool = False,
+                           omero_queue_size: int = 100,
                            min_period: float = 0.2,
                            n_time_points: int = 1,
                            n_z_planes: int = 1,
@@ -128,6 +104,8 @@ class ExperimentModeBase(ABC):
             write_stitched_tiff: Whether to write stitched TIFF
             write_tiff_single: Whether to append tiles to a single TIFF file
             write_individual_tiffs: Whether to write individual TIFF files with position-based naming
+            write_omero: Whether to stream tiles to OMERO server
+            omero_queue_size: Max tiles to queue for OMERO upload
             min_period: Minimum period between writes
             n_time_points: Number of time points
             n_z_planes: Number of Z planes
@@ -144,11 +122,51 @@ class ExperimentModeBase(ABC):
             write_stitched_tiff=write_stitched_tiff,
             write_tiff_single=write_tiff_single,
             write_individual_tiffs=write_individual_tiffs,
+            write_omero=write_omero,
+            omero_queue_size=omero_queue_size,
             min_period=min_period,
             pixel_size=pixel_size,
             n_time_points=n_time_points,
             n_z_planes=n_z_planes,
             n_channels=n_channels
+        )
+
+    def prepare_omero_connection_params(self) -> Optional[OMEROConnectionParams]:
+        """
+        Prepare OMERO connection parameters from ExperimentManager config.
+        
+        Returns:
+            OMEROConnectionParams if OMERO is enabled and available, None otherwise.
+        """
+        if not is_omero_available():
+            self._logger.debug("OMERO not available (omero-py not installed)")
+            return None
+
+        exp_manager = self.controller.experimentManager
+        if exp_manager is None:
+            self._logger.debug("ExperimentManager not available")
+            return None
+
+        if not getattr(exp_manager, 'omeroEnabled', False):
+            self._logger.debug("OMERO not enabled in ExperimentManager config")
+            return None
+
+        # Get OMERO connection parameters from ExperimentManager
+        host = getattr(exp_manager, 'omeroServerUrl', None)
+        if not host:
+            self._logger.warning("OMERO enabled but no server URL configured")
+            return None
+
+        return OMEROConnectionParams(
+            host=host,
+            port=getattr(exp_manager, 'omeroPort', 4064),
+            username=getattr(exp_manager, 'omeroUsername', ''),
+            password=getattr(exp_manager, 'omeroPassword', ''),
+            group_id=getattr(exp_manager, 'omeroGroupId', None),
+            project_id=getattr(exp_manager, 'omeroProjectId', None),
+            dataset_id=getattr(exp_manager, 'omeroDatasetId', None),
+            connection_timeout=getattr(exp_manager, 'omeroConnectionTimeout', 30),
+            upload_timeout=getattr(exp_manager, 'omeroUploadTimeout', 300),
         )
 
     def prepare_illumination_parameters(self, illumination_intensities: List[float]) -> Dict[str, Optional[float]]:
@@ -163,16 +181,14 @@ class ExperimentModeBase(ABC):
             
         Returns:
             List with illumination0-N and led parameters
-        """
-        intensity_list = [0]*len(illumination_intensities)  # Default LED value
+        """ # TODO: This is still correct?!! 
+
+        intensity_list = [0]*5 # This maps to the 5 avaiable channels on the eps32 side 
         
         # Simple direct mapping - frontend already handles channel_index matching
         for i, intensity in enumerate(illumination_intensities):
             intensity_list[self.controller.availableIlluminations[i].channel_index] = intensity
-            #print(self.controller.availableIlluminations[i].name)
-            #print(self.controller.availableIlluminations[i].channel_index)            
-            # order it by channel index
-        
+            
         return intensity_list
 
     def create_experiment_directory(self, exp_name: str) -> Tuple[str, str, str]:

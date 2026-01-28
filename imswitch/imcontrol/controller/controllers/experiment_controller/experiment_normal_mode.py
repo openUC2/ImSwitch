@@ -6,12 +6,12 @@ of the scanning process using workflow steps for precise control.
 """
 
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import numpy as np
 
 from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowStep
+from imswitch.imcontrol.model.io import OMEWriter, OMEROConnectionParams
 from .experiment_mode_base import ExperimentModeBase
-from .ome_writer import OMEWriter
 
 
 class ExperimentNormalMode(ExperimentModeBase):
@@ -28,6 +28,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                          illumination_intensities: List[float],
                          illumination_sources: List[str],
                          isRGB: bool = False,
+                         shared_file_writers: Optional[List[OMEWriter]] = None,
+                         omero_connection_params: Optional[OMEROConnectionParams] = None,
+                         shared_omero_key: Optional[str] = None,
                          **kwargs) -> Dict[str, Any]:
         """
         Execute experiment in normal mode.
@@ -36,6 +39,11 @@ class ExperimentNormalMode(ExperimentModeBase):
             snake_tiles: List of tiles containing scan points
             illumination_intensities: List of illumination values
             illumination_sources: List of illumination source names
+            isRGB: Whether images are RGB
+            shared_file_writers: Optional shared writers from previous timepoints (for timelapse).
+                               If provided, reuses these writers instead of creating new ones.
+            omero_connection_params: Optional OMERO connection parameters for streaming upload.
+            shared_omero_key: Optional key for shared OMERO uploader (for timelapse).
             **kwargs: Additional parameters including z_positions, exposures, gains, etc.
             
         Returns:
@@ -69,11 +77,19 @@ class ExperimentNormalMode(ExperimentModeBase):
         file_writers = []
         step_id = 0
 
-        # Set up OME writers for each tile - create new writers for each timepoint
-        file_writers = self._setup_ome_writers(
-            snake_tiles, t, exp_name, dir_path, m_file_name,
-            z_positions, illumination_intensities, isRGB=isRGB
-        )
+        # Set up OME writers for each tile
+        # If shared_file_writers provided (timelapse), reuse them; otherwise create new
+        if shared_file_writers is not None:
+            file_writers = shared_file_writers
+            self._logger.debug(f"Reusing {len(file_writers)} shared file writers from previous timepoint")
+        else:
+            file_writers = self._setup_ome_writers(
+                snake_tiles, t, exp_name, dir_path, m_file_name,
+                z_positions, illumination_intensities, isRGB=isRGB,
+                omero_connection_params=omero_connection_params,
+                shared_omero_key=shared_omero_key,
+                n_times=n_times,
+            )
         # Create workflow steps for each tile
         for position_center_index, tiles in enumerate(snake_tiles):
             step_id = self._create_tile_workflow_steps(
@@ -162,6 +178,52 @@ class ExperimentNormalMode(ExperimentModeBase):
             "max_retries": step.max_retries
         }
 
+    def setup_shared_ome_writers(self,
+                                snake_tiles: List[List[Dict]],
+                                exp_name: str,
+                                dir_path: str,
+                                m_file_name: str,
+                                z_positions: List[float],
+                                illumination_intensities: List[float],
+                                isRGB: bool = False,
+                                omero_connection_params: Optional[OMEROConnectionParams] = None,
+                                shared_omero_key: Optional[str] = None,
+                                n_times: int = 1) -> List[OMEWriter]:
+        """
+        Set up shared OME writers for multi-timepoint experiments.
+        
+        This method creates writers that can be reused across multiple timepoints
+        in a timelapse experiment. The writers are configured to handle all
+        timepoints without creating new files for each timepoint.
+        
+        Args:
+            snake_tiles: List of tiles containing scan points
+            exp_name: Experiment name
+            dir_path: Directory path for saving
+            m_file_name: Base filename
+            z_positions: List of Z positions
+            illumination_intensities: List of illumination values
+            isRGB: Whether images are RGB
+            omero_connection_params: Optional OMERO connection parameters
+            shared_omero_key: Optional key for shared OMERO uploader
+            n_times: Total number of time points
+            
+        Returns:
+            List of OMEWriter instances to be reused across timepoints
+        """
+        return self._setup_ome_writers(
+            snake_tiles=snake_tiles,
+            t=0,  # Initial timepoint
+            exp_name=exp_name,
+            dir_path=dir_path,
+            m_file_name=m_file_name,
+            z_positions=z_positions,
+            illumination_intensities=illumination_intensities,
+            isRGB=isRGB,
+            omero_connection_params=omero_connection_params,
+            shared_omero_key=shared_omero_key,
+            n_times=n_times,
+        )
     def _setup_ome_writers(self,
                           snake_tiles: List[List[Dict]],
                           t: int,
@@ -170,7 +232,10 @@ class ExperimentNormalMode(ExperimentModeBase):
                           m_file_name: str,
                           z_positions: List[float],
                           illumination_intensities: List[float],
-                          isRGB: bool) -> List[OMEWriter]:
+                          isRGB: bool,
+                          omero_connection_params: Optional[OMEROConnectionParams] = None,
+                          shared_omero_key: Optional[str] = None,
+                          n_times: int = 1) -> List[OMEWriter]:
 
         """
         Set up OME writers for each tile.
@@ -183,101 +248,66 @@ class ExperimentNormalMode(ExperimentModeBase):
             m_file_name: Base filename
             z_positions: List of Z positions
             illumination_intensities: List of illumination values
+            isRGB: Whether images are RGB
+            omero_connection_params: Optional OMERO connection parameters
+            shared_omero_key: Optional key for shared OMERO uploader
+            n_times: Total number of time points
             
         Returns:
             List of OMEWriter instances
         """
         file_writers = []
+        
+        # Create shared directory for individual TIFFs - all tiles go under experiment folder
+        # Structure: dir_path/m_file_name/tiles/timepoint_XXXX/
+        shared_individual_tiffs_dir = None  # No longer needed - OMEFileStorePaths handles it internally
 
-        # Create shared individual_tiffs directory at the experiment root level
-        shared_individual_tiffs_dir = os.path.join(dir_path, "individual_tiffs")
-        os.makedirs(shared_individual_tiffs_dir, exist_ok=True)
-
-        # Check if single TIFF writing is enabled (single tile scan mode)
-        is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-
-        if is_single_tiff_mode:
-            # Create a single OME writer for all tiles in single TIFF mode
-            experiment_name = f"{t}_{exp_name}"
-            m_file_path = os.path.join(dir_path, f"{m_file_name}_{experiment_name}.ome.tif")
-            self._logger.debug(f"Single TIFF mode - OME-TIFF path: {m_file_path}")
+        # Original behavior: create separate writers for each tile position
+        # but use shared individual_tiffs directory
+        for position_center_index, tiles in enumerate(snake_tiles):
+            experiment_name = f"{t}_{exp_name}_{position_center_index}"
+            m_file_path = os.path.join(
+                dir_path,
+                m_file_name + str(position_center_index) + "_" + experiment_name + "_" + ".ome.tif"
+            )
+            self._logger.debug(f"OME-TIFF path: {m_file_path}")
 
             # Create file paths with shared individual_tiffs directory
             file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
 
-            # Calculate combined tile and grid parameters for all positions
-            all_tiles = [tile for tiles in snake_tiles for tile in tiles]  # Flatten all tiles
+            # Calculate tile and grid parameters
             tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
-            grid_shape, grid_geometry = self.calculate_grid_parameters(all_tiles)
+            grid_shape, grid_geometry = self.calculate_grid_parameters(tiles)
 
-            # Create writer configuration for single TIFF mode
+            # Create writer configuration
             n_channels = sum(np.array(illumination_intensities) > 0)
+            write_omero = omero_connection_params is not None and getattr(self.controller, '_ome_write_omero', False)
             writer_config = self.create_writer_config(
-                write_tiff=False,  # Disable individual TIFF files
+                write_tiff=self.controller._ome_write_tiff,
                 write_zarr=self.controller._ome_write_zarr,
-                write_stitched_tiff=False,  # Disable stitched TIFF
-                write_tiff_single=True,  # Enable single TIFF writing
+                write_stitched_tiff=self.controller._ome_write_stitched_tiff,
+                write_tiff_single=False,  # Disable single TIFF for multi-tile mode
                 write_individual_tiffs=self.controller._ome_write_individual_tiffs,
-                min_period=0.1,
-                n_time_points=1,
+                write_omero=write_omero,
+                min_period=0.1,  # Faster for normal mode
+                n_time_points=n_times,
                 n_z_planes=len(z_positions),
                 n_channels=n_channels
             )
 
-            # Create single OME writer for all positions
+            # Create OME writer
             ome_writer = OMEWriter(
                 file_paths=file_paths,
                 tile_shape=tile_shape,
                 grid_shape=grid_shape,
                 grid_geometry=grid_geometry,
                 config=writer_config,
-                logger=self._logger
+                logger=self._logger,
+                isRGB=isRGB,
+                omero_connection_params=omero_connection_params,
+                shared_omero_key=shared_omero_key,
             )
             file_writers.append(ome_writer)
-
-        else:
-            # Original behavior: create separate writers for each tile position
-            # but use shared individual_tiffs directory
-            for position_center_index, tiles in enumerate(snake_tiles):
-                experiment_name = f"{t}_{exp_name}_{position_center_index}"
-                m_file_path = os.path.join(
-                    dir_path,
-                    m_file_name + str(position_center_index) + "_" + experiment_name + "_" + ".ome.tif"
-                )
-                self._logger.debug(f"OME-TIFF path: {m_file_path}")
-
-                # Create file paths with shared individual_tiffs directory
-                file_paths = self.create_ome_file_paths(m_file_path.replace(".ome.tif", ""), shared_individual_tiffs_dir)
-
-                # Calculate tile and grid parameters
-                tile_shape = (self.controller.mDetector._shape[-1], self.controller.mDetector._shape[-2])
-                grid_shape, grid_geometry = self.calculate_grid_parameters(tiles)
-
-                # Create writer configuration
-                n_channels = sum(np.array(illumination_intensities) > 0)
-                writer_config = self.create_writer_config(
-                    write_tiff=self.controller._ome_write_tiff,
-                    write_zarr=self.controller._ome_write_zarr,
-                    write_stitched_tiff=self.controller._ome_write_stitched_tiff,
-                    write_tiff_single=False,  # Disable single TIFF for multi-tile mode
-                    write_individual_tiffs=self.controller._ome_write_individual_tiffs,
-                    min_period=0.1,  # Faster for normal mode
-                    n_time_points=1,
-                    n_z_planes=len(z_positions),
-                    n_channels=n_channels
-                )
-
-                # Create OME writer
-                ome_writer = OMEWriter(
-                    file_paths=file_paths,
-                    tile_shape=tile_shape,
-                    grid_shape=grid_shape,
-                    grid_geometry=grid_geometry,
-                    config=writer_config,
-                    logger=self._logger,
-                    isRGB=isRGB
-                )
-                file_writers.append(ome_writer)
 
         return file_writers
 

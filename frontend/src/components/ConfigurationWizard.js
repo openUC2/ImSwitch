@@ -247,7 +247,6 @@ const ConfigurationWizard = ({ open, onClose, hostIP, hostPort }) => {
         "sim": null,
         "dpc": null,
         "objective": null,
-        "mct": null,
         "nidaq": {
           "timerCounterChannel": null,
           "startTrigger": false

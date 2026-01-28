@@ -27,6 +27,11 @@ class LEDController(ImConWidgetController):
 
             self.setSharedAttr(lName, _enabledAttr, self._widget.isLEDActive(lName))
             self.setSharedAttr(lName, _valueAttr, self._widget.getValue(lName))
+            # Store value units for metadata context
+            self.setSharedAttr(lName, _unitsAttr, lManager.valueUnits)
+            # Store range info for metadata
+            self.setSharedAttr(lName, _rangeMinAttr, lManager.valueRangeMin)
+            self.setSharedAttr(lName, _rangeMaxAttr, lManager.valueRangeMax)
 
         # Load presets
         for ledPresetName in self._setupInfo.ledPresets:
@@ -248,6 +253,9 @@ class LEDController(ImConWidgetController):
 _attrCategory = 'LED'
 _enabledAttr = 'Enabled'
 _valueAttr = 'Value'
+_unitsAttr = 'Units'
+_rangeMinAttr = 'RangeMin'
+_rangeMaxAttr = 'RangeMax'
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

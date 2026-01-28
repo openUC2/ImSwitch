@@ -88,22 +88,26 @@
                 "stepsizeX": 1,
                 "stepsizeY": 1,
                 "stepsizeZ": 1,
+                "stepsizeA": 1,
                 "homeSpeedX": 15000,
                 "homeSpeedY": 15000,
                 "homeSpeedZ": 15000,
+                "homeSpeedA": 15000,
                 "homeDirectionX": 1,
                 "homeDirectionY": 1,
                 "homeDirectionZ": -1,
                 "initialSpeed": {
                     "X": 15000,
                     "Y": 15000,
-                    "Z": 15000
+                    "Z": 15000, 
+                    "A": 15000
                 }
             },
             "axes": [
                 "X",
                 "Y",
-                "Z"
+                "Z",
+                "A"
             ],
             "isPositiveDirection": true,
             "forPositioning": true,
@@ -124,7 +128,7 @@
                 "imagePath_": "simplant",
                 "imagePath__": "smlm",
                 "imagePath___": "astigmatism",
-                "imagePath": "wellplatecalib"
+                "imagePath____": "wellplatecalib"
             }
         }
     },
@@ -133,7 +137,7 @@
     "dpc": null,
     "objective": {
         "pixelsizes": [
-            5,
+            1.0,
             10
         ],
         "NAs": [
@@ -176,7 +180,87 @@
     "FlowStop": null,
     "Lepmon": null,
     "Flatfield": null,
-    "PixelCalibration": {},
+    "PixelCalibration": {
+        "affineCalibrations": {
+            "1": {
+                "affine_matrix": [
+                    [
+                        -1.0,
+                        0.0,
+                        0.0
+                    ],
+                    [
+                        0.0,
+                        -1.0,
+                        0.0
+                    ]
+                ],
+                "metrics": {
+                    "rmse_um": 0.0,
+                    "max_error_um": 0.0,
+                    "mean_error_um": 0.0,
+                    "n_inliers": 9.0,
+                    "n_outliers": 0.0,
+                    "rotation_deg": 0.0,
+                    "scale_x_um_per_pixel": 1.0,
+                    "scale_y_um_per_pixel": 1.0,
+                    "condition_number": 1.0,
+                    "mean_correlation": 0.0,
+                    "min_correlation": 0.0
+                },
+                "timestamp": "2025-10-19T08:19:51",
+                "objective_info": {
+                    "name": 1,
+                    "detector": "WidefieldCamera"
+                }
+            },
+            "0": {
+                "affine_matrix": [
+                    [
+                        -1.0,
+                        0.0,
+                        0.0
+                    ],
+                    [
+                        0.0,
+                        -1.0,
+                        0.0
+                    ]
+                ],
+                "metrics": {
+                    "rmse_um": 0.0,
+                    "max_error_um": 0.0,
+                    "mean_error_um": 0.0,
+                    "n_inliers": 9.0,
+                    "n_outliers": 0.0,
+                    "rotation_deg": 0.0,
+                    "scale_x_um_per_pixel": 1.0,
+                    "scale_y_um_per_pixel": 1.0,
+                    "condition_number": 1.0,
+                    "mean_correlation": 0.0,
+                    "min_correlation": 0.0
+                },
+                "timestamp": "2025-10-19T12:50:11",
+                "objective_info": {
+                    "name": 0,
+                    "detector": "WidefieldCamera"
+                }
+            }
+        },
+        "defaultAffineMatrix": [
+            [
+                1.0,
+                0.0,
+                0.0
+            ],
+            [
+                0.0,
+                1.0,
+                0.0
+            ]
+        ],
+        "ObservationCamera": null
+    },
     "experiment": {
         "omeroServerUrl": "100.111.214.77",
         "omeroUsername": "root",
@@ -204,12 +288,17 @@
         "piKi": 0.2,
         "focusLockMetric": "astigmatism",
         "laserName": null,
-        "laserValue": null
+        "laserValue": null,
+        "fovWidth": 512,
+        "fovCenter": [
+            null,
+            null
+        ]
     },
     "arkitekt": {
         "enabled": true,
         "appName": "imswitch",
-        "redeemToken": "561bac13-ad8d-4439-9341-a4bea57b4eef",
+        "redeemToken": "",
         "url": "go.arkitekt.live",
         "syncInAsync": true,
         "deconvolveActionHash": "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
@@ -230,6 +319,9 @@
     "etSTED": null,
     "rotators": null,
     "microscopeStand": null,
+    "storage": {
+        "activeDataPath": "/Users/bene/Downloads/ImSwitchData"
+    },
     "pulseStreamer": {
         "ipAddress": null
     },
@@ -268,14 +360,18 @@
         "StageCenterCalibration",
         "Demo",
         "FocusLock",
+        "MazeGame",
+        "PixelCalibration",
         "Arkitekt",
-        "MazeGame"
+        "LiveView", 
+        "Composite",
+        "InLineHolo"
     ],
     "nonAvailableWidgets": [
         "STORMRecon",
+        "Lepmon",
         "Hypha",
         "Histogramm",
-        "Lepmon",
         "imswitch_lightsheet",
         "imswitch_arkitekt_next",
         "FocusLock",
@@ -289,7 +385,6 @@
         "PixelCalibration",
         "WebRTC",
         "Flatfield",
-        "DPC",
-        "PixelCalibration"
+        "DPC"
     ]
 }

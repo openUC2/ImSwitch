@@ -127,7 +127,6 @@ setupInfoBasic = ViewSetupInfo.from_json("""
     "Laser",
     "Positioner",
     "Autofocus",
-    "MCT",
     "ROIScan",
     "HistoScan",
     "Hypha"
@@ -268,7 +267,6 @@ setupInfoWithoutWidgets = ViewSetupInfo.from_json("""
     "Laser",
     "Positioner",
     "Autofocus",
-    "MCT",
     "ROIScan",
     "HistoScan",
     "Hypha",

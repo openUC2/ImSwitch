@@ -175,6 +175,22 @@ class ImConMainController(MainController):
                 f"Could not create StorageController: {e}"
             )
 
+        # Add MetadataController for metadata hub API access (no widget required)
+        try:
+            self.__logger.info("Creating MetadataController for metadata API")
+            from .controllers.MetadataController import MetadataController
+            self.controllers["Metadata"] = self.__factory.createController(
+                MetadataController, None
+            )
+            # Register MetadataController
+            self.__masterController.registerController(
+                "Metadata", self.controllers["Metadata"]
+            )
+        except Exception as e:
+            self.__logger.warning(
+                f"Could not create MetadataController: {e}"
+            )
+
         # Generate API
         self.__api = None
         apiObjs = list(self.controllers.values()) + [self.__commChannel]

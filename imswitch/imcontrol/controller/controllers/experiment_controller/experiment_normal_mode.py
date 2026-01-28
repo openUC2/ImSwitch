@@ -257,10 +257,10 @@ class ExperimentNormalMode(ExperimentModeBase):
             List of OMEWriter instances
         """
         file_writers = []
-
-        # Create shared individual_tiffs directory at the experiment root level
-        shared_individual_tiffs_dir = os.path.join(dir_path, "individual_tiffs")
-        os.makedirs(shared_individual_tiffs_dir, exist_ok=True)
+        
+        # Create shared directory for individual TIFFs - all tiles go under experiment folder
+        # Structure: dir_path/m_file_name/tiles/timepoint_XXXX/
+        shared_individual_tiffs_dir = None  # No longer needed - OMEFileStorePaths handles it internally
 
         # Check if single TIFF writing is enabled (single tile scan mode)
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)

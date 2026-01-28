@@ -51,11 +51,13 @@ class OMEWriterConfig:
     Controls which output formats are enabled and their parameters.
     
     Attributes:
-        write_tiff: Write individual TIFF files per tile
+        write_tiff: DEPRECATED - Use write_individual_tiffs instead.
+                   Legacy mode that writes TIFFs without OME metadata.
         write_zarr: Write OME-Zarr format with pyramids
         write_stitched_tiff: Write stitched OME-TIFF mosaic
         write_tiff_single: Append tiles to a single TIFF file
-        write_individual_tiffs: Write individual TIFFs with position naming
+        write_individual_tiffs: Write individual OME-TIFFs with position naming
+                               and proper OME-XML metadata (RECOMMENDED)
         write_omero: Stream tiles to OMERO server
         omero_queue_size: Max tiles to queue for OMERO upload
         min_period: Minimum time between writes (throttling)
@@ -74,7 +76,7 @@ class OMEWriterConfig:
         z_start: Starting Z position in microns
         time_interval: Time interval in seconds
     """
-    write_tiff: bool = False
+    write_tiff: bool = False  # DEPRECATED - use write_individual_tiffs
     write_zarr: bool = True
     write_stitched_tiff: bool = False
     write_tiff_single: bool = False
@@ -131,16 +133,18 @@ class OMEFileStorePaths:
     """
     Helper class for managing OME file storage paths.
     
-    Organizes output directories for different file types:
-    - tiff_dir: Individual TIFF tiles
-    - zarr_dir: OME-Zarr store
-    - individual_tiffs_dir: Position-named TIFF files
+    Organizes output directories in a single timestamped folder structure:
+    - base_dir/: Root experiment folder
+    - base_dir/tiles/: TIFF tiles organized by timepoint
+    - base_dir.ome.zarr: OME-Zarr store
+    
+    All TIFF files (tiles and individual images) go into the same tiles directory,
+    organized by timepoint subfolders to avoid duplication.
     
     Attributes:
         base_dir: Base directory for all outputs
-        tiff_dir: Directory for tile TIFF files
+        tiff_dir: Directory for all TIFF files (tiles and individual)
         zarr_dir: Path for OME-Zarr store
-        individual_tiffs_dir: Directory for individual TIFFs
     """
     
     def __init__(self, base_dir: str, shared_individual_tiffs_dir: Optional[str] = None):
@@ -149,21 +153,13 @@ class OMEFileStorePaths:
         
         Args:
             base_dir: Base directory for this writer's files
-            shared_individual_tiffs_dir: Shared directory for individual TIFFs across 
-                                        all timepoints. If None, creates one under base_dir.
+            shared_individual_tiffs_dir: Deprecated - ignored. All TIFFs go to tiff_dir.
         """
         self.base_dir = base_dir
         self.tiff_dir = os.path.join(base_dir, "tiles")
         self.zarr_dir = os.path.join(base_dir + ".ome.zarr")
 
-        # Use shared individual_tiffs directory or create one under base_dir
-        if shared_individual_tiffs_dir is not None:
-            self.individual_tiffs_dir = shared_individual_tiffs_dir
-        else:
-            self.individual_tiffs_dir = os.path.join(base_dir, "individual_tiffs")
-
         os.makedirs(self.tiff_dir, exist_ok=True)
-        os.makedirs(self.individual_tiffs_dir, exist_ok=True)
 
     def get_timepoint_dir(self, timepoint_index: int) -> str:
         """
@@ -176,7 +172,7 @@ class OMEFileStorePaths:
             Path to the timepoint directory
         """
         timepoint_dir = os.path.join(
-            self.individual_tiffs_dir, 
+            self.tiff_dir,  # Use unified tiff_dir instead of separate individual_tiffs_dir
             f"timepoint_{timepoint_index:04d}"
         )
         os.makedirs(timepoint_dir, exist_ok=True)
@@ -497,9 +493,10 @@ class OMEWriter:
         """
         result = {}
 
-        # Write individual TIFF file if requested
-        if self.config.write_tiff:
-            self._write_tiff_tile(frame, metadata)
+        # Legacy write_tiff is deprecated - use write_individual_tiffs instead
+        # which includes proper OME-XML metadata
+        # if self.config.write_tiff:
+        #     self._write_tiff_tile(frame, metadata)
 
         # Write to Zarr canvas if requested
         if self.config.write_zarr and self.canvas is not None:
@@ -599,13 +596,16 @@ class OMEWriter:
 
     def _write_individual_tiff(self, frame, metadata: Dict[str, Any]):
         """
-        Write individual TIFF file with position-based naming.
+        Write individual TIFF file with position-based naming and OME-XML metadata.
         
         Files are organized in folders by timepoint, with filenames indicating:
         - Position in XYZ (in microns * 1000 for sub-micron precision)
         - Channel index and name
         - Iterator (running number)
         - Laser power
+        
+        Each file includes proper OME-XML metadata for compatibility with 
+        ImageJ, OMERO, and other OME tools.
         """
         t_idx = metadata.get("time_index", 0)
         c_idx = metadata.get("channel_index", 0)
@@ -624,7 +624,31 @@ class OMEWriter:
         filename = f"t{current_time}_x{x_microns}_y{y_microns}_z{z_microns}_c{c_idx}_{channel}_i{iterator:04d}_p{laser_power}.tif"
         filepath = os.path.join(timepoint_dir, filename)
 
-        tif.imwrite(filepath, frame, compression=self.config.compression)
+        # Build OME-XML metadata for this individual TIFF
+        try:
+            from .ome_tiff_metadata import build_ome_metadata_from_dict, OME_TYPES_AVAILABLE
+            
+            if OME_TYPES_AVAILABLE:
+                # Prepare metadata dict with image dimensions and pixel info
+                ome_metadata = metadata.copy()
+                ome_metadata["height"] = frame.shape[0]
+                ome_metadata["width"] = frame.shape[1] if frame.ndim > 1 else 1
+                ome_metadata["dtype"] = str(frame.dtype)
+                ome_metadata["pixel_size"] = self.config.pixel_size
+                ome_metadata["channel_name"] = channel
+                
+                # Build OME-XML string
+                ome_xml = build_ome_metadata_from_dict(ome_metadata)
+                if ome_xml:
+                    tif.imwrite(filepath, frame, compression=self.config.compression, description=ome_xml)
+                else:
+                    tif.imwrite(filepath, frame, compression=self.config.compression)
+            else:
+                tif.imwrite(filepath, frame, compression=self.config.compression)
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"Failed to write OME metadata to individual TIFF: {e}")
+            tif.imwrite(filepath, frame, compression=self.config.compression)
 
     def _write_omero_tile(self, frame, metadata: Dict[str, Any]):
         """
@@ -737,8 +761,21 @@ class OMEWriter:
             if new_y < 64 or new_x < 64:
                 break
 
+            level_name = str(level)
+            
+            # Check if array already exists and delete it to avoid "array exists in store" error
+            if level_name in self.root:
+                try:
+                    del self.root[level_name]
+                    if self.logger:
+                        self.logger.debug(f"Deleted existing pyramid level {level} for regeneration")
+                except Exception as e:
+                    if self.logger:
+                        self.logger.warning(f"Could not delete existing pyramid level {level}: {e}")
+                    continue
+
             level_canvas = self.root.create_array(
-                name=str(level),
+                name=level_name,
                 shape=(n_t, n_c, n_z, int(new_y), int(new_x)),
                 chunks=(1, 1, 1, int(min(self.tile_h, new_y)), int(min(self.tile_w, new_x))),
                 dtype="uint16",

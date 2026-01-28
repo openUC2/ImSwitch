@@ -245,11 +245,36 @@ class BackgroundStorageWorker:
                 task.callback(success, message)
     
     def _write_tiff(self, filepath: str, data: np.ndarray, metadata: Dict = None):
-        """Write TIFF file with optional metadata."""
+        """Write TIFF file with optional OME-XML metadata."""
         os.makedirs(os.path.dirname(filepath), exist_ok=True) if os.path.dirname(filepath) else None
         if metadata:
             try:
-                tiff.imwrite(filepath, data, description=metadata)
+                # Try to build proper OME-XML metadata using ome_types
+                from imswitch.imcontrol.model.io.ome_writers.ome_tiff_metadata import (
+                    build_ome_metadata_from_dict, OME_TYPES_AVAILABLE
+                )
+                
+                if OME_TYPES_AVAILABLE:
+                    # Add image dimensions to metadata
+                    metadata_with_dims = metadata.copy()
+                    metadata_with_dims["height"] = data.shape[0]
+                    metadata_with_dims["width"] = data.shape[1] if data.ndim > 1 else 1
+                    metadata_with_dims["dtype"] = str(data.dtype)
+                    
+                    # Build OME-XML string
+                    ome_xml = build_ome_metadata_from_dict(metadata_with_dims)
+                    if ome_xml:
+                        tiff.imwrite(filepath, data, description=ome_xml)
+                    else:
+                        # Fallback to simple metadata as ImageJ description
+                        import json
+                        desc_str = json.dumps(metadata, default=str)
+                        tiff.imwrite(filepath, data, description=desc_str)
+                else:
+                    # ome_types not available, use simple JSON description
+                    import json
+                    desc_str = json.dumps(metadata, default=str)
+                    tiff.imwrite(filepath, data, description=desc_str)
             except Exception as e:
                 logger.warning(f"Failed to write metadata to TIFF: {e}")
                 tiff.imwrite(filepath, data)

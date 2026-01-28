@@ -56,6 +56,14 @@ from .omero_uploader import (
     TileMetadata,
     is_omero_available,
 )
+from .ome_tiff_metadata import (
+    build_ome_metadata,
+    build_ome_metadata_from_dict,
+    build_ome_instrument,
+    OMEMetadataParams,
+    OMEInstrumentTemplate,
+    OME_TYPES_AVAILABLE,
+)
 
 __all__ = [
     # Primary unified writer
@@ -69,6 +77,13 @@ __all__ = [
     'MinimalZarrDataSource',
     # Metadata utilities
     'MinimalMetadata',
+    # OME-TIFF metadata (using ome_types library)
+    'build_ome_metadata',
+    'build_ome_metadata_from_dict',
+    'build_ome_instrument',
+    'OMEMetadataParams',
+    'OMEInstrumentTemplate',
+    'OME_TYPES_AVAILABLE',
     # OMERO uploader
     'OMEROUploader',
     'OMEROConnectionParams',

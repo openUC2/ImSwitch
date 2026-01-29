@@ -162,11 +162,7 @@ class SuperScanController(ImConWidgetController):
         """ Loads scanning parameters from the specified file. """
         pass
 
-    def getNumScanPositions(self):
-        """ Returns the number of scan positions for the configured scan. """
-        _, positions, _ = self._master.scanManager.getScanSignalsDict(self._analogParameterDict)
-        numPositions = functools.reduce(lambda x, y: x * y, positions)
-        return numPositions
+
 
     def saveScan(self):
         """ Save scan parameters template. """

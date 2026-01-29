@@ -27,8 +27,6 @@ from imswitch.imcontrol.model import (
     FOVLockManager,
     RotatorsManager,
     LEDsManager,
-    ScanManagerBase,
-    ScanManagerPointScan,
     FlatfieldManager,
     FlowStopManager,
     WorkflowManager,
@@ -92,6 +90,13 @@ class MasterController:
         self.positionersManager = PositionersManager(
             self.__setupInfo.positioners, self.__commChannel, **lowLevelManagers
         )
+        
+        # Initialize galvo scanners manager
+        from imswitch.imcontrol.model import GalvoScannersManager
+        self.galvoScannersManager = GalvoScannersManager(
+            self.__setupInfo.galvoScanners, **lowLevelManagers
+        )
+        
         self.LEDMatrixsManager = LEDMatrixsManager(
             self.__setupInfo.LEDMatrixs, **lowLevelManagers
         )
@@ -100,7 +105,6 @@ class MasterController:
         )
 
         self.LEDsManager = LEDsManager(self.__setupInfo.LEDs)
-        # self.scanManager = ScanManager(self.__setupInfo)
         
         # Initialize unified I/O service (RecordingService from io module)
         self.recordingService = RecordingService(self.detectorsManager)
@@ -205,19 +209,6 @@ class MasterController:
         ###################################################################################################
         # PLUGIN SYSTEM FOR MANAGERS
         ###################################################################################################
-        # Generate scanManager type according to setupInfo
-        if self.__setupInfo.scan:
-            if self.__setupInfo.scan.scanWidgetType == "PointScan":
-                self.scanManager = ScanManagerPointScan(self.__setupInfo)
-            elif self.__setupInfo.scan.scanWidgetType == "Base":
-                self.scanManager = ScanManagerBase(self.__setupInfo)
-            else:
-                self.__logger.error(
-                    'ScanWidgetType in SetupInfo["scan"] not recognized, choose one of the following:'
-                    ' ["Base", "PointScan", "MoNaLISA"].'
-                )
-                return
-        
         # Register detectors with MetadataHub
         if self.metadataHub is not None:
             self._register_detectors_with_hub()

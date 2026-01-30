@@ -48,6 +48,7 @@ import laserReducer from "./slices/LaserSlice";
 import vizarrViewerReducer from "./slices/VizarrViewerSlice";
 import compositeAcquisitionReducer from "./slices/CompositeAcquisitionSlice";
 import experimentUIReducer from "./slices/ExperimentUISlice";
+import galvoScannerReducer from "./slices/GalvoScannerSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -127,6 +128,7 @@ const rootReducer = combineReducers({
   vizarrViewerState: vizarrViewerReducer,
   compositeAcquisitionState: compositeAcquisitionReducer,
   experimentUI: experimentUIReducer,
+  galvoScannerState: galvoScannerReducer,
 });
 
 //#####################################################################################

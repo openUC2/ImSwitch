@@ -75,9 +75,13 @@ if not os.path.isfile(_modulesFilePath):
     # Modules file doesn't exist, create it.
         _modules = _Modules(enabled=['imcontrol', 'imscripting', 'imnotebook'])
 else:
-    with open(_modulesFilePath, 'r') as modulesFile:
-        _modules = _Modules.from_json(modulesFile.read(), infer_missing=True)
-
+    try:
+        with open(_modulesFilePath, 'r') as modulesFile: # TODO: Do something about it: if the file is corrupted, the user has to watch it
+            _modules = _Modules.from_json(modulesFile.read(), infer_missing=True)
+    except Exception as e:
+        print(f"Error loading modules config file {_modulesFilePath}: {e}")
+        raise(e)
+        
 with open(_modulesFilePath, 'w') as modulesFile:
     modulesFile.write(_modules.to_json(indent=4))
 

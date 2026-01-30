@@ -252,6 +252,64 @@ class LightsheetInfo:
 
 
 @dataclass(frozen=False)
+class GalvoScannerInfo(DeviceInfo):
+    """
+    Configuration for galvo scanner devices.
+    
+    Galvo scanners use mirror galvanometers for high-speed 2D laser scanning.
+    Position values are in DAC units (0-4095 for 12-bit DAC).
+    
+    Example configuration:
+    {
+        "galvoScanners": {
+            "ESP32Galvo": {
+                "managerName": "ESP32GalvoScannerManager",
+                "managerProperties": {
+                    "rs232device": "ESP32",
+                    "nx": 256,
+                    "ny": 256,
+                    "x_min": 500,
+                    "x_max": 3500,
+                    "y_min": 500,
+                    "y_max": 3500,
+                    "sample_period_us": 1,
+                    "frame_count": 0,
+                    "bidirectional": false
+                }
+            }
+        }
+    }
+    """
+    
+    nx: int = 256
+    """ Number of X samples per line. """
+    
+    ny: int = 256
+    """ Number of Y lines per frame. """
+    
+    x_min: int = 500
+    """ Minimum X position (DAC units 0-4095). """
+    
+    x_max: int = 3500
+    """ Maximum X position (DAC units 0-4095). """
+    
+    y_min: int = 500
+    """ Minimum Y position (DAC units 0-4095). """
+    
+    y_max: int = 3500
+    """ Maximum Y position (DAC units 0-4095). """
+    
+    sample_period_us: int = 1
+    """ Microseconds per sample. 0 = maximum speed. """
+    
+    frame_count: int = 0
+    """ Number of frames to acquire. 0 = infinite/continuous. """
+    
+    bidirectional: bool = False
+    """ Enable bidirectional scanning for faster acquisition. """
+
+
+@dataclass(frozen=False)
 class WebRTCInfo:
     pass
 
@@ -694,6 +752,10 @@ class SetupInfo:
     positioners: Dict[str, PositionerInfo] = field(default_factory=dict)
     """ Positioners in this setup. This is a map from unique positioner names
     to DetectorInfo objects. """
+
+    galvoScanners: Dict[str, GalvoScannerInfo] = field(default_factory=dict)
+    """ Galvo scanners in this setup. This is a map from unique galvo scanner names
+    to GalvoScannerInfo objects. Used for high-speed laser scanning microscopy. """
 
     rs232devices: Dict[str, RS232Info] = field(default_factory=dict)
     """ RS232 connections in this setup. This is a map from unique RS232

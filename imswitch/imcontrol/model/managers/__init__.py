@@ -9,6 +9,7 @@ from .LEDMatrixsManager import LEDMatrixsManager
 from .MultiManager import MultiManager
 from .NidaqManager import NidaqManager
 from .PositionersManager import PositionersManager
+from .GalvoScannersManager import GalvoScannersManager
 from .RS232sManager import RS232sManager
 # RecordingManager is deprecated - use RecordingService from io module
 # Importing RecMode, SaveMode, SaveFormat from io module for backwards compatibility
@@ -16,8 +17,6 @@ from imswitch.imcontrol.model.io import RecordingService, RecMode, SaveMode, Sav
 # Create alias for backwards compatibility (will be removed in future versions)
 # RecordingManager = RecordingService
 from .SLMManager import SLMManager
-from .ScanManagerPointScan import ScanManagerPointScan
-from .ScanManagerBase import ScanManagerBase
 from .RotatorsManager import RotatorsManager
 from .UC2ConfigManager import UC2ConfigManager
 from .SIMManager import SIMManager

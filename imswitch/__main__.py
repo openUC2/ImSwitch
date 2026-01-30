@@ -38,7 +38,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
 
         # Update configuration immediately with any provided parameters # @ethanjli this needs a review since we load this from docker - is there a better way to load from the compose file?
         config.update_from_args(
-            is_headless=is_headless,
+            is_headless=True, #is_headless,
             default_config=default_config,
             http_port=http_port,
             ssl=ssl,
@@ -150,7 +150,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         )
 
         # Enable signal emission for log messages if in headless mode
-        if config.is_headless:
+        if True: #config.is_headless:
             try:
                 from imswitch.imcommon.framework.noqt import sigLog
                 enable_signal_emission(sigLog)
@@ -173,14 +173,14 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
 
         # TODO: check if port is already in use
 
-        if config.is_headless:
+        if True: #config.is_headless:
             app = None
         else:
             app = prepareApp()
         enabledModuleIds = modulesconfigtools.getEnabledModuleIds()
 
         if 'imscripting' in enabledModuleIds:
-            if config.is_headless:
+            if True: #config.is_headless:
                 enabledModuleIds.remove('imscripting')
             else:
                 # Ensure that imscripting is added last
@@ -201,7 +201,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         moduleCommChannel = ModuleCommunicationChannel()
 
         # only create the GUI if necessary
-        if not config.is_headless:
+        if False: #not config.is_headless:
             from imswitch.imcommon.view import MultiModuleWindow, ModuleLoadErrorView
             multiModuleWindow = MultiModuleWindow('ImSwitch')
             multiModuleWindowController = MultiModuleWindowController.create(
@@ -241,12 +241,12 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
                 logger.error(e)
                 logger.error(traceback.format_exc())
                 moduleCommChannel.unregister(modulePkg)
-                if not config.is_headless:
+                if False: #not config.is_headless:
                     from imswitch.imcommon.view import ModuleLoadErrorView
                     multiModuleWindow.addModule(moduleId, moduleName, ModuleLoadErrorView(e))
             else:
                 # Add module to window
-                if not config.is_headless:
+                if False: #not config.is_headless:
                     multiModuleWindow.addModule(moduleId, moduleName, view)
                 moduleMainControllers[moduleId] = controller
 
@@ -255,7 +255,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
                     config.jupyter_url = controller.webaddr
 
                 # Update loading progress
-                if not config.is_headless:
+                if False: #not config.is_headless:
                     multiModuleWindow.updateLoadingProgress(i / len(modulePkgs))
                     app.processEvents()  # Draw window before continuing
         logger.info('init done')

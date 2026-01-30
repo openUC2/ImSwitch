@@ -40,6 +40,7 @@ import { JupyterProvider } from "./context/JupyterContext.js";
 import DemoController from "./components/DemoController.js";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import StageCenterCalibrationWizard from "./components/StageCenterCalibrationWizard.js";
+import GalvoScannerController from "./components/GalvoScannerController.jsx";
 
 // ImSwitch Navigation Drawer
 import { NavigationDrawer, TopBar } from "./components/navigation";
@@ -420,6 +421,7 @@ function App() {
           )}
 
           {selectedPlugin === "WellPlate" && <AxonTabComponent />}
+          {selectedPlugin === "GalvoScannerController" && <GalvoScannerController />}
           {selectedPlugin === "ImJoy" && (
             <ImJoyView sharedImage={sharedImage} />
           )}

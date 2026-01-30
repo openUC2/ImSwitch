@@ -250,6 +250,7 @@ class VirtualMicroscopy:
         self.positioner = Positioner(self)
         self.illuminator = Illuminator(self)
         self.objective = Objective(self)
+        self.galvo = VirtualGalvoScanner(self)  # Virtual galvo scanner for testing
 
     def startAcquisition(self):
         """Start continuous frame acquisition"""
@@ -347,6 +348,186 @@ if __name__ == "__main__":
 class Objective:
     def __init__(self, parent):
         self._parent = parent
+
+
+class VirtualGalvoScanner:
+    """
+    Virtual Galvo Scanner for testing and simulation.
+    Simulates a galvo mirror scanner with DAC range 0-4095.
+    """
+    
+    def __init__(self, parent):
+        self._parent = parent
+        self._logger = None
+        self.lock = threading.Lock()
+        
+        # Scan configuration (matching GalvoScanConfig parameters)
+        self._config = {
+            'nx': 256,
+            'ny': 256,
+            'x_min': 500,
+            'x_max': 3500,
+            'y_min': 500,
+            'y_max': 3500,
+            'sample_period_us': 1,
+            'frame_count': 0,  # 0 = infinite
+            'bidirectional': False
+        }
+        
+        # Scan state
+        self._running = False
+        self._current_frame = 0
+        self._current_line = 0
+        self._scan_thread = None
+        self._stop_event = threading.Event()
+        
+        # DAC position (current mirror position)
+        self._x_position = 2048  # Center position
+        self._y_position = 2048  # Center position
+        
+    def set_galvo_scan(self, nx=None, ny=None, x_min=None, x_max=None, 
+                       y_min=None, y_max=None, sample_period_us=None,
+                       frame_count=None, bidirectional=None):
+        """Set scan configuration and start scanning."""
+        with self.lock:
+            # Update configuration
+            if nx is not None:
+                self._config['nx'] = int(nx)
+            if ny is not None:
+                self._config['ny'] = int(ny)
+            if x_min is not None:
+                self._config['x_min'] = max(0, min(4095, int(x_min)))
+            if x_max is not None:
+                self._config['x_max'] = max(0, min(4095, int(x_max)))
+            if y_min is not None:
+                self._config['y_min'] = max(0, min(4095, int(y_min)))
+            if y_max is not None:
+                self._config['y_max'] = max(0, min(4095, int(y_max)))
+            if sample_period_us is not None:
+                self._config['sample_period_us'] = max(0, int(sample_period_us))
+            if frame_count is not None:
+                self._config['frame_count'] = max(0, int(frame_count))
+            if bidirectional is not None:
+                self._config['bidirectional'] = bool(bidirectional)
+                
+        # Start the scan
+        self._start_scan()
+        
+        return {
+            'success': True,
+            'config': self.get_config()
+        }
+    
+    def _start_scan(self):
+        """Start the virtual scan in a background thread."""
+        # Stop any existing scan
+        self.stop_galvo_scan()
+        
+        self._stop_event.clear()
+        self._running = True
+        self._current_frame = 0
+        self._current_line = 0
+        
+        self._scan_thread = threading.Thread(target=self._scan_loop, daemon=True)
+        self._scan_thread.start()
+        
+    def _scan_loop(self):
+        """Simulated scan loop running in background thread."""
+        config = self._config.copy()
+        nx = config['nx']
+        ny = config['ny']
+        x_min = config['x_min']
+        x_max = config['x_max']
+        y_min = config['y_min']
+        y_max = config['y_max']
+        sample_period_us = config['sample_period_us']
+        frame_count = config['frame_count']
+        bidirectional = config['bidirectional']
+        
+        # Calculate step sizes
+        x_step = (x_max - x_min) / max(nx - 1, 1)
+        y_step = (y_max - y_min) / max(ny - 1, 1)
+        
+        # Scan delay (convert µs to seconds, minimum 1µs)
+        delay = max(sample_period_us / 1_000_000, 0.000001)
+        
+        frame = 0
+        while not self._stop_event.is_set():
+            # Check frame limit
+            if frame_count > 0 and frame >= frame_count:
+                break
+                
+            self._current_frame = frame
+            
+            # Scan each line
+            for y_idx in range(ny):
+                if self._stop_event.is_set():
+                    break
+                    
+                self._current_line = y_idx
+                y_pos = y_min + y_idx * y_step
+                self._y_position = int(y_pos)
+                
+                # Determine scan direction (bidirectional: alternate directions)
+                reverse = bidirectional and (y_idx % 2 == 1)
+                
+                # Scan each pixel in the line
+                for x_idx in range(nx):
+                    if self._stop_event.is_set():
+                        break
+                        
+                    # Calculate X position
+                    if reverse:
+                        x_pos = x_max - x_idx * x_step
+                    else:
+                        x_pos = x_min + x_idx * x_step
+                    
+                    self._x_position = int(x_pos)
+                    
+                    # Simulate sample period delay
+                    time.sleep(delay)
+                    
+            frame += 1
+            
+        self._running = False
+        
+    def stop_galvo_scan(self):
+        """Stop the current scan."""
+        self._stop_event.set()
+        if self._scan_thread and self._scan_thread.is_alive():
+            self._scan_thread.join(timeout=1.0)
+        self._running = False
+        return {'success': True}
+    
+    def get_galvo_status(self):
+        """Get current scan status."""
+        with self.lock:
+            return {
+                'running': self._running,
+                'current_frame': self._current_frame,
+                'current_line': self._current_line,
+                'x_position': self._x_position,
+                'y_position': self._y_position
+            }
+    
+    def get_config(self):
+        """Get current configuration."""
+        with self.lock:
+            return self._config.copy()
+            
+    def set_position(self, x=None, y=None):
+        """Set galvo position directly (without scanning)."""
+        with self.lock:
+            if x is not None:
+                self._x_position = max(0, min(4095, int(x)))
+            if y is not None:
+                self._y_position = max(0, min(4095, int(y)))
+        return {'success': True, 'x': self._x_position, 'y': self._y_position}
+    
+    def get_position(self):
+        """Get current galvo position."""
+        with self.lock:
+            return {'x': self._x_position, 'y': self._y_position}
 
 
 

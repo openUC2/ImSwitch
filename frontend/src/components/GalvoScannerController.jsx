@@ -6,12 +6,10 @@ import {
   Grid,
   Paper,
   Alert,
-  CircularProgress,
   TextField,
   Slider,
   FormControlLabel,
   Checkbox,
-  Divider,
   Select,
   MenuItem,
   FormControl,
@@ -24,9 +22,37 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SettingsIcon from '@mui/icons-material/Settings';
-import SaveIcon from '@mui/icons-material/Save';
-import { useSelector } from 'react-redux';
+import SendIcon from '@mui/icons-material/Send';
+import { useSelector, useDispatch } from 'react-redux';
 import { getConnectionSettingsState } from '../state/slices/ConnectionSettingsSlice';
+import {
+  getGalvoScannerState,
+  getGalvoConfig,
+  getGalvoStatus,
+  getScanInfo,
+  setScannerNames,
+  setSelectedScanner,
+  setConfig,
+  setConfigParam,
+  setXRange,
+  setYRange,
+  toggleBidirectional,
+  setStatus,
+  setRunning,
+  setError,
+  clearError,
+  setStatusMessage,
+  clearStatusMessage,
+  setAutoRefresh,
+  applyPreset,
+} from '../state/slices/GalvoScannerSlice';
+import {
+  apiGetGalvoScannerNames,
+  apiGetGalvoScannerConfig,
+  apiGetGalvoScannerStatus,
+  apiStartGalvoScan,
+  apiStopGalvoScan,
+} from '../backendapi/apiGalvoScannerController';
 
 /**
  * GalvoScannerController - Control panel for galvo mirror scanners
@@ -35,49 +61,28 @@ import { getConnectionSettingsState } from '../state/slices/ConnectionSettingsSl
  * - Configure scan parameters (nx, ny, x/y ranges, timing)
  * - Start/stop galvo scans
  * - Real-time status polling
- * - Visual preview of scan pattern
+ * - Visual preview of scan pattern on full 4096x4096 canvas
  * - Multiple scanner device support
+ * - Redux state management
  */
 const GalvoScannerController = () => {
+  const dispatch = useDispatch();
   const connectionSettings = useSelector(getConnectionSettingsState);
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
 
-  // Scanner selection
-  const [scannerNames, setScannerNames] = useState([]);
-  const [selectedScanner, setSelectedScanner] = useState('');
-
-  // Scan parameters
-  const [config, setConfig] = useState({
-    nx: 256,
-    ny: 256,
-    x_min: 500,
-    x_max: 3500,
-    y_min: 500,
-    y_max: 3500,
-    sample_period_us: 1,
-    frame_count: 0,
-    bidirectional: false
-  });
-
-  // Status
-  const [status, setStatus] = useState({
-    running: false,
-    current_frame: 0,
-    current_line: 0
-  });
-
-  // UI state
-  const [loading, setLoading] = useState(false);
-  const [statusMessage, setStatusMessage] = useState('');
-  const [error, setError] = useState('');
-  const [autoRefresh, setAutoRefresh] = useState(false);
-
-  // API base URL
-  const apiBase = useMemo(() => 
-    `${hostIP}:${hostPort}/imswitch/api/GalvoScannerController`,
-    [hostIP, hostPort]
-  );
+  // Redux state
+  const galvoState = useSelector(getGalvoScannerState);
+  const config = useSelector(getGalvoConfig);
+  const status = useSelector(getGalvoStatus);
+  const scanInfo = useSelector(getScanInfo);
+  
+  // Destructure with defaults for safety
+  const scannerNames = galvoState?.scannerNames || [];
+  const selectedScanner = galvoState?.selectedScanner || '';
+  const error = galvoState?.error || null;
+  const statusMessage = galvoState?.statusMessage || '';
+  const autoRefresh = galvoState?.autoRefresh || false;
 
   // ========================
   // API Functions
@@ -85,126 +90,101 @@ const GalvoScannerController = () => {
 
   const fetchScannerNames = useCallback(async () => {
     try {
-      const response = await fetch(`${apiBase}/getGalvoScannerNames`);
-      const data = await response.json();
+      const data = await apiGetGalvoScannerNames(hostIP, hostPort);
       if (Array.isArray(data)) {
-        setScannerNames(data);
-        if (data.length > 0 && !selectedScanner) {
-          setSelectedScanner(data[0]);
-        }
+        dispatch(setScannerNames(data));
       }
     } catch (err) {
       console.error('Failed to fetch scanner names:', err);
     }
-  }, [apiBase, selectedScanner]);
+  }, [hostIP, hostPort, dispatch]);
 
   const fetchConfig = useCallback(async () => {
     if (!selectedScanner) return;
     try {
-      const response = await fetch(
-        `${apiBase}/getGalvoScannerConfig?scannerName=${selectedScanner}`
-      );
-      const data = await response.json();
+      const data = await apiGetGalvoScannerConfig(hostIP, hostPort, selectedScanner);
       if (data.config) {
-        setConfig(data.config);
+        dispatch(setConfig(data.config));
       }
     } catch (err) {
       console.error('Failed to fetch config:', err);
     }
-  }, [apiBase, selectedScanner]);
+  }, [hostIP, hostPort, selectedScanner, dispatch]);
 
   const fetchStatus = useCallback(async () => {
     if (!selectedScanner) return;
     try {
-      const response = await fetch(
-        `${apiBase}/getGalvoScannerStatus?scannerName=${selectedScanner}`
-      );
-      const data = await response.json();
+      const data = await apiGetGalvoScannerStatus(hostIP, hostPort, selectedScanner);
       if (!data.error) {
-        setStatus({
+        dispatch(setStatus({
           running: data.running || false,
           current_frame: data.current_frame || 0,
           current_line: data.current_line || 0
-        });
+        }));
       }
     } catch (err) {
       console.error('Failed to fetch status:', err);
     }
-  }, [apiBase, selectedScanner]);
-
-  const updateConfig = useCallback(async (newConfig) => {
-    if (!selectedScanner) return;
-    try {
-      const params = new URLSearchParams({
-        scannerName: selectedScanner,
-        ...Object.fromEntries(
-          Object.entries(newConfig).map(([k, v]) => [k, String(v)])
-        )
-      });
-      const response = await fetch(`${apiBase}/setGalvoScanConfig?${params}`);
-      const data = await response.json();
-      if (data.config) {
-        setConfig(data.config);
-        setStatusMessage('Configuration updated');
-        setTimeout(() => setStatusMessage(''), 2000);
-      }
-    } catch (err) {
-      setError(`Failed to update config: ${err.message}`);
-    }
-  }, [apiBase, selectedScanner]);
+  }, [hostIP, hostPort, selectedScanner, dispatch]);
 
   const startScan = useCallback(async () => {
     if (!selectedScanner) return;
-    setLoading(true);
-    setError('');
+    dispatch(setRunning(true)); // Optimistic update - button stays enabled
+    dispatch(clearError());
+    
     try {
-      const params = new URLSearchParams({
-        scannerName: selectedScanner,
-        nx: String(config.nx),
-        ny: String(config.ny),
-        x_min: String(config.x_min),
-        x_max: String(config.x_max),
-        y_min: String(config.y_min),
-        y_max: String(config.y_max),
-        sample_period_us: String(config.sample_period_us),
-        frame_count: String(config.frame_count),
-        bidirectional: String(config.bidirectional)
-      });
-      const response = await fetch(`${apiBase}/startGalvoScan?${params}`);
-      const data = await response.json();
+      const data = await apiStartGalvoScan(hostIP, hostPort, selectedScanner, config);
       if (data.error) {
-        setError(data.error);
+        dispatch(setError(data.error));
+        dispatch(setRunning(false));
       } else {
-        setStatusMessage('Scan started');
-        setStatus(prev => ({ ...prev, running: true }));
+        dispatch(setStatusMessage('Scan started'));
+        setTimeout(() => dispatch(clearStatusMessage()), 2000);
       }
     } catch (err) {
-      setError(`Failed to start scan: ${err.message}`);
-    } finally {
-      setLoading(false);
+      dispatch(setError(`Failed to start scan: ${err.message}`));
+      dispatch(setRunning(false));
     }
-  }, [apiBase, selectedScanner, config]);
+  }, [hostIP, hostPort, selectedScanner, config, dispatch]);
 
   const stopScan = useCallback(async () => {
     if (!selectedScanner) return;
-    setLoading(true);
+    dispatch(setRunning(false)); // Optimistic update - button stays enabled
+    
     try {
-      const response = await fetch(
-        `${apiBase}/stopGalvoScan?scannerName=${selectedScanner}`
-      );
-      const data = await response.json();
+      const data = await apiStopGalvoScan(hostIP, hostPort, selectedScanner);
       if (data.error) {
-        setError(data.error);
+        dispatch(setError(data.error));
       } else {
-        setStatusMessage('Scan stopped');
-        setStatus(prev => ({ ...prev, running: false }));
+        dispatch(setStatusMessage('Scan stopped'));
+        setTimeout(() => dispatch(clearStatusMessage()), 2000);
       }
     } catch (err) {
-      setError(`Failed to stop scan: ${err.message}`);
-    } finally {
-      setLoading(false);
+      dispatch(setError(`Failed to stop scan: ${err.message}`));
     }
-  }, [apiBase, selectedScanner]);
+  }, [hostIP, hostPort, selectedScanner, dispatch]);
+
+  // Apply config and immediately start scan
+  const applyConfigAndStartScan = useCallback(async () => {
+    if (!selectedScanner) return;
+    dispatch(setRunning(true)); // Optimistic update
+    dispatch(clearError());
+    dispatch(setStatusMessage('Applying configuration and starting scan...'));
+    
+    try {
+      const data = await apiStartGalvoScan(hostIP, hostPort, selectedScanner, config);
+      if (data.error) {
+        dispatch(setError(data.error));
+        dispatch(setRunning(false));
+      } else {
+        dispatch(setStatusMessage('Configuration applied, scan started'));
+        setTimeout(() => dispatch(clearStatusMessage()), 2000);
+      }
+    } catch (err) {
+      dispatch(setError(`Failed to apply config and start: ${err.message}`));
+      dispatch(setRunning(false));
+    }
+  }, [hostIP, hostPort, selectedScanner, config, dispatch]);
 
   // ========================
   // Effects
@@ -222,11 +202,11 @@ const GalvoScannerController = () => {
   }, [selectedScanner, fetchConfig, fetchStatus]);
 
   useEffect(() => {
-    if (autoRefresh && status.running) {
+    if (autoRefresh) {
       const interval = setInterval(fetchStatus, 500);
       return () => clearInterval(interval);
     }
-  }, [autoRefresh, status.running, fetchStatus]);
+  }, [autoRefresh, fetchStatus]);
 
   // ========================
   // Handlers
@@ -236,127 +216,230 @@ const GalvoScannerController = () => {
     const value = event.target.type === 'checkbox' 
       ? event.target.checked 
       : Number(event.target.value);
-    setConfig(prev => ({ ...prev, [field]: value }));
+    dispatch(setConfigParam({ param: field, value }));
   };
 
-  const handleSliderChange = (field) => (event, newValue) => {
-    setConfig(prev => ({ ...prev, [field]: newValue }));
+  const handleXRangeChange = (event, newValue) => {
+    dispatch(setXRange(newValue));
   };
 
-  const handleApplyConfig = () => {
-    updateConfig(config);
+  const handleYRangeChange = (event, newValue) => {
+    dispatch(setYRange(newValue));
+  };
+
+  const handlePresetClick = (preset) => () => {
+    dispatch(applyPreset(preset));
   };
 
   // ========================
-  // Scan Pattern Visualization
+  // Enhanced Scan Pattern Visualization
+  // Shows full 4096x4096 DAC range with scan area highlighted
   // ========================
 
   const ScanPatternPreview = useMemo(() => {
-    const width = 200;
-    const height = 200;
-    const padding = 10;
+    const canvasSize = 280;
+    const dacMax = 4096;
+    const padding = 25;
+    const innerSize = canvasSize - 2 * padding;
     
-    // Map DAC values to canvas coordinates
-    const mapX = (dac) => padding + ((dac - config.x_min) / (config.x_max - config.x_min)) * (width - 2 * padding);
-    const mapY = (dac) => padding + ((dac - config.y_min) / (config.y_max - config.y_min)) * (height - 2 * padding);
+    // Map DAC values (0-4095) to canvas coordinates
+    const mapToCanvas = (dacVal) => padding + (dacVal / dacMax) * innerSize;
+    
+    // Scan area bounds on canvas
+    const scanLeft = mapToCanvas(config.x_min);
+    const scanRight = mapToCanvas(config.x_max);
+    const scanTop = mapToCanvas(config.y_min);
+    const scanBottom = mapToCanvas(config.y_max);
+    const scanWidth = scanRight - scanLeft;
+    const scanHeight = scanBottom - scanTop;
 
-    // Generate sample points for preview
-    const points = [];
-    const stepX = (config.x_max - config.x_min) / Math.min(config.nx, 32);
-    const stepY = (config.y_max - config.y_min) / Math.min(config.ny, 32);
+    // Generate scan points for visualization (first 64 points max)
+    const maxPreviewPoints = 64;
+    const previewNx = Math.min(config.nx, maxPreviewPoints);
+    const previewNy = Math.min(config.ny, maxPreviewPoints);
+    
+    const stepX = scanWidth / Math.max(previewNx - 1, 1);
+    const stepY = scanHeight / Math.max(previewNy - 1, 1);
 
-    for (let y = 0; y < Math.min(config.ny, 32); y++) {
-      const yVal = config.y_min + y * stepY;
+    // Generate scan path
+    const pathPoints = [];
+    for (let y = 0; y < previewNy; y++) {
+      const yPos = scanTop + y * stepY;
       const isReverse = config.bidirectional && y % 2 === 1;
       
-      for (let x = 0; x < Math.min(config.nx, 32); x++) {
-        const xIdx = isReverse ? (Math.min(config.nx, 32) - 1 - x) : x;
-        const xVal = config.x_min + xIdx * stepX;
-        points.push({ x: mapX(xVal), y: mapY(yVal) });
+      for (let x = 0; x < previewNx; x++) {
+        const xIdx = isReverse ? (previewNx - 1 - x) : x;
+        const xPos = scanLeft + xIdx * stepX;
+        pathPoints.push({ x: xPos, y: yPos });
       }
     }
 
+    // Grid lines for full DAC range
+    const gridLines = [];
+    for (let i = 0; i <= 4; i++) {
+      const pos = padding + (i / 4) * innerSize;
+      const dacVal = (i / 4) * dacMax;
+      gridLines.push({ pos, dacVal: Math.round(dacVal) });
+    }
+
     return (
-      <svg width={width} height={height} style={{ border: '1px solid #ccc', borderRadius: 4, backgroundColor: '#1a1a2e' }}>
-        {/* Scan area rectangle */}
+      <svg 
+        width={canvasSize} 
+        height={canvasSize} 
+        style={{ 
+          border: '1px solid #444', 
+          borderRadius: 4, 
+          backgroundColor: '#0a0a15' 
+        }}
+      >
+        {/* Background - Full 4096x4096 DAC range */}
         <rect
           x={padding}
           y={padding}
-          width={width - 2 * padding}
-          height={height - 2 * padding}
-          fill="none"
-          stroke="#4a4a6a"
+          width={innerSize}
+          height={innerSize}
+          fill="#12121f"
+          stroke="#333"
           strokeWidth={1}
         />
-        
+
         {/* Grid lines */}
-        {[...Array(5)].map((_, i) => (
+        {gridLines.map((line, i) => (
           <React.Fragment key={i}>
+            {/* Vertical grid line */}
             <line
-              x1={padding + (i / 4) * (width - 2 * padding)}
+              x1={line.pos}
               y1={padding}
-              x2={padding + (i / 4) * (width - 2 * padding)}
-              y2={height - padding}
-              stroke="#3a3a5a"
+              x2={line.pos}
+              y2={canvasSize - padding}
+              stroke="#2a2a4a"
               strokeWidth={0.5}
             />
+            {/* Horizontal grid line */}
             <line
               x1={padding}
-              y1={padding + (i / 4) * (height - 2 * padding)}
-              x2={width - padding}
-              y2={padding + (i / 4) * (height - 2 * padding)}
-              stroke="#3a3a5a"
+              y1={line.pos}
+              x2={canvasSize - padding}
+              y2={line.pos}
+              stroke="#2a2a4a"
               strokeWidth={0.5}
             />
+            {/* X axis labels */}
+            {i < gridLines.length && (
+              <text
+                x={line.pos}
+                y={canvasSize - 5}
+                fontSize={8}
+                fill="#666"
+                textAnchor="middle"
+              >
+                {line.dacVal}
+              </text>
+            )}
+            {/* Y axis labels */}
+            {i < gridLines.length && (
+              <text
+                x={5}
+                y={line.pos + 3}
+                fontSize={8}
+                fill="#666"
+                textAnchor="start"
+              >
+                {line.dacVal}
+              </text>
+            )}
           </React.Fragment>
         ))}
 
-        {/* Scan path */}
-        {points.length > 1 && (
+        {/* Scan area highlight (the actual scan region) */}
+        <rect
+          x={scanLeft}
+          y={scanTop}
+          width={scanWidth}
+          height={scanHeight}
+          fill="rgba(0, 150, 255, 0.15)"
+          stroke="#0096ff"
+          strokeWidth={2}
+          strokeDasharray="4,2"
+        />
+
+        {/* Scan path lines */}
+        {pathPoints.length > 1 && (
           <polyline
-            points={points.map(p => `${p.x},${p.y}`).join(' ')}
+            points={pathPoints.map(p => `${p.x},${p.y}`).join(' ')}
             fill="none"
-            stroke="#00ff88"
+            stroke={config.bidirectional ? '#ff9900' : '#00ff88'}
             strokeWidth={1}
-            opacity={0.7}
+            opacity={0.8}
           />
         )}
 
         {/* Sample points */}
-        {points.slice(0, 100).map((point, i) => (
+        {pathPoints.slice(0, 200).map((point, i) => (
           <circle
             key={i}
             cx={point.x}
             cy={point.y}
-            r={2}
-            fill="#00aaff"
+            r={Math.max(1, 3 - pathPoints.length / 50)}
+            fill={i === 0 ? '#ff0000' : '#00aaff'}
           />
         ))}
 
+        {/* Start point marker */}
+        {pathPoints.length > 0 && (
+          <circle
+            cx={pathPoints[0].x}
+            cy={pathPoints[0].y}
+            r={5}
+            fill="none"
+            stroke="#ff0000"
+            strokeWidth={2}
+          />
+        )}
+
+        {/* Scan direction arrows for bidirectional */}
+        {config.bidirectional && previewNy >= 2 && (
+          <>
+            {/* Forward arrow (line 0) */}
+            <polygon
+              points={`${scanRight - 8},${scanTop - 2} ${scanRight},${scanTop + 4} ${scanRight - 8},${scanTop + 10}`}
+              fill="#00ff88"
+            />
+            {/* Reverse arrow (line 1) */}
+            <polygon
+              points={`${scanLeft + 8},${scanTop + stepY - 2} ${scanLeft},${scanTop + stepY + 4} ${scanLeft + 8},${scanTop + stepY + 10}`}
+              fill="#ff9900"
+            />
+          </>
+        )}
+
         {/* Labels */}
-        <text x={width / 2} y={height - 2} fontSize={10} fill="#888" textAnchor="middle">
-          X: {config.x_min}-{config.x_max}
+        <text x={canvasSize / 2} y={12} fontSize={10} fill="#888" textAnchor="middle" fontWeight="bold">
+          DAC Range: 0-4095
         </text>
-        <text x={5} y={height / 2} fontSize={10} fill="#888" transform={`rotate(-90, 5, ${height / 2})`} textAnchor="middle">
-          Y: {config.y_min}-{config.y_max}
+        
+        {/* Scan mode indicator */}
+        <rect
+          x={canvasSize - 85}
+          y={2}
+          width={80}
+          height={16}
+          rx={3}
+          fill={config.bidirectional ? '#ff9900' : '#00ff88'}
+          opacity={0.3}
+        />
+        <text 
+          x={canvasSize - 45} 
+          y={13} 
+          fontSize={9} 
+          fill={config.bidirectional ? '#ff9900' : '#00ff88'} 
+          textAnchor="middle"
+          fontWeight="bold"
+        >
+          {config.bidirectional ? 'BIDI' : 'UNI'}
         </text>
       </svg>
     );
-  }, [config]);
-
-  // ========================
-  // Computed values
-  // ========================
-
-  const scanInfo = useMemo(() => {
-    const totalPixels = config.nx * config.ny;
-    const frameTimeMs = (totalPixels * config.sample_period_us) / 1000;
-    const frameRate = config.sample_period_us > 0 ? 1000 / frameTimeMs : '∞';
-    return {
-      totalPixels,
-      frameTimeMs: frameTimeMs.toFixed(2),
-      frameRate: typeof frameRate === 'number' ? frameRate.toFixed(1) : frameRate
-    };
   }, [config]);
 
   // ========================
@@ -379,7 +462,7 @@ const GalvoScannerController = () => {
               <Select
                 value={selectedScanner}
                 label="Scanner Device"
-                onChange={(e) => setSelectedScanner(e.target.value)}
+                onChange={(e) => dispatch(setSelectedScanner(e.target.value))}
               >
                 {scannerNames.map(name => (
                   <MenuItem key={name} value={name}>{name}</MenuItem>
@@ -390,12 +473,12 @@ const GalvoScannerController = () => {
 
           {/* Status and Alerts */}
           {statusMessage && (
-            <Alert severity="success" sx={{ mb: 2 }} onClose={() => setStatusMessage('')}>
+            <Alert severity="success" sx={{ mb: 2 }} onClose={() => dispatch(clearStatusMessage())}>
               {statusMessage}
             </Alert>
           )}
           {error && (
-            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
+            <Alert severity="error" sx={{ mb: 2 }} onClose={() => dispatch(clearError())}>
               {error}
             </Alert>
           )}
@@ -446,7 +529,7 @@ const GalvoScannerController = () => {
             </Typography>
             <Slider
               value={[config.x_min, config.x_max]}
-              onChange={(e, val) => setConfig(prev => ({ ...prev, x_min: val[0], x_max: val[1] }))}
+              onChange={handleXRangeChange}
               valueLabelDisplay="auto"
               min={0}
               max={4095}
@@ -482,7 +565,7 @@ const GalvoScannerController = () => {
             </Typography>
             <Slider
               value={[config.y_min, config.y_max]}
-              onChange={(e, val) => setConfig(prev => ({ ...prev, y_min: val[0], y_max: val[1] }))}
+              onChange={handleYRangeChange}
               valueLabelDisplay="auto"
               min={0}
               max={4095}
@@ -551,14 +634,14 @@ const GalvoScannerController = () => {
               control={
                 <Checkbox
                   checked={config.bidirectional}
-                  onChange={handleConfigChange('bidirectional')}
+                  onChange={() => dispatch(toggleBidirectional())}
                 />
               }
               label="Bidirectional Scanning"
               sx={{ mt: 1 }}
             />
 
-            <Box sx={{ mt: 2, p: 1, backgroundColor: 'secondary.main', borderRadius: 1 }}>
+            <Box sx={{ mt: 2, p: 1, backgroundColor: 'rgba(0,150,255,0.1)', borderRadius: 1 }}>
               <Typography variant="body2">
                 Frame time: ~{scanInfo.frameTimeMs} ms | 
                 Rate: ~{scanInfo.frameRate} Hz
@@ -566,15 +649,16 @@ const GalvoScannerController = () => {
             </Box>
           </Paper>
 
-          {/* Apply Button */}
+          {/* Apply & Start Button */}
           <Button
-            variant="outlined"
-            startIcon={<SaveIcon />}
-            onClick={handleApplyConfig}
+            variant="contained"
+            color="primary"
+            startIcon={<SendIcon />}
+            onClick={applyConfigAndStartScan}
             fullWidth
             sx={{ mb: 2 }}
           >
-            Apply Configuration
+            Apply Configuration & Start Scan
           </Button>
         </Grid>
 
@@ -589,8 +673,11 @@ const GalvoScannerController = () => {
               {ScanPatternPreview}
             </Box>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, textAlign: 'center' }}>
-              Preview shows first 32×32 points of scan pattern
-              {config.bidirectional && ' (bidirectional)'}
+              Full DAC range (4096×4096) • Scan area highlighted in blue
+              <br />
+              {config.bidirectional 
+                ? '🟠 Bidirectional: alternating scan direction' 
+                : '🟢 Unidirectional: same direction each line'}
             </Typography>
           </Paper>
 
@@ -606,7 +693,7 @@ const GalvoScannerController = () => {
                     <Checkbox
                       size="small"
                       checked={autoRefresh}
-                      onChange={(e) => setAutoRefresh(e.target.checked)}
+                      onChange={(e) => dispatch(setAutoRefresh(e.target.checked))}
                     />
                   }
                   label="Auto-refresh"
@@ -636,7 +723,7 @@ const GalvoScannerController = () => {
             </Box>
           </Paper>
 
-          {/* Control Buttons */}
+          {/* Control Buttons - Always enabled */}
           <Paper sx={{ p: 2 }}>
             <Typography variant="subtitle1" gutterBottom>
               Scan Control
@@ -647,9 +734,8 @@ const GalvoScannerController = () => {
                 <Button
                   variant="contained"
                   color="success"
-                  startIcon={loading ? <CircularProgress size={20} /> : <PlayArrowIcon />}
+                  startIcon={<PlayArrowIcon />}
                   onClick={startScan}
-                  disabled={loading || status.running}
                   fullWidth
                   size="large"
                 >
@@ -660,9 +746,8 @@ const GalvoScannerController = () => {
                 <Button
                   variant="contained"
                   color="error"
-                  startIcon={loading ? <CircularProgress size={20} /> : <StopIcon />}
+                  startIcon={<StopIcon />}
                   onClick={stopScan}
-                  disabled={loading || !status.running}
                   fullWidth
                   size="large"
                 >
@@ -683,7 +768,7 @@ const GalvoScannerController = () => {
                   variant="outlined"
                   size="small"
                   fullWidth
-                  onClick={() => setConfig(prev => ({ ...prev, nx: 64, ny: 64 }))}
+                  onClick={handlePresetClick('64x64')}
                 >
                   64×64
                 </Button>
@@ -693,7 +778,7 @@ const GalvoScannerController = () => {
                   variant="outlined"
                   size="small"
                   fullWidth
-                  onClick={() => setConfig(prev => ({ ...prev, nx: 256, ny: 256 }))}
+                  onClick={handlePresetClick('256x256')}
                 >
                   256×256
                 </Button>
@@ -703,7 +788,7 @@ const GalvoScannerController = () => {
                   variant="outlined"
                   size="small"
                   fullWidth
-                  onClick={() => setConfig(prev => ({ ...prev, nx: 512, ny: 512 }))}
+                  onClick={handlePresetClick('512x512')}
                 >
                   512×512
                 </Button>
@@ -713,11 +798,7 @@ const GalvoScannerController = () => {
                   variant="outlined"
                   size="small"
                   fullWidth
-                  onClick={() => setConfig(prev => ({ 
-                    ...prev, 
-                    x_min: 0, x_max: 4095, 
-                    y_min: 0, y_max: 4095 
-                  }))}
+                  onClick={handlePresetClick('fullRange')}
                 >
                   Full Range
                 </Button>
@@ -727,11 +808,7 @@ const GalvoScannerController = () => {
                   variant="outlined"
                   size="small"
                   fullWidth
-                  onClick={() => setConfig(prev => ({ 
-                    ...prev, 
-                    x_min: 1024, x_max: 3072, 
-                    y_min: 1024, y_max: 3072 
-                  }))}
+                  onClick={handlePresetClick('center50')}
                 >
                   Center 50%
                 </Button>

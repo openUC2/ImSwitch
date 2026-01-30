@@ -558,7 +558,7 @@ const GalvoScannerController = () => {
               sx={{ mt: 1 }}
             />
 
-            <Box sx={{ mt: 2, p: 1, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
+            <Box sx={{ mt: 2, p: 1, backgroundColor: 'secondary.main', borderRadius: 1 }}>
               <Typography variant="body2">
                 Frame time: ~{scanInfo.frameTimeMs} ms | 
                 Rate: ~{scanInfo.frameRate} Hz

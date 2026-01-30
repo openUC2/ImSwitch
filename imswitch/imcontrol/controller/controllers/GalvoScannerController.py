@@ -180,7 +180,10 @@ class GalvoScannerController(ImConWidgetController):
         """
         if not hasattr(self._master, 'galvoScannersManager'):
             return {"error": "No galvo scanners manager available"}
-        
+        self.__logger.info(f"setGalvoScanConfig called with: scannerName={scannerName}, "
+                           f"nx={nx}, ny={ny}, x_min={x_min}, x_max={x_max}, "
+                           f"y_min={y_min}, y_max={y_max}, sample_period_us={sample_period_us}, "
+                           f"frame_count={frame_count}, bidirectional={bidirectional}")
         scannerName = self._resolveScanner(scannerName)
         if scannerName is None:
             return {"error": "No galvo scanner available"}
@@ -250,7 +253,7 @@ class GalvoScannerController(ImConWidgetController):
         
         try:
             scanner = self._master.galvoScannersManager[scannerName]
-            result = scanner.start_scan(
+            scanner.start_scan(
                 nx=nx, ny=ny,
                 x_min=x_min, x_max=x_max,
                 y_min=y_min, y_max=y_max,
@@ -261,7 +264,7 @@ class GalvoScannerController(ImConWidgetController):
             )
             
             self.__logger.info(f"Started scan on {scannerName}")
-            result["scannerName"] = scannerName
+            result = {"status": "started", "scannerName": scannerName}
             return result
         except Exception as e:
             self.__logger.error(f"Error starting scan on {scannerName}: {e}")
@@ -292,10 +295,10 @@ class GalvoScannerController(ImConWidgetController):
         
         try:
             scanner = self._master.galvoScannersManager[scannerName]
-            result = scanner.stop_scan(timeout=timeout)
+            scanner.stop_scan(timeout=timeout)
             
             self.__logger.info(f"Stopped scan on {scannerName}")
-            result["scannerName"] = scannerName
+            result = {"status": "stopped", "scannerName": scannerName}
             return result
         except Exception as e:
             self.__logger.error(f"Error stopping scan on {scannerName}: {e}")

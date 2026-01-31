@@ -1078,7 +1078,7 @@ class UC2ConfigController(ImConWidgetController):
     ''' CAN OTA Streaming Methods (USB-based, no WiFi required) '''
     
     @APIExport(runOnUIThread=False)
-    def startCANStreamingOTA(self, can_id: int, firmware_url: str = None):
+    def startCANStreamingOTA(self, can_id: int, firmware_url: str = None, baud: int = 921600):
         """
         Start CAN-based OTA streaming upload (USB-based, no WiFi required).
         
@@ -1150,11 +1150,12 @@ class UC2ConfigController(ImConWidgetController):
                 self.__logger.info(f"CAN OTA: {message}")
             
             # Start streaming upload (blocking)
-            success = self._uc2ConfigManager.ESP32.canota.start_can_streaming_ota_blocking(
+            success = self._master.UC2ConfigManager.ESP32.canota.start_can_streaming_ota_blocking(
                 can_id=can_id,
                 firmware_path=str(firmware_path),
                 progress_callback=progress_callback,
-                status_callback=status_callback
+                status_callback=status_callback, 
+                baud=baud
             )
             
             if success:

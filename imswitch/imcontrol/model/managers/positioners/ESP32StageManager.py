@@ -17,8 +17,12 @@ class ESP32StageManager(PositionerManager):
         self._motor = self._rs232manager._esp32.motor
         self._homeModule = self._rs232manager._esp32.home
 
-        # get bootup position and write to GUI
-        self._position = self.getPosition()
+        # global offset (i.e. difference between stage zero and device zero)
+        self.stageOffsetPositions = {}
+        self.stageOffsetPositions["X"] = positionerInfo.stageOffsets.get('stageOffsetPositionX',0)
+        self.stageOffsetPositions["Y"] = positionerInfo.stageOffsets.get('stageOffsetPositionY',0)
+        self.stageOffsetPositions["Z"] = positionerInfo.stageOffsets.get('stageOffsetPositionZ',0)
+        self.stageOffsetPositions["A"] = positionerInfo.stageOffsets.get('stageOffsetPositionA',0)
 
         # Calibrated stepsizes in steps/µm
         self.stepSizes = {}
@@ -69,11 +73,6 @@ class ESP32StageManager(PositionerManager):
         # move z before homing?
         self._safeDistanceZHoming = positionerInfo.managerProperties.get('safeDistanceZHoming',0)
 
-        self.stageOffsetPositions = {}
-        self.stageOffsetPositions["X"] = positionerInfo.stageOffsets.get('stageOffsetPositionX',0)
-        self.stageOffsetPositions["Y"] = positionerInfo.stageOffsets.get('stageOffsetPositionY',0)
-        self.stageOffsetPositions["Z"] = positionerInfo.stageOffsets.get('stageOffsetPositionZ',0)
-        self.stageOffsetPositions["A"] = positionerInfo.stageOffsets.get('stageOffsetPositionA',0)
         # Setup homing coordinates and speed
         # X
         self.setHomeParametersAxis(axis="X", speed=positionerInfo.managerProperties.get('homeSpeedX', 15000),
@@ -154,6 +153,9 @@ class ESP32StageManager(PositionerManager):
 
         # Set IsCoreXY
         self._motor.setIsCoreXY(isCoreXY=self.isCoreXY)
+
+        # get bootup position and write to GUI
+        self._position = self.getPosition()
 
         # Setup motors
         self.setupMotor(self.minX, self.maxX, self.stepSizes["X"], self.backlashX, "X")
@@ -831,11 +833,26 @@ class ESP32StageManager(PositionerManager):
         else:
             limits = {'enabled': False}
         
+        # Hard limits settings (hardware endstop emergency stop)
+        try:
+            # Query current hard limit state from device
+            limit_info = self._motor.get_hard_limits(axis=axis, timeout=1)
+            if limit_info:
+                hardLimitsEnabled = limit_info.get('enabled', None)
+            else:
+                hardLimitsEnabled = None
+        except Exception:
+            hardLimitsEnabled = None  # Unknown or not supported
+        
+        # Add hard limits to limits section for frontend compatibility
+        limits['hardLimitsEnabled'] = hardLimitsEnabled
+        
         return {
             'axis': axis,
             'motion': motion,
             'homing': homing,
             'limits': limits,
+            'hardLimitsEnabled': hardLimitsEnabled,  # Also keep at root for backwards compatibility
         }
     
     def setMotorSettingsForAxis(self, axis: str, settings: dict) -> dict:
@@ -973,6 +990,25 @@ class ESP32StageManager(PositionerManager):
                     elif axis == 'Y': self.limitYenabled = limits['enabled']
                     elif axis == 'Z': self.limitZenabled = limits['enabled']
                     result['updated'].append('limits.enabled')
+                
+                # Also check for hard limits inside the limits section (from frontend)
+                if 'hardLimitsEnabled' in limits:
+                    try:
+                        enabled = bool(limits['hardLimitsEnabled'])
+                        self._motor.set_hard_limits(axis=axis, enabled=enabled, timeout=1)
+                        result['updated'].append('limits.hardLimitsEnabled')
+                    except Exception as e:
+                        result['errors'].append(f"Failed to set hard limits from limits section: {e}")
+            
+            # Update hard limits settings (hardware endstop emergency stop)
+            # Also accept at root level for backwards compatibility
+            if 'hardLimitsEnabled' in settings:
+                try:
+                    enabled = bool(settings['hardLimitsEnabled'])
+                    self._motor.set_hard_limits(axis=axis, enabled=enabled, timeout=1)
+                    result['updated'].append('hardLimitsEnabled')
+                except Exception as e:
+                    result['errors'].append(f"Failed to set hard limits: {e}")
             
             result['success'] = True
             self.__logger.info(f"Updated motor settings for axis {axis}: {result['updated']}")

@@ -97,7 +97,7 @@ class PositionerController(ImConWidgetController):
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)
             self._master.positionersManager[positionerName].move(dist, axis)
-        self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
+        # self._commChannel.sigUpdateMotorPosition.emit(self.getPos()) # TODO: Unsure if this is needed - for the ESP motor not as it will update the position itself asynchronously
 
     def moveForever(self, positionerName: str=None, axis="X", speed=0, is_stop:bool=False):
         """ Moves positioner forever. """

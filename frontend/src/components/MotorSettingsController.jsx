@@ -344,6 +344,9 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <Warning color="primary" />
             <Typography variant="subtitle1">Limit Settings</Typography>
+            {(limits.enabled || limits.hardLimitsEnabled) && (
+              <Chip label="Active" color="success" size="small" />
+            )}
           </Box>
         </AccordionSummary>
         <AccordionDetails>
@@ -358,9 +361,36 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
                     }
                   />
                 }
-                label="Enable Position Limits (prevent movement below 0)"
+                label="Enable Position Limits (software - prevent movement below 0)"
               />
             </Grid>
+            <Grid item xs={12}>
+              <Divider sx={{ my: 1 }} />
+              <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+                Hardware Hard Limits use physical endstop switches to prevent movement beyond safe range
+              </Typography>
+            </Grid>
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={limits.hardLimitsEnabled ?? false}
+                    onChange={(e) =>
+                      handleChange("limits", "hardLimitsEnabled", e.target.checked)
+                    }
+                  />
+                }
+                label="Enable Hardware Hard Limits (physical endstops)"
+              />
+            </Grid>
+            {limits.hardLimitsEnabled && (
+              <Grid item xs={12}>
+                <Alert severity="info" sx={{ mt: 1 }}>
+                  Hardware hard limits enabled. Motor will stop immediately when endstop is triggered.
+                  Make sure physical endstops are properly connected to the motor driver.
+                </Alert>
+              </Grid>
+            )}
           </Grid>
         </AccordionDetails>
       </Accordion>
@@ -383,7 +413,7 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
                   params: { axis, positionerName: 'ESP32Stage' }
                 });
                 // Move 100 steps
-                await axios.post('/PositionerController/move', {
+                await axios.get('/PositionerController/move', {
                   positionerName: 'ESP32Stage',
                   axis: axis,
                   dist: -100,
@@ -406,7 +436,7 @@ const AxisSettingsPanel = ({ axis, settings, onChange, onSave, isSaving, baseURL
               setTesting(true);
               try {
                 const axios = createAxiosInstance(baseURL);
-                await axios.post('/PositionerController/move', {
+                await axios.get('/PositionerController/move', {
                   positionerName: 'ESP32Stage',
                   axis: axis,
                   dist: 100,

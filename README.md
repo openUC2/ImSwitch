@@ -16,6 +16,7 @@ Run:
 
 ```bash
 # Install uv
+cd ~
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source $HOME/.local/bin/env
 
@@ -32,6 +33,12 @@ uv pip install -e .[dev]
 # Run a workaround for some brokenness:
 uv pip uninstall psygnal
 uv pip install psygnal --no-binary :all:
+
+# Install UC2-REST from source
+cd ~
+git clone https://github.com/openuc2/UC2-REST
+cd UC2-REST
+uv pip install .
 
 # Download ImSwitch configurations (yes, this is a janky way of getting configurations)
 cd ~

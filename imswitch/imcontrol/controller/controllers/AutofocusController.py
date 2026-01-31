@@ -2,6 +2,7 @@ from imswitch import IS_HEADLESS
 import time
 import numpy as np
 import threading
+from enum import Enum
 from scipy.optimize import curve_fit
 from imswitch.imcommon.model import initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
@@ -12,6 +13,18 @@ import queue
 
 # Global axis for Z-positioning
 gAxis = "Z"
+
+
+class AutofocusState(Enum):
+    """State machine for autofocus lifecycle."""
+    IDLE = "idle"
+    STARTING = "starting"
+    SCANNING = "scanning"
+    FITTING = "fitting"
+    MOVING_TO_FOCUS = "moving_to_focus"
+    ABORTED = "aborted"
+    FINISHED = "finished"
+    ERROR = "error"
 
 
 def _gaussian(x, a, x0, sigma, c):
@@ -48,9 +61,10 @@ def _robust_gaussian_fit(x, y):
 
 class MovementController:
     """
-    Simple asynchronous mover:
+    Asynchronous mover with abort capability:
       .move_to_position(value, axis, speed, is_absolute)
       .is_target_reached()
+      .abort() - stops current motion immediately
     """
     def __init__(self, stages):
         self.stages = stages
@@ -61,9 +75,11 @@ class MovementController:
         self.speed = None
         self.is_absolute = True
         self._thread = None
+        self._abort_flag = False
 
     def move_to_position(self, value, axis=gAxis, speed=None, is_absolute=True):
         with self._lock:
+            self._abort_flag = False
             self.target_reached = False
             self.target_position = value
             self.axis = axis
@@ -79,6 +95,9 @@ class MovementController:
             speed = self.speed
             is_absolute = self.is_absolute
         try:
+            # Check abort flag before starting move
+            if self._abort_flag:
+                return
             self.stages.move(value=value, axis=axis, speed=speed, is_absolute=is_absolute, is_blocking=True)
         finally:
             with self._lock:
@@ -87,6 +106,27 @@ class MovementController:
     def is_target_reached(self):
         with self._lock:
             return bool(self.target_reached)
+
+    def abort(self):
+        """Abort current motion immediately by calling forceStop on the stage."""
+        with self._lock:
+            self._abort_flag = True
+        # Call forceStop on stage if available
+        if hasattr(self.stages, 'forceStop'):
+            try:
+                if self.axis:
+                    self.stages.forceStop(self.axis)
+                else:
+                    self.stages.forceStop(gAxis)
+            except Exception:
+                pass
+        with self._lock:
+            self.target_reached = True
+
+    def is_aborted(self):
+        """Check if abort was requested."""
+        with self._lock:
+            return bool(self._abort_flag)
 
 
 class AutofocusController(ImConWidgetController):
@@ -97,12 +137,21 @@ class AutofocusController(ImConWidgetController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
+        
+        # Thread-safe state management
+        self._stateLock = threading.Lock()
+        self._autofocusState = AutofocusState.IDLE
         self.isAutofusRunning = False  # keep attribute name for compatibility
         self.isLiveMonitoring = False  # for live focus value monitoring
         self._liveMonitoringThread = None
         self._liveMonitoringPeriod = 0.5  # default period in seconds
         self._focusMethod = "LAPE"  # default focus measurement method
         self._liveMonitoringCropsize = 2048  # default crop size for live monitoring
+        
+        # Safety configuration - default software limits
+        self._minZ = -np.inf  # Will be updated from stage manager if available
+        self._maxZ = np.inf   # Will be updated from stage manager if available
+        self._positionValidated = False  # Track if position has been validated since startup
 
         if self._setupInfo.autofocus is not None:
             self.cameraName = self._setupInfo.autofocus.camera
@@ -122,12 +171,16 @@ class AutofocusController(ImConWidgetController):
             self.stageName = self._master.positionersManager.getAllDeviceNames()[0]
             self.stages = self._master.positionersManager[self.stageName]
 
+        # Initialize safety limits from stage manager if available
+        self._initializeSafetyLimits()
+
         self._commChannel.sigAutoFocus.connect(self.autoFocus)
 
         self._moveController = MovementController(self.stages)
 
     def __del__(self):
         try:
+            self._setAutofocusState(AutofocusState.IDLE)
             self.isAutofusRunning = False
             self.isLiveMonitoring = False
             if hasattr(self, '_AutofocusThead') and self._AutofocusThead and self._AutofocusThead.is_alive():
@@ -138,6 +191,131 @@ class AutofocusController(ImConWidgetController):
             pass
         if hasattr(super(), '__del__'):
             super().__del__()
+
+    def _initializeSafetyLimits(self):
+        """Initialize safety limits from stage manager if available."""
+        try:
+            # Try to get limits from stage manager (ESP32StageManager has these)
+            if hasattr(self.stages, 'minZ'):
+                self._minZ = self.stages.minZ
+            if hasattr(self.stages, 'maxZ'):
+                self._maxZ = self.stages.maxZ
+            self.__logger.info(f"Autofocus safety limits initialized: minZ={self._minZ}, maxZ={self._maxZ}")
+        except Exception as e:
+            self.__logger.warning(f"Could not initialize safety limits from stage: {e}")
+
+    def _setAutofocusState(self, state: AutofocusState):
+        """Thread-safe state setter."""
+        with self._stateLock:
+            self._autofocusState = state
+            self.isAutofusRunning = state not in [AutofocusState.IDLE, AutofocusState.FINISHED, AutofocusState.ERROR, AutofocusState.ABORTED]
+
+    def _getAutofocusState(self) -> AutofocusState:
+        """Thread-safe state getter."""
+        with self._stateLock:
+            return self._autofocusState
+
+    def _getSafeCurrentZ(self, axis: str = gAxis) -> tuple:
+        """
+        Get current Z position with validation against hardware limits.
+        
+        Returns:
+            tuple: (position, is_valid, error_message)
+                - position: float or None if invalid
+                - is_valid: bool
+                - error_message: str or None
+        """
+        try:
+            # Get fresh position from hardware
+            pos_dict = self.stages.getPosition()
+            if pos_dict is None:
+                return None, False, "Failed to read position from stage"
+            
+            if axis not in pos_dict:
+                return None, False, f"Axis '{axis}' not found in position data"
+            
+            current_z = float(pos_dict[axis])
+            
+            # Validate against NaN
+            if np.isnan(current_z):
+                return None, False, "Position is NaN - stage position not initialized"
+            
+            # Validate against limits
+            if current_z < self._minZ:
+                return None, False, f"Current position {current_z} is below minimum limit {self._minZ}"
+            if current_z > self._maxZ:
+                return None, False, f"Current position {current_z} is above maximum limit {self._maxZ}"
+            
+            self._positionValidated = True
+            return current_z, True, None
+            
+        except Exception as e:
+            return None, False, f"Error reading position: {e}"
+
+    def _clampPosition(self, position: float, axis: str = gAxis) -> float:
+        """
+        Clamp a position to hardware limits.
+        
+        Args:
+            position: Target position
+            axis: Axis name
+            
+        Returns:
+            Clamped position within safe bounds
+        """
+        clamped = np.clip(position, self._minZ, self._maxZ)
+        if clamped != position:
+            self.__logger.warning(f"Position {position} clamped to {clamped} (limits: {self._minZ} to {self._maxZ})")
+        return float(clamped)
+
+    def _validateScanRange(self, center: float, rangez: float, axis: str = gAxis) -> tuple:
+        """
+        Validate and potentially adjust scan range to stay within limits.
+        
+        Args:
+            center: Center position for scan
+            rangez: Scan range (±rangez from center)
+            axis: Axis name
+            
+        Returns:
+            tuple: (adjusted_rangez, is_valid, warning_message)
+        """
+        scan_min = center - abs(rangez) / 2
+        scan_max = center + abs(rangez) / 2
+        
+        # Check if scan would exceed limits
+        if scan_min < self._minZ or scan_max > self._maxZ:
+            # Try to adjust range to fit within limits
+            available_down = center - self._minZ
+            available_up = self._maxZ - center
+            adjusted_rangez = 2 * min(available_down, available_up, abs(rangez) / 2)
+            
+            if adjusted_rangez < abs(rangez) * 0.1:  # Less than 10% of requested range
+                return adjusted_rangez, False, f"Scan range too restricted: only {adjusted_rangez:.1f} available vs {rangez} requested"
+            
+            return adjusted_rangez, True, f"Scan range adjusted from {rangez} to {adjusted_rangez:.1f} to fit within limits"
+        
+        return rangez, True, None
+
+    @APIExport(runOnUIThread=True)
+    def getAutofocusStatus(self):
+        """
+        Get current autofocus status for frontend synchronization.
+        
+        Returns:
+            dict with state information
+        """
+        current_z, is_valid, error = self._getSafeCurrentZ()
+        return {
+            "state": self._getAutofocusState().value,
+            "isRunning": self.isAutofusRunning,
+            "isLiveMonitoring": self.isLiveMonitoring,
+            "currentZ": current_z,
+            "positionValid": is_valid,
+            "positionError": error,
+            "minZ": self._minZ if self._minZ != -np.inf else None,
+            "maxZ": self._maxZ if self._maxZ != np.inf else None,
+        }
 
 
 
@@ -158,16 +336,41 @@ class AutofocusController(ImConWidgetController):
             focusAlgorithm: Focus measurement method ("LAPE", "GLVA", or "JPEG")
             static_offset: Static offset to add to final focus position
             twoStage: If True, perform coarse scan followed by fine scan (10x finer)
+        
+        Returns:
+            dict with status information or None if started successfully
         """
-        if self.isAutofusRunning:
-            return
-        self.isAutofusRunning = True
+        # Thread-safe state check
+        with self._stateLock:
+            if self._autofocusState not in [AutofocusState.IDLE, AutofocusState.FINISHED, AutofocusState.ERROR, AutofocusState.ABORTED]:
+                self.__logger.warning(f"Autofocus already running (state: {self._autofocusState.value})")
+                return {"status": "error", "message": f"Autofocus already running (state: {self._autofocusState.value})"}
+            self._autofocusState = AutofocusState.STARTING
+            self.isAutofusRunning = True
+        
+        # Validate current position before starting
+        current_z, is_valid, error_msg = self._getSafeCurrentZ()
+        if not is_valid:
+            self.__logger.error(f"Cannot start autofocus: {error_msg}")
+            self._setAutofocusState(AutofocusState.ERROR)
+            return {"status": "error", "message": error_msg}
+        
+        # Validate scan range
+        adjusted_rangez, range_valid, range_warning = self._validateScanRange(current_z, rangez)
+        if range_warning:
+            self.__logger.warning(range_warning)
+        if not range_valid:
+            self.__logger.error(f"Cannot start autofocus: {range_warning}")
+            self._setAutofocusState(AutofocusState.ERROR)
+            return {"status": "error", "message": range_warning}
+        
         self._AutofocusThead = threading.Thread(
             target=self.doAutofocusBackground,
-            args=(rangez, resolutionz, defocusz, gAxis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset, twoStage),
+            args=(adjusted_rangez, resolutionz, defocusz, gAxis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset, twoStage),
             daemon=True
         )
         self._AutofocusThead.start()
+        return {"status": "started", "rangez": adjusted_rangez, "centerZ": current_z}
 
     @APIExport(runOnUIThread=True)
     def autoFocusFast(self, sweep_range: float = 150.0, speed: float = None, defocusz: int = 0, axis: str = gAxis,
@@ -180,20 +383,75 @@ class AutofocusController(ImConWidgetController):
             z(t) = z_start + v_eff * (t - t_start), where
             v_eff = (z_end - z_start) / (t_end - t_start).
           - Fit Gaussian to (z, focus) and move to center.
+        
+        Returns:
+            dict with status information
         """
-        if self.isAutofusRunning:
-            return
-        self.isAutofusRunning = True
+        # Thread-safe state check
+        with self._stateLock:
+            if self._autofocusState not in [AutofocusState.IDLE, AutofocusState.FINISHED, AutofocusState.ERROR, AutofocusState.ABORTED]:
+                self.__logger.warning(f"Autofocus already running (state: {self._autofocusState.value})")
+                return {"status": "error", "message": f"Autofocus already running (state: {self._autofocusState.value})"}
+            self._autofocusState = AutofocusState.STARTING
+            self.isAutofusRunning = True
+        
+        # Validate current position before starting
+        current_z, is_valid, error_msg = self._getSafeCurrentZ(axis)
+        if not is_valid:
+            self.__logger.error(f"Cannot start fast autofocus: {error_msg}")
+            self._setAutofocusState(AutofocusState.ERROR)
+            return {"status": "error", "message": error_msg}
+        
+        # Validate sweep range
+        adjusted_range, range_valid, range_warning = self._validateScanRange(current_z, sweep_range * 2)  # *2 because sweep is ±sweep_range
+        if range_warning:
+            self.__logger.warning(range_warning)
+        adjusted_sweep = adjusted_range / 2
+        
         self._AutofocusThead = threading.Thread(
             target=self._doAutofocusFastBackground_timeMapped,
-            args=(sweep_range, speed, defocusz, axis, nCropsize, focusAlgorithm, static_offset),
+            args=(adjusted_sweep, speed, defocusz, axis, nCropsize, focusAlgorithm, static_offset),
             daemon=True
         )
         self._AutofocusThead.start()
+        return {"status": "started", "sweep_range": adjusted_sweep, "centerZ": current_z}
 
     @APIExport(runOnUIThread=True)
     def stopAutofocus(self):
+        """
+        Stop autofocus immediately.
+        
+        This will:
+        1. Set abort flag to stop scanning loop
+        2. Call forceStop on stage to halt motion immediately
+        3. Abort MovementController if active
+        4. Update state machine
+        
+        Returns:
+            dict with status information
+        """
+        self.__logger.info("Stop autofocus requested")
+        
+        # Set abort state
+        self._setAutofocusState(AutofocusState.ABORTED)
         self.isAutofusRunning = False
+        
+        # Abort MovementController (this will call forceStop on stage)
+        if hasattr(self, '_moveController') and self._moveController:
+            self._moveController.abort()
+        
+        # Also directly call forceStop on stage for blocking moves
+        try:
+            if hasattr(self.stages, 'forceStop'):
+                self.stages.forceStop(gAxis)
+                self.__logger.info(f"Force stop called on {gAxis} axis")
+        except Exception as e:
+            self.__logger.error(f"Error calling forceStop: {e}")
+        
+        # Emit signal to notify frontend
+        self._commChannel.sigAutoFocusRunning.emit(False)
+        
+        return {"status": "stopped", "state": self._getAutofocusState().value}
 
     @APIExport(runOnUIThread=True)
     def startLiveMonitoring(self, period: float = 0.5, method: str = "LAPE", nCropsize: int = 2048):
@@ -344,33 +602,47 @@ class AutofocusController(ImConWidgetController):
     # ---------- Step-scan autofocus with Gaussian fit ----------
     def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=7, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
         try:
+            self._setAutofocusState(AutofocusState.SCANNING)
             self._commChannel.sigAutoFocusRunning.emit(True)
-            self.isAutofusRunning = True
+            
             # Stage 1: Coarse scan
             self.__logger.info(f"Starting autofocus - Stage 1: Coarse scan (range=±{rangez}, resolution={resolutionz})")
             best_z_coarse = self._doSingleAutofocusScan(rangez, resolutionz, defocusz, axis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset)
 
-            if best_z_coarse is None or not self.isAutofusRunning:
+            # Check if aborted
+            if self._getAutofocusState() == AutofocusState.ABORTED:
+                self.__logger.info("Autofocus aborted during coarse scan")
                 self._commChannel.sigAutoFocusRunning.emit(False)
-                self.isAutofusRunning = False
+                return None
+
+            if best_z_coarse is None:
+                self._setAutofocusState(AutofocusState.ERROR)
+                self._commChannel.sigAutoFocusRunning.emit(False)
                 return None
 
             # Stage 2: Fine scan if enabled
-            if twoStage:
+            if twoStage and self._getAutofocusState() != AutofocusState.ABORTED:
                 # Fine scan with 10x finer parameters around the coarse best position
                 fine_rangez = rangez / 10.0
                 fine_resolutionz = resolutionz / 10.0
                 self.__logger.info(f"Starting autofocus - Stage 2: Fine scan (range=±{fine_rangez}, resolution={fine_resolutionz}) around z={best_z_coarse}")
 
-                # Move to coarse best position first
-                self.stages.move(value=best_z_coarse, axis=axis, is_absolute=True, is_blocking=True)
+                # Move to coarse best position first (clamped)
+                clamped_coarse = self._clampPosition(best_z_coarse, axis)
+                self.stages.move(value=clamped_coarse, axis=axis, is_absolute=True, is_blocking=True)
                 time.sleep(tSettle * 2)
 
-                # Perform fine scan centered at best_z_coarse
-                best_z_fine = self._doSingleAutofocusScan(fine_rangez, fine_resolutionz, defocusz, axis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset, center_position=best_z_coarse)
+                # Check abort again
+                if self._getAutofocusState() == AutofocusState.ABORTED:
+                    self.__logger.info("Autofocus aborted before fine scan")
+                    self._commChannel.sigAutoFocusRunning.emit(False)
+                    return best_z_coarse
 
-                if best_z_fine is None or not self.isAutofusRunning:
-                    # If fine scan failed, use coarse result
+                # Perform fine scan centered at best_z_coarse
+                best_z_fine = self._doSingleAutofocusScan(fine_rangez, fine_resolutionz, defocusz, axis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset, center_position=clamped_coarse)
+
+                if best_z_fine is None or self._getAutofocusState() == AutofocusState.ABORTED:
+                    # If fine scan failed or aborted, use coarse result
                     final_z = best_z_coarse
                 else:
                     final_z = best_z_fine
@@ -378,20 +650,20 @@ class AutofocusController(ImConWidgetController):
             else:
                 final_z = best_z_coarse
 
+            self._setAutofocusState(AutofocusState.FINISHED)
             self._commChannel.sigAutoFocusRunning.emit(False)
-            self.isAutofusRunning = False
             self.sigUpdateFocusValue.emit({"bestzpos": final_z})
             return final_z
 
         except Exception as e:
             self.__logger.error(f"Autofocus error: {e}")
-            self.isAutofusRunning = False
+            self._setAutofocusState(AutofocusState.ERROR)
             self._commChannel.sigAutoFocusRunning.emit(False)
             return None
 
     def _doSingleAutofocusScan(self, rangez:float, resolutionz:float, defocusz:float, axis:str, tSettle:float, isDebug:bool, nGauss:int, nCropsize:int, focusAlgorithm:str, static_offset:float, center_position:float=None):
         """
-        Perform a single autofocus scan.
+        Perform a single autofocus scan with position validation and clamping.
         
         Args:
             rangez: Z-range to scan (±rangez from center position)
@@ -404,7 +676,7 @@ class AutofocusController(ImConWidgetController):
             nCropsize: Crop size for focus calculation
             focusAlgorithm: Focus measurement method
             static_offset: Static offset to add to final position
-            center_position: Center position for scan (None = current position)
+            center_position: Center position for scan (None = current position, validated)
         
         Returns:
             Best Z position found, or None on error
@@ -412,27 +684,57 @@ class AutofocusController(ImConWidgetController):
         try:
             mProcessor = FrameProcessor(nGauss=nGauss, nCropsize=nCropsize, isDebug=isDebug, focusMethod=focusAlgorithm)
 
-            # Get center position for scan
+            # Get center position for scan with validation
             if center_position is None:
-                center_position = float(self.stages.getPosition()[axis])
+                center_position, is_valid, error_msg = self._getSafeCurrentZ(axis)
+                if not is_valid:
+                    self.__logger.error(f"Cannot perform autofocus scan: {error_msg}")
+                    return None
+            else:
+                # Validate provided center position
+                center_position = self._clampPosition(center_position, axis)
 
-            # Calculate scan positions
+            # Calculate scan positions with clamping
             Nz = int(max(5, np.floor((abs(rangez)) / max(1e-6, abs(resolutionz))) + 1))
             relative_positions = np.linspace(-abs(rangez/2), abs(rangez/2), Nz).astype(float)
             absolute_positions = relative_positions + center_position
+            
+            # Clamp all positions to safe bounds
+            absolute_positions = np.array([self._clampPosition(p, axis) for p in absolute_positions])
+            
+            self.__logger.debug(f"Scan positions: {absolute_positions[0]:.2f} to {absolute_positions[-1]:.2f} ({Nz} steps)")
 
-            # Move to start position
+            # Check abort before starting motion
+            if self._getAutofocusState() == AutofocusState.ABORTED:
+                mProcessor.stop()
+                return None
+
+            # Move to start position (already clamped)
             self.stages.move(value=absolute_positions[0], axis=axis, is_absolute=True, is_blocking=True)
-            time.sleep(tSettle )  # allow some settling time
+            time.sleep(tSettle)  # allow some settling time
 
             # Scan through positions
             for iz in range(Nz):
-                if not self.isAutofusRunning:
-                    break
+                # Check abort flag
+                if self._getAutofocusState() == AutofocusState.ABORTED:
+                    self.__logger.info(f"Autofocus scan aborted at step {iz}/{Nz}")
+                    mProcessor.stop()
+                    # Return to center position on abort
+                    try:
+                        self.stages.move(value=center_position, axis=axis, is_absolute=True, is_blocking=True)
+                    except Exception:
+                        pass
+                    return center_position
+                
                 if iz != 0:
                     self.stages.move(value=absolute_positions[iz], axis=axis, is_absolute=True, is_blocking=True)
                     time.sleep(tSettle)
+                
                 frame = self.grabCameraFrame()
+                if frame is None:
+                    self.__logger.warning(f"Failed to grab frame at step {iz}")
+                    continue
+                    
                 if isDebug:
                     import tifffile as tif
                     # Save raw frames as-is (preserve original datatype)
@@ -446,12 +748,16 @@ class AutofocusController(ImConWidgetController):
             allfocusvals = np.array(mProcessor.getFocusValueList(Nz))
             mProcessor.stop()
 
-            # Move back to center before fitting
-            self.stages.move(value=absolute_positions[0], axis=axis, is_absolute=True, is_blocking=True)
-
-            if not self.isAutofusRunning:
+            # Check abort before fitting
+            if self._getAutofocusState() == AutofocusState.ABORTED:
                 self.stages.move(value=center_position, axis=axis, is_absolute=True, is_blocking=True)
                 return center_position
+
+            # Update state to fitting
+            self._setAutofocusState(AutofocusState.FITTING)
+
+            # Move back to start position before fitting
+            self.stages.move(value=absolute_positions[0], axis=axis, is_absolute=True, is_blocking=True)
 
             # Plot data
             try:
@@ -472,8 +778,17 @@ class AutofocusController(ImConWidgetController):
             except Exception:
                 pass
 
+            # Calculate and clamp best target position
+            best_target = self._clampPosition(float(x0_fit) + static_offset, axis)
+            
+            # Check abort before final move
+            if self._getAutofocusState() == AutofocusState.ABORTED:
+                return center_position
+
+            # Update state to moving to focus
+            self._setAutofocusState(AutofocusState.MOVING_TO_FOCUS)
+            
             # Move to best position
-            best_target = float(x0_fit) + static_offset
             self.stages.move(value=best_target, axis=axis, is_absolute=True, is_blocking=True)
 
             return best_target
@@ -484,13 +799,28 @@ class AutofocusController(ImConWidgetController):
     # ---------- Continuous fast-sweep autofocus with time→Z mapping (no continuous Z readback) ----------
     def _doAutofocusFastBackground_timeMapped(self, sweep_range=150.0, speed=None, defocusz=0, axis=gAxis,
                                                nCropsize=2048, focusAlgorithm="LAPE", static_offset=0.0):
+        self._setAutofocusState(AutofocusState.SCANNING)
         self._commChannel.sigAutoFocusRunning.emit(True)
 
-        # Setup sweep
-        z0 = float(self.stages.getPosition()[axis])  # single read at start
-        z_start = z0 + abs(sweep_range)
-        z_end = z0 - abs(sweep_range)
+        # Get and validate current position
+        z0, is_valid, error_msg = self._getSafeCurrentZ(axis)
+        if not is_valid:
+            self.__logger.error(f"Cannot start fast autofocus: {error_msg}")
+            self._setAutofocusState(AutofocusState.ERROR)
+            self._commChannel.sigAutoFocusRunning.emit(False)
+            return None
+
+        # Calculate and clamp sweep positions
+        z_start = self._clampPosition(z0 + abs(sweep_range), axis)
+        z_end = self._clampPosition(z0 - abs(sweep_range), axis)
         total_dist = float(z_end - z_start)  # negative for downward sweep
+        
+        self.__logger.debug(f"Fast autofocus sweep: {z_start:.2f} to {z_end:.2f} (center: {z0:.2f})")
+
+        # Check abort before starting
+        if self._getAutofocusState() == AutofocusState.ABORTED:
+            self._commChannel.sigAutoFocusRunning.emit(False)
+            return None
 
         # Move to start
         self.stages.move(value=z_start, axis=axis, is_absolute=True, is_blocking=True)
@@ -505,7 +835,7 @@ class AutofocusController(ImConWidgetController):
         fvals = []
         last_fn = None
 
-        while not self._moveController.is_target_reached() and self.isAutofusRunning:
+        while not self._moveController.is_target_reached() and self._getAutofocusState() != AutofocusState.ABORTED:
             frame, fn = self.grabCameraFrame(returnFrameNumber=True)
             if frame is None:
                 time.sleep(0.001)
@@ -534,18 +864,23 @@ class AutofocusController(ImConWidgetController):
             time.sleep(0.0005)  # reduce CPU
 
         # Ensure motion fully completed; capture total time
-        while not self._moveController.is_target_reached() and self.isAutofusRunning:
+        while not self._moveController.is_target_reached() and self._getAutofocusState() != AutofocusState.ABORTED:
             time.sleep(0.001)
         t_end = time.time()
         total_time = max(1e-6, t_end - t_start)
 
-        if not self.isAutofusRunning:
-            # aborted: return to original position
+        # Handle abort
+        if self._getAutofocusState() == AutofocusState.ABORTED:
+            self.__logger.info("Fast autofocus aborted, returning to original position")
+            # Abort the movement controller to stop any ongoing motion
+            self._moveController.abort()
             self.stages.move(value=z0, axis=axis, is_absolute=True, is_blocking=True)
             self._commChannel.sigAutoFocusRunning.emit(False)
-            self.isAutofusRunning = False
             self.sigUpdateFocusValue.emit({"bestzpos": z0})
             return z0
+
+        # Update state to fitting
+        self._setAutofocusState(AutofocusState.FITTING)
 
         # Map times -> Z using effective constant velocity
         v_eff = total_dist / total_time  # units of stage axis per second (likely µm/s)
@@ -579,13 +914,22 @@ class AutofocusController(ImConWidgetController):
         except Exception:
             pass
 
-        # Move to best focus (absolute) with static offset
-        best_target = float(x0_fit)
-        self.stages.move(value=best_target + static_offset, axis=axis, is_absolute=True, is_blocking=True)
+        # Check abort before final move
+        if self._getAutofocusState() == AutofocusState.ABORTED:
+            self.stages.move(value=z0, axis=axis, is_absolute=True, is_blocking=True)
+            self._commChannel.sigAutoFocusRunning.emit(False)
+            return z0
+
+        # Update state to moving to focus
+        self._setAutofocusState(AutofocusState.MOVING_TO_FOCUS)
+
+        # Move to best focus (absolute) with static offset and clamping
+        best_target = self._clampPosition(float(x0_fit) + static_offset, axis)
+        self.stages.move(value=best_target, axis=axis, is_absolute=True, is_blocking=True)
 
         final_z = best_target
+        self._setAutofocusState(AutofocusState.FINISHED)
         self._commChannel.sigAutoFocusRunning.emit(False)
-        self.isAutofusRunning = False
         self.sigUpdateFocusValue.emit({"bestzpos": final_z})
         return final_z
 

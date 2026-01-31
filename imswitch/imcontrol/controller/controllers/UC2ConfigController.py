@@ -1074,6 +1074,160 @@ class UC2ConfigController(ImConWidgetController):
             },
             "description": "CAN ID mapping for UC2 devices"
         }
+    
+    ''' CAN OTA Streaming Methods (USB-based, no WiFi required) '''
+    
+    @APIExport(runOnUIThread=False)
+    def startCANStreamingOTA(self, can_id: int, firmware_url: str = None):
+        """
+        Start CAN-based OTA streaming upload (USB-based, no WiFi required).
+        
+        This method uses the CAN bus streaming protocol to upload firmware directly
+        from the master device via USB->CAN, without requiring WiFi connectivity.
+        
+        Workflow:
+        1. Downloads firmware from URL (or uses local firmware directory)
+        2. Initiates streaming session via CAN
+        3. Uploads firmware in 4KB pages with ACK per page
+        4. Verifies MD5 checksum
+        5. Device reboots automatically
+        
+        :param can_id: CAN ID of the target device (e.g., 11=Motor X, 20=Laser)
+        :param firmware_url: Optional URL to download firmware (uses firmware server if not provided)
+        :return: Status updates via sigOTAStatusUpdate signal
+        """
+        try:
+            # Initialize status
+            self._ota_status[can_id] = {
+                "status": "initializing",
+                "progress": 0,
+                "message": "Starting CAN streaming upload...",
+                "method": "can_streaming"
+            }
+            self.sigOTAStatusUpdate.emit({
+                "canId": can_id,
+                "status": "initializing",
+                "progress": 0,
+                "message": "Starting CAN streaming upload...",
+                "method": "can_streaming"
+            })
+            
+            # Download firmware
+            firmware_path = self._download_firmware_for_device(can_id)
+            if not firmware_path:
+                raise Exception("Failed to download or locate firmware")
+            
+            self._ota_status[can_id]["status"] = "uploading"
+            self._ota_status[can_id]["message"] = "Uploading firmware via CAN streaming..."
+            self.sigOTAStatusUpdate.emit({
+                "canId": can_id,
+                "status": "uploading",
+                "progress": 5,
+                "message": "Uploading firmware via CAN streaming...",
+                "method": "can_streaming"
+            })
+            
+            # Progress callback
+            def progress_callback(page, total_pages, bytes_sent, speed_kbps):
+                progress = int((page / total_pages) * 90) + 5  # 5-95%
+                self._ota_status[can_id]["progress"] = progress
+                self._ota_status[can_id]["message"] = f"Page {page}/{total_pages} - {speed_kbps:.1f} KB/s"
+                self.sigOTAStatusUpdate.emit({
+                    "canId": can_id,
+                    "status": "uploading",
+                    "progress": progress,
+                    "message": f"Page {page}/{total_pages} - {speed_kbps:.1f} KB/s",
+                    "method": "can_streaming",
+                    "page": page,
+                    "totalPages": total_pages,
+                    "speed": speed_kbps
+                })
+            
+            # Status callback
+            def status_callback(message, success):
+                if not success:
+                    self.__logger.warning(f"CAN OTA status: {message}")
+                self.__logger.info(f"CAN OTA: {message}")
+            
+            # Start streaming upload (blocking)
+            success = self._uc2ConfigManager.ESP32.canota.start_can_streaming_ota_blocking(
+                can_id=can_id,
+                firmware_path=str(firmware_path),
+                progress_callback=progress_callback,
+                status_callback=status_callback
+            )
+            
+            if success:
+                self._ota_status[can_id]["status"] = "success"
+                self._ota_status[can_id]["progress"] = 100
+                self._ota_status[can_id]["message"] = "Firmware uploaded successfully - device rebooting"
+                self.sigOTAStatusUpdate.emit({
+                    "canId": can_id,
+                    "status": "success",
+                    "progress": 100,
+                    "message": "Firmware uploaded successfully - device rebooting",
+                    "method": "can_streaming"
+                })
+                return {
+                    "status": "success",
+                    "can_id": can_id,
+                    "message": "CAN streaming OTA completed successfully"
+                }
+            else:
+                raise Exception("CAN streaming upload failed")
+                
+        except Exception as e:
+            self.__logger.error(f"CAN streaming OTA failed for device {can_id}: {e}")
+            self._ota_status[can_id] = {
+                "status": "error",
+                "error": str(e),
+                "message": f"Upload failed: {str(e)}",
+                "method": "can_streaming"
+            }
+            self.sigOTAStatusUpdate.emit({
+                "canId": can_id,
+                "status": "error",
+                "message": f"Upload failed: {str(e)}",
+                "error": str(e),
+                "method": "can_streaming"
+            })
+            return {
+                "status": "error",
+                "can_id": can_id,
+                "message": f"CAN streaming OTA failed: {str(e)}"
+            }
+    
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def startMultipleCANStreamingOTA(self, can_ids: list[int], delay_between: int = 5):
+        """
+        Start CAN streaming OTA for multiple devices sequentially.
+        
+        :param can_ids: List of CAN IDs (e.g., [11, 12, 13, 20, 30])
+        :param delay_between: Delay in seconds between devices (for reboot time)
+        :return: Status message with results for each device
+        """
+        if not isinstance(can_ids, list):
+            return {"status": "error", "message": "can_ids must be a list"}
+        
+        results = []
+        for can_id in can_ids:
+            result = self.startCANStreamingOTA(can_id=can_id)
+            results.append({
+                "can_id": can_id,
+                "result": result
+            })
+            
+            # Wait for device to reboot before starting next one
+            if delay_between > 0 and can_id != can_ids[-1]:  # Don't delay after last device
+                import time
+                self.__logger.info(f"Waiting {delay_between}s for device {can_id} to reboot...")
+                time.sleep(delay_between)
+        
+        return {
+            "status": "success",
+            "message": f"CAN streaming OTA completed for {len(can_ids)} devices",
+            "results": results
+        }
 
     @APIExport(runOnUIThread=False)
     def clearOTAFirmwareCache(self):

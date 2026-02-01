@@ -147,6 +147,8 @@ class AutofocusController(ImConWidgetController):
         self._liveMonitoringPeriod = 0.5  # default period in seconds
         self._focusMethod = "LAPE"  # default focus measurement method
         self._liveMonitoringCropsize = 2048  # default crop size for live monitoring
+        self._liveMonitoringNGauss = 0  # Gaussian blur sigma (0 = no blur, set to match autofocus if needed)
+        self._liveMonitoringBinning = 1  # Binning factor (1 = no binning, set to match autofocus if needed)
         
         # Safety configuration - default software limits
         self._minZ = -np.inf  # Will be updated from stage manager if available
@@ -495,7 +497,7 @@ class AutofocusController(ImConWidgetController):
         return {"status": "stopped"}
 
     @APIExport(runOnUIThread=True)
-    def setLiveMonitoringParameters(self, period: float = None, method: str = None, nCropsize: int = None):
+    def setLiveMonitoringParameters(self, period: float = None, method: str = None, nCropsize: int = None, nGauss: int = None, binning: int = None):
         """
         Update live monitoring parameters.
         
@@ -503,6 +505,8 @@ class AutofocusController(ImConWidgetController):
             period: Update period in seconds (optional)
             method: Focus measurement method ("LAPE", "GLVA", or "JPEG") (optional)
             nCropsize: Crop size for focus calculation (optional)
+            nGauss: Gaussian blur sigma (0 = no blur, 7 = match autofocus default) (optional)
+            binning: Binning factor (1 = no binning, 3 = match autofocus default) (optional)
         """
         if period is not None:
             self._liveMonitoringPeriod = max(0.1, float(period))
@@ -510,12 +514,18 @@ class AutofocusController(ImConWidgetController):
             self._focusMethod = method
         if nCropsize is not None:
             self._liveMonitoringCropsize = int(nCropsize)
+        if nGauss is not None:
+            self._liveMonitoringNGauss = max(0, int(nGauss))
+        if binning is not None:
+            self._liveMonitoringBinning = max(1, int(binning))
 
         return {
             "status": "updated",
             "period": self._liveMonitoringPeriod,
             "method": self._focusMethod,
             "cropsize": self._liveMonitoringCropsize,
+            "nGauss": self._liveMonitoringNGauss,
+            "binning": self._liveMonitoringBinning,
             "is_running": self.isLiveMonitoring
         }
 
@@ -526,7 +536,9 @@ class AutofocusController(ImConWidgetController):
             "is_running": self.isLiveMonitoring,
             "period": self._liveMonitoringPeriod,
             "method": self._focusMethod,
-            "cropsize": getattr(self, '_liveMonitoringCropsize', 2048)
+            "cropsize": getattr(self, '_liveMonitoringCropsize', 2048),
+            "nGauss": getattr(self, '_liveMonitoringNGauss', 0),
+            "binning": getattr(self, '_liveMonitoringBinning', 1)
         }
 
     def _doLiveMonitoringBackground(self):
@@ -543,11 +555,37 @@ class AutofocusController(ImConWidgetController):
                     time.sleep(0.01)
                     continue
 
-                # Process frame and calculate focus value using the configured cropsize
-                img = FrameProcessor.extract(frame, min(frame.shape[0], frame.shape[1], self._liveMonitoringCropsize))
+                # Process frame using the same pipeline as autofocus scan
+                # to ensure consistent focus values
+                img = frame.copy()
+                
+                # Step 1: Normalize to float [0, 1] (same as process_frame in autofocus)
+                if img.dtype == np.uint8:
+                    img = img.astype(np.float32) / 255.0
+                elif img.dtype == np.uint16:
+                    img = img.astype(np.float32) / 65535.0
+                elif img.dtype not in [np.float32, np.float64]:
+                    img = img.astype(np.float32)
+                
+                # Step 2: Apply binning if configured (to match autofocus which uses binning=3)
+                binning = getattr(self, '_liveMonitoringBinning', 1)
+                if binning > 1:
+                    import skimage.transform
+                    img = skimage.transform.resize(img, (img.shape[0] // binning, img.shape[1] // binning), anti_aliasing=True)
+                
+                # Step 3: Crop to center region
+                img = FrameProcessor.extract(img, min(img.shape[0], img.shape[1], self._liveMonitoringCropsize))
+                
+                # Step 4: Convert to grayscale if needed
                 if img.ndim == 3:
                     img = np.mean(img, axis=-1)
-
+                
+                # Step 5: Apply Gaussian blur if configured (to match autofocus which uses nGauss=7)
+                nGauss = getattr(self, '_liveMonitoringNGauss', 0)
+                if nGauss > 0:
+                    img = gaussian(img, sigma=nGauss)
+                
+                # Calculate focus value using static method
                 focus_value, result_image = FrameProcessor.calculate_focus_measure_static(img, method=self._focusMethod)
 
                 # Emit signal with focus value and timestamp

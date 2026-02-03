@@ -49,7 +49,7 @@ import {
 function ConnectionSettings() {
   const dispatch = useDispatch();
   const connectionSettings = useSelector(
-    (state) => state.connectionSettingsState
+    (state) => state.connectionSettingsState,
   );
 
   // Get connection status from Redux state
@@ -77,23 +77,23 @@ function ConnectionSettings() {
 
   const smartDefaults = getSmartDefaults();
 
-  // Local state, initialized from Redux with smart fallbacks
-  const [hostProtocol, setHostProtocol] = useState(
-    connectionSettings.ip?.startsWith("http://")
-      ? "http://"
-      : connectionSettings.ip?.startsWith("https://")
-      ? "https://"
-      : smartDefaults.protocol
-  );
-  const [hostIP, setHostIP] = useState(
-    connectionSettings.ip?.replace(/^https?:\/\//, "") || smartDefaults.hostname
-  );
-  const [websocketPort, setWebsocketPortState] = useState(
-    connectionSettings.websocketPort || smartDefaults.port
-  );
-  const [apiPort, setApiPortState] = useState(
-    connectionSettings.apiPort || smartDefaults.port
-  );
+  // Local state - Priority: Smart defaults from current URL (no-config approach)
+  // Users can override in Advanced Settings for development/remote access
+  const [hostProtocol, setHostProtocol] = useState(() => {
+    return smartDefaults.protocol;
+  });
+
+  const [hostIP, setHostIP] = useState(() => {
+    return smartDefaults.hostname;
+  });
+
+  const [websocketPort, setWebsocketPortState] = useState(() => {
+    return smartDefaults.port;
+  });
+
+  const [apiPort, setApiPortState] = useState(() => {
+    return smartDefaults.port;
+  });
 
   // Connection test state
   const [isTestingConnection, setIsTestingConnection] = useState(false);
@@ -112,7 +112,7 @@ function ConnectionSettings() {
     window.dispatchEvent(
       new CustomEvent("imswitch:pausePeriodicTests", {
         detail: { pause: true },
-      })
+      }),
     );
 
     // Only auto-test once on mount if we have saved connection settings from Redux
@@ -128,7 +128,7 @@ function ConnectionSettings() {
               port: connectionSettings.apiPort,
               websocketPort: connectionSettings.websocketPort,
             },
-          })
+          }),
         );
       }, 1500); // Delay to allow component to settle
 
@@ -140,7 +140,7 @@ function ConnectionSettings() {
       window.dispatchEvent(
         new CustomEvent("imswitch:pausePeriodicTests", {
           detail: { pause: false },
-        })
+        }),
       );
     };
   }, [
@@ -157,7 +157,7 @@ function ConnectionSettings() {
         setNotification({
           message: "Please configure IP and API port first",
           type: "warning",
-        })
+        }),
       );
       return;
     }
@@ -175,7 +175,7 @@ function ConnectionSettings() {
             port: apiPort,
             websocketPort: websocketPort,
           },
-        })
+        }),
       );
 
       // Give it a moment to complete both tests
@@ -185,7 +185,7 @@ function ConnectionSettings() {
           setNotification({
             message: "Connection tests completed - check status indicators",
             type: "info",
-          })
+          }),
         );
       }, 5000);
     } catch (e) {
@@ -193,7 +193,7 @@ function ConnectionSettings() {
         setNotification({
           message: "Error testing connection!",
           type: "error",
-        })
+        }),
       );
       setIsTestingConnection(false);
     }
@@ -214,14 +214,14 @@ function ConnectionSettings() {
         setNotification({
           message: "Settings saved successfully!",
           type: "success",
-        })
+        }),
       );
     } catch (e) {
       dispatch(
         setNotification({
           message: "Error saving settings!",
           type: "error",
-        })
+        }),
       );
     } finally {
       setIsSaving(false);
@@ -292,8 +292,8 @@ function ConnectionSettings() {
           (websocketTestStatus === "success" || isWebSocketConnected)
             ? "success"
             : hasConnectionSettings
-            ? "error"
-            : "warning"
+              ? "error"
+              : "warning"
         }
         sx={{ mb: 3 }}
       >
@@ -366,7 +366,7 @@ function ConnectionSettings() {
             {websocketPort && (
               <Chip
                 label={`WebSocket ${getWebSocketStatusLabel(
-                  websocketTestStatus
+                  websocketTestStatus,
                 )}`}
                 color={getWebSocketStatusColor(websocketTestStatus)}
                 size="small"
@@ -378,50 +378,13 @@ function ConnectionSettings() {
             )}
           </Box>
 
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Configure the IP address and ports for connecting to the ImSwitch
-            backend server.
-          </Typography>
-
-          {/* Basic Configuration Form */}
-          <Box
-            component="form"
-            sx={{
-              display: "grid",
-              gridTemplateColumns: "1fr 2fr",
-              gap: 3,
-              alignItems: "start",
-              mb: 3,
-            }}
-            autoComplete="off"
-          >
-            {/* Protocol Selection */}
-            <TextField
-              select
-              id="protocol"
-              label="Protocol"
-              value={hostProtocol}
-              onChange={(e) => setHostProtocol(e.target.value)}
-              fullWidth
-            >
-              <MenuItem value="https://">https://</MenuItem>
-              <MenuItem value="http://">http://</MenuItem>
-            </TextField>
-
-            {/* IP Address */}
-            <TextField
-              id="ip-address"
-              label="IP Address / Hostname"
-              type="text"
-              value={hostIP}
-              onChange={(e) =>
-                setHostIP(e.target.value.trim().replace(/^https?:\/\//, ""))
-              }
-              fullWidth
-              placeholder="e.g., 192.168.1.100 or localhost"
-              helperText="Usually same as frontend URL"
-            />
-          </Box>
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <Typography variant="body2">
+              <strong>No configuration needed!</strong> Connection settings are
+              automatically detected from the current URL. Only use Advanced
+              Settings below for development or remote access scenarios.
+            </Typography>
+          </Alert>
 
           {/* Advanced Settings Accordion */}
           <Accordion sx={{ mb: 3 }}>
@@ -436,9 +399,10 @@ function ConnectionSettings() {
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Both services typically run on port 80. Only change these if
-                you have a custom setup.
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                <strong>⚠️ Developer Settings:</strong> Only modify these if you
+                need to connect to a remote backend or have a custom setup.
+                Default values are auto-detected from the current URL.
               </Typography>
 
               <Box
@@ -449,6 +413,33 @@ function ConnectionSettings() {
                   alignItems: "start",
                 }}
               >
+                {/* Protocol Selection */}
+                <TextField
+                  select
+                  id="protocol"
+                  label="Protocol"
+                  value={hostProtocol}
+                  onChange={(e) => setHostProtocol(e.target.value)}
+                  fullWidth
+                >
+                  <MenuItem value="https://">https://</MenuItem>
+                  <MenuItem value="http://">http://</MenuItem>
+                </TextField>
+
+                {/* IP Address */}
+                <TextField
+                  id="ip-address"
+                  label="IP Address / Hostname"
+                  type="text"
+                  value={hostIP}
+                  onChange={(e) =>
+                    setHostIP(e.target.value.trim().replace(/^https?:\/\//, ""))
+                  }
+                  fullWidth
+                  placeholder="e.g., 192.168.1.100 or localhost"
+                  helperText="Override auto-detected hostname"
+                />
+
                 {/* WebSocket Port */}
                 <TextField
                   id="port-websocket"
@@ -458,6 +449,7 @@ function ConnectionSettings() {
                   onChange={(e) => setWebsocketPortState(e.target.value.trim())}
                   fullWidth
                   placeholder="e.g., 80"
+                  helperText="Override auto-detected port"
                 />
 
                 {/* API Port */}
@@ -469,6 +461,7 @@ function ConnectionSettings() {
                   onChange={(e) => setApiPortState(e.target.value.trim())}
                   fullWidth
                   placeholder="e.g., 80"
+                  helperText="Override auto-detected port"
                 />
               </Box>
             </AccordionDetails>

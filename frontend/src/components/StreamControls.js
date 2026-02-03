@@ -46,7 +46,7 @@ export default function StreamControls({
 
   // Redux state
   const showHistogram = useSelector(
-    (state) => state.liveStreamState.showHistogram
+    (state) => state.liveStreamState.showHistogram,
   );
 
   // Internal state for save format and file name
@@ -98,7 +98,7 @@ export default function StreamControls({
       // Only update Redux if state differs from backend
       if (active !== liveViewState.isStreamRunning) {
         console.log(
-          `[StreamControls] Backend status mismatch detected. Backend: ${active}, Frontend: ${liveViewState.isStreamRunning}`
+          `[StreamControls] Backend status mismatch detected. Backend: ${active}, Frontend: ${liveViewState.isStreamRunning}`,
         );
         dispatch(liveViewSlice.setIsStreamRunning(active));
       }
@@ -321,6 +321,7 @@ export default function StreamControls({
             value={saveFormat}
             label="Format"
             onChange={(e) => setSaveFormat(e.target.value)}
+            disabled={!isLiveViewActive}
           >
             {saveFormatOptions.map((opt) => (
               <MenuItem key={opt.value} value={opt.value}>
@@ -336,6 +337,7 @@ export default function StreamControls({
           value={snapFileName}
           onChange={(e) => setSnapFileName(e.target.value)}
           sx={{ minWidth: 200, flex: 1 }}
+          disabled={!isLiveViewActive}
         />
 
         {/* Action buttons */}
@@ -345,6 +347,7 @@ export default function StreamControls({
           size="small"
           onClick={() => onSnap(snapFileName, saveFormat)}
           startIcon={<CameraAlt />}
+          disabled={!isLiveViewActive}
         >
           Snap
         </Button>
@@ -365,6 +368,7 @@ export default function StreamControls({
             size="small"
             onClick={() => onStartRecord(saveFormat)}
             startIcon={<FiberManualRecord />}
+            disabled={!isLiveViewActive}
           >
             Record
           </Button>

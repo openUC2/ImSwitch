@@ -105,7 +105,7 @@ export const APP_REGISTRY = {
   },
 
   appManager: {
-    id: "appManager",
+    id: "AppManager",
     name: "App Manager",
     description:
       "Customize your workspace by enabling or disabling apps in the navigation drawer. Tailor ImSwitch to your specific workflow needs.",

@@ -77,27 +77,41 @@ function ConnectionSettings() {
 
   const smartDefaults = getSmartDefaults();
 
-  // Local state - Priority: Smart defaults from current URL (no-config approach)
+  // Local state - Priority: Redux values (if set), otherwise Smart defaults from current URL
   // Users can override in Advanced Settings for development/remote access
   const [hostProtocol, setHostProtocol] = useState(() => {
+    // Extract protocol from Redux IP if it exists, otherwise use smart default
+    if (connectionSettings.ip) {
+      return connectionSettings.ip.startsWith("https://")
+        ? "https://"
+        : "http://";
+    }
     return smartDefaults.protocol;
   });
 
   const [hostIP, setHostIP] = useState(() => {
+    // Extract hostname from Redux IP if it exists, otherwise use smart default
+    if (connectionSettings.ip) {
+      return connectionSettings.ip.replace(/^https?:\/\//, "");
+    }
     return smartDefaults.hostname;
   });
 
   const [websocketPort, setWebsocketPortState] = useState(() => {
-    return smartDefaults.port;
+    return connectionSettings.websocketPort || smartDefaults.port;
   });
 
   const [apiPort, setApiPortState] = useState(() => {
-    return smartDefaults.port;
+    return connectionSettings.apiPort || smartDefaults.port;
   });
 
   // Connection test state
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Advanced settings accordion state
+  const [advancedSettingsExpanded, setAdvancedSettingsExpanded] =
+    useState(false);
 
   // Check if connection settings are configured
   const hasConnectionSettings = hostIP && apiPort;
@@ -387,7 +401,13 @@ function ConnectionSettings() {
           </Alert>
 
           {/* Advanced Settings Accordion */}
-          <Accordion sx={{ mb: 3 }}>
+          <Accordion
+            sx={{ mb: 3 }}
+            expanded={advancedSettingsExpanded}
+            onChange={(_, isExpanded) =>
+              setAdvancedSettingsExpanded(isExpanded)
+            }
+          >
             <AccordionSummary
               expandIcon={<ExpandMore />}
               aria-controls="advanced-settings-content"
@@ -538,76 +558,81 @@ function ConnectionSettings() {
           )}
         </CardContent>
 
-        <CardActions sx={{ p: 2, pt: 0 }}>
-          {/* Save Settings Button */}
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleSave}
-            disabled={!isDirty || isSaving || isTestingConnection}
-            startIcon={isSaving ? <CircularProgress size={16} /> : <Save />}
-          >
-            {isSaving ? "Saving..." : "Save Settings"}
-          </Button>
+        {/* Only show action buttons when Advanced Settings are expanded */}
+        {advancedSettingsExpanded && (
+          <CardActions sx={{ p: 2, pt: 0 }}>
+            {/* Save Settings Button */}
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={handleSave}
+              disabled={!isDirty || isSaving || isTestingConnection}
+              startIcon={isSaving ? <CircularProgress size={16} /> : <Save />}
+            >
+              {isSaving ? "Saving..." : "Save Settings"}
+            </Button>
 
-          {/* Test Connection Button */}
-          <Button
-            variant="outlined"
-            color="secondary"
-            onClick={handleTestConnection}
-            disabled={!hasConnectionSettings || isTestingConnection || isSaving}
-            startIcon={
-              isTestingConnection ? (
-                <CircularProgress size={16} />
-              ) : (
-                <Settings />
-              )
-            }
-          >
-            {isTestingConnection ? "Testing..." : "Test Connection"}
-          </Button>
+            {/* Test Connection Button */}
+            <Button
+              variant="outlined"
+              color="secondary"
+              onClick={handleTestConnection}
+              disabled={
+                !hasConnectionSettings || isTestingConnection || isSaving
+              }
+              startIcon={
+                isTestingConnection ? (
+                  <CircularProgress size={16} />
+                ) : (
+                  <Settings />
+                )
+              }
+            >
+              {isTestingConnection ? "Testing..." : "Test Connection"}
+            </Button>
 
-          {/* Reset to Smart Defaults Button */}
-          <Button
-            variant="text"
-            color="secondary"
-            onClick={() => {
-              const defaults = getSmartDefaults();
-              setHostProtocol(defaults.protocol);
-              setHostIP(defaults.hostname);
-              setWebsocketPortState(defaults.port);
-              setApiPortState(defaults.port);
-            }}
-            disabled={isTestingConnection || isSaving}
-          >
-            Reset to Defaults
-          </Button>
+            {/* Reset to Smart Defaults Button */}
+            <Button
+              variant="text"
+              color="secondary"
+              onClick={() => {
+                const defaults = getSmartDefaults();
+                setHostProtocol(defaults.protocol);
+                setHostIP(defaults.hostname);
+                setWebsocketPortState(defaults.port);
+                setApiPortState(defaults.port);
+              }}
+              disabled={isTestingConnection || isSaving}
+            >
+              Reset to Defaults
+            </Button>
 
-          {/* Status Text */}
-          {(isTestingConnection || isSaving) && (
-            <Typography variant="body2" color="text.secondary" sx={{ ml: 2 }}>
-              {isTestingConnection
-                ? "Testing backend and WebSocket connection..."
-                : "Saving settings..."}
-            </Typography>
-          )}
+            {/* Status Text */}
+            {(isTestingConnection || isSaving) && (
+              <Typography variant="body2" color="text.secondary" sx={{ ml: 2 }}>
+                {isTestingConnection
+                  ? "Testing backend and WebSocket connection..."
+                  : "Saving settings..."}
+              </Typography>
+            )}
 
-          {/* Auto-test notification */}
-          {!hasAutoTested && hasConnectionSettings && (
-            <Typography variant="caption" color="info.main" sx={{ ml: 2 }}>
-              Auto-testing connection...
-            </Typography>
-          )}
+            {/* Auto-test notification */}
+            {!hasAutoTested && hasConnectionSettings && (
+              <Typography variant="caption" color="info.main" sx={{ ml: 2 }}>
+                Auto-testing connection...
+              </Typography>
+            )}
 
-          {/* Periodic tests paused indicator */}
-          <Chip
-            label="Periodic Tests Paused"
-            size="small"
-            variant="outlined"
-            color="info"
-            sx={{ ml: "auto" }}
-          />
-        </CardActions>
+            {/* Periodic tests paused indicator */}
+            <Chip
+              label="Periodic Tests Paused"
+              size="small"
+              variant="outlined"
+              color="info"
+              sx={{ ml: "auto" }}
+            />
+          </CardActions>
+        )}
       </Card>
 
       {/* Connection Help Card */}

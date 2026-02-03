@@ -84,7 +84,7 @@ export const APP_REGISTRY = {
   },
 
   vizarrViewer: {
-    id: "VizarrViewer",
+    id: "vizarrViewer",
     name: "OME-Zarr Viewer",
     description:
       "Offline OME-Zarr viewer for multidimensional microscopy data. View and navigate through large datasets locally without internet connection.",
@@ -105,7 +105,7 @@ export const APP_REGISTRY = {
   },
 
   appManager: {
-    id: "AppManager",
+    id: "appManager",
     name: "App Manager",
     description:
       "Customize your workspace by enabling or disabling apps in the navigation drawer. Tailor ImSwitch to your specific workflow needs.",

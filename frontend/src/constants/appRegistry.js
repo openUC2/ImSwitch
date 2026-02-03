@@ -139,6 +139,20 @@ export const APP_REGISTRY = {
     pluginId: "WellPlate",
   },
 
+  // GalvoScannerController
+  galvoScanner: {
+    id: "galvoScanner",
+    name: "Galvo Scanner",
+    description:
+      "High-speed laser scanning control using galvo mirrors. Configure scan patterns and parameters for advanced imaging techniques.",
+    category: APP_CATEGORIES.APPS,
+    icon: ViewModuleIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["galvo", "scanner", "laser", "scanning", "mirrors", "imaging"],
+    pluginId: "GalvoScannerController",
+  },
+
   stormLocal: {
     id: "stormLocal",
     name: "STORM Local",

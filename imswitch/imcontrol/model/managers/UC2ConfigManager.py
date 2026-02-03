@@ -21,6 +21,7 @@ class UC2ConfigManager(SignalInterface):
         self._digitalIn = self.ESP32.digitalin
         self._digitalOut = self.ESP32.digitalout
 
+    '''
     def saveState(self, state_general=None, state_pos=None, state_aber=None):
         if state_general is not None:
             self.state_general = state_general
@@ -28,16 +29,9 @@ class UC2ConfigManager(SignalInterface):
             self.state_pos = state_pos
         if state_aber is not None:
             self.state_aber = state_aber
-
-    def setGeneral(self, general_info):
-        pass
-
     def loadDefaultConfig(self):
         return self.ESP32.config.loadDefaultConfig()
-
-    def update(self, maskChange=False, tiltChange=False, aberChange=False):
-        pass
-
+    '''
     def closeSerial(self):
         return self.ESP32.closeSerial()
 

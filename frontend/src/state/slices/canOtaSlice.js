@@ -1,11 +1,14 @@
 import { createSlice } from "@reduxjs/toolkit";
 
 const initialState = {
-  // Wizard step navigation (0: WiFi setup, 1: Server config, 2: Device scan, 3: Device selection, 4: Update progress, 5: Completion)
+  // Wizard step navigation (0: Method selection, 1: WiFi/Config, 2: Server config, 3: Device scan, 4: Device selection, 5: Update progress, 6: Completion)
   currentStep: 0,
   isWizardOpen: false,
 
-  // WiFi credentials for OTA
+  // OTA method selection: "wifi" (ArduinoOTA over WiFi) or "can_streaming" (USB->CAN direct upload)
+  otaMethod: "wifi",
+
+  // WiFi credentials for OTA (only used for "wifi" method)
   wifiSsid: "",
   wifiPassword: "",
   defaultWifiSsid: "",
@@ -29,7 +32,7 @@ const initialState = {
   
   // OTA update progress
   isUpdating: false,
-  updateProgress: {}, // { canId: { status, message, progress, timestamp } }
+  updateProgress: {}, // { canId: { status, message, progress, timestamp, method } }
   activeUpdateCount: 0,
   completedUpdateCount: 0,
   failedUpdateCount: 0,
@@ -65,6 +68,7 @@ const canOtaSlice = createSlice({
     },
     resetWizard: (state) => {
       state.currentStep = 0;
+      state.otaMethod = "wifi";
       state.selectedDeviceIds = [];
       state.updateProgress = {};
       state.updateResults = [];
@@ -74,6 +78,11 @@ const canOtaSlice = createSlice({
       state.error = null;
       state.successMessage = null;
       state.scanError = null;
+    },
+
+    // OTA method selection
+    setOtaMethod: (state, action) => {
+      state.otaMethod = action.payload; // "wifi" or "can_streaming"
     },
 
     // WiFi credentials
@@ -214,6 +223,7 @@ export const {
   nextStep,
   previousStep,
   resetWizard,
+  setOtaMethod,
   setWifiSsid,
   setWifiPassword,
   setDefaultWifiCredentials,

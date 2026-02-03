@@ -291,6 +291,7 @@ class ObjectiveController(LiveUpdatedController):
         """
         Update pixel size in detector based on current objective.
         Internal method called after objective changes.
+        Also updates SharedAttributes for metadata tracking.
         """
         if self._currentObjective is None or self._currentObjective not in [0, 1]:
             return
@@ -304,6 +305,9 @@ class ObjectiveController(LiveUpdatedController):
         if pixelsize is not None:
             self.detector.setPixelSizeUm(pixelsize)
             self._logger.debug(f"Updated detector pixel size to {pixelsize} µm/px")
+
+        # Update SharedAttributes for metadata tracking
+        self._updateSharedAttrs()
 
     def _onConfigParametersChanged(self, slot: int, params: dict):
         """
@@ -601,6 +605,38 @@ class ObjectiveController(LiveUpdatedController):
                 self._logger.debug(f"Could not get motor position: {e}")
 
         return status
+
+    # === SharedAttributes for metadata tracking ===
+    
+    def setSharedAttr(self, attr, value):
+        """Set a shared attribute for metadata tracking."""
+        self._commChannel.sharedAttrs[(_attrCategory, attr)] = value
+
+    def _updateSharedAttrs(self):
+        """Update all shared attributes with current objective state."""
+        if self._currentObjective is None:
+            return
+        
+        # Update objective metadata for the metadata hub
+        self.setSharedAttr(_nameAttr, self._getCurrentObjectiveName())
+        self.setSharedAttr(_magnificationAttr, self._getCurrentMagnification())
+        self.setSharedAttr(_naAttr, self._getCurrentNA())
+        self.setSharedAttr(_pixelSizeAttr, self._getCurrentPixelSize())
+        self.setSharedAttr(_slotAttr, self._currentObjective)
+        
+        fov = self._getCurrentFOV()
+        if fov:
+            self.setSharedAttr(_fovUmAttr, fov)
+
+
+# Metadata key constants for SharedAttributes
+_attrCategory = 'Objective'
+_nameAttr = 'Name'
+_magnificationAttr = 'Magnification'
+_naAttr = 'NA'
+_pixelSizeAttr = 'PixelSizeUm'
+_slotAttr = 'TurretIndex'
+_fovUmAttr = 'FOVUm'
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

@@ -1,6 +1,32 @@
 import json
+import time
+import numpy as np
 
 from imswitch.imcommon.framework import Signal, SignalInterface
+
+# Lazy import to avoid circular import issues
+# The import chain imcommon.model -> SharedAttributes -> imcontrol.model.metadata
+# -> imcontrol.model.managers -> initLogger -> imcommon.model creates a cycle
+HAS_METADATA_HUB = False
+SharedAttrValue = None
+
+def _get_shared_attr_value_class():
+    """Lazy import of SharedAttrValue to avoid circular imports."""
+    global HAS_METADATA_HUB, SharedAttrValue
+    if SharedAttrValue is None:
+        try:
+            from imswitch.imcontrol.model.metadata.schema import SharedAttrValue as _SharedAttrValue
+            SharedAttrValue = _SharedAttrValue
+            HAS_METADATA_HUB = True
+        except ImportError:
+            HAS_METADATA_HUB = False
+    return SharedAttrValue
+
+
+def _is_shared_attr_value(value):
+    """Check if value is a SharedAttrValue instance (with lazy import)."""
+    cls = _get_shared_attr_value_class()
+    return cls is not None and isinstance(value, cls)
 
 
 class SharedAttributes(SignalInterface):
@@ -10,17 +36,38 @@ class SharedAttributes(SignalInterface):
         super().__init__()
         self._data = {}
 
-    def getHDF5Attributes(self):
-        """ Returns a dictionary of HDF5 attributes representing this object.
+    def getSharedAttributes(self):
+        """ 
+        Returns a dictionary of HDF5 attributes representing this object.
+        
+        If values are SharedAttrValue objects, extracts the actual value.
+        Also includes metadata as separate keys if available.
         """
         attrs = {}
         for key, value in self._data.items():
-            attrs[':'.join(key)] = value
+            key_str = ':'.join(key)
+            
+            # Check if value is a SharedAttrValue
+            if _is_shared_attr_value(value):
+                attrs[key_str] = value.value
+                # Add metadata as separate keys
+                if value.units:
+                    attrs[f"{key_str}:units"] = value.units
+                if value.timestamp:
+                    attrs[f"{key_str}:timestamp"] = value.timestamp
+                if value.source:
+                    attrs[f"{key_str}:source"] = value.source
+            else:
+                attrs[key_str] = value
 
         return attrs
 
     def getJSON(self):
-        """ Returns a JSON representation of this instance. """
+        """ 
+        Returns a JSON representation of this instance.
+        
+        If values are SharedAttrValue objects, includes full metadata.
+        """
         attrs = {}
         for key, value in self._data.items():
             parent = attrs
@@ -29,9 +76,31 @@ class SharedAttributes(SignalInterface):
                     parent[key[i]] = {}
                 parent = parent[key[i]]
 
-            parent[key[-1]] = value
+            # Check if value is a SharedAttrValue
+            if _is_shared_attr_value(value):
+                parent[key[-1]] = {
+                    'value': value.value,
+                    'timestamp': value.timestamp,
+                    'units': value.units,
+                    'dtype': value.dtype,
+                    'source': value.source,
+                    'valid': value.valid,
+                }
+            else:
+                parent[key[-1]] = value
 
-        return json.dumps(attrs)
+        # Custom serializer for numpy types and other special objects
+        def json_serializer(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, (np.integer, np.floating)):
+                return obj.item()
+            elif hasattr(obj, '__dict__'):
+                return str(obj)
+            else:
+                return str(obj)
+
+        return json.dumps(attrs, default=json_serializer)
 
     def update(self, data):
         """ Updates this object with the data in the given dictionary or
@@ -44,12 +113,31 @@ class SharedAttributes(SignalInterface):
 
     def __getitem__(self, key):
         self._validateKey(key)
-        return self._data[key]
+        value = self._data[key]
+        # For backwards compatibility, return raw value if it's a SharedAttrValue
+        if _is_shared_attr_value(value):
+            return value.value
+        return value
+    
+    def get_typed(self, key):
+        """
+        Get the full typed value (SharedAttrValue) if available.
+        
+        Returns:
+            SharedAttrValue if available, otherwise raw value
+        """
+        self._validateKey(key)
+        return self._data.get(key)
 
     def __setitem__(self, key, value):
         self._validateKey(key)
+        # Store the value as-is (can be raw value or SharedAttrValue)
         self._data[key] = value
-        self.sigAttributeSet.emit(key, value)
+        # For signal emission, unwrap SharedAttrValue to maintain backwards compatibility
+        if _is_shared_attr_value(value):
+            self.sigAttributeSet.emit(key, value.value)
+        else:
+            self.sigAttributeSet.emit(key, value)
 
     def __iter__(self):
         yield from self._data.items()

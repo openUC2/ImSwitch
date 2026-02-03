@@ -144,7 +144,7 @@ class VirtualStageManager(PositionerManager):
         #self._commChannel.sigUpdateMotorPosition.emit()
 
     def start_stage_scanning(self, xstart=0, xstep=1, nx=100,
-                             ystart=0, ystep=1, ny=100, tsettle=0.1, tExposure=50, illumination=None, led=None):
+                             ystart=0, ystep=1, zstart=0, zstep=1, nz=100, ny=100, tsettle=0.1, tExposure=50, illumination=None, led=None):
         """
         Start a stage scanning operation with the given parameters.
         Virtual implementation that simulates the scanning process.
@@ -193,6 +193,7 @@ class VirtualStageManager(PositionerManager):
         # Move to starting position
         self.move(value=xstart, axis="X", is_absolute=True)
         self.move(value=ystart, axis="Y", is_absolute=True)
+        self.move(value=zstart, axis="Z", is_absolute=True)
 
         self.__logger.info("Virtual stage scanning started successfully")
         return {"success": True, "message": "Virtual stage scanning started", "params": scan_params}

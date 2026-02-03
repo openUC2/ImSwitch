@@ -1581,7 +1581,7 @@ class STORMReconController(LiveUpdatedController):
             os.makedirs(os.path.dirname(saveDirectory), exist_ok=True)
 
             # Initialize simplified OME-Zarr store using MinimalZarrDataSource
-            from imswitch.imcontrol.controller.controllers.experiment_controller.zarr_data_source import MinimalZarrDataSource
+            from imswitch.imcontrol.model.io import MinimalZarrDataSource
             self._ome_zarr_store = MinimalZarrDataSource(saveDirectory, mode="w")
 
             # Get frame shape for configuration

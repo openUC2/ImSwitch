@@ -14,9 +14,8 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from enum import Enum
 
-# import OME-Zarr writer
-from imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
-from imswitch.imcontrol.controller.controllers.experiment_controller.SingleTiffWriter import SingleTiffWriter
+# Import OME writers from io module
+from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStorePaths, SingleTiffWriter
 from dataclasses import dataclass
 
 
@@ -563,8 +562,7 @@ class LightsheetController(ImConWidgetController):
             self.mZarrPath = zarrPath
             self._scanStatus.zarrPath = zarrPath
 
-            from imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
-            from imswitch.imcontrol.controller.controllers.experiment_controller.experiment_mode_base import OMEFileStorePaths
+            # Import from io module (already imported at top)
             
             # Create file paths structure
             base_name = params.experimentName
@@ -985,8 +983,7 @@ class LightsheetController(ImConWidgetController):
 
             # Initialize OME-Zarr writer if needed (direct frame-by-frame writing like step-acquire)
             if params.storageFormat in (StorageFormat.OME_ZARR, StorageFormat.BOTH):
-                from imswitch.imcontrol.controller.controllers.experiment_controller.ome_writer import OMEWriter, OMEWriterConfig
-                from imswitch.imcontrol.controller.controllers.experiment_controller.experiment_mode_base import OMEFileStorePaths
+                # Import from io module (already imported at top)
                 
                 # Create file paths structure - base_dir without .zarr extension
                 base_name = params.experimentName

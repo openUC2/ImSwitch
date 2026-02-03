@@ -79,7 +79,7 @@ setup(
         "python-socketio[asyncio]==5.11.4",
         "jupyterlab==4.2.5",
         "python-dateutil >= 2.8.1",
-        "zarr>=3",
+        "zarr>=3.0.0a0",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
         "numba>=0.61.2",
@@ -87,7 +87,8 @@ setup(
         "arkitekt-next[all]==0.35.0",
         "koil>=2.0.5",
         "msgpack>=1.0.4",
-        "esptool"
+        "esptool", 
+        "omero-py"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

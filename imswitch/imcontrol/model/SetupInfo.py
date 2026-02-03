@@ -242,9 +242,6 @@ class ObjectiveInfo:
     calibrateOnStart: bool = True
     active: bool = True
 
-@dataclass(frozen=False)
-class MCTInfo:
-    tWait: int
 
 class ROIScanInfo:
     pass
@@ -252,6 +249,64 @@ class ROIScanInfo:
 @dataclass(frozen=False)
 class LightsheetInfo:
     pass
+
+
+@dataclass(frozen=False)
+class GalvoScannerInfo(DeviceInfo):
+    """
+    Configuration for galvo scanner devices.
+    
+    Galvo scanners use mirror galvanometers for high-speed 2D laser scanning.
+    Position values are in DAC units (0-4095 for 12-bit DAC).
+    
+    Example configuration:
+    {
+        "galvoScanners": {
+            "ESP32Galvo": {
+                "managerName": "ESP32GalvoScannerManager",
+                "managerProperties": {
+                    "rs232device": "ESP32",
+                    "nx": 256,
+                    "ny": 256,
+                    "x_min": 500,
+                    "x_max": 3500,
+                    "y_min": 500,
+                    "y_max": 3500,
+                    "sample_period_us": 1,
+                    "frame_count": 0,
+                    "bidirectional": false
+                }
+            }
+        }
+    }
+    """
+    
+    nx: int = 256
+    """ Number of X samples per line. """
+    
+    ny: int = 256
+    """ Number of Y lines per frame. """
+    
+    x_min: int = 500
+    """ Minimum X position (DAC units 0-4095). """
+    
+    x_max: int = 3500
+    """ Maximum X position (DAC units 0-4095). """
+    
+    y_min: int = 500
+    """ Minimum Y position (DAC units 0-4095). """
+    
+    y_max: int = 3500
+    """ Maximum Y position (DAC units 0-4095). """
+    
+    sample_period_us: int = 1
+    """ Microseconds per sample. 0 = maximum speed. """
+    
+    frame_count: int = 0
+    """ Number of frames to acquire. 0 = infinite/continuous. """
+    
+    bidirectional: bool = False
+    """ Enable bidirectional scanning for faster acquisition. """
 
 
 @dataclass(frozen=False)
@@ -290,6 +345,60 @@ class FlowStopInfo:
 @dataclass(frozen=False)
 class LepmonInfo:
     pass
+
+
+@dataclass(frozen=False)
+class InstrumentInfo:
+    """
+    Microscope instrument metadata for OME-types integration.
+    
+    This configuration is loaded from the setup JSON and provides
+    static instrument information that doesn't change during operation.
+    Dynamic values (firmware version, etc.) are updated at runtime.
+    """
+    
+    # Microscope identification
+    name: str = "openUC2 Microscope"
+    """ Instrument display name. """
+    
+    microscopeType: str = "Inverted"
+    """ Microscope type: 'Inverted', 'Upright', or 'Other'. """
+    
+    manufacturer: str = "openUC2"
+    """ Instrument manufacturer. """
+    
+    model: str = "UC2 Frame"
+    """ Instrument model. """
+    
+    serialNumber: str = ""
+    """ Instrument serial number. """
+    
+    # Optical configuration
+    tubeLensFocalLengthMm: float = 180.0
+    """ Tube lens focal length in millimeters. Standard Nikon = 180mm. """
+    
+    tubeLensMagnification: float = 1.0
+    """ Tube lens magnification factor. """
+    
+    # UC2 specific metadata
+    uc2FrameName: str = ""
+    """ Name of the UC2 frame configuration. """
+    
+    uc2FrameAuthor: str = ""
+    """ Author of the UC2 frame configuration. """
+    
+    uc2FrameVersion: str = "1.0.0"
+    """ Version of the UC2 frame configuration. """
+    
+    uc2Verified: bool = False
+    """ Whether the UC2 frame is verified. """
+    
+    uc2OptiKitConfigPath: Optional[str] = None
+    """ Path to UC2 OptiKit JSON configuration file. """
+    
+    # Filter configuration (static filters defined in setup)
+    filters: List[Dict[str, Any]] = field(default_factory=list)
+    """ List of optical filters. Each entry: {name, filterType, wavelengthNm, bandwidthNm}. """
 
 @dataclass(frozen=False)
 class FlatfieldInfo:
@@ -644,6 +753,10 @@ class SetupInfo:
     """ Positioners in this setup. This is a map from unique positioner names
     to DetectorInfo objects. """
 
+    galvoScanners: Dict[str, GalvoScannerInfo] = field(default_factory=dict)
+    """ Galvo scanners in this setup. This is a map from unique galvo scanner names
+    to GalvoScannerInfo objects. Used for high-speed laser scanning microscopy. """
+
     rs232devices: Dict[str, RS232Info] = field(default_factory=dict)
     """ RS232 connections in this setup. This is a map from unique RS232
     connection names to RS232Info objects. Some detector/laser/positioner
@@ -663,9 +776,6 @@ class SetupInfo:
     objective: Optional[ObjectiveInfo] = field(default_factory=lambda: None)
     """ Objective settings. Required to be defined to use Objective functionality. """
 
-    mct: Optional[MCTInfo] = field(default_factory=lambda: None)
-    """ MCT settings. Required to be defined to use MCT functionality. """
-
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """
 
@@ -673,7 +783,7 @@ class SetupInfo:
     """ ROIScan settings. Required to be defined to use ROIScan functionality. """
 
     lightsheet: Optional[LightsheetInfo] = field(default_factory=lambda: None)
-    """ MCT settings. Required to be defined to use Lightsheet functionality. """
+    """ lighthseet settings. Required to be defined to use Lightsheet functionality. """
 
     webrtc: Optional[WebRTCInfo] = field(default_factory=lambda: None)
     """ WebRTC settings. Required to be defined to use WebRTC functionality. """
@@ -747,6 +857,10 @@ class SetupInfo:
 
     storage: Optional[StorageInfo] = field(default_factory=lambda: None)
     """ Storage configuration for data paths. Contains persistent storage settings. """
+
+    instrument: Optional[InstrumentInfo] = field(default_factory=lambda: None)
+    """ Instrument metadata for OME-types integration. Contains microscope identification,
+    optical configuration, and UC2-specific metadata. """
 
     nidaq: NidaqInfo = field(default_factory=NidaqInfo)
     """ NI-DAQ settings. """

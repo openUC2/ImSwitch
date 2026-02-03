@@ -356,7 +356,9 @@ class FlowStopController(LiveUpdatedController):
         elif fileFormat == "PNG":
             pngFormat = SaveFormat.PNG
             saveMode = SaveMode.Disk
-            self._master.recordingManager.snap([self.detectorFlowCam], saveMode=saveMode, saveFormat=pngFormat, savename=fileName, attrs=metaData)
+            # self._master.recordingManager.snap([self.detectorFlowCam], saveMode=saveMode, saveFormat=pngFormat, savename=fileName, attrs=metaData)
+            # TODO: We have to update to use RecordingService
+            self._logger.warning("Saving as PNG not yet implemented.")
         else:
             self._logger.warning("Nothing saved, no fileformat selected")
 

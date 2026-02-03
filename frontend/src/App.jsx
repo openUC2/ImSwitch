@@ -40,12 +40,12 @@ import { JupyterProvider } from "./context/JupyterContext.js";
 import DemoController from "./components/DemoController.js";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import StageCenterCalibrationWizard from "./components/StageCenterCalibrationWizard.js";
+import GalvoScannerController from "./components/GalvoScannerController.jsx";
 
 // ImSwitch Navigation Drawer
 import { NavigationDrawer, TopBar } from "./components/navigation";
 import AppManagerPage from "./components/AppManagerPage.jsx";
 
-import { MCTProvider } from "./context/MCTContext.js";
 
 //axon
 import AxonTabComponent from "./axon/AxonTabComponent.js";
@@ -421,6 +421,7 @@ function App() {
           )}
 
           {selectedPlugin === "WellPlate" && <AxonTabComponent />}
+          {selectedPlugin === "GalvoScannerController" && <GalvoScannerController />}
           {selectedPlugin === "ImJoy" && (
             <ImJoyView sharedImage={sharedImage} />
           )}
@@ -440,11 +441,6 @@ function App() {
           )}
           {selectedPlugin === "Infinity Scanning" && <LargeFovScanController />}
           {selectedPlugin === "Blockly" && <BlocklyController />}
-          {selectedPlugin === "Timelapse" && (
-            <MCTProvider>
-              <TimelapseController />
-            </MCTProvider>
-          )}
           {selectedPlugin === "Objective" && <ObjectiveController />}
           {selectedPlugin === "About" && <AboutPage />}
           {selectedPlugin === "SystemSettings" && <SystemSettings />}

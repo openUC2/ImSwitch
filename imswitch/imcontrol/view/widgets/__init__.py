@@ -9,9 +9,7 @@ if not IS_HEADLESS:
     from .basewidgets import WidgetFactory
     from .BeadRecWidget import BeadRecWidget
     from .ConsoleWidget import ConsoleWidget
-    from .EtSTEDWidget import EtSTEDWidget
     from .FFTWidget import FFTWidget
-    from .JoystickWidget import JoystickWidget
     from .HistogrammWidget import HistogrammWidget
     from .STORMReconWidget import STORMReconWidget
     from .HoliSheetWidget import HoliSheetWidget
@@ -40,7 +38,6 @@ if not IS_HEADLESS:
     from .UC2ConfigWidget import UC2ConfigWidget
     from .SIMWidget import SIMWidget
     from .DPCWidget import DPCWidget
-    from .MCTWidget import MCTWidget
     from .LepmonWidget import LepmonWidget
     from .ExperimentWidget import ExperimentWidget
     from .TimelapseWidget import TimelapseWidget
@@ -52,7 +49,6 @@ if not IS_HEADLESS:
     from .HistoScanWidget import HistoScanWidget
     from .WorkflowWidget import WorkflowWidget
     from .FlatfieldWidget import FlatfieldWidget
-    from .PixelCalibrationWidget import PixelCalibrationWidget
     from .SquidStageScanWidget import SquidStageScanWidget
     from .ISMWidget import ISMWidget
     from .SettingsWidget import SettingsWidget

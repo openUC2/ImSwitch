@@ -11,8 +11,6 @@ class ROIScanManager(SignalInterface):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
 
-        if mctInfo is None:
-            return
 
         self.update()
 

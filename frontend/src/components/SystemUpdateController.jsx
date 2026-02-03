@@ -259,12 +259,12 @@ const SystemUpdateController = () => {
                 sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}
               >
                 <Build color="primary" />
-                <Typography variant="h6">CAN Device Firmware Update</Typography>
+                <Typography variant="h6">Device Firmware Update</Typography>
               </Box>
 
               <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                Update firmware on CAN-connected devices (motors, lasers, LEDs)
-                via Over-The-Air (OTA) updates
+                Update firmware on connected devices (motors, lasers, LEDs) via CAN or 
+                via Over-The-Air WIFI (OTA) updates
               </Typography>
 
               <Button

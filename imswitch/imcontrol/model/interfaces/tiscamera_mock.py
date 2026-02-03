@@ -191,9 +191,11 @@ class MockCameraTIS:
     def _continuous_loop(self):
         import time
         time0 = time.time()
-        while not self._stop_evt.wait():
+        while True:
+            # TODO: I think this is not very smart or blocking the mainloop weird!
             interval = np.max([self.exposure_ms,200]) / 1000.0
-            
+            if self._stop_evt.is_set():
+                break
             if time.time() - time0 < interval:
                 time.sleep(0.01)
                 continue

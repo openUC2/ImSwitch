@@ -8,13 +8,12 @@ from imswitch.imcontrol.model import (
     LasersManager,
     MultiManager,
     PositionersManager,
-    RecordingManager,
+    #RecordingManager,  # DEPRECATED - kept for backwards compatibility
     RS232sManager,
     SLMManager,
     SIMManager,
     DPCManager,
     LEDMatrixsManager,
-    MCTManager,
     ROIScanManager,
     WebRTCManager,
     HyphaManager,
@@ -26,12 +25,8 @@ from imswitch.imcontrol.model import (
     LightsheetManager,
     NidaqManager,
     FOVLockManager,
-    StandManager,
     RotatorsManager,
     LEDsManager,
-    ScanManagerBase,
-    ScanManagerPointScan,
-    ScanManagerMoNaLISA,
     FlatfieldManager,
     FlowStopManager,
     WorkflowManager,
@@ -40,7 +35,11 @@ from imswitch.imcontrol.model import (
     ExperimentManager,
     ObjectiveManager,
     ArkitektManager,
+    InstrumentMetadataManager,
 )
+
+# New unified I/O service
+from imswitch.imcontrol.model.io import RecordingService
 
 
 class MasterController:
@@ -58,6 +57,25 @@ class MasterController:
         # Dictionary to hold controller references for inter-controller communication
         self._controllersRegistry = {}
 
+        # Initialize Metadata Hub
+        try:
+            from imswitch.imcontrol.model.metadata import (
+                MetadataHub, SharedAttrsMetadataBridge
+            )
+            self.metadataHub = MetadataHub()
+            self.__logger.info("Metadata Hub initialized")
+            
+            # Initialize bridge to connect SharedAttrs to MetadataHub
+            self.metadataBridge = SharedAttrsMetadataBridge(
+                shared_attrs=commChannel.sharedAttrs,
+                hub=self.metadataHub
+            )
+            self.__logger.info("SharedAttrs-MetadataHub bridge initialized")
+        except ImportError as e:
+            self.__logger.warning(f"Metadata Hub not available: {e}")
+            self.metadataHub = None
+            self.metadataBridge = None
+
         # Init managers
         self.rs232sManager = RS232sManager(self.__setupInfo.rs232devices)
 
@@ -72,6 +90,13 @@ class MasterController:
         self.positionersManager = PositionersManager(
             self.__setupInfo.positioners, self.__commChannel, **lowLevelManagers
         )
+        
+        # Initialize galvo scanners manager
+        from imswitch.imcontrol.model import GalvoScannersManager
+        self.galvoScannersManager = GalvoScannersManager(
+            self.__setupInfo.galvoScanners, **lowLevelManagers
+        )
+        
         self.LEDMatrixsManager = LEDMatrixsManager(
             self.__setupInfo.LEDMatrixs, **lowLevelManagers
         )
@@ -80,19 +105,35 @@ class MasterController:
         )
 
         self.LEDsManager = LEDsManager(self.__setupInfo.LEDs)
-        # self.scanManager = ScanManager(self.__setupInfo)
-        self.recordingManager = RecordingManager(self.detectorsManager)
+        
+        # Initialize unified I/O service (RecordingService from io module)
+        self.recordingService = RecordingService(self.detectorsManager)
+        # Connect RecordingService to MetadataHub if available
+        if self.metadataHub is not None:
+            self.recordingService.set_metadata_hub(self.metadataHub)
+            self.__logger.info("RecordingService connected to MetadataHub")
+        
+        # Alias for backwards compatibility - recordingManager now points to recordingService
+        # Legacy RecordingManager has been removed, all functionality is now in RecordingService
+        # self.recordingManager = self.recordingService
+        
         if "SLM" in self.__setupInfo.availableWidgets:
             self.slmManager = SLMManager(self.__setupInfo.slm)
         self.UC2ConfigManager = UC2ConfigManager(
             self.__setupInfo.uc2Config, lowLevelManagers
         )
+        
+        # Initialize InstrumentMetadataManager for OME instrument metadata
+        self.instrumentMetadataManager = InstrumentMetadataManager(
+            instrumentInfo=getattr(self.__setupInfo, 'instrument', None),
+            setupInfo=self.__setupInfo,
+            lowLevelManagers=lowLevelManagers,
+        )
+        
         if "SIM" in self.__setupInfo.availableWidgets:
             self.simManager = SIMManager(self.__setupInfo.sim)
         if "DPC" in self.__setupInfo.availableWidgets:
             self.dpcManager = DPCManager(self.__setupInfo.dpc)
-        if "MCT" in self.__setupInfo.availableWidgets:
-            self.mctManager = MCTManager(self.__setupInfo.mct)
         if "NIDAQ" in self.__setupInfo.availableWidgets:
             self.nidaqManager = NidaqManager(self.__setupInfo.nidaq)
         if "Hypha" in self.__setupInfo.availableWidgets:
@@ -136,6 +177,9 @@ class MasterController:
         # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the
         # MasterController Class
 
+        ###################################################################################################
+        # PLUGIN SYSTEM FOR MANAGERS
+        ###################################################################################################
         for entry_point in pkg_resources.iter_entry_points("imswitch.implugins"):
             InfoClass = None
             print(f"entry_point: {entry_point.name}")
@@ -160,25 +204,76 @@ class MasterController:
             except Exception as e:
                 self.__logger.error(e)
 
-        if self.__setupInfo.microscopeStand:
-            self.standManager = StandManager(
-                self.__setupInfo.microscopeStand, **lowLevelManagers
-            )
 
-        # Generate scanManager type according to setupInfo
-        if self.__setupInfo.scan:
-            if self.__setupInfo.scan.scanWidgetType == "PointScan":
-                self.scanManager = ScanManagerPointScan(self.__setupInfo)
-            elif self.__setupInfo.scan.scanWidgetType == "Base":
-                self.scanManager = ScanManagerBase(self.__setupInfo)
-            elif self.__setupInfo.scan.scanWidgetType == "MoNaLISA":
-                self.scanManager = ScanManagerMoNaLISA(self.__setupInfo)
-            else:
-                self.__logger.error(
-                    'ScanWidgetType in SetupInfo["scan"] not recognized, choose one of the following:'
-                    ' ["Base", "PointScan", "MoNaLISA"].'
+
+        ###################################################################################################
+        # PLUGIN SYSTEM FOR MANAGERS
+        ###################################################################################################
+        # Register detectors with MetadataHub
+        if self.metadataHub is not None:
+            self._register_detectors_with_hub()
+
+    def _register_detectors_with_hub(self):
+        """Register all detectors with the MetadataHub."""
+        try:
+            from imswitch.imcontrol.model.metadata import DetectorContext
+            
+            for detectorName in self.detectorsManager.getAllDeviceNames():
+                detector = self.detectorsManager[detectorName]
+                
+                # Get detector properties
+                shape_px = detector.shape
+                # Safely access pixelSizeUm with fallback
+                if hasattr(detector, 'pixelSizeUm') and detector.pixelSizeUm:
+                    if isinstance(detector.pixelSizeUm, (list, tuple)) and len(detector.pixelSizeUm) > 1:
+                        pixel_size_um = detector.pixelSizeUm[1]
+                    elif isinstance(detector.pixelSizeUm, (list, tuple)) and len(detector.pixelSizeUm) == 1:
+                        pixel_size_um = detector.pixelSizeUm[0]
+                    elif isinstance(detector.pixelSizeUm, (int, float)):
+                        pixel_size_um = float(detector.pixelSizeUm)
+                    else:
+                        pixel_size_um = 1.0
+                else:
+                    pixel_size_um = 1.0
+                
+                dtype = str(detector.fullChunk.dtype) if hasattr(detector, 'fullChunk') else 'uint16'
+                
+                # Create detector context
+                context = DetectorContext(
+                    name=detectorName,
+                    shape_px=shape_px,
+                    pixel_size_um=pixel_size_um,
+                    dtype=dtype,
+                    binning=detector.binning,
+                    channel_name=detectorName,
+                    is_rgb=getattr(detector, '_isRGB', False),  # Add isRGB flag
                 )
-                return
+                
+                # Try to get additional properties if available
+                try:
+                    if hasattr(detector, 'parameters') and 'exposure' in detector.parameters:
+                        context.exposure_ms = detector.parameters['exposure'].value
+                except Exception:
+                    pass
+                
+                try:
+                    if hasattr(detector, 'parameters') and 'gain' in detector.parameters:
+                        context.gain = detector.parameters['gain'].value
+                except Exception:
+                    pass
+                
+                # Try to get bit depth
+                try:
+                    if hasattr(detector, 'bitDepth'):
+                        context.bit_depth = detector.bitDepth
+                except Exception:
+                    pass
+                
+                # Register with hub
+                self.metadataHub.register_detector(detectorName, context)
+                self.__logger.info(f"Registered detector '{detectorName}' with MetadataHub")
+        except Exception as e:
+            self.__logger.error(f"Error registering detectors with MetadataHub: {e}")
 
         # Connect signals
         cc = self.__commChannel
@@ -188,7 +283,7 @@ class MasterController:
         self.detectorsManager.sigDetectorSwitched.connect(cc.sigDetectorSwitched)
         self.detectorsManager.sigImageUpdated.connect(cc.sigUpdateImage) # TODO: why do we need to map a signal into a signal and cannot direclty use it ?!
         self.detectorsManager.sigNewFrame.connect(cc.sigNewFrame)
-
+        ''' # TODO: Potentially not used anymore 
         self.recordingManager.sigRecordingStarted.connect(cc.sigRecordingStarted)
         self.recordingManager.sigRecordingEnded.connect(cc.sigRecordingEnded)
         self.recordingManager.sigRecordingFrameNumUpdated.connect(
@@ -199,6 +294,7 @@ class MasterController:
         self.recordingManager.sigMemoryRecordingAvailable.connect(
             self.memoryRecordingAvailable
         )
+        '''
 
     def memoryRecordingAvailable(self, name, file, filePath, savedToDisk):
         self.__moduleCommChannel.memoryRecordings[name] = VFileItem(
@@ -238,7 +334,7 @@ class MasterController:
         return list(self._controllersRegistry.keys())
 
     def closeEvent(self):
-        self.recordingManager.endRecording(emitSignal=False, wait=True)
+        # self.recordingManager.endRecording(emitSignal=False, wait=True)
 
         for attrName in dir(self):
             attr = getattr(self, attrName)

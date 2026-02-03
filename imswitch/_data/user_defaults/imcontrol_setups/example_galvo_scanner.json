@@ -1,0 +1,99 @@
+{
+  "comment": "Example configuration demonstrating galvo scanner integration with ESP32/UC2 hardware",
+  
+  "galvoScanners": {
+    "ESP32Galvo": {
+      "managerName": "ESP32GalvoScannerManager",
+      "managerProperties": {
+        "rs232device": "ESP32",
+        "nx": 256,
+        "ny": 256,
+        "x_min": 500,
+        "x_max": 3500,
+        "y_min": 500,
+        "y_max": 3500,
+        "sample_period_us": 1,
+        "frame_count": 0,
+        "bidirectional": false
+      },
+      "analogChannel": null,
+      "digitalLine": null
+    }
+  },
+
+  "positioners": {
+    "ESP32Stage": {
+      "managerName": "ESP32StageManager",
+      "managerProperties": {
+        "rs232device": "ESP32",
+        "isEnable": true,
+        "enableauto": false,
+        "stepsizeX": -0.3125,
+        "stepsizeY": -0.3125,
+        "stepsizeZ": 0.3125,
+        "homeSpeedX": 15000,
+        "homeSpeedY": 15000,
+        "homeSpeedZ": 15000,
+        "initialSpeed": {
+          "X": 25000,
+          "Y": 25000,
+          "Z": 25000,
+          "A": 25000
+        }
+      },
+      "axes": ["X", "Y", "Z", "A"],
+      "forScanning": true,
+      "forPositioning": true
+    }
+  },
+
+  "rs232devices": {
+    "ESP32": {
+      "managerName": "ESP32Manager",
+      "managerProperties": {
+        "serialport": "COM3",
+        "debug": 1
+      }
+    }
+  },
+
+  "lasers": {
+    "Laser 532": {
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "ESP32LEDLaserManager",
+      "managerProperties": {
+        "rs232device": "ESP32",
+        "channel_index": 1
+      },
+      "wavelength": 532,
+      "valueRangeMin": 0,
+      "valueRangeMax": 1023
+    }
+  },
+
+  "detectors": {
+    "WebCamera": {
+      "ExtPackage": "imswitch_det_webcam",
+      "analogChannel": null,
+      "digitalLine": null,
+      "managerName": "WebcamManager",
+      "managerProperties": {
+        "cameraListIndex": 0,
+        "cameraEffPixelsize": 1
+      },
+      "forAcquisition": true,
+      "forFocusLock": false
+    }
+  },
+
+  "availableWidgets": [
+    "Settings",
+    "Laser",
+    "Positioner",
+    "Recording",
+    "GalvoScanner"
+  ],
+
+  "uc2Config": {}
+}

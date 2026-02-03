@@ -56,7 +56,6 @@ export default function StreamControls({
 
   const saveFormatOptions = [
     { value: 1, label: "TIFF" },
-    { value: 2, label: "HDF5" },
     { value: 3, label: "ZARR" },
     { value: 4, label: "MP4" },
     { value: 5, label: "PNG" },

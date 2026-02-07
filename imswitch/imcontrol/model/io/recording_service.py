@@ -678,19 +678,22 @@ class RecordingService(SignalInterface):
         
         return results
     
-    def snap_numpy(self, detector_names: List[str] = None) -> Dict[str, np.ndarray]:
+    def snap_numpy(self, detector_names: List[str] = None,
+                   attrs: Dict[str, Dict[str, Any]] = None) -> Dict[str, np.ndarray]:
         """
         Capture images and return as numpy arrays (no saving).
         
         Args:
             detector_names: List of detector names (None = all)
+            attrs: Optional metadata attributes per detector
             
         Returns:
             Dict mapping detector names to image arrays
         """
         return self.snap(
             detector_names=detector_names,
-            save_mode=SaveMode.Numpy
+            save_mode=SaveMode.Numpy,
+            attrs=attrs
         )
     
     def save_image(self, detector_name: str, image: np.ndarray,

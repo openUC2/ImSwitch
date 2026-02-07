@@ -95,6 +95,19 @@ const ExtendedObjectiveController = () => {
 
   // Switch objective (slot should be 0 or 1)
   const handleSwitchObjective = (slot, skipZ) => {
+    // Warn user if the target positions have not been configured yet
+    const x0 = objectiveState.posX0;
+    const x1 = objectiveState.posX1;
+    const positionsConfigured =
+      x0 !== null && x0 !== undefined && x0 !== 0 &&
+      x1 !== null && x1 !== undefined && x1 !== 0;
+    if (!positionsConfigured) {
+      alert(
+        "Objective positions (X0 / X1) are not configured yet.\n" +
+        "Please use the Calibration Wizard to set them before switching."
+      );
+      return;
+    }
     apiObjectiveControllerMoveToObjective(slot, skipZ)
       .then((data) => {
         dispatch(objectiveSlice.setCurrentObjective(slot)); //setCurrentObjective(slot);

@@ -93,15 +93,6 @@ const PositionsDimension = () => {
       case "Heidstar 4x Histosample":
         wellLayout = wsUtils.wellLayoutDevelopment;
         break;
-      case "histolayout":
-        wellLayout = wsUtils.histolayout;
-        break;
-      case "Wellplate 32":
-        wellLayout = wsUtils.wellLayout32;
-        break;
-      case "Wellplate 96":
-        wellLayout = wsUtils.wellLayout96;
-        break;
       case "Wellplate 384":
         wellLayout = wsUtils.generateWellLayout384({ offsetX, offsetY });
         break;

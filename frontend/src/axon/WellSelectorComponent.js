@@ -98,13 +98,7 @@ const WellSelectorComponent = () => {
       wellLayout = wsUtils.wellLayoutDefault;
     } else if (event.target.value === "Heidstar 4x Histosample") {
       wellLayout = wsUtils.wellLayoutDevelopment;
-    } else if (event.target.value === "histolayout") {
-      wellLayout = wsUtils.histolayout;
-    } else if (event.target.value === "Wellplate 32") {
-      wellLayout = wsUtils.wellLayout32;
-    } else if (event.target.value === "Wellplate 96") {
-      wellLayout = wsUtils.wellLayout96;
-    } else if (event.target.value === "Wellplate 384") {
+   } else if (event.target.value === "Wellplate 384") {
       // Generate 384 layout with offsets
       wellLayout = wsUtils.generateWellLayout384({
         offsetX: offsetX,
@@ -135,12 +129,6 @@ const WellSelectorComponent = () => {
 
     // Apply offsets to the layout
     wellLayout = wsUtils.applyLayoutOffset(wellLayout, offsetX, offsetY);
-
-    //get from web
-    ///TODO 
-    //console.log(JSON.stringify(wsUtils.wellLayoutDevelopment));
-    //console.log(JSON.stringify(wsUtils.wellLayout32));
-    //console.log(JSON.stringify(wsUtils.wellLayout96));
 
 
     //set new layout
@@ -324,10 +312,7 @@ const WellSelectorComponent = () => {
             <MenuItem value="Default">Default</MenuItem>
             <MenuItem value="Heidstar 4x Histosample">4 Slide Heidstar</MenuItem>
             <MenuItem value="Ropod">Ropod</MenuItem>  
-            <MenuItem value="Wellplate 32">Wellplate 32</MenuItem>
-            <MenuItem value="Wellplate 96">Wellplate 96</MenuItem>
             <MenuItem value="Wellplate 384">Wellplate 384</MenuItem>
-            <MenuItem value="histolayout">histolayout</MenuItem>
             {/* online layouts */}
             {wellLayoutFileList.map((file, index) => (
               <MenuItem value={file}>{file}</MenuItem>

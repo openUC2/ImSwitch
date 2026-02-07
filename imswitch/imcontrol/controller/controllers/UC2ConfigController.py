@@ -1112,7 +1112,7 @@ class UC2ConfigController(ImConWidgetController):
                 "method": "can_streaming"
             })
             
-            # Download firmware
+            # Download firmware # TODO: The firmware ID/link should be the same as in the wifi-mode 
             firmware_path = self._download_firmware_for_device(can_id)
             if not firmware_path:
                 raise Exception("Failed to download or locate firmware")

@@ -117,7 +117,7 @@ class UC2ConfigController(ImConWidgetController):
         :return: Dictionary mapping CAN IDs to firmware filenames
         """
         return {
-            1: "esp32_UC2_3_CAN_HAT_Master.bin",  # Master firmware (USB connected, use esptool)
+            1: "esp32_UC2_3_CAN_HAT_Master_v2.bin",  # Master firmware (USB connected, use esptool)
             10: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor A
             11: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor X
             12: "esp32_seeed_xiao_esp32s3_can_slave_motor.bin",  # Motor Y
@@ -839,12 +839,12 @@ class UC2ConfigController(ImConWidgetController):
 
             # Extract firmware file names from JSON response
             firmware_files = [item['name'] for item in firmware_data if item['name'].endswith('.bin')]
-
-            self.__logger.info(f"Available firmware files: {firmware_files}")
+            
+            self.__logger.debug(f"Available firmware files: {firmware_files}")
 
             # Use centralized firmware mapping
             can_id_to_firmware = self._get_can_id_firmware_mapping()
-
+            self.__logger.debug(f"CAN ID to firmware mapping: {can_id_to_firmware}")
             # Organize by device ID using lookup table
             firmware_by_id = {}
             for can_id, expected_firmware in can_id_to_firmware.items():
@@ -872,6 +872,7 @@ class UC2ConfigController(ImConWidgetController):
             }
 
         except requests.exceptions.RequestException as e:
+            self.__logger.error(f"Error fetching firmware list: {e}")
             return {
                 "status": "error",
                 "message": f"Failed to fetch firmware list from server: {str(e)}",
@@ -1143,11 +1144,18 @@ class UC2ConfigController(ImConWidgetController):
                     "speed": speed_kbps
                 })
             
-            # Status callback
+            # Status callback – also forward to frontend via signal
             def status_callback(message, success):
                 if not success:
                     self.__logger.warning(f"CAN OTA status: {message}")
                 self.__logger.info(f"CAN OTA: {message}")
+                self.sigOTAStatusUpdate.emit({
+                    "canId": can_id,
+                    "status": "uploading" if success else "error",
+                    "progress": self._ota_status.get(can_id, {}).get("progress", 0),
+                    "message": message,
+                    "method": "can_streaming"
+                })
             
             # Start streaming upload (blocking)
             success = self._master.UC2ConfigManager.ESP32.canota.start_can_streaming_ota_blocking(
@@ -1486,6 +1494,8 @@ class UC2ConfigController(ImConWidgetController):
             "esp32_UC2_CAN_HAT_Master.bin",
             "UC2_CAN_HAT_Master.bin",
             "CAN_HAT_Master.bin",
+            "UC2_3_CAN_HAT_Master_v2.bin",
+            "esp32_UC2_3_CAN_HAT_Master_v2.bin"
         ]
         for fn in preferred:
             if fn in names:
@@ -1599,7 +1609,7 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.info(f"Flashing master firmware via {flash_port} (baud={baud}, offset=0x{flash_offset:x})")
 
             # 4) optionally erase
-            if erase_flash:
+            if False: #erase_flash:
                 self._emit_usb_flash_status("erasing", 30, "Erasing flash memory...")
                 ok, msg = self._run_esptool(["--port", flash_port, "--baud", str(baud), "erase_flash"])
                 if not ok:
@@ -1613,19 +1623,7 @@ class UC2ConfigController(ImConWidgetController):
                     }
                 self._emit_usb_flash_status("flashing", 40, "Flash erased successfully")
 
-            # 5) write flash
-            self._emit_usb_flash_status("flashing", 45, "Writing firmware to device...")
-            write_args = [
-                "--port", flash_port,
-                "--baud", str(baud),
-                "--chip", "esp32",
-                "write_flash",
-                "--flash_mode", "dio",
-                "--flash_freq", "80m",
-                "--flash_size", "4MB",
-                "0x%X" % int(flash_offset),
-                str(fw_path),
-            ]
+            # 5) write flash esptool.py --chip esp32 --port /dev/cu.SLAB_USBtoUART --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 40m --flash_size detect 0x10000 /Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/UC2-REST/binaries/latest/esp32_UC2_3_CAN_HAT_Master_v2.bin
             '''should be:
             esptool.py \
                 --chip esp32 \
@@ -1636,6 +1634,18 @@ class UC2ConfigController(ImConWidgetController):
                 --flash_freq 80m \
                 --flash_size 4MB \
                 0x10000 firmware.bin'''
+            self._emit_usb_flash_status("flashing", 45, "Writing firmware to device...")
+            write_args = [
+                "--port", flash_port,
+                "--baud", str(baud),
+                "--chip", "esp32",
+                "write_flash",
+                "--flash_mode", "dio",
+                "--flash_freq", "80m",
+                "--flash_size", "4MB",
+                "0x10000",
+                str(fw_path),
+            ]
             ok, msg = self._run_esptool(write_args)
             if not ok:
                 self._emit_usb_flash_status("failed", 50, "Firmware write failed", msg)

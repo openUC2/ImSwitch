@@ -165,6 +165,7 @@ const canOtaSlice = createSlice({
     },
     setUpdateProgress: (state, action) => {
       const { canId, status, message, progress, timestamp } = action.payload;
+      const previousStatus = state.updateProgress[canId]?.status;
       state.updateProgress[canId] = {
         status,
         message,
@@ -172,11 +173,17 @@ const canOtaSlice = createSlice({
         timestamp: timestamp || new Date().toISOString(),
       };
       
-      // Update counters based on status
-      if (status === "completed") {
-        state.completedUpdateCount += 1;
-      } else if (status === "failed" || status === "error") {
-        state.failedUpdateCount += 1;
+      // Only update counters on first transition to a terminal state
+      // to avoid double-counting from multiple streaming updates
+      const isTerminal = (s) =>
+        s === "completed" || s === "success" || s === "failed" || s === "error" ||
+        s === "wifi_failed" || s === "ota_failed";
+      if (isTerminal(status) && !isTerminal(previousStatus)) {
+        if (status === "completed" || status === "success") {
+          state.completedUpdateCount += 1;
+        } else {
+          state.failedUpdateCount += 1;
+        }
       }
     },
     clearUpdateProgress: (state) => {

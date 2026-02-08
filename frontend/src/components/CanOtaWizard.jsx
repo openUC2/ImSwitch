@@ -39,6 +39,7 @@ import {
   Info as InfoIcon,
   Wifi as WifiIcon,
   Cable as CableIcon,
+  AddCircleOutline as AddCircleOutlineIcon,
 } from "@mui/icons-material";
 
 // Redux slice
@@ -73,6 +74,9 @@ const CanOtaWizard = ({ open, onClose }) => {
 
   // Device type mapping for display
   const [deviceMapping, setDeviceMapping] = React.useState({});
+
+  // Manual CAN address entry
+  const [manualCanId, setManualCanId] = React.useState("");
 
   // Load initial data when wizard opens
   useEffect(() => {
@@ -585,6 +589,59 @@ const CanOtaWizard = ({ open, onClose }) => {
         </Alert>
       )}
 
+      {/* Manual CAN address entry */}
+      <Paper sx={{ mt: 3, p: 2 }}>
+        <Typography variant="subtitle2" gutterBottom>
+          Manual CAN Address Entry
+        </Typography>
+        <Typography variant="body2" color="text.secondary" gutterBottom>
+          If a device was not found by the scan, you can manually add it by entering its CAN ID below.
+        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
+          <TextField
+            label="CAN ID"
+            type="number"
+            size="small"
+            value={manualCanId}
+            onChange={(e) => setManualCanId(e.target.value)}
+            placeholder="e.g. 11"
+            sx={{ width: 140 }}
+          />
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<AddCircleOutlineIcon />}
+            disabled={!manualCanId}
+            onClick={() => {
+              const id = parseInt(manualCanId, 10);
+              if (isNaN(id) || id < 1 || id > 255) {
+                dispatch(canOtaSlice.setScanError("CAN ID must be between 1 and 255"));
+                return;
+              }
+              // Check if already in list
+              const exists = canOtaState.scannedDevices.some((d) => d.canId === id);
+              if (exists) {
+                dispatch(canOtaSlice.setScanError(`Device with CAN ID ${id} is already in the list`));
+                return;
+              }
+              dispatch(canOtaSlice.setScannedDevices([
+                ...canOtaState.scannedDevices,
+                { canId: id, deviceTypeStr: "Manual", deviceType: -1, statusStr: "Unknown", manual: true },
+              ]));
+              setManualCanId("");
+              dispatch(canOtaSlice.setScanError(null));
+            }}
+          >
+            Add Device
+          </Button>
+        </Box>
+        <Alert severity="warning" sx={{ mt: 2 }} icon={<WarningIcon />}>
+          <strong>Use at your own risk:</strong> Manually adding a CAN address bypasses
+          device detection. Make sure the CAN ID is correct – sending firmware to
+          the wrong device may cause it to become unresponsive.
+        </Alert>
+      </Paper>
+
       {canOtaState.scannedDevices.length > 0 && (
         <Paper sx={{ mt: 2 }}>
           <List>
@@ -701,9 +758,15 @@ const CanOtaWizard = ({ open, onClose }) => {
       )}
 
       {canOtaState.selectedDeviceIds.length > 0 && (
-        <Alert severity="info" sx={{ mt: 2 }}>
-          {canOtaState.selectedDeviceIds.length} device(s) selected for update
-        </Alert>
+        <>
+          <Alert severity="info" sx={{ mt: 2 }}>
+            {canOtaState.selectedDeviceIds.length} device(s) selected for update
+          </Alert>
+          <Alert severity="warning" sx={{ mt: 1 }} icon={<WarningIcon />}>
+            <strong>Important:</strong> Do not turn off the microscope or disconnect
+            USB during the update. The process may take several minutes per device.
+          </Alert>
+        </>
       )}
     </Box>
   );
@@ -712,7 +775,16 @@ const CanOtaWizard = ({ open, onClose }) => {
     const totalDevices = canOtaState.selectedDeviceIds.length;
     const completedDevices = canOtaState.completedUpdateCount;
     const failedDevices = canOtaState.failedUpdateCount;
-    const progressPercent = totalDevices > 0 ? (completedDevices / totalDevices) * 100 : 0;
+
+    // For CAN streaming, compute overall progress from per-device progress values
+    let overallProgress = 0;
+    if (totalDevices > 0) {
+      const progressSum = canOtaState.selectedDeviceIds.reduce((sum, canId) => {
+        const p = canOtaState.updateProgress[canId];
+        return sum + (p ? p.progress || 0 : 0);
+      }, 0);
+      overallProgress = progressSum / totalDevices;
+    }
 
     return (
       <Box sx={{ mt: 2 }}>
@@ -720,10 +792,29 @@ const CanOtaWizard = ({ open, onClose }) => {
           Update Progress
         </Typography>
 
+        {/* Safety warnings */}
+        <Alert severity="error" sx={{ mb: 2 }} icon={<WarningIcon />}>
+          <strong>Do NOT turn off the microscope or disconnect USB</strong> while
+          the firmware update is in progress. Interrupting the update can leave
+          devices in an unrecoverable state.
+        </Alert>
+        <Alert severity="info" sx={{ mb: 2 }}>
+          CAN streaming updates transfer firmware at ~2-4 KB/s.
+          A typical update takes <strong>2–5 minutes per device</strong>.
+          Please be patient – the progress bar below shows real-time page-by-page upload status.
+        </Alert>
+
         <Paper sx={{ p: 2, mt: 2, mb: 2 }}>
           <Grid container spacing={2} alignItems="center">
             <Grid item xs={12}>
-              <LinearProgress variant="determinate" value={progressPercent} sx={{ height: 10, borderRadius: 5 }} />
+              <LinearProgress
+                variant="determinate"
+                value={overallProgress}
+                sx={{ height: 10, borderRadius: 5 }}
+              />
+              <Typography variant="caption" align="center" display="block" sx={{ mt: 0.5 }}>
+                Overall: {Math.round(overallProgress)}%
+              </Typography>
             </Grid>
             <Grid item xs={4}>
               <Typography variant="body2" align="center">

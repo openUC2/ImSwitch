@@ -880,6 +880,54 @@ class UC2ConfigController(ImConWidgetController):
             }
 
     @APIExport(runOnUIThread=False)
+    def listAllFirmwareFiles(self):
+        """
+        List ALL .bin firmware files from the configured server as a flat list.
+        Unlike listAvailableFirmware() which maps files to CAN IDs, this returns
+        every .bin file so the user can pick any firmware for USB flashing.
+
+        :return: Dictionary with flat list of firmware files
+        """
+        if not self._firmware_server_url:
+            return {
+                "status": "error",
+                "message": "Firmware server not set. Use setOTAFirmwareServer first.",
+            }
+
+        try:
+            list_url = f"{self._firmware_server_url}/"
+            self.__logger.debug(f"Fetching all firmware files from {list_url}")
+            response = requests.get(list_url, timeout=10, headers={"Accept": "application/json"})
+            response.raise_for_status()
+            data = response.json()
+
+            if not isinstance(data, list):
+                raise ValueError("Invalid response format from firmware server")
+
+            firmware_files = []
+            for item in data:
+                if isinstance(item, dict) and item.get("name", "").endswith(".bin"):
+                    firmware_files.append({
+                        "filename": item["name"],
+                        "size": item.get("size", 0),
+                        "mod_time": item.get("mod_time", ""),
+                        "url": f"{self._firmware_server_url}/{item['name']}",
+                    })
+
+            return {
+                "status": "success",
+                "firmware_server": self._firmware_server_url,
+                "files": firmware_files,
+            }
+        except requests.exceptions.RequestException as e:
+            self.__logger.error(f"Error fetching firmware files: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to fetch firmware list: {str(e)}",
+                "server_url": self._firmware_server_url,
+            }
+
+    @APIExport(runOnUIThread=False)
     def startSingleDeviceOTA(self, can_id:int, ssid:str=None, password:str=None, timeout:int=300000):
         """
         Start OTA update for a single CAN device.
@@ -1516,30 +1564,70 @@ class UC2ConfigController(ImConWidgetController):
 
     def _run_esptool(self, args: list[str]) -> tuple[bool, str]:
         """
-        Run esptool either via python module (preferred) or subprocess fallback.
-        Returns (success, message).
+        Run esptool via subprocess, streaming stdout/stderr lines through
+        sigUSBFlashStatusUpdate so the frontend can display real-time progress
+        (e.g. "Writing at 0x000f3000... (62%)").
+        Returns (success, collected_output_string).
         """
-        # Preferred: imported esptool (no external process)
-        if HAS_ESPTOOL:
-            try:
-                # esptool.main() calls sys.exit(); catch it.
-                esptool.main(args)
-                return True, "OK"
-            except SystemExit as e:
-                code = int(getattr(e, "code", 1) or 0)
-                return (code == 0), f"esptool exited with code {code}"
-            except Exception as e:
-                return False, f"esptool failed: {e}"
+        collected_lines = []
 
-        # Fallback: subprocess (requires esptool to be installed as module)
+        def _stream_subprocess(cmd_args):
+            """Run esptool as subprocess and stream output line by line."""
+            cmd = [sys.executable, "-m", "esptool"] + cmd_args
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                line = line.rstrip("\n\r")
+                if not line:
+                    continue
+                collected_lines.append(line)
+                self.__logger.debug(f"esptool: {line}")
+
+                # Parse "Writing at 0x000XXXXX... (NN%)" for progress
+                progress_match = None
+                if "Writing at" in line and "%" in line:
+                    try:
+                        pct_str = line.split("(")[1].split("%")[0].strip()
+                        pct = int(pct_str)
+                        # Map esptool 0-100% into our 30-85% range
+                        mapped = 30 + int(pct * 0.55)
+                        progress_match = mapped
+                    except (IndexError, ValueError):
+                        pass
+
+                self._emit_usb_flash_status(
+                    "flashing",
+                    progress_match if progress_match is not None else -1,
+                    line,
+                )
+            proc.stdout.close()
+            proc.wait()
+            return proc.returncode
+
+        # Prefer subprocess so we can stream output
         try:
-            cmd = [sys.executable, "-m", "esptool"] + args
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            ok = (proc.returncode == 0)
-            out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-            return ok, out.strip()
+            rc = _stream_subprocess(args)
+            ok = rc == 0
+            return ok, "\n".join(collected_lines)
+        except FileNotFoundError:
+            # esptool not installed as CLI module – try imported esptool
+            if HAS_ESPTOOL:
+                try:
+                    esptool.main(args)
+                    return True, "OK (imported esptool)"
+                except SystemExit as e:
+                    code = int(getattr(e, "code", 1) or 0)
+                    return (code == 0), f"esptool exited with code {code}"
+                except Exception as e:
+                    return False, f"esptool failed: {e}"
+            return False, "esptool not found. Install with: pip install esptool"
         except Exception as e:
-            return False, f"Failed to run esptool subprocess: {e}"
+            return False, f"Failed to run esptool: {e}"
 
     @APIExport(runOnUIThread=False, requestType="POST")
     def flashMasterFirmwareUSB(
@@ -1547,23 +1635,21 @@ class UC2ConfigController(ImConWidgetController):
         port: str | None = None,
         match: str = "HAT",
         baud: int = 921600,
-        flash_offset: int = 0x10000,
-        erase_flash: bool = False,
+        firmware_filename: str | None = None,
         reconnect_after: bool = True,
     ):
         """
-        Flash the master CAN HAT firmware via USB serial using esptool.
+        Flash firmware to an ESP32 via USB serial using esptool.
 
-        - Disconnects ImSwitch from the ESP32 first (master carries comms).
-        - Downloads firmware from the configured firmware server.
-        - Flashes firmware to the detected (or provided) USB serial port.
+        - Disconnects ImSwitch from the ESP32 first.
+        - Downloads the selected firmware file from the configured firmware server.
+        - Flashes firmware to the detected (or provided) USB serial port at offset 0x10000.
 
         Parameters:
           port: explicit serial port (e.g. "/dev/ttyACM0"). If None, auto-detect via 'match'.
           match: substring to identify the HAT in serial port metadata (default "HAT").
           baud: flashing baudrate (default 921600).
-          flash_offset: address to flash the BIN to. Use 0x0 for merged images; 0x10000 for app-only images.
-          erase_flash: if True, erase flash before writing.
+          firmware_filename: name of the .bin file on the firmware server. If None, auto-detect master firmware.
           reconnect_after: if True, reconnect ImSwitch to the master after flashing.
         """
         with self._usb_flash_lock:
@@ -1586,11 +1672,14 @@ class UC2ConfigController(ImConWidgetController):
             time.sleep(0.5)  # give OS time to release port
             self._emit_usb_flash_status("downloading", 10, "Downloading firmware from server...")
 
-            # 2) resolve firmware
-            fw_path = self._download_master_firmware()
+            # 2) resolve firmware – either by explicit filename or auto-detect master
+            if firmware_filename:
+                fw_path = self._download_firmware_by_name(firmware_filename)
+            else:
+                fw_path = self._download_master_firmware()
             if not fw_path:
-                self._emit_usb_flash_status("failed", 10, "No master firmware found on server")
-                return {"status": "error", "message": "No master firmware found/downloaded."}
+                self._emit_usb_flash_status("failed", 10, "Firmware not found on server")
+                return {"status": "error", "message": "Firmware not found/downloaded."}
 
             self._emit_usb_flash_status("downloading", 20, f"Firmware downloaded: {fw_path.name}")
 
@@ -1606,35 +1695,10 @@ class UC2ConfigController(ImConWidgetController):
                     "available_ports": self._list_serial_ports(),
                 }
 
-            self.__logger.info(f"Flashing master firmware via {flash_port} (baud={baud}, offset=0x{flash_offset:x})")
+            self.__logger.info(f"Flashing firmware via {flash_port} (baud={baud}, file={fw_path.name})")
 
-            # 4) optionally erase
-            if False: #erase_flash:
-                self._emit_usb_flash_status("erasing", 30, "Erasing flash memory...")
-                ok, msg = self._run_esptool(["--port", flash_port, "--baud", str(baud), "erase_flash"])
-                if not ok:
-                    self._emit_usb_flash_status("failed", 30, "Flash erase failed", msg)
-                    return {
-                        "status": "error",
-                        "message": "erase_flash failed",
-                        "details": msg,
-                        "port": flash_port,
-                        "firmware": str(fw_path),
-                    }
-                self._emit_usb_flash_status("flashing", 40, "Flash erased successfully")
-
-            # 5) write flash esptool.py --chip esp32 --port /dev/cu.SLAB_USBtoUART --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 40m --flash_size detect 0x10000 /Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/UC2-REST/binaries/latest/esp32_UC2_3_CAN_HAT_Master_v2.bin
-            '''should be:
-            esptool.py \
-                --chip esp32 \
-                --port /dev/cu.SLAB_USBtoUART \
-                --baud 921600 \
-                write_flash \
-                --flash_mode dio \
-                --flash_freq 80m \
-                --flash_size 4MB \
-                0x10000 firmware.bin'''
-            self._emit_usb_flash_status("flashing", 45, "Writing firmware to device...")
+            # 4) write flash at fixed offset 0x10000
+            self._emit_usb_flash_status("flashing", 30, "Writing firmware to device...")
             write_args = [
                 "--port", flash_port,
                 "--baud", str(baud),
@@ -1655,12 +1719,11 @@ class UC2ConfigController(ImConWidgetController):
                     "details": msg,
                     "port": flash_port,
                     "firmware": str(fw_path),
-                    "flash_offset": int(flash_offset),
                 }
 
             self._emit_usb_flash_status("flashing", 85, "Firmware written successfully!")
 
-            # 6) reconnect
+            # 5) reconnect
             if reconnect_after:
                 self._emit_usb_flash_status("reconnecting", 90, "Reconnecting to device...")
                 try:
@@ -1682,12 +1745,10 @@ class UC2ConfigController(ImConWidgetController):
 
             return {
                 "status": "success",
-                "message": "Master firmware flashed via USB",
+                "message": "Firmware flashed via USB",
                 "port": flash_port,
                 "firmware": str(fw_path),
                 "baud": int(baud),
-                "flash_offset": int(flash_offset),
-                "erase_flash": bool(erase_flash),
                 "reconnect_after": bool(reconnect_after),
             }
 

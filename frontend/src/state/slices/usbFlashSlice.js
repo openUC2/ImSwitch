@@ -6,7 +6,7 @@ import { createSlice } from "@reduxjs/toolkit";
  */
 
 const initialState = {
-  // Wizard step navigation (0: Port Selection, 1: Firmware Info, 2: Flash Progress, 3: Complete)
+  // Wizard step navigation (0: Firmware Server, 1: Select Firmware, 2: Port Selection, 3: Flash Progress, 4: Complete)
   currentStep: 0,
   isWizardOpen: false,
 
@@ -18,13 +18,15 @@ const initialState = {
 
   // Firmware server configuration
   firmwareServerUrl: "",
-  masterFirmwareInfo: null, // { filename, url, size, mod_time }
+  defaultFirmwareServerUrl: "",
   isLoadingFirmware: false,
+
+  // Available firmware files (flat list from server)
+  firmwareFiles: [], // [{ filename, size, mod_time, url }]
+  selectedFirmware: null, // { filename, size, mod_time, url }
 
   // Flash options
   baudRate: 921600,
-  flashOffset: 0x0,
-  eraseFlash: false,
   reconnectAfter: true,
 
   // Flash progress
@@ -54,7 +56,7 @@ const usbFlashSlice = createSlice({
       state.isWizardOpen = action.payload;
     },
     nextStep: (state) => {
-      if (state.currentStep < 3) {
+      if (state.currentStep < 4) {
         state.currentStep += 1;
       }
     },
@@ -72,6 +74,8 @@ const usbFlashSlice = createSlice({
       state.flashResult = null;
       state.error = null;
       state.successMessage = null;
+      state.selectedFirmware = null;
+      state.firmwareFiles = [];
     },
 
     // Serial ports
@@ -92,8 +96,14 @@ const usbFlashSlice = createSlice({
     setFirmwareServerUrl: (state, action) => {
       state.firmwareServerUrl = action.payload;
     },
-    setMasterFirmwareInfo: (state, action) => {
-      state.masterFirmwareInfo = action.payload;
+    setDefaultFirmwareServerUrl: (state, action) => {
+      state.defaultFirmwareServerUrl = action.payload;
+    },
+    setFirmwareFiles: (state, action) => {
+      state.firmwareFiles = action.payload;
+    },
+    setSelectedFirmware: (state, action) => {
+      state.selectedFirmware = action.payload;
     },
     setIsLoadingFirmware: (state, action) => {
       state.isLoadingFirmware = action.payload;
@@ -102,12 +112,6 @@ const usbFlashSlice = createSlice({
     // Flash options
     setBaudRate: (state, action) => {
       state.baudRate = action.payload;
-    },
-    setFlashOffset: (state, action) => {
-      state.flashOffset = action.payload;
-    },
-    setEraseFlash: (state, action) => {
-      state.eraseFlash = action.payload;
     },
     setReconnectAfter: (state, action) => {
       state.reconnectAfter = action.payload;
@@ -137,7 +141,8 @@ const usbFlashSlice = createSlice({
     updateFlashProgress: (state, action) => {
       const { status, progress, message, details } = action.payload;
       if (status) state.flashStatus = status;
-      if (progress !== undefined) state.flashProgress = progress;
+      // Only update progress when a real value is provided (>= 0)
+      if (progress !== undefined && progress >= 0) state.flashProgress = progress;
       if (message) state.flashMessage = message;
       if (details) state.flashDetails = details;
     },
@@ -168,11 +173,11 @@ export const {
   setIsLoadingPorts,
   setPortMatch,
   setFirmwareServerUrl,
-  setMasterFirmwareInfo,
+  setDefaultFirmwareServerUrl,
+  setFirmwareFiles,
+  setSelectedFirmware,
   setIsLoadingFirmware,
   setBaudRate,
-  setFlashOffset,
-  setEraseFlash,
   setReconnectAfter,
   setIsFlashing,
   setFlashStatus,

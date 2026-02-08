@@ -16,6 +16,7 @@ import * as socketDebugSlice from "../state/slices/SocketDebugSlice.js";
 import * as uc2Slice from "../state/slices/UC2Slice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as canOtaSlice from "../state/slices/canOtaSlice.js";
+import * as usbFlashSlice from "../state/slices/usbFlashSlice.js";
 import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 
@@ -776,6 +777,35 @@ const WebSocketHandler = () => {
           }
         } catch (error) {
           console.error("Error in sigOTAStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigUSBFlashStatusUpdate") {
+        // Handle USB flash status updates from esptool flashing process
+        console.log("sigUSBFlashStatusUpdate received:", dataJson);
+        try {
+          const flashStatus = dataJson.args?.p0;
+          if (flashStatus) {
+            dispatch(usbFlashSlice.updateFlashProgress({
+              status: flashStatus.status,
+              progress: flashStatus.progress,
+              message: flashStatus.message,
+              details: flashStatus.details,
+            }));
+
+            // Auto-advance to completion step on terminal states
+            const terminalStates = ["success", "failed", "warning"];
+            if (terminalStates.includes(flashStatus.status)) {
+              if (flashStatus.status === "success" || flashStatus.status === "warning") {
+                dispatch(usbFlashSlice.setFlashResult({
+                  status: flashStatus.status,
+                  message: flashStatus.message,
+                }));
+              }
+              dispatch(usbFlashSlice.setIsFlashing(false));
+            }
+          }
+        } catch (error) {
+          console.error("Error in sigUSBFlashStatusUpdate handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateOMEZarrStore") {

@@ -67,7 +67,7 @@ const TimeDimension = () => {
     if (count <= 1) {
       summary = "Single timepoint";
     } else {
-      summary = `Every ${interval}s · ${count} times`;
+      summary = `Period ${interval}s · ${count} timepoints`;
     }
 
     dispatch(experimentUISlice.setDimensionSummary({
@@ -121,10 +121,10 @@ const TimeDimension = () => {
         </Typography>
       </Box>
 
-      {/* Interval */}
+      {/* Period between acquisitions */}
       <Box sx={{ mb: 3 }}>
         <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
-          Interval
+          Period (time between acquisitions)
         </Typography>
         
         {/* Preset buttons */}
@@ -142,10 +142,10 @@ const TimeDimension = () => {
           ))}
         </Box>
 
-        {/* Custom interval input */}
+        {/* Custom period input */}
         <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
           <TextField
-            label="Custom interval"
+            label="Period"
             type="number"
             size="small"
             value={parameterValue.timeLapsePeriod}
@@ -157,6 +157,10 @@ const TimeDimension = () => {
             seconds
           </Typography>
         </Box>
+        <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, fontStyle: "italic" }}>
+          Time between the start of one acquisition and the start of the next.
+          If the acquisition takes longer than the period, the next one starts immediately.
+        </Typography>
       </Box>
 
       {/* Number of timepoints */}

@@ -196,49 +196,6 @@ const OutputDimension = () => {
               </FormControl>
             </Box>
 
-            {/* Timing Parameters */}
-            <Box sx={{ display: "flex", gap: 2 }}>
-              <Box sx={{ flex: 1 }}>
-                <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-                  tPre (Settle Time, time it takes to activate the trigger)
-                </Typography>
-                <TextField
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={parameterValue.performanceTPreMs || 90}
-                  onChange={(e) => dispatch(experimentSlice.setPerformanceTPreMs(Number(e.target.value)))}
-                  InputProps={{
-                    endAdornment: <Typography variant="caption" sx={{ ml: 1 }}>ms</Typography>,
-                  }}
-                  inputProps={{ min: 0, step: 10 }}
-                />
-                <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: "block" }}>
-                  Time before exposure (stage settling)
-                </Typography>
-              </Box>
-
-              <Box sx={{ flex: 1 }}>
-                <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-                  tPost (Exposure, time until the next action)
-                </Typography>
-                <TextField
-                  type="number"
-                  size="small"
-                  fullWidth
-                  value={parameterValue.performanceTPostMs || 50}
-                  onChange={(e) => dispatch(experimentSlice.setPerformanceTPostMs(Number(e.target.value)))}
-                  InputProps={{
-                    endAdornment: <Typography variant="caption" sx={{ ml: 1 }}>ms</Typography>,
-                  }}
-                  inputProps={{ min: 0, step: 10 }}
-                />
-                <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: "block" }}>
-                  Exposure/acquisition time
-                </Typography>
-              </Box>
-            </Box>
-
             {/* Warning for software trigger mode */}
             {parameterValue.performanceTriggerMode === "software" && (
               <Box
@@ -261,6 +218,66 @@ const OutputDimension = () => {
             )}
           </Box>
         )}
+
+        {/* Timing Parameters - always visible for both normal and performance mode */}
+        <Box
+          sx={{
+            mt: 2,
+            p: 2,
+            border: `1px solid ${theme.palette.divider}`,
+            borderRadius: 1,
+            backgroundColor: alpha(theme.palette.background.paper, 0.5),
+          }}
+        >
+          <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>
+            Acquisition Timing
+          </Typography>
+          <Typography variant="caption" color="textSecondary" sx={{ mb: 2, display: "block" }}>
+            Controls settle and exposure durations for both normal and performance mode.
+          </Typography>
+
+          <Box sx={{ display: "flex", gap: 2 }}>
+            <Box sx={{ flex: 1 }}>
+              <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
+                tPre (Settle Time)
+              </Typography>
+              <TextField
+                type="number"
+                size="small"
+                fullWidth
+                value={parameterValue.performanceTPreMs || 90}
+                onChange={(e) => dispatch(experimentSlice.setPerformanceTPreMs(Number(e.target.value)))}
+                InputProps={{
+                  endAdornment: <Typography variant="caption" sx={{ ml: 1 }}>ms</Typography>,
+                }}
+                inputProps={{ min: 0, step: 10 }}
+              />
+              <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: "block" }}>
+                Time before exposure (stage settling, illumination activation)
+              </Typography>
+            </Box>
+
+            <Box sx={{ flex: 1 }}>
+              <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
+                tPost (Exposure / Acquisition)
+              </Typography>
+              <TextField
+                type="number"
+                size="small"
+                fullWidth
+                value={parameterValue.performanceTPostMs || 50}
+                onChange={(e) => dispatch(experimentSlice.setPerformanceTPostMs(Number(e.target.value)))}
+                InputProps={{
+                  endAdornment: <Typography variant="caption" sx={{ ml: 1 }}>ms</Typography>,
+                }}
+                inputProps={{ min: 0, step: 10 }}
+              />
+              <Typography variant="caption" color="textSecondary" sx={{ mt: 0.5, display: "block" }}>
+                Exposure/acquisition time before next action
+              </Typography>
+            </Box>
+          </Box>
+        </Box>
       </Box>
 
       <Divider sx={{ mb: 3 }} />

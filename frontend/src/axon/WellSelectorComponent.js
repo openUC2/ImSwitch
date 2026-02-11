@@ -207,78 +207,6 @@ const WellSelectorComponent = () => {
   };
 
   //##################################################################################
-  // Save positions to JSON file
-  const handleSavePositions = () => {
-    try {
-      const positionsData = {
-        pointList: experimentState.pointList,
-        wellLayout: experimentState.wellLayout,
-        savedAt: new Date().toISOString(),
-      };
-      
-      const dataStr = JSON.stringify(positionsData, null, 2);
-      const dataBlob = new Blob([dataStr], { type: "application/json" });
-      const url = URL.createObjectURL(dataBlob);
-      
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `wellplate_positions_${new Date().toISOString().slice(0, 10)}.json`;
-      link.click();
-      
-      URL.revokeObjectURL(url);
-      
-      infoPopupRef.current?.showInfo("Positions saved successfully!");
-    } catch (error) {
-      console.error("Error saving positions:", error);
-      infoPopupRef.current?.showInfo("Error saving positions!");
-    }
-  };
-
-  //##################################################################################
-  // Load positions from JSON file
-  const handleLoadPositions = () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/json";
-    
-    input.onchange = (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const positionsData = JSON.parse(event.target.result);
-          
-          // Validate data structure
-          if (!positionsData.pointList || !Array.isArray(positionsData.pointList)) {
-            throw new Error("Invalid positions file format");
-          }
-          
-          // Load positions into Redux state
-          dispatch(experimentSlice.setPointList(positionsData.pointList));
-          
-          // Optionally restore layout if included
-          if (positionsData.wellLayout) {
-            dispatch(experimentSlice.setWellLayout(positionsData.wellLayout));
-          }
-          
-          infoPopupRef.current?.showInfo(
-            `Loaded ${positionsData.pointList.length} position(s) successfully!`
-          );
-        } catch (error) {
-          console.error("Error loading positions:", error);
-          infoPopupRef.current?.showInfo("Error loading positions file!");
-        }
-      };
-      
-      reader.readAsText(file);
-    };
-    
-    input.click();
-  };
-
-  //##################################################################################
   return (
     <div style={{ border: "0px solid #eee", padding: "10px" }}>
       
@@ -357,25 +285,6 @@ const WellSelectorComponent = () => {
           </label>
         </Box>
 
-        {/* Save/Load Positions */}
-        <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
-          <Button 
-            variant="outlined" 
-            size="small"
-            onClick={handleSavePositions}
-            disabled={!experimentState.pointList || experimentState.pointList.length === 0}
-          >
-            💾 Save Positions
-          </Button>
-
-          <Button 
-            variant="outlined" 
-            size="small"
-            onClick={handleLoadPositions}
-          >
-            📂 Load Positions
-          </Button>
-        </Box>
       </div>
 
       {/* MODE */}

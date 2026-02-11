@@ -1,4 +1,4 @@
-import React, { useRef } from "react";
+import React, { useRef, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Box,
@@ -14,12 +14,23 @@ import {
   AccordionDetails,
   TextField,
   Slider,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  IconButton,
+  Chip,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import AddLocationIcon from "@mui/icons-material/AddLocation";
 import MyLocationIcon from "@mui/icons-material/MyLocation";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import DeleteIcon from "@mui/icons-material/Delete";
+import SaveAltIcon from "@mui/icons-material/SaveAlt";
+import FileUploadIcon from "@mui/icons-material/FileUpload";
 
 import WellSelectorCanvas, { Mode } from "../WellSelectorCanvas";
 import * as wsUtils from "../WellSelectorUtils";
@@ -48,6 +59,7 @@ const PositionsDimension = () => {
   // Refs
   const canvasRef = useRef();
   const infoPopupRef = useRef();
+  const fileInputRef = useRef();
   
   // Redux state
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
@@ -125,24 +137,111 @@ const PositionsDimension = () => {
     }
   };
 
-  // Calibrate offset
-  const handleCalibrateOffset = () => {
-    if (infoPopupRef.current) {
-      infoPopupRef.current.showMessage(
-        "Right-click on the map where you are and select 'We are here' to calibrate the stage offset."
-      );
+  // Save positions to CSV
+  const handleSavePositions = useCallback(() => {
+    const points = experimentState.pointList || [];
+    if (points.length === 0) {
+      if (infoPopupRef.current) {
+        infoPopupRef.current.showMessage("No positions to save");
+      }
+      return;
     }
-  };
 
-  // Reset view
-  const handleResetView = () => {
-    canvasRef.current?.resetView();
-  };
+    // Build CSV header and rows
+    const header = "name,x,y,wellId,areaType";
+    const rows = points.map((p) =>
+      `${p.name || ""},${p.x},${p.y},${p.wellId || ""},${p.areaType || ""}`
+    );
+    const csv = [header, ...rows].join("\n");
 
-  // Reset history
-  const handleResetHistory = () => {
-    canvasRef.current?.resetHistory();
-  };
+    // Trigger download
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "positions.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+
+    if (infoPopupRef.current) {
+      infoPopupRef.current.showMessage(`Saved ${points.length} positions to CSV`);
+    }
+  }, [experimentState.pointList]);
+
+  // Load positions from CSV
+  const handleLoadPositions = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileSelected = useCallback((event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target.result;
+        const lines = text.split("\n").filter((l) => l.trim().length > 0);
+        if (lines.length < 2) {
+          infoPopupRef.current?.showMessage("CSV file is empty or has no data rows");
+          return;
+        }
+
+        // Parse header to find column indices
+        const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
+        const nameIdx = header.indexOf("name");
+        const xIdx = header.indexOf("x");
+        const yIdx = header.indexOf("y");
+        const wellIdx = header.indexOf("wellid");
+        const areaIdx = header.indexOf("areatype");
+
+        if (xIdx === -1 || yIdx === -1) {
+          infoPopupRef.current?.showMessage("CSV must have 'x' and 'y' columns");
+          return;
+        }
+
+        // Parse data rows
+        const newPoints = [];
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i].split(",").map((c) => c.trim());
+          const x = parseFloat(cols[xIdx]);
+          const y = parseFloat(cols[yIdx]);
+          if (isNaN(x) || isNaN(y)) continue;
+
+          newPoints.push({
+            name: nameIdx >= 0 ? cols[nameIdx] || `Position ${i}` : `Position ${i}`,
+            x,
+            y,
+            shape: "",
+            wellId: wellIdx >= 0 ? cols[wellIdx] || "" : "",
+            areaType: areaIdx >= 0 ? cols[areaIdx] || "" : "",
+          });
+        }
+
+        dispatch(experimentSlice.setPointList(newPoints));
+        infoPopupRef.current?.showMessage(`Loaded ${newPoints.length} positions from CSV`);
+      } catch (err) {
+        console.error("Failed to parse CSV:", err);
+        infoPopupRef.current?.showMessage("Failed to parse CSV file");
+      }
+    };
+    reader.readAsText(file);
+    // Reset the input so the same file can be re-selected
+    event.target.value = "";
+  }, [dispatch]);
+
+  // Remove single position
+  const handleRemovePosition = useCallback((index) => {
+    dispatch(experimentSlice.removePoint(index));
+  }, [dispatch]);
+
+  // Clear all positions
+  const handleClearAll = useCallback(() => {
+    dispatch(experimentSlice.setPointList([]));
+    if (infoPopupRef.current) {
+      infoPopupRef.current.showMessage("All positions cleared");
+    }
+  }, [dispatch]);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -178,29 +277,89 @@ const PositionsDimension = () => {
         </Button>
       </Box>
 
-      {/* Position list (placeholder for save/load functionality) */}
+      {/* Save / Load Positions as CSV */}
       <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
         <Button
           size="small"
           variant="outlined"
           fullWidth
-          disabled
+          startIcon={<SaveAltIcon />}
+          onClick={handleSavePositions}
+          disabled={!experimentState.pointList || experimentState.pointList.length === 0}
         >
-          💾 Save Positions
+          Save Positions (CSV)
         </Button>
         <Button
           size="small"
           variant="outlined"
           fullWidth
-          disabled
+          startIcon={<FileUploadIcon />}
+          onClick={handleLoadPositions}
         >
-          📂 Load Positions
+          Load Positions (CSV)
         </Button>
+        {/* Hidden file input for CSV loading */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,.txt"
+          style={{ display: "none" }}
+          onChange={handleFileSelected}
+        />
       </Box>
 
-      <Typography variant="caption" color="textSecondary" sx={{ fontStyle: "italic" }}>
-        Save/Load functionality coming soon
-      </Typography>
+      {/* Position list table */}
+      {experimentState.pointList && experimentState.pointList.length > 0 && (
+        <Box sx={{ mb: 2 }}>
+          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 1 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+              Positions ({experimentState.pointList.length})
+            </Typography>
+            <Button
+              size="small"
+              color="error"
+              variant="text"
+              onClick={handleClearAll}
+            >
+              Clear All
+            </Button>
+          </Box>
+          <TableContainer sx={{ maxHeight: 250, border: `1px solid ${theme.palette.divider}`, borderRadius: 1 }}>
+            <Table size="small" stickyHeader>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 600, py: 0.5 }}>#</TableCell>
+                  <TableCell sx={{ fontWeight: 600, py: 0.5 }}>Name</TableCell>
+                  <TableCell sx={{ fontWeight: 600, py: 0.5 }} align="right">X (µm)</TableCell>
+                  <TableCell sx={{ fontWeight: 600, py: 0.5 }} align="right">Y (µm)</TableCell>
+                  <TableCell sx={{ fontWeight: 600, py: 0.5 }} align="center">Well</TableCell>
+                  <TableCell sx={{ py: 0.5 }} align="center"></TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {experimentState.pointList.map((point, idx) => (
+                  <TableRow key={point.id || idx} hover>
+                    <TableCell sx={{ py: 0.25 }}>{idx + 1}</TableCell>
+                    <TableCell sx={{ py: 0.25 }}>{point.name || "-"}</TableCell>
+                    <TableCell sx={{ py: 0.25 }} align="right">{Math.round(point.x)}</TableCell>
+                    <TableCell sx={{ py: 0.25 }} align="right">{Math.round(point.y)}</TableCell>
+                    <TableCell sx={{ py: 0.25 }} align="center">
+                      {point.wellId ? (
+                        <Chip label={point.wellId} size="small" variant="outlined" sx={{ fontSize: "0.65rem", height: 18 }} />
+                      ) : "-"}
+                    </TableCell>
+                    <TableCell sx={{ py: 0.25 }} align="center">
+                      <IconButton size="small" onClick={() => handleRemovePosition(idx)}>
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
+      )}
 
       <InfoPopup ref={infoPopupRef} />
     </Box>

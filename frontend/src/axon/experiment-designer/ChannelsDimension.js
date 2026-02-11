@@ -372,6 +372,10 @@ const ChannelsDimension = () => {
     const laserName = illuSources[index];
     if (laserName) {
       setLaserActive(laserName, enabled);
+      // When disabling, set intensity to 0 so the backend knows not to use this channel
+      if (!enabled) {
+        handleIntensityChange(index, 0);
+      }
     }
   };
 

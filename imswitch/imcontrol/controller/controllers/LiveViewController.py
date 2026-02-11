@@ -339,6 +339,9 @@ class JPEGStreamWorker(StreamWorker):
                 pass
 
             # Normalize to uint8 if needed
+            if frame is None:
+                self._logger.warning("Received None frame, skipping")
+                return None  # Not an error, but skip processing
             if frame.dtype != np.uint8:
                 vmin = float(np.min(frame))
                 vmax = float(np.max(frame))

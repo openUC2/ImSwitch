@@ -49,18 +49,18 @@ const JupyterExecutor = () => {
           `${hostIP}:${hostPort}/imswitch/api/jupyternotebookurl`
         );
         const data = await response.json();
-        const notebookUrl = data["url"]; // e.g., http://192.168.1.100:8888/jupyter
+        const notebookUrl = data["url"]; // e.g., http://192.168.1.100:8888/jupyter/
 
         // Extract the path from the notebook URL
         const urlObj = new URL(notebookUrl);
-        const jupyterPath = urlObj.pathname; // e.g., /jupyter
+        const jupyterPath = urlObj.pathname; // e.g., /jupyter/
         const jupyterPort = urlObj.port; // e.g., 8888
 
         // Construct both possible URLs:
-        // 1. Proxied URL through the ImSwitch API server (Caddy reverse proxy in Docker) e.g. http://localhost:80/jupyter
+        // 1. Proxied URL through the ImSwitch API server (Caddy reverse proxy in Docker) e.g. http://localhost:80/jupyter/
         const proxiedUrl = `${hostIP}:${hostPort}${jupyterPath}`;
         
-        // 2. Direct URL to Jupyter server (for local development) e.g. http://localhost:8888/jupyter
+        // 2. Direct URL to Jupyter server (for local development) e.g. http://localhost:8888/jupyter/
         const directUrl = `${hostIP}:${jupyterPort}${jupyterPath}`;
 
         // Test both URLs to see which one works

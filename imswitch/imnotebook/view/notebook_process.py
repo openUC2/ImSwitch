@@ -55,7 +55,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=None, directory='',
                                     "--port=%s" % port,
                                     "--allow-root",
                                     "--IdentityProvider.token=",
-                                    "--ServerApp.base_url=/jupyter",
+                                    "--ServerApp.base_url=/jupyter/",
                                     "--ServerApp.password=",
                                     "--no-browser",
                                     "--ip=0.0.0.0",
@@ -68,7 +68,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=None, directory='',
                                     "--port=%s" % port,
                                     "--allow-root",
                                     "--IdentityProvider.token=",
-                                    "--ServerApp.base_url=/jupyter",
+                                    "--ServerApp.base_url=/jupyter/",
                                     "--ServerApp.password=",
                                     "--no-browser",
                                     "--ip=0.0.0.0",
@@ -97,7 +97,7 @@ def startnotebook(notebook_executable="jupyter-lab", port=None, directory='',
         
         # Construct the proper web address using server IP and configured port
         server_ip = get_server_ip()
-        webaddr = f"http://{server_ip}:{port}/jupyter"
+        webaddr = f"http://{server_ip}:{port}/jupyter/"
         print(f"Jupyter Lab server started at {webaddr}")
 
         # pass monitoring over to child thread
@@ -115,13 +115,13 @@ def startnotebook(notebook_executable="jupyter-lab", port=None, directory='',
         print("Starting jupyter with: %s" % " ".join([notebook_executable,
                                     "--port=%s" % port,
                                     "--allow-root",
-                                    "--ServerApp.base_url=/jupyter",
+                                    "--ServerApp.base_url=/jupyter/",
                                     "--no-browser",
                                     "--ip=0.0.0.0",
                                     "--config=%s" % configfile,
                                     "--notebook-dir=%s" % directory,
                                     ]))
-    return f"http://{get_server_ip()}:{port}/jupyter"
+    return f"http://{get_server_ip()}:{port}/jupyter/"
 
 
 def stopnotebook():

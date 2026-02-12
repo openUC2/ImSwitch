@@ -2,8 +2,9 @@ import threading
 from imswitch.imcommon.framework import Worker
 from imswitch.imcommon.model import dirtools, initLogger
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Form, Body
 from pydantic import BaseModel
+from pathlib import Path
 from imswitch.imcontrol.model import Options
 from imswitch.imcommon.model import ostools
 from imswitch.imcontrol.view.guitools import ViewSetupInfo
@@ -118,23 +119,43 @@ def get_available_controllers() -> Dict[str, List[str]]:
 
 
 # Create a Folder
-@api_router.post("/folder")
-def create_folder(request: CreateFolderRequest):
+@api_router.post("/FileManager/folder")
+def create_folder(body: dict = Body(...)):
     """
-    Create a folder using JSON payload.
+    Create a folder using JSON payload. Expects: {"name": "folder_name", "parentId": "/path/to/parent"}
     """
+    name = body.get("name")
+    parent_id = body.get("parentId", "")
+    
+    if not name:
+        raise HTTPException(status_code=400, detail="Folder name is required")
+    
     # Resolve folder path
-    parent_path = request.parentId or ""
-    folder_path = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), parent_path, request.name)
+    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
+    parent_path = base_path / parent_id.lstrip('/') if parent_id else base_path
+    folder_path = parent_path / name
 
     # Check if folder already exists
-    if os.path.exists(folder_path):
+    if folder_path.exists():
         raise HTTPException(status_code=400, detail="Folder already exists")
 
     # Create folder
     try:
-        os.makedirs(folder_path, exist_ok=True)
-        return {"message": f"Folder '{request.name}' created successfully", "path": folder_path}
+        folder_path.mkdir(parents=True, exist_ok=True)
+        
+        # Return full folder metadata matching list_items structure
+        rel_path = f"/{os.path.relpath(folder_path, base_path).replace(os.path.sep, '/')}"
+        stat_info = folder_path.stat()
+        
+        return {
+            "name": name,
+            "isDirectory": True,
+            "path": rel_path,
+            "_id": rel_path,
+            "size": None,
+            "filePreviewPath": None,
+            "modifiedTime": stat_info.st_mtime
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -162,6 +183,7 @@ def list_items(base_path: str) -> List[Dict]:
                         "name": entry.name,
                         "isDirectory": entry.is_dir(),
                         "path": rel_path,
+                        "_id": rel_path,  # Add _id field for frontend compatibility
                         "size": stat_info.st_size if entry.is_file() else None,
                         "filePreviewPath": preview_url,
                         "modifiedTime": stat_info.st_mtime  # Add modification timestamp
@@ -207,72 +229,141 @@ def get_items(path: str = ""):
     return list_items(directory)
 
 @api_router.post("/FileManager/upload")
-def upload_file(file: UploadFile = File(...), target_path: Optional[str] = Form("")):
+def upload_file(file: UploadFile = File(...), parentId: Optional[str] = Form(None)):
     """
     Upload a file to the specified target directory.
     - `file`: The file being uploaded.
-    - `target_path`: The relative path where the file should be uploaded.
+    - `parentId`: The relative path (folder ID) where the file should be uploaded.
     """
     # Resolve target directory
-    upload_dir = dirtools.UserFileDirs.getValidatedDataPath() / target_path
+    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
+    upload_dir = base_path / parentId.lstrip('/') if parentId else base_path
     upload_dir.mkdir(parents=True, exist_ok=True)  # Create directory if it doesn't exist
 
     # Save the uploaded file
     file_location = upload_dir / file.filename
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-
-    return {"message": f"File '{file.filename}' uploaded successfully", "path": str(file_location)}
+    
+    # Return full file metadata matching list_items structure
+    rel_path = f"/{os.path.relpath(file_location, base_path).replace(os.path.sep, '/')}"
+    stat_info = file_location.stat()
+    
+    return {
+        "name": file.filename,
+        "isDirectory": False,
+        "path": rel_path,
+        "_id": rel_path,
+        "size": stat_info.st_size,
+        "filePreviewPath": f"/preview{rel_path}",
+        "modifiedTime": stat_info.st_mtime
+    }
 
 # 📋 Copy File(s) or Folder(s)
 @api_router.post("/FileManager/copy")
-def copy_item(source: str = Form(...), destination: str = Form(...)):
-    src = dirtools.UserFileDirs.getValidatedDataPath() / source
-    dest = dirtools.UserFileDirs.getValidatedDataPath() / destination / src.name
-    if not src.exists():
-        raise HTTPException(status_code=404, detail="Source not found")
-    if dest.exists():
-        raise HTTPException(status_code=400, detail="Destination already exists")
-    if src.is_dir():
-        shutil.copytree(src, dest)
-    else:
-        shutil.copy2(src, dest)
-    return {"message": "Item copied successfully", "destination": str(dest)}
+def copy_item(body: dict = Body(...)):
+    """Copy files or folders. Expects JSON body: {"sourceIds": ["path1", ...], "destinationId": "dest_path"}"""
+    source_ids = body.get("sourceIds", [])
+    destination_id = body.get("destinationId", "")
+    
+    if not source_ids:
+        raise HTTPException(status_code=400, detail="No source items provided")
+    
+    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
+    dest_dir = base_path / destination_id.lstrip('/') if destination_id else base_path
+    
+    copied_items = []
+    for source_id in source_ids:
+        src = base_path / source_id.lstrip('/')
+        if not src.exists():
+            raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
+        
+        dest = dest_dir / src.name
+        if dest.exists():
+            raise HTTPException(status_code=400, detail=f"Destination '{dest.name}' already exists")
+        
+        if src.is_dir():
+            shutil.copytree(src, dest)
+        else:
+            shutil.copy2(src, dest)
+        copied_items.append(str(dest))
+    
+    return {"message": "Item(s) copied successfully", "destinations": copied_items}
 
 
 # 📤 Move File(s) or Folder(s)
 @api_router.put("/FileManager/move")
-def move_item(source: str = Form(...), destination: str = Form(...)):
-    src = dirtools.UserFileDirs.getValidatedDataPath() / source
-    dest = dirtools.UserFileDirs.getValidatedDataPath() / destination / src.name
-    if not src.exists():
-        raise HTTPException(status_code=404, detail="Source not found")
-    shutil.move(src, dest)
-    return {"message": "Item moved successfully", "destination": str(dest)}
+def move_item(body: dict = Body(...)):
+    """Move files or folders. Expects JSON body: {"sourceIds": ["path1", ...], "destinationId": "dest_path"}"""
+    source_ids = body.get("sourceIds", [])
+    destination_id = body.get("destinationId", "")
+    
+    if not source_ids:
+        raise HTTPException(status_code=400, detail="No source items provided")
+    
+    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
+    dest_dir = base_path / destination_id.lstrip('/') if destination_id else base_path
+    
+    moved_items = []
+    for source_id in source_ids:
+        src = base_path / source_id.lstrip('/')
+        if not src.exists():
+            raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
+        
+        dest = dest_dir / src.name
+        shutil.move(src, dest)
+        moved_items.append(str(dest))
+    
+    return {"message": "Item(s) moved successfully", "destinations": moved_items}
 
 
 # Rename a File or Folder
 @api_router.patch("/FileManager/rename")
-def rename_item(source: str = Form(...), new_name: str = Form(...)):
-    src = dirtools.UserFileDirs.getValidatedDataPath() / source
+def rename_item(body: dict = Body(...)):
+    """Rename a file or folder. Expects JSON body: {"id": "path", "newName": "new_name"}"""
+    file_id = body.get("id")
+    new_name = body.get("newName")
+    
+    if not file_id or not new_name:
+        raise HTTPException(status_code=400, detail="Missing id or newName")
+    
+    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
+    src = base_path / file_id.lstrip('/')
     new_path = src.parent / new_name
+    
     if not src.exists():
         raise HTTPException(status_code=404, detail="Source not found")
+    
     src.rename(new_path)
     return {"message": "Item renamed successfully", "new_path": str(new_path)}
 
 
 # 🗑️ Delete File(s) or Folder(s)
 @api_router.delete("/FileManager")
-def delete_item(paths: List[str]):
+def delete_item(body: dict = Body(...)):
+    """Delete files or folders. Expects JSON body: {"ids": ["path1", "path2"]}"""
+    print(f"DELETE request received with body: {body}")
+    paths = body.get("ids", [])
+    print(f"Extracted paths: {paths}")
+    if not paths:
+        raise HTTPException(status_code=400, detail="No paths provided")
+    
+    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
     for path in paths:
-        target = dirtools.UserFileDirs.getValidatedDataPath() / path
+        if path is None:
+            continue
+        # Remove leading slash if present
+        clean_path = path.lstrip('/')
+        target = base_path / clean_path
+        print(f"Attempting to delete: {target} (exists: {target.exists()})")
         if not target.exists():
             raise HTTPException(status_code=404, detail=f"Path '{path}' not found")
         if target.is_dir():
             shutil.rmtree(target)
+            print(f"Deleted directory: {target}")
         else:
             target.unlink()
+            print(f"Deleted file: {target}")
     return {"message": "Item(s) deleted successfully"}
 
 

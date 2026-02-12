@@ -174,9 +174,15 @@ class PositionerController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def homeAxis(self, positionerName:str=None, axis:str="X", isBlocking:bool=False, homeDirection:int=None, homeSpeed:float=None, homeEndstoppolarity:int=None, homeEndposRelease:float=None, homeTimeout:int=None):
         self.__logger.debug(f"Homing axis {axis}")
-        if positionerName is None:
+        if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-        self._master.positionersManager[positionerName].doHome(axis, isBlocking=isBlocking, homeDirection=homeDirection, homeSpeed=homeSpeed, homeEndstoppolarity=homeEndstoppolarity, homeEndposRelease=homeEndposRelease, homeTimeout=homeTimeout)
+        self._master.positionersManager[positionerName].doHome(axis, 
+                                                               isBlocking=isBlocking, 
+                                                               homeDirection=homeDirection, 
+                                                               homeSpeed=homeSpeed, 
+                                                               homeEndstoppolarity=homeEndstoppolarity, 
+                                                               homeEndposRelease=homeEndposRelease, 
+                                                               homeTimeout=homeTimeout)
         #self.updatePosition(positionerName, axis)
         #self._commChannel.sigUpdateMotorPosition.emit(self.getPos()) # Not needed as it will be pushed asynchronously from the esp via signal
 

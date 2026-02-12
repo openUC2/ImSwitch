@@ -69,6 +69,9 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_target_focus_setpoint = kwargs.get('autofocus_target_focus_setpoint', None)
         initial_z_position = kwargs.get('initial_z_position', None)
         t_period = kwargs.get('t_period', 1)
+        # Timing parameters from GUI (used for settle/exposure waits)
+        t_pre_s = kwargs.get('t_pre_s', 0.09)  # Pre-exposure settle time in seconds
+        t_post_s = kwargs.get('t_post_s', 0.05)  # Post-exposure time in seconds
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
 
@@ -97,7 +100,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 z_positions, initial_z_position, illumination_sources, illumination_intensities,
                 exposures, gains, t, is_auto_focus, autofocus_min,
                 autofocus_max, autofocus_step_size, autofocus_illumination_channel,
-                autofocus_mode, autofocus_max_attempts, autofocus_target_focus_setpoint, n_times
+                autofocus_mode, autofocus_max_attempts, autofocus_target_focus_setpoint, n_times,
+                t_pre_s=t_pre_s, t_post_s=t_post_s
             )
 
         # Add finalization steps
@@ -331,7 +335,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   autofocus_mode: str,
                                     autofocus_max_attempts: int,
                                     autofocus_target_focus_setpoint: float,
-                                  n_times: int) -> int:
+                                  n_times: int,
+                                  t_pre_s: float = 0.09,
+                                  t_post_s: float = 0.05) -> int:
         """
         Create workflow steps for a single tile.
         
@@ -427,7 +433,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                         main_func=self.controller.move_stage_z,
                         main_params={"posZ": i_z, "relative": False},
                         pre_funcs=[self.controller.wait_time],
-                        pre_params={"seconds": 0.1},
+                        pre_params={"seconds": t_pre_s},
                     ))
                     step_id += 1
 
@@ -437,14 +443,14 @@ class ExperimentNormalMode(ExperimentModeBase):
                     if illu_intensity <= 0:
                         continue
 
-                    # Turn on illumination only for multiple sources (single source was turned on once at the beginning)
+                    # Turn on illumination - use tPre as settle time after activation
                     workflow_steps.append(WorkflowStep(
                         name="Turn on illumination",
                         step_id=step_id,
                         main_func=self.controller.set_laser_power,
                         main_params={"power": illu_intensity, "channel": illu_source},
                         post_funcs=[self.controller.wait_time],
-                        post_params={"seconds": 0.1},
+                        post_params={"seconds": t_pre_s},
                     ))
                     step_id += 1
 
@@ -503,7 +509,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     main_func=self.controller.move_stage_z,
                     main_params={"posZ": initial_z_position, "relative": False},
                     pre_funcs=[self.controller.wait_time],
-                    pre_params={"seconds": 0.1},
+                    pre_params={"seconds": t_pre_s},
                 ))
                 step_id += 1
 

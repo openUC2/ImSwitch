@@ -532,7 +532,7 @@ class ImSwitchServer(Worker):
         config = get_config()
         
         # Get the jupyter_url from config which is set when notebook starts
-        jupyter_url = f"http://localhost:{config.jupyter_port}/jupyter" # this will be converted in the frontend to the correct HOSTIP
+        jupyter_url = f"http://localhost:{config.jupyter_port}/jupyter/" # the frontend will substitute localhost:port accordingly
         
 
         return {"url": jupyter_url}

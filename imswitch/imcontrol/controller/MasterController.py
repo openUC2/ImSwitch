@@ -1,6 +1,9 @@
 from imswitch.imcommon.model import VFileItem, initLogger
 
-import pkg_resources
+try:
+    from importlib.metadata import entry_points
+except ImportError:
+    entry_points = None
 
 # TODO: Import managers dynamically - similar to the controllers - to save time
 from imswitch.imcontrol.model import (
@@ -171,7 +174,12 @@ class MasterController:
         if "Workflow" in self.__setupInfo.availableWidgets:
             self.workflowManager = WorkflowManager()
         if "Arkitekt" in self.__setupInfo.availableWidgets:
-            self.arkitektManager = ArkitektManager(self.__setupInfo.arkitekt)
+            if ArkitektManager is None:
+                self.__logger.warning(
+                    "ArkitektManager unavailable; skipping Arkitekt initialization."
+                )
+            else:
+                self.arkitektManager = ArkitektManager(self.__setupInfo.arkitekt)
         # load all implugin-related managers and add them to the class
         # try to get it from the plugins
         # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the
@@ -180,7 +188,8 @@ class MasterController:
         ###################################################################################################
         # PLUGIN SYSTEM FOR MANAGERS
         ###################################################################################################
-        for entry_point in pkg_resources.iter_entry_points("imswitch.implugins"):
+        eps = list(entry_points(group="imswitch.implugins")) if entry_points else []
+        for entry_point in eps:
             InfoClass = None
             print(f"entry_point: {entry_point.name}")
             try:
@@ -188,13 +197,14 @@ class MasterController:
                     # check if there is an info class, too
                     try:
                         InfoClassName = entry_point.name.split("_manager")[0] + "_info"
-                        # load the info class from InfoClassName
-                        InfoClass = pkg_resources.load_entry_point(
-                            "imswitch", "imswitch.implugins", InfoClassName
+                        info_entry = next(
+                            (ep for ep in eps if ep.name == InfoClassName), None
                         )
+                        if info_entry is not None:
+                            InfoClass = info_entry.load()
                     except Exception:
                         InfoClass = None
-                    ManagerClass = entry_point.load(InfoClass)  # Load the manager class
+                    ManagerClass = entry_point.load()  # Load the manager class
                     # self.__setupInfo.add_attribute(attr_name=entry_point.name.split("_manager")[0], attr_value={})
                     moduleInfo = None  # TODO: This is not complete yet - the setupinfo would need to be added to the class in the very begnning prior to detecing external plugins/hooks
                     manager = ManagerClass(moduleInfo)  # Initialize the manager

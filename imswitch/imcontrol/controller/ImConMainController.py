@@ -75,6 +75,13 @@ class ImConMainController(MainController):
                 )
             if widgetKey == "ImSwitchServer":
                 continue
+            if widgetKey == "Arkitekt" and not hasattr(
+                self.__masterController, "arkitektManager"
+            ):
+                self.__logger.warning(
+                    "ArkitektManager unavailable; skipping ArkitektController."
+                )
+                continue
 
             controller_class = None
             # Try to get controller from controllers module (static import)

@@ -3,16 +3,16 @@ name: test-uv
 on:
   push:
     branches:
-      - 'master'
-      - 'main'
+      - "master"
+      - "main"
     tags:
-      - 'v*'
+      - "v*"
   pull_request:
   merge_group:
   workflow_dispatch:
     inputs:
       git-ref:
-        description: 'Git ref (optional)'
+        description: "Git ref (optional)"
         required: false
 
 jobs:
@@ -58,6 +58,7 @@ jobs:
           else
             uv pip install --system pytest
           fi
+          uv pip install --system setuptools
           # Install additional test dependencies that might be needed
           uv pip install --system pytest-xvfb
         shell: bash

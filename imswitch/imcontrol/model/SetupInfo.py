@@ -879,8 +879,13 @@ class SetupInfo:
         # If there is a imswitch_sim_info, we want to add this as self.imswitch_sim_info to the
         # SetupInfo Class
 
-        import pkg_resources
-        for entry_point in pkg_resources.iter_entry_points('imswitch.implugins'):
+        try:
+            from importlib.metadata import entry_points
+            eps = entry_points(group='imswitch.implugins')
+        except Exception:
+            eps = []
+        
+        for entry_point in eps:
             if entry_point.name == attr_name+"_info":
                 ManagerClass = entry_point.load()
                 ManagerDataClass = make_dataclass(entry_point.name.split("_info")[0], [(entry_point.name, ManagerClass)])

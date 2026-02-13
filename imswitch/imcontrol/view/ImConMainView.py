@@ -4,7 +4,10 @@ from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from . import widgets
-import pkg_resources
+try:
+    from importlib.metadata import entry_points
+except ImportError:
+    entry_points = None
 import importlib
 import importlib.util
 

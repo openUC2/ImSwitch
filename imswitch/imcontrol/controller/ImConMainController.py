@@ -1,5 +1,8 @@
 import dataclasses
-import pkg_resources
+try:
+    from importlib.metadata import entry_points
+except ImportError:
+    entry_points = None
 import h5py
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.controller import MainController, PickDatasetsController

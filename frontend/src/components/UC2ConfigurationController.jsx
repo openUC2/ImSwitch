@@ -283,7 +283,13 @@ const UC2ConfigurationController = () => {
           data = text;
         }
         if (!response.ok) {
-          throw new Error(`Failed to set configuration: ${response.status}`);
+          // Create a custom error to distinguish HTTP errors from network errors
+          const httpError = new Error(
+            `Failed to set configuration: ${response.status}`,
+          );
+          httpError.isHttpError = true;
+          httpError.status = response.status;
+          throw httpError;
         }
         return data;
       })
@@ -313,7 +319,10 @@ const UC2ConfigurationController = () => {
       })
       .catch((error) => {
         console.error("Error setting setup:", error);
-        if (restartSoftware) {
+
+        // Only start restart monitor for network errors during expected restart
+        // HTTP errors (404, 500, etc.) should show error message instead
+        if (restartSoftware && !error.isHttpError) {
           dispatch(
             setNotification({
               message: "ImSwitch is restarting... Please wait",
@@ -323,9 +332,11 @@ const UC2ConfigurationController = () => {
           monitorRestartStatus();
           return;
         }
+
+        // For HTTP errors or other issues, show error message
         dispatch(
           setNotification({
-            message: "Failed to set configuration",
+            message: error.message || "Failed to set configuration",
             type: "error",
           }),
         );
@@ -754,28 +765,6 @@ const UC2ConfigurationController = () => {
               >
                 {isRestarting ? "Processing..." : "Apply Configuration"}
               </Button>
-
-              {/* Status Information */}
-              {selectedSetup && (
-                <Box
-                  sx={{
-                    mt: 3,
-                    p: 2,
-                    bgcolor: "background.default",
-                    borderRadius: 1,
-                  }}
-                >
-                  <Typography variant="subtitle2" gutterBottom>
-                    Selected Configuration:
-                  </Typography>
-                  <Chip
-                    label={selectedSetup}
-                    color="primary"
-                    size="small"
-                    variant="outlined"
-                  />
-                </Box>
-              )}
 
               {/* Confirmation Dialog */}
               <Dialog open={isDialogOpen} onClose={handleDialogClose}>

@@ -569,8 +569,9 @@ class ImSwitchServer(Worker):
         """
         Returns the current setup filename.
         """
-        options = imswitch.DEFAULT_SETUP_FILE # configfiletools.loadOptions()
-        return {"current_setup": options}
+        options, _ = configfiletools.loadOptions()
+        current_setup = options.setupFileName or imswitch.DEFAULT_SETUP_FILE or ""
+        return {"current_setup": current_setup}
 
 
     @api_router.get("/UC2ConfigController/readSetupFile")

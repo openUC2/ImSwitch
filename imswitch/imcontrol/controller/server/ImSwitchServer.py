@@ -386,9 +386,7 @@ def rename_item(body: dict = Body(...)):
 @api_router.delete("/FileManager")
 def delete_item(body: dict = Body(...)):
     """Delete files or folders. Expects JSON body: {"ids": ["path1", "path2"]}"""
-    print(f"DELETE request received with body: {body}")
     paths = body.get("ids", [])
-    print(f"Extracted paths: {paths}")
     if not paths:
         raise HTTPException(status_code=400, detail="No paths provided")
     
@@ -397,15 +395,12 @@ def delete_item(body: dict = Body(...)):
         if path is None:
             continue
         target = _safe_resolve_path(base_path, path)
-        print(f"Attempting to delete: {target} (exists: {target.exists()})")
         if not target.exists():
             raise HTTPException(status_code=404, detail=f"Path '{path}' not found")
         if target.is_dir():
             shutil.rmtree(target)
-            print(f"Deleted directory: {target}")
         else:
             target.unlink()
-            print(f"Deleted file: {target}")
     return {"message": "Item(s) deleted successfully"}
 
 

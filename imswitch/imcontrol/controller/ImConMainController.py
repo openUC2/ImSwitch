@@ -244,7 +244,11 @@ class ImConMainController(MainController):
     def loadPlugin(self, widgetKey):
         # try to get it from the plugins
         foundPluginController = False
-        for entry_point in pkg_resources.iter_entry_points("imswitch.implugins"):
+        try:
+            eps = entry_points(group="imswitch.implugins")
+        except Exception:
+            eps = []
+        for entry_point in eps:
             if entry_point.name == f"{widgetKey}_controller":
                 packageController = entry_point.load()
                 return packageController

@@ -233,7 +233,11 @@ class ImConMainView(QMainWindow):
             except Exception as e:
                 # try to get it from the plugins
                 foundPluginController = False
-                for entry_point in pkg_resources.iter_entry_points('imswitch.implugins'):
+                try:
+                    eps = entry_points(group='imswitch.implugins')
+                except Exception:
+                    eps = []
+                for entry_point in eps:
                     if entry_point.name == f'{widgetKey}_widget':
                         packageWidget = entry_point.load()
                         self.widgets[widgetKey] = self.factory.createWidget(packageWidget)
@@ -287,9 +291,13 @@ class ImConMainViewNoQt(object):
 
     def _addWidgetNoQt(self, dockInfoDict):
         # Preload all available plugins for widgets
+        try:
+            eps = entry_points(group='imswitch.implugins')
+        except Exception:
+            eps = []
         availablePlugins = {
             entry_point.name: entry_point
-            for entry_point in pkg_resources.iter_entry_points('imswitch.implugins')
+            for entry_point in eps
         }
 
         for widgetKey, dockInfo in dockInfoDict.items():

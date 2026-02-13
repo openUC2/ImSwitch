@@ -58,13 +58,14 @@ jobs:
           else
             uv pip install --system pytest
           fi
-          uv pip install --system setuptools
           # Install additional test dependencies that might be needed
           uv pip install --system pytest-xvfb
         shell: bash
 
       - name: Install project with uv (editable)
         run: |
+          echo "Installing setuptools first..."
+          uv pip install --system setuptools
           echo "Installing project with UV..."
           uv pip install --system -e .
           echo "Checking if psygnal is installed..."

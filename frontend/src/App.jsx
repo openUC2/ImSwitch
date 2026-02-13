@@ -46,14 +46,12 @@ import GalvoScannerController from "./components/GalvoScannerController.jsx";
 import { NavigationDrawer, TopBar } from "./components/navigation";
 import AppManagerPage from "./components/AppManagerPage.jsx";
 
-
 //axon
 import AxonTabComponent from "./axon/AxonTabComponent.js";
 import WebSocketHandler from "./middleware/WebSocketHandler.js";
 import CompositeAcquisitionComponent from "./axon/CompositeAcquisitionComponent.js";
-import CompositeStreamViewer from "./axon/CompositeStreamViewer.js"
+import CompositeStreamViewer from "./axon/CompositeStreamViewer.js";
 import CompositeComponent from "./axon/CompositeComponent";
-
 
 //redux
 import { useDispatch, useSelector } from "react-redux";
@@ -63,6 +61,7 @@ import * as vizarrViewerSlice from "./state/slices/VizarrViewerSlice.js";
 import {
   clearNotification,
   getNotificationState,
+  setNotification,
 } from "./state/slices/NotificationSlice.js";
 import { getThemeState } from "./state/slices/ThemeSlice.js";
 
@@ -87,7 +86,7 @@ function App() {
 
   // Access global Redux state
   const connectionSettingsState = useSelector(
-    connectionSettingsSlice.getConnectionSettingsState
+    connectionSettingsSlice.getConnectionSettingsState,
   );
   const { isDarkMode } = useSelector(getThemeState);
 
@@ -120,8 +119,8 @@ function App() {
       ? "100%"
       : 240
     : isMobile
-    ? 0
-    : 90; // Collapsed sidebar width on desktop
+      ? 0
+      : 90; // Collapsed sidebar width on desktop
 
   const hostIP = connectionSettingsState.ip;
   const apiPort = connectionSettingsState.apiPort;
@@ -184,13 +183,22 @@ function App() {
 
   const handlePaste = async (copiedItems, destinationFolder, operationType) => {
     setIsLoading(true);
-    const copiedItemIds = copiedItems.map((item) => item._id);
-    if (operationType === "copy") {
-      await copyItemAPI(copiedItemIds, destinationFolder?._id);
-    } else {
-      await moveItemAPI(copiedItemIds, destinationFolder?._id);
+    try {
+      const copiedItemIds = copiedItems.map((item) => item._id);
+      if (operationType === "copy") {
+        await copyItemAPI(copiedItemIds, destinationFolder?._id);
+      } else {
+        await moveItemAPI(copiedItemIds, destinationFolder?._id);
+      }
+      getFiles();
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      const message =
+        detail || "Copy/move failed. Please refresh and try again.";
+      dispatch(setNotification({ message, type: "error" }));
+    } finally {
+      setIsLoading(false);
     }
-    getFiles();
   };
 
   const handleDownload = async (files) => {
@@ -229,13 +237,15 @@ function App() {
     // Construct the relative path for the Zarr file
     // The path from FileManager is like "/recordings/experiment.ome.zarr"
     const zarrPath = file.path || `/${file.name}`;
-    
+
     // Open the Vizarr viewer through Redux
-    dispatch(vizarrViewerSlice.openViewer({
-      url: zarrPath,
-      fileName: file.name
-    }));
-    
+    dispatch(
+      vizarrViewerSlice.openViewer({
+        url: zarrPath,
+        fileName: file.name,
+      }),
+    );
+
     // Switch to the Vizarr viewer tab
     setSelectedPlugin("VizarrViewer");
   };
@@ -298,7 +308,7 @@ function App() {
           // Check if the scope is loaded
           if (!window[scope]) {
             console.error(
-              `Scope '${scope}' not found on window. Make sure the script is loaded correctly.`
+              `Scope '${scope}' not found on window. Make sure the script is loaded correctly.`,
             );
             return;
           }
@@ -306,7 +316,7 @@ function App() {
           await container.init(__webpack_share_scopes__.default);
 
           const factory = await container.get(
-            exposed.startsWith("./") ? exposed : `./${exposed}`
+            exposed.startsWith("./") ? exposed : `./${exposed}`,
           );
           const module = factory();
           resolve({ default: module.default || module }); // <-- important
@@ -341,7 +351,7 @@ function App() {
             plugins.map(async (m) => ({
               name: m.name,
               Component: lazy(() => loadRemote(m)), // Wrap loadRemote with lazy
-            }))
+            })),
           );
 
           // Update the widgets state
@@ -421,7 +431,9 @@ function App() {
           )}
 
           {selectedPlugin === "WellPlate" && <AxonTabComponent />}
-          {selectedPlugin === "GalvoScannerController" && <GalvoScannerController />}
+          {selectedPlugin === "GalvoScannerController" && (
+            <GalvoScannerController />
+          )}
           {selectedPlugin === "ImJoy" && (
             <ImJoyView sharedImage={sharedImage} />
           )}
@@ -431,7 +443,9 @@ function App() {
           {selectedPlugin === "Stresstest" && <StresstestController />}
           {selectedPlugin === "FocusLock" && <FocusLockController />}
           {selectedPlugin === "AcceptanceTest" && <AcceptanceTestComponent />}
-          {selectedPlugin === "StageCenterCalibration" && <StageCenterCalibrationWizard />}
+          {selectedPlugin === "StageCenterCalibration" && (
+            <StageCenterCalibrationWizard />
+          )}
           {selectedPlugin === "HoloController" && <HoloController />}
           {selectedPlugin === "DPCController" && <DPCController />}
           {selectedPlugin === "JupyterNotebook" && (
@@ -479,7 +493,7 @@ function App() {
           )}
           {selectedPlugin === "VizarrViewer" && (
             <Box sx={{ width: "100%", height: "calc(100vh - 64px)" }}>
-              <VizarrViewer 
+              <VizarrViewer
                 zarrUrl={vizarrViewerState.currentUrl}
                 onClose={handleCloseVizarr}
                 height="100%"
@@ -498,11 +512,15 @@ function App() {
                 <Suspense fallback={<div>loading…</div>} key={p.name}>
                   <p.Component hostIP={hostIP} hostPort={apiPort} />
                 </Suspense>
-              )
+              ),
           )}
           {selectedPlugin === "DemoController" && <DemoController />}
-          {selectedPlugin === "CompositeAcquisition" && <CompositeAcquisitionComponent />}
-          {selectedPlugin === "CompositeStreamViewer" && <CompositeStreamViewer />}
+          {selectedPlugin === "CompositeAcquisition" && (
+            <CompositeAcquisitionComponent />
+          )}
+          {selectedPlugin === "CompositeStreamViewer" && (
+            <CompositeStreamViewer />
+          )}
           {selectedPlugin === "CompositeComponent" && <CompositeComponent />}
           {selectedPlugin === "FlowStop" && <FlowStopController />}
           {selectedPlugin === "StageOffsetCalibration" && (

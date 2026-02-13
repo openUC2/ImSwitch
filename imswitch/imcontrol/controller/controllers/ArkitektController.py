@@ -34,7 +34,17 @@ class ArkitektController(ImConWidgetController):
             self._master.detectorsManager.getAllDeviceNames()[0]
         ]
 
+        if not getattr(self._master, "arkitektManager", None):
+            self._logger.warning("ArkitektManager unavailable; controller disabled.")
+            return
+        if not self._master.arkitektManager.is_enabled():
+            self._logger.warning("Arkitekt not enabled; controller disabled.")
+            return
+
         self.arkitekt_app = self._master.arkitektManager.get_arkitekt_app()
+        if self.arkitekt_app is None:
+            self._logger.warning("Arkitekt app unavailable; controller disabled.")
+            return
         self.arkitekt_app.register(self.moveToSampleLoadingPosition)
         self.arkitekt_app.register(self.runTileScan)
         self.arkitekt_app.register(self.goToPosition)

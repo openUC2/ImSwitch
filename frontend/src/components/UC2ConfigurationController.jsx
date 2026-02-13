@@ -99,7 +99,6 @@ const UC2ConfigurationController = () => {
   const restartAfterSave = uc2State.restartAfterSave;
   const overwriteFile = uc2State.overwriteFile;
   const currentActiveFilename = uc2State.currentActiveFilename;
-  const isLoadingCurrentFilename = uc2State.isLoadingCurrentFilename;
 
   // New state properties
   const isLoadingFile = uc2State.isLoadingFile;

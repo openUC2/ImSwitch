@@ -64,8 +64,6 @@ jobs:
 
       - name: Install project with uv (editable)
         run: |
-          echo "Installing setuptools first..."
-          uv pip install --system setuptools
           echo "Installing project with UV..."
           uv pip install --system -e .
           echo "Checking if psygnal is installed..."

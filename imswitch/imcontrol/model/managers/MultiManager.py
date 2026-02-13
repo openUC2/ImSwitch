@@ -1,10 +1,9 @@
 import importlib
 from abc import ABC, abstractmethod
+from importlib.metadata import entry_points
+
 from imswitch.imcommon.model import initLogger
-
 from imswitch.imcommon.model import pythontools
-
-import pkg_resources
 
 class MultiManager(ABC):
     """ Abstract class for a manager used to control a group of sub-managers.
@@ -33,7 +32,8 @@ class MultiManager(ABC):
                     # try to import from the implugins
                     self.__logger.error(e)
                     try:
-                        for entry_point in pkg_resources.iter_entry_points(f'imswitch.implugins.{subManagersPackage}'):
+                        eps = entry_points(group=f'imswitch.implugins.{subManagersPackage}')
+                        for entry_point in eps:
                             manager = entry_point.load()
                             self._subManagers[managedDeviceName] = manager(
                                 managedDeviceInfo, managedDeviceName, **lowLevelManagers)

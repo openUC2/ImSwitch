@@ -151,7 +151,7 @@ const UC2ConfigurationController = () => {
       .then((response) => response.json())
       .then((data) => {
         const currentSetup = data.current_setup || "";
-        const setupName = currentSetup.split("/").pop();
+        const setupName = currentSetup.split(/[\\/]/).pop();
         const normalized = setupName || currentSetup;
         dispatch(uc2Slice.setCurrentActiveFilename(normalized));
 

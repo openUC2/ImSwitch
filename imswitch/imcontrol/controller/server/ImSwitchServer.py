@@ -98,6 +98,20 @@ class CreateFolderRequest(BaseModel):
     name: str
     parentId: Optional[str] = None
 
+
+class CopyMoveRequest(BaseModel):
+    sourceIds: List[str]
+    destinationId: Optional[str] = None
+
+
+class RenameRequest(BaseModel):
+    id: str
+    newName: str
+
+
+class DeleteRequest(BaseModel):
+    ids: List[str]
+
 @api_router.get("/version")
 def get_version():
     """
@@ -120,12 +134,12 @@ def get_available_controllers() -> Dict[str, List[str]]:
 
 # Create a Folder
 @api_router.post("/FileManager/folder")
-def create_folder(body: dict = Body(...)):
+def create_folder(body: CreateFolderRequest):
     """
     Create a folder using JSON payload. Expects: {"name": "folder_name", "parentId": "/path/to/parent"}
     """
-    name = body.get("name")
-    parent_id = body.get("parentId", "")
+    name = body.name
+    parent_id = body.parentId or ""
     
     if not name:
         raise HTTPException(status_code=400, detail="Folder name is required")
@@ -293,10 +307,10 @@ def upload_file(file: UploadFile = File(...), parentId: Optional[str] = Form(Non
 
 # 📋 Copy File(s) or Folder(s)
 @api_router.post("/FileManager/copy")
-def copy_item(body: dict = Body(...)):
+def copy_item(body: CopyMoveRequest):
     """Copy files or folders. Expects JSON body: {"sourceIds": ["path1", ...], "destinationId": "dest_path"}"""
-    source_ids = body.get("sourceIds", [])
-    destination_id = body.get("destinationId", "")
+    source_ids = body.sourceIds
+    destination_id = body.destinationId or ""
     
     if not source_ids:
         raise HTTPException(status_code=400, detail="No source items provided")
@@ -325,10 +339,10 @@ def copy_item(body: dict = Body(...)):
 
 # 📤 Move File(s) or Folder(s)
 @api_router.put("/FileManager/move")
-def move_item(body: dict = Body(...)):
+def move_item(body: CopyMoveRequest):
     """Move files or folders. Expects JSON body: {"sourceIds": ["path1", ...], "destinationId": "dest_path"}"""
-    source_ids = body.get("sourceIds", [])
-    destination_id = body.get("destinationId", "")
+    source_ids = body.sourceIds
+    destination_id = body.destinationId or ""
     
     if not source_ids:
         raise HTTPException(status_code=400, detail="No source items provided")
@@ -351,13 +365,10 @@ def move_item(body: dict = Body(...)):
 
 # Rename a File or Folder
 @api_router.patch("/FileManager/rename")
-def rename_item(body: dict = Body(...)):
+def rename_item(body: RenameRequest):
     """Rename a file or folder. Expects JSON body: {"id": "path", "newName": "new_name"}"""
-    file_id = body.get("id")
-    new_name = body.get("newName")
-    
-    if not file_id or not new_name:
-        raise HTTPException(status_code=400, detail="Missing id or newName")
+    file_id = body.id
+    new_name = body.newName
     
     _validate_simple_name(new_name, "new name")
     base_path = _get_base_path()
@@ -375,9 +386,9 @@ def rename_item(body: dict = Body(...)):
 
 # 🗑️ Delete File(s) or Folder(s)
 @api_router.delete("/FileManager")
-def delete_item(body: dict = Body(...)):
+def delete_item(body: DeleteRequest):
     """Delete files or folders. Expects JSON body: {"ids": ["path1", "path2"]}"""
-    paths = body.get("ids", [])
+    paths = body.ids
     if not paths:
         raise HTTPException(status_code=400, detail="No paths provided")
     

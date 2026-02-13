@@ -158,15 +158,6 @@ const UC2ConfigurationController = () => {
         const setupName = currentSetup.split(/[\\/]/).pop();
         const normalized = setupName || currentSetup;
         dispatch(uc2Slice.setCurrentActiveFilename(normalized));
-
-        if (
-          !hasAutoSelectedRef.current &&
-          normalized &&
-          availableSetups.includes(normalized)
-        ) {
-          dispatch(uc2Slice.setSelectedSetup(normalized));
-          hasAutoSelectedRef.current = true;
-        }
       })
       .catch((error) => {
         console.error("Error fetching current setup:", error);
@@ -181,7 +172,19 @@ const UC2ConfigurationController = () => {
       .finally(() => {
         dispatch(uc2Slice.setIsLoadingCurrentFilename(false));
       });
-  }, [hostIP, hostPort, dispatch, availableSetups]);
+  }, [hostIP, hostPort, dispatch]);
+
+  // Auto-select current setup when both currentActiveFilename and availableSetups are ready
+  useEffect(() => {
+    if (
+      !hasAutoSelectedRef.current &&
+      currentActiveFilename &&
+      availableSetups.includes(currentActiveFilename)
+    ) {
+      dispatch(uc2Slice.setSelectedSetup(currentActiveFilename));
+      hasAutoSelectedRef.current = true;
+    }
+  }, [currentActiveFilename, availableSetups, dispatch]);
 
   const monitorRestartStatus = useCallback(() => {
     let retryCount = 0;

@@ -317,6 +317,10 @@ def copy_item(body: CopyMoveRequest):
     
     base_path = _get_base_path()
     dest_dir = _safe_resolve_path(base_path, destination_id or "")
+    if destination_id and not dest_dir.exists():
+        raise HTTPException(status_code=404, detail="Destination not found")
+    if dest_dir.exists() and not dest_dir.is_dir():
+        raise HTTPException(status_code=400, detail="Destination is not a folder")
     
     copied_items = []
     for source_id in source_ids:
@@ -349,6 +353,10 @@ def move_item(body: CopyMoveRequest):
     
     base_path = _get_base_path()
     dest_dir = _safe_resolve_path(base_path, destination_id or "")
+    if destination_id and not dest_dir.exists():
+        raise HTTPException(status_code=404, detail="Destination not found")
+    if dest_dir.exists() and not dest_dir.is_dir():
+        raise HTTPException(status_code=400, detail="Destination is not a folder")
     
     moved_items = []
     for source_id in source_ids:

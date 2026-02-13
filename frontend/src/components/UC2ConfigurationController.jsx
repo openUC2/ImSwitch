@@ -56,7 +56,6 @@ import {
 import ConfigurationPreviewDialog from "./ConfigurationPreviewDialog";
 import ConfigurationWizard from "./ConfigurationWizard";
 
-
 const TabPanel = ({ children, value, index, ...other }) => (
   <div
     role="tabpanel"
@@ -79,6 +78,7 @@ const UC2ConfigurationController = () => {
   const hostPort = connectionSettings.apiPort || "8000";
 
   const [showConfigWizard, setShowConfigWizard] = React.useState(false);
+  const hasAutoSelectedRef = React.useRef(false);
 
   // Access global Redux state
   const uc2State = useSelector(uc2Slice.getUc2State);
@@ -98,6 +98,8 @@ const UC2ConfigurationController = () => {
   const setAsCurrentConfig = uc2State.setAsCurrentConfig;
   const restartAfterSave = uc2State.restartAfterSave;
   const overwriteFile = uc2State.overwriteFile;
+  const currentActiveFilename = uc2State.currentActiveFilename;
+  const isLoadingCurrentFilename = uc2State.isLoadingCurrentFilename;
 
   // New state properties
   const isLoadingFile = uc2State.isLoadingFile;
@@ -107,14 +109,13 @@ const UC2ConfigurationController = () => {
   const configPreview = uc2State.configPreview;
   const showPreviewDialog = uc2State.showPreviewDialog;
 
-
   const fetchAvailableSetups = useCallback(() => {
     const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/returnAvailableSetups`;
     dispatch(
       setNotification({
         message: "Loading available setups...",
         type: "info",
-      })
+      }),
     );
 
     fetch(url)
@@ -127,7 +128,7 @@ const UC2ConfigurationController = () => {
               data.available_setups?.length || 0
             } configuration files`,
             type: "success",
-          })
+          }),
         );
         setTimeout(() => dispatch(clearNotification()), 3000);
       })
@@ -137,32 +138,70 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "Failed to load configuration files",
             type: "error",
-          })
+          }),
         );
         setTimeout(() => dispatch(clearNotification()), 3000);
       });
   }, [hostIP, hostPort, dispatch]);
+
+  const fetchCurrentSetup = useCallback(() => {
+    const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/getCurrentSetupFilename`;
+    dispatch(uc2Slice.setIsLoadingCurrentFilename(true));
+    fetch(url)
+      .then((response) => response.json())
+      .then((data) => {
+        const currentSetup = data.current_setup || "";
+        const setupName = currentSetup.split("/").pop();
+        const normalized = setupName || currentSetup;
+        dispatch(uc2Slice.setCurrentActiveFilename(normalized));
+
+        if (
+          !hasAutoSelectedRef.current &&
+          normalized &&
+          availableSetups.includes(normalized)
+        ) {
+          dispatch(uc2Slice.setSelectedSetup(normalized));
+          hasAutoSelectedRef.current = true;
+        }
+      })
+      .catch((error) => {
+        console.error("Error fetching current setup:", error);
+        dispatch(
+          setNotification({
+            message: "Failed to load current configuration",
+            type: "warning",
+          }),
+        );
+        setTimeout(() => dispatch(clearNotification()), 3000);
+      })
+      .finally(() => {
+        dispatch(uc2Slice.setIsLoadingCurrentFilename(false));
+      });
+  }, [hostIP, hostPort, dispatch, availableSetups]);
 
   const monitorRestartStatus = useCallback(() => {
     let retryCount = 0;
     const maxRetries = 30; // 5 minutes with 10-second intervals
 
     const checkStatus = () => {
-      fetch(`${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/is_connected`)
-        .then((res) => res.json())
-        .then((data) => {
-          if (data === true) {
-            dispatch(
-              setNotification({
-                message: "ImSwitch is back online!",
-                type: "success",
-              })
-            );
-            dispatch(uc2Slice.setIsRestarting(false));
-            setTimeout(() => dispatch(clearNotification()), 3000);
-          } else {
-            throw new Error("Not connected yet");
+      fetch(`${hostIP}:${hostPort}/imswitch/api/version`)
+        .then((res) => {
+          if (!res.ok) {
+            throw new Error("Backend not ready");
           }
+          return res.json().catch(() => ({}));
+        })
+        .then(() => {
+          dispatch(
+            setNotification({
+              message: "ImSwitch backend is back online!",
+              type: "success",
+            }),
+          );
+          dispatch(uc2Slice.setIsRestarting(false));
+          setTimeout(() => dispatch(clearNotification()), 3000);
+          fetchAvailableSetups();
+          fetchCurrentSetup();
         })
         .catch(() => {
           retryCount++;
@@ -171,7 +210,7 @@ const UC2ConfigurationController = () => {
               setNotification({
                 message: `Waiting for ImSwitch to restart... (${retryCount}/${maxRetries})`,
                 type: "info",
-              })
+              }),
             );
             setTimeout(checkStatus, 10000); // Check every 10 seconds
           } else {
@@ -180,7 +219,7 @@ const UC2ConfigurationController = () => {
                 message:
                   "ImSwitch restart taking longer than expected. Please check manually.",
                 type: "warning",
-              })
+              }),
             );
             dispatch(uc2Slice.setIsRestarting(false));
           }
@@ -194,6 +233,12 @@ const UC2ConfigurationController = () => {
   useEffect(() => {
     fetchAvailableSetups();
   }, [dispatch, fetchAvailableSetups]);
+
+  useEffect(() => {
+    if (availableSetups.length > 0) {
+      fetchCurrentSetup();
+    }
+  }, [availableSetups, fetchCurrentSetup]);
 
   // Note: Connection monitoring is now handled centrally by WebSocketHandler
   // This eliminates duplicate API calls and potential conflicts with ConnectionSettings testing
@@ -212,7 +257,7 @@ const UC2ConfigurationController = () => {
         setNotification({
           message: "Please select a setup before proceeding",
           type: "warning",
-        })
+        }),
       );
       return;
     }
@@ -222,15 +267,27 @@ const UC2ConfigurationController = () => {
       setNotification({
         message: "Setting up configuration...",
         type: "info",
-      })
+      }),
     );
 
     const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/setSetupFileName?setupFileName=${encodeURIComponent(
-      selectedSetup
+      selectedSetup,
     )}&restartSoftware=${restartSoftware}`;
 
     fetch(url, { method: "GET" })
-      .then((response) => response.json())
+      .then(async (response) => {
+        const text = await response.text();
+        let data = null;
+        try {
+          data = JSON.parse(text);
+        } catch (error) {
+          data = text;
+        }
+        if (!response.ok) {
+          throw new Error(`Failed to set configuration: ${response.status}`);
+        }
+        return data;
+      })
       .then((data) => {
         console.log("Setup selected:", data);
         dispatch(uc2Slice.setIsDialogOpen(true));
@@ -240,7 +297,7 @@ const UC2ConfigurationController = () => {
             setNotification({
               message: "ImSwitch is restarting... Please wait",
               type: "info",
-            })
+            }),
           );
           // Start monitoring connection status
           monitorRestartStatus();
@@ -249,7 +306,7 @@ const UC2ConfigurationController = () => {
             setNotification({
               message: "Configuration updated successfully",
               type: "success",
-            })
+            }),
           );
           dispatch(uc2Slice.setIsRestarting(false));
           setTimeout(() => dispatch(clearNotification()), 3000);
@@ -257,11 +314,21 @@ const UC2ConfigurationController = () => {
       })
       .catch((error) => {
         console.error("Error setting setup:", error);
+        if (restartSoftware) {
+          dispatch(
+            setNotification({
+              message: "ImSwitch is restarting... Please wait",
+              type: "info",
+            }),
+          );
+          monitorRestartStatus();
+          return;
+        }
         dispatch(
           setNotification({
             message: "Failed to set configuration",
             type: "error",
-          })
+          }),
         );
         dispatch(uc2Slice.setIsRestarting(false));
       });
@@ -284,7 +351,7 @@ const UC2ConfigurationController = () => {
         setNotification({
           message: "Please select a file to load",
           type: "warning",
-        })
+        }),
       );
       return;
     }
@@ -295,11 +362,11 @@ const UC2ConfigurationController = () => {
       setNotification({
         message: "Loading configuration file...",
         type: "info",
-      })
+      }),
     );
 
     const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/readSetupFile?setupFileName=${encodeURIComponent(
-      selectedFileForEdit
+      selectedFileForEdit,
     )}`;
 
     fetch(url)
@@ -310,7 +377,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "Configuration file loaded successfully",
             type: "success",
-          })
+          }),
         );
         setTimeout(() => dispatch(clearNotification()), 3000);
       })
@@ -320,7 +387,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "Failed to load configuration file",
             type: "error",
-          })
+          }),
         );
       })
       .finally(() => {
@@ -334,7 +401,7 @@ const UC2ConfigurationController = () => {
         setNotification({
           message: "Please provide a filename",
           type: "warning",
-        })
+        }),
       );
       return;
     }
@@ -348,7 +415,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "No JSON content to preview",
             type: "warning",
-          })
+          }),
         );
         return;
       }
@@ -359,7 +426,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: `Invalid JSON: ${jsonValidation.error}`,
             type: "error",
-          })
+          }),
         );
         return;
       }
@@ -370,7 +437,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "No JSON content to preview",
             type: "warning",
-          })
+          }),
         );
         return;
       }
@@ -400,7 +467,7 @@ const UC2ConfigurationController = () => {
         setNotification({
           message: "Please provide a filename",
           type: "warning",
-        })
+        }),
       );
       return;
     }
@@ -412,7 +479,7 @@ const UC2ConfigurationController = () => {
         setNotification({
           message: fileNameValidation.error,
           type: "error",
-        })
+        }),
       );
       return;
     }
@@ -432,7 +499,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "No JSON content to save",
             type: "warning",
-          })
+          }),
         );
         return;
       }
@@ -443,7 +510,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: `Invalid JSON: ${jsonValidation.error}`,
             type: "error",
-          })
+          }),
         );
         return;
       }
@@ -454,7 +521,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "No JSON content to save",
             type: "warning",
-          })
+          }),
         );
         return;
       }
@@ -466,11 +533,11 @@ const UC2ConfigurationController = () => {
       setNotification({
         message: "Saving configuration file...",
         type: "info",
-      })
+      }),
     );
 
     const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/writeNewSetupFile?setupFileName=${encodeURIComponent(
-      finalFileName
+      finalFileName,
     )}&setAsCurrentConfig=${setAsCurrentConfig}&restart=${restartAfterSave}&overwrite=${overwriteFile}`;
 
     fetch(url, {
@@ -511,7 +578,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "Configuration file saved successfully",
             type: "success",
-          })
+          }),
         );
 
         // Refresh available setups
@@ -522,7 +589,7 @@ const UC2ConfigurationController = () => {
             setNotification({
               message: "ImSwitch is restarting with new configuration...",
               type: "info",
-            })
+            }),
           );
           monitorRestartStatus();
         } else {
@@ -535,7 +602,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: `Failed to save configuration: ${error.message}`,
             type: "error",
-          })
+          }),
         );
       })
       .finally(() => {
@@ -640,6 +707,14 @@ const UC2ConfigurationController = () => {
                 </Select>
               </FormControl>
 
+              {currentActiveFilename && (
+                <Alert severity="info" sx={{ mb: 3 }}>
+                  <Typography variant="body2">
+                    Current configuration: {currentActiveFilename}
+                  </Typography>
+                </Alert>
+              )}
+
               {/* Configuration Options */}
               <Box sx={{ mb: 3 }}>
                 <FormControlLabel
@@ -728,7 +803,6 @@ const UC2ConfigurationController = () => {
               </Dialog>
             </CardContent>
           </Card>
-
         </TabPanel>
 
         <TabPanel value={tabIndex} index={1}>
@@ -932,7 +1006,7 @@ const UC2ConfigurationController = () => {
                           checked={setAsCurrentConfig}
                           onChange={(e) =>
                             dispatch(
-                              uc2Slice.setSetAsCurrentConfig(e.target.checked)
+                              uc2Slice.setSetAsCurrentConfig(e.target.checked),
                             )
                           }
                           disabled={isLoadingFile || isSavingFile}
@@ -948,7 +1022,7 @@ const UC2ConfigurationController = () => {
                           checked={restartAfterSave}
                           onChange={(e) =>
                             dispatch(
-                              uc2Slice.setRestartAfterSave(e.target.checked)
+                              uc2Slice.setRestartAfterSave(e.target.checked),
                             )
                           }
                           disabled={isLoadingFile || isSavingFile}
@@ -964,7 +1038,7 @@ const UC2ConfigurationController = () => {
                           checked={overwriteFile}
                           onChange={(e) =>
                             dispatch(
-                              uc2Slice.setOverwriteFile(e.target.checked)
+                              uc2Slice.setOverwriteFile(e.target.checked),
                             )
                           }
                           disabled={isLoadingFile || isSavingFile}
@@ -1033,7 +1107,6 @@ const UC2ConfigurationController = () => {
         hostIP={hostIP}
         hostPort={hostPort}
       />
-
     </Box>
   );
 };

@@ -147,7 +147,12 @@ const UC2ConfigurationController = () => {
     const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/getCurrentSetupFilename`;
     dispatch(uc2Slice.setIsLoadingCurrentFilename(true));
     fetch(url)
-      .then((response) => response.json())
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to fetch current setup: ${response.status}`);
+        }
+        return response.json();
+      })
       .then((data) => {
         const currentSetup = data.current_setup || "";
         const setupName = currentSetup.split(/[\\/]/).pop();

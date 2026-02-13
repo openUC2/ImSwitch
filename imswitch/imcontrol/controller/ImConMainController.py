@@ -1,5 +1,8 @@
 import dataclasses
-import pkg_resources
+try:
+    from importlib.metadata import entry_points
+except ImportError:
+    entry_points = None
 import h5py
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.controller import MainController, PickDatasetsController
@@ -71,6 +74,13 @@ class ImConMainController(MainController):
                     f"{widgetKey}Controller{self.__setupInfo.scan.scanWidgetType}"
                 )
             if widgetKey == "ImSwitchServer":
+                continue
+            if widgetKey == "Arkitekt" and not hasattr(
+                self.__masterController, "arkitektManager"
+            ):
+                self.__logger.warning(
+                    "ArkitektManager unavailable; skipping ArkitektController."
+                )
                 continue
 
             controller_class = None
@@ -241,7 +251,11 @@ class ImConMainController(MainController):
     def loadPlugin(self, widgetKey):
         # try to get it from the plugins
         foundPluginController = False
-        for entry_point in pkg_resources.iter_entry_points("imswitch.implugins"):
+        try:
+            eps = entry_points(group="imswitch.implugins")
+        except Exception:
+            eps = []
+        for entry_point in eps:
             if entry_point.name == f"{widgetKey}_controller":
                 packageController = entry_point.load()
                 return packageController

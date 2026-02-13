@@ -3,16 +3,16 @@ name: test-uv
 on:
   push:
     branches:
-      - 'master'
-      - 'main'
+      - "master"
+      - "main"
     tags:
-      - 'v*'
+      - "v*"
   pull_request:
   merge_group:
   workflow_dispatch:
     inputs:
       git-ref:
-        description: 'Git ref (optional)'
+        description: "Git ref (optional)"
         required: false
 
 jobs:

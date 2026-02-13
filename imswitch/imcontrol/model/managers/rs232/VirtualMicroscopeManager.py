@@ -19,6 +19,23 @@ try:
 except:
     IS_NIP = False
 
+
+def _extract_image(image, shape):
+    if IS_NIP:
+        return nip.extract(image, shape)
+    height, width = shape
+    img_h, img_w = image.shape[:2]
+    start_y = max((img_h - height) // 2, 0)
+    start_x = max((img_w - width) // 2, 0)
+    end_y = start_y + height
+    end_x = start_x + width
+    cropped = image[start_y:end_y, start_x:end_x]
+    if cropped.shape[0] == height and cropped.shape[1] == width:
+        return cropped
+    out = np.zeros((height, width), dtype=image.dtype)
+    out[: cropped.shape[0], : cropped.shape[1]] = cropped
+    return out
+
 # Makes sure code still executes without numba, albeit extremely slow
 try:
     from numba import njit, prange
@@ -704,7 +721,9 @@ class Camera:
             image = np.roll(
                 np.roll(image, int(x_offset), axis=1), int(y_offset), axis=0
             )
-            image = nip.extract(image, (self.SensorHeight, self.SensorWidth)) # extract the image to the sensor size
+            image = _extract_image(
+                image, (self.SensorHeight, self.SensorWidth)
+            )  # extract the image to the sensor size
             # do all post-processing on cropped image
             if IS_NIP and defocusPSF is not None and not defocusPSF.shape == ():
                 image = np.array(np.real(nip.convolve(image, defocusPSF)))
@@ -735,7 +754,9 @@ class Camera:
         image = np.roll(
             np.roll(image, int(x_offset), axis=1), int(y_offset), axis=0
         )
-        image = np.array(nip.extract(image, (self.SensorHeight, self.SensorWidth)))
+        image = np.array(
+            _extract_image(image, (self.SensorHeight, self.SensorWidth))
+        )
 
         yc_array, xc_array = binary2locs(image, density=0.05)
         photon_array = np.random.normal(

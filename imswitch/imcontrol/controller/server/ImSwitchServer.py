@@ -305,7 +305,7 @@ def upload_file(file: UploadFile = File(...), parentId: Optional[str] = Form(Non
     # Return full file metadata matching list_items structure
     return _build_item_metadata(file_location, base_path, is_dir_override=False)
 
-# 📋 Copy File(s) or Folder(s)
+# Copy File(s) or Folder(s)
 @api_router.post("/FileManager/copy")
 def copy_item(body: CopyMoveRequest):
     """Copy files or folders. Expects JSON body: {"sourceIds": ["path1", ...], "destinationId": "dest_path"}"""
@@ -341,7 +341,7 @@ def copy_item(body: CopyMoveRequest):
     return {"message": "Item(s) copied successfully", "destinations": copied_items}
 
 
-# 📤 Move File(s) or Folder(s)
+# Move File(s) or Folder(s)
 @api_router.put("/FileManager/move")
 def move_item(body: CopyMoveRequest):
     """Move files or folders. Expects JSON body: {"sourceIds": ["path1", ...], "destinationId": "dest_path"}"""
@@ -392,7 +392,7 @@ def rename_item(body: RenameRequest):
     return {"message": "Item renamed successfully", "new_path": str(new_path)}
 
 
-# 🗑️ Delete File(s) or Folder(s)
+# Delete File(s) or Folder(s)
 @api_router.delete("/FileManager")
 def delete_item(body: DeleteRequest):
     """Delete files or folders. Expects JSON body: {"ids": ["path1", "path2"]}"""
@@ -401,6 +401,7 @@ def delete_item(body: DeleteRequest):
         raise HTTPException(status_code=400, detail="No paths provided")
     
     base_path = _get_base_path()
+    deleted_items = []
     for path in paths:
         if path is None:
             continue
@@ -411,10 +412,11 @@ def delete_item(body: DeleteRequest):
             shutil.rmtree(target)
         else:
             target.unlink()
-    return {"message": "Item(s) deleted successfully"}
+        deleted_items.append(_make_rel_path(base_path, target))
+    return {"message": "Item(s) deleted successfully", "deleted": deleted_items}
 
 
-# ⬇️ Download File(s) or Folder(s)
+#  Download File(s) or Folder(s)
 @api_router.get("/FileManager/download/{path:path}")
 def download_file(path: str):
     base_path = _get_base_path()

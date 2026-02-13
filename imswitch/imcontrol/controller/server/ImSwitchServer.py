@@ -130,10 +130,22 @@ def create_folder(body: dict = Body(...)):
     if not name:
         raise HTTPException(status_code=400, detail="Folder name is required")
     
-    # Resolve folder path
-    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
-    parent_path = base_path / parent_id.lstrip('/') if parent_id else base_path
-    folder_path = parent_path / name
+    # Resolve folder path safely (prevent path traversal)
+    base_path = _get_base_path()
+    if name in {".", ".."} or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="Invalid folder name")
+    if parent_id:
+        parent_path_obj = Path(parent_id)
+        if parent_path_obj.is_absolute() or parent_path_obj.anchor or parent_path_obj.drive or ":" in parent_id:
+            raise HTTPException(status_code=400, detail="Invalid parent path")
+        parent_path = (base_path / parent_path_obj).resolve()
+    else:
+        parent_path = base_path
+    if not parent_path.is_relative_to(base_path):
+        raise HTTPException(status_code=400, detail="Invalid parent path")
+    folder_path = (parent_path / name).resolve()
+    if not folder_path.is_relative_to(base_path):
+        raise HTTPException(status_code=400, detail="Invalid folder path")
 
     # Check if folder already exists
     if folder_path.exists():
@@ -144,18 +156,7 @@ def create_folder(body: dict = Body(...)):
         folder_path.mkdir(parents=True, exist_ok=True)
         
         # Return full folder metadata matching list_items structure
-        rel_path = f"/{os.path.relpath(folder_path, base_path).replace(os.path.sep, '/')}"
-        stat_info = folder_path.stat()
-        
-        return {
-            "name": name,
-            "isDirectory": True,
-            "path": rel_path,
-            "_id": rel_path,
-            "size": None,
-            "filePreviewPath": None,
-            "modifiedTime": stat_info.st_mtime
-        }
+        return _build_item_metadata(folder_path, base_path, is_dir_override=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -167,33 +168,81 @@ class FileSystemItem(BaseModel):
     mimeType: str = None
 
 
+def _validate_simple_name(value: str, label: str) -> None:
+    if not value or value in {".", ".."} or "/" in value or "\\" in value:
+        raise HTTPException(status_code=400, detail=f"Invalid {label}")
+
+
+def _get_base_path() -> Path:
+    return Path(dirtools.UserFileDirs.getValidatedDataPath()).resolve()
+
+
+def _safe_resolve_path(base_path: Path, relative_path: str) -> Path:
+    if relative_path is None:
+        relative_path = ""
+    relative_path = relative_path.lstrip("/")
+    if ":" in relative_path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    rel_path_obj = Path(relative_path)
+    if rel_path_obj.is_absolute() or rel_path_obj.anchor or rel_path_obj.drive:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    resolved = (base_path / rel_path_obj).resolve()
+    if not resolved.is_relative_to(base_path):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return resolved
+
+
+def _make_rel_path(base_path: Path, target_path: Path) -> str:
+    return f"/{os.path.relpath(target_path, base_path).replace(os.path.sep, '/')}"
+
+
+def _build_item_metadata(path: Path, base_path: Path, is_dir_override: Optional[bool] = None) -> Dict:
+    stat_info = path.stat()
+    is_dir = path.is_dir() if is_dir_override is None else is_dir_override
+    rel_path = _make_rel_path(base_path, path)
+    preview_url = None if is_dir else f"/preview{rel_path}"
+    return {
+        "name": path.name,
+        "isDirectory": is_dir,
+        "path": rel_path,
+        "_id": rel_path,
+        "size": None if is_dir else stat_info.st_size,
+        "filePreviewPath": preview_url,
+        "modifiedTime": stat_info.st_mtime,
+    }
+
+
+def _unique_destination(dest_dir: Path, name: str) -> Path:
+    base = Path(name)
+    stem = base.stem
+    suffix = base.suffix
+    for index in range(0, 1000):
+        if index == 0:
+            candidate = f"{stem} (copy){suffix}"
+        else:
+            candidate = f"{stem} (copy {index + 1}){suffix}"
+        dest = dest_dir / candidate
+        if not dest.exists():
+            return dest
+    raise HTTPException(status_code=409, detail="Too many copy name conflicts")
+
+
 # Utility: List files/folders
-def list_items(base_path: str) -> List[Dict]:
+def list_items(directory: Path, base_path: Path) -> List[Dict]:
     items = []
 
-    def scan_directory(path):
+    def scan_directory(path: Path):
         with os.scandir(path) as it:
             for entry in it:
                 try:
-                    full_path = entry.path
-                    rel_path = f"/{os.path.relpath(full_path, dirtools.UserFileDirs.getValidatedDataPath()).replace(os.path.sep, '/')}"
-                    preview_url = f"/preview{rel_path}" if entry.is_file() else None
-                    stat_info = entry.stat()
-                    items.append({
-                        "name": entry.name,
-                        "isDirectory": entry.is_dir(),
-                        "path": rel_path,
-                        "_id": rel_path,  # Add _id field for frontend compatibility
-                        "size": stat_info.st_size if entry.is_file() else None,
-                        "filePreviewPath": preview_url,
-                        "modifiedTime": stat_info.st_mtime  # Add modification timestamp
-                    })
+                    full_path = Path(entry.path)
+                    items.append(_build_item_metadata(full_path, base_path))
                     if entry.is_dir():
                         scan_directory(full_path)
                 except Exception as e:
                     print(f"Error scanning {entry.path}: {e}")
 
-    scan_directory(base_path)
+    scan_directory(directory)
     # Sort items by modification time (newest first)
     items.sort(key=lambda x: x["modifiedTime"], reverse=True)
     return items
@@ -206,8 +255,9 @@ def preview_file(file_path: str):
     Provides file previews by serving the file from disk.
     - `file_path` is the relative path to the file within dirtools.UserFileDirs.getValidatedDataPath().
     """
-    # Resolve the absolute file path
-    absolute_path = dirtools.UserFileDirs.getValidatedDataPath() / file_path
+    # Resolve the absolute file path safely
+    base_path = _get_base_path()
+    absolute_path = _safe_resolve_path(base_path, file_path)
 
     # Check if the file exists and is a file
     if not absolute_path.exists() or not absolute_path.is_file():
@@ -223,10 +273,11 @@ def preview_file(file_path: str):
 
 @api_router.get("/FileManager/")
 def get_items(path: str = ""):
-    directory = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), path)
-    if not os.path.exists(directory):
+    base_path = _get_base_path()
+    directory = _safe_resolve_path(base_path, path)
+    if not directory.exists():
         raise HTTPException(status_code=404, detail="Path not found")
-    return list_items(directory)
+    return list_items(directory, base_path)
 
 @api_router.post("/FileManager/upload")
 def upload_file(file: UploadFile = File(...), parentId: Optional[str] = Form(None)):
@@ -236,8 +287,9 @@ def upload_file(file: UploadFile = File(...), parentId: Optional[str] = Form(Non
     - `parentId`: The relative path (folder ID) where the file should be uploaded.
     """
     # Resolve target directory
-    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
-    upload_dir = base_path / parentId.lstrip('/') if parentId else base_path
+    _validate_simple_name(file.filename, "file name")
+    base_path = _get_base_path()
+    upload_dir = _safe_resolve_path(base_path, parentId or "")
     upload_dir.mkdir(parents=True, exist_ok=True)  # Create directory if it doesn't exist
 
     # Save the uploaded file
@@ -246,18 +298,7 @@ def upload_file(file: UploadFile = File(...), parentId: Optional[str] = Form(Non
         shutil.copyfileobj(file.file, buffer)
     
     # Return full file metadata matching list_items structure
-    rel_path = f"/{os.path.relpath(file_location, base_path).replace(os.path.sep, '/')}"
-    stat_info = file_location.stat()
-    
-    return {
-        "name": file.filename,
-        "isDirectory": False,
-        "path": rel_path,
-        "_id": rel_path,
-        "size": stat_info.st_size,
-        "filePreviewPath": f"/preview{rel_path}",
-        "modifiedTime": stat_info.st_mtime
-    }
+    return _build_item_metadata(file_location, base_path, is_dir_override=False)
 
 # 📋 Copy File(s) or Folder(s)
 @api_router.post("/FileManager/copy")
@@ -269,24 +310,24 @@ def copy_item(body: dict = Body(...)):
     if not source_ids:
         raise HTTPException(status_code=400, detail="No source items provided")
     
-    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
-    dest_dir = base_path / destination_id.lstrip('/') if destination_id else base_path
+    base_path = _get_base_path()
+    dest_dir = _safe_resolve_path(base_path, destination_id or "")
     
     copied_items = []
     for source_id in source_ids:
-        src = base_path / source_id.lstrip('/')
+        src = _safe_resolve_path(base_path, source_id)
         if not src.exists():
             raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
         
         dest = dest_dir / src.name
         if dest.exists():
-            raise HTTPException(status_code=400, detail=f"Destination '{dest.name}' already exists")
+            dest = _unique_destination(dest_dir, src.name)
         
         if src.is_dir():
             shutil.copytree(src, dest)
         else:
             shutil.copy2(src, dest)
-        copied_items.append(str(dest))
+        copied_items.append(_make_rel_path(base_path, dest))
     
     return {"message": "Item(s) copied successfully", "destinations": copied_items}
 
@@ -301,18 +342,18 @@ def move_item(body: dict = Body(...)):
     if not source_ids:
         raise HTTPException(status_code=400, detail="No source items provided")
     
-    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
-    dest_dir = base_path / destination_id.lstrip('/') if destination_id else base_path
+    base_path = _get_base_path()
+    dest_dir = _safe_resolve_path(base_path, destination_id or "")
     
     moved_items = []
     for source_id in source_ids:
-        src = base_path / source_id.lstrip('/')
+        src = _safe_resolve_path(base_path, source_id)
         if not src.exists():
             raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
         
         dest = dest_dir / src.name
         shutil.move(src, dest)
-        moved_items.append(str(dest))
+        moved_items.append(_make_rel_path(base_path, dest))
     
     return {"message": "Item(s) moved successfully", "destinations": moved_items}
 
@@ -327,9 +368,12 @@ def rename_item(body: dict = Body(...)):
     if not file_id or not new_name:
         raise HTTPException(status_code=400, detail="Missing id or newName")
     
-    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
-    src = base_path / file_id.lstrip('/')
-    new_path = src.parent / new_name
+    _validate_simple_name(new_name, "new name")
+    base_path = _get_base_path()
+    src = _safe_resolve_path(base_path, file_id)
+    new_path = (src.parent / new_name).resolve()
+    if not new_path.is_relative_to(base_path):
+        raise HTTPException(status_code=400, detail="Invalid new path")
     
     if not src.exists():
         raise HTTPException(status_code=404, detail="Source not found")
@@ -348,13 +392,11 @@ def delete_item(body: dict = Body(...)):
     if not paths:
         raise HTTPException(status_code=400, detail="No paths provided")
     
-    base_path = Path(dirtools.UserFileDirs.getValidatedDataPath())
+    base_path = _get_base_path()
     for path in paths:
         if path is None:
             continue
-        # Remove leading slash if present
-        clean_path = path.lstrip('/')
-        target = base_path / clean_path
+        target = _safe_resolve_path(base_path, path)
         print(f"Attempting to delete: {target} (exists: {target.exists()})")
         if not target.exists():
             raise HTTPException(status_code=404, detail=f"Path '{path}' not found")
@@ -370,19 +412,20 @@ def delete_item(body: dict = Body(...)):
 # ⬇️ Download File(s) or Folder(s)
 @api_router.get("/FileManager/download/{path:path}")
 def download_file(path: str):
-    target = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), path.lstrip("/"))
-    if not os.path.exists(target):
+    base_path = _get_base_path()
+    target = _safe_resolve_path(base_path, path)
+    if not target.exists():
         raise HTTPException(status_code=404, detail="File/Folder not found")
-    if os.path.isfile(target):
-        return FileResponse(target, filename=target)
+    if target.is_file():
+        return FileResponse(str(target), filename=target.name)
     # If it's a folder, zip it and send
     # Assuming target is a string representing the path
-    zip_path = target + ".zip"
+    zip_path = str(target) + ".zip"
     with zipfile.ZipFile(zip_path, "w") as zipf:
-        for root, _, files in os.walk(target):
+        for root, _, files in os.walk(str(target)):
             for file in files:
                 full_path = os.path.join(root, file)
-                arcname = os.path.relpath(full_path, os.path.dirname(target))
+                arcname = os.path.relpath(full_path, os.path.dirname(str(target)))
                 zipf.write(full_path, arcname=arcname)
     return FileResponse(zip_path, filename=os.path.basename(zip_path))
 

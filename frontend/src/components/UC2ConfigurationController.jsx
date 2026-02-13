@@ -238,7 +238,7 @@ const UC2ConfigurationController = () => {
     if (availableSetups.length > 0) {
       fetchCurrentSetup();
     }
-  }, [availableSetups, fetchCurrentSetup]);
+  }, [availableSetups]);
 
   // Note: Connection monitoring is now handled centrally by WebSocketHandler
   // This eliminates duplicate API calls and potential conflicts with ConnectionSettings testing

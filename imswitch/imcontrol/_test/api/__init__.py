@@ -74,7 +74,7 @@ class ImSwitchAPITestServer:
 
         while time.time() - start_time < timeout:
             try:
-                response = requests.get(f"{self.base_url}/docs", timeout=2)
+                response = requests.get(f"{self.base_url}/imswitch/api/version", timeout=2)
                 if response.status_code == 200:
                     self.is_running = True
                     elapsed = time.time() - start_time
@@ -190,6 +190,14 @@ class ImSwitchAPITestServer:
     def put(self, endpoint: str, **kwargs) -> requests.Response:
         """Make PUT request to API endpoint."""
         return requests.put(f"{self.base_url}{endpoint}", **kwargs)
+
+    def patch(self, endpoint: str, **kwargs) -> requests.Response:
+        """Make PATCH request to API endpoint."""
+        return requests.patch(f"{self.base_url}{endpoint}", **kwargs)
+
+    def delete(self, endpoint: str, **kwargs) -> requests.Response:
+        """Make DELETE request to API endpoint."""
+        return requests.delete(f"{self.base_url}{endpoint}", **kwargs)
 
 
 # Global server instance for tests

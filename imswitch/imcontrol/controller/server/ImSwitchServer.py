@@ -132,17 +132,8 @@ def create_folder(body: dict = Body(...)):
     
     # Resolve folder path safely (prevent path traversal)
     base_path = _get_base_path()
-    if name in {".", ".."} or "/" in name or "\\" in name:
-        raise HTTPException(status_code=400, detail="Invalid folder name")
-    if parent_id:
-        parent_path_obj = Path(parent_id)
-        if parent_path_obj.is_absolute() or parent_path_obj.anchor or parent_path_obj.drive or ":" in parent_id:
-            raise HTTPException(status_code=400, detail="Invalid parent path")
-        parent_path = (base_path / parent_path_obj).resolve()
-    else:
-        parent_path = base_path
-    if not parent_path.is_relative_to(base_path):
-        raise HTTPException(status_code=400, detail="Invalid parent path")
+    _validate_simple_name(name, "folder name")
+    parent_path = _safe_resolve_path(base_path, parent_id or "")
     folder_path = (parent_path / name).resolve()
     if not folder_path.is_relative_to(base_path):
         raise HTTPException(status_code=400, detail="Invalid folder path")

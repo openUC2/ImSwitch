@@ -20,7 +20,7 @@ const PreviewFileAction = ({ filePreviewPath }) => {
   const { selectedFiles } = useSelection();
   const fileIcons = useFileIcons(73);
   const extension = getFileExtension(selectedFiles[0].name)?.toLowerCase();
-  const filePath = `${filePreviewPath}FileManager/download/${selectedFiles[0].path}`;
+  const filePath = `${filePreviewPath}FileManager/download${selectedFiles[0].path}`;
 
   const handleImageLoad = () => {
     setIsLoading(false); // Loading is complete

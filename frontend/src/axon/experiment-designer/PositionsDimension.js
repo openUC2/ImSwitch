@@ -108,6 +108,9 @@ const PositionsDimension = () => {
       case "Wellplate 384":
         wellLayout = wsUtils.generateWellLayout384({ offsetX, offsetY });
         break;
+      case "DEP Chip":
+        wellLayout = wsUtils.generateWellLayoutDEPChip({ offsetX, offsetY });
+        break;
       case "Ropod":
         wellLayout = wsUtils.ropodLayout;
         break;

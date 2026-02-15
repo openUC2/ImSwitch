@@ -43,7 +43,7 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
     fetchStatus();
 
     // Refresh every 10 seconds
-    const interval = setInterval(fetchStatus, 10000);
+    const interval = setInterval(fetchStatus, 30000);
     return () => clearInterval(interval);
   }, [fetchStatus]);
 

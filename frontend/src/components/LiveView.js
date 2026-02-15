@@ -171,25 +171,6 @@ export default function LiveView({ setFileManagerInitialPath }) {
   }, [hostIP, hostPort, dispatch]);
   */
 
-  /* poll second detector */
-  useEffect(() => {
-    if (activeTab === 1 && detectors.length > 1) {
-      const id = setInterval(async () => {
-        try {
-          const res = await fetch(
-            `${hostIP}:${hostPort}/imswitch/api/HistoScanController/getPreviewCameraImage?resizeFactor=.25`
-          );
-          if (res.ok)
-            dispatch(
-              liveViewSlice.setPollImageUrl(
-                URL.createObjectURL(await res.blob())
-              )
-            );
-        } catch {}
-      }, 1000);
-      return () => clearInterval(id);
-    }
-  }, [activeTab, detectors, hostIP, hostPort, dispatch]);
 
   /* Check if stream is running and auto-start if not active (only on initial mount or connection change) */
   useEffect(() => {

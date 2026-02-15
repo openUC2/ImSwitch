@@ -219,7 +219,17 @@ class RecordingController(ImConWidgetController):
         """
         self.updateRecAttrs(isSnapping=True)
         detectorNames = self.getDetectorNamesToCapture()
-        return self.recording_service.snap_numpy(detector_names=detectorNames)
+        
+        # Collect metadata attributes (same as snap())
+        attrs = {
+            detectorName: self._get_detector_attrs(detectorName)
+            for detectorName in detectorNames
+        }
+        
+        return self.recording_service.snap_numpy(
+            detector_names=detectorNames,
+            attrs=attrs
+        )
 
     def _start_frame_recording(self, save_format: SaveFormat):
         """Start recording for a specific number of frames."""
@@ -363,7 +373,7 @@ class RecordingController(ImConWidgetController):
 
 
     @APIExport(runOnUIThread=True)
-    def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: SaveFormat = SaveFormat.TIFF) -> dict:
+    def snapImageToPath(self, fileName: Optional[str] = None, saveFormat: int = SaveFormat.TIFF) -> dict:
         """Take a snap and save it to a file at the given fileName.
 
         Parameters:

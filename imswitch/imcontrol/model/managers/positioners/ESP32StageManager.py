@@ -78,27 +78,27 @@ class ESP32StageManager(PositionerManager):
         self.setHomeParametersAxis(axis="X", speed=positionerInfo.managerProperties.get('homeSpeedX', 15000),
                                    direction=positionerInfo.managerProperties.get('homeDirectionX', -1),
                                    endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityX', 1),
-                                   endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseX', 1),
+                                   endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseX', 0),
                                    timeout=positionerInfo.managerProperties.get('homeTimeoutX', 20000))
         # Y
         self.setHomeParametersAxis(axis="Y", speed=positionerInfo.managerProperties.get('homeSpeedY', 15000),
                                       direction=positionerInfo.managerProperties.get('homeDirectionY', -1),
                                       endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityY', 1),
-                                      endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseY', 1),
+                                      endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseY', 0),
                                       timeout=positionerInfo.managerProperties.get('homeTimeoutY', 20000))
 
         # Z
         self.setHomeParametersAxis(axis="Z", speed=positionerInfo.managerProperties.get('homeSpeedZ', 15000),
                                         direction=positionerInfo.managerProperties.get('homeDirectionZ', -1),
                                         endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityZ', 1),
-                                        endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseZ', 1),
+                                        endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseZ', 0),
                                         timeout=positionerInfo.managerProperties.get('homeTimeoutZ', 20000))
 
         # A
         self.setHomeParametersAxis(axis="A", speed=positionerInfo.managerProperties.get('homeSpeedA', 15000),
                                         direction=positionerInfo.managerProperties.get('homeDirectionA', -1),
                                         endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityA', 1),
-                                        endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseA', 1),
+                                        endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseA', 0),
                                         timeout=positionerInfo.managerProperties.get('homeTimeoutA', 20000))
 
         # perform homing on startup?
@@ -833,26 +833,11 @@ class ESP32StageManager(PositionerManager):
         else:
             limits = {'enabled': False}
         
-        # Hard limits settings (hardware endstop emergency stop)
-        try:
-            # Query current hard limit state from device
-            limit_info = self._motor.get_hard_limits(axis=axis, timeout=1)
-            if limit_info:
-                hardLimitsEnabled = limit_info.get('enabled', None)
-            else:
-                hardLimitsEnabled = None
-        except Exception:
-            hardLimitsEnabled = None  # Unknown or not supported
-        
-        # Add hard limits to limits section for frontend compatibility
-        limits['hardLimitsEnabled'] = hardLimitsEnabled
-        
         return {
             'axis': axis,
             'motion': motion,
             'homing': homing,
             'limits': limits,
-            'hardLimitsEnabled': hardLimitsEnabled,  # Also keep at root for backwards compatibility
         }
     
     def setMotorSettingsForAxis(self, axis: str, settings: dict) -> dict:
@@ -990,25 +975,6 @@ class ESP32StageManager(PositionerManager):
                     elif axis == 'Y': self.limitYenabled = limits['enabled']
                     elif axis == 'Z': self.limitZenabled = limits['enabled']
                     result['updated'].append('limits.enabled')
-                
-                # Also check for hard limits inside the limits section (from frontend)
-                if 'hardLimitsEnabled' in limits:
-                    try:
-                        enabled = bool(limits['hardLimitsEnabled'])
-                        self._motor.set_hard_limits(axis=axis, enabled=enabled, timeout=1)
-                        result['updated'].append('limits.hardLimitsEnabled')
-                    except Exception as e:
-                        result['errors'].append(f"Failed to set hard limits from limits section: {e}")
-            
-            # Update hard limits settings (hardware endstop emergency stop)
-            # Also accept at root level for backwards compatibility
-            if 'hardLimitsEnabled' in settings:
-                try:
-                    enabled = bool(settings['hardLimitsEnabled'])
-                    self._motor.set_hard_limits(axis=axis, enabled=enabled, timeout=1)
-                    result['updated'].append('hardLimitsEnabled')
-                except Exception as e:
-                    result['errors'].append(f"Failed to set hard limits: {e}")
             
             result['success'] = True
             self.__logger.info(f"Updated motor settings for axis {axis}: {result['updated']}")

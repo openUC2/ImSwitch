@@ -453,36 +453,38 @@ export const wellLayoutDefault = {
 export const wellLayoutDevelopment = {
   name: "Heidstar 4x Histosample",
   unit: "um",
-  width: 170000,
-  height: 130000,
+  width: 127000,
+  height: 84000,
+  width_: 170000,
+  height_: 130000,
   wells: [
     {
-      x: 40000,
-      y: 67250,
+      x: 18400,
+      y: 12600+37000-9000,
       shape: "rectangle",
       width: 27000,
       height: 74000,
       name: "Slide1",
     },
     {
-      x: 40000 + 30000,
-      y: 67250,
+      x: 18400 + 30000,
+      y: 12600+37000-9000,
       shape: "rectangle",
       width: 27000,
       height: 74000,
       name: "Slide2",
     },
     {
-      x: 40000 + 2 * 30000,
-      y: 67250,
+      x: 18400 + 2 * 30000,
+      y: 12600+37000-9000,
       shape: "rectangle",
       width: 27000,
       height: 74000,
       name: "Slide3",
     },
     {
-      x: 40000 + 3 * 30000,
-      y: 67250,
+      x: 18400 + 3 * 30000,
+      y: 12600+37000-9000,
       shape: "rectangle",
       width: 27000,
       height: 74000,
@@ -530,126 +532,13 @@ export const ropodLayout = {
   ],
 };
 
-export const wellLayout32 = {
-  name: "Wellplate 32",
-  unit: "um",
-  width: 128000,
-  height: 86000,
-  wells: [
-    { x: 15000, y: 15000, shape: "circle", radius: 4500 },
-    { x: 45000, y: 15000, shape: "circle", radius: 4500 },
-    { x: 75000, y: 15000, shape: "circle", radius: 4500 },
-    { x: 105000, y: 15000, shape: "circle", radius: 4500 },
-
-    { x: 15000, y: 30000, shape: "circle", radius: 4500 },
-    { x: 45000, y: 30000, shape: "circle", radius: 4500 },
-    { x: 75000, y: 30000, shape: "circle", radius: 4500 },
-    { x: 105000, y: 30000, shape: "circle", radius: 4500 },
-
-    { x: 15000, y: 45000, shape: "circle", radius: 4500 },
-    { x: 45000, y: 45000, shape: "circle", radius: 4500 },
-    { x: 75000, y: 45000, shape: "circle", radius: 4500 },
-    { x: 105000, y: 45000, shape: "circle", radius: 4500 },
-
-    { x: 15000, y: 60000, shape: "circle", radius: 4500 },
-    { x: 45000, y: 60000, shape: "circle", radius: 4500 },
-    { x: 75000, y: 60000, shape: "circle", radius: 4500 },
-    { x: 105000, y: 60000, shape: "circle", radius: 4500 },
-
-    { x: 15000, y: 75000, shape: "circle", radius: 4500 },
-    { x: 45000, y: 75000, shape: "circle", radius: 4500 },
-    { x: 75000, y: 75000, shape: "circle", radius: 4500 },
-    { x: 105000, y: 75000, shape: "circle", radius: 4500 },
-  ],
-};
-
-export const histolayout = {
-  name: "histolayout",
-  unit: "um",
-  width: 128000,
-  height: 86000,
-  wells: [
-    {
-      x: 15000,
-      y: 0,
-      shape: "rectangle",
-      width: 24000,
-      height: 100000,
-      name: "A1",
-    },
-  ],
-};
-
-export const wellLayout96 = {
-  name: "Wellplate 96",
-  unit: "um",
-  width: 128000,
-  height: 86000,
-  wells: [
-    { x: 10667, y: 10667, shape: "circle", radius: 4500 },
-    { x: 21334, y: 10667, shape: "circle", radius: 4500 },
-    { x: 32001, y: 10667, shape: "circle", radius: 4500 },
-    { x: 42668, y: 10667, shape: "circle", radius: 4500 },
-    { x: 53335, y: 10667, shape: "circle", radius: 4500 },
-    { x: 64002, y: 10667, shape: "circle", radius: 4500 },
-    { x: 74669, y: 10667, shape: "circle", radius: 4500 },
-    { x: 85336, y: 10667, shape: "circle", radius: 4500 },
-
-    { x: 10667, y: 21334, shape: "circle", radius: 4500 },
-    { x: 21334, y: 21334, shape: "circle", radius: 4500 },
-    { x: 32001, y: 21334, shape: "circle", radius: 4500 },
-    { x: 42668, y: 21334, shape: "circle", radius: 4500 },
-    { x: 53335, y: 21334, shape: "circle", radius: 4500 },
-    { x: 64002, y: 21334, shape: "circle", radius: 4500 },
-    { x: 74669, y: 21334, shape: "circle", radius: 4500 },
-    { x: 85336, y: 21334, shape: "circle", radius: 4500 },
-
-    { x: 10667, y: 32001, shape: "circle", radius: 4500 },
-    { x: 21334, y: 32001, shape: "circle", radius: 4500 },
-    { x: 32001, y: 32001, shape: "circle", radius: 4500 },
-    { x: 42668, y: 32001, shape: "circle", radius: 4500 },
-    { x: 53335, y: 32001, shape: "circle", radius: 4500 },
-    { x: 64002, y: 32001, shape: "circle", radius: 4500 },
-    { x: 74669, y: 32001, shape: "circle", radius: 4500 },
-    { x: 85336, y: 32001, shape: "circle", radius: 4500 },
-
-    { x: 10667, y: 42668, shape: "circle", radius: 4500 },
-    { x: 21334, y: 42668, shape: "circle", radius: 4500 },
-    { x: 32001, y: 42668, shape: "circle", radius: 4500 },
-    { x: 42668, y: 42668, shape: "circle", radius: 4500 },
-    { x: 53335, y: 42668, shape: "circle", radius: 4500 },
-    { x: 64002, y: 42668, shape: "circle", radius: 4500 },
-    { x: 74669, y: 42668, shape: "circle", radius: 4500 },
-    { x: 85336, y: 42668, shape: "circle", radius: 4500 },
-
-    { x: 10667, y: 53335, shape: "circle", radius: 4500 },
-    { x: 21334, y: 53335, shape: "circle", radius: 4500 },
-    { x: 32001, y: 53335, shape: "circle", radius: 4500 },
-    { x: 42668, y: 53335, shape: "circle", radius: 4500 },
-    { x: 53335, y: 53335, shape: "circle", radius: 4500 },
-    { x: 64002, y: 53335, shape: "circle", radius: 4500 },
-    { x: 74669, y: 53335, shape: "circle", radius: 4500 },
-    { x: 85336, y: 53335, shape: "circle", radius: 4500 },
-
-    { x: 10667, y: 64002, shape: "circle", radius: 4500 },
-    { x: 21334, y: 64002, shape: "circle", radius: 4500 },
-    { x: 32001, y: 64002, shape: "circle", radius: 4500 },
-    { x: 42668, y: 64002, shape: "circle", radius: 4500 },
-    { x: 53335, y: 64002, shape: "circle", radius: 4500 },
-    { x: 64002, y: 64002, shape: "circle", radius: 4500 },
-    { x: 74669, y: 64002, shape: "circle", radius: 4500 },
-    { x: 85336, y: 64002, shape: "circle", radius: 4500 },
-  ],
-};
-
-
 
 // src/utils/generateWellLayout384.js
 
 export function generateWellLayout384({
   cols = 24,
   rows = 16,
-  pitch = 4500, // ~9 mm spacing (adjust if needed)
+  pitch = 4500, // 
   radius = 2000,       // 3 mm radius
   startX = 12000,
   startY = 9000,
@@ -684,6 +573,53 @@ export function generateWellLayout384({
 
 // Optional: export a ready-to-use layout
 export const wellLayout384 = generateWellLayout384();
+
+//##################################################################################
+// DEP Chip (Dielectrophoresis Chip) Layout
+// 8 columns x 6 rows, 1.5mm diameter (750µm radius), 2.25mm pitch
+export function generateWellLayoutDEPChip({
+  cols = 8,
+  rows = 6,
+  pitch = 2250,        // 2.25 mm spacing between centers
+  radius = 750,        // 1.5 mm diameter = 0.75 mm radius
+  startX = 127000/2-4*2250,      // Start position X (can be adjusted)
+  startY = 84000/2-3*2250,       // Start position Y (can be adjusted)
+  width = 127000,       // Total width of chip area
+  height = 84000,      // Total height of chip area
+  offsetX = 0,         // Global offset in X direction (micrometers)
+  offsetY = 0,         // Global offset in Y direction (micrometers)
+  /*
+    startX = 12000,
+  startY = 9000,
+  width = 127000,
+  height = 84000,*/
+} = {}) {
+  const wells = [];
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = startX + c * pitch + offsetX;
+      const y = startY + r * pitch + offsetY;
+      wells.push({
+        x: Number(x.toFixed(3)),
+        y: Number(y.toFixed(3)),
+        shape: "circle",
+        radius,
+      });
+    }
+  }
+
+  return {
+    name: "DEP Chip",
+    unit: "um",
+    width,
+    height,
+    wells,
+  };
+}
+
+// Optional: export a ready-to-use DEP chip layout
+export const wellLayoutDEPChip = generateWellLayoutDEPChip();
 
 //##################################################################################
 /**

@@ -156,7 +156,14 @@ class GalvoScannerController(ImConWidgetController):
                            y_min: Optional[int] = None, y_max: Optional[int] = None,
                            sample_period_us: Optional[int] = None,
                            frame_count: Optional[int] = None,
-                           bidirectional: Optional[bool] = None) -> Dict[str, Any]:
+                           bidirectional: Optional[bool] = None,
+                           pre_samples: Optional[int] = None,
+                           fly_samples: Optional[int] = None,
+                           trig_delay_us: Optional[int] = None,
+                           trig_width_us: Optional[int] = None,
+                           line_settle_samples: Optional[int] = None,
+                           enable_trigger: Optional[int] = None,
+                           apply_x_lut: Optional[int] = None) -> Dict[str, Any]:
         """
         Update the configuration for a galvo scanner without starting a scan.
         
@@ -171,6 +178,13 @@ class GalvoScannerController(ImConWidgetController):
             sample_period_us: Microseconds per sample (0=max speed)
             frame_count: Number of frames (0=infinite)
             bidirectional: Enable bidirectional scanning
+            pre_samples: Pre-scan samples
+            fly_samples: Fly-back samples
+            trig_delay_us: Trigger delay in microseconds
+            trig_width_us: Trigger width in microseconds
+            line_settle_samples: Line settling samples
+            enable_trigger: Enable trigger output (0/1)
+            apply_x_lut: Apply X lookup table (0/1)
             
         Returns:
             Updated configuration dictionary
@@ -183,7 +197,11 @@ class GalvoScannerController(ImConWidgetController):
         self.__logger.info(f"setGalvoScanConfig called with: scannerName={scannerName}, "
                            f"nx={nx}, ny={ny}, x_min={x_min}, x_max={x_max}, "
                            f"y_min={y_min}, y_max={y_max}, sample_period_us={sample_period_us}, "
-                           f"frame_count={frame_count}, bidirectional={bidirectional}")
+                           f"frame_count={frame_count}, bidirectional={bidirectional}, "
+                           f"pre_samples={pre_samples}, fly_samples={fly_samples}, "
+                           f"trig_delay_us={trig_delay_us}, trig_width_us={trig_width_us}, "
+                           f"line_settle_samples={line_settle_samples}, enable_trigger={enable_trigger}, "
+                           f"apply_x_lut={apply_x_lut}")
         scannerName = self._resolveScanner(scannerName)
         if scannerName is None:
             return {"error": "No galvo scanner available"}
@@ -198,7 +216,14 @@ class GalvoScannerController(ImConWidgetController):
                 y_min=y_min, y_max=y_max,
                 sample_period_us=sample_period_us,
                 frame_count=frame_count,
-                bidirectional=bidirectional
+                bidirectional=bidirectional,
+                pre_samples=pre_samples,
+                fly_samples=fly_samples,
+                trig_delay_us=trig_delay_us,
+                trig_width_us=trig_width_us,
+                line_settle_samples=line_settle_samples,
+                enable_trigger=enable_trigger,
+                apply_x_lut=apply_x_lut
             )
             
             self.__logger.info(f"Updated config for {scannerName}")
@@ -219,6 +244,13 @@ class GalvoScannerController(ImConWidgetController):
                        sample_period_us: Optional[int] = None,
                        frame_count: Optional[int] = None,
                        bidirectional: Optional[bool] = None,
+                       pre_samples: Optional[int] = None,
+                       fly_samples: Optional[int] = None,
+                       trig_delay_us: Optional[int] = None,
+                       trig_width_us: Optional[int] = None,
+                       line_settle_samples: Optional[int] = None,
+                       enable_trigger: Optional[int] = None,
+                       apply_x_lut: Optional[int] = None,
                        timeout: int = 1) -> Dict[str, Any]:
         """
         Start a galvo scan with the specified parameters.
@@ -236,6 +268,13 @@ class GalvoScannerController(ImConWidgetController):
             sample_period_us: Microseconds per sample (0=max speed)
             frame_count: Number of frames (0=infinite)
             bidirectional: Enable bidirectional scanning
+            pre_samples: Pre-scan samples
+            fly_samples: Fly-back samples
+            trig_delay_us: Trigger delay in microseconds
+            trig_width_us: Trigger width in microseconds
+            line_settle_samples: Line settling samples
+            enable_trigger: Enable trigger output (0/1)
+            apply_x_lut: Apply X lookup table (0/1)
             timeout: Request timeout in seconds
             
         Returns:
@@ -260,6 +299,13 @@ class GalvoScannerController(ImConWidgetController):
                 sample_period_us=sample_period_us,
                 frame_count=frame_count,
                 bidirectional=bidirectional,
+                pre_samples=pre_samples,
+                fly_samples=fly_samples,
+                trig_delay_us=trig_delay_us,
+                trig_width_us=trig_width_us,
+                line_settle_samples=line_settle_samples,
+                enable_trigger=enable_trigger,
+                apply_x_lut=apply_x_lut,
                 timeout=timeout
             )
             

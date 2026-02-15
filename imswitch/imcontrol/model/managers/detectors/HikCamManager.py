@@ -68,11 +68,23 @@ class HikCamManager(DetectorManager):
         # TODO: Not implemented yet
         self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
 
+        # Read actual values from camera hardware instead of using hardcoded defaults
+        try:
+            hw_exposure = self._camera.get_exposuretime()  # returns (current, min, max)
+            initial_exposure = hw_exposure[0] if hw_exposure and hw_exposure[0] is not None else 100
+        except Exception:
+            initial_exposure = 100
+        try:
+            hw_gain = self._camera.get_gain()  # returns (current, min, max)
+            initial_gain = hw_gain[0] if hw_gain and hw_gain[0] is not None else 1
+        except Exception:
+            initial_gain = 1
+
         # Prepare parameters
         parameters = {
-            'exposure': DetectorNumberParameter(group='Misc', value=100, valueUnits='ms',
+            'exposure': DetectorNumberParameter(group='Misc', value=initial_exposure, valueUnits='ms',
                                                 editable=True),
-            'gain': DetectorNumberParameter(group='Misc', value=1, valueUnits='arb.u.',
+            'gain': DetectorNumberParameter(group='Misc', value=initial_gain, valueUnits='arb.u.',
                                             editable=True),
             'blacklevel': DetectorNumberParameter(group='Misc', value=100, valueUnits='arb.u.',
                                             editable=True),

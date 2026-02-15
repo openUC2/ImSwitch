@@ -649,6 +649,100 @@ const GalvoScannerController = () => {
             </Box>
           </Paper>
 
+          {/* Advanced Parameters */}
+          <Paper sx={{ p: 2, mb: 2 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Advanced Parameters
+            </Typography>
+            
+            <Grid container spacing={2}>
+              <Grid item xs={6}>
+                <TextField
+                  label="Pre-samples"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={config.pre_samples}
+                  onChange={handleConfigChange('pre_samples')}
+                  inputProps={{ min: 0 }}
+                  helperText="Pre-scan samples"
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Fly-samples"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={config.fly_samples}
+                  onChange={handleConfigChange('fly_samples')}
+                  inputProps={{ min: 0 }}
+                  helperText="Fly-back samples"
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Trig Delay (µs)"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={config.trig_delay_us}
+                  onChange={handleConfigChange('trig_delay_us')}
+                  inputProps={{ min: 0 }}
+                  helperText="Trigger delay"
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Trig Width (µs)"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={config.trig_width_us}
+                  onChange={handleConfigChange('trig_width_us')}
+                  inputProps={{ min: 0 }}
+                  helperText="Trigger width"
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Line Settle Samples"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={config.line_settle_samples}
+                  onChange={handleConfigChange('line_settle_samples')}
+                  inputProps={{ min: 0 }}
+                  helperText="Line settling"
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Enable Trigger"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={config.enable_trigger}
+                  onChange={handleConfigChange('enable_trigger')}
+                  inputProps={{ min: 0, max: 1 }}
+                  helperText="0=off, 1=on"
+                />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField
+                  label="Apply X LUT"
+                  type="number"
+                  size="small"
+                  fullWidth
+                  value={config.apply_x_lut}
+                  onChange={handleConfigChange('apply_x_lut')}
+                  inputProps={{ min: 0, max: 1 }}
+                  helperText="0=off, 1=on"
+                />
+              </Grid>
+            </Grid>
+          </Paper>
+
           {/* Apply & Start Button */}
           <Button
             variant="contained"

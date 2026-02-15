@@ -25,6 +25,7 @@ classifiers = [
 dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = [
+    "setuptools >= 42",
     "pydantic==2.11.4",
     "coloredlogs >= 15",
     "colour-science >= 0.3",

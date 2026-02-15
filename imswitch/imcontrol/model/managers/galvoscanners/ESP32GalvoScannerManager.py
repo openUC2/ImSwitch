@@ -72,7 +72,12 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
                    x_min: int = None, x_max: int = None,
                    y_min: int = None, y_max: int = None,
                    sample_period_us: int = None, frame_count: int = None,
-                   bidirectional: bool = None, timeout: int = 1) -> Dict[str, Any]:
+                   bidirectional: bool = None,
+                   pre_samples: int = None, fly_samples: int = None,
+                   trig_delay_us: int = None, trig_width_us: int = None,
+                   line_settle_samples: int = None, enable_trigger: int = None,
+                   apply_x_lut: int = None,
+                   timeout: int = 1) -> Dict[str, Any]:
         """
         Start galvo scanning with the specified parameters.
         
@@ -89,6 +94,13 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
             sample_period_us: Microseconds per sample, 0=max speed
             frame_count: Number of frames, 0=infinite
             bidirectional: Enable bidirectional scanning
+            pre_samples: Pre-scan samples
+            fly_samples: Fly-back samples
+            trig_delay_us: Trigger delay in microseconds
+            trig_width_us: Trigger width in microseconds
+            line_settle_samples: Line settling samples
+            enable_trigger: Enable trigger output 0/1
+            apply_x_lut: Apply X lookup table 0/1
             timeout: Request timeout in seconds
             
         Returns:
@@ -105,7 +117,14 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
             y_min=y_min, y_max=y_max,
             sample_period_us=sample_period_us,
             frame_count=frame_count,
-            bidirectional=bidirectional
+            bidirectional=bidirectional,
+            pre_samples=pre_samples,
+            fly_samples=fly_samples,
+            trig_delay_us=trig_delay_us,
+            trig_width_us=trig_width_us,
+            line_settle_samples=line_settle_samples,
+            enable_trigger=enable_trigger,
+            apply_x_lut=apply_x_lut
         )
         
         try:
@@ -119,6 +138,13 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
                 sample_period_us=self._config.sample_period_us,
                 frame_count=self._config.frame_count,
                 bidirectional=self._config.bidirectional,
+                pre_samples=self._config.pre_samples,
+                fly_samples=self._config.fly_samples,
+                trig_delay_us=self._config.trig_delay_us,
+                trig_width_us=self._config.trig_width_us,
+                line_settle_samples=self._config.line_settle_samples,
+                enable_trigger=self._config.enable_trigger,
+                apply_x_lut=self._config.apply_x_lut,
                 timeout=timeout
             )
             self._is_scanning = True

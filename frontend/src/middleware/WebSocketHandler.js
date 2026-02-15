@@ -16,6 +16,7 @@ import * as socketDebugSlice from "../state/slices/SocketDebugSlice.js";
 import * as uc2Slice from "../state/slices/UC2Slice.js";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as canOtaSlice from "../state/slices/canOtaSlice.js";
+import * as usbFlashSlice from "../state/slices/usbFlashSlice.js";
 import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as lightsheetSlice from "../state/slices/LightsheetSlice";
 
@@ -703,51 +704,61 @@ const WebSocketHandler = () => {
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigOTAStatusUpdate") {
-        // Handle CAN OTA status updates
+        // Handle CAN OTA status updates (both WiFi OTA and CAN streaming formats)
         console.log("sigOTAStatusUpdate received:", dataJson);
         try {
-          // Expected format: dataJson.args.p0 = { canId, status, statusMsg, ip, hostname, success }
           const otaStatus = dataJson.args?.p0;
 
           if (otaStatus && otaStatus.canId !== undefined) {
-            const { canId, status, statusMsg, success } = otaStatus;
+            const { canId, status, message, progress, method } = otaStatus;
 
-            // Determine status string and progress
-            let statusString = "unknown";
-            let progress = 0;
+            // Determine status string and progress.
+            // CAN streaming sends status as a string ("uploading", "success", "error", "initializing")
+            // WiFi OTA sends status as a number (0=completed, 1=wifi_failed, 2=ota_failed)
+            let statusString;
+            let progressValue;
 
-            if (status === 0) {
-              statusString = "completed";
-              progress = 100;
-            } else if (status === 1) {
-              statusString = "wifi_failed";
-              progress = 0;
-            } else if (status === 2) {
-              statusString = "ota_failed";
-              progress = 50;
+            if (typeof status === "number") {
+              // Legacy WiFi OTA format
+              if (status === 0) {
+                statusString = "completed";
+                progressValue = 100;
+              } else if (status === 1) {
+                statusString = "wifi_failed";
+                progressValue = 0;
+              } else if (status === 2) {
+                statusString = "ota_failed";
+                progressValue = 50;
+              } else {
+                statusString = otaStatus.success ? "completed" : "failed";
+                progressValue = otaStatus.success ? 100 : 0;
+              }
             } else {
-              statusString = success ? "completed" : "failed";
-              progress = success ? 100 : 0;
+              // CAN streaming format – status is a descriptive string
+              statusString = status || "in_progress";
+              progressValue = progress ?? 0;
             }
+
+            const displayMessage =
+              message || otaStatus.statusMsg || "Status update received";
 
             // Update Redux state with OTA progress
             dispatch(
               canOtaSlice.setUpdateProgress({
                 canId: canId,
                 status: statusString,
-                message: statusMsg || "Status update received",
-                progress: progress,
+                message: displayMessage,
+                progress: progressValue,
                 timestamp: new Date().toISOString(),
               })
             );
 
             // If update is completed or failed, check if all updates are done
-            if (
-              statusString === "completed" ||
-              statusString === "failed" ||
-              statusString === "wifi_failed" ||
-              statusString === "ota_failed"
-            ) {
+            const terminalStates = [
+              "completed", "success", "failed", "error",
+              "wifi_failed", "ota_failed",
+            ];
+            if (terminalStates.includes(statusString)) {
               const state = store.getState();
               const canOtaState = state.canOtaState;
               const totalDevices = canOtaState.selectedDeviceIds.length;
@@ -761,11 +772,40 @@ const WebSocketHandler = () => {
             }
 
             console.log(
-              `OTA update for device ${canId}: ${statusString} - ${statusMsg}`
+              `OTA update for device ${canId}: ${statusString} (${progressValue}%) - ${displayMessage}`
             );
           }
         } catch (error) {
           console.error("Error in sigOTAStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigUSBFlashStatusUpdate") {
+        // Handle USB flash status updates from esptool flashing process
+        console.log("sigUSBFlashStatusUpdate received:", dataJson);
+        try {
+          const flashStatus = dataJson.args?.p0;
+          if (flashStatus) {
+            dispatch(usbFlashSlice.updateFlashProgress({
+              status: flashStatus.status,
+              progress: flashStatus.progress,
+              message: flashStatus.message,
+              details: flashStatus.details,
+            }));
+
+            // Auto-advance to completion step on terminal states
+            const terminalStates = ["success", "failed", "warning"];
+            if (terminalStates.includes(flashStatus.status)) {
+              if (flashStatus.status === "success" || flashStatus.status === "warning") {
+                dispatch(usbFlashSlice.setFlashResult({
+                  status: flashStatus.status,
+                  message: flashStatus.message,
+                }));
+              }
+              dispatch(usbFlashSlice.setIsFlashing(false));
+            }
+          }
+        } catch (error) {
+          console.error("Error in sigUSBFlashStatusUpdate handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateOMEZarrStore") {

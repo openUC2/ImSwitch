@@ -47,7 +47,7 @@ import apiUC2ConfigControllerGetDiskUsage from "../backendapi/apiUC2ConfigContro
 const StorageButton = ({
   onStorageChange,
   onFileManagerRefresh,
-  scanInterval = 10000,
+  scanInterval = 60000,
   disabled = false,
 }) => {
   const dispatch = useDispatch();

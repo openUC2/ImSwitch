@@ -39,6 +39,7 @@ import {
   Info as InfoIcon,
   Wifi as WifiIcon,
   Cable as CableIcon,
+  AddCircleOutline as AddCircleOutlineIcon,
 } from "@mui/icons-material";
 
 // Redux slice
@@ -73,6 +74,9 @@ const CanOtaWizard = ({ open, onClose }) => {
 
   // Device type mapping for display
   const [deviceMapping, setDeviceMapping] = React.useState({});
+
+  // Manual CAN address entry
+  const [manualCanId, setManualCanId] = React.useState("");
 
   // Load initial data when wizard opens
   useEffect(() => {
@@ -192,8 +196,29 @@ const CanOtaWizard = ({ open, onClose }) => {
         dispatch(canOtaSlice.setIsLoadingFirmwareList(false));
         return;
       }
+    } else if (currentStep === 3) {
+      // Moving from Scan Devices to Select Devices
+      console.log("[CanOtaWizard] Step 3->4 transition. Current state:", {
+        scannedDevices: canOtaState.scannedDevices,
+        selectedDeviceIds: canOtaState.selectedDeviceIds,
+      });
+      // Auto-select any manual devices that aren't already selected
+      const manualDeviceIds = canOtaState.scannedDevices
+        .filter(d => d.manual && !canOtaState.selectedDeviceIds.includes(d.canId))
+        .map(d => d.canId);
+      if (manualDeviceIds.length > 0) {
+        console.log("[CanOtaWizard] Auto-selecting manual devices:", manualDeviceIds);
+        dispatch(canOtaSlice.setSelectedDeviceIds([
+          ...canOtaState.selectedDeviceIds,
+          ...manualDeviceIds,
+        ]));
+      }
     } else if (currentStep === 4) {
       // Device Selection - check if at least one device is selected
+      console.log("[CanOtaWizard] Step 4->5 validation. State:", {
+        scannedDevices: canOtaState.scannedDevices,
+        selectedDeviceIds: canOtaState.selectedDeviceIds,
+      });
       if (canOtaState.selectedDeviceIds.length === 0) {
         dispatch(canOtaSlice.setError("Please select at least one device to update"));
         return;
@@ -231,7 +256,12 @@ const CanOtaWizard = ({ open, onClose }) => {
       dispatch(canOtaSlice.setIsScanningDevices(true));
       dispatch(canOtaSlice.setScanError(null));
       const devices = await apiUC2ConfigControllerScanCanbus(5);
-      dispatch(canOtaSlice.setScannedDevices(devices.scan || []));
+      const scannedList = devices.scan || [];
+      // Preserve manually added devices that are not in the scan results
+      const manualDevices = canOtaState.scannedDevices.filter(
+        (d) => d.manual && !scannedList.some((s) => s.canId === d.canId)
+      );
+      dispatch(canOtaSlice.setScannedDevices([...scannedList, ...manualDevices]));
       if (!devices || devices.scan.length === 0) {
         dispatch(canOtaSlice.setScanError("No CAN devices found"));
       }
@@ -585,6 +615,68 @@ const CanOtaWizard = ({ open, onClose }) => {
         </Alert>
       )}
 
+      {/* Manual CAN address entry */}
+      <Paper sx={{ mt: 3, p: 2 }}>
+        <Typography variant="subtitle2" gutterBottom>
+          Manual CAN Address Entry
+        </Typography>
+        <Typography variant="body2" color="text.secondary" gutterBottom>
+          If a device was not found by the scan, you can manually add it by entering its CAN ID below.
+        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
+          <TextField
+            label="CAN ID"
+            type="number"
+            size="small"
+            value={manualCanId}
+            onChange={(e) => setManualCanId(e.target.value)}
+            placeholder="e.g. 11"
+            sx={{ width: 140 }}
+          />
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<AddCircleOutlineIcon />}
+            disabled={!manualCanId}
+            onClick={() => {
+              const id = parseInt(manualCanId, 10);
+              if (isNaN(id) || id < 1 || id > 255) {
+                dispatch(canOtaSlice.setScanError("CAN ID must be between 1 and 255"));
+                return;
+              }
+              // Check if already in list
+              const exists = canOtaState.scannedDevices.some((d) => d.canId === id);
+              if (exists) {
+                dispatch(canOtaSlice.setScanError(`Device with CAN ID ${id} is already in the list`));
+                return;
+              }
+              const newDevice = { canId: id, deviceTypeStr: "Manual", deviceType: -1, statusStr: "Unknown", manual: true };
+              console.log("[CanOtaWizard] Adding manual device:", newDevice);
+              console.log("[CanOtaWizard] Current scannedDevices before add:", canOtaState.scannedDevices);
+              dispatch(canOtaSlice.setScannedDevices([
+                ...canOtaState.scannedDevices,
+                newDevice,
+              ]));
+              // Auto-select the manually added device
+              dispatch(canOtaSlice.setSelectedDeviceIds([
+                ...canOtaState.selectedDeviceIds,
+                id,
+              ]));
+              console.log("[CanOtaWizard] Manual device added, new selectedDeviceIds:", [...canOtaState.selectedDeviceIds, id]);
+              setManualCanId("");
+              dispatch(canOtaSlice.setScanError(null));
+            }}
+          >
+            Add Device
+          </Button>
+        </Box>
+        <Alert severity="warning" sx={{ mt: 2 }} icon={<WarningIcon />}>
+          <strong>Use at your own risk:</strong> Manually adding a CAN address bypasses
+          device detection. Make sure the CAN ID is correct – sending firmware to
+          the wrong device may cause it to become unresponsive.
+        </Alert>
+      </Paper>
+
       {canOtaState.scannedDevices.length > 0 && (
         <Paper sx={{ mt: 2 }}>
           <List>
@@ -694,6 +786,14 @@ const CanOtaWizard = ({ open, onClose }) => {
             })}
           </List>
         </Paper>
+      ) : canOtaState.selectedDeviceIds.length > 0 ? (
+        <Alert severity="warning" sx={{ mt: 2 }}>
+          Manually entered CAN IDs: {canOtaState.selectedDeviceIds.join(", ")}
+          <br />
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            Note: Device information not available. Click NEXT to proceed with update.
+          </Typography>
+        </Alert>
       ) : (
         <Alert severity="info" sx={{ mt: 2 }}>
           No devices found. Please go back and scan for devices first.
@@ -701,9 +801,15 @@ const CanOtaWizard = ({ open, onClose }) => {
       )}
 
       {canOtaState.selectedDeviceIds.length > 0 && (
-        <Alert severity="info" sx={{ mt: 2 }}>
-          {canOtaState.selectedDeviceIds.length} device(s) selected for update
-        </Alert>
+        <>
+          <Alert severity="info" sx={{ mt: 2 }}>
+            {canOtaState.selectedDeviceIds.length} device(s) selected for update
+          </Alert>
+          <Alert severity="warning" sx={{ mt: 1 }} icon={<WarningIcon />}>
+            <strong>Important:</strong> Do not turn off the microscope or disconnect
+            USB during the update. The process may take several minutes per device.
+          </Alert>
+        </>
       )}
     </Box>
   );
@@ -712,7 +818,16 @@ const CanOtaWizard = ({ open, onClose }) => {
     const totalDevices = canOtaState.selectedDeviceIds.length;
     const completedDevices = canOtaState.completedUpdateCount;
     const failedDevices = canOtaState.failedUpdateCount;
-    const progressPercent = totalDevices > 0 ? (completedDevices / totalDevices) * 100 : 0;
+
+    // For CAN streaming, compute overall progress from per-device progress values
+    let overallProgress = 0;
+    if (totalDevices > 0) {
+      const progressSum = canOtaState.selectedDeviceIds.reduce((sum, canId) => {
+        const p = canOtaState.updateProgress[canId];
+        return sum + (p ? p.progress || 0 : 0);
+      }, 0);
+      overallProgress = progressSum / totalDevices;
+    }
 
     return (
       <Box sx={{ mt: 2 }}>
@@ -720,10 +835,29 @@ const CanOtaWizard = ({ open, onClose }) => {
           Update Progress
         </Typography>
 
+        {/* Safety warnings */}
+        <Alert severity="error" sx={{ mb: 2 }} icon={<WarningIcon />}>
+          <strong>Do NOT turn off the microscope or disconnect USB</strong> while
+          the firmware update is in progress. Interrupting the update can leave
+          devices in an unrecoverable state.
+        </Alert>
+        <Alert severity="info" sx={{ mb: 2 }}>
+          CAN streaming updates transfer firmware at ~2-4 KB/s.
+          A typical update takes <strong>2–5 minutes per device</strong>.
+          Please be patient – the progress bar below shows real-time page-by-page upload status.
+        </Alert>
+
         <Paper sx={{ p: 2, mt: 2, mb: 2 }}>
           <Grid container spacing={2} alignItems="center">
             <Grid item xs={12}>
-              <LinearProgress variant="determinate" value={progressPercent} sx={{ height: 10, borderRadius: 5 }} />
+              <LinearProgress
+                variant="determinate"
+                value={overallProgress}
+                sx={{ height: 10, borderRadius: 5 }}
+              />
+              <Typography variant="caption" align="center" display="block" sx={{ mt: 0.5 }}>
+                Overall: {Math.round(overallProgress)}%
+              </Typography>
             </Grid>
             <Grid item xs={4}>
               <Typography variant="body2" align="center">
@@ -748,6 +882,7 @@ const CanOtaWizard = ({ open, onClose }) => {
             {canOtaState.selectedDeviceIds.map((canId, index) => {
               const progress = canOtaState.updateProgress[canId];
               const statusColor = progress ? getDeviceStatusColor(progress.status) : "default";
+              const deviceTypeName = deviceMapping[canId] || getDeviceTypeString(canId);
 
               return (
                 <React.Fragment key={canId}>
@@ -757,8 +892,16 @@ const CanOtaWizard = ({ open, onClose }) => {
                       primary={
                         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                           <Typography variant="subtitle1">
-                            {getDeviceTypeString(canId)} (CAN ID: {canId})
+                            Device {canId} (CAN ID: {canId})
                           </Typography>
+                          {deviceTypeName && deviceTypeName !== `Device ${canId}` && (
+                            <Chip
+                              label={deviceTypeName}
+                              size="small"
+                              color="info"
+                              variant="outlined"
+                            />
+                          )}
                           {progress && (
                             <Chip
                               label={progress.status}
@@ -812,6 +955,15 @@ const CanOtaWizard = ({ open, onClose }) => {
               Update in progress... Please wait.
             </Typography>
           </Box>
+        )}
+
+        {canOtaState.isUpdating && (
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            <Typography variant="body2">
+              <strong>Warning:</strong> Canceling during an active update may leave devices in an unstable state.
+              Only cancel if absolutely necessary.
+            </Typography>
+          </Alert>
         )}
       </Box>
     );
@@ -926,29 +1078,30 @@ const CanOtaWizard = ({ open, onClose }) => {
         {renderStepContent(canOtaState.currentStep)}
       </DialogContent>
       <DialogActions>
-        {canOtaState.currentStep !== 5 && (
+        {canOtaState.currentStep !== 6 && (
           <>
-            <Button onClick={handleClose}>Cancel</Button>
+            <Button 
+              onClick={handleClose}
+              color={canOtaState.currentStep === 5 && canOtaState.isUpdating ? "error" : "inherit"}
+            >
+              {canOtaState.currentStep === 5 && canOtaState.isUpdating ? "Cancel Update" : "Cancel"}
+            </Button>
             <Box sx={{ flex: "1 1 auto" }} />
-            <Button
-              //disabled={canOtaState.currentStep === 0}
-              onClick={handleBack}
-            >
-              Back
-            </Button>
-            <Button
-              variant="contained"
-              onClick={handleNext}
-              /*disabled={
-                canOtaState.isLoadingWifiCredentials ||
-                canOtaState.isLoadingFirmwareServer ||
-                canOtaState.isLoadingFirmwareList ||
-                canOtaState.isScanningDevices ||
-                canOtaState.isUpdating
-              }*/
-            >
-              {canOtaState.currentStep === steps.length - 2 ? "Start Update" : "Next"}
-            </Button>
+            {canOtaState.currentStep !== 5 && (
+              <Button
+                onClick={handleBack}
+              >
+                Back
+              </Button>
+            )}
+            {canOtaState.currentStep !== 5 && (
+              <Button
+                variant="contained"
+                onClick={handleNext}
+              >
+                {canOtaState.currentStep === steps.length - 2 ? "Start Update" : "Next"}
+              </Button>
+            )}
           </>
         )}
       </DialogActions>

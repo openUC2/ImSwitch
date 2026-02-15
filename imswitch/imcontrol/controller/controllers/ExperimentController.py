@@ -801,7 +801,9 @@ class ExperimentController(ImConWidgetController):
                     autofocus_target_focus_setpoint=autofocus_target_focus_setpoint,
                     autofocus_max_attempts=autofocus_max_attempts,
                     t_period=tPeriod,
-                    isRGB=self.mDetector._isRGB
+                    isRGB=self.mDetector._isRGB,
+                    t_pre_s=p.performanceTPreMs / 1000.0,  # Convert ms to seconds
+                    t_post_s=p.performanceTPostMs / 1000.0,  # Convert ms to seconds
                 )
 
                 # Append workflow steps and file writers to the accumulated lists
@@ -850,10 +852,10 @@ class ExperimentController(ImConWidgetController):
     ########################################
     # Hardware-related functions
     ########################################
-    def acquire_frame(self, channel: str, frameSync: int = 2):
+    def acquire_frame(self, channel: str, frameSync: int = 3):
         self._logger.debug(f"Acquiring frame on channel {channel}")
 
-        # ensure we get a fresh frame
+        # ensure we get a fresh frame (frameSync=3 to account for exposure/gain register latency)
         timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
         cTime = time.time()
 

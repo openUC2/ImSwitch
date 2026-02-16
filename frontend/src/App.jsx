@@ -12,6 +12,7 @@ import ExtendedLEDMatrixController from "./components/ExtendedLEDMatrixControlle
 import FlowStopController from "./components/FlowStopController.js";
 import FocusLockController from "./components/FocusLockController.js";
 import HoloController from "./components/HoloController.js";
+import OffAxisHoloController from "./components/OffAxisHoloController.js";
 import DPCController from "./components/DPCController.js";
 import ImJoyView from "./components/ImJoyView.js";
 import JupyterExecutor from "./components/JupyterExecutor.js";
@@ -447,6 +448,7 @@ function App() {
             <StageCenterCalibrationWizard />
           )}
           {selectedPlugin === "HoloController" && <HoloController />}
+          {selectedPlugin === "OffAxisHoloController" && <OffAxisHoloController />}
           {selectedPlugin === "DPCController" && <DPCController />}
           {selectedPlugin === "JupyterNotebook" && (
             <JupyterProvider>

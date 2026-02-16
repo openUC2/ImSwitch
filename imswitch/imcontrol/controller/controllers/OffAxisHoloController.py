@@ -582,7 +582,10 @@ class OffAxisHoloController(LiveUpdatedController):
             phase = np.angle(E)
             
             # === Step 7: Unwrap phase ===
-            unwrapped_phase = self._unwrap_phase(phase)
+            if 0:
+                unwrapped_phase = self._unwrap_phase(phase)
+            else:
+                unwrapped_phase = phase  # Skip unwrapping for now (can be slow)
             
             # Downsample for preview
             magnitude_preview = self._downsample_for_preview(magnitude)

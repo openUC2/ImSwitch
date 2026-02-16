@@ -428,6 +428,28 @@ export const APP_REGISTRY = {
     pluginId: "HoloController",
   },
 
+  // Off AxisHoloController is missing from registry - adding it back
+  offAxisHoloController: {
+    id: "offAxisHoloController",
+    name: "Off-Axis Holography",
+    description:
+      "Off-axis hologram processing for quantitative phase imaging. Real-time reconstruction of phase gradients and amplitude.",
+    category: APP_CATEGORIES.APPS,
+    icon: VisibilityIcon,
+    enabled: false,
+    essential: false,
+    keywords: [
+      "offaxis",
+      "holography",
+      "phase",
+      "imaging",
+      "reconstruction",
+      "gradient",
+      "amplitude",
+    ],
+    pluginId: "OffAxisHoloController",
+  },  
+
   dpcController: {
     id: "dpcController",
     name: "DPC Imaging",

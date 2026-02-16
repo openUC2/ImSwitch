@@ -10,6 +10,12 @@ import cv2
 import numpy as np
 import tifffile as tif
 
+try:
+    import NanoImagingPack as nip
+    HAS_NIP = True
+except ImportError:
+    HAS_NIP = False
+
 
 class TriggerSource(str, Enum):
     CONTINUOUS = "Continuous"
@@ -333,9 +339,13 @@ class MockCameraTIS:
         x = np.linspace(-np.pi, np.pi, width)
         y = np.linspace(-np.pi, np.pi, height)
         X, Y = np.meshgrid(x, y)
-        pupil = (X**2 + Y**2) < np.pi
-        phase_sample = np.exp(1j * ((X**2 + Y**2) < 50))
-
+        pupil = (X**2 + Y**2) < np.pi*2
+        if HAS_NIP:
+            mPhase = nip.extract(nip.readim(), ROIsize=(width,height))
+            mPhase = mPhase/np.max(mPhase)*2*np.pi
+            phase_sample = np.exp(1j * mPhase)
+        else:
+            phase_sample = np.exp(1j * ((X**2 + Y**2) < 50))
         tilt_x = k * np.sin(angle)
         tilt_y = k * np.sin(angle)
         Xpix, Ypix = np.meshgrid(np.arange(width), np.arange(height))

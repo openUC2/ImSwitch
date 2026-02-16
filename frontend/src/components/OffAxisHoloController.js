@@ -100,8 +100,8 @@ const OffAxisHoloController = () => {
   const [ccSelection, setCcSelection] = useState({
     centerX: 100, // FFT pixel coords
     centerY: 100,
-    sizeX: 50,
-    sizeY: 50,
+    sizeX: 200,
+    sizeY: 200,
   });
 
   // Local state for sensor ROI

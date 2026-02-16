@@ -43,6 +43,8 @@ import appManagerReducer from "./slices/appManagerSlice";
 import canOtaReducer from "./slices/canOtaSlice";
 import usbFlashReducer from "./slices/usbFlashSlice";
 import holoReducer from "./slices/HoloSlice";
+import offAxisHoloReducer from "./slices/OffAxisHoloSlice";
+import michelsonReducer from "./slices/MichelsonSlice";
 import dpcReducer from "./slices/dpcSlice";
 import laserReducer from "./slices/LaserSlice";
 import vizarrViewerReducer from "./slices/VizarrViewerSlice";
@@ -123,6 +125,8 @@ const rootReducer = combineReducers({
   canOtaState: canOtaReducer,
   usbFlash: usbFlashReducer,
   holoState: holoReducer,
+  offAxisHoloState: offAxisHoloReducer,
+  michelsonState: michelsonReducer,
   dpc: dpcReducer,
   laserState: laserReducer,
   vizarrViewerState: vizarrViewerReducer,

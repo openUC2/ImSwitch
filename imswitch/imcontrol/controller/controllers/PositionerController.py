@@ -97,7 +97,7 @@ class PositionerController(ImConWidgetController):
             # if the positioner does not have the move method, use the default move method
             self._logger.error(e)
             self._master.positionersManager[positionerName].move(dist, axis)
-        self._commChannel.sigUpdateMotorPosition.emit(self.getPos())
+        # self._commChannel.sigUpdateMotorPosition.emit(self.getPos()) # TODO: Unsure if this is needed - for the ESP motor not as it will update the position itself asynchronously
 
     def moveForever(self, positionerName: str=None, axis="X", speed=0, is_stop:bool=False):
         """ Moves positioner forever. """
@@ -174,9 +174,15 @@ class PositionerController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def homeAxis(self, positionerName:str=None, axis:str="X", isBlocking:bool=False, homeDirection:int=None, homeSpeed:float=None, homeEndstoppolarity:int=None, homeEndposRelease:float=None, homeTimeout:int=None):
         self.__logger.debug(f"Homing axis {axis}")
-        if positionerName is None:
+        if positionerName is None or positionerName == "" or positionerName not in self._master.positionersManager:
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-        self._master.positionersManager[positionerName].doHome(axis, isBlocking=isBlocking, homeDirection=homeDirection, homeSpeed=homeSpeed, homeEndstoppolarity=homeEndstoppolarity, homeEndposRelease=homeEndposRelease, homeTimeout=homeTimeout)
+        self._master.positionersManager[positionerName].doHome(axis, 
+                                                               isBlocking=isBlocking, 
+                                                               homeDirection=homeDirection, 
+                                                               homeSpeed=homeSpeed, 
+                                                               homeEndstoppolarity=homeEndstoppolarity, 
+                                                               homeEndposRelease=homeEndposRelease, 
+                                                               homeTimeout=homeTimeout)
         #self.updatePosition(positionerName, axis)
         #self._commChannel.sigUpdateMotorPosition.emit(self.getPos()) # Not needed as it will be pushed asynchronously from the esp via signal
 

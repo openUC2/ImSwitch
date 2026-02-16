@@ -17,8 +17,12 @@ class ESP32StageManager(PositionerManager):
         self._motor = self._rs232manager._esp32.motor
         self._homeModule = self._rs232manager._esp32.home
 
-        # get bootup position and write to GUI
-        self._position = self.getPosition()
+        # global offset (i.e. difference between stage zero and device zero)
+        self.stageOffsetPositions = {}
+        self.stageOffsetPositions["X"] = positionerInfo.stageOffsets.get('stageOffsetPositionX',0)
+        self.stageOffsetPositions["Y"] = positionerInfo.stageOffsets.get('stageOffsetPositionY',0)
+        self.stageOffsetPositions["Z"] = positionerInfo.stageOffsets.get('stageOffsetPositionZ',0)
+        self.stageOffsetPositions["A"] = positionerInfo.stageOffsets.get('stageOffsetPositionA',0)
 
         # Calibrated stepsizes in steps/µm
         self.stepSizes = {}
@@ -69,37 +73,32 @@ class ESP32StageManager(PositionerManager):
         # move z before homing?
         self._safeDistanceZHoming = positionerInfo.managerProperties.get('safeDistanceZHoming',0)
 
-        self.stageOffsetPositions = {}
-        self.stageOffsetPositions["X"] = positionerInfo.stageOffsets.get('stageOffsetPositionX',0)
-        self.stageOffsetPositions["Y"] = positionerInfo.stageOffsets.get('stageOffsetPositionY',0)
-        self.stageOffsetPositions["Z"] = positionerInfo.stageOffsets.get('stageOffsetPositionZ',0)
-        self.stageOffsetPositions["A"] = positionerInfo.stageOffsets.get('stageOffsetPositionA',0)
         # Setup homing coordinates and speed
         # X
         self.setHomeParametersAxis(axis="X", speed=positionerInfo.managerProperties.get('homeSpeedX', 15000),
                                    direction=positionerInfo.managerProperties.get('homeDirectionX', -1),
                                    endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityX', 1),
-                                   endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseX', 1),
+                                   endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseX', 0),
                                    timeout=positionerInfo.managerProperties.get('homeTimeoutX', 20000))
         # Y
         self.setHomeParametersAxis(axis="Y", speed=positionerInfo.managerProperties.get('homeSpeedY', 15000),
                                       direction=positionerInfo.managerProperties.get('homeDirectionY', -1),
                                       endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityY', 1),
-                                      endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseY', 1),
+                                      endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseY', 0),
                                       timeout=positionerInfo.managerProperties.get('homeTimeoutY', 20000))
 
         # Z
         self.setHomeParametersAxis(axis="Z", speed=positionerInfo.managerProperties.get('homeSpeedZ', 15000),
                                         direction=positionerInfo.managerProperties.get('homeDirectionZ', -1),
                                         endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityZ', 1),
-                                        endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseZ', 1),
+                                        endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseZ', 0),
                                         timeout=positionerInfo.managerProperties.get('homeTimeoutZ', 20000))
 
         # A
         self.setHomeParametersAxis(axis="A", speed=positionerInfo.managerProperties.get('homeSpeedA', 15000),
                                         direction=positionerInfo.managerProperties.get('homeDirectionA', -1),
                                         endstoppolarity=positionerInfo.managerProperties.get('homeEndstoppolarityA', 1),
-                                        endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseA', 1),
+                                        endposrelease=positionerInfo.managerProperties.get('homeEndposReleaseA', 0),
                                         timeout=positionerInfo.managerProperties.get('homeTimeoutA', 20000))
 
         # perform homing on startup?
@@ -154,6 +153,9 @@ class ESP32StageManager(PositionerManager):
 
         # Set IsCoreXY
         self._motor.setIsCoreXY(isCoreXY=self.isCoreXY)
+
+        # get bootup position and write to GUI
+        self._position = self.getPosition()
 
         # Setup motors
         self.setupMotor(self.minX, self.maxX, self.stepSizes["X"], self.backlashX, "X")

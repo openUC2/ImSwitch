@@ -20,7 +20,6 @@ import {
   Warning,
   CheckCircle,
   ErrorOutline,
-  Memory,
 } from "@mui/icons-material";
 import apiUC2ConfigControllerGetDiskUsage from "../backendapi/apiUC2ConfigControllerGetDiskUsage";
 
@@ -266,61 +265,6 @@ export default function SystemSettings() {
               onClick={() => callEndpoint(`${base}/stopImSwitch`)}
             >
               Stop ImSwitch
-            </Button>
-          </Box>
-        </CardContent>
-      </Card>
-
-      {/* UC2 Hardware Control Card */}
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3 }}>
-            <Memory color="primary" />
-            <Typography variant="h6">UC2 Hardware Control</Typography>
-            <Chip
-              label={isBackendConnected ? "Connected" : "Disconnected"}
-              color={isBackendConnected ? "success" : "error"}
-              size="small"
-              variant="outlined"
-            />
-          </Box>
-
-          <FormControlLabel
-            control={
-              <Switch
-                checked={enableImSwitch}
-                onChange={(e) => setEnableImSwitch(e.target.checked)}
-              />
-            }
-            label="Enable UC2 hardware control"
-            sx={{ mb: 2 }}
-          />
-
-          <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
-            <Button
-              variant="contained"
-              disabled={!enableImSwitch || !isBackendConnected}
-              onClick={() => callEndpoint(`${base}/reconnect`)}
-            >
-              Reconnect UC2 Board
-            </Button>
-
-            <Button
-              variant="contained"
-              color="warning"
-              disabled={!enableImSwitch || !isBackendConnected}
-              onClick={() => callEndpoint(`${base}/espRestart`)}
-            >
-              Force Restart ESP
-            </Button>
-
-            <Button
-              variant="contained"
-              color="info"
-              disabled={!enableImSwitch || !isBackendConnected}
-              onClick={() => callEndpoint(`${base}/btpairing`)}
-            >
-              Bluetooth Pairing
             </Button>
           </Box>
         </CardContent>

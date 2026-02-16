@@ -91,8 +91,16 @@ export const APP_REGISTRY = {
     category: APP_CATEGORIES.ESSENTIALS,
     icon: ViewInArIcon,
     enabled: true,
-    essential: false,
-    keywords: ["zarr", "omezarr", "viewer", "3d", "multidimensional", "offline", "vizarr"],
+    essential: true,
+    keywords: [
+      "zarr",
+      "omezarr",
+      "viewer",
+      "3d",
+      "multidimensional",
+      "offline",
+      "vizarr",
+    ],
     pluginId: "VizarrViewer",
   },
 
@@ -397,8 +405,8 @@ export const APP_REGISTRY = {
       "positioning",
     ],
     pluginId: "StageCenterCalibration",
-  },  
-  
+  },
+
   holoController: {
     id: "holoController",
     name: "Hologram Processing",
@@ -545,7 +553,7 @@ export const APP_REGISTRY = {
     pluginId: "CompositeStreamViewer",
   },
 
-  compositeComponent:{
+  compositeComponent: {
     id: "compositeComponent",
     name: "Composite Component",
     description:
@@ -639,7 +647,7 @@ export const getAppsByCategory = (category) => {
  */
 export const getEnabledApps = (enabledAppIds = []) => {
   return Object.values(APP_REGISTRY).filter(
-    (app) => app.essential || enabledAppIds.includes(app.id)
+    (app) => app.essential || enabledAppIds.includes(app.id),
   );
 };
 
@@ -654,7 +662,9 @@ export const searchApps = (query) => {
     (app) =>
       app.name.toLowerCase().includes(searchTerm) ||
       app.description.toLowerCase().includes(searchTerm) ||
-      app.keywords.some((keyword) => keyword.toLowerCase().includes(searchTerm))
+      app.keywords.some((keyword) =>
+        keyword.toLowerCase().includes(searchTerm),
+      ),
   );
 };
 

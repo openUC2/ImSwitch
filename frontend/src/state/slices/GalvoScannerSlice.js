@@ -31,7 +31,14 @@ const initialState = {
     y_max: 3500,
     sample_period_us: 1,
     frame_count: 0,
-    bidirectional: false
+    bidirectional: false,
+    pre_samples: 0,
+    fly_samples: 0,
+    trig_delay_us: 0,
+    trig_width_us: 0,
+    line_settle_samples: 0,
+    enable_trigger: 1,
+    apply_x_lut: 0
   },
   
   // Current scanner status

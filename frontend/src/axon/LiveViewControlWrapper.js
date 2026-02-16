@@ -1,10 +1,18 @@
 import React, { useState, useCallback } from "react";
-import { IconButton, Tooltip, Box, Chip } from "@mui/material";
+import {
+  IconButton,
+  Tooltip,
+  Box,
+  Chip,
+  Typography,
+  CircularProgress,
+} from "@mui/material";
 import { keyframes } from "@mui/system";
 import {
   Gamepad,
   GamepadOutlined,
   FiberManualRecord,
+  Videocam,
 } from "@mui/icons-material";
 import LiveViewComponent from "./LiveViewComponent";
 import LiveViewerGL from "../components/LiveViewerGL";
@@ -69,7 +77,7 @@ const LiveViewControlWrapper = ({
     pixelX,
     pixelY,
     imageWidth,
-    imageHeight
+    imageHeight,
   ) => {
     if (!enableStageMovement) return;
 
@@ -92,12 +100,12 @@ const LiveViewControlWrapper = ({
       const moveY = relativeY * fovY;
 
       console.log(
-        `Image: ${imageWidth}x${imageHeight}, Click: (${pixelX}, ${pixelY}), Center: (${centerX}, ${centerY})`
+        `Image: ${imageWidth}x${imageHeight}, Click: (${pixelX}, ${pixelY}), Center: (${centerX}, ${centerY})`,
       );
       console.log(
         `Relative: (${relativeX.toFixed(3)}, ${relativeY.toFixed(
-          3
-        )}), Moving stage by: X=${moveX.toFixed(2)}µm, Y=${moveY.toFixed(2)}µm`
+          3,
+        )}), Moving stage by: X=${moveX.toFixed(2)}µm, Y=${moveY.toFixed(2)}µm`,
       );
 
       // Move stage to the clicked position (relative movement)
@@ -126,7 +134,7 @@ const LiveViewControlWrapper = ({
         onImageLoad(width, height);
       }
     },
-    [onImageLoad]
+    [onImageLoad],
   );
 
   return (
@@ -148,7 +156,7 @@ const LiveViewControlWrapper = ({
         <IconButton
           onClick={() =>
             dispatch(
-              liveViewSlice.setShowPositionController(!showPositionController)
+              liveViewSlice.setShowPositionController(!showPositionController),
             )
           }
           sx={{
@@ -213,15 +221,20 @@ const LiveViewControlWrapper = ({
         )}
       </Box>
 
-      <div
-        style={{
+      <Box
+        sx={{
           position: "relative",
           flex: "1",
           width: "100%",
+          minHeight: "480px", // Prevent collapse before stream loads
           maxHeight: "calc(100vh - 220px)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
+          backgroundColor: "background.default",
+          border: 1,
+          borderColor: "divider",
+          borderRadius: 1,
         }}
       >
         {/* Histogram overlay */}
@@ -235,7 +248,7 @@ const LiveViewControlWrapper = ({
               // Show every 100th label for 16-bit, every 10th for 8-bit
               i % (liveStreamState.histogramX?.length > 500 ? 100 : 10) === 0
                 ? v
-                : ""
+                : "",
             ),
             datasets: [
               {
@@ -289,6 +302,40 @@ const LiveViewControlWrapper = ({
             onDoubleClick={handleImageDoubleClick}
             onImageLoad={handleImageLoadInternal}
           />
+        ) : !liveViewState.isStreamRunning ? (
+          // Placeholder when stream is not running
+          <Box
+            sx={{
+              width: "100%",
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 2,
+            }}
+          >
+            <Videocam
+              sx={{
+                fontSize: 80,
+                color: "text.disabled",
+              }}
+            />
+            <Typography
+              variant="h6"
+              sx={{
+                color: "text.secondary",
+              }}
+            >
+              Stream nicht aktiv
+            </Typography>
+            <CircularProgress
+              size={24}
+              sx={{
+                color: "text.disabled",
+              }}
+            />
+          </Box>
         ) : useWebGL ? (
           <LiveViewerGL
             onClick={onClick}
@@ -305,7 +352,7 @@ const LiveViewControlWrapper = ({
             overlayContent={overlayContent}
           />
         )}
-      </div>
+      </Box>
 
       {/* Position controller - shown on hover OR when toggled on */}
       {(showPositionController ||

@@ -16,7 +16,8 @@ import {
   Chip,
   Paper,
   Tooltip,
-
+  Switch,
+  FormControlLabel,
 } from "@mui/material";
 import {
   SystemUpdate,
@@ -31,6 +32,7 @@ import {
   Build,
   AutoFixHigh as WizardIcon,
   Usb as UsbIcon,
+  Bluetooth as BluetoothIcon,
 } from "@mui/icons-material";
 
 import CanOtaWizard from "./CanOtaWizard";
@@ -38,6 +40,7 @@ import UsbFlashWizard from "./UsbFlashWizard";
 
 // Redux state management
 import * as uc2Slice from "../state/slices/UC2Slice.js";
+import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 
 /**
  * ImSwitch System Update Controller
@@ -50,6 +53,28 @@ const SystemUpdateController = () => {
   const uc2State = useSelector(uc2Slice.getUc2State);
   const uc2Connected = uc2State.uc2Connected; // Hardware connected
   const isBackendConnected = uc2State.backendConnected; // API reachable
+
+  // Connection settings for direct API calls
+  const { ip: hostIP, apiPort: hostPort } = useSelector(getConnectionSettingsState);
+  const base = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController`;
+
+  // UC2 Hardware Control toggle
+  const [enableHardwareControl, setEnableHardwareControl] = useState(false);
+
+  // Direct API call helper
+  const callEndpoint = async (url) => {
+    try {
+      const response = await fetch(url, { method: "GET" });
+      if (!response.ok) {
+        console.error(`API call failed: ${response.status} ${response.statusText}`);
+      } else {
+        const data = await response.json();
+        console.log("API response:", data);
+      }
+    } catch (e) {
+      console.error("API call error:", e);
+    }
+  };
 
     // Wizard state
     const [showCanOtaWizard, setShowCanOtaWizard] = React.useState(false);
@@ -252,6 +277,62 @@ const SystemUpdateController = () => {
         </CardActions>
       </Card>
 
+      {/* UC2 Hardware Control Card */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 3 }}>
+            <Memory color="primary" />
+            <Typography variant="h6">UC2 Hardware Control</Typography>
+            <Chip
+              label={isBackendConnected ? "Connected" : "Disconnected"}
+              color={isBackendConnected ? "success" : "error"}
+              size="small"
+              variant="outlined"
+            />
+          </Box>
+
+          <FormControlLabel
+            control={
+              <Switch
+                checked={enableHardwareControl}
+                onChange={(e) => setEnableHardwareControl(e.target.checked)}
+              />
+            }
+            label="Enable UC2 hardware control"
+            sx={{ mb: 2 }}
+          />
+
+          <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+            <Button
+              variant="contained"
+              disabled={!enableHardwareControl || !isBackendConnected}
+              onClick={() => callEndpoint(`${base}/reconnect`)}
+            >
+              Reconnect UC2 Board
+            </Button>
+
+            <Button
+              variant="contained"
+              color="warning"
+              disabled={!enableHardwareControl || !isBackendConnected}
+              onClick={() => callEndpoint(`${base}/espRestart`)}
+            >
+              Force Restart ESP
+            </Button>
+
+            <Button
+              variant="contained"
+              color="info"
+              startIcon={<BluetoothIcon />}
+              disabled={!enableHardwareControl || !isBackendConnected}
+              onClick={() => callEndpoint(`${base}/btpairing`)}
+            >
+              Bluetooth Pairing
+            </Button>
+          </Box>
+        </CardContent>
+      </Card>
+
           {/* CAN OTA Update Card */}
           <Card sx={{ mt: 3 }}>
             <CardContent>
@@ -259,12 +340,12 @@ const SystemUpdateController = () => {
                 sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}
               >
                 <Build color="primary" />
-                <Typography variant="h6">CAN Device Firmware Update</Typography>
+                <Typography variant="h6">Device Firmware Update</Typography>
               </Box>
 
               <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                Update firmware on CAN-connected devices (motors, lasers, LEDs)
-                via Over-The-Air (OTA) updates
+                Update firmware on connected devices (motors, lasers, LEDs) via CAN or 
+                via Over-The-Air WIFI (OTA) updates
               </Typography>
 
               <Button

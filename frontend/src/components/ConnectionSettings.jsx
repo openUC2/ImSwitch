@@ -49,7 +49,7 @@ import {
 function ConnectionSettings() {
   const dispatch = useDispatch();
   const connectionSettings = useSelector(
-    (state) => state.connectionSettingsState
+    (state) => state.connectionSettingsState,
   );
 
   // Get connection status from Redux state
@@ -77,27 +77,41 @@ function ConnectionSettings() {
 
   const smartDefaults = getSmartDefaults();
 
-  // Local state, initialized from Redux with smart fallbacks
-  const [hostProtocol, setHostProtocol] = useState(
-    connectionSettings.ip?.startsWith("http://")
-      ? "http://"
-      : connectionSettings.ip?.startsWith("https://")
-      ? "https://"
-      : smartDefaults.protocol
-  );
-  const [hostIP, setHostIP] = useState(
-    connectionSettings.ip?.replace(/^https?:\/\//, "") || smartDefaults.hostname
-  );
-  const [websocketPort, setWebsocketPortState] = useState(
-    connectionSettings.websocketPort || smartDefaults.port
-  );
-  const [apiPort, setApiPortState] = useState(
-    connectionSettings.apiPort || smartDefaults.port
-  );
+  // Local state - Priority: Redux values (if set), otherwise Smart defaults from current URL
+  // Users can override in Advanced Settings for development/remote access
+  const [hostProtocol, setHostProtocol] = useState(() => {
+    // Extract protocol from Redux IP if it exists, otherwise use smart default
+    if (connectionSettings.ip) {
+      return connectionSettings.ip.startsWith("https://")
+        ? "https://"
+        : "http://";
+    }
+    return smartDefaults.protocol;
+  });
+
+  const [hostIP, setHostIP] = useState(() => {
+    // Extract hostname from Redux IP if it exists, otherwise use smart default
+    if (connectionSettings.ip) {
+      return connectionSettings.ip.replace(/^https?:\/\//, "");
+    }
+    return smartDefaults.hostname;
+  });
+
+  const [websocketPort, setWebsocketPortState] = useState(() => {
+    return connectionSettings.websocketPort || smartDefaults.port;
+  });
+
+  const [apiPort, setApiPortState] = useState(() => {
+    return connectionSettings.apiPort || smartDefaults.port;
+  });
 
   // Connection test state
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Advanced settings accordion state
+  const [advancedSettingsExpanded, setAdvancedSettingsExpanded] =
+    useState(false);
 
   // Check if connection settings are configured
   const hasConnectionSettings = hostIP && apiPort;
@@ -112,7 +126,7 @@ function ConnectionSettings() {
     window.dispatchEvent(
       new CustomEvent("imswitch:pausePeriodicTests", {
         detail: { pause: true },
-      })
+      }),
     );
 
     // Only auto-test once on mount if we have saved connection settings from Redux
@@ -128,7 +142,7 @@ function ConnectionSettings() {
               port: connectionSettings.apiPort,
               websocketPort: connectionSettings.websocketPort,
             },
-          })
+          }),
         );
       }, 1500); // Delay to allow component to settle
 
@@ -140,7 +154,7 @@ function ConnectionSettings() {
       window.dispatchEvent(
         new CustomEvent("imswitch:pausePeriodicTests", {
           detail: { pause: false },
-        })
+        }),
       );
     };
   }, [
@@ -157,7 +171,7 @@ function ConnectionSettings() {
         setNotification({
           message: "Please configure IP and API port first",
           type: "warning",
-        })
+        }),
       );
       return;
     }
@@ -175,7 +189,7 @@ function ConnectionSettings() {
             port: apiPort,
             websocketPort: websocketPort,
           },
-        })
+        }),
       );
 
       // Give it a moment to complete both tests
@@ -185,7 +199,7 @@ function ConnectionSettings() {
           setNotification({
             message: "Connection tests completed - check status indicators",
             type: "info",
-          })
+          }),
         );
       }, 5000);
     } catch (e) {
@@ -193,7 +207,7 @@ function ConnectionSettings() {
         setNotification({
           message: "Error testing connection!",
           type: "error",
-        })
+        }),
       );
       setIsTestingConnection(false);
     }
@@ -214,14 +228,14 @@ function ConnectionSettings() {
         setNotification({
           message: "Settings saved successfully!",
           type: "success",
-        })
+        }),
       );
     } catch (e) {
       dispatch(
         setNotification({
           message: "Error saving settings!",
           type: "error",
-        })
+        }),
       );
     } finally {
       setIsSaving(false);
@@ -292,8 +306,8 @@ function ConnectionSettings() {
           (websocketTestStatus === "success" || isWebSocketConnected)
             ? "success"
             : hasConnectionSettings
-            ? "error"
-            : "warning"
+              ? "error"
+              : "warning"
         }
         sx={{ mb: 3 }}
       >
@@ -366,7 +380,7 @@ function ConnectionSettings() {
             {websocketPort && (
               <Chip
                 label={`WebSocket ${getWebSocketStatusLabel(
-                  websocketTestStatus
+                  websocketTestStatus,
                 )}`}
                 color={getWebSocketStatusColor(websocketTestStatus)}
                 size="small"
@@ -378,53 +392,22 @@ function ConnectionSettings() {
             )}
           </Box>
 
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Configure the IP address and ports for connecting to the ImSwitch
-            backend server.
-          </Typography>
-
-          {/* Basic Configuration Form */}
-          <Box
-            component="form"
-            sx={{
-              display: "grid",
-              gridTemplateColumns: "1fr 2fr",
-              gap: 3,
-              alignItems: "start",
-              mb: 3,
-            }}
-            autoComplete="off"
-          >
-            {/* Protocol Selection */}
-            <TextField
-              select
-              id="protocol"
-              label="Protocol"
-              value={hostProtocol}
-              onChange={(e) => setHostProtocol(e.target.value)}
-              fullWidth
-            >
-              <MenuItem value="https://">https://</MenuItem>
-              <MenuItem value="http://">http://</MenuItem>
-            </TextField>
-
-            {/* IP Address */}
-            <TextField
-              id="ip-address"
-              label="IP Address / Hostname"
-              type="text"
-              value={hostIP}
-              onChange={(e) =>
-                setHostIP(e.target.value.trim().replace(/^https?:\/\//, ""))
-              }
-              fullWidth
-              placeholder="e.g., 192.168.1.100 or localhost"
-              helperText="Usually same as frontend URL"
-            />
-          </Box>
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <Typography variant="body2">
+              <strong>No configuration needed!</strong> Connection settings are
+              automatically detected from the current URL. Only use Advanced
+              Settings below for development or remote access scenarios.
+            </Typography>
+          </Alert>
 
           {/* Advanced Settings Accordion */}
-          <Accordion sx={{ mb: 3 }}>
+          <Accordion
+            sx={{ mb: 3 }}
+            expanded={advancedSettingsExpanded}
+            onChange={(_, isExpanded) =>
+              setAdvancedSettingsExpanded(isExpanded)
+            }
+          >
             <AccordionSummary
               expandIcon={<ExpandMore />}
               aria-controls="advanced-settings-content"
@@ -436,9 +419,10 @@ function ConnectionSettings() {
               </Box>
             </AccordionSummary>
             <AccordionDetails>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Both services typically run on port 80. Only change these if
-                you have a custom setup.
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                <strong>⚠️ Developer Settings:</strong> Only modify these if you
+                need to connect to a remote backend or have a custom setup.
+                Default values are auto-detected from the current URL.
               </Typography>
 
               <Box
@@ -449,6 +433,33 @@ function ConnectionSettings() {
                   alignItems: "start",
                 }}
               >
+                {/* Protocol Selection */}
+                <TextField
+                  select
+                  id="protocol"
+                  label="Protocol"
+                  value={hostProtocol}
+                  onChange={(e) => setHostProtocol(e.target.value)}
+                  fullWidth
+                >
+                  <MenuItem value="https://">https://</MenuItem>
+                  <MenuItem value="http://">http://</MenuItem>
+                </TextField>
+
+                {/* IP Address */}
+                <TextField
+                  id="ip-address"
+                  label="IP Address / Hostname"
+                  type="text"
+                  value={hostIP}
+                  onChange={(e) =>
+                    setHostIP(e.target.value.trim().replace(/^https?:\/\//, ""))
+                  }
+                  fullWidth
+                  placeholder="e.g., 192.168.1.100 or localhost"
+                  helperText="Override auto-detected hostname"
+                />
+
                 {/* WebSocket Port */}
                 <TextField
                   id="port-websocket"
@@ -458,6 +469,7 @@ function ConnectionSettings() {
                   onChange={(e) => setWebsocketPortState(e.target.value.trim())}
                   fullWidth
                   placeholder="e.g., 80"
+                  helperText="Override auto-detected port"
                 />
 
                 {/* API Port */}
@@ -469,6 +481,7 @@ function ConnectionSettings() {
                   onChange={(e) => setApiPortState(e.target.value.trim())}
                   fullWidth
                   placeholder="e.g., 80"
+                  helperText="Override auto-detected port"
                 />
               </Box>
             </AccordionDetails>
@@ -545,76 +558,81 @@ function ConnectionSettings() {
           )}
         </CardContent>
 
-        <CardActions sx={{ p: 2, pt: 0 }}>
-          {/* Save Settings Button */}
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleSave}
-            disabled={!isDirty || isSaving || isTestingConnection}
-            startIcon={isSaving ? <CircularProgress size={16} /> : <Save />}
-          >
-            {isSaving ? "Saving..." : "Save Settings"}
-          </Button>
+        {/* Only show action buttons when Advanced Settings are expanded */}
+        {advancedSettingsExpanded && (
+          <CardActions sx={{ p: 2, pt: 0 }}>
+            {/* Save Settings Button */}
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={handleSave}
+              disabled={!isDirty || isSaving || isTestingConnection}
+              startIcon={isSaving ? <CircularProgress size={16} /> : <Save />}
+            >
+              {isSaving ? "Saving..." : "Save Settings"}
+            </Button>
 
-          {/* Test Connection Button */}
-          <Button
-            variant="outlined"
-            color="secondary"
-            onClick={handleTestConnection}
-            disabled={!hasConnectionSettings || isTestingConnection || isSaving}
-            startIcon={
-              isTestingConnection ? (
-                <CircularProgress size={16} />
-              ) : (
-                <Settings />
-              )
-            }
-          >
-            {isTestingConnection ? "Testing..." : "Test Connection"}
-          </Button>
+            {/* Test Connection Button */}
+            <Button
+              variant="outlined"
+              color="secondary"
+              onClick={handleTestConnection}
+              disabled={
+                !hasConnectionSettings || isTestingConnection || isSaving
+              }
+              startIcon={
+                isTestingConnection ? (
+                  <CircularProgress size={16} />
+                ) : (
+                  <Settings />
+                )
+              }
+            >
+              {isTestingConnection ? "Testing..." : "Test Connection"}
+            </Button>
 
-          {/* Reset to Smart Defaults Button */}
-          <Button
-            variant="text"
-            color="secondary"
-            onClick={() => {
-              const defaults = getSmartDefaults();
-              setHostProtocol(defaults.protocol);
-              setHostIP(defaults.hostname);
-              setWebsocketPortState(defaults.port);
-              setApiPortState(defaults.port);
-            }}
-            disabled={isTestingConnection || isSaving}
-          >
-            Reset to Defaults
-          </Button>
+            {/* Reset to Smart Defaults Button */}
+            <Button
+              variant="text"
+              color="secondary"
+              onClick={() => {
+                const defaults = getSmartDefaults();
+                setHostProtocol(defaults.protocol);
+                setHostIP(defaults.hostname);
+                setWebsocketPortState(defaults.port);
+                setApiPortState(defaults.port);
+              }}
+              disabled={isTestingConnection || isSaving}
+            >
+              Reset to Defaults
+            </Button>
 
-          {/* Status Text */}
-          {(isTestingConnection || isSaving) && (
-            <Typography variant="body2" color="text.secondary" sx={{ ml: 2 }}>
-              {isTestingConnection
-                ? "Testing backend and WebSocket connection..."
-                : "Saving settings..."}
-            </Typography>
-          )}
+            {/* Status Text */}
+            {(isTestingConnection || isSaving) && (
+              <Typography variant="body2" color="text.secondary" sx={{ ml: 2 }}>
+                {isTestingConnection
+                  ? "Testing backend and WebSocket connection..."
+                  : "Saving settings..."}
+              </Typography>
+            )}
 
-          {/* Auto-test notification */}
-          {!hasAutoTested && hasConnectionSettings && (
-            <Typography variant="caption" color="info.main" sx={{ ml: 2 }}>
-              Auto-testing connection...
-            </Typography>
-          )}
+            {/* Auto-test notification */}
+            {!hasAutoTested && hasConnectionSettings && (
+              <Typography variant="caption" color="info.main" sx={{ ml: 2 }}>
+                Auto-testing connection...
+              </Typography>
+            )}
 
-          {/* Periodic tests paused indicator */}
-          <Chip
-            label="Periodic Tests Paused"
-            size="small"
-            variant="outlined"
-            color="info"
-            sx={{ ml: "auto" }}
-          />
-        </CardActions>
+            {/* Periodic tests paused indicator */}
+            <Chip
+              label="Periodic Tests Paused"
+              size="small"
+              variant="outlined"
+              color="info"
+              sx={{ ml: "auto" }}
+            />
+          </CardActions>
+        )}
       </Card>
 
       {/* Connection Help Card */}

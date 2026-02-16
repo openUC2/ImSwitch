@@ -16,7 +16,6 @@ import {
   List,
   ListItem,
   ListItemText,
-  ListItemIcon,
   LinearProgress,
   Paper,
   FormControl,
@@ -26,7 +25,6 @@ import {
   MenuItem,
   InputLabel,
   TextField,
-  Chip,
   Radio,
   RadioGroup,
   Divider,
@@ -51,18 +49,21 @@ import * as usbFlashSlice from "../state/slices/usbFlashSlice";
 import apiUC2ConfigControllerListSerialPorts from "../backendapi/apiUC2ConfigControllerListSerialPorts";
 import apiUC2ConfigControllerFlashMasterFirmwareUSB from "../backendapi/apiUC2ConfigControllerFlashMasterFirmwareUSB";
 import apiUC2ConfigControllerGetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerGetOTAFirmwareServer";
-import apiUC2ConfigControllerListAvailableFirmware from "../backendapi/apiUC2ConfigControllerListAvailableFirmware";
+import apiUC2ConfigControllerSetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerSetOTAFirmwareServer";
+import apiUC2ConfigControllerListAllFirmwareFiles from "../backendapi/apiUC2ConfigControllerListAllFirmwareFiles";
 
 const steps = [
+  "Firmware Server",
+  "Select Firmware",
   "Port Selection",
-  "Firmware Info",
   "Flash Device",
   "Complete",
 ];
 
 /**
  * USB Flash Wizard Component
- * Wizard for flashing the master CAN HAT firmware via USB/esptool
+ * Wizard for flashing ESP32 firmware via USB/esptool.
+ * The user configures the firmware server, picks any .bin file, selects a port, then flashes.
  */
 const UsbFlashWizard = ({ open, onClose }) => {
   const dispatch = useDispatch();
@@ -77,21 +78,49 @@ const UsbFlashWizard = ({ open, onClose }) => {
 
   const loadInitialData = async () => {
     try {
-      // Load serial ports
-      await loadSerialPorts();
-
-      // Load firmware server URL
+      // Load firmware server URL from backend
       const firmwareServer = await apiUC2ConfigControllerGetOTAFirmwareServer();
-      dispatch(usbFlashSlice.setFirmwareServerUrl(firmwareServer.firmware_server_url));
-
-      // Load available firmware to find master firmware
-      await loadFirmwareInfo();
+      dispatch(usbFlashSlice.setFirmwareServerUrl(firmwareServer.firmware_server_url || ""));
+      dispatch(usbFlashSlice.setDefaultFirmwareServerUrl(firmwareServer.firmware_server_url || ""));
     } catch (error) {
       console.error("Error loading initial data:", error);
-      dispatch(usbFlashSlice.setError("Failed to load initial configuration"));
+      dispatch(usbFlashSlice.setError("Failed to load firmware server configuration"));
     }
   };
 
+  // --- Firmware server ---
+  const handleLoadFirmwareFiles = async () => {
+    try {
+      dispatch(usbFlashSlice.setIsLoadingFirmware(true));
+      dispatch(usbFlashSlice.clearMessages());
+
+      // Save server URL to backend first
+      if (usbFlashState.firmwareServerUrl) {
+        try {
+          await apiUC2ConfigControllerSetOTAFirmwareServer(usbFlashState.firmwareServerUrl);
+        } catch (_) {
+          // Non-fatal - the URL might already be set
+        }
+      }
+
+      const result = await apiUC2ConfigControllerListAllFirmwareFiles();
+      if (result.status === "success") {
+        dispatch(usbFlashSlice.setFirmwareFiles(result.files || []));
+        if (!result.files || result.files.length === 0) {
+          dispatch(usbFlashSlice.setError("No .bin firmware files found on the server"));
+        }
+      } else {
+        dispatch(usbFlashSlice.setError(result.message || "Failed to load firmware list"));
+      }
+    } catch (error) {
+      console.error("Error loading firmware files:", error);
+      dispatch(usbFlashSlice.setError("Failed to load firmware list from server"));
+    } finally {
+      dispatch(usbFlashSlice.setIsLoadingFirmware(false));
+    }
+  };
+
+  // --- Serial ports ---
   const loadSerialPorts = async () => {
     try {
       dispatch(usbFlashSlice.setIsLoadingPorts(true));
@@ -105,44 +134,30 @@ const UsbFlashWizard = ({ open, onClose }) => {
     }
   };
 
-  const loadFirmwareInfo = async () => {
-    try {
-      dispatch(usbFlashSlice.setIsLoadingFirmware(true));
-      const firmwareList = await apiUC2ConfigControllerListAvailableFirmware();
-      
-      // Find master firmware (CAN ID 1)
-      const masterFirmware = firmwareList.firmware?.["1"] || null;
-      dispatch(usbFlashSlice.setMasterFirmwareInfo(masterFirmware));
-      
-      if (!masterFirmware) {
-        dispatch(usbFlashSlice.setError("Master firmware not found on server"));
-      }
-    } catch (error) {
-      console.error("Error loading firmware info:", error);
-      dispatch(usbFlashSlice.setError("Failed to load firmware information"));
-    } finally {
-      dispatch(usbFlashSlice.setIsLoadingFirmware(false));
-    }
-  };
-
+  // --- Navigation ---
   const handleNext = async () => {
-    const currentStep = usbFlashState.currentStep;
+    const step = usbFlashState.currentStep;
+    dispatch(usbFlashSlice.clearMessages());
 
-    // Step-specific validation and actions
-    if (currentStep === 0) {
-      // Port selection - no specific validation needed (auto-detect is allowed)
-      dispatch(usbFlashSlice.clearMessages());
-    } else if (currentStep === 1) {
-      // Firmware info - check if firmware is available
-      if (!usbFlashState.masterFirmwareInfo) {
-        dispatch(usbFlashSlice.setError("Master firmware not available. Please check firmware server."));
+    if (step === 0) {
+      // Firmware server - validate URL and load files
+      if (!usbFlashState.firmwareServerUrl) {
+        dispatch(usbFlashSlice.setError("Please enter a firmware server URL"));
         return;
       }
-      dispatch(usbFlashSlice.clearMessages());
-    } else if (currentStep === 2) {
+      await handleLoadFirmwareFiles();
+    } else if (step === 1) {
+      // Select firmware - validate selection
+      if (!usbFlashState.selectedFirmware) {
+        dispatch(usbFlashSlice.setError("Please select a firmware file"));
+        return;
+      }
+      // Pre-load serial ports for next step
+      loadSerialPorts();
+    } else if (step === 3) {
       // Start flashing
       await startFlashing();
-      return; // Don't advance step automatically, wait for flash completion
+      return; // Don't auto-advance; signal-driven progress does it
     }
 
     dispatch(usbFlashSlice.nextStep());
@@ -158,34 +173,21 @@ const UsbFlashWizard = ({ open, onClose }) => {
     onClose();
   };
 
+  // --- Flashing ---
   const startFlashing = async () => {
     try {
       dispatch(usbFlashSlice.setIsFlashing(true));
       dispatch(usbFlashSlice.setFlashStatus("disconnecting"));
       dispatch(usbFlashSlice.setFlashProgress(0));
-      dispatch(usbFlashSlice.setFlashMessage("Disconnecting from ESP32..."));
+      dispatch(usbFlashSlice.setFlashMessage("Starting flash process..."));
       dispatch(usbFlashSlice.clearMessages());
 
-      // Simulate progress updates (actual progress comes from backend via socket)
-      setTimeout(() => {
-        dispatch(usbFlashSlice.setFlashStatus("downloading"));
-        dispatch(usbFlashSlice.setFlashProgress(10));
-        dispatch(usbFlashSlice.setFlashMessage("Downloading firmware from server..."));
-      }, 1000);
-
-      setTimeout(() => {
-        dispatch(usbFlashSlice.setFlashStatus("flashing"));
-        dispatch(usbFlashSlice.setFlashProgress(20));
-        dispatch(usbFlashSlice.setFlashMessage("Flashing firmware via USB..."));
-      }, 3000);
-
-      // Call the flash API
+      // Call the flash API - real-time progress comes via sigUSBFlashStatusUpdate
       const result = await apiUC2ConfigControllerFlashMasterFirmwareUSB(
         usbFlashState.selectedPort,
         usbFlashState.portMatch,
         usbFlashState.baudRate,
-        usbFlashState.flashOffset,
-        usbFlashState.eraseFlash,
+        usbFlashState.selectedFirmware?.filename || null,
         usbFlashState.reconnectAfter
       );
 
@@ -194,46 +196,184 @@ const UsbFlashWizard = ({ open, onClose }) => {
       if (result.status === "success") {
         dispatch(usbFlashSlice.setFlashStatus("success"));
         dispatch(usbFlashSlice.setFlashProgress(100));
-        dispatch(usbFlashSlice.setFlashMessage("✅ Firmware flashed successfully!"));
-        dispatch(usbFlashSlice.setSuccessMessage("Master firmware has been updated successfully"));
+        dispatch(usbFlashSlice.setFlashMessage("Firmware flashed successfully!"));
+        dispatch(usbFlashSlice.setSuccessMessage("Firmware has been updated successfully"));
         dispatch(usbFlashSlice.nextStep()); // Move to completion step
       } else if (result.status === "warning") {
         dispatch(usbFlashSlice.setFlashStatus("success"));
         dispatch(usbFlashSlice.setFlashProgress(100));
-        dispatch(usbFlashSlice.setFlashMessage("⚠️ Firmware flashed, but reconnection failed"));
+        dispatch(usbFlashSlice.setFlashMessage("Firmware flashed, but reconnection failed"));
         dispatch(usbFlashSlice.setError(result.message || "Reconnection failed"));
         dispatch(usbFlashSlice.nextStep());
       } else {
         dispatch(usbFlashSlice.setFlashStatus("failed"));
-        dispatch(usbFlashSlice.setFlashMessage("❌ Flashing failed"));
+        dispatch(usbFlashSlice.setFlashMessage("Flashing failed"));
         dispatch(usbFlashSlice.setError(result.message || "Unknown error"));
         dispatch(usbFlashSlice.setFlashDetails(result.details));
       }
     } catch (error) {
       console.error("Error during flashing:", error);
       dispatch(usbFlashSlice.setFlashStatus("failed"));
-      dispatch(usbFlashSlice.setFlashMessage("❌ Flashing failed"));
-      dispatch(usbFlashSlice.setError(`Failed to flash firmware: ${error.message}`));
+      dispatch(usbFlashSlice.setFlashMessage("Flashing failed"));
+      dispatch(usbFlashSlice.setError("Failed to flash firmware: " + error.message));
     } finally {
       dispatch(usbFlashSlice.setIsFlashing(false));
     }
   };
 
+  // ======================================
+  // Step renderers
+  // ======================================
   const renderStepContent = (step) => {
     switch (step) {
       case 0:
-        return renderPortSelection();
+        return renderFirmwareServer();
       case 1:
-        return renderFirmwareInfo();
+        return renderFirmwareSelection();
       case 2:
-        return renderFlashProgress();
+        return renderPortSelection();
       case 3:
+        return renderFlashProgress();
+      case 4:
         return renderCompletion();
       default:
         return null;
     }
   };
 
+  // --- Step 0: Firmware Server ---
+  const renderFirmwareServer = () => (
+    <Box sx={{ mt: 2 }}>
+      <Typography variant="h6" gutterBottom>
+        <DownloadIcon sx={{ mr: 1, verticalAlign: "middle" }} />
+        Firmware Server Configuration
+      </Typography>
+      <Typography variant="body2" color="text.secondary" gutterBottom>
+        Enter the URL of the firmware server that hosts the .bin files.
+      </Typography>
+
+      <Box sx={{ mt: 3 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <TextField
+            fullWidth
+            label="Firmware Server URL"
+            value={usbFlashState.firmwareServerUrl}
+            onChange={(e) => dispatch(usbFlashSlice.setFirmwareServerUrl(e.target.value))}
+            margin="normal"
+            placeholder="https://example.com/firmware/latest"
+            helperText={
+              usbFlashState.defaultFirmwareServerUrl
+                ? "Default: " + usbFlashState.defaultFirmwareServerUrl
+                : "Set the URL where firmware .bin files are hosted"
+            }
+          />
+          <Tooltip title="Reload firmware files from server">
+            <IconButton
+              onClick={handleLoadFirmwareFiles}
+              disabled={usbFlashState.isLoadingFirmware || !usbFlashState.firmwareServerUrl}
+              sx={{ mt: 1 }}
+            >
+              {usbFlashState.isLoadingFirmware ? (
+                <CircularProgress size={24} />
+              ) : (
+                <RefreshIcon />
+              )}
+            </IconButton>
+          </Tooltip>
+        </Box>
+
+        {usbFlashState.firmwareFiles.length > 0 && (
+          <Paper sx={{ mt: 2, p: 2 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              {usbFlashState.firmwareFiles.length} firmware file(s) found on server
+            </Typography>
+          </Paper>
+        )}
+      </Box>
+    </Box>
+  );
+
+  // --- Step 1: Select Firmware ---
+  const renderFirmwareSelection = () => (
+    <Box sx={{ mt: 2 }}>
+      <Typography variant="h6" gutterBottom>
+        <MemoryIcon sx={{ mr: 1, verticalAlign: "middle" }} />
+        Select Firmware
+      </Typography>
+      <Typography variant="body2" color="text.secondary" gutterBottom>
+        Choose the firmware file you want to flash to the device.
+      </Typography>
+
+      {usbFlashState.isLoadingFirmware ? (
+        <Box sx={{ display: "flex", justifyContent: "center", my: 3 }}>
+          <CircularProgress />
+        </Box>
+      ) : usbFlashState.firmwareFiles.length > 0 ? (
+        <Box sx={{ mt: 2 }}>
+          <FormControl component="fieldset" sx={{ width: "100%" }}>
+            <RadioGroup
+              value={usbFlashState.selectedFirmware?.filename || ""}
+              onChange={(e) => {
+                const selected = usbFlashState.firmwareFiles.find(
+                  (f) => f.filename === e.target.value
+                );
+                dispatch(usbFlashSlice.setSelectedFirmware(selected || null));
+              }}
+            >
+              {usbFlashState.firmwareFiles.map((fw) => (
+                <Paper
+                  key={fw.filename}
+                  sx={{
+                    p: 1.5,
+                    mb: 1,
+                    border: usbFlashState.selectedFirmware?.filename === fw.filename ? 2 : 1,
+                    borderColor:
+                      usbFlashState.selectedFirmware?.filename === fw.filename
+                        ? "primary.main"
+                        : "divider",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => dispatch(usbFlashSlice.setSelectedFirmware(fw))}
+                >
+                  <FormControlLabel
+                    value={fw.filename}
+                    control={<Radio />}
+                    label={
+                      <Box>
+                        <Typography variant="body1" sx={{ fontFamily: "monospace" }}>
+                          {fw.filename}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {(fw.size / 1024).toFixed(1)} KB
+                          {fw.mod_time && (" \u00b7 " + fw.mod_time)}
+                        </Typography>
+                      </Box>
+                    }
+                    sx={{ width: "100%", m: 0 }}
+                  />
+                </Paper>
+              ))}
+            </RadioGroup>
+          </FormControl>
+
+          <Button
+            size="small"
+            startIcon={<RefreshIcon />}
+            onClick={handleLoadFirmwareFiles}
+            sx={{ mt: 1 }}
+          >
+            Refresh
+          </Button>
+        </Box>
+      ) : (
+        <Alert severity="warning" sx={{ mt: 2 }}>
+          No firmware files found. Go back and check the firmware server URL.
+        </Alert>
+      )}
+    </Box>
+  );
+
+  // --- Step 2: Port Selection ---
   const renderPortSelection = () => (
     <Box sx={{ mt: 2 }}>
       <Typography variant="h6" gutterBottom>
@@ -241,7 +381,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
         USB Port Selection
       </Typography>
       <Typography variant="body2" color="text.secondary" gutterBottom>
-        Select the serial port connected to the master CAN HAT, or use auto-detection.
+        Select the serial port connected to the ESP32 or use auto-detection.
       </Typography>
 
       {usbFlashState.isLoadingPorts ? (
@@ -274,7 +414,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
                   <Box>
                     <Typography variant="body1">Auto-detect</Typography>
                     <Typography variant="caption" color="text.secondary">
-                      Automatically find the CAN HAT by matching "{usbFlashState.portMatch}" in port metadata
+                      Automatically find the device by matching "{usbFlashState.portMatch}" in port metadata
                     </Typography>
                   </Box>
                 }
@@ -291,7 +431,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
                         <Typography variant="body1">{port.device}</Typography>
                         <Typography variant="caption" color="text.secondary">
                           {port.description || port.manufacturer || port.product || "Unknown device"}
-                          {port.vid && port.pid && ` (VID:${port.vid.toString(16)} PID:${port.pid.toString(16)})`}
+                          {port.vid && port.pid && (" (VID:" + port.vid.toString(16) + " PID:" + port.pid.toString(16) + ")")}
                         </Typography>
                       </Box>
                     }
@@ -314,75 +454,11 @@ const UsbFlashWizard = ({ open, onClose }) => {
             helperText="Substring to search for in port metadata when auto-detecting"
             size="small"
           />
-        </Box>
-      )}
-    </Box>
-  );
 
-  const renderFirmwareInfo = () => (
-    <Box sx={{ mt: 2 }}>
-      <Typography variant="h6" gutterBottom>
-        <MemoryIcon sx={{ mr: 1, verticalAlign: "middle" }} />
-        Firmware Information
-      </Typography>
-      <Typography variant="body2" color="text.secondary" gutterBottom>
-        Review firmware and flash options before proceeding.
-      </Typography>
-
-      {usbFlashState.isLoadingFirmware ? (
-        <Box sx={{ display: "flex", justifyContent: "center", my: 3 }}>
-          <CircularProgress />
-        </Box>
-      ) : (
-        <Box sx={{ mt: 3 }}>
-          {/* Firmware Info */}
-          <Paper sx={{ p: 2, mb: 3 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              <DownloadIcon sx={{ mr: 1, verticalAlign: "middle", fontSize: 20 }} />
-              Master CAN HAT Firmware
-            </Typography>
-            {usbFlashState.masterFirmwareInfo ? (
-              <List dense>
-                <ListItem>
-                  <ListItemIcon><MemoryIcon fontSize="small" /></ListItemIcon>
-                  <ListItemText
-                    primary="Filename"
-                    secondary={usbFlashState.masterFirmwareInfo.filename}
-                  />
-                </ListItem>
-                <ListItem>
-                  <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon>
-                  <ListItemText
-                    primary="Size"
-                    secondary={`${(usbFlashState.masterFirmwareInfo.size / 1024).toFixed(2)} KB`}
-                  />
-                </ListItem>
-                <ListItem>
-                  <ListItemText
-                    primary="Server URL"
-                    secondary={usbFlashState.firmwareServerUrl}
-                  />
-                </ListItem>
-              </List>
-            ) : (
-              <Alert severity="error">
-                Master firmware not found on server. Please configure the firmware server.
-              </Alert>
-            )}
-            <Button
-              size="small"
-              startIcon={<RefreshIcon />}
-              onClick={loadFirmwareInfo}
-              sx={{ mt: 1 }}
-            >
-              Refresh
-            </Button>
-          </Paper>
-
-          {/* Flash Options */}
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              <SettingsIcon sx={{ mr: 1, verticalAlign: "middle", fontSize: 20 }} />
+          {/* Minimal flash options */}
+          <Paper sx={{ p: 2, mt: 2 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              <SettingsIcon sx={{ mr: 1, verticalAlign: "middle", fontSize: 18 }} />
               Flash Options
             </Typography>
 
@@ -400,28 +476,6 @@ const UsbFlashWizard = ({ open, onClose }) => {
               </Select>
             </FormControl>
 
-            <FormControl fullWidth margin="normal" size="small">
-              <InputLabel>Flash Offset</InputLabel>
-              <Select
-                value={usbFlashState.flashOffset}
-                onChange={(e) => dispatch(usbFlashSlice.setFlashOffset(e.target.value))}
-                label="Flash Offset"
-              >
-                <MenuItem value={0x10000}>0x10000 (app-only image)</MenuItem>
-                {/*<MenuItem value={0x0}>0x0 (merged/factory image)</MenuItem>*/}
-              </Select>
-            </FormControl>
-
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={usbFlashState.eraseFlash}
-                  onChange={(e) => dispatch(usbFlashSlice.setEraseFlash(e.target.checked))}
-                />
-              }
-              label="Erase flash before writing (clears all settings)"
-            />
-
             <FormControlLabel
               control={
                 <Checkbox
@@ -432,11 +486,19 @@ const UsbFlashWizard = ({ open, onClose }) => {
               label="Reconnect to device after flashing"
             />
           </Paper>
+
+          {/* Selected firmware summary */}
+          {usbFlashState.selectedFirmware && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              <strong>Firmware:</strong> {usbFlashState.selectedFirmware.filename} ({(usbFlashState.selectedFirmware.size / 1024).toFixed(1)} KB)
+            </Alert>
+          )}
         </Box>
       )}
     </Box>
   );
 
+  // --- Step 3: Flash Progress ---
   const renderFlashProgress = () => (
     <Box sx={{ mt: 2 }}>
       <Typography variant="h6" gutterBottom>
@@ -475,7 +537,11 @@ const UsbFlashWizard = ({ open, onClose }) => {
 
         {usbFlashState.flashDetails && (
           <Alert severity="info" sx={{ mt: 2 }}>
-            <Typography variant="body2" component="pre" sx={{ whiteSpace: "pre-wrap", fontFamily: "monospace" }}>
+            <Typography
+              variant="body2"
+              component="pre"
+              sx={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: "0.8rem" }}
+            >
               {usbFlashState.flashDetails}
             </Typography>
           </Alert>
@@ -483,11 +549,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
 
         {usbFlashState.flashStatus === "failed" && (
           <Box sx={{ mt: 2, textAlign: "center" }}>
-            <Button
-              variant="outlined"
-              color="primary"
-              onClick={startFlashing}
-            >
+            <Button variant="outlined" color="primary" onClick={startFlashing}>
               Retry
             </Button>
           </Box>
@@ -503,6 +565,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
     </Box>
   );
 
+  // --- Step 4: Completion ---
   const renderCompletion = () => (
     <Box sx={{ mt: 2, textAlign: "center" }}>
       {usbFlashState.flashResult?.status === "success" ? (
@@ -512,7 +575,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
             Firmware Update Complete!
           </Typography>
           <Typography variant="body1" color="text.secondary" gutterBottom>
-            The master CAN HAT firmware has been successfully updated.
+            The firmware has been successfully flashed to the device.
           </Typography>
         </>
       ) : usbFlashState.flashResult?.status === "warning" ? (
@@ -571,7 +634,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
       case "downloading":
         return "Downloading firmware from the server...";
       case "flashing":
-        return "Writing firmware to the device via USB...";
+        return "Writing firmware to the device via USB (esptool)...";
       case "reconnecting":
         return "Reconnecting to the device...";
       case "success":
@@ -585,8 +648,9 @@ const UsbFlashWizard = ({ open, onClose }) => {
 
   const isNextDisabled = () => {
     const step = usbFlashState.currentStep;
-    if (step === 1 && !usbFlashState.masterFirmwareInfo) return true;
-    if (step === 2 && usbFlashState.isFlashing) return true;
+    if (step === 0 && !usbFlashState.firmwareServerUrl) return true;
+    if (step === 1 && !usbFlashState.selectedFirmware) return true;
+    if (step === 3 && usbFlashState.isFlashing) return true;
     return false;
   };
 
@@ -633,20 +697,20 @@ const UsbFlashWizard = ({ open, onClose }) => {
 
       <DialogActions>
         <Button onClick={handleClose} disabled={usbFlashState.isFlashing}>
-          {usbFlashState.currentStep === 3 ? "Close" : "Cancel"}
+          {usbFlashState.currentStep === 4 ? "Close" : "Cancel"}
         </Button>
-        {usbFlashState.currentStep > 0 && usbFlashState.currentStep < 3 && (
+        {usbFlashState.currentStep > 0 && usbFlashState.currentStep < 4 && (
           <Button onClick={handleBack} disabled={usbFlashState.isFlashing}>
             Back
           </Button>
         )}
-        {usbFlashState.currentStep < 3 && (
+        {usbFlashState.currentStep < 4 && (
           <Button
             variant="contained"
             onClick={handleNext}
             disabled={isNextDisabled() || usbFlashState.isFlashing}
           >
-            {usbFlashState.currentStep === 2 ? "Start Flashing" : "Next"}
+            {usbFlashState.currentStep === 3 ? "Start Flashing" : "Next"}
           </Button>
         )}
       </DialogActions>

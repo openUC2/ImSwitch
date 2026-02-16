@@ -389,7 +389,7 @@ const ConfigurationWizard = ({ open, onClose, hostIP, hostPort }) => {
         });
     };
     
-    setTimeout(checkStatus, 5000);
+    setTimeout(checkStatus, 15000);
   }, [hostIP, hostPort]);
 
   // Validation functions for step transitions

@@ -575,6 +575,53 @@ export function generateWellLayout384({
 export const wellLayout384 = generateWellLayout384();
 
 //##################################################################################
+// DEP Chip (Dielectrophoresis Chip) Layout
+// 8 columns x 6 rows, 1.5mm diameter (750µm radius), 2.25mm pitch
+export function generateWellLayoutDEPChip({
+  cols = 8,
+  rows = 6,
+  pitch = 2250,        // 2.25 mm spacing between centers
+  radius = 750,        // 1.5 mm diameter = 0.75 mm radius
+  startX = 127000/2-4*2250,      // Start position X (can be adjusted)
+  startY = 84000/2-3*2250,       // Start position Y (can be adjusted)
+  width = 127000,       // Total width of chip area
+  height = 84000,      // Total height of chip area
+  offsetX = 0,         // Global offset in X direction (micrometers)
+  offsetY = 0,         // Global offset in Y direction (micrometers)
+  /*
+    startX = 12000,
+  startY = 9000,
+  width = 127000,
+  height = 84000,*/
+} = {}) {
+  const wells = [];
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = startX + c * pitch + offsetX;
+      const y = startY + r * pitch + offsetY;
+      wells.push({
+        x: Number(x.toFixed(3)),
+        y: Number(y.toFixed(3)),
+        shape: "circle",
+        radius,
+      });
+    }
+  }
+
+  return {
+    name: "DEP Chip",
+    unit: "um",
+    width,
+    height,
+    wells,
+  };
+}
+
+// Optional: export a ready-to-use DEP chip layout
+export const wellLayoutDEPChip = generateWellLayoutDEPChip();
+
+//##################################################################################
 /**
  * Apply global offset to all wells in a layout
  * @param {Object} layout - Well layout object

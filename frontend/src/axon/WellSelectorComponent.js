@@ -104,6 +104,12 @@ const WellSelectorComponent = () => {
         offsetX: offsetX,
         offsetY: offsetY
       });
+    } else if (event.target.value === "DEP Chip") {
+      // Generate DEP Chip layout with offsets
+      wellLayout = wsUtils.generateWellLayoutDEPChip({
+        offsetX: offsetX,
+        offsetY: offsetY
+      });
     } else if (event.target.value === "Ropod") {
       wellLayout = wsUtils.ropodLayout;      
     } else {
@@ -241,6 +247,7 @@ const WellSelectorComponent = () => {
             <MenuItem value="Heidstar 4x Histosample">4 Slide Heidstar</MenuItem>
             <MenuItem value="Ropod">Ropod</MenuItem>  
             <MenuItem value="Wellplate 384">Wellplate 384</MenuItem>
+            <MenuItem value="DEP Chip">DEP Chip (8x6)</MenuItem>
             {/* online layouts */}
             {wellLayoutFileList.map((file, index) => (
               <MenuItem value={file}>{file}</MenuItem>

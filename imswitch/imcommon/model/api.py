@@ -97,7 +97,7 @@ def generateAPI(objs, *, missingAttributeErrorMsg=None):
                 continue
 
             if subObjName in exportedFuncs:
-                raise NameError(f'API method name "{subObjName}" is already in use')
+                raise NameError(f'API method name "{subObjName}" is already in use at: {str(obj)}')
 
             runOnUIThread = hasattr(subObj, '_APIRunOnUIThread') and subObj._APIRunOnUIThread
 

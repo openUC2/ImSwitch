@@ -337,15 +337,25 @@ const OffAxisHoloController = () => {
   const handleToggleApodization = useCallback(
     async (event) => {
       const enabled = event.target.checked;
+      // Update UI immediately for better responsiveness
+      dispatch(offAxisHoloSlice.setApodizationEnabled(enabled));
       try {
-        await apiOffAxisHoloControllerSetApodization(
-          enabled,
-          offAxisState.apodizationType,
-          offAxisState.apodizationAlpha
+        // Use timeout to prevent UI blocking
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Request timeout")), 5000)
         );
-        dispatch(offAxisHoloSlice.setApodizationEnabled(enabled));
+        await Promise.race([
+          apiOffAxisHoloControllerSetApodization(
+            enabled,
+            offAxisState.apodizationType,
+            offAxisState.apodizationAlpha
+          ),
+          timeoutPromise,
+        ]);
       } catch (error) {
         console.error("Failed to toggle apodization:", error);
+        // Revert on error
+        dispatch(offAxisHoloSlice.setApodizationEnabled(!enabled));
       }
     },
     [dispatch, offAxisState.apodizationType, offAxisState.apodizationAlpha]
@@ -355,29 +365,45 @@ const OffAxisHoloController = () => {
   const handleApodizationTypeChange = useCallback(
     async (event) => {
       const type = event.target.value;
+      const previousType = offAxisState.apodizationType;
+      // Update UI immediately
+      dispatch(offAxisHoloSlice.setApodizationType(type));
       try {
-        await apiOffAxisHoloControllerSetApodization(
-          offAxisState.apodizationEnabled,
-          type,
-          offAxisState.apodizationAlpha
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Request timeout")), 5000)
         );
-        dispatch(offAxisHoloSlice.setApodizationType(type));
+        await Promise.race([
+          apiOffAxisHoloControllerSetApodization(
+            offAxisState.apodizationEnabled,
+            type,
+            offAxisState.apodizationAlpha
+          ),
+          timeoutPromise,
+        ]);
       } catch (error) {
         console.error("Failed to change apodization type:", error);
+        // Revert on error
+        dispatch(offAxisHoloSlice.setApodizationType(previousType));
       }
     },
-    [dispatch, offAxisState.apodizationEnabled, offAxisState.apodizationAlpha]
+    [dispatch, offAxisState.apodizationEnabled, offAxisState.apodizationAlpha, offAxisState.apodizationType]
   );
 
   // Change apodization alpha
   const handleApodizationAlphaCommit = useCallback(
     async (event, value) => {
       try {
-        await apiOffAxisHoloControllerSetApodization(
-          offAxisState.apodizationEnabled,
-          offAxisState.apodizationType,
-          value
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Request timeout")), 5000)
         );
+        await Promise.race([
+          apiOffAxisHoloControllerSetApodization(
+            offAxisState.apodizationEnabled,
+            offAxisState.apodizationType,
+            value
+          ),
+          timeoutPromise,
+        ]);
         dispatch(offAxisHoloSlice.setApodizationAlpha(value));
       } catch (error) {
         console.error("Failed to change apodization alpha:", error);
@@ -628,7 +654,7 @@ const OffAxisHoloController = () => {
                 sx={{
                   position: "relative",
                   width: "100%",
-                  paddingTop: "75%",
+                  
                   backgroundColor: "#000",
                   borderRadius: 1,
                   overflow: "hidden",
@@ -697,6 +723,119 @@ const OffAxisHoloController = () => {
           </Card>
         </Grid>
       </Grid>
+
+            {/* Sideband ROI Controls */}
+      <Accordion>
+        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+          <Typography variant="h6">Sideband (CC) Selection</Typography>
+        </AccordionSummary>
+        <AccordionDetails>
+          <Grid container spacing={2}>
+            <Grid item xs={6} sm={3}>
+              <TextField
+                label="Center X"
+                type="number"
+                value={ccSelection.centerX}
+                onChange={async (e) => {
+                  const value = parseInt(e.target.value) || 0;
+                  setCcSelection((prev) => ({ ...prev, centerX: value }));
+                  // Auto-update backend
+                  try {
+                    await apiOffAxisHoloControllerSetCcRoi(
+                      value,
+                      ccSelection.centerY,
+                      ccSelection.sizeX,
+                      ccSelection.sizeY
+                    );
+                  } catch (error) {
+                    console.error("Failed to update sideband center X:", error);
+                  }
+                }}
+                size="small"
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={6} sm={3}>
+              <TextField
+                label="Center Y"
+                type="number"
+                value={ccSelection.centerY}
+                onChange={async (e) => {
+                  const value = parseInt(e.target.value) || 0;
+                  setCcSelection((prev) => ({ ...prev, centerY: value }));
+                  // Auto-update backend
+                  try {
+                    await apiOffAxisHoloControllerSetCcRoi(
+                      ccSelection.centerX,
+                      value,
+                      ccSelection.sizeX,
+                      ccSelection.sizeY
+                    );
+                  } catch (error) {
+                    console.error("Failed to update sideband center Y:", error);
+                  }
+                }}
+                size="small"
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={6} sm={3}>
+              <TextField
+                label="Size X"
+                type="number"
+                value={ccSelection.sizeX}
+                onChange={async (e) => {
+                  const value = parseInt(e.target.value) || 50;
+                  setCcSelection((prev) => ({ ...prev, sizeX: value }));
+                  // Auto-update backend
+                  try {
+                    await apiOffAxisHoloControllerSetCcRoi(
+                      ccSelection.centerX,
+                      ccSelection.centerY,
+                      value,
+                      ccSelection.sizeY
+                    );
+                  } catch (error) {
+                    console.error("Failed to update sideband size X:", error);
+                  }
+                }}
+                size="small"
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={6} sm={3}>
+              <TextField
+                label="Size Y"
+                type="number"
+                value={ccSelection.sizeY}
+                onChange={async (e) => {
+                  const value = parseInt(e.target.value) || 50;
+                  setCcSelection((prev) => ({ ...prev, sizeY: value }));
+                  // Auto-update backend
+                  try {
+                    await apiOffAxisHoloControllerSetCcRoi(
+                      ccSelection.centerX,
+                      ccSelection.centerY,
+                      ccSelection.sizeX,
+                      value
+                    );
+                  } catch (error) {
+                    console.error("Failed to update sideband size Y:", error);
+                  }
+                }}
+                size="small"
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary">
+                Click on FFT image to select sideband center. Changes are applied automatically.
+              </Typography>
+            </Grid>
+          </Grid>
+        </AccordionDetails>
+      </Accordion>
+
 
       {/* Processed Streams Tabs */}
       <Paper elevation={2} sx={{ mb: 2 }}>
@@ -788,148 +927,37 @@ const OffAxisHoloController = () => {
         </Box>
       </Paper>
 
-      {/* Sideband ROI Controls */}
-      <Accordion defaultExpanded>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Typography variant="h6">Sideband (CC) Selection</Typography>
-        </AccordionSummary>
-        <AccordionDetails>
-          <Grid container spacing={2}>
-            <Grid item xs={6} sm={3}>
-              <TextField
-                label="Center X"
-                type="number"
-                value={ccSelection.centerX}
-                onChange={(e) =>
-                  setCcSelection((prev) => ({
-                    ...prev,
-                    centerX: parseInt(e.target.value) || 0,
-                  }))
-                }
-                size="small"
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={6} sm={3}>
-              <TextField
-                label="Center Y"
-                type="number"
-                value={ccSelection.centerY}
-                onChange={(e) =>
-                  setCcSelection((prev) => ({
-                    ...prev,
-                    centerY: parseInt(e.target.value) || 0,
-                  }))
-                }
-                size="small"
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={6} sm={3}>
-              <TextField
-                label="Size X"
-                type="number"
-                value={ccSelection.sizeX}
-                onChange={(e) =>
-                  setCcSelection((prev) => ({
-                    ...prev,
-                    sizeX: parseInt(e.target.value) || 50,
-                  }))
-                }
-                size="small"
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={6} sm={3}>
-              <TextField
-                label="Size Y"
-                type="number"
-                value={ccSelection.sizeY}
-                onChange={(e) =>
-                  setCcSelection((prev) => ({
-                    ...prev,
-                    sizeY: parseInt(e.target.value) || 50,
-                  }))
-                }
-                size="small"
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <Button variant="contained" onClick={handleApplyCcRoi}>
-                Apply Sideband ROI
-              </Button>
-            </Grid>
-          </Grid>
-        </AccordionDetails>
-      </Accordion>
-
-      {/* Apodization Controls */}
-      <Accordion>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Typography variant="h6">Apodization (Edge Damping)</Typography>
-        </AccordionSummary>
-        <AccordionDetails>
-          <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} sm={4}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={offAxisState.apodizationEnabled}
-                    onChange={handleToggleApodization}
-                  />
-                }
-                label="Enable Apodization"
-              />
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <FormControl fullWidth size="small">
-                <InputLabel>Window Type</InputLabel>
-                <Select
-                  value={offAxisState.apodizationType}
-                  onChange={handleApodizationTypeChange}
-                  label="Window Type"
-                  disabled={!offAxisState.apodizationEnabled}
-                >
-                  <MenuItem value="tukey">Tukey</MenuItem>
-                  <MenuItem value="hann">Hann</MenuItem>
-                  <MenuItem value="hamming">Hamming</MenuItem>
-                  <MenuItem value="blackman">Blackman</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <Typography variant="caption">
-                Alpha (Tukey): {offAxisState.apodizationAlpha.toFixed(2)}
-              </Typography>
-              <Slider
-                value={offAxisState.apodizationAlpha}
-                onChange={(e, v) => dispatch(offAxisHoloSlice.setApodizationAlpha(v))}
-                onChangeCommitted={handleApodizationAlphaCommit}
-                min={0}
-                max={1}
-                step={0.01}
-                disabled={
-                  !offAxisState.apodizationEnabled ||
-                  offAxisState.apodizationType !== "tukey"
-                }
-                size="small"
-              />
-            </Grid>
-          </Grid>
-        </AccordionDetails>
-      </Accordion>
-
       {/* Advanced Settings */}
-      <Accordion>
+      <Accordion defaultExpanded>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <Typography variant="h6">
             <SettingsIcon sx={{ mr: 1, verticalAlign: "middle" }} />
-            Advanced Settings
+            Advanced Settings (Crop Size for FFT)
           </Typography>
         </AccordionSummary>
         <AccordionDetails>
           <Grid container spacing={2}>
+            <Grid item xs={6} sm={4}>
+              <TextField
+                label="ROI Size (px)"
+                type="number"
+                value={roiSelection.size}
+                onChange={(e) =>
+                  setRoiSelection((prev) => ({
+                    ...prev,
+                    size: parseInt(e.target.value) || 512,
+                  }))
+                }
+                size="small"
+                fullWidth
+                inputProps={{ min: 64, max: 2048, step: 64 }}
+              />
+            </Grid>
+            <Grid item xs={6} sm={4}>
+              <Button variant="outlined" onClick={handleApplyRoi} fullWidth>
+                Apply ROI
+              </Button>
+            </Grid>
             <Grid item xs={6} sm={4}>
               <TextField
                 label="Pixel Size (µm)"
@@ -982,26 +1010,62 @@ const OffAxisHoloController = () => {
                 </Select>
               </FormControl>
             </Grid>
-            <Grid item xs={6} sm={4}>
-              <TextField
-                label="ROI Size (px)"
-                type="number"
-                value={roiSelection.size}
-                onChange={(e) =>
-                  setRoiSelection((prev) => ({
-                    ...prev,
-                    size: parseInt(e.target.value) || 512,
-                  }))
+          </Grid>
+        </AccordionDetails>
+      </Accordion>
+
+
+      {/* Apodization Controls */}
+      <Accordion>
+        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+          <Typography variant="h6">Apodization (Edge Damping)</Typography>
+        </AccordionSummary>
+        <AccordionDetails>
+          <Grid container spacing={2} alignItems="center">
+            <Grid item xs={12} sm={4}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={offAxisState.apodizationEnabled}
+                    onChange={handleToggleApodization}
+                  />
                 }
-                size="small"
-                fullWidth
-                inputProps={{ min: 64, max: 2048, step: 64 }}
+                label="Enable Apodization"
               />
             </Grid>
-            <Grid item xs={6} sm={4}>
-              <Button variant="outlined" onClick={handleApplyRoi} fullWidth>
-                Apply ROI
-              </Button>
+            <Grid item xs={12} sm={4}>
+              <FormControl fullWidth size="small">
+                <InputLabel>Window Type</InputLabel>
+                <Select
+                  value={offAxisState.apodizationType}
+                  onChange={handleApodizationTypeChange}
+                  label="Window Type"
+                  disabled={!offAxisState.apodizationEnabled}
+                >
+                  <MenuItem value="tukey">Tukey</MenuItem>
+                  <MenuItem value="hann">Hann</MenuItem>
+                  <MenuItem value="hamming">Hamming</MenuItem>
+                  <MenuItem value="blackman">Blackman</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12} sm={4}>
+              <Typography variant="caption">
+                Alpha (Tukey): {offAxisState.apodizationAlpha.toFixed(2)}
+              </Typography>
+              <Slider
+                value={offAxisState.apodizationAlpha}
+                onChange={(e, v) => dispatch(offAxisHoloSlice.setApodizationAlpha(v))}
+                onChangeCommitted={handleApodizationAlphaCommit}
+                min={0}
+                max={1}
+                step={0.01}
+                disabled={
+                  !offAxisState.apodizationEnabled ||
+                  offAxisState.apodizationType !== "tukey"
+                }
+                size="small"
+              />
             </Grid>
           </Grid>
         </AccordionDetails>

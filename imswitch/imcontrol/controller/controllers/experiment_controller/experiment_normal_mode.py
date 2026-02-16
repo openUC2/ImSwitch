@@ -404,6 +404,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 main_params={"posX": m_point["x"], "posY": m_point["y"], "relative": False},
             ))
             step_id += 1
+            # zpos= focusMapFct(XYCordinate) => 
             
             # Perform autofocus if enabled
             if is_auto_focus:

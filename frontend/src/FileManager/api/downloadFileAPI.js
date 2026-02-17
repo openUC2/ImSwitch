@@ -1,11 +1,12 @@
 import { api } from "./api";
 
 export const downloadFile = async (files, hostname, port) => {
-  if (files.length === 0) return;
+  if (files.length === 0) return { success: [], failed: [] };
 
-  try {
-    // Download each file individually
-    for (const file of files) {
+  const result = { success: [], failed: [] };
+
+  for (const file of files) {
+    try {
       // Remove leading slash if present to avoid double slashes
       const cleanPath = file.path.startsWith("/")
         ? file.path.slice(1)
@@ -20,11 +21,25 @@ export const downloadFile = async (files, hostname, port) => {
       link.click();
       document.body.removeChild(link);
 
+      result.success.push(file.name);
+
       // Small delay between downloads
       await new Promise((resolve) => setTimeout(resolve, 100));
+    } catch (error) {
+      console.error(`Download failed for file "${file.name}":`, error);
+      result.failed.push({ name: file.name, error: error.message });
     }
-  } catch (error) {
-    console.error("Download error:", error);
-    return error;
   }
+
+  // Log summary
+  if (result.failed.length > 0) {
+    console.warn(
+      `Download completed with errors: ${result.success.length} succeeded, ${result.failed.length} failed`,
+      result.failed,
+    );
+  } else if (result.success.length > 0) {
+    console.log(`All ${result.success.length} file(s) downloaded successfully`);
+  }
+
+  return result;
 };

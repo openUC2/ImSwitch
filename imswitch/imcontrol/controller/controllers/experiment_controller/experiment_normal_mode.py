@@ -404,9 +404,34 @@ class ExperimentNormalMode(ExperimentModeBase):
                 main_params={"posX": m_point["x"], "posY": m_point["y"], "relative": False},
             ))
             step_id += 1
-            # zpos= focusMapFct(XYCordinate) => 
+
+            # Apply focus map Z if available (pre-computed surface)
+            # This replaces or supplements autofocus at each position
+            focus_map_group_id = m_point.get("areaId", m_point.get("wellId", "default"))
+            focus_map_z = self.controller.apply_focus_map_z(
+                x=m_point["x"], y=m_point["y"], group_id=focus_map_group_id
+            )
+            if focus_map_z is None and not getattr(self.controller, '_focus_map_fit_by_region', True):
+                # Try global map as fallback
+                focus_map_z = self.controller.apply_focus_map_z(
+                    x=m_point["x"], y=m_point["y"], group_id="global"
+                )
+
+            if focus_map_z is not None:
+                # Move Z to the focus-mapped position
+                settle_ms = getattr(self.controller, '_focus_map_settle_ms', 0)
+                settle_s = settle_ms / 1000.0 if settle_ms > 0 else 0
+                workflow_steps.append(WorkflowStep(
+                    name=f"Focus map Z → {focus_map_z:.2f}",
+                    step_id=step_id,
+                    main_func=self.controller.move_stage_z,
+                    main_params={"posZ": focus_map_z, "relative": False},
+                    post_funcs=[self.controller.wait_time] if settle_s > 0 else None,
+                    post_params={"seconds": settle_s} if settle_s > 0 else None,
+                ))
+                step_id += 1
             
-            # Perform autofocus if enabled
+            # Perform autofocus if enabled (runs after focus map Z move if both active)
             if is_auto_focus:
                 workflow_steps.append(WorkflowStep(
                     name="Autofocus",

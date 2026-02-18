@@ -27,6 +27,7 @@ import ZFocusDimension from "./ZFocusDimension";
 import TimeDimension from "./TimeDimension";
 import TilingDimension from "./TilingDimension";
 import OutputDimension from "./OutputDimension";
+import FocusMapDimension from "./FocusMapDimension";
 
 // Utilities
 import * as coordinateCalculator from "../CoordinateCalculator";
@@ -41,6 +42,7 @@ import * as wellSelectorSlice from "../../state/slices/WellSelectorSlice";
 import * as objectiveSlice from "../../state/slices/ObjectiveSlice";
 import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice";
 import * as vizarrViewerSlice from "../../state/slices/VizarrViewerSlice";
+import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 
 // API
@@ -80,6 +82,7 @@ const ExperimentDesigner = () => {
   const experimentWorkflow = useSelector(experimentStateSlice.getExperimentState);
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+  const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
 
   // Progress tracking
   const [cachedStepId, setCachedStepId] = useState(0);
@@ -118,6 +121,7 @@ const ExperimentDesigner = () => {
     [DIMENSIONS.POSITIONS]: PositionsDimension,
     [DIMENSIONS.CHANNELS]: ChannelsDimension,
     [DIMENSIONS.Z_FOCUS]: ZFocusDimension,
+    [DIMENSIONS.FOCUS_MAP]: FocusMapDimension,
     [DIMENSIONS.TIME]: TimeDimension,
     [DIMENSIONS.TILING]: TilingDimension,
     [DIMENSIONS.OUTPUT]: OutputDimension,
@@ -162,6 +166,7 @@ const ExperimentDesigner = () => {
       scanAreas: scanConfig.scanAreas,
       scanMetadata: scanConfig.metadata,
       pointList: coordinateCalculator.convertToBackendFormat(scanConfig, experimentState).pointList,
+      focusMap: focusMapConfig.enabled ? focusMapConfig : undefined,
     };
 
     apiExperimentControllerStartWellplateExperiment(experimentRequest)

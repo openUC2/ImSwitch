@@ -31,6 +31,7 @@ from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ExperimentPerformanceMode,
     ExperimentNormalMode,
 )
+from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult
 
 from pydantic import Field
 
@@ -132,6 +133,33 @@ class ParameterValue(BaseModel):
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
     ome_write_individual_tiffs: bool = Field(False, description="Whether to write individual TIFF files per frame")
 
+class FocusMapConfig(BaseModel):
+    """Configuration for optional focus mapping (Z surface estimation over XY)."""
+    enabled: bool = Field(False, description="Enable focus mapping before acquisition")
+
+    # Grid generation
+    rows: int = Field(3, description="Number of grid rows for focus measurement")
+    cols: int = Field(3, description="Number of grid columns for focus measurement")
+    add_margin: bool = Field(False, description="Shrink grid inward to avoid edge effects")
+
+    # Fit strategy
+    fit_by_region: bool = Field(True, description="Fit per well / scan region (True) or global (False)")
+    method: str = Field("spline", description="Fit method: spline, rbf, or constant")
+    smoothing_factor: float = Field(0.1, description="Smoothing factor for surface fit")
+
+    # Runtime behavior
+    apply_during_scan: bool = Field(True, description="Move Z per XY using focus map during acquisition")
+    z_offset: float = Field(0.0, description="Global Z offset applied to interpolated values")
+    clamp_enabled: bool = Field(False, description="Clamp interpolated Z to min/max range")
+    z_min: float = Field(0.0, description="Minimum allowed Z value when clamping")
+    z_max: float = Field(0.0, description="Maximum allowed Z value when clamping")
+
+    # Autofocus integration
+    autofocus_profile: Optional[str] = Field(None, description="Reference to AF controller preset")
+    settle_ms: int = Field(0, description="Extra settle time in ms after Z move")
+    store_debug_artifacts: bool = Field(True, description="Store focus points + fit stats as JSON")
+
+
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
     name: str
@@ -141,6 +169,9 @@ class Experiment(BaseModel):
     # NEW: Pre-calculated scan data from frontend
     scanAreas: Optional[List[ScanArea]] = None
     scanMetadata: Optional[ScanMetadata] = None
+
+    # Focus mapping configuration (disabled by default)
+    focusMap: Optional[FocusMapConfig] = Field(default=None, description="Optional focus mapping configuration")
 
     # From your old "ExperimentModel":
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
@@ -313,6 +344,9 @@ class ExperimentController(ImConWidgetController):
         # Initialize experiment execution modes
         self.performance_mode = ExperimentPerformanceMode(self)
         self.normal_mode = ExperimentNormalMode(self)
+
+        # Initialize focus map manager
+        self.focus_map_manager = FocusMapManager(logger=self._logger)
 
         # Initialize omero  parameters  # TODO: Maybe not needed!
         self.omero_url = self._master.experimentManager.omeroServerUrl
@@ -710,6 +744,31 @@ class ExperimentController(ImConWidgetController):
         # Start the detector if not already running
         if not self.mDetector._running:
             self.mDetector.startAcquisition()
+
+        # Store scan areas for focus map API access
+        self._last_scan_areas = None
+        self._focus_map_fit_by_region = True
+        self._focus_map_settle_ms = 0
+        if mExperiment.scanAreas:
+            self._last_scan_areas = [
+                {
+                    "areaId": sa.areaId,
+                    "areaName": sa.areaName,
+                    "bounds": sa.bounds.dict() if hasattr(sa.bounds, 'dict') else {
+                        "minX": sa.bounds.minX, "maxX": sa.bounds.maxX,
+                        "minY": sa.bounds.minY, "maxY": sa.bounds.maxY,
+                    },
+                }
+                for sa in mExperiment.scanAreas
+            ]
+
+        # ── Focus Mapping (optional) ──────────────────────────────────────
+        focusMapConfig = mExperiment.focusMap
+        if focusMapConfig is not None and focusMapConfig.enabled:
+            self._logger.info("Focus mapping enabled – computing Z surface per scan group")
+            self._focus_map_fit_by_region = focusMapConfig.fit_by_region
+            self._focus_map_settle_ms = focusMapConfig.settle_ms
+            self._run_focus_map_phase(mExperiment, focusMapConfig)
 
         # Generate the list of points to scan from pre-calculated coordinates
         snake_tiles = self.generate_snake_tiles(mExperiment) # TODO: Is this still needed?
@@ -2019,6 +2078,300 @@ class ExperimentController(ImConWidgetController):
         )
 
         return image
+
+    # ================================================================
+    # Focus Map – internal helpers
+    # ================================================================
+
+    def _run_focus_map_phase(self, mExperiment, config: FocusMapConfig):
+        """
+        Run focus mapping before the main acquisition loop.
+
+        Iterates over all scan areas (groups), measures focus on a grid,
+        and fits a Z surface for each group.  Called from startWellplateExperiment
+        when focusMap.enabled == True.
+        """
+        areas = []
+        if mExperiment.scanAreas:
+            for sa in mExperiment.scanAreas:
+                areas.append({
+                    "areaId": sa.areaId,
+                    "areaName": sa.areaName,
+                    "bounds": {
+                        "minX": sa.bounds.minX,
+                        "maxX": sa.bounds.maxX,
+                        "minY": sa.bounds.minY,
+                        "maxY": sa.bounds.maxY,
+                    },
+                })
+        else:
+            # Fallback: derive bounds from pointList
+            if mExperiment.pointList:
+                xs = [pt.x for pt in mExperiment.pointList]
+                ys = [pt.y for pt in mExperiment.pointList]
+                areas.append({
+                    "areaId": "default",
+                    "areaName": "All Points",
+                    "bounds": {
+                        "minX": min(xs), "maxX": max(xs),
+                        "minY": min(ys), "maxY": max(ys),
+                    },
+                })
+
+        if not areas:
+            self._logger.warning("Focus map: no areas found – skipping")
+            return
+
+        if config.fit_by_region:
+            # Fit separately per region
+            for area in areas:
+                self._compute_focus_map_for_group( # TODO: Where is this stored and reused? 
+                    group_id=area["areaId"],
+                    group_name=area["areaName"],
+                    bounds=area["bounds"],
+                    config=config,
+                )
+        else:
+            # Fit globally: merge all bounds
+            all_min_x = min(a["bounds"]["minX"] for a in areas)
+            all_max_x = max(a["bounds"]["maxX"] for a in areas)
+            all_min_y = min(a["bounds"]["minY"] for a in areas)
+            all_max_y = max(a["bounds"]["maxY"] for a in areas)
+            merged = {
+                "minX": all_min_x, "maxX": all_max_x,
+                "minY": all_min_y, "maxY": all_max_y,
+            }
+            self._compute_focus_map_for_group(
+                group_id="global",
+                group_name="Global Fit",
+                bounds=merged,
+                config=config,
+            )
+
+    # ================================================================
+    # Focus Map API endpoints
+    # ================================================================
+
+    @APIExport(requestType="POST")
+    def computeFocusMap(self, focusMapConfig: Optional[FocusMapConfig] = None,
+                        group_id: Optional[str] = None):
+        """
+        Compute focus map for one or all scan groups.
+
+        Runs autofocus on a grid of positions within each group's bounds,
+        fits a Z surface, and stores the results for use during acquisition.
+
+        Args:
+            focusMapConfig: Optional override config (uses experiment default if None)
+            group_id: If provided, only compute for this group. Otherwise compute for all.
+
+        Returns:
+            Dict with focus map results per group
+        """
+        if focusMapConfig is None:
+            focusMapConfig = FocusMapConfig(enabled=True)
+
+        self._logger.info(
+            f"Computing focus map: method={focusMapConfig.method}, "
+            f"grid={focusMapConfig.rows}x{focusMapConfig.cols}, "
+            f"group_id={group_id}"
+        )
+
+        # Determine scan area bounds from the last experiment or current state
+        results = {}
+
+        # Get the scan areas if available from last experiment
+        scan_areas = getattr(self, '_last_scan_areas', None)
+        if scan_areas is None:
+            # Fallback: use current stage position as single area
+            pos = self.mStage.getPosition()
+            scan_areas = [{
+                "areaId": "current",
+                "areaName": "Current Position",
+                "bounds": {
+                    "minX": pos.get("X", 0) - 500,
+                    "maxX": pos.get("X", 0) + 500,
+                    "minY": pos.get("Y", 0) - 500,
+                    "maxY": pos.get("Y", 0) + 500,
+                },
+            }]
+
+        for area in scan_areas:
+            area_id = area.get("areaId", "default")
+            area_name = area.get("areaName", area_id)
+
+            if group_id is not None and area_id != group_id:
+                continue
+
+            bounds = area.get("bounds", {})
+            result = self._compute_focus_map_for_group(
+                group_id=area_id,
+                group_name=area_name,
+                bounds=bounds,
+                config=focusMapConfig,
+            )
+            results[area_id] = result
+
+        return results
+
+    def _compute_focus_map_for_group(self, group_id: str, group_name: str,
+                                     bounds: Dict[str, float],
+                                     config: FocusMapConfig) -> Dict[str, Any]:
+        """
+        Compute focus map for a single group by moving stage and running autofocus.
+
+        Args:
+            group_id: Identifier for this scan group
+            group_name: Human-readable name
+            bounds: Dict with minX, maxX, minY, maxY
+            config: FocusMapConfig
+
+        Returns:
+            FocusMapResult as dict
+        """
+        fm = self.focus_map_manager.get_or_create(
+            group_id=group_id,
+            group_name=group_name,
+            method=config.method,
+            smoothing_factor=config.smoothing_factor,
+            z_offset=config.z_offset,
+            clamp_enabled=config.clamp_enabled,
+            z_min=config.z_min,
+            z_max=config.z_max,
+        )
+        fm.clear_points()
+
+        # Generate measurement grid
+        grid = FocusMap.generate_grid(
+            bounds=bounds,
+            rows=config.rows,
+            cols=config.cols,
+            add_margin=config.add_margin,
+        )
+        self._logger.info(f"Focus map [{group_id}]: measuring {len(grid)} points")
+
+        # Measure each grid point
+        for i, (gx, gy) in enumerate(grid):
+            try:
+                # Move stage to measurement position
+                self.move_stage_xy(posX=gx, posY=gy, relative=False)
+                time.sleep(0.1)  # Settle time
+
+                # Run autofocus to find best Z
+                best_z = self.autofocus(
+                    minZ=config.z_min if config.clamp_enabled else -50,
+                    maxZ=config.z_max if config.clamp_enabled else 50,
+                    stepSize=5.0,
+                    illuminationChannel="",
+                    mode="software",
+                )
+
+                if best_z is None:
+                    # If autofocus failed, read current Z as fallback
+                    best_z = self.mStage.getPosition().get("Z", 0)
+                    self._logger.warning(
+                        f"Focus map [{group_id}]: autofocus failed at ({gx:.1f}, {gy:.1f}), "
+                        f"using current Z={best_z:.3f}"
+                    )
+
+                fm.add_point(gx, gy, float(best_z))
+                self._logger.debug(
+                    f"Focus map [{group_id}]: point {i+1}/{len(grid)} "
+                    f"at ({gx:.1f}, {gy:.1f}) → Z={best_z:.3f}"
+                )
+
+            except Exception as e:
+                self._logger.error(f"Focus map [{group_id}]: failed at ({gx:.1f}, {gy:.1f}): {e}")
+
+        # Fit the surface
+        try:
+            stats = fm.fit()
+            self._logger.info(
+                f"Focus map [{group_id}]: fitted {stats.method}, "
+                f"MAE={stats.mean_abs_error:.4f}, n={stats.n_points}"
+            )
+        except ValueError as e:
+            self._logger.error(f"Focus map [{group_id}]: fit failed: {e}")
+            return fm.to_result().to_dict()
+
+        # Save artifacts if requested
+        if config.store_debug_artifacts:
+            try:
+                save_dir = os.path.join(self.save_dir, "focus_maps")
+                fm.save(save_dir)
+            except Exception as e:
+                self._logger.warning(f"Failed to save focus map artifacts: {e}")
+
+        return fm.to_result().to_dict()
+
+    @APIExport(requestType="GET")
+    def getFocusMap(self, group_id: Optional[str] = None):
+        """
+        Get saved focus maps.
+
+        Args:
+            group_id: If provided, get only this group. Otherwise get all.
+
+        Returns:
+            Focus map data per group
+        """
+        if group_id is not None:
+            fm = self.focus_map_manager.get(group_id)
+            if fm is None:
+                raise HTTPException(status_code=404, detail=f"No focus map for group '{group_id}'")
+            return fm.to_result().to_dict()
+        return self.focus_map_manager.to_dict()
+
+    @APIExport(requestType="POST")
+    def getFocusMapPreview(self, group_id: str, resolution: int = 30):
+        """
+        Get a preview grid for visualization of a focus map.
+
+        Args:
+            group_id: Group to preview
+            resolution: Grid resolution for preview
+
+        Returns:
+            Dict with x, y, z arrays and raw points
+        """
+        fm = self.focus_map_manager.get(group_id)
+        if fm is None or not fm.is_fitted:
+            raise HTTPException(status_code=404, detail=f"No fitted focus map for group '{group_id}'")
+
+        return fm.generate_preview_grid(resolution=resolution)
+
+    @APIExport(requestType="POST")
+    def clearFocusMap(self, group_id: Optional[str] = None):
+        """
+        Clear focus map(s).
+
+        Args:
+            group_id: If provided, clear only this group. Otherwise clear all.
+
+        Returns:
+            Status message
+        """
+        self.focus_map_manager.clear(group_id)
+        target = f"group '{group_id}'" if group_id else "all groups"
+        self._logger.info(f"Cleared focus map for {target}")
+        return {"status": "cleared", "target": target}
+
+    def apply_focus_map_z(self, x: float, y: float, group_id: str = "default") -> Optional[float]:
+        """
+        Get the focus-mapped Z for a given XY position during acquisition.
+
+        This is called by the normal mode experiment execution to adjust Z
+        before acquiring at each tile position.
+
+        Args:
+            x: X position
+            y: Y position
+            group_id: Scan group identifier
+
+        Returns:
+            Estimated Z position, or None if no map available
+        """
+        return self.focus_map_manager.interpolate(x, y, group_id)
 
 
 # Copyright (C) 2025 Benedict Diederich

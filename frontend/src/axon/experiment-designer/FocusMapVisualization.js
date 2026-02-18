@@ -28,8 +28,17 @@ const FocusMapVisualization = ({ data }) => {
   const theme = useTheme();
   const canvasRef = useRef(null);
 
-  // Extract bounds from measured points or preview grid
-  const { measured_points = [], preview_grid, fit_stats } = data || {};
+  // Normalize data format: backend may return either
+  //   { points, x, y, z }  (from generate_preview_grid / getFocusMapPreview)
+  //   { measured_points, preview_grid: { x, y, z }, fit_stats }  (legacy)
+  const rawPoints = data?.measured_points || data?.points || [];
+  const measured_points = rawPoints.map((p) =>
+    typeof p === "object" ? p : { x: 0, y: 0, z: 0 }
+  );
+  const preview_grid = data?.preview_grid || (
+    data?.x && data?.y && data?.z ? { x: data.x, y: data.y, z: data.z } : null
+  );
+  const fit_stats = data?.fit_stats || null;
 
   // Compute data bounds
   const bounds = useMemo(() => {
@@ -159,7 +168,9 @@ const FocusMapVisualization = ({ data }) => {
 
   }, [data, bounds, theme]);
 
-  if (!data || (measured_points.length === 0 && !preview_grid)) {
+  const hasData = measured_points.length > 0 || (preview_grid && preview_grid.z && preview_grid.z.length > 0);
+
+  if (!data || !hasData) {
     return (
       <Box sx={{ p: 2, textAlign: "center" }}>
         <Typography variant="body2" color="text.secondary">

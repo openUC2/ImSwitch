@@ -19,6 +19,7 @@ import {
   Switch,
   Tooltip,
   IconButton,
+  Alert,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -29,8 +30,10 @@ import PreviewIcon from "@mui/icons-material/Preview";
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
+import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import { DIMENSIONS, Z_FOCUS_MODES } from "../../state/slices/ExperimentUISlice";
 import apiFocusLockControllerGetCurrentFocusValue from "../../backendapi/apiFocusLockControllerGetCurrentFocusValue";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 
 /**
  * ZFocusDimension - Z/Focus configuration interface
@@ -54,6 +57,9 @@ const ZFocusDimension = () => {
 
   const parameterValue = experimentState.parameterValue;
   const zFocusMode = experimentUI.dimensions[DIMENSIONS.Z_FOCUS]?.mode || Z_FOCUS_MODES.SINGLE_Z;
+
+  // Check if focus map is enabled (for mutual-exclusion warning)
+  const focusMapEnabled = useSelector(focusMapSlice.isFocusMapEnabled);
 
   // Calculate Z stack info
   const zStackRange = parameterValue.zStackMax - parameterValue.zStackMin;
@@ -124,6 +130,18 @@ const ZFocusDimension = () => {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column" }}>
+      {/* Mutual exclusion warning: Focus Map + per-position AF */}
+      {focusMapEnabled && (zFocusMode === Z_FOCUS_MODES.AUTOFOCUS || zFocusMode === Z_FOCUS_MODES.Z_STACK_AUTOFOCUS) && (
+        <Alert
+          severity="warning"
+          icon={<WarningAmberIcon />}
+          sx={{ mb: 2 }}
+        >
+          <strong>Focus Map is enabled.</strong> Using per-position autofocus together with Focus Mapping is redundant.
+          The focus map already provides Z correction at every XY position. Consider using &quot;Single Z&quot; or &quot;Z-Stack&quot; mode instead.
+        </Alert>
+      )}
+
       {/* Mode Selector */}
       <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
         Select Offset

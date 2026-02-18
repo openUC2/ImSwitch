@@ -540,6 +540,19 @@ class FocusMapManager:
     def __init__(self, logger=None):
         self._logger = logger
         self._maps: Dict[str, FocusMap] = {}
+        self._abort_requested = False
+
+    @property
+    def abort_requested(self) -> bool:
+        return self._abort_requested
+
+    def request_abort(self):
+        """Request cancellation of ongoing focus map computation."""
+        self._abort_requested = True
+
+    def clear_abort(self):
+        """Reset abort flag before a new computation."""
+        self._abort_requested = False
 
     def get_or_create(self,
                       group_id: str,

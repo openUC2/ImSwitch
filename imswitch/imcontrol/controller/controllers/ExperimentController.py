@@ -158,6 +158,7 @@ class FocusMapConfig(BaseModel):
     autofocus_profile: Optional[str] = Field(None, description="Reference to AF controller preset")
     settle_ms: int = Field(0, description="Extra settle time in ms after Z move")
     store_debug_artifacts: bool = Field(True, description="Store focus points + fit stats as JSON")
+    channel_offsets: Optional[Dict[str, float]] = Field(default=None, description="Per-illumination-channel Z offset (µm)")
 
 
 class Experiment(BaseModel):
@@ -2091,6 +2092,9 @@ class ExperimentController(ImConWidgetController):
         and fits a Z surface for each group.  Called from startWellplateExperiment
         when focusMap.enabled == True.
         """
+        # Store config for channel_offsets access during acquisition
+        self._focus_map_config = config
+        self.focus_map_manager.clear_abort()
         areas = []
         if mExperiment.scanAreas:
             for sa in mExperiment.scanAreas:
@@ -2170,6 +2174,12 @@ class ExperimentController(ImConWidgetController):
         """
         if focusMapConfig is None:
             focusMapConfig = FocusMapConfig(enabled=True)
+
+        # Store config for channel_offsets access during acquisition
+        self._focus_map_config = focusMapConfig
+
+        # Clear any previous abort request
+        self.focus_map_manager.clear_abort()
 
         self._logger.info(
             f"Computing focus map: method={focusMapConfig.method}, "
@@ -2252,6 +2262,10 @@ class ExperimentController(ImConWidgetController):
 
         # Measure each grid point
         for i, (gx, gy) in enumerate(grid):
+            # Check abort flag
+            if self.focus_map_manager.abort_requested:
+                self._logger.warning(f"Focus map [{group_id}]: aborted by user at point {i+1}/{len(grid)}")
+                break
             try:
                 # Move stage to measurement position
                 self.move_stage_xy(posX=gx, posY=gy, relative=False)
@@ -2356,7 +2370,96 @@ class ExperimentController(ImConWidgetController):
         self._logger.info(f"Cleared focus map for {target}")
         return {"status": "cleared", "target": target}
 
-    def apply_focus_map_z(self, x: float, y: float, group_id: str = "default") -> Optional[float]:
+    @APIExport(requestType="POST")
+    def interruptFocusMap(self):
+        """
+        Interrupt an ongoing focus map computation.
+
+        Sets the abort flag so the measurement loop stops at the next grid point.
+        The map that was being computed will still try to fit with whatever
+        points have been collected so far.
+
+        Returns:
+            Status message
+        """
+        self.focus_map_manager.request_abort()
+        self._logger.info("Focus map computation interrupt requested")
+        return {"status": "interrupt_requested"}
+
+    @APIExport(requestType="POST")
+    def computeFocusMapFromPoints(self,
+                                  points: list,
+                                  group_id: str = "manual",
+                                  group_name: str = "Manual Points",
+                                  method: str = "rbf",
+                                  smoothing_factor: float = 0.1,
+                                  z_offset: float = 0.0,
+                                  clamp_enabled: bool = False,
+                                  z_min: float = 0.0,
+                                  z_max: float = 0.0):
+        """
+        Compute a focus map from manually specified XYZ points.
+
+        Instead of running autofocus on a grid, the user provides pre-measured
+        reference points (e.g. from clicking on the wellplate viewer and
+        recording the current stage Z).
+
+        Args:
+            points: List of dicts with 'x', 'y', 'z' keys (µm)
+            group_id: Identifier for this focus map group
+            group_name: Human-readable name
+            method: Fit method ('spline', 'rbf', 'constant')
+            smoothing_factor: Smoothing for the surface fit
+            z_offset: Global Z offset to add
+            clamp_enabled: Whether to clamp Z to min/max
+            z_min: Min Z when clamping
+            z_max: Max Z when clamping
+
+        Returns:
+            FocusMapResult as dict
+        """
+        if not points or len(points) < 1:
+            return {"error": "At least 1 point is required"}
+
+        self._logger.info(
+            f"Computing focus map from {len(points)} manual points, "
+            f"method={method}, group_id={group_id}"
+        )
+
+        fm = self.focus_map_manager.get_or_create(
+            group_id=group_id,
+            group_name=group_name,
+            method=method,
+            smoothing_factor=smoothing_factor,
+            z_offset=z_offset,
+            clamp_enabled=clamp_enabled,
+            z_min=z_min,
+            z_max=z_max,
+        )
+        fm.clear_points()
+
+        # Add all manual points
+        for pt in points:
+            x = pt.get("x", 0)
+            y = pt.get("y", 0)
+            z = pt.get("z", 0)
+            fm.add_point(float(x), float(y), float(z))
+
+        # Fit the surface
+        try:
+            stats = fm.fit()
+            self._logger.info(
+                f"Focus map [{group_id}]: fitted {stats.method} from manual points, "
+                f"MAE={stats.mean_abs_error:.4f}, n={stats.n_points}"
+            )
+        except ValueError as e:
+            self._logger.error(f"Focus map [{group_id}]: fit failed: {e}")
+            return fm.to_result().to_dict()
+
+        return fm.to_result().to_dict()
+
+    def apply_focus_map_z(self, x: float, y: float, group_id: str = "default",
+                          channel: Optional[str] = None) -> Optional[float]:
         """
         Get the focus-mapped Z for a given XY position during acquisition.
 
@@ -2367,11 +2470,25 @@ class ExperimentController(ImConWidgetController):
             x: X position
             y: Y position
             group_id: Scan group identifier
+            channel: Optional illumination channel name. If provided and
+                     channel_offsets are configured in the FocusMapConfig,
+                     the per-channel offset will be added to the result.
 
         Returns:
             Estimated Z position, or None if no map available
         """
-        return self.focus_map_manager.interpolate(x, y, group_id)
+        z = self.focus_map_manager.interpolate(x, y, group_id)
+        if z is not None and channel:
+            # Apply per-channel Z offset if configured
+            focus_map_config = getattr(self, '_focus_map_config', None)
+            if focus_map_config and focus_map_config.channel_offsets:
+                channel_offset = focus_map_config.channel_offsets.get(channel, 0.0)
+                if channel_offset != 0.0:
+                    self._logger.debug(
+                        f"Applying channel offset for '{channel}': {channel_offset} µm"
+                    )
+                    z += channel_offset
+        return z
 
 
 # Copyright (C) 2025 Benedict Diederich

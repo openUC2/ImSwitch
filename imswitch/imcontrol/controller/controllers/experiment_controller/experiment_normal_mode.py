@@ -406,8 +406,16 @@ class ExperimentNormalMode(ExperimentModeBase):
             step_id += 1
 
             # Apply focus map Z if available (pre-computed surface)
-            # This replaces or supplements autofocus at each position
-            focus_map_group_id = m_point.get("areaId", m_point.get("wellId", "default"))
+            # This replaces or supplements autofocus at each position.
+            # Resolve the group_id that was used when storing the focus map.
+            # _run_focus_map_phase stores under sa.areaId (e.g. "area_0").
+            # generate_snake_tiles stores centerIndex=area.areaId in tiles.
+            focus_map_group_id = (
+                m_point.get("centerIndex")
+                or m_point.get("areaName")
+                or m_point.get("wellId")
+                or "default"
+            )
             focus_map_z = self.controller.apply_focus_map_z(
                 x=m_point["x"], y=m_point["y"], group_id=focus_map_group_id
             )
@@ -468,6 +476,23 @@ class ExperimentNormalMode(ExperimentModeBase):
                     illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
                     if illu_intensity <= 0:
                         continue
+
+                    # Apply per-channel focus map Z offset if configured
+                    # This adjusts Z relative to the focus-mapped position for chromatic shift compensation
+                    if focus_map_z is not None:
+                        channel_offset_z = 0.0
+                        _fm_cfg = getattr(self.controller, '_focus_map_config', None)
+                        if _fm_cfg and _fm_cfg.channel_offsets:
+                            channel_offset_z = _fm_cfg.channel_offsets.get(illu_source, 0.0)
+                        if channel_offset_z != 0.0:
+                            adjusted_z = focus_map_z + channel_offset_z + (i_z if i_z != 0 else 0)
+                            workflow_steps.append(WorkflowStep(
+                                name=f"Channel Z offset ({illu_source}: {channel_offset_z:+.1f} µm)",
+                                step_id=step_id,
+                                main_func=self.controller.move_stage_z,
+                                main_params={"posZ": adjusted_z, "relative": False},
+                            ))
+                            step_id += 1
 
                     # Turn on illumination - use tPre as settle time after activation
                     workflow_steps.append(WorkflowStep(

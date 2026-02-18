@@ -34,6 +34,10 @@ const defaultFocusMapConfig = {
   autofocus_profile: null,
   settle_ms: 0,
   store_debug_artifacts: true,
+
+  // Per-illumination-channel Z offsets (µm)
+  // e.g. { "LED": 0.0, "Fluorescence": -1.5 }
+  channel_offsets: {},
 };
 
 const initialState = {
@@ -43,6 +47,10 @@ const initialState = {
   // Results per group (received from backend)
   // { [groupId]: { group_id, group_name, points, fit_stats, preview_grid, status } }
   results: {},
+
+  // Manual focus points placed by user on the wellplate viewer
+  // [{ x, y, z }]
+  manualPoints: [],
 
   // UI state
   ui: {
@@ -117,6 +125,41 @@ const focusMapSlice = createSlice({
       state.config.apply_during_scan = action.payload;
     },
 
+    setFocusMapChannelOffset: (state, action) => {
+      // payload: { channel: "LED", offset: -1.5 }
+      const { channel, offset } = action.payload;
+      state.config.channel_offsets[channel] = offset;
+    },
+
+    removeChannelOffset: (state, action) => {
+      delete state.config.channel_offsets[action.payload];
+    },
+
+    // ── Manual points (user-placed on wellplate) ────────────
+
+    addManualPoint: (state, action) => {
+      // payload: { x, y, z }
+      if (!state.manualPoints) state.manualPoints = [];
+      state.manualPoints.push(action.payload);
+    },
+
+    removeManualPoint: (state, action) => {
+      if (state.manualPoints) {
+        state.manualPoints.splice(action.payload, 1);
+      }
+    },
+
+    clearManualPoints: (state) => {
+      state.manualPoints = [];
+    },
+
+    updateManualPointZ: (state, action) => {
+      // payload: { index, z }
+      if (state.manualPoints && state.manualPoints[action.payload.index]) {
+        state.manualPoints[action.payload.index].z = action.payload.z;
+      }
+    },
+
     // ── Results management ──────────────────────────────────
 
     setFocusMapResults: (state, action) => {
@@ -185,6 +228,12 @@ export const {
   setFocusMapSettleMs,
   setFocusMapAddMargin,
   setFocusMapApplyDuringScan,
+  setFocusMapChannelOffset,
+  removeChannelOffset,
+  addManualPoint,
+  removeManualPoint,
+  clearManualPoints,
+  updateManualPointZ,
   setFocusMapResults,
   updateFocusMapGroupResult,
   clearFocusMapResults,
@@ -203,6 +252,7 @@ export const getFocusMapUI = (state) => state.focusMap.ui;
 export const getFocusMapGroupResult = (groupId) => (state) =>
   state.focusMap.results[groupId] || null;
 export const isFocusMapEnabled = (state) => state.focusMap.config.enabled;
+export const getManualPoints = (state) => state.focusMap.manualPoints || [];
 
 // Export reducer
 export default focusMapSlice.reducer;

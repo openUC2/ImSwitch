@@ -59,6 +59,7 @@ const initialState = {
     selectedGroupId: null, // Which group is selected for visualization
     error: null,
     lastComputeTime: null,
+    showOverlayOnWellplate: true, // Toggle: draw focus map points on wellplate canvas
   },
 };
 
@@ -204,6 +205,10 @@ const focusMapSlice = createSlice({
       state.ui.error = null;
     },
 
+    setShowOverlayOnWellplate: (state, action) => {
+      state.ui.showOverlayOnWellplate = action.payload;
+    },
+
     // ── Reset ───────────────────────────────────────────────
 
     resetFocusMapState: () => {
@@ -241,6 +246,7 @@ export const {
   setFocusMapSelectedGroup,
   setFocusMapError,
   clearFocusMapError,
+  setShowOverlayOnWellplate,
   resetFocusMapState,
 } = focusMapSlice.actions;
 
@@ -253,6 +259,7 @@ export const getFocusMapGroupResult = (groupId) => (state) =>
   state.focusMap.results[groupId] || null;
 export const isFocusMapEnabled = (state) => state.focusMap.config.enabled;
 export const getManualPoints = (state) => state.focusMap.manualPoints || [];
+export const getShowOverlayOnWellplate = (state) => state.focusMap.ui?.showOverlayOnWellplate ?? true;
 
 // Export reducer
 export default focusMapSlice.reducer;

@@ -822,9 +822,11 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   // Draw focus map grid points as black crosses and manual points as blue circles
   const drawFocusMapOverlay = (ctx) => {
     if (!focusMapState?.config?.enabled) return;
+    // Check the overlay toggle (default to visible if property not yet in state)
+    if (focusMapState?.ui?.showOverlayOnWellplate === false) return;
 
     const results = focusMapState.results || {};
-    const crossSize = 6; // px half-size of each cross arm
+    const crossSize = 3; // px half-size of each cross arm
 
     ctx.save();
     ctx.lineWidth = 2;

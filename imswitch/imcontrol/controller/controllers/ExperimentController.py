@@ -160,6 +160,13 @@ class FocusMapConfig(BaseModel):
     store_debug_artifacts: bool = Field(True, description="Store focus points + fit stats as JSON")
     channel_offsets: Optional[Dict[str, float]] = Field(default=None, description="Per-illumination-channel Z offset (µm)")
 
+    # Scan areas – passed from the frontend so that computeFocusMap knows the
+    # correct XY bounds even when no experiment has been started yet.
+    scan_areas: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="List of scan area dicts with areaId, areaName, bounds (minX/maxX/minY/maxY)"
+    )
+
 
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
@@ -1465,7 +1472,8 @@ class ExperimentController(ImConWidgetController):
                       zstart:float=0, zstep:float=0, nz:int=1,
                       tsettle:float=90, tExposure:float=50,
                       illumination:List[int]=None, led:float=None,
-                      tPeriod:int=1, nTimes:int=1):
+                      tPeriod:int=1, nTimes:int=1,
+                      isSnakeScan:bool=True):
         """Full workflow: arm camera ➔ launch writer ➔ execute scan.
         
         Args:
@@ -1484,6 +1492,7 @@ class ExperimentController(ImConWidgetController):
             led: LED intensity (0-255)
             tPeriod: Period between time points (s)
             nTimes: Number of time points
+            isSnakeScan: If True, apply snake (serpentine) scan pattern; if False, use raster
         """
         self.fastStageScanIsRunning = True
         self._stop() # ensure all prior runs are stopped
@@ -1531,8 +1540,8 @@ class ExperimentController(ImConWidgetController):
                     z = zstart + iz * zstep
                     x = xstart + ix * xstep
                     y = ystart + iy * ystep
-                    # Snake pattern
-                    if iy % 2 == 1:
+                    # Snake pattern: reverse X direction on odd rows
+                    if isSnakeScan and iy % 2 == 1:
                         x = xstart + (nx - 1 - ix) * xstep
                 
                     # If there's at least one valid illumination or LED set, take only one image as "default"
@@ -2166,7 +2175,10 @@ class ExperimentController(ImConWidgetController):
         fits a Z surface, and stores the results for use during acquisition.
 
         Args:
-            focusMapConfig: Optional override config (uses experiment default if None)
+            focusMapConfig: Override config (uses experiment default if None).
+                            May include scan_areas from the frontend so that
+                            the correct XY bounds are known even before an
+                            experiment has been started.
             group_id: If provided, only compute for this group. Otherwise compute for all.
 
         Returns:
@@ -2187,15 +2199,19 @@ class ExperimentController(ImConWidgetController):
             f"group_id={group_id}"
         )
 
-        # Determine scan area bounds from the last experiment or current state
+        # Determine scan area bounds – prefer scan_areas passed in the config,
+        # then fall back to last experiment areas, then to current stage pos.
         results = {}
 
-        # Get the scan areas if available from last experiment
-        scan_areas = getattr(self, '_last_scan_areas', None)
-        if scan_areas is None:
+        if focusMapConfig.scan_areas is not None and len(focusMapConfig.scan_areas) > 0:
+            # Caller provided scan areas directly (e.g. from frontend)
+            self._last_scan_areas = focusMapConfig.scan_areas
+        
+        effective_scan_areas = getattr(self, '_last_scan_areas', None)
+        if effective_scan_areas is None or len(effective_scan_areas) == 0:
             # Fallback: use current stage position as single area
             pos = self.mStage.getPosition()
-            scan_areas = [{
+            effective_scan_areas = [{
                 "areaId": "current",
                 "areaName": "Current Position",
                 "bounds": {
@@ -2206,7 +2222,7 @@ class ExperimentController(ImConWidgetController):
                 },
             }]
 
-        for area in scan_areas:
+        for area in effective_scan_areas:
             area_id = area.get("areaId", "default")
             area_name = area.get("areaName", area_id)
 

@@ -42,12 +42,22 @@ import PendingIcon from "@mui/icons-material/Pending";
 import StopIcon from "@mui/icons-material/Stop";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
+import MyLocationIcon from "@mui/icons-material/MyLocation";
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import EditIcon from "@mui/icons-material/Edit";
 
 // State slices
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
+import * as positionSlice from "../../state/slices/PositionSlice";
+import * as wellSelectorSlice from "../../state/slices/WellSelectorSlice";
+import * as objectiveSlice from "../../state/slices/ObjectiveSlice";
+
+// Coordinate calculation
+import { calculateScanCoordinates } from "../CoordinateCalculator";
 
 // API
 import apiExperimentControllerComputeFocusMap from "../../backendapi/apiExperimentControllerComputeFocusMap";
@@ -56,6 +66,7 @@ import apiExperimentControllerClearFocusMap from "../../backendapi/apiExperiment
 import apiExperimentControllerGetFocusMapPreview from "../../backendapi/apiExperimentControllerGetFocusMapPreview";
 import apiExperimentControllerInterruptFocusMap from "../../backendapi/apiExperimentControllerInterruptFocusMap";
 import apiExperimentControllerComputeFocusMapFromPoints from "../../backendapi/apiExperimentControllerComputeFocusMapFromPoints";
+import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner";
 
 // Visualization
 import FocusMapVisualization from "./FocusMapVisualization";
@@ -88,6 +99,10 @@ const FocusMapDimension = () => {
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const parameterValue = experimentState.parameterValue;
   const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
+  const positionState = useSelector(positionSlice.getPositionState);
+  const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
+  const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+  const showOverlayOnWellplate = useSelector(focusMapSlice.getShowOverlayOnWellplate);
 
   // Detect mutual exclusion: per-position AF enabled while Focus Map is also enabled
   const isAutoFocusPerPosition = parameterValue.autoFocus === true;
@@ -97,8 +112,11 @@ const FocusMapDimension = () => {
   const [showAFSettings, setShowAFSettings] = useState(false);
   const [showChannelOffsets, setShowChannelOffsets] = useState(false);
   const [showManualPoints, setShowManualPoints] = useState(false);
+  const [showMeasuredPoints, setShowMeasuredPoints] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [expandedFitGroup, setExpandedFitGroup] = useState(null);
+  const [editingPointZ, setEditingPointZ] = useState(null); // { groupId, pointIndex, z }
+  const [goToInProgress, setGoToInProgress] = useState(null); // "groupId-pointIndex"
 
   // ── Dimension summary ────────────────────────────────────────────────
   useEffect(() => {
@@ -135,20 +153,48 @@ const FocusMapDimension = () => {
 
   // ── Handlers ─────────────────────────────────────────────────────────
 
+  // Build scan areas from the current experiment/wellplate state so the
+  // backend knows the correct XY bounds even before an experiment is started.
+  const buildScanAreas = useCallback(() => {
+    try {
+      const scanConfig = calculateScanCoordinates(
+        experimentState,
+        objectiveState,
+        wellSelectorState
+      );
+      if (scanConfig?.scanAreas?.length > 0) {
+        return scanConfig.scanAreas.map((area) => ({
+          areaId: area.areaId,
+          areaName: area.areaName,
+          bounds: area.bounds,
+        }));
+      }
+    } catch (err) {
+      console.warn("Could not build scan areas for focus map:", err);
+    }
+    return null;
+  }, [experimentState, objectiveState, wellSelectorState]);
+
   // Compute focus map for all groups
   const handleComputeAll = useCallback(async () => {
     dispatch(focusMapSlice.setFocusMapComputing({ isComputing: true, groupId: null }));
     dispatch(focusMapSlice.clearFocusMapError());
 
     try {
-      const data = await apiExperimentControllerComputeFocusMap(config);
+      // Attach scan_areas so the backend uses the correct wellplate bounds
+      const scanAreas = buildScanAreas();
+      const configWithAreas = { ...config };
+      if (scanAreas) {
+        configWithAreas.scan_areas = scanAreas;
+      }
+      const data = await apiExperimentControllerComputeFocusMap(configWithAreas);
       dispatch(focusMapSlice.setFocusMapResults(data));
     } catch (err) {
       dispatch(focusMapSlice.setFocusMapError(err.message || "Failed to compute focus map"));
     } finally {
       dispatch(focusMapSlice.setFocusMapComputing({ isComputing: false }));
     }
-  }, [config, dispatch]);
+  }, [config, buildScanAreas, dispatch]);
 
   // Interrupt ongoing computation
   const handleInterrupt = useCallback(async () => {
@@ -186,9 +232,78 @@ const FocusMapDimension = () => {
 
   // Add a manual focus point at current stage position
   const handleAddManualPoint = useCallback(() => {
-    // Placeholder: user fills in coordinates manually or from current position
-    dispatch(focusMapSlice.addManualPoint({ x: 0, y: 0, z: 0 }));
-  }, [dispatch]);
+    dispatch(
+      focusMapSlice.addManualPoint({
+        x: positionState?.x ?? 0,
+        y: positionState?.y ?? 0,
+        z: positionState?.z ?? 0,
+      })
+    );
+  }, [dispatch, positionState]);
+
+  // Move stage to a measured focus point
+  const handleGoToPoint = useCallback(
+    async (pt, groupId, pointIndex) => {
+      const key = `${groupId}-${pointIndex}`;
+      setGoToInProgress(key);
+      try {
+        // Move X then Y (absolute, blocking)
+        await apiPositionerControllerMovePositioner({
+          axis: "X",
+          dist: pt.x,
+          isAbsolute: true,
+          isBlocking: true,
+        });
+        await apiPositionerControllerMovePositioner({
+          axis: "Y",
+          dist: pt.y,
+          isAbsolute: true,
+          isBlocking: true,
+        });
+        // Move Z
+        await apiPositionerControllerMovePositioner({
+          axis: "Z",
+          dist: pt.z,
+          isAbsolute: true,
+          isBlocking: true,
+        });
+      } catch (err) {
+        console.error("Failed to move to focus point:", err);
+      } finally {
+        setGoToInProgress(null);
+      }
+    },
+    []
+  );
+
+  // Refit a group's focus map using its measured points (possibly with edited Z values)
+  const handleRefitGroup = useCallback(
+    async (groupId, points) => {
+      dispatch(focusMapSlice.setFocusMapComputing({ isComputing: true, groupId }));
+      dispatch(focusMapSlice.clearFocusMapError());
+      try {
+        const result = await apiExperimentControllerComputeFocusMapFromPoints({
+          points: points.map((pt) => ({ x: pt.x, y: pt.y, z: pt.z })),
+          group_id: groupId,
+          group_name: results[groupId]?.group_name || groupId,
+          method: config.method,
+          smoothing_factor: config.smoothing_factor,
+          z_offset: config.z_offset,
+          clamp_enabled: config.clamp_enabled,
+          z_min: config.z_min,
+          z_max: config.z_max,
+        });
+        dispatch(focusMapSlice.updateFocusMapGroupResult({ groupId, result }));
+      } catch (err) {
+        dispatch(
+          focusMapSlice.setFocusMapError(err.message || "Failed to refit focus map")
+        );
+      } finally {
+        dispatch(focusMapSlice.setFocusMapComputing({ isComputing: false }));
+      }
+    },
+    [config, results, dispatch]
+  );
 
   // Status icon helper
   const StatusIcon = ({ status }) => {
@@ -241,6 +356,30 @@ const FocusMapDimension = () => {
 
       {config.enabled && (
         <>
+          {/* ── Overlay toggle for wellplate viewer ──────────────────── */}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={showOverlayOnWellplate}
+                  onChange={(e) =>
+                    dispatch(focusMapSlice.setShowOverlayOnWellplate(e.target.checked))
+                  }
+                  size="small"
+                />
+              }
+              label={
+                <Typography variant="body2">
+                  {showOverlayOnWellplate ? (
+                    <><VisibilityIcon fontSize="inherit" sx={{ verticalAlign: "middle", mr: 0.5 }} />Show points on wellplate</>
+                  ) : (
+                    <><VisibilityOffIcon fontSize="inherit" sx={{ verticalAlign: "middle", mr: 0.5 }} />Show points on wellplate</>
+                  )}
+                </Typography>
+              }
+            />
+          </Box>
+
           {/* ── Mutual exclusion warning ──────────────────────────────── */}
           {isAutoFocusPerPosition && (
             <Alert
@@ -1052,6 +1191,201 @@ const FocusMapDimension = () => {
                 </Box>
               ))}
             </Box>
+          )}
+
+          {/* ── Measured Points List with Go-To and Refit ──────────── */}
+          {groupEntries.length > 0 && (
+            <Accordion
+              expanded={showMeasuredPoints}
+              onChange={() => setShowMeasuredPoints(!showMeasuredPoints)}
+              variant="outlined"
+              sx={{ mb: 2 }}
+            >
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Typography variant="body2">
+                  Measured Focus Points
+                  <Chip
+                    label={`${groupEntries.reduce(
+                      (sum, [, r]) => sum + (r.points?.length || 0),
+                      0
+                    )} point(s)`}
+                    size="small"
+                    sx={{ ml: 1 }}
+                  />
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ mb: 1, display: "block" }}
+                >
+                  Points measured by autofocus during focus map computation. Use "Go To" to move
+                  the stage, edit Z to fine-tune, and "Refit" to update the surface.
+                </Typography>
+
+                {groupEntries.map(([groupId, result]) => {
+                  const pts = result.points || [];
+                  if (pts.length === 0) return null;
+
+                  return (
+                    <Box key={groupId} sx={{ mb: 2 }}>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1,
+                          mb: 0.5,
+                        }}
+                      >
+                        <Typography variant="body2" fontWeight={500}>
+                          {result.group_name || groupId}
+                        </Typography>
+                        <Chip
+                          label={`${pts.length} pts`}
+                          size="small"
+                          variant="outlined"
+                        />
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<RefreshIcon />}
+                          onClick={() => handleRefitGroup(groupId, pts)}
+                          disabled={ui.isComputing}
+                        >
+                          Refit
+                        </Button>
+                      </Box>
+                      <TableContainer
+                        component={Paper}
+                        variant="outlined"
+                        sx={{ maxHeight: 300 }}
+                      >
+                        <Table size="small" stickyHeader>
+                          <TableHead>
+                            <TableRow>
+                              <TableCell>#</TableCell>
+                              <TableCell>X (µm)</TableCell>
+                              <TableCell>Y (µm)</TableCell>
+                              <TableCell>Z (µm)</TableCell>
+                              <TableCell>Quality</TableCell>
+                              <TableCell align="right">Actions</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {pts.map((pt, idx) => {
+                              const isEditing =
+                                editingPointZ?.groupId === groupId &&
+                                editingPointZ?.pointIndex === idx;
+                              const goToKey = `${groupId}-${idx}`;
+                              const isMoving = goToInProgress === goToKey;
+
+                              return (
+                                <TableRow key={idx} hover>
+                                  <TableCell>{idx + 1}</TableCell>
+                                  <TableCell>{pt.x?.toFixed(1)}</TableCell>
+                                  <TableCell>{pt.y?.toFixed(1)}</TableCell>
+                                  <TableCell>
+                                    {isEditing ? (
+                                      <TextField
+                                        type="number"
+                                        size="small"
+                                        variant="standard"
+                                        value={editingPointZ.z}
+                                        onChange={(e) =>
+                                          setEditingPointZ({
+                                            ...editingPointZ,
+                                            z: parseFloat(e.target.value) || 0,
+                                          })
+                                        }
+                                        onBlur={() => {
+                                          // Save edited Z back into the result points
+                                          // (local only, use Refit to apply)
+                                          const updatedPts = [...pts];
+                                          updatedPts[idx] = {
+                                            ...pt,
+                                            z: editingPointZ.z,
+                                          };
+                                          dispatch(
+                                            focusMapSlice.updateFocusMapGroupResult({
+                                              groupId,
+                                              result: {
+                                                ...result,
+                                                points: updatedPts,
+                                              },
+                                            })
+                                          );
+                                          setEditingPointZ(null);
+                                        }}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") e.target.blur();
+                                        }}
+                                        autoFocus
+                                        sx={{ width: 80 }}
+                                      />
+                                    ) : (
+                                      <Box
+                                        sx={{
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: 0.5,
+                                          cursor: "pointer",
+                                          "&:hover": {
+                                            color: "primary.main",
+                                          },
+                                        }}
+                                        onClick={() =>
+                                          setEditingPointZ({
+                                            groupId,
+                                            pointIndex: idx,
+                                            z: pt.z,
+                                          })
+                                        }
+                                      >
+                                        {pt.z?.toFixed(2)}
+                                        <EditIcon
+                                          fontSize="inherit"
+                                          sx={{ opacity: 0.4 }}
+                                        />
+                                      </Box>
+                                    )}
+                                  </TableCell>
+                                  <TableCell>
+                                    {pt.quality_metric != null
+                                      ? pt.quality_metric.toFixed(2)
+                                      : "—"}
+                                  </TableCell>
+                                  <TableCell align="right">
+                                    <Tooltip title="Move stage to this XYZ position">
+                                      <span>
+                                        <IconButton
+                                          size="small"
+                                          color="primary"
+                                          onClick={() =>
+                                            handleGoToPoint(pt, groupId, idx)
+                                          }
+                                          disabled={isMoving}
+                                        >
+                                          {isMoving ? (
+                                            <CircularProgress size={16} />
+                                          ) : (
+                                            <MyLocationIcon fontSize="small" />
+                                          )}
+                                        </IconButton>
+                                      </span>
+                                    </Tooltip>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </TableContainer>
+                    </Box>
+                  );
+                })}
+              </AccordionDetails>
+            </Accordion>
           )}
 
           {/* ── Visualization ─────────────────────────────────────────── */}

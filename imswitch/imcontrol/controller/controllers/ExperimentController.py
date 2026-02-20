@@ -1158,12 +1158,13 @@ class ExperimentController(ImConWidgetController):
             # Determine resolution: prefer af_resolution, fall back to legacy stepSize
             resolutionz = af_resolution if af_resolution > 0 else (stepSize if stepSize > 0 else 10.0)
 
-            # Call autofocus with all parameters from config
-            result = autofocusController.doAutofocusBackground(
+            # Call autofocus – use autoFocus which starts doAutofocusBackground
+            # in a thread with proper state management and validation.
+            # Then wait for the AF thread to finish before reading the result.
+            autofocusController.autoFocus(
                 rangez=rangez,
                 resolutionz=resolutionz,
                 defocusz=0,
-                axis="Z",
                 tSettle=af_settle_time,
                 isDebug=False,
                 nGauss=af_n_gauss,
@@ -1172,6 +1173,14 @@ class ExperimentController(ImConWidgetController):
                 static_offset=af_static_offset,
                 twoStage=af_two_stage
             )
+
+            # Wait for autofocus thread to finish (it runs in _AutofocusThead)
+            af_thread = getattr(autofocusController, '_AutofocusThead', None)
+            if af_thread is not None and af_thread.is_alive():
+                af_thread.join(timeout=120)  # 2 min timeout
+
+            # Read the resulting Z position
+            result = self.mStage.getPosition().get("Z", None)
 
             self._logger.debug("Autofocus completed successfully")
             return result
@@ -2202,10 +2211,16 @@ class ExperimentController(ImConWidgetController):
             return
 
         if config.fit_by_region:
-            # Fit separately per region
+            # Fit separately per region – skip groups that already have a valid fit
             for area in areas:
-                self._compute_focus_map_for_group( # TODO: Where is this stored and reused? 
-                    group_id=area["areaId"],
+                gid = area["areaId"]
+                if self.focus_map_manager.has_fitted_map(gid):
+                    self._logger.info(
+                        f"Focus map [{gid}]: using pre-computed map (already fitted)"
+                    )
+                    continue
+                self._compute_focus_map_for_group(
+                    group_id=gid,
                     group_name=area["areaName"],
                     bounds=area["bounds"],
                     config=config,
@@ -2220,12 +2235,15 @@ class ExperimentController(ImConWidgetController):
                 "minX": all_min_x, "maxX": all_max_x,
                 "minY": all_min_y, "maxY": all_max_y,
             }
-            self._compute_focus_map_for_group(
-                group_id="global",
-                group_name="Global Fit",
-                bounds=merged,
-                config=config,
-            )
+            if self.focus_map_manager.has_fitted_map("global"):
+                self._logger.info("Focus map [global]: using pre-computed map (already fitted)")
+            else:
+                self._compute_focus_map_for_group(
+                    group_id="global",
+                    group_name="Global Fit",
+                    bounds=merged,
+                    config=config,
+                )
 
     # ================================================================
     # Focus Map API endpoints
@@ -2331,8 +2349,12 @@ class ExperimentController(ImConWidgetController):
             z_min=config.z_min,
             z_max=config.z_max,
         )
-        # TODO: Only clear if we're recomputing an existing map? Or should we always clear to avoid mixing points from different runs?
+        # Always clear points when explicitly (re)computing a focus map.
+        # Precomputed maps are protected by the skip-logic in _run_focus_map_phase
+        # and computeFocusMap; this function is only reached when we truly want
+        # to measure from scratch.
         fm.clear_points()
+
         # Generate measurement grid
         grid = FocusMap.generate_grid(
             bounds=bounds,
@@ -2476,6 +2498,44 @@ class ExperimentController(ImConWidgetController):
         self.focus_map_manager.request_abort()
         self._logger.info("Focus map computation interrupt requested")
         return {"status": "interrupt_requested"}
+
+    @APIExport(requestType="GET")
+    def saveFocusMaps(self, path: str = ""):
+        """
+        Save all current focus maps to disk as JSON files.
+
+        Args:
+            path: Directory to save into. Empty string uses default location.
+
+        Returns:
+            Dict with saved file info
+        """
+        if not path:
+            path = os.path.join(self.save_dir, "focus_maps")
+        os.makedirs(path, exist_ok=True)
+        saved = self.focus_map_manager.save_all(path)
+        self._logger.info(f"Saved {len(saved)} focus maps to {path}")
+        return {"saved_files": saved, "count": len(saved), "path": path}
+
+    @APIExport(requestType="GET")
+    def loadFocusMaps(self, path: str = ""):
+        """
+        Load focus maps from disk, restoring previously saved maps.
+
+        Args:
+            path: Directory to load from. Empty string uses default location.
+
+        Returns:
+            Dict with loaded map info
+        """
+        if not path:
+            path = os.path.join(self.save_dir, "focus_maps")
+        if not os.path.isdir(path):
+            return {"loaded_count": 0, "path": path, "error": "Directory not found"}
+        count = self.focus_map_manager.load_all(path)
+        self._logger.info(f"Loaded {count} focus maps from {path}")
+        maps_dict = self.focus_map_manager.to_dict()
+        return {"loaded_count": count, "path": path, "maps": maps_dict}
 
     @APIExport(requestType="POST")
     def computeFocusMapFromPoints(self, request: FocusMapFromPointsRequest):

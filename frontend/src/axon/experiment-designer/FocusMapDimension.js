@@ -76,7 +76,7 @@ import apiExperimentControllerSaveFocusMaps from "../../backendapi/apiExperiment
 import apiExperimentControllerLoadFocusMaps from "../../backendapi/apiExperimentControllerLoadFocusMaps";
 import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner";
 import apiPositionerControllerGetPositions from "../../backendapi/apiPositionerControllerGetPositions";
-import apiAutofocusControllerDoAutofocusBackground from "../../backendapi/apiAutofocusControllerDoAutofocusBackground";
+import apiAutofocusControllerDoAutofocusBackground, { waitForAutofocusComplete } from "../../backendapi/apiAutofocusControllerDoAutofocusBackground";
 
 
 // Visualization
@@ -335,7 +335,8 @@ const FocusMapDimension = () => {
         });
 
         // Run autofocus with current ExperimentSlice settings
-        const afResult = await apiAutofocusControllerDoAutofocusBackground({
+        // autoFocus starts the AF in a background thread; we must poll until done.
+        await apiAutofocusControllerDoAutofocusBackground({
           rangez: parameterValue.autoFocusRange ?? 100,
           resolutionz: parameterValue.autoFocusResolution ?? 10,
           nCropsize: parameterValue.autoFocusCropsize ?? 2048,
@@ -345,8 +346,11 @@ const FocusMapDimension = () => {
           twoStage: parameterValue.autoFocusTwoStage ?? false,
         });
 
-        // Use AF return value (best Z) or read from positions API
-        let newZ = typeof afResult === "number" ? afResult : null;
+        // Wait for autofocus to finish (polls getAutofocusStatus)
+        const afStatus = await waitForAutofocusComplete(500, 120000);
+
+        // Read resulting Z from AF status or positions API
+        let newZ = afStatus?.currentZ ?? null;
         if (newZ == null) {
           const positions = await apiPositionerControllerGetPositions();
           newZ = extractZFromPositions(positions) ?? pt.z;

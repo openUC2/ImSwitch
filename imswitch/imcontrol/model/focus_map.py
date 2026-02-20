@@ -613,7 +613,12 @@ class FocusMapManager:
                 logger=self._logger,
             )
         else:
-            # Update parameters on existing map so frontend changes propagate # TODO: We should not clear the existing points and fit when parameters change - we should only apply the new parameters during interpolation and fitting. This way users can adjust parameters like z_offset, clamp_enabled, z_min, z_max, etc. on the fly without losing their existing measurements and fit.
+            # Update parameters on existing map so frontend changes propagate.
+            # Only update config params (method, z_offset, etc.) – do NOT clear
+            # existing points or fit. This allows users to adjust parameters
+            # like z_offset, clamp_enabled, z_min, z_max on the fly without
+            # losing their existing measurements. A new fit() call will use
+            # the updated parameters.
             fm = self._maps[group_id]
             fm.group_name = group_name
             fm.method = method

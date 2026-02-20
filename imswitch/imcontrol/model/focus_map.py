@@ -218,7 +218,7 @@ class FocusMap:
     # Surface fitting
     # ------------------------------------------------------------------
 
-    def fit(self) -> FitStats:
+    def fit(self, reject_outliers: bool = True, outlier_sigma: float = 3.0) -> FitStats:
         """
         Fit a Z-surface through the measured focus points.
 
@@ -228,6 +228,13 @@ class FocusMap:
           - 2-3 points: reject with error (need >= 4 for 2D fit) unless
             method == "constant" → use mean
           - >= 4 points: try requested method; fall back if necessary
+
+        Args:
+            reject_outliers: If True, remove Z values further than
+                             outlier_sigma standard deviations from
+                             the median before fitting.
+            outlier_sigma:   Number of standard deviations for outlier
+                             rejection (default 3.0).
 
         Returns:
             FitStats with quality metrics
@@ -240,6 +247,25 @@ class FocusMap:
         xs = np.array([p.x for p in self._points])
         ys = np.array([p.y for p in self._points])
         zs = np.array([p.z for p in self._points])
+
+        # --- Outlier rejection (based on Z values) ---
+        n_rejected = 0
+        if reject_outliers and n >= 4:
+            median_z = np.median(zs)
+            mad = np.median(np.abs(zs - median_z))  # median absolute deviation
+            # Use MAD-based sigma estimate (robust); fall back to std if MAD==0
+            sigma_est = mad * 1.4826 if mad > 0 else np.std(zs)
+            if sigma_est > 0:
+                mask = np.abs(zs - median_z) <= outlier_sigma * sigma_est
+                n_rejected = int(np.sum(~mask))
+                if n_rejected > 0 and np.sum(mask) >= 1:
+                    if self._logger:
+                        self._logger.warning(
+                            f"FocusMap [{self.group_id}]: rejected {n_rejected}/{n} "
+                            f"outlier points (>{outlier_sigma}σ from median Z={median_z:.2f})"
+                        )
+                    xs, ys, zs = xs[mask], ys[mask], zs[mask]
+                    n = len(xs)
 
         self._fit_stats = FitStats(
             n_points=n,
@@ -345,11 +371,16 @@ class FocusMap:
         )
 
     def _fit_rbf(self, xs: np.ndarray, ys: np.ndarray, zs: np.ndarray) -> None:
-        """Fit using RBF (multiquadric) interpolation."""
+        """Fit using RBF interpolation with thin-plate-spline kernel.
+        
+        We use 'thin_plate_spline' because it does not require an explicit
+        epsilon parameter (unlike 'multiquadric', 'gaussian', etc.) and
+        works well for smooth 2-D surface interpolation.
+        """
         points = np.column_stack([xs, ys])
         self._interpolator = RBFInterpolator(
             points, zs,
-            kernel="multiquadric",
+            kernel="thin_plate_spline",
             smoothing=self.smoothing_factor,
         )
 
@@ -563,7 +594,12 @@ class FocusMapManager:
                       clamp_enabled: bool = False,
                       z_min: float = 0.0,
                       z_max: float = 0.0) -> FocusMap:
-        """Get existing FocusMap for group, or create a new one."""
+        """Get existing FocusMap for group, or create a new one.
+        
+        If the map already exists, its configuration parameters are
+        updated so that changes from the frontend (e.g. z_min, z_max,
+        method) are reflected without having to clear and recreate.
+        """
         if group_id not in self._maps:
             self._maps[group_id] = FocusMap(
                 group_id=group_id,
@@ -576,6 +612,16 @@ class FocusMapManager:
                 z_max=z_max,
                 logger=self._logger,
             )
+        else:
+            # Update parameters on existing map so frontend changes propagate
+            fm = self._maps[group_id]
+            fm.group_name = group_name
+            fm.method = method
+            fm.smoothing_factor = smoothing_factor
+            fm.z_offset = z_offset
+            fm.clamp_enabled = clamp_enabled
+            fm.z_min = z_min
+            fm.z_max = z_max
         return self._maps[group_id]
 
     def get(self, group_id: str) -> Optional[FocusMap]:

@@ -18,10 +18,11 @@ import createAxiosInstance from "./createAxiosInstance";
 const apiExperimentControllerComputeFocusMapFromPoints = async (params) => {
   const axiosInstance = createAxiosInstance();
 
+  // Send all parameters as POST JSON body, not as query params.
+  // The backend @APIExport(requestType="POST") parses the body.
   const response = await axiosInstance.post(
     "/ExperimentController/computeFocusMapFromPoints",
-    null,
-    { params },
+    params,
   );
   return response.data;
 };

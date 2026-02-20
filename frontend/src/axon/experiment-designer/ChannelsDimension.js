@@ -29,6 +29,9 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import SettingsIcon from "@mui/icons-material/Settings";
 import DeleteIcon from "@mui/icons-material/Delete";
 import AddIcon from "@mui/icons-material/Add";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import ScienceIcon from "@mui/icons-material/Science";
+import PowerSettingsNewIcon from "@mui/icons-material/PowerSettingsNew";
 
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
@@ -50,12 +53,14 @@ const ChannelBlock = ({
   minIntensity,
   maxIntensity,
   isEnabled,
+  isIncludedInExperiment,
   isExpanded,
   onToggleExpand,
   onIntensityChange,
   onExposureChange,
   onGainChange,
   onEnabledChange,
+  onIncludeInExperimentChange,
   onRemove,
 }) => {
   const theme = useTheme();
@@ -109,21 +114,43 @@ const ChannelBlock = ({
             variant="caption"
             sx={{ color: theme.palette.text.secondary, flex: 1 }}
           >
-            {intensity} mW · {exposure} ms · Gain {gain} · {isEnabled ? "ON" : "OFF"}
+            {intensity} mW · {exposure} ms · Gain {gain} ·{" "}
+            {isEnabled ? "ON" : "OFF"}{" "}
+            {isIncludedInExperiment ? "· ✔ Exp" : "· ✘ Exp"}
           </Typography>
         )}
 
-        {/* Enable checkbox */}
-        <Checkbox
-          checked={isEnabled}
-          onChange={(e) => {
-            e.stopPropagation();
-            onEnabledChange(e.target.checked);
-          }}
-          onClick={(e) => e.stopPropagation()}
-          size="small"
-          sx={{ mr: 0.5 }}
-        />
+        {/* Laser power toggle – physically turns the laser on/off */}
+        <Tooltip title="Toggle laser ON/OFF (physically enables the illumination source)" arrow>
+          <Checkbox
+            checked={isEnabled}
+            onChange={(e) => {
+              e.stopPropagation();
+              onEnabledChange(e.target.checked);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            size="small"
+            icon={<PowerSettingsNewIcon sx={{ fontSize: 20, opacity: 0.4 }} />}
+            checkedIcon={<PowerSettingsNewIcon sx={{ fontSize: 20, color: theme.palette.success.main }} />}
+            sx={{ mr: 0 }}
+          />
+        </Tooltip>
+
+        {/* Include in experiment toggle – determines if this channel is used during acquisition */}
+        <Tooltip title="Include this channel in the experiment acquisition (does NOT toggle the laser)" arrow>
+          <Checkbox
+            checked={isIncludedInExperiment}
+            onChange={(e) => {
+              e.stopPropagation();
+              onIncludeInExperimentChange(e.target.checked);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            size="small"
+            icon={<ScienceIcon sx={{ fontSize: 20, opacity: 0.4 }} />}
+            checkedIcon={<ScienceIcon sx={{ fontSize: 20, color: theme.palette.info.main }} />}
+            sx={{ mr: 0.5 }}
+          />
+        </Tooltip>
 
         {/* Expand/collapse indicator */}
         <ExpandMoreIcon
@@ -140,9 +167,14 @@ const ChannelBlock = ({
         <Box sx={{ p: 2 }}>
           {/* Intensity Slider */}
           <Box sx={{ mb: 2 }}>
-            <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-              Intensity
-            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", mb: 0.5 }}>
+              <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                Intensity
+              </Typography>
+              <Tooltip title="Illumination power in mW. Higher values give brighter images but may cause photobleaching." arrow>
+                <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+              </Tooltip>
+            </Box>
             <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
               <Slider
                 value={intensity}
@@ -164,9 +196,14 @@ const ChannelBlock = ({
           <Box sx={{ display: "flex", gap: 2, mb: 2 }}>
             {/* Exposure */}
             <Box sx={{ flex: 1 }}>
-              <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-                Exposure
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", mb: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Exposure
+                </Typography>
+                <Tooltip title="Camera exposure time per frame. Longer exposure captures more light but slows down acquisition." arrow>
+                  <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
               <FormControl size="small" fullWidth>
                 <Select
                   value={exposure}
@@ -183,9 +220,14 @@ const ChannelBlock = ({
 
             {/* Gain */}
             <Box sx={{ flex: 1 }}>
-              <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-                Gain
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", mb: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Gain
+                </Typography>
+                <Tooltip title="Camera sensor gain (amplification). Higher gain brightens the image but increases noise." arrow>
+                  <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
               <FormControl size="small" fullWidth>
                 <Select
                   value={gain}
@@ -242,6 +284,7 @@ const ChannelsDimension = () => {
   const intensities = parameterValue.illuIntensities || [];
   const exposures = parameterValue.exposureTimes || [];
   const gains = parameterValue.gains || [];
+  const channelEnabledForExperiment = parameterValue.channelEnabledForExperiment || [];
   const illuSources = parameterRange.illuSources || [];
   const laserMinValues = parameterRange.illuSourceMinIntensities || [];
   const laserMaxValues = parameterRange.illuSourceMaxIntensities || [];
@@ -274,6 +317,8 @@ const ChannelsDimension = () => {
       const initIntensities = illuSources.map((_, idx) => intensities[idx] ?? 0);
       const initExposures = illuSources.map((_, idx) => exposures[idx] ?? 100);
       const initGains = illuSources.map((_, idx) => gains[idx] ?? 0);
+      // Default: all channels included in experiment
+      const initChannelEnabled = illuSources.map((_, idx) => channelEnabledForExperiment[idx] ?? true);
 
       if (JSON.stringify(intensities) !== JSON.stringify(initIntensities)) {
         dispatch(experimentSlice.setIlluminationIntensities(initIntensities));
@@ -283,6 +328,9 @@ const ChannelsDimension = () => {
       }
       if (JSON.stringify(gains) !== JSON.stringify(initGains)) {
         dispatch(experimentSlice.setGains(initGains));
+      }
+      if (JSON.stringify(channelEnabledForExperiment) !== JSON.stringify(initChannelEnabled)) {
+        dispatch(experimentSlice.setChannelEnabledForExperiment(initChannelEnabled));
       }
       dispatch(experimentSlice.setIllumination(illuSources));
     }
@@ -367,16 +415,17 @@ const ChannelsDimension = () => {
     }
   };
 
-  // Handler for enabled/disabled change
+  // Handler for enabled/disabled change (physical laser toggle only)
   const handleEnabledChange = (index, enabled) => {
     const laserName = illuSources[index];
     if (laserName) {
       setLaserActive(laserName, enabled);
-      // When disabling, set intensity to 0 so the backend knows not to use this channel
-      if (!enabled) {
-        handleIntensityChange(index, 0);
-      }
     }
+  };
+
+  // Handler for toggling channel inclusion in experiment (no backend call)
+  const handleIncludeInExperimentChange = (index, included) => {
+    dispatch(experimentSlice.toggleChannelForExperiment(index));
   };
 
   // Handler for exposure change
@@ -449,6 +498,17 @@ const ChannelsDimension = () => {
       >
         <Typography variant="body2" color="textSecondary">
           {illuSources.length} {illuSources.length === 1 ? "channel" : "channels"} selected
+          <Tooltip
+            title={
+              "Each channel has two toggles:\n" +
+              "⏻ Power – physically turns the laser on/off for live preview.\n" +
+              "🔬 Experiment – includes this channel in the automated acquisition.\n" +
+              "You can preview with a laser ON but exclude it from the experiment."
+            }
+            arrow
+          >
+            <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, mb: -0.3, color: "text.disabled", cursor: "help" }} />
+          </Tooltip>
         </Typography>
 
         <Tooltip title="Copy settings from first channel to all others">
@@ -496,12 +556,14 @@ const ChannelsDimension = () => {
               minIntensity={laserMinValues[idx] ?? 0}
               maxIntensity={laserMaxValues[idx] ?? 1023}
               isEnabled={laserData.enabled}
+              isIncludedInExperiment={channelEnabledForExperiment[idx] ?? true}
               isExpanded={expandedChannels[idx] ?? idx === 0}
               onToggleExpand={() => toggleChannelExpand(idx)}
               onIntensityChange={(val) => handleIntensityChange(idx, val)}
               onExposureChange={(val) => handleExposureChange(idx, val)}
               onGainChange={(val) => handleGainChange(idx, val)}
               onEnabledChange={(enabled) => handleEnabledChange(idx, enabled)}
+              onIncludeInExperimentChange={(included) => handleIncludeInExperimentChange(idx, included)}
             />
           );
         })

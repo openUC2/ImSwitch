@@ -309,9 +309,16 @@ const ZFocusDimension = () => {
           {parameterValue.autoFocusMode === "hardware" && (
             <>
               <Box sx={{ mb: 2 }}>
-                <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-                  Max Attempts
-                </Typography>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+                  <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                    Max Attempts
+                  </Typography>
+                  <Tooltip title="Maximum number of hardware autofocus attempts before giving up. Increase if your sample has weak reflections.">
+                    <IconButton size="small" sx={{ p: 0 }}>
+                      <InfoIcon sx={{ fontSize: 14 }} />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
                 <TextField
                   type="number"
                   size="small"
@@ -356,9 +363,16 @@ const ZFocusDimension = () => {
 
           {/* Illumination Channel for Autofocus */}
           <Box sx={{ mb: 2 }}>
-            <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-              Illumination Channel
-            </Typography>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+              <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                Illumination Channel
+              </Typography>
+              <Tooltip title="Select which illumination source to use during autofocus. 'Auto' uses the currently active channel.">
+                <IconButton size="small" sx={{ p: 0 }}>
+                  <InfoIcon sx={{ fontSize: 14 }} />
+                </IconButton>
+              </Tooltip>
+            </Box>
             <FormControl size="small" fullWidth>
               <Select
                 value={parameterValue.autoFocusIlluminationChannel || ""}

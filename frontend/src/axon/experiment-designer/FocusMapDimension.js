@@ -46,6 +46,8 @@ import MyLocationIcon from "@mui/icons-material/MyLocation";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import EditIcon from "@mui/icons-material/Edit";
+import SaveIcon from "@mui/icons-material/Save";
+import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 
 // State slices
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
@@ -66,6 +68,8 @@ import apiExperimentControllerClearFocusMap from "../../backendapi/apiExperiment
 import apiExperimentControllerGetFocusMapPreview from "../../backendapi/apiExperimentControllerGetFocusMapPreview";
 import apiExperimentControllerInterruptFocusMap from "../../backendapi/apiExperimentControllerInterruptFocusMap";
 import apiExperimentControllerComputeFocusMapFromPoints from "../../backendapi/apiExperimentControllerComputeFocusMapFromPoints";
+import apiExperimentControllerSaveFocusMaps from "../../backendapi/apiExperimentControllerSaveFocusMaps";
+import apiExperimentControllerLoadFocusMaps from "../../backendapi/apiExperimentControllerLoadFocusMaps";
 import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner";
 
 // Visualization
@@ -294,6 +298,8 @@ const FocusMapDimension = () => {
           z_max: config.z_max,
         });
         dispatch(focusMapSlice.updateFocusMapGroupResult({ groupId, result }));
+        // Update preview data so the heatmap visualization refreshes immediately
+        setPreviewData({ groupId, ...result });
       } catch (err) {
         dispatch(
           focusMapSlice.setFocusMapError(err.message || "Failed to refit focus map")
@@ -1006,6 +1012,50 @@ const FocusMapDimension = () => {
             >
               Refresh
             </Button>
+
+            {/* Save / Load focus maps to/from disk */}
+            <Tooltip title="Save all focus maps to disk (~/ ImSwitch/focus_maps). Allows reuse across sessions." arrow>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<SaveIcon />}
+                onClick={async () => {
+                  try {
+                    const res = await apiExperimentControllerSaveFocusMaps();
+                    dispatch(focusMapSlice.clearFocusMapError());
+                    alert(`Saved ${res.count} focus map(s) to ${res.path}`);
+                  } catch (err) {
+                    dispatch(focusMapSlice.setFocusMapError(err.message || "Failed to save focus maps"));
+                  }
+                }}
+                disabled={ui.isComputing || Object.keys(results).length === 0}
+              >
+                Save Maps
+              </Button>
+            </Tooltip>
+
+            <Tooltip title="Load previously saved focus maps from disk (~/ ImSwitch/focus_maps)." arrow>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<FolderOpenIcon />}
+                onClick={async () => {
+                  try {
+                    const res = await apiExperimentControllerLoadFocusMaps();
+                    if (res.maps) {
+                      dispatch(focusMapSlice.setFocusMapResults(res.maps));
+                    }
+                    dispatch(focusMapSlice.clearFocusMapError());
+                    alert(`Loaded ${res.loaded_count} focus map(s) from ${res.path}`);
+                  } catch (err) {
+                    dispatch(focusMapSlice.setFocusMapError(err.message || "Failed to load focus maps"));
+                  }
+                }}
+                disabled={ui.isComputing}
+              >
+                Load Maps
+              </Button>
+            </Tooltip>
           </Box>
 
           {/* ── Error display ─────────────────────────────────────────── */}

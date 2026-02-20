@@ -15,9 +15,11 @@ import {
   AccordionSummary,
   AccordionDetails,
   Chip,
+  Tooltip,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
@@ -246,9 +248,14 @@ const TimeDimension = () => {
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
             {/* Focus every N frames */}
             <Box>
-              <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-                Focus every N frames
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Focus every N frames
+                </Typography>
+                <Tooltip title="Run autofocus every N timepoints to correct for focus drift during long time-lapse acquisitions." arrow>
+                  <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
               <TextField
                 type="number"
                 size="small"

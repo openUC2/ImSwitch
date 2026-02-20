@@ -691,8 +691,8 @@ class AutofocusController(ImConWidgetController):
             self._setAutofocusState(AutofocusState.FINISHED)
             self._commChannel.sigAutoFocusRunning.emit(False)
             self.sigUpdateFocusValue.emit({"bestzpos": final_z})
+            self.__logger.info(f"Autofocus Value is: {final_z:.2f}")
             return final_z
-
         except Exception as e:
             self.__logger.error(f"Autofocus error: {e}")
             self._setAutofocusState(AutofocusState.ERROR)

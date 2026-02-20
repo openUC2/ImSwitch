@@ -921,7 +921,7 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     // Calculate the new scale
     const zoomMin = 0.5;
     const zoomMax = 10;
-    const zoomFactor = 0.1;
+    const zoomFactor = 0.5; // Zoom sensitivity – higher = faster zoom
     const newScale = Math.min(
       Math.max(scale - e.deltaY * zoomFactor * 0.01, zoomMin),
       zoomMax

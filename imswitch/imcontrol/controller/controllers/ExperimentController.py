@@ -102,6 +102,7 @@ class ScanMetadata(BaseModel):
 
 class ParameterValue(BaseModel):
     illumination: Union[List[str], str] = None # X, Y, nX, nY
+    channelEnabledForExperiment: Optional[List[bool]] = None  # Per-channel flag: include in experiment acquisition
     illuIntensities: Union[List[Optional[int]], Optional[int]] = None
     brightfield: bool = 0,
     darkfield: bool = 0,
@@ -701,6 +702,23 @@ class ExperimentController(ImConWidgetController):
         illuminationIntensities = p.illuIntensities
         if type(illuminationIntensities) is not List  and type(illuminationIntensities) is not list: illuminationIntensities = [p.illuIntensities]
         if type(illuSources) is not List  and type(illuSources) is not list: illuSources = [p.illumination]
+
+        # Filter channels by channelEnabledForExperiment flags (if provided)
+        channelEnabled = p.channelEnabledForExperiment
+        if channelEnabled is not None and len(channelEnabled) == len(illuSources):
+            filteredSources = []
+            filteredIntensities = []
+            for i, enabled in enumerate(channelEnabled):
+                if enabled:
+                    filteredSources.append(illuSources[i])
+                    if i < len(illuminationIntensities):
+                        filteredIntensities.append(illuminationIntensities[i])
+            if filteredSources:
+                illuSources = filteredSources
+                illuminationIntensities = filteredIntensities
+            else:
+                self.__logger.warning("All channels excluded from experiment, using all channels as fallback")
+
         isDarkfield = p.darkfield # TODO: Needs to be implemented
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
@@ -2473,6 +2491,44 @@ class ExperimentController(ImConWidgetController):
             return fm.to_result().to_dict()
 
         return fm.to_result().to_dict()
+
+    @APIExport(runOnUIThread=False)
+    def saveFocusMaps(self, path: str = None):
+        """
+        Save all current focus maps to disk as JSON files.
+
+        Args:
+            path: Directory path to save into. If None, uses default location.
+
+        Returns:
+            Dict with list of saved file paths and count.
+        """
+        if path is None:
+            path = os.path.join(os.path.expanduser("~"), "ImSwitch", "focus_maps")
+        saved = self.focus_map_manager.save_all(path)
+        self._logger.info(f"Saved {len(saved)} focus maps to {path}")
+        return {"saved_files": saved, "count": len(saved), "path": path}
+
+    @APIExport(runOnUIThread=False)
+    def loadFocusMaps(self, path: str = None):
+        """
+        Load focus maps from disk, replacing any current maps with the same group IDs.
+
+        Args:
+            path: Directory path to load from. If None, uses default location.
+
+        Returns:
+            Dict with number of loaded maps and current state.
+        """
+        if path is None:
+            path = os.path.join(os.path.expanduser("~"), "ImSwitch", "focus_maps")
+        loaded = self.focus_map_manager.load_all(path)
+        self._logger.info(f"Loaded {loaded} focus maps from {path}")
+        return {
+            "loaded_count": loaded,
+            "path": path,
+            "maps": self.focus_map_manager.to_dict(),
+        }
 
     def apply_focus_map_z(self, x: float, y: float, group_id: str = "default",
                           channel: Optional[str] = None) -> Optional[float]:

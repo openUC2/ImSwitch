@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo } from "react";
+import React, { useRef, useEffect, useMemo, useCallback } from "react";
 import { Box, Typography } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 
@@ -10,6 +10,7 @@ import { useTheme, alpha } from "@mui/material/styles";
  *   data.measured_points: [{ x, y, z }]   – autofocus measurements
  *   data.preview_grid: { x: [], y: [], z: [[]] }  – fitted surface on regular grid
  *   data.fit_stats: { method, z_range, mean_abs_error, ... }
+ *   onClickPosition: (worldX, worldY) => void  – callback when canvas is clicked
  */
 
 const CANVAS_SIZE = 320;
@@ -24,7 +25,7 @@ const colorForValue = (t) => {
   return `rgb(${r},${g},${b})`;
 };
 
-const FocusMapVisualization = ({ data }) => {
+const FocusMapVisualization = ({ data, onClickPosition }) => {
   const theme = useTheme();
   const canvasRef = useRef(null);
 
@@ -92,7 +93,32 @@ const FocusMapVisualization = ({ data }) => {
     return (z - bounds.zMin) / (bounds.zMax - bounds.zMin);
   };
 
-  // Draw
+  // Inverse mapping: canvas CSS pixel → world coordinates (no DPR scaling needed
+  // because click events report CSS coords, matching toCanvas output).
+  const fromCanvas = useCallback((canvasX, canvasY) => {
+    const drawW = CANVAS_SIZE - 2 * PADDING;
+    const drawH = CANVAS_SIZE - 2 * PADDING;
+    const worldX = bounds.xMin + ((canvasX - PADDING) / drawW) * (bounds.xMax - bounds.xMin);
+    const worldY = bounds.yMin + ((canvasY - PADDING) / drawH) * (bounds.yMax - bounds.yMin);
+    return [worldX, worldY];
+  }, [bounds]);
+
+  // Click handler: translate canvas click to world coords and call callback
+  const handleCanvasClick = useCallback((e) => {
+    if (!onClickPosition) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = e.clientX - rect.left;
+    const canvasY = e.clientY - rect.top;
+    // Only respond to clicks within the drawing area
+    if (canvasX < PADDING || canvasX > CANVAS_SIZE - PADDING ||
+        canvasY < PADDING || canvasY > CANVAS_SIZE - PADDING) {
+      return;
+    }
+    const [worldX, worldY] = fromCanvas(canvasX, canvasY);
+    onClickPosition(worldX, worldY);
+  }, [onClickPosition, fromCanvas]);
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -184,13 +210,20 @@ const FocusMapVisualization = ({ data }) => {
     <Box>
       <canvas
         ref={canvasRef}
+        onClick={handleCanvasClick}
         style={{
           width: CANVAS_SIZE,
           height: CANVAS_SIZE,
           border: `1px solid ${theme.palette.divider}`,
           borderRadius: 4,
+          cursor: onClickPosition ? "crosshair" : "default",
         }}
       />
+      {onClickPosition && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+          Click on the heatmap to move the stage to that XY position.
+        </Typography>
+      )}
       {/* Stats below canvas */}
       {fit_stats && (
         <Box sx={{ mt: 1, display: "flex", gap: 2, flexWrap: "wrap" }}>

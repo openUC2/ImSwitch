@@ -48,6 +48,10 @@ import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import EditIcon from "@mui/icons-material/Edit";
 import SaveIcon from "@mui/icons-material/Save";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
+import CenterFocusStrongIcon from "@mui/icons-material/CenterFocusStrong";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import GpsFixedIcon from "@mui/icons-material/GpsFixed";
 
 // State slices
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
@@ -71,9 +75,29 @@ import apiExperimentControllerComputeFocusMapFromPoints from "../../backendapi/a
 import apiExperimentControllerSaveFocusMaps from "../../backendapi/apiExperimentControllerSaveFocusMaps";
 import apiExperimentControllerLoadFocusMaps from "../../backendapi/apiExperimentControllerLoadFocusMaps";
 import apiPositionerControllerMovePositioner from "../../backendapi/apiPositionerControllerMovePositioner";
+import apiPositionerControllerGetPositions from "../../backendapi/apiPositionerControllerGetPositions";
+import apiAutofocusControllerDoAutofocusBackground from "../../backendapi/apiAutofocusControllerDoAutofocusBackground";
+
 
 // Visualization
 import FocusMapVisualization from "./FocusMapVisualization";
+
+/**
+ * Extract Z from positions API response which may be nested:
+ * e.g. {VirtualStage: {X: ..., Y: ..., Z: ...}} or {Z: ...}
+ * The positioner name ("VirtualStage") is dynamic.
+ */
+const extractZFromPositions = (positions) => {
+  if (!positions) return null;
+  if (positions.Z !== undefined) return positions.Z;
+  const keys = Object.keys(positions);
+  for (const key of keys) {
+    if (positions[key] && typeof positions[key] === "object" && positions[key].Z !== undefined) {
+      return positions[key].Z;
+    }
+  }
+  return null;
+};
 
 /**
  * FocusMapDimension – Experiment Designer panel for Focus Mapping configuration.
@@ -191,6 +215,22 @@ const FocusMapDimension = () => {
       if (scanAreas) {
         configWithAreas.scan_areas = scanAreas;
       }
+
+      // Merge autofocus parameters from ExperimentSlice so the backend
+      // uses the user-configured AF settings instead of hardcoded defaults.
+      configWithAreas.af_range = parameterValue.autoFocusRange ?? 100;
+      configWithAreas.af_resolution = parameterValue.autoFocusResolution ?? 10;
+      configWithAreas.af_cropsize = parameterValue.autoFocusCropsize ?? 2048;
+      configWithAreas.af_algorithm = parameterValue.autoFocusAlgorithm || "LAPE";
+      configWithAreas.af_settle_time = parameterValue.autoFocusSettleTime ?? 0.1;
+      configWithAreas.af_static_offset = parameterValue.autoFocusStaticOffset ?? 0;
+      configWithAreas.af_two_stage = parameterValue.autoFocusTwoStage ?? false;
+      configWithAreas.af_n_gauss = 7; // Gaussian kernel – not exposed in UI
+      configWithAreas.af_illumination_channel = parameterValue.autoFocusIlluminationChannel || "";
+      configWithAreas.af_mode = parameterValue.autoFocusMode || "software";
+      configWithAreas.af_max_attempts = parameterValue.autofocus_max_attempts ?? 2;
+      configWithAreas.af_target_setpoint = parameterValue.autofocus_target_focus_setpoint ?? null;
+
       const data = await apiExperimentControllerComputeFocusMap(configWithAreas);
       dispatch(focusMapSlice.setFocusMapResults(data));
     } catch (err) {
@@ -198,7 +238,7 @@ const FocusMapDimension = () => {
     } finally {
       dispatch(focusMapSlice.setFocusMapComputing({ isComputing: false }));
     }
-  }, [config, buildScanAreas, dispatch]);
+  }, [config, parameterValue, buildScanAreas, dispatch]);
 
   // Interrupt ongoing computation
   const handleInterrupt = useCallback(async () => {
@@ -278,6 +318,120 @@ const FocusMapDimension = () => {
       }
     },
     []
+  );
+
+  // Run autofocus at a specific measured point's XY, then update its Z
+  const handleAutofocusAtPoint = useCallback(
+    async (pt, groupId, pointIndex) => {
+      const key = `${groupId}-${pointIndex}`;
+      setGoToInProgress(key);
+      try {
+        // Move stage to point XY
+        await apiPositionerControllerMovePositioner({
+          axis: "X", dist: pt.x, isAbsolute: true, isBlocking: true,
+        });
+        await apiPositionerControllerMovePositioner({
+          axis: "Y", dist: pt.y, isAbsolute: true, isBlocking: true,
+        });
+
+        // Run autofocus with current ExperimentSlice settings
+        const afResult = await apiAutofocusControllerDoAutofocusBackground({
+          rangez: parameterValue.autoFocusRange ?? 100,
+          resolutionz: parameterValue.autoFocusResolution ?? 10,
+          nCropsize: parameterValue.autoFocusCropsize ?? 2048,
+          focusAlgorithm: parameterValue.autoFocusAlgorithm || "LAPE",
+          tSettle: parameterValue.autoFocusSettleTime ?? 0.1,
+          static_offset: parameterValue.autoFocusStaticOffset ?? 0,
+          twoStage: parameterValue.autoFocusTwoStage ?? false,
+        });
+
+        // Use AF return value (best Z) or read from positions API
+        let newZ = typeof afResult === "number" ? afResult : null;
+        if (newZ == null) {
+          const positions = await apiPositionerControllerGetPositions();
+          newZ = extractZFromPositions(positions) ?? pt.z;
+        }
+
+        // Update the point's Z in Redux
+        const result = results[groupId];
+        if (result?.points) {
+          const updatedPts = [...result.points];
+          updatedPts[pointIndex] = { ...pt, z: newZ };
+          dispatch(
+            focusMapSlice.updateFocusMapGroupResult({
+              groupId,
+              result: { ...result, points: updatedPts },
+            })
+          );
+        }
+      } catch (err) {
+        console.error("Autofocus at point failed:", err);
+      } finally {
+        setGoToInProgress(null);
+      }
+    },
+    [parameterValue, results, dispatch]
+  );
+
+  // Step Z up/down by a fixed amount (5 µm) and update the point
+  const STEP_Z_SIZE = 5;
+  const handleStepZ = useCallback(
+    async (pt, groupId, pointIndex, direction) => {
+      const delta = direction === "up" ? STEP_Z_SIZE : -STEP_Z_SIZE;
+      const key = `${groupId}-${pointIndex}`;
+      setGoToInProgress(key);
+      try {
+        // Move Z relative
+        await apiPositionerControllerMovePositioner({
+          axis: "Z",
+          dist: delta,
+          isAbsolute: false,
+          isBlocking: true,
+        });
+
+        // Read actual Z from positions API (nested structure)
+        const positions = await apiPositionerControllerGetPositions();
+        const newZ = extractZFromPositions(positions) ?? pt.z + delta;
+
+        // Update point
+        const result = results[groupId];
+        if (result?.points) {
+          const updatedPts = [...result.points];
+          updatedPts[pointIndex] = { ...pt, z: newZ };
+          dispatch(
+            focusMapSlice.updateFocusMapGroupResult({
+              groupId,
+              result: { ...result, points: updatedPts },
+            })
+          );
+        }
+      } catch (err) {
+        console.error("Step Z failed:", err);
+      } finally {
+        setGoToInProgress(null);
+      }
+    },
+    [results, dispatch]
+  );
+
+  // Set a point's Z to the current stage Z position (uses Redux state which is always up-to-date)
+  const handleSetCurrentZ = useCallback(
+    (pt, groupId, pointIndex) => {
+      const newZ = positionState.z;
+
+      const result = results[groupId];
+      if (result?.points) {
+        const updatedPts = [...result.points];
+        updatedPts[pointIndex] = { ...pt, z: newZ };
+        dispatch(
+          focusMapSlice.updateFocusMapGroupResult({
+            groupId,
+            result: { ...result, points: updatedPts },
+          })
+        );
+      }
+    },
+    [positionState, results, dispatch]
   );
 
   // Refit a group's focus map using its measured points (possibly with edited Z values)
@@ -1318,7 +1472,6 @@ const FocusMapDimension = () => {
                               <TableCell>X (µm)</TableCell>
                               <TableCell>Y (µm)</TableCell>
                               <TableCell>Z (µm)</TableCell>
-                              <TableCell>Quality</TableCell>
                               <TableCell align="right">Actions</TableCell>
                             </TableRow>
                           </TableHead>
@@ -1400,30 +1553,81 @@ const FocusMapDimension = () => {
                                       </Box>
                                     )}
                                   </TableCell>
-                                  <TableCell>
-                                    {pt.quality_metric != null
-                                      ? pt.quality_metric.toFixed(2)
-                                      : "—"}
-                                  </TableCell>
                                   <TableCell align="right">
-                                    <Tooltip title="Move stage to this XYZ position">
-                                      <span>
-                                        <IconButton
-                                          size="small"
-                                          color="primary"
-                                          onClick={() =>
-                                            handleGoToPoint(pt, groupId, idx)
-                                          }
-                                          disabled={isMoving}
-                                        >
-                                          {isMoving ? (
-                                            <CircularProgress size={16} />
-                                          ) : (
-                                            <MyLocationIcon fontSize="small" />
-                                          )}
-                                        </IconButton>
-                                      </span>
-                                    </Tooltip>
+                                    <Box sx={{ display: "flex", gap: 0.25, justifyContent: "flex-end" }}>
+                                      <Tooltip title="Move stage to this XYZ position">
+                                        <span>
+                                          <IconButton
+                                            size="small"
+                                            color="primary"
+                                            onClick={() =>
+                                              handleGoToPoint(pt, groupId, idx)
+                                            }
+                                            disabled={isMoving}
+                                          >
+                                            {isMoving ? (
+                                              <CircularProgress size={16} />
+                                            ) : (
+                                              <MyLocationIcon fontSize="small" />
+                                            )}
+                                          </IconButton>
+                                        </span>
+                                      </Tooltip>
+                                      <Tooltip title="Run autofocus at this XY, update Z">
+                                        <span>
+                                          <IconButton
+                                            size="small"
+                                            color="secondary"
+                                            onClick={() =>
+                                              handleAutofocusAtPoint(pt, groupId, idx)
+                                            }
+                                            disabled={isMoving}
+                                          >
+                                            <CenterFocusStrongIcon fontSize="small" />
+                                          </IconButton>
+                                        </span>
+                                      </Tooltip>
+                                      <Tooltip title="Step Z up (+5 µm)">
+                                        <span>
+                                          <IconButton
+                                            size="small"
+                                            onClick={() =>
+                                              handleStepZ(pt, groupId, idx, "up")
+                                            }
+                                            disabled={isMoving}
+                                          >
+                                            <ArrowUpwardIcon fontSize="small" />
+                                          </IconButton>
+                                        </span>
+                                      </Tooltip>
+                                      <Tooltip title="Step Z down (−5 µm)">
+                                        <span>
+                                          <IconButton
+                                            size="small"
+                                            onClick={() =>
+                                              handleStepZ(pt, groupId, idx, "down")
+                                            }
+                                            disabled={isMoving}
+                                          >
+                                            <ArrowDownwardIcon fontSize="small" />
+                                          </IconButton>
+                                        </span>
+                                      </Tooltip>
+                                      <Tooltip title="Set this point's Z to current stage Z">
+                                        <span>
+                                          <IconButton
+                                            size="small"
+                                            color="success"
+                                            onClick={() =>
+                                              handleSetCurrentZ(pt, groupId, idx)
+                                            }
+                                            disabled={isMoving}
+                                          >
+                                            <GpsFixedIcon fontSize="small" />
+                                          </IconButton>
+                                        </span>
+                                      </Tooltip>
+                                    </Box>
                                   </TableCell>
                                 </TableRow>
                               );
@@ -1444,7 +1648,28 @@ const FocusMapDimension = () => {
               <Typography variant="subtitle2" sx={{ mb: 1 }}>
                 Focus Map Preview – {previewData.groupId}
               </Typography>
-              <FocusMapVisualization data={previewData} />
+              <FocusMapVisualization
+                data={previewData}
+                onClickPosition={async (worldX, worldY) => {
+                  // Move stage to clicked position on the heatmap
+                  try {
+                    await apiPositionerControllerMovePositioner({
+                      axis: "X",
+                      dist: worldX,
+                      isAbsolute: true,
+                      isBlocking: true,
+                    });
+                    await apiPositionerControllerMovePositioner({
+                      axis: "Y",
+                      dist: worldY,
+                      isAbsolute: true,
+                      isBlocking: true,
+                    });
+                  } catch (err) {
+                    console.error("Failed to move stage to heatmap position:", err);
+                  }
+                }}
+              />
             </Box>
           )}
         </>

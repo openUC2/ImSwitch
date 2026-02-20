@@ -254,7 +254,7 @@ class FocusMap:
             median_z = np.median(zs)
             mad = np.median(np.abs(zs - median_z))  # median absolute deviation
             # Use MAD-based sigma estimate (robust); fall back to std if MAD==0
-            sigma_est = mad * 1.4826 if mad > 0 else np.std(zs)
+            sigma_est = mad * 2*1.4826 if mad > 0 else np.std(zs) # actually twice the stdv
             if sigma_est > 0:
                 mask = np.abs(zs - median_z) <= outlier_sigma * sigma_est
                 n_rejected = int(np.sum(~mask))
@@ -613,7 +613,7 @@ class FocusMapManager:
                 logger=self._logger,
             )
         else:
-            # Update parameters on existing map so frontend changes propagate
+            # Update parameters on existing map so frontend changes propagate # TODO: We should not clear the existing points and fit when parameters change - we should only apply the new parameters during interpolation and fitting. This way users can adjust parameters like z_offset, clamp_enabled, z_min, z_max, etc. on the fly without losing their existing measurements and fit.
             fm = self._maps[group_id]
             fm.group_name = group_name
             fm.method = method

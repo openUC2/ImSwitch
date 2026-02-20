@@ -29,15 +29,18 @@ class Mutex(abstract.Mutex):
 
 
 # Initialize Socket.IO server
+sio = AsyncServer(async_mode="asgi", cors_allowed_origins="*") # TODO: Not sure if the pings may cause issues with long-running backend operations (e.g. focus-map fitting) - may need to increase ping_interval and ping_timeout to avoid client disconnects during intensive tasks....
 # Use generous ping_interval / ping_timeout so that long-running backend
 # operations (e.g. focus-map autofocus loop) do not cause the client to
 # think the connection is dead and reconnect in a loop.
+'''
 sio = AsyncServer(
     async_mode="asgi",
     cors_allowed_origins="*",
     ping_interval=60,   # seconds between pings (default 25)
     ping_timeout=120,   # seconds to wait for pong (default 20)
 )
+'''
 socket_app = ASGIApp(sio, socketio_path=None)  # Renamed to socket_app - will be mounted on FastAPI app
 
 # Per-client frame acknowledgement tracking

@@ -40,6 +40,19 @@ from pydantic import Field
 # -----------------------------------------------------------
 
 
+class FocusMapFromPointsRequest(BaseModel):
+    """Request body for computeFocusMapFromPoints endpoint."""
+    points: List[Dict[str, float]]
+    group_id: str = "manual"
+    group_name: str = "Manual Points"
+    method: str = "rbf"
+    smoothing_factor: float = 0.1
+    z_offset: float = 0.0
+    clamp_enabled: bool = False
+    z_min: float = 0.0
+    z_max: float = 0.0
+
+
 class NeighborPoint(BaseModel):
     x: float
     y: float
@@ -102,7 +115,6 @@ class ScanMetadata(BaseModel):
 
 class ParameterValue(BaseModel):
     illumination: Union[List[str], str] = None # X, Y, nX, nY
-    channelEnabledForExperiment: Optional[List[bool]] = None  # Per-channel flag: include in experiment acquisition
     illuIntensities: Union[List[Optional[int]], Optional[int]] = None
     brightfield: bool = 0,
     darkfield: bool = 0,
@@ -160,6 +172,20 @@ class FocusMapConfig(BaseModel):
     settle_ms: int = Field(0, description="Extra settle time in ms after Z move")
     store_debug_artifacts: bool = Field(True, description="Store focus points + fit stats as JSON")
     channel_offsets: Optional[Dict[str, float]] = Field(default=None, description="Per-illumination-channel Z offset (µm)")
+
+    # Autofocus parameters – passed through to doAutofocusBackground
+    af_range: float = Field(100.0, description="Autofocus Z range (±µm from current Z)")
+    af_resolution: float = Field(10.0, description="Autofocus step size (µm)")
+    af_cropsize: int = Field(2048, description="Crop size for focus quality algorithm")
+    af_algorithm: str = Field("LAPE", description="Focus quality algorithm: LAPE, GLVA, JPEG")
+    af_settle_time: float = Field(0.1, description="Settle time (s) after each Z step")
+    af_static_offset: float = Field(0.0, description="Static Z offset applied after autofocus (µm)")
+    af_two_stage: bool = Field(False, description="Use two-stage autofocus (coarse + fine)")
+    af_n_gauss: int = Field(7, description="Gaussian kernel size for focus algorithm")
+    af_illumination_channel: str = Field("", description="Illumination channel for autofocus")
+    af_mode: str = Field("software", description="Autofocus mode: software (Z-sweep) or hardware (FocusLock)")
+    af_max_attempts: int = Field(2, description="Max retry attempts for hardware autofocus")
+    af_target_setpoint: Optional[float] = Field(None, description="Target focus setpoint for hardware AF")
 
     # Scan areas – passed from the frontend so that computeFocusMap knows the
     # correct XY bounds even when no experiment has been started yet.
@@ -702,23 +728,6 @@ class ExperimentController(ImConWidgetController):
         illuminationIntensities = p.illuIntensities
         if type(illuminationIntensities) is not List  and type(illuminationIntensities) is not list: illuminationIntensities = [p.illuIntensities]
         if type(illuSources) is not List  and type(illuSources) is not list: illuSources = [p.illumination]
-
-        # Filter channels by channelEnabledForExperiment flags (if provided)
-        channelEnabled = p.channelEnabledForExperiment
-        if channelEnabled is not None and len(channelEnabled) == len(illuSources):
-            filteredSources = []
-            filteredIntensities = []
-            for i, enabled in enumerate(channelEnabled):
-                if enabled:
-                    filteredSources.append(illuSources[i])
-                    if i < len(illuminationIntensities):
-                        filteredIntensities.append(illuminationIntensities[i])
-            if filteredSources:
-                illuSources = filteredSources
-                illuminationIntensities = filteredIntensities
-            else:
-                self.__logger.warning("All channels excluded from experiment, using all channels as fallback")
-
         isDarkfield = p.darkfield # TODO: Needs to be implemented
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
@@ -1042,22 +1051,41 @@ class ExperimentController(ImConWidgetController):
     def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0,
                   illuminationChannel: str="", mode: str="software",
                   max_attempts: int=2,
-                  target_focus_setpoint: Optional[float] = None) -> Optional[float]:
+                  target_focus_setpoint: Optional[float] = None,
+                  af_range: float = 100.0,
+                  af_resolution: float = 10.0,
+                  af_cropsize: int = 2048,
+                  af_algorithm: str = "LAPE",
+                  af_settle_time: float = 0.1,
+                  af_static_offset: float = 0.0,
+                  af_two_stage: bool = False,
+                  af_n_gauss: int = 7) -> Optional[float]:
         """Perform autofocus using either hardware or software method.
 
         Args:
-            minZ: Minimum Z position for autofocus (software mode only)
-            maxZ: Maximum Z position for autofocus (software mode only)
-            stepSize: Step size for autofocus scan (software mode only)
+            minZ: Legacy minimum Z position (overridden by af_range)
+            maxZ: Legacy maximum Z position (overridden by af_range)
+            stepSize: Legacy step size (overridden by af_resolution)
             illuminationChannel: Selected illumination channel for autofocus
             mode: "hardware" (fast, one-shot) or "software" (slow, Z-sweep)
+            max_attempts: Max retry attempts for hardware AF
+            target_focus_setpoint: Target setpoint for hardware AF
+            af_range: Autofocus Z range ±µm from current Z
+            af_resolution: Z step size for autofocus
+            af_cropsize: Crop size for focus algorithm
+            af_algorithm: Focus quality algorithm (LAPE, GLVA, JPEG)
+            af_settle_time: Settle time in seconds
+            af_static_offset: Static Z offset after autofocus
+            af_two_stage: Use two-stage (coarse+fine) autofocus
+            af_n_gauss: Gaussian kernel size
 
         Returns:
             float: Best focus Z position, or None if autofocus failed
         """
         self._logger.debug(
             f"Performing autofocus (mode={mode}) with parameters "
-            f"minZ={minZ}, maxZ={maxZ}, stepSize={stepSize}, channel={illuminationChannel}"
+            f"af_range={af_range}, af_resolution={af_resolution}, "
+            f"af_algorithm={af_algorithm}, channel={illuminationChannel}"
         )
 
         # Route to appropriate autofocus method
@@ -1067,25 +1095,42 @@ class ExperimentController(ImConWidgetController):
                                            illuminationChannel=illuminationChannel)
         else:
             return self.autofocus_software(
+                af_range=af_range,
+                af_resolution=af_resolution,
+                af_cropsize=af_cropsize,
+                af_algorithm=af_algorithm,
+                af_settle_time=af_settle_time,
+                af_static_offset=af_static_offset,
+                af_two_stage=af_two_stage,
+                af_n_gauss=af_n_gauss,
+                illuminationChannel=illuminationChannel,
                 minZ=minZ,
                 maxZ=maxZ,
                 stepSize=stepSize,
-                illuminationChannel=illuminationChannel
             )
 
-    def autofocus_software(self, minZ: float=0, maxZ: float=0, stepSize: float=0, illuminationChannel: str=""):
+    def autofocus_software(self, af_range: float = 100.0, af_resolution: float = 10.0,
+                           af_cropsize: int = 2048, af_algorithm: str = "LAPE",
+                           af_settle_time: float = 0.1, af_static_offset: float = 0.0,
+                           af_two_stage: bool = False, af_n_gauss: int = 7,
+                           illuminationChannel: str = "",
+                           minZ: float = 0, maxZ: float = 0, stepSize: float = 0):
         """Perform software-based autofocus using AutofocusController (Z-sweep).
 
-        Args:
-            minZ: Minimum Z position for autofocus (not used - uses rangez instead)
-            maxZ: Maximum Z position for autofocus (not used - uses rangez instead)
-            stepSize: Step size for autofocus scan
-            illuminationChannel: Selected illumination channel for autofocus
+        All parameters are passed through from FocusMapConfig or experiment settings.
+        Legacy minZ/maxZ/stepSize params are kept for backward compatibility but
+        are overridden by af_range/af_resolution when those are non-default.
 
         Returns:
             float: Best focus Z position, or None if autofocus failed
         """
-        self._logger.debug("Performing software autofocus (Z-sweep)... with parameters minZ, maxZ, stepSize, illuminationChannel: %s, %s, %s, %s", minZ, maxZ, stepSize, illuminationChannel)
+        self._logger.debug(
+            "Performing software autofocus (Z-sweep)... "
+            "af_range=%s, af_resolution=%s, af_algorithm=%s, af_cropsize=%s, "
+            "af_settle_time=%s, af_n_gauss=%s, af_two_stage=%s, illumination=%s",
+            af_range, af_resolution, af_algorithm, af_cropsize,
+            af_settle_time, af_n_gauss, af_two_stage, illuminationChannel
+        )
 
         # Get the autofocus controller
         autofocusController = self._master.getController('Autofocus')
@@ -1097,32 +1142,35 @@ class ExperimentController(ImConWidgetController):
         # Set illumination if specified
         if illuminationChannel and hasattr(self, '_master') and hasattr(self._master, 'lasersManager'):
             try:
-                # Turn on the specified illumination channel for autofocus
                 self._logger.debug(f"Setting illumination channel {illuminationChannel} for autofocus")
-                # TODO: Set appropriate intensity - this would require getting current intensity or using a default
-                # For now, we'll let the autofocus controller handle illumination
             except Exception as e:
                 self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
 
         try:
-            # Calculate range from min/max
-            rangez = abs(maxZ - minZ) / 2.0 if maxZ > minZ else 50.0
-            resolutionz = stepSize if stepSize > 0 else 10.0
+            # Determine rangez: prefer af_range, fall back to legacy minZ/maxZ
+            if af_range > 0:
+                rangez = af_range
+            elif maxZ > minZ:
+                rangez = abs(maxZ - minZ) / 2.0
+            else:
+                rangez = 50.0
 
-            # Call autofocus directly - the method is already decorated with @APIExport
-            #     def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=7, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
+            # Determine resolution: prefer af_resolution, fall back to legacy stepSize
+            resolutionz = af_resolution if af_resolution > 0 else (stepSize if stepSize > 0 else 10.0)
+
+            # Call autofocus with all parameters from config
             result = autofocusController.doAutofocusBackground(
                 rangez=rangez,
                 resolutionz=resolutionz,
                 defocusz=0,
                 axis="Z",
-                tSettle =0.1, # TODO: Implement via frontend parameters
+                tSettle=af_settle_time,
                 isDebug=False,
-                nGauss=7,
-                nCropsize=2048,
-                focusAlgorithm="LAPE",
-                static_offset=0.0,
-                twoStage=False
+                nGauss=af_n_gauss,
+                nCropsize=af_cropsize,
+                focusAlgorithm=af_algorithm,
+                static_offset=af_static_offset,
+                twoStage=af_two_stage
             )
 
             self._logger.debug("Autofocus completed successfully")
@@ -2283,8 +2331,8 @@ class ExperimentController(ImConWidgetController):
             z_min=config.z_min,
             z_max=config.z_max,
         )
+        # TODO: Only clear if we're recomputing an existing map? Or should we always clear to avoid mixing points from different runs?
         fm.clear_points()
-
         # Generate measurement grid
         grid = FocusMap.generate_grid(
             bounds=bounds,
@@ -2305,13 +2353,20 @@ class ExperimentController(ImConWidgetController):
                 self.move_stage_xy(posX=gx, posY=gy, relative=False)
                 time.sleep(0.1)  # Settle time
 
-                # Run autofocus to find best Z
+                # Run autofocus to find best Z using config parameters
                 best_z = self.autofocus(
-                    minZ=config.z_min if config.clamp_enabled else -50,
-                    maxZ=config.z_max if config.clamp_enabled else 50,
-                    stepSize=5.0,
-                    illuminationChannel="",
-                    mode="software",
+                    mode=config.af_mode,
+                    af_range=config.af_range,
+                    af_resolution=config.af_resolution,
+                    af_cropsize=config.af_cropsize,
+                    af_algorithm=config.af_algorithm,
+                    af_settle_time=config.af_settle_time,
+                    af_static_offset=config.af_static_offset,
+                    af_two_stage=config.af_two_stage,
+                    af_n_gauss=config.af_n_gauss,
+                    illuminationChannel=config.af_illumination_channel,
+                    max_attempts=config.af_max_attempts,
+                    target_focus_setpoint=config.af_target_setpoint,
                 )
 
                 if best_z is None:
@@ -2327,6 +2382,8 @@ class ExperimentController(ImConWidgetController):
                     f"Focus map [{group_id}]: point {i+1}/{len(grid)} "
                     f"at ({gx:.1f}, {gy:.1f}) → Z={best_z:.3f}"
                 )
+                # settle for a moment 
+                time.sleep(0.5)
 
             except Exception as e:
                 self._logger.error(f"Focus map [{group_id}]: failed at ({gx:.1f}, {gy:.1f}): {e}")
@@ -2421,16 +2478,7 @@ class ExperimentController(ImConWidgetController):
         return {"status": "interrupt_requested"}
 
     @APIExport(requestType="POST")
-    def computeFocusMapFromPoints(self,
-                                  points: list,
-                                  group_id: str = "manual",
-                                  group_name: str = "Manual Points",
-                                  method: str = "rbf",
-                                  smoothing_factor: float = 0.1,
-                                  z_offset: float = 0.0,
-                                  clamp_enabled: bool = False,
-                                  z_min: float = 0.0,
-                                  z_max: float = 0.0):
+    def computeFocusMapFromPoints(self, request: FocusMapFromPointsRequest):
         """
         Compute a focus map from manually specified XYZ points.
 
@@ -2439,19 +2487,21 @@ class ExperimentController(ImConWidgetController):
         recording the current stage Z).
 
         Args:
-            points: List of dicts with 'x', 'y', 'z' keys (µm)
-            group_id: Identifier for this focus map group
-            group_name: Human-readable name
-            method: Fit method ('spline', 'rbf', 'constant')
-            smoothing_factor: Smoothing for the surface fit
-            z_offset: Global Z offset to add
-            clamp_enabled: Whether to clamp Z to min/max
-            z_min: Min Z when clamping
-            z_max: Max Z when clamping
+            request: FocusMapFromPointsRequest with points and fit config
 
         Returns:
             FocusMapResult as dict
         """
+        points = request.points
+        group_id = request.group_id
+        group_name = request.group_name
+        method = request.method
+        smoothing_factor = request.smoothing_factor
+        z_offset = request.z_offset
+        clamp_enabled = request.clamp_enabled
+        z_min = request.z_min
+        z_max = request.z_max
+
         if not points or len(points) < 1:
             return {"error": "At least 1 point is required"}
 
@@ -2491,44 +2541,6 @@ class ExperimentController(ImConWidgetController):
             return fm.to_result().to_dict()
 
         return fm.to_result().to_dict()
-
-    @APIExport(runOnUIThread=False)
-    def saveFocusMaps(self, path: str = None):
-        """
-        Save all current focus maps to disk as JSON files.
-
-        Args:
-            path: Directory path to save into. If None, uses default location.
-
-        Returns:
-            Dict with list of saved file paths and count.
-        """
-        if path is None:
-            path = os.path.join(os.path.expanduser("~"), "ImSwitch", "focus_maps")
-        saved = self.focus_map_manager.save_all(path)
-        self._logger.info(f"Saved {len(saved)} focus maps to {path}")
-        return {"saved_files": saved, "count": len(saved), "path": path}
-
-    @APIExport(runOnUIThread=False)
-    def loadFocusMaps(self, path: str = None):
-        """
-        Load focus maps from disk, replacing any current maps with the same group IDs.
-
-        Args:
-            path: Directory path to load from. If None, uses default location.
-
-        Returns:
-            Dict with number of loaded maps and current state.
-        """
-        if path is None:
-            path = os.path.join(os.path.expanduser("~"), "ImSwitch", "focus_maps")
-        loaded = self.focus_map_manager.load_all(path)
-        self._logger.info(f"Loaded {loaded} focus maps from {path}")
-        return {
-            "loaded_count": loaded,
-            "path": path,
-            "maps": self.focus_map_manager.to_dict(),
-        }
 
     def apply_focus_map_z(self, x: float, y: float, group_id: str = "default",
                           channel: Optional[str] = None) -> Optional[float]:

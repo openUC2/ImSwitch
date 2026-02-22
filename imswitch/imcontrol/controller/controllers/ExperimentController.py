@@ -157,6 +157,7 @@ class FocusMapConfig(BaseModel):
 
     # Fit strategy
     fit_by_region: bool = Field(True, description="Fit per well / scan region (True) or global (False)")
+    use_manual_map: bool = Field(False, description="Reuse a pre-existing manual/global map for all groups via interpolation instead of measuring per group")
     method: str = Field("spline", description="Fit method: spline, rbf, or constant")
     smoothing_factor: float = Field(0.1, description="Smoothing factor for surface fit")
 
@@ -2210,6 +2211,56 @@ class ExperimentController(ImConWidgetController):
             self._logger.warning("Focus map: no areas found – skipping")
             return
 
+        # ----------------------------------------------------------
+        # Option: reuse a pre-existing manual / global map for all
+        # groups by interpolation instead of measuring a new grid.
+        # ----------------------------------------------------------
+        if config.use_manual_map:
+            source_fm = self._find_reusable_manual_map()
+            if source_fm is not None:
+                self._logger.info(
+                    f"Focus map: reusing manual map [{source_fm.group_id}] "
+                    f"for {len(areas)} group(s) via interpolation"
+                )
+                for area in areas:
+                    gid = area["areaId"]
+                    if self.focus_map_manager.has_fitted_map(gid):
+                        self._logger.info(
+                            f"Focus map [{gid}]: already fitted – skipping interpolation"
+                        )
+                        continue
+                    try:
+                        new_fm = source_fm.interpolate_to_region(
+                            group_id=gid,
+                            group_name=area["areaName"],
+                            bounds=area["bounds"],
+                            rows=max(config.rows, 3),
+                            cols=max(config.cols, 3),
+                            logger=self._logger,
+                        )
+                        self.focus_map_manager._maps[gid] = new_fm
+                        self._logger.info(
+                            f"Focus map [{gid}]: interpolated from [{source_fm.group_id}] "
+                            f"({new_fm.n_points} pts, fitted={new_fm.is_fitted})"
+                        )
+                    except Exception as e:
+                        self._logger.warning(
+                            f"Focus map [{gid}]: interpolation from manual map failed ({e}), "
+                            f"falling back to measurement"
+                        )
+                        self._compute_focus_map_for_group(
+                            group_id=gid,
+                            group_name=area["areaName"],
+                            bounds=area["bounds"],
+                            config=config,
+                        )
+                return
+            else:
+                self._logger.warning(
+                    "Focus map: use_manual_map is enabled but no fitted manual/global map found – "
+                    "falling back to per-group measurement"
+                )
+
         if config.fit_by_region:
             # Fit separately per region – skip groups that already have a valid fit
             for area in areas:
@@ -2244,6 +2295,26 @@ class ExperimentController(ImConWidgetController):
                     bounds=merged,
                     config=config,
                 )
+
+    def _find_reusable_manual_map(self) -> "Optional[FocusMap]":
+        """
+        Look for a pre-existing fitted focus map that can be reused as
+        a global template for all groups.  Preference order:
+          1. "manual" (from "Fit from Points" in the UI)
+          2. "global" (from a previous global computation)
+          3. any other fitted map
+        Returns None if nothing suitable is found.
+        """
+        from imswitch.imcontrol.model.focus_map import FocusMap  # noqa: local import
+        for candidate_id in ["manual", "global"]:
+            fm = self.focus_map_manager.get(candidate_id)
+            if fm is not None and fm.is_fitted:
+                return fm
+        # Fallback: any fitted map
+        for fm in self.focus_map_manager.get_all().values():
+            if fm.is_fitted:
+                return fm
+        return None
 
     # ================================================================
     # Focus Map API endpoints

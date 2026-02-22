@@ -144,6 +144,7 @@ const FocusMapDimension = () => {
   const [previewData, setPreviewData] = useState(null);
   const [expandedFitGroup, setExpandedFitGroup] = useState(null);
   const [editingPointZ, setEditingPointZ] = useState(null); // { groupId, pointIndex, z }
+  const [editingPointXY, setEditingPointXY] = useState(null); // { groupId, pointIndex, field: "x"|"y", value }
   const [goToInProgress, setGoToInProgress] = useState(null); // "groupId-pointIndex"
 
   // ── Dimension summary ────────────────────────────────────────────────
@@ -296,20 +297,23 @@ const FocusMapDimension = () => {
           axis: "X",
           dist: pt.x,
           isAbsolute: true,
-          isBlocking: true,
+          isBlocking: false,
+          speed: 15000,
         });
         await apiPositionerControllerMovePositioner({
           axis: "Y",
           dist: pt.y,
           isAbsolute: true,
-          isBlocking: true,
+          isBlocking: false,
+          speed: 15000,
         });
         // Move Z
         await apiPositionerControllerMovePositioner({
           axis: "Z",
           dist: pt.z,
           isAbsolute: true,
-          isBlocking: true,
+          isBlocking: false,
+          speed: 15000,
         });
       } catch (err) {
         console.error("Failed to move to focus point:", err);
@@ -328,10 +332,10 @@ const FocusMapDimension = () => {
       try {
         // Move stage to point XY
         await apiPositionerControllerMovePositioner({
-          axis: "X", dist: pt.x, isAbsolute: true, isBlocking: true,
+          axis: "X", dist: pt.x, isAbsolute: true, isBlocking: false, speed: 15000
         });
         await apiPositionerControllerMovePositioner({
-          axis: "Y", dist: pt.y, isAbsolute: true, isBlocking: true,
+          axis: "Y", dist: pt.y, isAbsolute: true, isBlocking: false, speed: 15000  
         });
 
         // Run autofocus with current ExperimentSlice settings
@@ -390,7 +394,7 @@ const FocusMapDimension = () => {
           axis: "Z",
           dist: delta,
           isAbsolute: false,
-          isBlocking: true,
+          isBlocking: false,
         });
 
         // Read actual Z from positions API (nested structure)
@@ -427,6 +431,29 @@ const FocusMapDimension = () => {
       if (result?.points) {
         const updatedPts = [...result.points];
         updatedPts[pointIndex] = { ...pt, z: newZ };
+        dispatch(
+          focusMapSlice.updateFocusMapGroupResult({
+            groupId,
+            result: { ...result, points: updatedPts },
+          })
+        );
+      }
+    },
+    [positionState, results, dispatch]
+  );
+
+  // Set a point's XYZ to the current stage position
+  const handleSetCurrentXYZ = useCallback(
+    (pt, groupId, pointIndex) => {
+      const result = results[groupId];
+      if (result?.points) {
+        const updatedPts = [...result.points];
+        updatedPts[pointIndex] = {
+          ...pt,
+          x: positionState?.x ?? pt.x,
+          y: positionState?.y ?? pt.y,
+          z: positionState?.z ?? pt.z,
+        };
         dispatch(
           focusMapSlice.updateFocusMapGroupResult({
             groupId,
@@ -592,7 +619,7 @@ const FocusMapDimension = () => {
           </Box>
 
           {/* Fit mode toggles */}
-          <Box sx={{ display: "flex", gap: 2, mb: 2, alignItems: "center" }}>
+          <Box sx={{ display: "flex", gap: 2, mb: 2, alignItems: "center", flexWrap: "wrap" }}>
             <FormControlLabel
               control={
                 <Switch
@@ -617,7 +644,38 @@ const FocusMapDimension = () => {
               }
               label="Add margin"
             />
+            <Tooltip
+              title="When enabled, a pre-existing manual or global focus map is interpolated for all scan groups instead of measuring a new focus grid per group. Create a manual map first using 'Manual Focus Points' → 'Fit from Points'."
+              arrow
+            >
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={config.use_manual_map ?? false}
+                    onChange={(e) =>
+                      dispatch(focusMapSlice.setFocusMapUseManualMap(e.target.checked))
+                    }
+                    size="small"
+                    color="secondary"
+                  />
+                }
+                label="Use manual map for all groups"
+              />
+            </Tooltip>
           </Box>
+
+          {/* Info alert when use_manual_map is enabled */}
+          {config.use_manual_map && (
+            <Alert severity="info" sx={{ mb: 2 }} icon={<InfoIcon />}>
+              <strong>Manual map mode:</strong> During acquisition, the pre-existing manual/global
+              focus map will be interpolated for each scan group instead of measuring new focus
+              points. Make sure you have fitted a manual map first (see Manual Focus Points below).
+              {Object.keys(results).some((k) => results[k]?.status === "ready" && (k === "manual" || k === "global"))
+                ? <Chip label="Manual map available ✓" size="small" color="success" sx={{ ml: 1 }} />
+                : <Chip label="No manual map yet" size="small" color="warning" sx={{ ml: 1 }} />
+              }
+            </Alert>
+          )}
 
           {/* ── Autofocus Settings (shared with Z/Focus tab) ─────────── */}
           <Accordion
@@ -1490,8 +1548,88 @@ const FocusMapDimension = () => {
                               return (
                                 <TableRow key={idx} hover>
                                   <TableCell>{idx + 1}</TableCell>
-                                  <TableCell>{pt.x?.toFixed(1)}</TableCell>
-                                  <TableCell>{pt.y?.toFixed(1)}</TableCell>
+                                  {/* Editable X */}
+                                  <TableCell>
+                                    {editingPointXY?.groupId === groupId &&
+                                     editingPointXY?.pointIndex === idx &&
+                                     editingPointXY?.field === "x" ? (
+                                      <TextField
+                                        type="number"
+                                        size="small"
+                                        variant="standard"
+                                        value={editingPointXY.value}
+                                        onChange={(e) =>
+                                          setEditingPointXY({
+                                            ...editingPointXY,
+                                            value: parseFloat(e.target.value) || 0,
+                                          })
+                                        }
+                                        onBlur={() => {
+                                          const updatedPts = [...pts];
+                                          updatedPts[idx] = { ...pt, x: editingPointXY.value };
+                                          dispatch(
+                                            focusMapSlice.updateFocusMapGroupResult({
+                                              groupId,
+                                              result: { ...result, points: updatedPts },
+                                            })
+                                          );
+                                          setEditingPointXY(null);
+                                        }}
+                                        onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                                        autoFocus
+                                        sx={{ width: 80 }}
+                                      />
+                                    ) : (
+                                      <Box
+                                        sx={{ display: "flex", alignItems: "center", gap: 0.5, cursor: "pointer", "&:hover": { color: "primary.main" } }}
+                                        onClick={() => setEditingPointXY({ groupId, pointIndex: idx, field: "x", value: pt.x })}
+                                      >
+                                        {pt.x?.toFixed(1)}
+                                        <EditIcon fontSize="inherit" sx={{ opacity: 0.4 }} />
+                                      </Box>
+                                    )}
+                                  </TableCell>
+                                  {/* Editable Y */}
+                                  <TableCell>
+                                    {editingPointXY?.groupId === groupId &&
+                                     editingPointXY?.pointIndex === idx &&
+                                     editingPointXY?.field === "y" ? (
+                                      <TextField
+                                        type="number"
+                                        size="small"
+                                        variant="standard"
+                                        value={editingPointXY.value}
+                                        onChange={(e) =>
+                                          setEditingPointXY({
+                                            ...editingPointXY,
+                                            value: parseFloat(e.target.value) || 0,
+                                          })
+                                        }
+                                        onBlur={() => {
+                                          const updatedPts = [...pts];
+                                          updatedPts[idx] = { ...pt, y: editingPointXY.value };
+                                          dispatch(
+                                            focusMapSlice.updateFocusMapGroupResult({
+                                              groupId,
+                                              result: { ...result, points: updatedPts },
+                                            })
+                                          );
+                                          setEditingPointXY(null);
+                                        }}
+                                        onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                                        autoFocus
+                                        sx={{ width: 80 }}
+                                      />
+                                    ) : (
+                                      <Box
+                                        sx={{ display: "flex", alignItems: "center", gap: 0.5, cursor: "pointer", "&:hover": { color: "primary.main" } }}
+                                        onClick={() => setEditingPointXY({ groupId, pointIndex: idx, field: "y", value: pt.y })}
+                                      >
+                                        {pt.y?.toFixed(1)}
+                                        <EditIcon fontSize="inherit" sx={{ opacity: 0.4 }} />
+                                      </Box>
+                                    )}
+                                  </TableCell>
                                   <TableCell>
                                     {isEditing ? (
                                       <TextField
@@ -1631,6 +1769,20 @@ const FocusMapDimension = () => {
                                           </IconButton>
                                         </span>
                                       </Tooltip>
+                                      <Tooltip title="Set this point's XYZ to current stage position">
+                                        <span>
+                                          <IconButton
+                                            size="small"
+                                            color="info"
+                                            onClick={() =>
+                                              handleSetCurrentXYZ(pt, groupId, idx)
+                                            }
+                                            disabled={isMoving}
+                                          >
+                                            <MyLocationIcon fontSize="small" sx={{ color: theme.palette.info.main }} />
+                                          </IconButton>
+                                        </span>
+                                      </Tooltip>
                                     </Box>
                                   </TableCell>
                                 </TableRow>
@@ -1661,13 +1813,15 @@ const FocusMapDimension = () => {
                       axis: "X",
                       dist: worldX,
                       isAbsolute: true,
-                      isBlocking: true,
+                      isBlocking: false,
+                      speed: 15000,
                     });
                     await apiPositionerControllerMovePositioner({
                       axis: "Y",
                       dist: worldY,
                       isAbsolute: true,
-                      isBlocking: true,
+                      isBlocking: false,
+                      speed: 15000,
                     });
                   } catch (err) {
                     console.error("Failed to move stage to heatmap position:", err);

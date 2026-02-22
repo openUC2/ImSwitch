@@ -440,6 +440,69 @@ class FocusMap:
         return float(z)
 
     # ------------------------------------------------------------------
+    # Interpolation to a new region
+    # ------------------------------------------------------------------
+
+    def interpolate_to_region(
+        self,
+        group_id: str,
+        group_name: str,
+        bounds: Dict[str, float],
+        rows: int = 3,
+        cols: int = 3,
+        logger=None,
+    ) -> "FocusMap":
+        """
+        Create a new FocusMap for a different region by sampling this fitted
+        map at a grid of points within the given bounds.
+
+        This is used when the user has a manual/global map and wants to
+        reuse it for per-region groups without measuring again.
+
+        Args:
+            group_id:   ID for the new map
+            group_name: Human-readable name
+            bounds:     dict with minX, maxX, minY, maxY
+            rows:       number of sample rows
+            cols:       number of sample columns
+            logger:     optional logger
+
+        Returns:
+            A new FocusMap instance with interpolated points, already fitted.
+        """
+        if not self._is_fitted:
+            raise RuntimeError(
+                f"FocusMap [{self.group_id}]: cannot interpolate – not fitted yet"
+            )
+
+        grid = FocusMap.generate_grid(bounds=bounds, rows=rows, cols=cols)
+
+        new_fm = FocusMap(
+            group_id=group_id,
+            group_name=group_name,
+            method=self.method,
+            smoothing_factor=self.smoothing_factor,
+            z_offset=self.z_offset,
+            clamp_enabled=self.clamp_enabled,
+            z_min=self.z_min,
+            z_max=self.z_max,
+            logger=logger or self._logger,
+        )
+
+        for gx, gy in grid:
+            try:
+                gz = self.interpolate(gx, gy)
+                new_fm.add_point(gx, gy, gz)
+            except Exception:
+                # Point outside the fitted domain – skip
+                pass
+
+        if new_fm.n_points > 0:
+            new_fm.fit()
+
+        return new_fm
+
+    # ------------------------------------------------------------------
     # Preview grid generation
     # ------------------------------------------------------------------
 

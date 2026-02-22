@@ -20,6 +20,7 @@ const defaultFocusMapConfig = {
 
   // Fit strategy
   fit_by_region: true,
+  use_manual_map: false, // Reuse manual/global map for all groups via interpolation
   method: "spline", // "spline" | "rbf" | "constant"
   smoothing_factor: 0.1,
 
@@ -108,6 +109,10 @@ const focusMapSlice = createSlice({
 
     setFocusMapFitByRegion: (state, action) => {
       state.config.fit_by_region = action.payload;
+    },
+
+    setFocusMapUseManualMap: (state, action) => {
+      state.config.use_manual_map = action.payload;
     },
 
     setFocusMapZOffset: (state, action) => {
@@ -238,6 +243,7 @@ export const {
   setFocusMapMethod,
   setFocusMapSmoothingFactor,
   setFocusMapFitByRegion,
+  setFocusMapUseManualMap,
   setFocusMapZOffset,
   setFocusMapClampEnabled,
   setFocusMapZMin,

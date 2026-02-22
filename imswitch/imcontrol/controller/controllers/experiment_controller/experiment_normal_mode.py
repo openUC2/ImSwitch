@@ -424,6 +424,11 @@ class ExperimentNormalMode(ExperimentModeBase):
                 focus_map_z = self.controller.apply_focus_map_z(
                     x=m_point["x"], y=m_point["y"], group_id="global"
                 )
+            if focus_map_z is None:
+                # Try manual map as last-resort fallback (user-defined points)
+                focus_map_z = self.controller.apply_focus_map_z(
+                    x=m_point["x"], y=m_point["y"], group_id="manual"
+                )
 
             if focus_map_z is not None:
                 # Move Z to the focus-mapped position

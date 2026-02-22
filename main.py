@@ -28,4 +28,4 @@ if __name__ == '__main__':
     '''
     # DON'T CHANGE THIS!!!!
     # This has to be maintained for DOCKER!
-    main(is_headless=True)
+    main(is_headless=True, ssl=0)

@@ -638,7 +638,7 @@ class AutofocusController(ImConWidgetController):
 
 
     # ---------- Step-scan autofocus with Gaussian fit ----------
-    def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=7, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
+    def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=0, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
         try:
             self._setAutofocusState(AutofocusState.SCANNING)
             self._commChannel.sigAutoFocusRunning.emit(True)

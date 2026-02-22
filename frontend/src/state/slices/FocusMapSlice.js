@@ -39,7 +39,7 @@ const defaultFocusMapConfig = {
   af_settle_time: 0.1,
   af_static_offset: 0.0,
   af_two_stage: false,
-  af_n_gauss: 7,
+  af_n_gauss: 0,
   af_illumination_channel: "",
   af_mode: "software",
 

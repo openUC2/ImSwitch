@@ -182,7 +182,7 @@ class FocusMapConfig(BaseModel):
     af_settle_time: float = Field(0.1, description="Settle time (s) after each Z step")
     af_static_offset: float = Field(0.0, description="Static Z offset applied after autofocus (µm)")
     af_two_stage: bool = Field(False, description="Use two-stage autofocus (coarse + fine)")
-    af_n_gauss: int = Field(7, description="Gaussian kernel size for focus algorithm")
+    af_n_gauss: int = Field(0, description="Gaussian kernel size for focus algorithm")
     af_illumination_channel: str = Field("", description="Illumination channel for autofocus")
     af_mode: str = Field("software", description="Autofocus mode: software (Z-sweep) or hardware (FocusLock)")
     af_max_attempts: int = Field(2, description="Max retry attempts for hardware autofocus")
@@ -1060,7 +1060,7 @@ class ExperimentController(ImConWidgetController):
                   af_settle_time: float = 0.1,
                   af_static_offset: float = 0.0,
                   af_two_stage: bool = False,
-                  af_n_gauss: int = 7) -> Optional[float]:
+                  af_n_gauss: int = 0) -> Optional[float]:
         """Perform autofocus using either hardware or software method.
 
         Args:
@@ -1113,7 +1113,7 @@ class ExperimentController(ImConWidgetController):
     def autofocus_software(self, af_range: float = 100.0, af_resolution: float = 10.0,
                            af_cropsize: int = 2048, af_algorithm: str = "LAPE",
                            af_settle_time: float = 0.1, af_static_offset: float = 0.0,
-                           af_two_stage: bool = False, af_n_gauss: int = 7,
+                           af_two_stage: bool = False, af_n_gauss: int = 0,
                            illuminationChannel: str = "",
                            minZ: float = 0, maxZ: float = 0, stepSize: float = 0):
         """Perform software-based autofocus using AutofocusController (Z-sweep).
@@ -2341,7 +2341,7 @@ class ExperimentController(ImConWidgetController):
         """
         if focusMapConfig is None:
             focusMapConfig = FocusMapConfig(enabled=True)
-
+        focusMapConfig.af_n_gauss=0  # TODO: Force n_gauss=0 for autofocus during focus mapping to speed it up and avoid fitting issues at low SNR. The main purpose of the focus map is to get a general Z surface, not perfect autofocus results at each point, so this is an acceptable tradeoff. The config parameter is still kept for potential future use if we want to allow more flexible autofocus settings during focus mapping.
         # Store config for channel_offsets access during acquisition
         self._focus_map_config = focusMapConfig
 

@@ -323,7 +323,7 @@ class AutofocusController(ImConWidgetController):
 
     @APIExport(runOnUIThread=True)
     def autoFocus(self, rangez: int = 100, resolutionz: int = 10, defocusz: int = 0, tSettle:float=0.1, isDebug:bool=False,
-                               nGauss:int=7, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
+                               nGauss:int=0, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
         """
         Step-scan autofocus with Gaussian peak fit.
         
@@ -640,11 +640,11 @@ class AutofocusController(ImConWidgetController):
     # ---------- Step-scan autofocus with Gaussian fit ----------
     def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=0, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
         try:
+            
+            self.__logger.info(f"Starting autofocus - Stage 1: Coarse scan (range=±{rangez}, resolution={resolutionz}), defocus={defocusz}, axis={axis}, tSettle={tSettle}, nGauss={nGauss}, nCropsize={nCropsize}, focusAlgorithm={focusAlgorithm}, static_offset={static_offset}, twoStage={twoStage}")
             self._setAutofocusState(AutofocusState.SCANNING)
             self._commChannel.sigAutoFocusRunning.emit(True)
-            
             # Stage 1: Coarse scan
-            self.__logger.info(f"Starting autofocus - Stage 1: Coarse scan (range=±{rangez}, resolution={resolutionz})")
             best_z_coarse = self._doSingleAutofocusScan(rangez, resolutionz, defocusz, axis, tSettle, isDebug, nGauss, nCropsize, focusAlgorithm, static_offset)
 
             # Check if aborted

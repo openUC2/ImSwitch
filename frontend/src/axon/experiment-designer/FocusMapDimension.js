@@ -226,7 +226,7 @@ const FocusMapDimension = () => {
       configWithAreas.af_settle_time = parameterValue.autoFocusSettleTime ?? 0.1;
       configWithAreas.af_static_offset = parameterValue.autoFocusStaticOffset ?? 0;
       configWithAreas.af_two_stage = parameterValue.autoFocusTwoStage ?? false;
-      configWithAreas.af_n_gauss = 7; // Gaussian kernel – not exposed in UI
+      configWithAreas.af_n_gauss = 0; // Gaussian kernel – not exposed in UI // TODO: expose in UI if requested by users!!
       configWithAreas.af_illumination_channel = parameterValue.autoFocusIlluminationChannel || "";
       configWithAreas.af_mode = parameterValue.autoFocusMode || "software";
       configWithAreas.af_max_attempts = parameterValue.autofocus_max_attempts ?? 2;

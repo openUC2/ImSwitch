@@ -5,11 +5,12 @@ Supports hardware encoding options while maintaining scientific camera features.
 """
 
 import collections
+import json
 import numpy as np
 import time
 import cv2
 from imswitch.imcommon.model import initLogger
-from typing import List
+from typing import List, Optional
 import threading
 
 # Try to import picamera2, fall back to mock if not available
@@ -44,7 +45,8 @@ class CameraPicamera2:
         binning: int = 1,
         flipImage: tuple = (False, False),
         resolution: tuple = (640, 480),
-        use_video_mode: bool = True
+        use_video_mode: bool = True,
+        tuning_file: Optional[str] = None
     ):
         """
         Initialize Raspberry Pi camera.
@@ -60,6 +62,7 @@ class CameraPicamera2:
             flipImage: (flipY, flipX) tuple
             resolution: (width, height) tuple
             use_video_mode: Use video mode for continuous streaming (recommended)
+            tuning_file: Optional path to a JSON tuning file for custom ALSC/LUT/CCM
         """
         super().__init__()
         self.__logger = initLogger(self, tryInheritParent=False)
@@ -106,7 +109,22 @@ class CameraPicamera2:
 
         # Auto exposure/white balance
         self.exposure_auto = False
-        self.awb_auto = True
+        self.awb_auto = False
+
+        # White balance mode and manual colour gains
+        self.awb_mode = "manual"  # auto | manual | once
+        self.colour_gains = (1.0, 1.0)  # (red_gain, blue_gain)
+
+        # Tuning file support
+        self.tuning_file = tuning_file
+        self._tuning_dict = None
+        if tuning_file is not None:
+            try:
+                with open(tuning_file) as f:
+                    self._tuning_dict = json.load(f)
+                self.__logger.info(f"Loaded tuning file: {tuning_file}")
+            except Exception as e:
+                self.__logger.error(f"Failed to load tuning file '{tuning_file}': {e}")
 
         # Trigger mode
         self.trigger_source = "Continuous"
@@ -201,8 +219,12 @@ class CameraPicamera2:
             # Try to release camera from other processes
             self._release_camera_from_other_processes(camera_index)
 
-            # Create camera instance
-            self.camera = Picamera2() # sudo fuser -k /dev/video0 /dev/media0 /dev/media1 /dev/media2
+            # Create camera instance, optionally with a custom tuning
+            if self._tuning_dict is not None:
+                self.camera = Picamera2(camera_num=camera_index, tuning=self._tuning_dict)
+                self.__logger.info("Camera created with custom tuning")
+            else:
+                self.camera = Picamera2(camera_num=camera_index)
 
             # Get sensor resolution
             sensor_modes = self.camera.sensor_modes
@@ -284,8 +306,13 @@ class CameraPicamera2:
         # Gain control
         controls["AnalogueGain"] = float(self.gain)
 
-        # Auto white balance
-        controls["AwbEnable"] = self.awb_auto
+        # White balance control based on awb_mode
+        if self.awb_mode == "manual":
+            controls["AwbEnable"] = False
+            controls["ColourGains"] = tuple(float(g) for g in self.colour_gains)
+        else:
+            # auto or once (once is handled separately)
+            controls["AwbEnable"] = True
 
         try:
             self.camera.set_controls(controls)
@@ -343,18 +370,25 @@ class CameraPicamera2:
 
     def _process_frame(self, array: np.ndarray) -> np.ndarray:
         """
-        Process captured frame (apply flipping, color conversion, flatfielding).
+        Process captured frame (apply color conversion, flipping, flatfielding).
+        
+        Picamera2 outputs RGB888 (R, G, B order).  The internal ImSwitch pipeline
+        expects BGR order (OpenCV convention).  We convert once here so that
+        cv2.imwrite / cv2.imencode produce correct colours without any extra step.
         
         Args:
-            array: Raw frame from camera
+            array: Raw frame from camera (RGB888)
             
         Returns:
-            Processed frame
+            Processed frame in BGR order (or single-channel grayscale)
         """
+        # Convert RGB → BGR for OpenCV-compatible pipeline
+        if len(array.shape) == 3 and array.shape[2] == 3:
+            array = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
+
         # Convert to mono if needed
         if not self.isRGB and len(array.shape) == 3:
-            # Convert RGB to grayscale
-            array = np.dot(array[..., :3], [0.299, 0.587, 0.114]).astype(np.uint8)
+            array = cv2.cvtColor(array, cv2.COLOR_BGR2GRAY)
 
         # Apply flipping
         if self.flipImage[0]:  # Flip Y
@@ -366,11 +400,198 @@ class CameraPicamera2:
         if self.isFlatfielding and self.flatfieldImage is not None:
             try:
                 # Normalize by flatfield
-                array = np.clip(array.astype(np.float32) / (self.flatfieldImage.astype(np.float32) + 1e-6) * 255, 0, 255).astype(np.uint8)
+                array = np.clip(
+                    array.astype(np.float32) / (self.flatfieldImage.astype(np.float32) + 1e-6) * 255,
+                    0, 255
+                ).astype(np.uint8)
             except Exception as e:
                 self.__logger.error(f"Flatfield correction failed: {e}")
 
         return array
+
+    # ------------------------------------------------------------------
+    # White balance control
+    # ------------------------------------------------------------------
+
+    def set_white_balance_mode(self, mode: str):
+        """
+        Set white balance mode.
+
+        Args:
+            mode: 'auto', 'manual', or 'once'
+        """
+        mode = mode.lower()
+        self.awb_mode = mode
+
+        if self.camera is None:
+            return
+
+        if mode == "auto":
+            self.camera.set_controls({"AwbEnable": True})
+            self.__logger.info("AWB set to auto")
+
+        elif mode == "manual":
+            self.camera.set_controls({
+                "AwbEnable": False,
+                "ColourGains": tuple(float(g) for g in self.colour_gains)
+            })
+            self.__logger.info(f"AWB set to manual, gains={self.colour_gains}")
+
+        elif mode == "once":
+            # Enable AWB briefly, let it converge, then lock the gains
+            self.camera.set_controls({"AwbEnable": True})
+            time.sleep(0.5)
+            try:
+                meta = self.camera.capture_metadata()
+                gains = meta.get("ColourGains", (1.0, 1.0))
+                self.colour_gains = (float(gains[0]), float(gains[1]))
+            except Exception as e:
+                self.__logger.warning(f"Could not read ColourGains in 'once' mode: {e}")
+            self.camera.set_controls({
+                "AwbEnable": False,
+                "ColourGains": tuple(float(g) for g in self.colour_gains)
+            })
+            self.__logger.info(f"AWB 'once' locked gains={self.colour_gains}")
+        else:
+            self.__logger.warning(f"Unknown AWB mode: {mode}")
+
+    def set_colour_gains(self, red: float, blue: float):
+        """
+        Set manual colour (white-balance) gains.
+
+        Args:
+            red:  Red channel gain  (typ. 0.5 – 8.0)
+            blue: Blue channel gain (typ. 0.5 – 8.0)
+        """
+        self.colour_gains = (float(red), float(blue))
+        if self.awb_mode == "manual" and self.camera is not None:
+            self.camera.set_controls({
+                "AwbEnable": False,
+                "ColourGains": self.colour_gains
+            })
+            self.__logger.debug(f"Colour gains updated: R={red}, B={blue}")
+
+    # ------------------------------------------------------------------
+    # Tuning file support
+    # ------------------------------------------------------------------
+
+    def apply_tuning(self, tuning_dict: dict):
+        """
+        Apply a new tuning dictionary at runtime.
+        This requires recreating the Picamera2 instance.
+
+        Args:
+            tuning_dict: Parsed JSON tuning dictionary
+        """
+        was_running = self.is_streaming
+        if was_running:
+            self.stop_live()
+
+        cam_idx = self.cameraNo
+        if self.camera is not None:
+            try:
+                self.camera.close()
+            except Exception as e:
+                self.__logger.warning(f"Error closing camera for tuning: {e}")
+            self.camera = None
+
+        self._tuning_dict = tuning_dict
+        self._open_camera(cam_idx)
+
+        if was_running:
+            self.start_live()
+
+        self.__logger.info("Tuning applied and camera restarted")
+
+    def load_tuning_file(self, path: str):
+        """
+        Load a tuning file from disk and apply it.
+
+        Args:
+            path: Path to JSON tuning file
+        """
+        with open(path) as f:
+            tuning = json.load(f)
+        self.apply_tuning(tuning)
+
+    # ------------------------------------------------------------------
+    # Lens shading / ALSC calibration
+    # ------------------------------------------------------------------
+
+    def calibrate_lens_shading(self, grid_size: tuple = (16, 12)):
+        """
+        Capture a raw frame and compute a per-channel lens-shading correction
+        table that can be fed into rpi.alsc tuning.
+
+        The camera should be pointing at a uniformly illuminated white target.
+
+        Args:
+            grid_size: (columns, rows) for the down-sampled correction grid.
+
+        Returns:
+            dict with keys 'r', 'g', 'b' each holding a 2-D numpy array of
+            correction factors normalised so centre = 1.0.  The dict can be
+            serialised and merged into a tuning file under ``rpi.alsc``.
+        """
+        if self.camera is None:
+            raise RuntimeError("Camera not initialised")
+
+        was_running = self.is_streaming
+        if was_running:
+            self.stop_live()
+
+        try:
+            # Capture a raw Bayer frame
+            self.camera.start()
+            raw = self.camera.capture_array("raw")
+            self.camera.stop()
+        except Exception as e:
+            self.__logger.error(f"Failed to capture raw frame: {e}")
+            if was_running:
+                self.start_live()
+            raise
+
+        # Assume BGGR Bayer pattern (most common for RPi sensors)
+        b  = raw[0::2, 0::2].astype(np.float64)
+        g1 = raw[0::2, 1::2].astype(np.float64)
+        g2 = raw[1::2, 0::2].astype(np.float64)
+        r  = raw[1::2, 1::2].astype(np.float64)
+        g  = (g1 + g2) / 2.0
+
+        cols, rows = grid_size
+
+        def _downsample_and_normalise(channel: np.ndarray) -> np.ndarray:
+            """Downsample a single Bayer channel to grid_size and normalise."""
+            h, w = channel.shape
+            bh, bw = h // rows, w // cols
+            grid = np.zeros((rows, cols), dtype=np.float64)
+            for gy in range(rows):
+                for gx in range(cols):
+                    block = channel[gy * bh:(gy + 1) * bh, gx * bw:(gx + 1) * bw]
+                    grid[gy, gx] = np.mean(block)
+            # Normalise so centre value = 1.0
+            centre_val = grid[rows // 2, cols // 2]
+            if centre_val > 0:
+                grid = grid / centre_val
+            # Invert so we get *correction* factors (bright centre → 1.0, dark edges → >1.0)
+            grid = np.where(grid > 0, 1.0 / grid, 1.0)
+            return grid
+
+        lut = {
+            "r": _downsample_and_normalise(r),
+            "g": _downsample_and_normalise(g),
+            "b": _downsample_and_normalise(b),
+        }
+
+        self.__logger.info(
+            f"Lens shading calibration complete – grid {cols}x{rows}, "
+            f"R range [{lut['r'].min():.3f}, {lut['r'].max():.3f}]"
+        )
+
+        if was_running:
+            self.start_live()
+
+        return lut
 
     def reconnectCamera(self):
         """Reconnect the camera after disconnection"""
@@ -437,6 +658,9 @@ class CameraPicamera2:
             "gain": self.gain,
             "frame_rate": self.frame_rate,
             "trigger_source": self.trigger_source,
+            "awb_mode": self.awb_mode,
+            "red_gain": self.colour_gains[0],
+            "blue_gain": self.colour_gains[1],
         }
 
         # Get current metadata if available
@@ -736,6 +960,7 @@ class CameraPicamera2:
             "blacklevel": self.set_blacklevel,
             "exposure_mode": self.set_exposure_mode,
             "flat_fielding": self.set_flatfielding,
+            "awb_mode": self.set_white_balance_mode,
         }
 
         if property_name in property_map:
@@ -744,6 +969,25 @@ class CameraPicamera2:
                 return property_value
             except Exception as e:
                 self.__logger.error(f"Failed to set {property_name}: {e}")
+                return None
+
+        # Compound properties that modify colour_gains
+        if property_name == "red_gain":
+            r = float(property_value)
+            _, b = self.colour_gains
+            self.set_colour_gains(r, b)
+            return r
+        elif property_name == "blue_gain":
+            r, _ = self.colour_gains
+            b_val = float(property_value)
+            self.set_colour_gains(r, b_val)
+            return b_val
+        elif property_name == "tuning_file":
+            try:
+                self.load_tuning_file(str(property_value))
+                return property_value
+            except Exception as e:
+                self.__logger.error(f"Failed to load tuning file: {e}")
                 return None
         else:
             self.__logger.warning(f"Unknown property: {property_name}")
@@ -759,6 +1003,9 @@ class CameraPicamera2:
             "exposure_mode": lambda: "auto" if self.exposure_auto else "manual",
             "flat_fielding": lambda: self.isFlatfielding,
             "frame_number": lambda: self.frameNumber,
+            "awb_mode": lambda: self.awb_mode,
+            "red_gain": lambda: self.colour_gains[0],
+            "blue_gain": lambda: self.colour_gains[1],
         }
 
         if property_name in property_map:
@@ -955,5 +1202,10 @@ class MockCameraPicamera2:
     def recordFlatfieldImage(self, *args, **kwargs): pass
     def getFrameNumber(self): return self.frameNumber
     def reconnectCamera(self): pass
+    def set_white_balance_mode(self, mode): self.awb_mode = getattr(self, 'awb_mode', 'auto')
+    def set_colour_gains(self, r, b): self.colour_gains = (r, b)
+    def apply_tuning(self, tuning_dict): pass
+    def load_tuning_file(self, path): pass
+    def calibrate_lens_shading(self, grid_size=(16, 12)): return {'r': np.ones(grid_size[::-1]), 'g': np.ones(grid_size[::-1]), 'b': np.ones(grid_size[::-1])}
     def __enter__(self): return self
     def __exit__(self, *args): self.close()

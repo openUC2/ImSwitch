@@ -1522,6 +1522,15 @@ wheels = [
 ]
 
 [[package]]
+name = "future"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/b2/4140c69c6a66432916b26158687e821ba631a4c9273c474343badf84d3ba/future-1.0.0.tar.gz", hash = "sha256:bd2968309307861edae1458a4f8a4f3598c03be43b97521076aebf5d94c07b05", size = 1228490, upload-time = "2024-02-21T11:52:38.461Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/da/71/ae30dadffc90b9006d77af76b393cb9dfbfc9629f339fc1574a1c52e6806/future-1.0.0-py3-none-any.whl", hash = "sha256:929292d34f5872e70396626ef385ec22355a1fae8ad29e1a734c3e43f9fbc216", size = 491326, upload-time = "2024-02-21T11:52:35.956Z" },
+]
+
+[[package]]
 name = "google-crc32c"
 version = "1.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1856,6 +1865,7 @@ dependencies = [
     { name = "requests" },
     { name = "scikit-image" },
     { name = "send2trash" },
+    { name = "setuptools" },
     { name = "tifffile" },
     { name = "uc2-rest" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1873,11 +1883,14 @@ imjoy = [
     { name = "imjoy" },
     { name = "imjoy-rpc" },
 ]
-lepmont = [
+lepmon = [
     { name = "luma-oled" },
     { name = "rpi-gpio" },
     { name = "smbus" },
     { name = "smbus2" },
+]
+omero = [
+    { name = "omero-py" },
 ]
 pyqt5 = [
     { name = "lantzdev", extra = ["qt"] },
@@ -1913,7 +1926,7 @@ requires-dist = [
     { name = "lantzdev", specifier = ">=0.5.2" },
     { name = "lantzdev", extras = ["qt"], marker = "extra == 'pyqt5'", specifier = ">=0.5.2" },
     { name = "luddite", specifier = ">=1" },
-    { name = "luma-oled", marker = "extra == 'lepmont'" },
+    { name = "luma-oled", marker = "extra == 'lepmon'" },
     { name = "matplotlib", specifier = "==3.9.2" },
     { name = "msgpack", specifier = ">=1.0.4" },
     { name = "nanoimagingpack", specifier = "==2.1.4" },
@@ -1922,6 +1935,7 @@ requires-dist = [
     { name = "numba", specifier = ">=0.61.2" },
     { name = "numcodecs", specifier = ">=0.13.1" },
     { name = "numpy", specifier = "==2.1.2" },
+    { name = "omero-py", marker = "extra == 'omero'", specifier = ">=5.6.0" },
     { name = "opencv-python-headless" },
     { name = "packaging", specifier = ">=19" },
     { name = "piexif", specifier = ">=1.1.3" },
@@ -1941,17 +1955,18 @@ requires-dist = [
     { name = "qscintilla", marker = "extra == 'pyqt5'", specifier = ">=2.12" },
     { name = "qtpy", marker = "extra == 'pyqt5'", specifier = ">=1.9" },
     { name = "requests", specifier = ">=2.25" },
-    { name = "rpi-gpio", marker = "extra == 'lepmont'" },
+    { name = "rpi-gpio", marker = "extra == 'lepmon'" },
     { name = "scikit-image", specifier = "==0.25.2" },
     { name = "send2trash", specifier = ">=1.8" },
-    { name = "smbus", marker = "extra == 'lepmont'" },
-    { name = "smbus2", marker = "extra == 'lepmont'" },
+    { name = "setuptools", specifier = ">=42" },
+    { name = "smbus", marker = "extra == 'lepmon'" },
+    { name = "smbus2", marker = "extra == 'lepmon'" },
     { name = "tifffile", specifier = ">=2020.11.26" },
     { name = "uc2-rest" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.19.0" },
-    { name = "zarr", specifier = ">=3.0.0" },
+    { name = "zarr", specifier = ">=3.0.0a0" },
 ]
-provides-extras = ["pyqt5", "lepmont", "ashlar", "imjoy", "dev"]
+provides-extras = ["pyqt5", "lepmon", "ashlar", "imjoy", "dev", "omero"]
 
 [[package]]
 name = "in-n-out"
@@ -3425,6 +3440,26 @@ wheels = [
 ]
 
 [[package]]
+name = "omero-py"
+version = "5.22.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "appdirs" },
+    { name = "future" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "portalocker" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "zeroc-ice" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5e/b2/41573b991d45925a48a46d8f0ef91a11fb71f80e463f34130f2b596e9e2b/omero_py-5.22.0.tar.gz", hash = "sha256:ccebff4eecaaf73236336b22218d0b18ac7b5ab6442578687658ac91af1d8cd8", size = 2343420, upload-time = "2026-02-09T10:42:43.466Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/62/b0/8f7f11375b87144f302b170f990350f0184d9938d662cd0f5e9fab2ae4a9/omero_py-5.22.0-py3-none-any.whl", hash = "sha256:796ac9a2e3ac49629249349e0be7c01ef55d61bd84f6e11de74f330fbadfe4ad", size = 2785537, upload-time = "2026-02-09T10:42:41.963Z" },
+]
+
+[[package]]
 name = "opencv-python-headless"
 version = "4.13.0.90"
 source = { registry = "https://pypi.org/simple" }
@@ -3697,6 +3732,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c6/77/b3d3e00c696c16cf99af81ef7b1f5fe73bd2a307abca41bd7605429fe6e5/pooch-1.8.2.tar.gz", hash = "sha256:76561f0de68a01da4df6af38e9955c4c9d1a5c90da73f7e40276a5728ec83d10", size = 59353, upload-time = "2024-06-06T16:53:46.224Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a8/87/77cc11c7a9ea9fd05503def69e3d18605852cd0d4b0d3b8f15bbeb3ef1d1/pooch-1.8.2-py3-none-any.whl", hash = "sha256:3529a57096f7198778a5ceefd5ac3ef0e4d06a6ddaf9fc2d609b806f25302c47", size = 64574, upload-time = "2024-06-06T16:53:44.343Z" },
+]
+
+[[package]]
+name = "portalocker"
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5e/77/65b857a69ed876e1951e88aaba60f5ce6120c33703f7cb61a3c894b8c1b6/portalocker-3.2.0.tar.gz", hash = "sha256:1f3002956a54a8c3730586c5c77bf18fae4149e07eaf1c29fc3faf4d5a3f89ac", size = 95644, upload-time = "2025-06-14T13:20:40.03Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4b/a6/38c8e2f318bf67d338f4d629e93b0b4b9af331f455f0390ea8ce4a099b26/portalocker-3.2.0-py3-none-any.whl", hash = "sha256:3cdc5f565312224bc570c49337bd21428bba0ef363bbcf58b9ef4a9f11779968", size = 22424, upload-time = "2025-06-14T13:20:38.083Z" },
 ]
 
 [[package]]
@@ -5988,6 +6035,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/d6/67/14be68a7bad15eecd
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1a/71/9de7229515a53d1cc5705ca9c411530f711a2242f962214d9dbfe2741aa4/zarr-3.1.3-py3-none-any.whl", hash = "sha256:45f67f87f65f14fa453f99dd8110a5936b7ac69f3a21981d33e90407c80c302a", size = 276427, upload-time = "2025-09-18T19:32:40.042Z" },
 ]
+
+[[package]]
+name = "zeroc-ice"
+version = "3.6.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/65/43c3ad2412467c731ee3c23bce03fad7e2b79df31301e27cc7b1b454554b/zeroc-ice-3.6.5.tar.gz", hash = "sha256:4235ffeb605bcd4e22e716577f7d61e4aa1bc82f65276bb542701a81b7933356", size = 1150200, upload-time = "2019-08-13T15:44:55.162Z" }
 
 [[package]]
 name = "zict"

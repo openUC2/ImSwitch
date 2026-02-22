@@ -64,6 +64,9 @@ class Picamera2Manager(DetectorManager):
         except KeyError:
             use_video_mode = True
 
+        # Optional tuning file for custom ALSC / LUT / CCM
+        tuning_file = detectorInfo.managerProperties.get('tuning_file', None)
+
         # Get flip settings from configuration
         try:
             flipX = detectorInfo.managerProperties['picamera2']['flipX']
@@ -84,7 +87,8 @@ class Picamera2Manager(DetectorManager):
             binning,
             flipImage,
             resolution,
-            use_video_mode
+            use_video_mode,
+            tuning_file
         )
 
         # Apply additional properties from config
@@ -185,6 +189,24 @@ class Picamera2Manager(DetectorManager):
                 value=pixelSize,
                 valueUnits='µm',
                 editable=True
+            ),
+            'awb_mode': DetectorListParameter(
+                group='Color',
+                value='auto',
+                options=['auto', 'manual', 'once'],
+                editable=True
+            ),
+            'red_gain': DetectorNumberParameter(
+                group='Color',
+                value=1.0,
+                valueUnits='arb.u.',
+                editable=True
+            ),
+            'blue_gain': DetectorNumberParameter(
+                group='Color',
+                value=1.0,
+                valueUnits='arb.u.',
+                editable=True
             )
         }
 
@@ -193,6 +215,10 @@ class Picamera2Manager(DetectorManager):
             'Record Flatfield': DetectorAction(
                 group='Misc',
                 func=self.recordFlatfieldImage
+            ),
+            'Calibrate Lens Shading': DetectorAction(
+                group='Color',
+                func=self.calibrateLensShading
             )
         }
 
@@ -362,7 +388,7 @@ class Picamera2Manager(DetectorManager):
         return self._camera.getTriggerTypes()
 
     def _getPicamera2Obj(self, cameraId, isRGB=True, binning=1, flipImage=(False, False),
-                         resolution=(640, 480), use_video_mode=True):
+                         resolution=(640, 480), use_video_mode=True, tuning_file=None):
         """
         Get camera object (real or mock).
         
@@ -373,6 +399,7 @@ class Picamera2Manager(DetectorManager):
             flipImage: (flipY, flipX) tuple
             resolution: (width, height) tuple
             use_video_mode: Use video mode
+            tuning_file: Optional path to JSON tuning file
             
         Returns:
             Camera object
@@ -388,7 +415,8 @@ class Picamera2Manager(DetectorManager):
                 binning=binning,
                 flipImage=flipImage,
                 resolution=resolution,
-                use_video_mode=use_video_mode
+                use_video_mode=use_video_mode,
+                tuning_file=tuning_file
             )
 
             self.__logger.info(f'Initialized camera: {camera.model}')
@@ -407,6 +435,18 @@ class Picamera2Manager(DetectorManager):
 
             self.__logger.info(f'Initialized mock camera: {camera.model}')
             return camera
+
+    def calibrateLensShading(self):
+        """Run lens-shading calibration and log the result"""
+        try:
+            lut = self._camera.calibrate_lens_shading()
+            self.__logger.info(
+                f"Lens shading LUT computed – R range [{lut['r'].min():.3f}, {lut['r'].max():.3f}]"
+            )
+            return lut
+        except Exception as e:
+            self.__logger.error(f"Lens shading calibration failed: {e}")
+            return None
 
     def closeEvent(self):
         """Handle close event"""

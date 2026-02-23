@@ -1460,6 +1460,13 @@ class ExperimentController(ImConWidgetController):
     @APIExport()
     def stopExperiment(self):
         """Stop the experiment. Works for both normal and performance modes."""
+        # Abort any in-progress focus map computation first so
+        # the synchronous _run_focus_map_phase loop exits early.
+        try:
+            self.focus_map_manager.request_abort()
+        except Exception:
+            pass
+
         # Check workflow manager status (normal mode)
         workflow_status = self.workflow_manager.get_status()["status"]
 

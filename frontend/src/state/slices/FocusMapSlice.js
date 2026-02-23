@@ -14,8 +14,8 @@ const defaultFocusMapConfig = {
   enabled: false,
 
   // Grid generation
-  rows: 3,
-  cols: 3,
+  rows: 2,
+  cols: 2,
   add_margin: false,
 
   // Fit strategy

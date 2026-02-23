@@ -150,10 +150,18 @@ const ExperimentDesigner = () => {
     console.log("Scan configuration:", scanConfig);
     console.log(`Total positions: ${scanConfig.metadata.totalPositions}`);
 
+    // Zero out intensities for channels that are not enabled for experiment acquisition
+    const channelEnabled = experimentState.parameterValue.channelEnabledForExperiment || [];
+    const rawIntensities = experimentState.parameterValue.illuIntensities || [];
+    const filteredIntensities = rawIntensities.map((val, idx) =>
+      channelEnabled[idx] === false ? 0 : val
+    );
+
     const experimentRequest = {
       name: experimentState.name,
       parameterValue: {
         ...experimentState.parameterValue,
+        illuIntensities: filteredIntensities,
         resortPointListToSnakeCoordinates: false,
         is_snakescan: wellSelectorState.areaSelectSnakescan,
         overlapWidth: wellSelectorState.mode === "area" 

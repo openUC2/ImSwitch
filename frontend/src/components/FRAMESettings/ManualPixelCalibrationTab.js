@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
+import { useSelector } from 'react-redux';
 import {
   Box,
   Button,
@@ -28,6 +29,7 @@ import {
 } from '@mui/icons-material';
 
 import LiveViewControlWrapper from '../../axon/LiveViewControlWrapper';
+import * as liveStreamSlice from '../../state/slices/LiveStreamSlice';
 import apiPositionerControllerMovePositioner from '../../backendapi/apiPositionerControllerMovePositioner';
 import apiPixelCalibrationControllerManualPixelSizeCalibration from '../../backendapi/apiPixelCalibrationControllerManualPixelSizeCalibration';
 
@@ -41,11 +43,26 @@ import apiPixelCalibrationControllerManualPixelSizeCalibration from '../../backe
  *  4. Calculate and store: pixelSize = movementDistance / pixelDisplacement
  */
 const ManualPixelCalibrationTab = () => {
+  // ---- Redux state for stream subsampling ----
+  const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
+
+  // Compute the stream subsampling factor so we can convert preview pixels
+  // back to full-sensor pixels before sending coordinates to the backend.
+  // The live preview may be subsampled (e.g. factor 4) for performance,
+  // meaning 1 preview pixel = subsamplingFactor sensor pixels.
+  const subsamplingFactor = useMemo(() => {
+    const settings = liveStreamState.streamSettings;
+    return settings?.jpeg?.subsampling?.factor ||
+           settings?.jpeg?.subsampling_factor ||
+           settings?.binary?.subsampling?.factor ||
+           settings?.webrtc?.subsampling_factor || 1;
+  }, [liveStreamState.streamSettings]);
+
   // ---- calibration state ----
   const [activeStep, setActiveStep] = useState(0);
-  const [point1, setPoint1] = useState(null);            // { x, y }
-  const [point2, setPoint2] = useState(null);             // { x, y }
-  const [imageDims, setImageDims] = useState(null);       // { width, height }
+  const [point1, setPoint1] = useState(null);            // { x, y } in preview pixels
+  const [point2, setPoint2] = useState(null);             // { x, y } in preview pixels
+  const [imageDims, setImageDims] = useState(null);       // { width, height } in preview pixels
   const [movementDistanceUm, setMovementDistanceUm] = useState(100);
   const [movementAxis, setMovementAxis] = useState('X');
   const [objectiveId, setObjectiveId] = useState('');     // empty = auto-detect
@@ -119,11 +136,15 @@ const ManualPixelCalibrationTab = () => {
       setError('');
       setStatus('Calculating pixel size…');
 
+      // Scale preview-pixel coordinates to full-sensor pixels.
+      // The live stream may be subsampled (e.g. factor 4), so 1 preview px
+      // corresponds to `subsamplingFactor` sensor px.
+      const sf = subsamplingFactor;
       const res = await apiPixelCalibrationControllerManualPixelSizeCalibration({
-        point1X: point1.x,
-        point1Y: point1.y,
-        point2X: point2.x,
-        point2Y: point2.y,
+        point1X: point1.x * sf,
+        point1Y: point1.y * sf,
+        point2X: point2.x * sf,
+        point2Y: point2.y * sf,
         movementDistanceUm,
         movementAxis,
         objectiveId: objectiveId || undefined,
@@ -268,14 +289,28 @@ const ManualPixelCalibrationTab = () => {
                   size="small"
                 />
               )}
-              {point1 && point2 && (
+              {point1 && point2 && (() => {
+                const dxPrev = point2.x - point1.x;
+                const dyPrev = point2.y - point1.y;
+                const dispPreview = Math.sqrt(dxPrev ** 2 + dyPrev ** 2);
+                const dispSensor = dispPreview * subsamplingFactor;
+                return (
+                  <Chip
+                    label={
+                      subsamplingFactor > 1
+                        ? `Δ = ${Math.round(dispSensor)} sensor px (${Math.round(dispPreview)} preview px × ${subsamplingFactor})`
+                        : `Δ = ${Math.round(dispPreview)} px`
+                    }
+                    color="warning"
+                    size="small"
+                  />
+                );
+              })()}
+              {/* Show subsampling factor when active so the user knows coordinates are scaled */}
+              {subsamplingFactor > 1 && (
                 <Chip
-                  label={`Δ = ${Math.round(
-                    Math.sqrt(
-                      (point2.x - point1.x) ** 2 + (point2.y - point1.y) ** 2,
-                    ),
-                  )} px`}
-                  color="warning"
+                  label={`Subsampling ×${subsamplingFactor}`}
+                  variant="outlined"
                   size="small"
                 />
               )}
@@ -462,6 +497,15 @@ const ManualPixelCalibrationTab = () => {
               4. The pixel size is: <strong>distance / displacement</strong>.<br />
               5. The value is saved for the current objective.
             </Typography>
+            {subsamplingFactor > 1 && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                <em>
+                  Note: The live preview is subsampled by &times;{subsamplingFactor}.
+                  Pixel coordinates are automatically scaled to full sensor
+                  resolution before the calibration calculation.
+                </em>
+              </Typography>
+            )}
           </Paper>
 
           {/* Result display */}

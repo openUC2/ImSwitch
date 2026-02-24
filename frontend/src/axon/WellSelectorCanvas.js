@@ -6,6 +6,7 @@ import * as wellSelectorSlice from "../state/slices/WellSelectorSlice.js";
 import * as experimentSlice from "../state/slices/ExperimentSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
+import * as focusMapSlice from "../state/slices/FocusMapSlice.js";
 
 import * as wsUtils from "./WellSelectorUtils.js";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
@@ -69,6 +70,8 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const positionState = useSelector(positionSlice.getPositionState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+  const focusMapState = useSelector(focusMapSlice.getFocusMapState);
+  const focusMapManualPoints = useSelector(focusMapSlice.getManualPoints);
 
   //##################################################################################
   useImperativeHandle(ref, () => ({
@@ -809,7 +812,70 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     //------------ draw position trace
     drawPositionTrace(ctx);
 
+    //------------ draw focus map points overlay
+    drawFocusMapOverlay(ctx);
+
     //ctx.restore();
+  };
+
+  //##################################################################################
+  // Draw focus map grid points as black crosses and manual points as blue circles
+  const drawFocusMapOverlay = (ctx) => {
+    if (!focusMapState?.config?.enabled) return;
+    // Check the overlay toggle (default to visible if property not yet in state)
+    if (focusMapState?.ui?.showOverlayOnWellplate === false) return;
+
+    const results = focusMapState.results || {};
+    const crossSize = 3; // px half-size of each cross arm
+
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+
+    // Draw measured grid points from computed results as black crosses
+    Object.values(results).forEach((group) => {
+      const points = group?.points || [];
+      points.forEach((pt) => {
+        if (pt.x == null || pt.y == null) return;
+        const px = calcPhy2Px(pt.x);
+        const py = calcPhy2Px(pt.y);
+
+        ctx.strokeStyle = "#000000";
+        ctx.beginPath();
+        ctx.moveTo(px - crossSize, py - crossSize);
+        ctx.lineTo(px + crossSize, py + crossSize);
+        ctx.moveTo(px + crossSize, py - crossSize);
+        ctx.lineTo(px - crossSize, py + crossSize);
+        ctx.stroke();
+      });
+    });
+
+    // Draw manual points as blue filled circles with white border
+    if (focusMapManualPoints && focusMapManualPoints.length > 0) {
+      focusMapManualPoints.forEach((pt, idx) => {
+        if (pt.x == null || pt.y == null) return;
+        const px = calcPhy2Px(pt.x);
+        const py = calcPhy2Px(pt.y);
+
+        // Blue filled circle
+        ctx.fillStyle = "rgba(33, 150, 243, 0.8)";
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(px, py, 5, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+
+        // Label index
+        ctx.fillStyle = "#000000";
+        ctx.font = "10px sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+        ctx.fillText(`M${idx + 1}`, px + 7, py - 2);
+      });
+    }
+
+    ctx.restore();
   };
 
   //##################################################################################
@@ -855,7 +921,7 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     // Calculate the new scale
     const zoomMin = 0.5;
     const zoomMax = 10;
-    const zoomFactor = 0.1;
+    const zoomFactor = 0.5; // Zoom sensitivity – higher = faster zoom
     const newScale = Math.min(
       Math.max(scale - e.deltaY * zoomFactor * 0.01, zoomMin),
       zoomMax
@@ -1185,6 +1251,22 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
 
     //avoid strg
     if (e.ctrlKey) return;
+
+    // Shift+Click: add manual focus map point at clicked XY position
+    // Uses current Z from the position state
+    if (e.shiftKey && focusMapState?.config?.enabled) {
+      const phyPos = calcPxPoint2PhyPoint(localPos);
+      const currentZ = positionState?.Z ?? 0;
+      dispatch(
+        focusMapSlice.addManualPoint({
+          x: phyPos.x,
+          y: phyPos.y,
+          z: currentZ,
+        })
+      );
+      console.log(`Added focus map manual point: X=${phyPos.x}, Y=${phyPos.y}, Z=${currentZ}`);
+      return;
+    }
 
     //handle mode
     if (wellSelectorState.mode == Mode.MOVE_CAMERA) {

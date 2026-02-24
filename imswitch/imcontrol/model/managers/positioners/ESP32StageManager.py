@@ -327,30 +327,48 @@ class ESP32StageManager(PositionerManager):
             if axis == "XY": acceleration = (self.acceleration["X"], self.acceleration["Y"])
             if axis == "XYZ": acceleration = (self.acceleration["X"], self.acceleration["Y"], self.acceleration["Z"])
         if axis == 'X' and speed >0:
-            # don't move to negative positions
+            # don't move to invalid positions (check both min and max limits)
             if not is_absolute and value == 0: return
-            if self.limitXenabled and is_absolute and value < 0: return
-            elif self.limitXenabled and not is_absolute and self._position[axis] + value < 0: return
+            target_pos = value if is_absolute else self._position[axis] + value
+            if self.limitXenabled:
+                if target_pos < self.minX:
+                    self.__logger.warning(f"X move blocked: target {target_pos} below minX {self.minX}")
+                    return
+                if target_pos > self.maxX:
+                    self.__logger.warning(f"X move blocked: target {target_pos} above maxX {self.maxX}")
+                    return
             # Apply offset for absolute moves: convert from user position to device position
             deviceValue = value + self.stageOffsetPositions["X"] if is_absolute else value
             self._motor.move_x(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout, is_reduced=is_reduced)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
         elif axis == 'Y' and speed >0:
-            # don't move to negative positions
+            # don't move to invalid positions (check both min and max limits)
             if not is_absolute and value == 0: return
-            if self.limitYenabled and is_absolute and value < 0: return
-            elif self.limitYenabled and not is_absolute and self._position[axis] + value < 0: return
+            target_pos = value if is_absolute else self._position[axis] + value
+            if self.limitYenabled:
+                if target_pos < self.minY:
+                    self.__logger.warning(f"Y move blocked: target {target_pos} below minY {self.minY}")
+                    return
+                if target_pos > self.maxY:
+                    self.__logger.warning(f"Y move blocked: target {target_pos} above maxY {self.maxY}")
+                    return
             # Apply offset for absolute moves: convert from user position to device position
             deviceValue = value + self.stageOffsetPositions["Y"] if is_absolute else value
             self._motor.move_y(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, timeout=timeout)
             if not is_absolute: self._position[axis] = self._position[axis] + value
             else: self._position[axis] = value
         elif axis == 'Z' and speed >0:
-            # don't move to negative positions
+            # don't move to invalid positions (check both min and max limits)
             if not is_absolute and value == 0: return
-            if self.limitZenabled and is_absolute and value < 0: return
-            elif self.limitZenabled and not is_absolute and self._position[axis] + value < 0: return
+            target_pos = value if is_absolute else self._position[axis] + value
+            if self.limitZenabled:
+                if target_pos < self.minZ:
+                    self.__logger.warning(f"Z move blocked: target {target_pos} below minZ {self.minZ}")
+                    return
+                if target_pos > self.maxZ:
+                    self.__logger.warning(f"Z move blocked: target {target_pos} above maxZ {self.maxZ}")
+                    return
             # Apply offset for absolute moves: convert from user position to device position
             deviceValue = value + self.stageOffsetPositions["Z"] if is_absolute else value
             self._motor.move_z(deviceValue, speed, acceleration=acceleration, is_absolute=is_absolute, is_enabled=isEnable, is_blocking=is_blocking, is_dualaxis=self.isDualAxis, timeout=timeout, is_reduced=is_reduced)

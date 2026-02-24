@@ -47,7 +47,47 @@ git clone https://github.com/openUC2/ImSwitchConfig
 # Set up permissions for the serial driver, if needed:
 newgrp dialout
 sudo usermod -a -G dialout $USER
+
+# eventually change ownership of the ImSwitchConfig Folder
+sudo chown  -R pi:pi /home/pi/ImSwitchConfig
+
 # Then reboot your computer, or at least fully log out of your user account and then log back in
+```
+
+eventually install libraries for aiortc
+
+```
+sudo apt install \
+    ffmpeg \
+    libavformat-dev \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libavfilter-dev \
+    libswscale-dev \
+    libswresample-dev \
+    pkg-config \
+    build-essential \
+    python3-dev
+```
+
+### Optional For PiCamera in UV 
+
+```
+apt-get update && apt install -y --no-install-recommends \
+         python3-picamera2 \
+     && apt-get clean \
+     && apt-get autoremove \
+     && rm -rf /var/cache/apt/archives/* \
+     && rm -rf /var/lib/apt/lists/*
+
+# then install picamera2
+uv pip install picamera2
+uv venv --system-site-packages -y
+
+cd ~/ImSwitch
+source .venv/bin/activate
+
 ```
 
 Next, follow the setup instructions for the development environment for the frontend in

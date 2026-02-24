@@ -621,7 +621,7 @@ class AcceptanceTestController(ImConWidgetController):
             }
 
     @APIExport(runOnUIThread=True)
-    def getAutofocusStatus(self) -> Dict:
+    def getAutofocusStatusAcceptanceTest(self) -> Dict:
         """
         Get current autofocus status.
         

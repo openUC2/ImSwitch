@@ -10,7 +10,7 @@ const initialAutofocusState = {
   illuminationChannel: "", // Selected illumination channel for autofocus
   tSettle: 0.1, // Settling time between steps (seconds)
   isDebug: false, // Save debug images
-  nGauss: 7, // Gaussian blur sigma (0 to disable)
+  nGauss: 0, // Gaussian blur sigma (0 to disable)
   nCropsize: 2048, // Crop size for focus calculation
   focusAlgorithm: "LAPE", // Focus measurement method (LAPE, GLVA, JPEG)
   staticOffset: 0.0, // Static offset to add to final focus position

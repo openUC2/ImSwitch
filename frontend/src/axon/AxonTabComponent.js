@@ -44,7 +44,7 @@ const AxonTabComponent = () => {
             id="2"
             tabNames={[
               "Live View",
-              "Tile View",
+//              "Tile View",
               "Points",
               "Parameter",
               "Objective", 
@@ -52,7 +52,7 @@ const AxonTabComponent = () => {
             ]}
           >
             <LiveViewControlWrapper />
-            <ZarrTileViewController/>
+            {/* <ZarrTileViewController /> */}
             <PointListEditorComponent />
             <ParameterEditorWrapper />
             {/*<ExperimentComponent />*/}

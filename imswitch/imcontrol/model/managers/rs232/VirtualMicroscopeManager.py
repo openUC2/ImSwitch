@@ -158,6 +158,23 @@ class VirtualMicroscopeManager:
         self._illuminator = self._virtualMicroscope.illuminator
         self._objective = self._virtualMicroscope.objective
 
+        # Focus surface tilt simulation – makes effective focus depend on XY
+        # Configure via managerProperties in the setup JSON, e.g.:
+        #   "focusSurface": { "tiltX": 0.01, "tiltY": 0.005, "curvature": 0.0001 }
+        focus_surface = self._settings.get("focusSurface", {})
+        self._positioner.set_focus_surface(
+            tilt_x=focus_surface.get("tiltX", 0.0),
+            tilt_y=focus_surface.get("tiltY", 0.0),
+            curvature=focus_surface.get("curvature", 0.0),
+            offset=focus_surface.get("offset", 0.0),
+        )
+        if any(v != 0 for v in [focus_surface.get("tiltX", 0), focus_surface.get("tiltY", 0), focus_surface.get("curvature", 0)]):
+            self.__logger.info(
+                f"Focus surface tilt enabled: tiltX={focus_surface.get('tiltX', 0)}, "
+                f"tiltY={focus_surface.get('tiltY', 0)}, "
+                f"curvature={focus_surface.get('curvature', 0)}"
+            )
+
         # Initialize objective state: 1 (default) => no binning, 2 => binned image (2x magnification)
         self.currentObjective = 1
         self._camera.binning = False
@@ -194,10 +211,65 @@ class Positioner:
         self.position = {"X": 0, "Y": 0, "Z": 0, "A": 0}
         self.mDimensions = (self._parent.camera.SensorHeight, self._parent.camera.SensorWidth)
         self.lock = threading.Lock()
+
+        # Focus surface tilt parameters (set via VirtualMicroscopeManager)
+        self._focus_tilt_x = 0.0   # dZ/dX slope (µm focus per µm X)
+        self._focus_tilt_y = 0.0   # dZ/dY slope
+        self._focus_curvature = 0.0  # Quadratic bowl term
+        self._focus_offset = 0.0   # Constant offset
+
         if IS_NIP:
             self.psf = self.compute_psf(dz=0)
         else:
             self.psf = None
+
+    def set_focus_surface(self, tilt_x: float = 0.0, tilt_y: float = 0.0,
+                          curvature: float = 0.0, offset: float = 0.0):
+        """
+        Configure XY-dependent focus surface for realistic simulation.
+
+        The effective defocus at position (x, y) is:
+            dz_surface = tilt_x * x + tilt_y * y + curvature * (x² + y²) + offset
+
+        The total defocus seen by the camera is:
+            dz_effective = Z_stage - dz_surface(X, Y)
+
+        When Z_stage == dz_surface → in focus (dz_effective == 0).
+
+        Args:
+            tilt_x: Linear tilt in X (units: Z per X, e.g. 0.01 means 10µm defocus per 1000µm X)
+            tilt_y: Linear tilt in Y
+            curvature: Quadratic bowl curvature (positive = concave up)
+            offset: Constant Z offset
+        """
+        self._focus_tilt_x = tilt_x
+        self._focus_tilt_y = tilt_y
+        self._focus_curvature = curvature
+        self._focus_offset = offset
+
+    def get_focus_surface_z(self, x: float, y: float) -> float:
+        """
+        Get the ideal focus Z for a given XY position.
+
+        Returns the Z value at which the sample is in focus at (x, y).
+        """
+        return (
+            self._focus_tilt_x * x +
+            self._focus_tilt_y * y +
+            self._focus_curvature * (x * x + y * y) +
+            self._focus_offset
+        )
+
+    def get_effective_defocus(self) -> float:
+        """
+        Compute effective defocus accounting for the focus surface.
+
+        Returns defocus = Z_stage - ideal_focus_Z(X, Y).
+        When this is 0, the image is in perfect focus.
+        """
+        pos = self.position
+        ideal_z = self.get_focus_surface_z(pos["X"], pos["Y"])
+        return pos["Z"] - ideal_z
 
     def move(self, x=None, y=None, z=None, a=None, is_absolute=False):
         with self.lock:
@@ -208,7 +280,6 @@ class Positioner:
                     self.position["Y"] = y
                 if z is not None:
                     self.position["Z"] = z
-                    self.compute_psf(self.position["Z"])
                 if a is not None:
                     self.position["A"] = a
             else:
@@ -218,9 +289,12 @@ class Positioner:
                     self.position["Y"] += y
                 if z is not None:
                     self.position["Z"] += z
-                    self.compute_psf(self.position["Z"])
                 if a is not None:
                     self.position["A"] += a
+
+            # Recompute PSF using effective defocus (accounts for focus surface)
+            effective_dz = self.get_effective_defocus()
+            self.compute_psf(effective_dz)
 
     def get_position(self):
         with self.lock:

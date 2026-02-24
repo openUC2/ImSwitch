@@ -11,7 +11,7 @@ import * as omeZarrSlice from "../state/slices/OmeZarrTileStreamSlice.js";
 import { log } from "deck.gl";
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
 
-const ZarrTileViewController = () => {
+const   ZarrTileViewController = () => {
   // reference Redux state
   const dispatch = useDispatch();
   const omeZarrState = useSelector(omeZarrSlice.getOmeZarrState);

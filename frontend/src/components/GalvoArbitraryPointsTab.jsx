@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Box,
   Button,
@@ -38,6 +38,7 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
+import BrushIcon from '@mui/icons-material/Brush';
 import { useSelector, useDispatch } from 'react-redux';
 import { getConnectionSettingsState } from '../state/slices/ConnectionSettingsSlice';
 import {
@@ -125,6 +126,13 @@ const GalvoArbitraryPointsTab = () => {
   const [newPointDwell, setNewPointDwell] = useState(arbState.defaultDwellUs);
   const [newPointIntensity, setNewPointIntensity] = useState(arbState.defaultIntensity);
 
+  // Continuous draw mode: hold mouse to paint dots at an interval
+  const [drawIntervalMs, setDrawIntervalMs] = useState(250);
+  const paintContainerRef = useRef(null);
+  const paintIntervalRef = useRef(null);
+  const lastPointerPos = useRef({ x: 0, y: 0 });
+  const isPainting = useRef(false);
+
   // ========================
   // Coordinate helpers (DAC space = 0-4095 = full scanner range)
   // ========================
@@ -203,6 +211,76 @@ const GalvoArbitraryPointsTab = () => {
     const dac = pixelToDac(pixelX, pixelY, imgWidth, imgHeight);
     dispatch(addArbitraryPoint({ x: dac.x, y: dac.y }));
   }, [isDrawing, pointsList.length, calibration, pixelToDac, getSubsamplingFactor, dispatch]);
+
+  // ========================
+  // Continuous draw: pointer → image-pixel conversion using wrapper container
+  // ========================
+
+  // Convert a pointer position (relative to the paint container) to image pixel coords.
+  // The viewer fills its container; image dimensions are tracked in `imageSize`.
+  const pointerToImagePixel = useCallback((clientX, clientY) => {
+    const container = paintContainerRef.current;
+    if (!container) return null;
+    const rect = container.getBoundingClientRect();
+    // Position relative to container
+    const relX = clientX - rect.left;
+    const relY = clientY - rect.top;
+    // The displayed image is fitted inside the container (object-fit: contain behaviour).
+    // Assume the viewer stretches to fill the full container width.
+    const scaleX = imageSize.width / rect.width;
+    const scaleY = imageSize.height / rect.height;
+    const imgPixelX = relX * scaleX;
+    const imgPixelY = relY * scaleY;
+    return { imgPixelX, imgPixelY };
+  }, [imageSize]);
+
+  // Place a dot at the current pointer position (called by the paint interval)
+  const placePointAtPointer = useCallback(() => {
+    if (!isPainting.current || !isDrawing || calibration.active) return;
+    if (pointsList.length >= 265) return;
+    const pos = pointerToImagePixel(lastPointerPos.current.x, lastPointerPos.current.y);
+    if (!pos) return;
+    const dac = pixelToDac(pos.imgPixelX, pos.imgPixelY, imageSize.width, imageSize.height);
+    dispatch(addArbitraryPoint({ x: dac.x, y: dac.y }));
+  }, [isDrawing, calibration.active, pointsList.length, pointerToImagePixel, pixelToDac, imageSize, dispatch]);
+
+  // Keep a stable ref to placePointAtPointer so the interval always calls the latest version
+  const placePointRef = useRef(placePointAtPointer);
+  useEffect(() => { placePointRef.current = placePointAtPointer; }, [placePointAtPointer]);
+
+  const handlePointerDown = useCallback((e) => {
+    if (!isDrawing || calibration.active) return;
+    isPainting.current = true;
+    lastPointerPos.current = { x: e.clientX, y: e.clientY };
+    // Place the first dot immediately
+    placePointRef.current();
+    // Start interval for subsequent dots — use ref so callback is always fresh
+    paintIntervalRef.current = setInterval(() => {
+      placePointRef.current();
+    }, drawIntervalMs);
+    // Capture pointer so we keep receiving events even if mouse leaves
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, [isDrawing, calibration.active, drawIntervalMs]);
+
+  const handlePointerMove = useCallback((e) => {
+    if (!isPainting.current) return;
+    lastPointerPos.current = { x: e.clientX, y: e.clientY };
+  }, []);
+
+  const stopPainting = useCallback(() => {
+    isPainting.current = false;
+    if (paintIntervalRef.current) {
+      clearInterval(paintIntervalRef.current);
+      paintIntervalRef.current = null;
+    }
+  }, []);
+
+  // Clean up interval on unmount
+  useEffect(() => {
+    return () => {
+      if (paintIntervalRef.current) clearInterval(paintIntervalRef.current);
+    };
+  }, []);
 
   // ========================
   // Scan Controls
@@ -440,12 +518,20 @@ const GalvoArbitraryPointsTab = () => {
             {/* Live stream with SVG point overlay.
                  Points are stored as galvo DAC coords (0-4095).
                  overlayContent maps them back to display-pixel space. */}
-            <Box sx={{
-              border: calibration.active ? '2px solid #ffff00' : '1px solid #444',
-              borderRadius: 1,
-              overflow: 'hidden',
-              cursor: isDrawing ? 'crosshair' : 'default',
-            }}>
+            <Box
+              ref={paintContainerRef}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={stopPainting}
+              onPointerLeave={stopPainting}
+              onPointerCancel={stopPainting}
+              sx={{
+                border: calibration.active ? '2px solid #ffff00' : '1px solid #444',
+                borderRadius: 1,
+                overflow: 'hidden',
+                cursor: isDrawing ? 'crosshair' : 'default',
+                touchAction: 'none', // Prevent browser scroll while drawing
+              }}>
               <LiveViewControlWrapper
                 onClick={handleLiveViewClick}
                 onImageLoad={(w, h) => setImageSize({ width: w, height: h })}
@@ -463,6 +549,22 @@ const GalvoArbitraryPointsTab = () => {
               >
                 {isDrawing ? '✏️ Drawing ON' : '✏️ Drawing OFF'}
               </Button>
+              {/* Continuous draw interval control */}
+              <Tooltip title="Hold mouse to draw continuously. Interval between dots (ms).">
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <BrushIcon fontSize="small" />
+                  <TextField
+                    type="number"
+                    size="small"
+                    label="Interval (ms)"
+                    value={drawIntervalMs}
+                    onChange={(e) => setDrawIntervalMs(Math.max(50, Number(e.target.value) || 250))}
+                    inputProps={{ min: 50, max: 2000, step: 50, style: { width: 65 } }}
+                    variant="outlined"
+                    sx={{ width: 120 }}
+                  />
+                </Box>
+              </Tooltip>
               <Button
                 size="small"
                 variant="outlined"

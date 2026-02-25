@@ -462,6 +462,17 @@ const galvoScannerSlice = createSlice({
     },
 
     /**
+     * Update a single calibration galvo point by index
+     * Payload: { index, x?, y?, label? }
+     */
+    updateCalibrationGalvoPoint: (state, action) => {
+      const { index, ...updates } = action.payload;
+      if (index >= 0 && index < state.calibration.galvoPoints.length) {
+        Object.assign(state.calibration.galvoPoints[index], updates);
+      }
+    },
+
+    /**
      * Mark calibration complete
      */
     setCalibrationComplete: (state) => {
@@ -517,6 +528,7 @@ export const {
   setCalibrationCamPoint,
   advanceCalibrationStep,
   setCalibrationGalvoPoints,
+  updateCalibrationGalvoPoint,
   setCalibrationComplete,
 } = galvoScannerSlice.actions;
 

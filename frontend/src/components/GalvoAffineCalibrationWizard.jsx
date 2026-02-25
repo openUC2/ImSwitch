@@ -10,6 +10,8 @@ import {
   StepContent,
   Alert,
   Chip,
+  TextField,
+  Grid,
 } from '@mui/material';
 import GpsFixedIcon from '@mui/icons-material/GpsFixed';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -28,11 +30,12 @@ import {
   setError,
   setStatusMessage,
   clearStatusMessage,
+  updateCalibrationGalvoPoint,
 } from '../state/slices/GalvoScannerSlice';
 import {
   apiRunAffineCalibration,
-  apiStartGalvoScan,
-  apiStopGalvoScan,
+  apiSetArbitraryPoints,
+  apiStopArbitraryScan,
 } from '../backendapi/apiGalvoScannerController';
 
 /**
@@ -60,24 +63,21 @@ const GalvoAffineCalibrationWizard = () => {
 
   const { currentStep, galvoPoints, camPoints, completed } = calibration;
 
-  // Move galvo to calibration position (use single-point raster as workaround)
+  // Move galvo to calibration position using arbitrary point API (single point, laser on)
   const moveGalvoToPoint = useCallback(async (galvoPt) => {
     if (!selectedScanner) return;
     try {
-      // Use a small 1x1 raster centered on the target to position the galvo
-      // and keep the laser on
-      const config = {
-        nx: 1,
-        ny: 1,
-        x_min: galvoPt.x,
-        x_max: galvoPt.x,
-        y_min: galvoPt.y,
-        y_max: galvoPt.y,
-        sample_period_us: 1000,
-        frame_count: 0, // infinite
-        enable_trigger: 1,
-      };
-      await apiStartGalvoScan(hostIP, hostPort, selectedScanner, config);
+      // Send a single point with long dwell and laser forced HIGH.
+      // applyAffine=false because calibration points are raw DAC coords.
+      const singlePoint = [{
+        x: galvoPt.x,
+        y: galvoPt.y,
+        dwell_us: 10000,
+        laser_intensity: 255,
+      }];
+      await apiSetArbitraryPoints(
+        hostIP, hostPort, selectedScanner, singlePoint, 'HIGH', false
+      );
     } catch (err) {
       dispatch(setError(`Failed to move galvo: ${err.message}`));
     }
@@ -86,7 +86,7 @@ const GalvoAffineCalibrationWizard = () => {
   // Stop galvo after calibration step
   const stopGalvo = useCallback(async () => {
     try {
-      await apiStopGalvoScan(hostIP, hostPort, selectedScanner);
+      await apiStopArbitraryScan(hostIP, hostPort, selectedScanner);
     } catch (err) {
       // Silently ignore
     }
@@ -192,13 +192,54 @@ const GalvoAffineCalibrationWizard = () => {
               <StepLabel
                 optional={
                   <Typography variant="caption">
-                    Galvo: ({gPt.x}, {gPt.y}) — {gPt.label}
+                    {gPt.label}
                   </Typography>
                 }
               >
                 Point {index + 1}: {gPt.label}
               </StepLabel>
               <StepContent>
+                {/* Editable galvo DAC coordinates */}
+                <Grid container spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Grid item xs={4}>
+                    <TextField
+                      label="Galvo X"
+                      type="number"
+                      size="small"
+                      fullWidth
+                      value={gPt.x}
+                      onChange={(e) => {
+                        const val = Math.max(0, Math.min(4095, Number(e.target.value) || 0));
+                        dispatch(updateCalibrationGalvoPoint({ index, x: val }));
+                      }}
+                      inputProps={{ min: 0, max: 4095 }}
+                    />
+                  </Grid>
+                  <Grid item xs={4}>
+                    <TextField
+                      label="Galvo Y"
+                      type="number"
+                      size="small"
+                      fullWidth
+                      value={gPt.y}
+                      onChange={(e) => {
+                        const val = Math.max(0, Math.min(4095, Number(e.target.value) || 0));
+                        dispatch(updateCalibrationGalvoPoint({ index, y: val }));
+                      }}
+                      inputProps={{ min: 0, max: 4095 }}
+                    />
+                  </Grid>
+                  <Grid item xs={4}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => moveGalvoToPoint(gPt)}
+                    >
+                      Move Here
+                    </Button>
+                  </Grid>
+                </Grid>
+
                 <Box sx={{ mb: 1 }}>
                   {camPt ? (
                     <Chip

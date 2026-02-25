@@ -37,6 +37,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
+import AddCircleIcon from '@mui/icons-material/AddCircle';
 import { useSelector, useDispatch } from 'react-redux';
 import { getConnectionSettingsState } from '../state/slices/ConnectionSettingsSlice';
 import {
@@ -117,6 +118,12 @@ const GalvoArbitraryPointsTab = () => {
   // Displayed image dimensions reported by LiveViewControlWrapper
   const [imageSize, setImageSize] = useState({ width: 640, height: 480 });
   const [isDrawing, setIsDrawing] = useState(true);
+
+  // Manual point creation form state
+  const [newPointX, setNewPointX] = useState(2048);
+  const [newPointY, setNewPointY] = useState(2048);
+  const [newPointDwell, setNewPointDwell] = useState(arbState.defaultDwellUs);
+  const [newPointIntensity, setNewPointIntensity] = useState(arbState.defaultIntensity);
 
   // ========================
   // Coordinate helpers (DAC space = 0-4095 = full scanner range)
@@ -206,9 +213,11 @@ const GalvoArbitraryPointsTab = () => {
     dispatch(setArbScanRunning(true));
     dispatch(clearError());
     try {
+      // Points in Redux are already in DAC space (0-4095), converted by pixelToDac()
+      // or entered manually in DAC coords.  Do NOT apply affine again on the backend.
       const data = await apiStartArbitraryScan(
         hostIP, hostPort, selectedScanner, pointsList,
-        arbState.laserTrigger, true
+        arbState.laserTrigger, false
       );
       if (data.error) {
         dispatch(setError(data.error));
@@ -633,8 +642,32 @@ const GalvoArbitraryPointsTab = () => {
                   {pointsList.map((pt, i) => (
                     <TableRow key={i} hover>
                       <TableCell>{i + 1}</TableCell>
-                      <TableCell>{pt.x}</TableCell>
-                      <TableCell>{pt.y}</TableCell>
+                      <TableCell>
+                        <TextField
+                          type="number"
+                          size="small"
+                          value={pt.x}
+                          onChange={(e) => {
+                            const val = Math.max(0, Math.min(4095, Number(e.target.value) || 0));
+                            dispatch(updateArbitraryPoint({ index: i, x: val }));
+                          }}
+                          inputProps={{ min: 0, max: 4095, style: { width: 70 } }}
+                          variant="standard"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <TextField
+                          type="number"
+                          size="small"
+                          value={pt.y}
+                          onChange={(e) => {
+                            const val = Math.max(0, Math.min(4095, Number(e.target.value) || 0));
+                            dispatch(updateArbitraryPoint({ index: i, y: val }));
+                          }}
+                          inputProps={{ min: 0, max: 4095, style: { width: 70 } }}
+                          variant="standard"
+                        />
+                      </TableCell>
                       <TableCell>
                         <TextField
                           type="number"
@@ -662,11 +695,79 @@ const GalvoArbitraryPointsTab = () => {
                       </TableCell>
                     </TableRow>
                   ))}
+                  {/* Manual add-point row */}
+                  <TableRow sx={{ backgroundColor: 'action.hover' }}>
+                    <TableCell>
+                      <AddCircleIcon fontSize="small" color="primary" />
+                    </TableCell>
+                    <TableCell>
+                      <TextField
+                        type="number"
+                        size="small"
+                        value={newPointX}
+                        onChange={(e) => setNewPointX(Math.max(0, Math.min(4095, Number(e.target.value) || 0)))}
+                        inputProps={{ min: 0, max: 4095, style: { width: 70 } }}
+                        variant="standard"
+                        placeholder="X"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <TextField
+                        type="number"
+                        size="small"
+                        value={newPointY}
+                        onChange={(e) => setNewPointY(Math.max(0, Math.min(4095, Number(e.target.value) || 0)))}
+                        inputProps={{ min: 0, max: 4095, style: { width: 70 } }}
+                        variant="standard"
+                        placeholder="Y"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <TextField
+                        type="number"
+                        size="small"
+                        value={newPointDwell}
+                        onChange={(e) => setNewPointDwell(Number(e.target.value) || 1)}
+                        inputProps={{ min: 1, style: { width: 70 } }}
+                        variant="standard"
+                        placeholder="µs"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <TextField
+                        type="number"
+                        size="small"
+                        value={newPointIntensity}
+                        onChange={(e) => setNewPointIntensity(Math.max(0, Math.min(255, Number(e.target.value) || 0)))}
+                        inputProps={{ min: 0, max: 255, style: { width: 60 } }}
+                        variant="standard"
+                        placeholder="Int"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Tooltip title="Add point manually">
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={() => {
+                            dispatch(addArbitraryPoint({
+                              x: newPointX,
+                              y: newPointY,
+                              dwell_us: newPointDwell,
+                              laser_intensity: newPointIntensity,
+                            }));
+                          }}
+                        >
+                          <AddCircleIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
                   {pointsList.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={6} align="center">
                         <Typography variant="body2" color="text.secondary">
-                          Click on the camera view to add points
+                          Click on the camera view or use the form above to add points
                         </Typography>
                       </TableCell>
                     </TableRow>

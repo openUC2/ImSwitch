@@ -697,10 +697,15 @@ class SettingsController(ImConWidgetController):
         self.adjustFrame(detector=detector)
 
     @APIExport(runOnUIThread=True)
-    def setDetectorParameter(self, detectorName: str, parameterName: str, value: Any) -> None:
+    def setDetectorParameter(self, detectorName: str=None, parameterName: str=None, value: Any=None) -> None:
         """ Sets the specified detector-specific parameter to the specified
         value. """
-
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        if parameterName is None:
+            return
+        if value is None:
+            return
         if (parameterName in ['Trigger source'] and
                 self.getCurrentParams().allDetectorsFrame.value()):
             # Special case for certain parameters that will follow the "update all detectors" option

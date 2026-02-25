@@ -16,13 +16,17 @@ import {
   InputLabel,
   Tooltip,
   IconButton,
-  Chip
+  Chip,
+  Tab,
+  Tabs,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SettingsIcon from '@mui/icons-material/Settings';
 import SendIcon from '@mui/icons-material/Send';
+import GridOnIcon from '@mui/icons-material/GridOn';
+import ScatterPlotIcon from '@mui/icons-material/ScatterPlot';
 import { useSelector, useDispatch } from 'react-redux';
 import { getConnectionSettingsState } from '../state/slices/ConnectionSettingsSlice';
 import {
@@ -30,6 +34,7 @@ import {
   getGalvoConfig,
   getGalvoStatus,
   getScanInfo,
+  getActiveTab,
   setScannerNames,
   setSelectedScanner,
   setConfig,
@@ -45,6 +50,7 @@ import {
   clearStatusMessage,
   setAutoRefresh,
   applyPreset,
+  setActiveTab,
 } from '../state/slices/GalvoScannerSlice';
 import {
   apiGetGalvoScannerNames,
@@ -53,6 +59,7 @@ import {
   apiStartGalvoScan,
   apiStopGalvoScan,
 } from '../backendapi/apiGalvoScannerController';
+import GalvoArbitraryPointsTab from './GalvoArbitraryPointsTab';
 
 /**
  * GalvoScannerController - Control panel for galvo mirror scanners
@@ -76,6 +83,7 @@ const GalvoScannerController = () => {
   const config = useSelector(getGalvoConfig);
   const status = useSelector(getGalvoStatus);
   const scanInfo = useSelector(getScanInfo);
+  const activeTab = useSelector(getActiveTab);
   
   // Destructure with defaults for safety
   const scannerNames = galvoState?.scannerNames || [];
@@ -452,36 +460,50 @@ const GalvoScannerController = () => {
         Galvo Scanner Controller
       </Typography>
 
+      {/* Scanner Selection — shared across all tabs */}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <FormControl fullWidth size="small">
+          <InputLabel>Scanner Device</InputLabel>
+          <Select
+            value={selectedScanner}
+            label="Scanner Device"
+            onChange={(e) => dispatch(setSelectedScanner(e.target.value))}
+          >
+            {scannerNames.map(name => (
+              <MenuItem key={name} value={name}>{name}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </Paper>
+
+      {/* Tab selector */}
+      <Tabs
+        value={activeTab}
+        onChange={(e, v) => dispatch(setActiveTab(v))}
+        sx={{ mb: 2 }}
+        variant="fullWidth"
+      >
+        <Tab icon={<GridOnIcon />} label="Raster Scan" />
+        <Tab icon={<ScatterPlotIcon />} label="Arbitrary Points" />
+      </Tabs>
+
+      {/* Status and Alerts — shared */}
+      {statusMessage && (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => dispatch(clearStatusMessage())}>
+          {statusMessage}
+        </Alert>
+      )}
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => dispatch(clearError())}>
+          {error}
+        </Alert>
+      )}
+
+      {/* ========== TAB 0: Raster Scan ========== */}
+      {activeTab === 0 && (
       <Grid container spacing={3}>
         {/* Left Column: Configuration */}
         <Grid item xs={12} md={6}>
-          {/* Scanner Selection */}
-          <Paper sx={{ p: 2, mb: 2 }}>
-            <FormControl fullWidth size="small">
-              <InputLabel>Scanner Device</InputLabel>
-              <Select
-                value={selectedScanner}
-                label="Scanner Device"
-                onChange={(e) => dispatch(setSelectedScanner(e.target.value))}
-              >
-                {scannerNames.map(name => (
-                  <MenuItem key={name} value={name}>{name}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Paper>
-
-          {/* Status and Alerts */}
-          {statusMessage && (
-            <Alert severity="success" sx={{ mb: 2 }} onClose={() => dispatch(clearStatusMessage())}>
-              {statusMessage}
-            </Alert>
-          )}
-          {error && (
-            <Alert severity="error" sx={{ mb: 2 }} onClose={() => dispatch(clearError())}>
-              {error}
-            </Alert>
-          )}
 
           {/* Scan Resolution */}
           <Paper sx={{ p: 2, mb: 2 }}>
@@ -911,6 +933,12 @@ const GalvoScannerController = () => {
           </Paper>
         </Grid>
       </Grid>
+      )}
+
+      {/* ========== TAB 1: Arbitrary Points ========== */}
+      {activeTab === 1 && (
+        <GalvoArbitraryPointsTab />
+      )}
     </Box>
   );
 };

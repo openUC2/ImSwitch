@@ -154,8 +154,7 @@ const ExperimentDesigner = () => {
     const channelEnabled = experimentState.parameterValue.channelEnabledForExperiment || [];
     const rawIntensities = experimentState.parameterValue.illuIntensities || [];
     const filteredIntensities = rawIntensities.map((val, idx) =>
-      channelEnabled[idx] === false ? 0 : val
-    );
+      channelEnabled[idx] === true ? val : 0    );
 
     const experimentRequest = {
       name: experimentState.name,

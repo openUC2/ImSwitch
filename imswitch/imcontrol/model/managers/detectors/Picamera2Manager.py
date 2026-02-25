@@ -249,6 +249,22 @@ class Picamera2Manager(DetectorManager):
             raise AttributeError(f'Non-existent parameter "{name}" specified')
 
         value = self._camera.setPropertyValue(name, value)
+
+        # After AWB "once", sync the locked colour gains back into our parameters
+        if name == 'awb_mode' and str(value).lower() == 'once':
+            try:
+                locked_red = self._camera.getPropertyValue('red_gain')
+                locked_blue = self._camera.getPropertyValue('blue_gain')
+                if locked_red is not None:
+                    self._DetectorManager__parameters['red_gain'].value = locked_red
+                if locked_blue is not None:
+                    self._DetectorManager__parameters['blue_gain'].value = locked_blue
+                self.__logger.info(
+                    f"AWB 'once' locked gains synced: R={locked_red}, B={locked_blue}"
+                )
+            except Exception as e:
+                self.__logger.warning(f"Could not sync colour gains after AWB once: {e}")
+
         return value
 
     def getParameter(self, name):

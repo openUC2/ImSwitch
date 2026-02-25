@@ -48,6 +48,38 @@ const initialState = {
     current_line: 0
   },
   
+  // Arbitrary points mode
+  arbitraryPoints: {
+    points: [],        // Array of { x, y, dwell_us, laser_intensity }
+    running: false,
+    paused: false,
+    defaultDwellUs: 500,
+    defaultIntensity: 128,
+    laserTrigger: 'AUTO',
+  },
+
+  // Affine transform (camera -> galvo)
+  affineTransform: {
+    a11: 1.0, a12: 0.0, tx: 0.0,
+    a21: 0.0, a22: 1.0, ty: 0.0,
+  },
+
+  // Calibration wizard state
+  calibration: {
+    active: false,
+    currentStep: 0,  // 0, 1, 2
+    galvoPoints: [
+      { x: 1024, y: 1024, label: 'Top-Left' },
+      { x: 3072, y: 1024, label: 'Top-Right' },
+      { x: 2048, y: 3072, label: 'Bottom-Center' },
+    ],
+    camPoints: [null, null, null],  // Filled by user clicks
+    completed: false,
+  },
+
+  // Active tab index (0 = Raster, 1 = Arbitrary Points)
+  activeTab: 0,
+
   // UI state
   loading: false,
   error: null,
@@ -232,6 +264,210 @@ const galvoScannerSlice = createSlice({
     resetConfig: (state) => {
       state.config = initialState.config;
     },
+
+    // ========================
+    // Active Tab
+    // ========================
+
+    /**
+     * Set active tab index (0=Raster, 1=Arbitrary Points)
+     */
+    setActiveTab: (state, action) => {
+      state.activeTab = action.payload;
+    },
+
+    // ========================
+    // Arbitrary Points Reducers
+    // ========================
+
+    /**
+     * Add a point to the arbitrary points list
+     */
+    addArbitraryPoint: (state, action) => {
+      const { x, y, dwell_us, laser_intensity } = action.payload;
+      if (state.arbitraryPoints.points.length < 265) {
+        state.arbitraryPoints.points.push({
+          x,
+          y,
+          dwell_us: dwell_us ?? state.arbitraryPoints.defaultDwellUs,
+          laser_intensity: laser_intensity ?? state.arbitraryPoints.defaultIntensity,
+        });
+      }
+    },
+
+    /**
+     * Remove a point by index
+     */
+    removeArbitraryPoint: (state, action) => {
+      const index = action.payload;
+      if (index >= 0 && index < state.arbitraryPoints.points.length) {
+        state.arbitraryPoints.points.splice(index, 1);
+      }
+    },
+
+    /**
+     * Update a single point's properties
+     */
+    updateArbitraryPoint: (state, action) => {
+      const { index, ...updates } = action.payload;
+      if (index >= 0 && index < state.arbitraryPoints.points.length) {
+        Object.assign(state.arbitraryPoints.points[index], updates);
+      }
+    },
+
+    /**
+     * Clear all arbitrary points
+     */
+    clearArbitraryPoints: (state) => {
+      state.arbitraryPoints.points = [];
+    },
+
+    /**
+     * Set all arbitrary points at once
+     */
+    setArbitraryPoints: (state, action) => {
+      state.arbitraryPoints.points = action.payload;
+    },
+
+    /**
+     * Set default dwell time for new points
+     */
+    setDefaultDwellUs: (state, action) => {
+      state.arbitraryPoints.defaultDwellUs = action.payload;
+    },
+
+    /**
+     * Set default laser intensity for new points
+     */
+    setDefaultIntensity: (state, action) => {
+      state.arbitraryPoints.defaultIntensity = action.payload;
+    },
+
+    /**
+     * Apply default dwell time to all existing points
+     */
+    applyDefaultDwellToAll: (state) => {
+      state.arbitraryPoints.points.forEach(pt => {
+        pt.dwell_us = state.arbitraryPoints.defaultDwellUs;
+      });
+    },
+
+    /**
+     * Apply default intensity to all existing points
+     */
+    applyDefaultIntensityToAll: (state) => {
+      state.arbitraryPoints.points.forEach(pt => {
+        pt.laser_intensity = state.arbitraryPoints.defaultIntensity;
+      });
+    },
+
+    /**
+     * Set laser trigger mode
+     */
+    setLaserTrigger: (state, action) => {
+      state.arbitraryPoints.laserTrigger = action.payload;
+    },
+
+    /**
+     * Set arbitrary scan running state
+     */
+    setArbScanRunning: (state, action) => {
+      state.arbitraryPoints.running = action.payload;
+      if (!action.payload) state.arbitraryPoints.paused = false;
+    },
+
+    /**
+     * Set arbitrary scan paused state
+     */
+    setArbScanPaused: (state, action) => {
+      state.arbitraryPoints.paused = action.payload;
+    },
+
+    // ========================
+    // Affine Transform Reducers
+    // ========================
+
+    /**
+     * Set entire affine transform
+     */
+    setAffineTransform: (state, action) => {
+      state.affineTransform = { ...state.affineTransform, ...action.payload };
+    },
+
+    /**
+     * Set a single affine transform parameter
+     */
+    setAffineParam: (state, action) => {
+      const { param, value } = action.payload;
+      if (state.affineTransform.hasOwnProperty(param)) {
+        state.affineTransform[param] = value;
+      }
+    },
+
+    /**
+     * Reset affine transform to identity
+     */
+    resetAffineTransform: (state) => {
+      state.affineTransform = initialState.affineTransform;
+    },
+
+    // ========================
+    // Calibration Reducers
+    // ========================
+
+    /**
+     * Start calibration wizard
+     */
+    startCalibration: (state) => {
+      state.calibration.active = true;
+      state.calibration.currentStep = 0;
+      state.calibration.camPoints = [null, null, null];
+      state.calibration.completed = false;
+    },
+
+    /**
+     * Cancel calibration wizard
+     */
+    cancelCalibration: (state) => {
+      state.calibration.active = false;
+      state.calibration.currentStep = 0;
+      state.calibration.camPoints = [null, null, null];
+      state.calibration.completed = false;
+    },
+
+    /**
+     * Set camera point for current calibration step
+     */
+    setCalibrationCamPoint: (state, action) => {
+      const { step, x, y } = action.payload;
+      state.calibration.camPoints[step] = { x, y };
+    },
+
+    /**
+     * Advance to the next calibration step
+     */
+    advanceCalibrationStep: (state) => {
+      if (state.calibration.currentStep < 2) {
+        state.calibration.currentStep += 1;
+      } else {
+        state.calibration.completed = true;
+      }
+    },
+
+    /**
+     * Set calibration galvo points (from backend)
+     */
+    setCalibrationGalvoPoints: (state, action) => {
+      state.calibration.galvoPoints = action.payload;
+    },
+
+    /**
+     * Mark calibration complete
+     */
+    setCalibrationComplete: (state) => {
+      state.calibration.completed = true;
+      state.calibration.active = false;
+    },
   },
 });
 
@@ -256,6 +492,32 @@ export const {
   setAutoRefresh,
   applyPreset,
   resetConfig,
+  // Tab
+  setActiveTab,
+  // Arbitrary points
+  addArbitraryPoint,
+  removeArbitraryPoint,
+  updateArbitraryPoint,
+  clearArbitraryPoints,
+  setArbitraryPoints,
+  setDefaultDwellUs,
+  setDefaultIntensity,
+  applyDefaultDwellToAll,
+  applyDefaultIntensityToAll,
+  setLaserTrigger,
+  setArbScanRunning,
+  setArbScanPaused,
+  // Affine transform
+  setAffineTransform,
+  setAffineParam,
+  resetAffineTransform,
+  // Calibration
+  startCalibration,
+  cancelCalibration,
+  setCalibrationCamPoint,
+  advanceCalibrationStep,
+  setCalibrationGalvoPoints,
+  setCalibrationComplete,
 } = galvoScannerSlice.actions;
 
 // Default values for when state is not yet initialized
@@ -277,11 +539,41 @@ const defaultStatus = {
   current_line: 0
 };
 
+const defaultAffineTransform = {
+  a11: 1.0, a12: 0.0, tx: 0.0,
+  a21: 0.0, a22: 1.0, ty: 0.0,
+};
+
+const defaultArbitraryPoints = {
+  points: [],
+  running: false,
+  paused: false,
+  defaultDwellUs: 500,
+  defaultIntensity: 128,
+  laserTrigger: 'AUTO',
+};
+
+const defaultCalibration = {
+  active: false,
+  currentStep: 0,
+  galvoPoints: [
+    { x: 1024, y: 1024, label: 'Top-Left' },
+    { x: 3072, y: 1024, label: 'Top-Right' },
+    { x: 2048, y: 3072, label: 'Bottom-Center' },
+  ],
+  camPoints: [null, null, null],
+  completed: false,
+};
+
 const defaultState = {
   scannerNames: [],
   selectedScanner: '',
   config: defaultConfig,
   status: defaultStatus,
+  arbitraryPoints: defaultArbitraryPoints,
+  affineTransform: defaultAffineTransform,
+  calibration: defaultCalibration,
+  activeTab: 0,
   loading: false,
   error: null,
   statusMessage: '',
@@ -297,6 +589,11 @@ export const getSelectedScanner = (state) => state.galvoScannerState?.selectedSc
 export const getGalvoLoading = (state) => state.galvoScannerState?.loading || false;
 export const getGalvoError = (state) => state.galvoScannerState?.error || null;
 export const getGalvoAutoRefresh = (state) => state.galvoScannerState?.autoRefresh || false;
+export const getActiveTab = (state) => state.galvoScannerState?.activeTab ?? 0;
+export const getArbitraryPointsState = (state) => state.galvoScannerState?.arbitraryPoints || defaultArbitraryPoints;
+export const getArbitraryPointsList = (state) => state.galvoScannerState?.arbitraryPoints?.points || [];
+export const getAffineTransformState = (state) => state.galvoScannerState?.affineTransform || defaultAffineTransform;
+export const getCalibrationState = (state) => state.galvoScannerState?.calibration || defaultCalibration;
 
 // Computed selectors
 export const getScanInfo = (state) => {

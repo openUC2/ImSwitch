@@ -1,19 +1,18 @@
 import React, { useEffect, useState } from "react";
-import { 
-  AppBar, 
-  Toolbar, 
-  Typography, 
-  Button, 
+import {
+  AppBar,
+  Toolbar,
+  Typography,
   TextField,
   Box,
   IconButton,
   Tooltip,
-  Chip
+  Chip,
 } from "@mui/material";
 import { OpenInNew, Refresh, Edit } from "@mui/icons-material";
 import { useSelector } from "react-redux";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
-import { validateNotebookUrl, testNotebookUrl } from '../utils/notebookValidator';
+import { testNotebookUrl } from "../utils/notebookValidator";
 
 const JupyterExecutor = () => {
   // Get connection settings from Redux
@@ -29,15 +28,17 @@ const JupyterExecutor = () => {
   // Test if a URL is accessible
   const testUrl = async (url) => {
     try {
+      console.log(`Testing URL: ${url}`);
       // the response is not used here because testNotebookUrl handles it
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000);
-      
+
       const isValid = await testNotebookUrl(url);
-      console.log(`Notebook valid: ${isValid}`);
+      console.log(`URL ${url} - Notebook valid: ${isValid}`);
       clearTimeout(timeoutId);
       return isValid;
     } catch (error) {
+      console.error(`URL ${url} - Error:`, error);
       return false;
     }
   };
@@ -46,7 +47,7 @@ const JupyterExecutor = () => {
     const fetchNotebookUrl = async () => {
       try {
         const response = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/jupyternotebookurl`
+          `${hostIP}:${hostPort}/imswitch/api/jupyternotebookurl`,
         );
         const data = await response.json();
         const notebookUrl = data["url"]; // e.g., http://192.168.1.100:8888/jupyter/
@@ -59,7 +60,7 @@ const JupyterExecutor = () => {
         // Construct both possible URLs:
         // 1. Proxied URL through the ImSwitch API server (Caddy reverse proxy in Docker) e.g. http://localhost:80/jupyter/
         const proxiedUrl = `${hostIP}:${hostPort}${jupyterPath}`;
-        
+
         // 2. Direct URL to Jupyter server (for local development) e.g. http://localhost:8888/jupyter/
         const directUrl = `${hostIP}:${jupyterPort}${jupyterPath}`;
 
@@ -70,7 +71,7 @@ const JupyterExecutor = () => {
 
         const [proxiedWorks, directWorks] = await Promise.all([
           testUrl(proxiedUrl),
-          testUrl(directUrl)
+          testUrl(directUrl),
         ]);
 
         setUrlStatus({ proxied: proxiedWorks, direct: directWorks });
@@ -103,20 +104,20 @@ const JupyterExecutor = () => {
   };
 
   const handleUrlSubmit = (event) => {
-    if (event.key === 'Enter' || event.type === 'click') {
+    if (event.key === "Enter" || event.type === "click") {
       setJupyterUrl(editableUrl);
       setIsEditing(false);
-      setIframeKey(prev => prev + 1); // Force iframe reload
+      setIframeKey((prev) => prev + 1); // Force iframe reload
     }
   };
 
   const handleRefresh = () => {
     // Reload the iframe by updating the key
-    setIframeKey(prev => prev + 1);
+    setIframeKey((prev) => prev + 1);
   };
 
   const handleOpenInNewTab = () => {
-    window.open(jupyterUrl, '_blank');
+    window.open(jupyterUrl, "_blank");
   };
 
   return (
@@ -127,12 +128,12 @@ const JupyterExecutor = () => {
           <Typography variant="h6" sx={{ flexGrow: 0, marginRight: 2 }}>
             Jupyter Executor
           </Typography>
-          
+
           {/* URL Status Indicators */}
           {urlStatus.proxied !== null && (
             <Tooltip title="Proxied URL (through ImSwitch)">
-              <Chip 
-                label="Proxied" 
+              <Chip
+                label="Proxied"
                 size="small"
                 color={urlStatus.proxied ? "success" : "default"}
                 sx={{ marginRight: 1 }}
@@ -141,8 +142,8 @@ const JupyterExecutor = () => {
           )}
           {urlStatus.direct !== null && (
             <Tooltip title="Direct URL (to Jupyter port)">
-              <Chip 
-                label="Direct" 
+              <Chip
+                label="Direct"
                 size="small"
                 color={urlStatus.direct ? "success" : "default"}
                 sx={{ marginRight: 2 }}
@@ -151,7 +152,7 @@ const JupyterExecutor = () => {
           )}
 
           {/* Editable URL field */}
-          <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center' }}>
+          <Box sx={{ flexGrow: 1, display: "flex", alignItems: "center" }}>
             {isEditing ? (
               <TextField
                 fullWidth
@@ -163,25 +164,25 @@ const JupyterExecutor = () => {
                 autoFocus
                 placeholder="Enter Jupyter URL..."
                 variant="outlined"
-                sx={{ 
-                  backgroundColor: 'white', 
+                sx={{
+                  backgroundColor: "white",
                   borderRadius: 1,
-                  '& .MuiOutlinedInput-root': {
-                    color: 'black'
-                  }
+                  "& .MuiOutlinedInput-root": {
+                    color: "black",
+                  },
                 }}
               />
             ) : (
-              <Typography 
-                variant="body2" 
-                sx={{ 
-                  flexGrow: 1, 
-                  cursor: 'pointer',
-                  backgroundColor: 'rgba(255,255,255,0.1)',
-                  padding: '8px 12px',
+              <Typography
+                variant="body2"
+                sx={{
+                  flexGrow: 1,
+                  cursor: "pointer",
+                  backgroundColor: "rgba(255,255,255,0.1)",
+                  padding: "8px 12px",
                   borderRadius: 1,
-                  fontFamily: 'monospace',
-                  fontSize: '0.85rem'
+                  fontFamily: "monospace",
+                  fontSize: "0.85rem",
                 }}
                 onClick={() => setIsEditing(true)}
               >
@@ -192,30 +193,24 @@ const JupyterExecutor = () => {
 
           {/* Action buttons */}
           <Tooltip title="Edit URL">
-            <IconButton 
-              color="inherit" 
+            <IconButton
+              color="inherit"
               onClick={() => setIsEditing(true)}
               sx={{ marginLeft: 1 }}
             >
               <Edit />
             </IconButton>
           </Tooltip>
-          
+
           <Tooltip title="Refresh iframe">
-            <IconButton 
-              color="inherit" 
-              onClick={handleRefresh}
-            >
+            <IconButton color="inherit" onClick={handleRefresh}>
               <Refresh />
             </IconButton>
           </Tooltip>
 
           {jupyterUrl && (
             <Tooltip title="Open in new tab">
-              <IconButton 
-                color="inherit" 
-                onClick={handleOpenInNewTab}
-              >
+              <IconButton color="inherit" onClick={handleOpenInNewTab}>
                 <OpenInNew />
               </IconButton>
             </Tooltip>
@@ -224,7 +219,13 @@ const JupyterExecutor = () => {
       </AppBar>
 
       {/* Notebook (iframe) */}
-      <div style={{ width: "100%", height: "calc(100vh - 64px)", position: "relative" }}>
+      <div
+        style={{
+          width: "100%",
+          height: "calc(100vh - 64px)",
+          position: "relative",
+        }}
+      >
         {jupyterUrl ? (
           <iframe
             key={iframeKey}
@@ -233,14 +234,14 @@ const JupyterExecutor = () => {
             title="Jupyter Notebook"
           />
         ) : (
-          <Box 
-            sx={{ 
-              display: 'flex', 
-              justifyContent: 'center', 
-              alignItems: 'center', 
-              height: '100%',
-              fontSize: '1.2rem',
-              color: 'gray'
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              height: "100%",
+              fontSize: "1.2rem",
+              color: "gray",
             }}
           >
             Loading Jupyter Notebook...

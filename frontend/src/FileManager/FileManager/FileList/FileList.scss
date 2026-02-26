@@ -154,7 +154,8 @@
     }
 
     .file-name {
-      width: calc(75% - 35px);
+      flex: 1;
+      min-width: 0;
       padding-left: 35px;
     }
 
@@ -193,7 +194,8 @@
     padding: 15px;
     padding-left: 33px;
     margin: 0;
-    width: calc(75% - 30px);
+    flex: 1;
+    min-width: 0;
 
     &:hover {
       background-color: unset;
@@ -204,7 +206,9 @@
     }
 
     .file-name {
-      max-width: 400px;
+      flex: 1;
+      min-width: 0;
+      max-width: none;
     }
   }
 

@@ -158,6 +158,7 @@ const JupyterExecutor = () => {
               display: "block",
               boxSizing: "border-box",
               backgroundColor: "white",
+              border: "none",
             }}
             title="Jupyter Notebook"
             onLoad={() => console.log("iframe loaded successfully")}

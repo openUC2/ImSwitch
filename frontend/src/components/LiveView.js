@@ -15,7 +15,6 @@ import MenuIcon from "@mui/icons-material/Menu";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import AxisControl from "./AxisControl.jsx";
 import JoystickControl from "./JoystickControl.jsx";
-import GamepadSpeedControl from "./GamepadSpeedControl.js";
 import VirtualJoystickControl from "./VirtualJoystickControl.js";
 import AutofocusController from "./AutofocusController";
 import DetectorParameters from "./DetectorParameters";
@@ -57,7 +56,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
   // Get connection settings from Redux
   const { ip: hostIP, apiPort: hostPort } = useSelector(
-    getConnectionSettingsState
+    getConnectionSettingsState,
   );
 
   // Access global Redux state
@@ -104,8 +103,10 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
     // If tab changed and stream is running, restart stream with new detector
     if (prevTab !== activeTab && isStreamRunning) {
-      console.log(`[LiveView] Tab changed from ${prevTab} to ${activeTab}, restarting stream...`);
-      
+      console.log(
+        `[LiveView] Tab changed from ${prevTab} to ${activeTab}, restarting stream...`,
+      );
+
       (async () => {
         try {
           // Stop current stream
@@ -119,7 +120,9 @@ export default function LiveView({ setFileManagerInitialPath }) {
           const protocol = liveStreamState.imageFormat || "jpeg";
           const newDetectorName = detectors[activeTab] || null;
           await apiLiveViewControllerStartLiveView(newDetectorName, protocol);
-          console.log(`[LiveView] Started ${protocol} stream for new detector: ${newDetectorName}`);
+          console.log(
+            `[LiveView] Started ${protocol} stream for new detector: ${newDetectorName}`,
+          );
         } catch (error) {
           console.error("[LiveView] Error switching detector stream:", error);
           // Ensure Redux state reflects actual state
@@ -127,7 +130,13 @@ export default function LiveView({ setFileManagerInitialPath }) {
         }
       })();
     }
-  }, [activeTab, isStreamRunning, detectors, liveStreamState.imageFormat, dispatch]);
+  }, [
+    activeTab,
+    isStreamRunning,
+    detectors,
+    liveStreamState.imageFormat,
+    dispatch,
+  ]);
 
   /* detectors */
   useEffect(() => {
@@ -135,7 +144,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
       try {
         // 'getDetectorNames' must return something array-like
         const r = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorNames`
+          `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorNames`,
         );
         const data = await r.json();
         // Check if data is an array before setting state
@@ -170,7 +179,6 @@ export default function LiveView({ setFileManagerInitialPath }) {
     })();
   }, [hostIP, hostPort, dispatch]);
   */
-
 
   /* Check if stream is running and auto-start if not active (only on initial mount or connection change) */
   useEffect(() => {
@@ -221,7 +229,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
         const protocol = liveStreamState.imageFormat || "jpeg"; // Default to JPEG
 
         console.log(
-          `Starting ${protocol} stream (imageFormat: ${liveStreamState.imageFormat})`
+          `Starting ${protocol} stream (imageFormat: ${liveStreamState.imageFormat})`,
         );
 
         // Start stream with current protocol (binary, jpeg, or webrtc)
@@ -246,7 +254,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
   async function snap(fileName, format) {
     // English comment: Example fetch for snapping an image with editable fileName
     const response = await fetch(
-      `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?fileName=${fileName}&mSaveFormat=${format}`
+      `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?fileName=${fileName}&saveFormat=${format}`,
     );
     const data = await response.json();
     // data.relativePath might be "recordings/2025_05_20-11-12-44_PM"
@@ -261,14 +269,14 @@ export default function LiveView({ setFileManagerInitialPath }) {
   const startRec = async (format) => {
     setIsRecording(true);
     fetch(
-      `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${format}`
+      `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${format}`,
     ).catch(() => {});
   };
   const stopRec = async () => {
     setIsRecording(false);
-    fetch(`${hostIP}:${hostPort}/imswitch/api/RecordingController/stopRecording`).catch(
-      () => {}
-    );
+    fetch(
+      `${hostIP}:${hostPort}/imswitch/api/RecordingController/stopRecording`,
+    ).catch(() => {});
   };
 
   return (

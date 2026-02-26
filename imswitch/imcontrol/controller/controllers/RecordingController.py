@@ -178,6 +178,9 @@ class RecordingController(ImConWidgetController):
         # by default
         if mSaveFormat is None:
                 mSaveFormat = SaveFormat.TIFF
+        else:
+                # Convert integer to SaveFormat enum (from API call)
+                mSaveFormat = SaveFormat(mSaveFormat)
 
         timeStampDay = datetime.datetime.now().strftime("%Y_%m_%d")
         relativeFolder = os.path.join("recordings", timeStampDay)
@@ -205,6 +208,7 @@ class RecordingController(ImConWidgetController):
             save_mode=SaveMode.Disk,
             format=mSaveFormat,
             attrs=attrs,
+            async_write=False,  # Synchronous write to ensure file is saved immediately
         )
         self.__logger.debug(f"Snap completed: {result}")
         
@@ -262,10 +266,26 @@ class RecordingController(ImConWidgetController):
                 folder=self.savename,
                 detector_names=self.recordingArgs["detectorNames"],
                 n_time_points=10000,  # Large buffer for continuous recording
-                write_zarr=True,
-                write_tiff=(save_format == SaveFormat.TIFF),
+                write_zarr=False,
+                write_tiff=True,
             )
-        # TODO: Implement other formats if needed
+        elif save_format == SaveFormat.ZARR:
+            self.start_streaming_recording(
+                folder=self.savename,
+                detector_names=self.recordingArgs["detectorNames"],
+                n_time_points=10000,
+                write_zarr=True,
+                write_tiff=False,
+            )
+        else:
+            self.__logger.warning(f"Record format {save_format} not yet implemented, using TIFF")
+            self.start_streaming_recording(
+                folder=self.savename,
+                detector_names=self.recordingArgs["detectorNames"],
+                n_time_points=10000,
+                write_zarr=False,
+                write_tiff=True,
+            )
         self._commChannel.sigRecordingStarted.emit()
     
     def _stop_recording(self):

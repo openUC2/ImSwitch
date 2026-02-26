@@ -801,7 +801,10 @@ class RecordingService(SignalInterface):
             SaveFormat.PNG: 'snap_png',
             SaveFormat.JPG: 'snap_jpg',
         }
-        return mapping.get(format, 'snap_tiff')
+        task_type = mapping.get(format)
+        if task_type is None:
+            raise ValueError(f"Unsupported format for snap: {format}. Only TIFF, PNG, JPG are supported.")
+        return task_type
     
     def _generate_filepath(self, basepath: str, detector_name: str, format: SaveFormat) -> str:
         """Generate full filepath with extension."""
@@ -840,17 +843,27 @@ class RecordingService(SignalInterface):
             self._logger.warning("Video recording already in progress")
             return False
         
-        self._video_writer = MP4Writer(filepath, fps=fps)
-        self._video_detector_name = detector_name
-        self._video_writer.start()
-        
-        # Connect frame callback for automatic frame capture
-        if auto_capture:
-            self._connect_frame_callback()
-        
-        self.sigRecordingStarted.emit()
-        self._logger.info(f"Video recording started: {filepath}")
-        return True
+        try:
+            # Ensure directory exists
+            filepath_dir = os.path.dirname(filepath)
+            if filepath_dir:
+                os.makedirs(filepath_dir, exist_ok=True)
+            
+            self._video_writer = MP4Writer(filepath, fps=fps)
+            self._video_detector_name = detector_name
+            self._video_writer.start()
+            
+            # Connect frame callback for automatic frame capture
+            if auto_capture:
+                self._connect_frame_callback()
+            
+            self.sigRecordingStarted.emit()
+            self._logger.info(f"Video recording started: {filepath}")
+            return True
+        except Exception as e:
+            self._logger.error(f"Failed to start video recording: {e}")
+            self._video_writer = None
+            return False
     
     def add_video_frame(self, frame: np.ndarray):
         """Add a frame to the current video recording."""

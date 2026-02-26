@@ -11,8 +11,11 @@ import InfoPopup from "./InfoPopup.js";
 import * as wellSelectorSlice from "../state/slices/WellSelectorSlice.js";
 import * as experimentSlice from "../state/slices/ExperimentSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js"; 
+import * as overviewRegSlice from '../state/slices/OverviewRegistrationSlice.js';
 
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
+import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
+import OverviewRegistrationWizard from "./OverviewRegistrationWizard.js";
 
 import {
   Button,
@@ -53,6 +56,37 @@ const WellSelectorComponent = () => {
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const positionState = useSelector(positionSlice.getPositionState); 
+  const overviewRegState = useSelector(overviewRegSlice.getOverviewRegistrationState);
+
+
+  //##################################################################################
+  const handleOpenOverviewWizard = () => {
+    dispatch(overviewRegSlice.setWizardOpen(true));
+  };
+
+  const handleOverlayToggle = (event) => {
+    dispatch(overviewRegSlice.setOverlayEnabled(event.target.checked));
+    // Load overlay data if enabling and not yet loaded
+    if (event.target.checked && (!overviewRegState.overlayData || !overviewRegState.overlayData.slides || Object.keys(overviewRegState.overlayData.slides || {}).length === 0)) {
+      loadOverlayData();
+    }
+  };
+
+  const handleOverlayOpacityChange = (event, newValue) => {
+    dispatch(overviewRegSlice.setOverlayOpacity(newValue));
+  };
+
+  const loadOverlayData = async () => {
+    try {
+      const data = await apiGetOverviewOverlayData(
+        overviewRegState.cameraName,
+        overviewRegState.layoutName || experimentState.wellLayout.name
+      );
+      dispatch(overviewRegSlice.setOverlayData(data));
+    } catch (e) {
+      console.warn("Failed to load overlay data:", e);
+    }
+  };
 
 
   //##################################################################################
@@ -359,6 +393,50 @@ const WellSelectorComponent = () => {
       </div>
 
       <InfoPopup ref={infoPopupRef}/>
+
+      {/* Overview Camera Overlay Controls */}
+      <Accordion sx={{ mt: 1 }} defaultExpanded={false}>
+        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+          <Typography variant="body2">Overview Camera Overlay</Typography>
+        </AccordionSummary>
+        <AccordionDetails>
+          <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap", mb: 1 }}>
+            <Button
+              variant="contained"
+              size="small"
+              onClick={handleOpenOverviewWizard}
+            >
+              Overview Overlay Wizard
+            </Button>
+            <label style={{ fontSize: "14px", display: "flex", alignItems: "center", gap: "4px" }}>
+              <input
+                type="checkbox"
+                checked={overviewRegState.overlayEnabled}
+                onChange={handleOverlayToggle}
+              />
+              Show Overlay
+            </label>
+          </Box>
+          {overviewRegState.overlayEnabled && (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 2, mt: 1 }}>
+              <Typography variant="caption" sx={{ minWidth: 60 }}>Opacity:</Typography>
+              <Slider
+                value={overviewRegState.overlayOpacity}
+                onChange={handleOverlayOpacityChange}
+                min={0}
+                max={1}
+                step={0.05}
+                size="small"
+                sx={{ maxWidth: 200 }}
+              />
+              <Typography variant="caption">{Math.round(overviewRegState.overlayOpacity * 100)}%</Typography>
+            </Box>
+          )}
+        </AccordionDetails>
+      </Accordion>
+
+      {/* Overview Registration Wizard Dialog */}
+      <OverviewRegistrationWizard />
     </div>
   );
 };

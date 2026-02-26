@@ -52,6 +52,7 @@ import compositeAcquisitionReducer from "./slices/CompositeAcquisitionSlice";
 import experimentUIReducer from "./slices/ExperimentUISlice";
 import galvoScannerReducer from "./slices/GalvoScannerSlice";
 import focusMapReducer from "./slices/FocusMapSlice";
+import overviewRegistrationReducer from "./slices/OverviewRegistrationSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -135,6 +136,7 @@ const rootReducer = combineReducers({
   experimentUI: experimentUIReducer,
   galvoScannerState: galvoScannerReducer,
   focusMap: focusMapReducer,
+  overviewRegistrationState: overviewRegistrationReducer,
 });
 
 //#####################################################################################

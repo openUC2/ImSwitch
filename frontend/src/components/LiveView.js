@@ -272,7 +272,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
     // English comment: Example fetch for snapping an image with editable fileName
     try {
       const response = await fetch(
-        `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?fileName=${fileName}&saveFormat=${format}`,
+        `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?fileName=${encodeURIComponent(fileName)}&saveFormat=${encodeURIComponent(format)}`,
       );
       if (!response.ok) {
         throw new Error(`Snap failed: ${response.status}`);
@@ -296,7 +296,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
   const startRec = async (format) => {
     try {
       const response = await fetch(
-        `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${format}`,
+        `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${encodeURIComponent(format)}`,
       );
       if (!response.ok) {
         throw new Error(`Start recording failed: ${response.status}`);

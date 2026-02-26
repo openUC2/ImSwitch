@@ -344,9 +344,18 @@ export default function StreamControls({
           label="Image Name"
           size="small"
           value={snapFileName}
-          onChange={(e) => setSnapFileName(e.target.value)}
+          onChange={(e) => {
+            // Only allow alphanumeric, underscore, hyphen, and dot
+            const sanitized = e.target.value.replace(/[^a-zA-Z0-9_.-]/g, "");
+            setSnapFileName(sanitized);
+          }}
           sx={{ minWidth: 200, flex: 1 }}
           disabled={!isLiveViewActive}
+          helperText="Allowed: a-z, A-Z, 0-9, _ - ."
+          inputProps={{
+            pattern: "[a-zA-Z0-9_.-]*",
+            maxLength: 100,
+          }}
         />
 
         {/* Action buttons */}
@@ -371,8 +380,16 @@ export default function StreamControls({
         </Button>
 
         {/* Record Format Dropdown (separate section) */}
-        <Box sx={{ width: "100%", borderTop: 1, borderColor: "divider", pt: 1.5, mt: 1 }} />
-        
+        <Box
+          sx={{
+            width: "100%",
+            borderTop: 1,
+            borderColor: "divider",
+            pt: 1.5,
+            mt: 1,
+          }}
+        />
+
         <FormControl size="small" sx={{ minWidth: 130 }}>
           <InputLabel id="record-format-label">Record Format</InputLabel>
           <Select

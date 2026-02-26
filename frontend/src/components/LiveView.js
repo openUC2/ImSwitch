@@ -27,6 +27,10 @@ import ObjectiveSwitcher from "./ObjectiveSwitcher";
 import DetectorTriggerController from "./DetectorTriggerController";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
+import {
+  setNotification,
+  clearNotification,
+} from "../state/slices/NotificationSlice";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
 import ExtendedLEDMatrixController from "./ExtendedLEDMatrixController.jsx";
 
@@ -95,6 +99,19 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
   // Track previous activeTab to detect changes
   const prevActiveTabRef = React.useRef(activeTab);
+
+  const showNotification = (message, type = "success") => {
+    dispatch(setNotification({ message, type }));
+    setTimeout(() => dispatch(clearNotification()), 3000);
+  };
+
+  const formatLabels = {
+    1: "TIFF",
+    3: "ZARR",
+    4: "MP4",
+    5: "PNG",
+    6: "JPG",
+  };
 
   // Handle detector tab switching - restart stream with new detector
   useEffect(() => {
@@ -253,13 +270,23 @@ export default function LiveView({ setFileManagerInitialPath }) {
   };
   async function snap(fileName, format) {
     // English comment: Example fetch for snapping an image with editable fileName
-    const response = await fetch(
-      `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?fileName=${fileName}&saveFormat=${format}`,
-    );
-    const data = await response.json();
-    // data.relativePath might be "recordings/2025_05_20-11-12-44_PM"
-    const snapPath = `/${data.relativePath}`;
-    dispatch(liveViewSlice.setLastSnapPath(snapPath)); // Store in Redux
+    try {
+      const response = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?fileName=${fileName}&saveFormat=${format}`,
+      );
+      if (!response.ok) {
+        throw new Error(`Snap failed: ${response.status}`);
+      }
+      const data = await response.json();
+      // data.relativePath might be "recordings/2025_05_20-11-12-44_PM"
+      const snapPath = `/${data.relativePath}`;
+      dispatch(liveViewSlice.setLastSnapPath(snapPath)); // Store in Redux
+      const label = formatLabels[format] || "Unknown";
+      showNotification(`Image saved (${label})`, "success");
+    } catch (error) {
+      console.error("Snap failed:", error);
+      showNotification("Snap failed", "error");
+    }
   }
   function handleGoToImage() {
     if (lastSnapPath) {
@@ -267,16 +294,35 @@ export default function LiveView({ setFileManagerInitialPath }) {
     }
   }
   const startRec = async (format) => {
-    setIsRecording(true);
-    fetch(
-      `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${format}`,
-    ).catch(() => {});
+    try {
+      const response = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${format}`,
+      );
+      if (!response.ok) {
+        throw new Error(`Start recording failed: ${response.status}`);
+      }
+      setIsRecording(true);
+      const label = formatLabels[format] || "Unknown";
+      showNotification(`Recording started (${label})`, "info");
+    } catch (error) {
+      console.error("Start recording failed:", error);
+      showNotification("Recording start failed", "error");
+    }
   };
   const stopRec = async () => {
-    setIsRecording(false);
-    fetch(
-      `${hostIP}:${hostPort}/imswitch/api/RecordingController/stopRecording`,
-    ).catch(() => {});
+    try {
+      const response = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/RecordingController/stopRecording`,
+      );
+      if (!response.ok) {
+        throw new Error(`Stop recording failed: ${response.status}`);
+      }
+      setIsRecording(false);
+      showNotification("Recording saved", "success");
+    } catch (error) {
+      console.error("Stop recording failed:", error);
+      showNotification("Recording stop failed", "error");
+    }
   };
 
   return (

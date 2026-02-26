@@ -9,12 +9,14 @@ import {
   Tooltip,
 } from "@mui/material";
 import { OpenInNew, Refresh, Edit } from "@mui/icons-material";
-import { useSelector } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
+import { setNotification } from "../state/slices/NotificationSlice.js";
 
 const JupyterExecutor = () => {
   // Get connection settings from Redux
   const connectionSettings = useSelector(getConnectionSettingsState);
+  const dispatch = useDispatch();
   const hostIP = connectionSettings.ip;
   const hostPort = connectionSettings.apiPort;
   const [jupyterUrl, setJupyterUrl] = useState(null);
@@ -42,8 +44,47 @@ const JupyterExecutor = () => {
 
         setJupyterUrl(proxiedUrl);
         setEditableUrl(proxiedUrl);
+
+        const validateUrl = async (url) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 4000);
+          try {
+            const response = await fetch(url, {
+              method: "HEAD",
+              signal: controller.signal,
+            });
+            return response.ok;
+          } catch (validationError) {
+            return false;
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        };
+
+        const proxiedOk = await validateUrl(proxiedUrl);
+        if (!proxiedOk) {
+          const directOk = await validateUrl(notebookUrl);
+          if (directOk) {
+            dispatch(
+              setNotification({
+                message:
+                  "Proxied Jupyter URL not reachable. Falling back to direct URL.",
+                type: "warning",
+              }),
+            );
+            console.log("Using Jupyter URL:", notebookUrl);
+            setJupyterUrl(notebookUrl);
+            setEditableUrl(notebookUrl);
+          }
+        }
       } catch (error) {
         console.error("Error fetching Jupyter URL:", error);
+        dispatch(
+          setNotification({
+            message: "Failed to fetch the Jupyter URL from the server.",
+            type: "error",
+          }),
+        );
       }
     };
     fetchNotebookUrl();

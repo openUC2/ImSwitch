@@ -10,6 +10,7 @@ import CenterFocusStrongIcon from "@mui/icons-material/CenterFocusStrong";
 import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import GridOnIcon from "@mui/icons-material/GridOn";
 import SaveAltIcon from "@mui/icons-material/SaveAlt";
+import LandscapeIcon from "@mui/icons-material/Landscape";
 
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
@@ -31,6 +32,11 @@ const DIMENSION_CONFIG = {
   [DIMENSIONS.Z_FOCUS]: {
     label: "Z / Focus",
     icon: CenterFocusStrongIcon,
+    alwaysEnabled: false,
+  },
+  [DIMENSIONS.FOCUS_MAP]: {
+    label: "Focus Map",
+    icon: LandscapeIcon,
     alwaysEnabled: false,
   },
   [DIMENSIONS.TIME]: {
@@ -216,6 +222,7 @@ const DimensionBar = () => {
     DIMENSIONS.POSITIONS,
     DIMENSIONS.CHANNELS,
     DIMENSIONS.Z_FOCUS,
+    DIMENSIONS.FOCUS_MAP,
     DIMENSIONS.TIME,
     DIMENSIONS.TILING,
     DIMENSIONS.OUTPUT,

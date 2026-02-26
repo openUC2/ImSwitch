@@ -404,9 +404,47 @@ class ExperimentNormalMode(ExperimentModeBase):
                 main_params={"posX": m_point["x"], "posY": m_point["y"], "relative": False},
             ))
             step_id += 1
-            # zpos= focusMapFct(XYCordinate) => 
+
+            # Apply focus map Z if available (pre-computed surface)
+            # This replaces or supplements autofocus at each position.
+            # Resolve the group_id that was used when storing the focus map.
+            # _run_focus_map_phase stores under sa.areaId (e.g. "area_0").
+            # generate_snake_tiles stores centerIndex=area.areaId in tiles.
+            focus_map_group_id = (
+                m_point.get("centerIndex")
+                or m_point.get("areaName")
+                or m_point.get("wellId")
+                or "default"
+            )
+            focus_map_z = self.controller.apply_focus_map_z(
+                x=m_point["x"], y=m_point["y"], group_id=focus_map_group_id
+            )
+            if focus_map_z is None and not getattr(self.controller, '_focus_map_fit_by_region', True):
+                # Try global map as fallback
+                focus_map_z = self.controller.apply_focus_map_z(
+                    x=m_point["x"], y=m_point["y"], group_id="global"
+                )
+            if focus_map_z is None:
+                # Try manual map as last-resort fallback (user-defined points)
+                focus_map_z = self.controller.apply_focus_map_z(
+                    x=m_point["x"], y=m_point["y"], group_id="manual"
+                )
+
+            if focus_map_z is not None:
+                # Move Z to the focus-mapped position
+                settle_ms = getattr(self.controller, '_focus_map_settle_ms', 0)
+                settle_s = settle_ms / 1000.0 if settle_ms > 0 else 0
+                workflow_steps.append(WorkflowStep(
+                    name=f"Focus map Z → {focus_map_z:.2f}",
+                    step_id=step_id,
+                    main_func=self.controller.move_stage_z,
+                    main_params={"posZ": focus_map_z, "relative": False},
+                    post_funcs=[self.controller.wait_time] if settle_s > 0 else None,
+                    post_params={"seconds": settle_s} if settle_s > 0 else None,
+                ))
+                step_id += 1
             
-            # Perform autofocus if enabled
+            # Perform autofocus if enabled (runs after focus map Z move if both active)
             if is_auto_focus:
                 workflow_steps.append(WorkflowStep(
                     name="Autofocus",
@@ -443,6 +481,23 @@ class ExperimentNormalMode(ExperimentModeBase):
                     illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
                     if illu_intensity <= 0:
                         continue
+
+                    # Apply per-channel focus map Z offset if configured
+                    # This adjusts Z relative to the focus-mapped position for chromatic shift compensation
+                    if focus_map_z is not None:
+                        channel_offset_z = 0.0
+                        _fm_cfg = getattr(self.controller, '_focus_map_config', None)
+                        if _fm_cfg and _fm_cfg.channel_offsets:
+                            channel_offset_z = _fm_cfg.channel_offsets.get(illu_source, 0.0)
+                        if channel_offset_z != 0.0:
+                            adjusted_z = focus_map_z + channel_offset_z + (i_z if i_z != 0 else 0)
+                            workflow_steps.append(WorkflowStep(
+                                name=f"Channel Z offset ({illu_source}: {channel_offset_z:+.1f} µm)",
+                                step_id=step_id,
+                                main_func=self.controller.move_stage_z,
+                                main_params={"posZ": adjusted_z, "relative": False},
+                            ))
+                            step_id += 1
 
                     # Turn on illumination - use tPre as settle time after activation
                     workflow_steps.append(WorkflowStep(

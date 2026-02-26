@@ -128,7 +128,13 @@
                 "imagePath_": "simplant",
                 "imagePath__": "smlm",
                 "imagePath___": "astigmatism",
-                "imagePath____": "wellplatecalib"
+                "imagePath____": "wellplatecalib",
+                "focusSurface": {
+                    "tiltX": 0.01,
+                    "tiltY": 0.005,
+                    "curvature": 0.0,
+                    "offset": 0.0
+                }
             }
         }
     },

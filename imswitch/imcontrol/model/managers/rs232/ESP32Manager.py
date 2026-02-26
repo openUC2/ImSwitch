@@ -33,6 +33,11 @@ class ESP32Manager:
             self._debugging = False
 
         try:
+            override_firmwarecheck = rs232Info.managerProperties['override_firmwarecheck']
+        except:
+            override_firmwarecheck = False
+            
+        try:
             baudrate = rs232Info.managerProperties['baudrate']
         except:
             baudrate = 115200
@@ -40,7 +45,7 @@ class ESP32Manager:
 
         # initialize the ESP32 device adapter
         self.__logger.info(f"Initializing ESP32 device adapter with host: {self._host}, port: {self._port}, identity: {self._identity}, serialport: {self._serialport}, baudrate: {baudrate}")
-        self._esp32 = uc2.UC2Client(host=self._host, port=80, identity=self._identity, serialport=self._serialport, baudrate=baudrate, DEBUG=self._debugging, logger=self.__logger)
+        self._esp32 = uc2.UC2Client(host=self._host, port=80, identity=self._identity, serialport=self._serialport, baudrate=baudrate, DEBUG=self._debugging, logger=self.__logger, skipFirmwareCheck=override_firmwarecheck)
 
 
     def finalize(self):

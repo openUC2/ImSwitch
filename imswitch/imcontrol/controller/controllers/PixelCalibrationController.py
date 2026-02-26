@@ -899,17 +899,37 @@ class PixelCalibrationController(LiveUpdatedController):
 
             # Update objective pixel size if this is the current objective
             # INDEXING CONVENTION:
-            # - obj_manager.getCurrentObjective(): 0-based (0 or 1)
-            # - setObjectiveParameters: expects 0-based slot (0 or 1)
+            # - ObjectiveManager stores config; ObjectiveController owns the
+            #   current-slot state.  We resolve the current slot from the
+            #   controller registry when available, falling back to matching
+            #   objective names directly on the manager.
             if hasattr(self._master, 'objectiveManager'):
                 obj_manager = self._master.objectiveManager
-                current_objective_name = obj_manager.getCurrentObjectiveName()
+
+                # Resolve current objective name via ObjectiveController (single source of truth)
+                current_objective_name = "default"
+                current_slot_0based = None
+                try:
+                    obj_ctrl = self._master._controllersRegistry.get("Objective", None)
+                    if obj_ctrl is not None and hasattr(obj_ctrl, '_getCurrentObjectiveName'):
+                        current_objective_name = obj_ctrl._getCurrentObjectiveName()
+                        current_slot_0based = getattr(obj_ctrl, '_currentObjective', None)
+                except Exception:
+                    pass
+
+                # Fallback: look up by name in ObjectiveManager
+                if current_slot_0based is None:
+                    names = obj_manager.objectiveNames
+                    if objective_id in names:
+                        current_slot_0based = names.index(objective_id)
+                        current_objective_name = objective_id
+                    elif names:
+                        current_slot_0based = 0
+                        current_objective_name = names[0]
 
                 # If calibrated objective matches current objective, update immediately
                 if objective_id == current_objective_name or objective_id == "default":
-                    current_slot_0based = obj_manager.getCurrentObjective()
                     if current_slot_0based is not None:
-                        # Use 0-based index directly
                         obj_manager.setObjectiveParameters(current_slot_0based, pixelsize=pixel_size, emitSignal=True)
                         self._logger.info(f"Updated objective slot {current_slot_0based} pixelsize to {pixel_size:.3f} µm/px")
 
@@ -2056,9 +2076,138 @@ class PixelCalibrationController(LiveUpdatedController):
             self._logger.error(f"Failed to get tag info: {e}", exc_info=True)
             return {"error": str(e), "success": False}
 
+    # ------------------------------------------------------------------ #
+    #  Manual Pixel-Size Calibration (two-point method)                   #
+    # ------------------------------------------------------------------ #
 
+    @APIExport(requestType="POST")
+    def manualPixelSizeCalibration(
+        self,
+        point1X: float = 0.0,
+        point1Y: float = 0.0,
+        point2X: float = 0.0,
+        point2Y: float = 0.0,
+        movementDistanceUm: float = 100.0,
+        movementAxis: str = "X",
+        objectiveId: str = None,
+    ):
+        """
+        Compute and store the pixel size from a manual two-point calibration.
 
+        Workflow (done on the frontend):
+        1. User marks a recognisable feature in the live image  → (point1X, point1Y)
+        2. Stage is moved by *movementDistanceUm* along *movementAxis*
+        3. User marks the **same** feature in the new image       → (point2X, point2Y)
 
+        The pixel displacement is calculated as the Euclidean distance between
+        the two points.  The pixel size is then:
+
+            pixel_size = movementDistanceUm / displacement_px   [µm / pixel]
+
+        The result is saved to the setup configuration as a simplified affine
+        calibration (scale-only, no rotation) so it is immediately available
+        to the rest of ImSwitch.
+
+        Args:
+            point1X:  X-pixel coordinate of the feature BEFORE movement
+            point1Y:  Y-pixel coordinate of the feature BEFORE movement
+            point2X:  X-pixel coordinate of the feature AFTER movement
+            point2Y:  Y-pixel coordinate of the feature AFTER movement
+            movementDistanceUm:  Known stage movement in micrometres (> 0)
+            movementAxis:  Axis of movement ("X" or "Y")
+            objectiveId:  Objective name/ID; defaults to current objective
+
+        Returns:
+            Dictionary with computed pixel size, displacement, and status
+        """
+        try:
+            # --- resolve objective ------------------------------------------------
+            if objectiveId is None or objectiveId == "":
+                objectiveId = self._getCurrentObjectiveId()
+
+            # --- validate inputs --------------------------------------------------
+            if movementDistanceUm <= 0:
+                return {"error": "movementDistanceUm must be > 0", "success": False}
+
+            if movementAxis not in ("X", "Y"):
+                return {"error": "movementAxis must be 'X' or 'Y'", "success": False}
+
+            # --- compute displacement in pixels -----------------------------------
+            dx = point2X - point1X
+            dy = point2Y - point1Y
+            displacement_px = np.sqrt(dx ** 2 + dy ** 2)
+
+            if displacement_px < 1.0:
+                return {
+                    "error": "Pixel displacement too small (< 1 px). "
+                             "Mark two distinct positions or increase the movement distance.",
+                    "success": False,
+                }
+
+            pixel_size_um = abs(movementDistanceUm) / displacement_px
+
+            self._logger.info(
+                f"Manual pixel-size calibration for '{objectiveId}': "
+                f"displacement = {displacement_px:.1f} px, "
+                f"movement = {movementDistanceUm:.1f} µm ({movementAxis}), "
+                f"→ pixel size = {pixel_size_um:.4f} µm/px"
+            )
+
+            # --- build a simplified affine matrix (scale-only) --------------------
+            # Convention: [[scaleX, 0, 0], [0, scaleY, 0]]
+            # We set both axes to the same scale since we only measured one axis.
+            affine_matrix = [
+                [pixel_size_um, 0.0, 0.0],
+                [0.0, pixel_size_um, 0.0],
+            ]
+
+            metrics = {
+                "scale_x_um_per_pixel": pixel_size_um,
+                "scale_y_um_per_pixel": pixel_size_um,
+                "rotation_deg": 0.0,
+                "quality": "manual",
+                "method": "manual_two_point",
+                "displacement_px": float(displacement_px),
+                "movement_distance_um": float(movementDistanceUm),
+                "movement_axis": movementAxis,
+                "point1": [float(point1X), float(point1Y)],
+                "point2": [float(point2X), float(point2Y)],
+            }
+
+            calibration_data = {
+                "affine_matrix": affine_matrix,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "metrics": metrics,
+                "objective_info": {"name": objectiveId, "method": "manual"},
+            }
+
+            # --- persist to setup config ------------------------------------------
+            self._setupInfo.setAffineCalibration(objectiveId, calibration_data)
+
+            import imswitch.imcontrol.model.configfiletools as configfiletools
+            options, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(options, self._setupInfo)
+
+            # --- apply immediately -------------------------------------------------
+            result = {"affine_matrix": affine_matrix, "metrics": metrics}
+            self._applyCalibrationResults(objectiveId, result)
+
+            return {
+                "success": True,
+                "objectiveId": objectiveId,
+                "pixelSizeUm": float(pixel_size_um),
+                "displacementPx": float(displacement_px),
+                "affineMatrix": affine_matrix,
+                "metrics": metrics,
+                "message": (
+                    f"Pixel size calibrated to {pixel_size_um:.4f} µm/px "
+                    f"for objective '{objectiveId}'"
+                ),
+            }
+
+        except Exception as e:
+            self._logger.error(f"Manual pixel-size calibration failed: {e}", exc_info=True)
+            return {"error": str(e), "success": False}
 
 
 class PixelCalibrationClass(object):

@@ -41,6 +41,7 @@ const initialExperimentState = {
   ],
   parameterValue: {
     illumination: [],
+    channelEnabledForExperiment: [],  // Per-channel boolean: include this channel in experiment (separate from physical laser on/off)
     darkfield: false,
     illuIntensities: 0,
     differentialPhaseContrast: false,
@@ -99,6 +100,21 @@ const experimentSlice = createSlice({
     setIllumination: (state, action) => {
       console.log("setIllumination", action.payload);
       state.parameterValue.illumination = action.payload;
+    },
+    // Set the entire array of per-channel experiment inclusion flags
+    setChannelEnabledForExperiment: (state, action) => {
+      console.log("setChannelEnabledForExperiment", action.payload);
+      state.parameterValue.channelEnabledForExperiment = action.payload;
+    },
+    // Toggle a single channel's experiment inclusion by index
+    toggleChannelForExperiment: (state, action) => {
+      const index = action.payload;
+      console.log("toggleChannelForExperiment", index);
+      const arr = [...state.parameterValue.channelEnabledForExperiment];
+      if (index >= 0 && index < arr.length) {
+        arr[index] = !arr[index];
+        state.parameterValue.channelEnabledForExperiment = arr;
+      }
     },
     setDarkfield: (state, action) => {
       console.log("setDarkfield");
@@ -315,6 +331,8 @@ export const {
   setWellLayout,
 
   setIllumination,
+  setChannelEnabledForExperiment,
+  toggleChannelForExperiment,
   setDarkfield,
   setIlluminationIntensities,
   setDifferentialPhaseContrast,

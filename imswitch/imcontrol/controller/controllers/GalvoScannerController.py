@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Any
 from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import APIExport, initLogger
 from ..basecontrollers import ImConWidgetController
+import json
 
 
 class GalvoScannerController(ImConWidgetController):
@@ -381,6 +382,422 @@ class GalvoScannerController(ImConWidgetController):
             return {"error": "No galvo scanners manager available"}
         
         return self._master.galvoScannersManager.stop_all_scans()
+
+    # ========================
+    # Arbitrary Points API
+    # ========================
+
+    @APIExport(runOnUIThread=True)
+    def setArbitraryPoints(self, points: str,
+                           scannerName: Optional[str] = None,
+                           laser_trigger: str = "AUTO",
+                           apply_affine: bool = True,
+                           timeout: int = 1) -> Dict[str, Any]:
+        """
+        Send arbitrary points to the galvo scanner.
+        
+        Points are given in camera coordinates if apply_affine is True (default),
+        or in DAC coordinates (0-4095) if apply_affine is False.
+        
+        Args:
+            points: JSON string of point list, each with:
+                    - x (int): X coordinate
+                    - y (int): Y coordinate
+                    - dwell_us (int): Dwell time in microseconds
+                    - laser_intensity (int, optional): 0-255
+            scannerName: Scanner device name (optional)
+            laser_trigger: Trigger mode - AUTO, HIGH, LOW, CONTINUOUS
+            apply_affine: Whether to apply affine transform (camera→galvo)
+            timeout: Request timeout
+            
+        Returns:
+            dict: Status and transformed points
+            
+        Example:
+            POST /api/GalvoScannerController/setArbitraryPoints?points=[{"x":100,"y":200,"dwell_us":500}]
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        
+        try:
+            # Parse points from JSON string
+            if isinstance(points, str):
+                point_list = json.loads(points)
+            else:
+                point_list = points
+            
+            if not isinstance(point_list, list):
+                return {"error": "Points must be a JSON array"}
+            
+            if len(point_list) > 265:
+                return {"error": f"Maximum 265 points supported, got {len(point_list)}"}
+            
+            scanner = self._master.galvoScannersManager[scannerName]
+            
+            # Apply affine transform if requested (camera coords → galvo DAC coords)
+            if apply_affine:
+                point_list = scanner.affine_transform.transform_points(point_list)
+            
+            result = scanner.set_arbitrary_points(
+                points=point_list, laser_trigger=laser_trigger, timeout=timeout
+            )
+            
+            self.__logger.info(f"Set {len(point_list)} arbitrary points on {scannerName}")
+            return {
+                "status": "points_set",
+                "scannerName": scannerName,
+                "num_points": len(point_list),
+                "transformed_points": point_list,
+                "result": result
+            }
+        except json.JSONDecodeError as e:
+            return {"error": f"Invalid JSON for points: {e}"}
+        except Exception as e:
+            self.__logger.error(f"Error setting arbitrary points: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def startArbitraryScan(self, points: str,
+                           scannerName: Optional[str] = None,
+                           laser_trigger: str = "AUTO",
+                           apply_affine: bool = True,
+                           timeout: int = 1) -> Dict[str, Any]:
+        """
+        Start arbitrary point scanning (alias for setArbitraryPoints).
+        
+        Args:
+            points: JSON string of point list
+            scannerName: Scanner device name
+            laser_trigger: Trigger mode
+            apply_affine: Apply affine transform
+            timeout: Request timeout
+            
+        Returns:
+            dict: Scan start status
+        """
+        return self.setArbitraryPoints(
+            points=points, scannerName=scannerName,
+            laser_trigger=laser_trigger, apply_affine=apply_affine,
+            timeout=timeout
+        )
+
+    @APIExport(runOnUIThread=True)
+    def stopArbitraryScan(self, scannerName: Optional[str] = None,
+                          timeout: int = 1) -> Dict[str, Any]:
+        """
+        Stop arbitrary point scanning.
+        
+        Args:
+            scannerName: Scanner device name
+            timeout: Request timeout
+            
+        Returns:
+            dict: Stop status
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            result = scanner.stop_arbitrary_scan(timeout=timeout)
+            return {"status": "stopped", "scannerName": scannerName, "result": result}
+        except Exception as e:
+            self.__logger.error(f"Error stopping arbitrary scan: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def pauseArbitraryScan(self, scannerName: Optional[str] = None,
+                           timeout: int = 1) -> Dict[str, Any]:
+        """
+        Pause arbitrary point scanning (keeps current index).
+        
+        Args:
+            scannerName: Scanner device name
+            timeout: Request timeout
+            
+        Returns:
+            dict: Pause status
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            result = scanner.pause_arbitrary_scan(timeout=timeout)
+            return {"status": "paused", "scannerName": scannerName, "result": result}
+        except Exception as e:
+            self.__logger.error(f"Error pausing arbitrary scan: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def resumeArbitraryScan(self, scannerName: Optional[str] = None,
+                            timeout: int = 1) -> Dict[str, Any]:
+        """
+        Resume arbitrary point scanning from paused position.
+        
+        Args:
+            scannerName: Scanner device name
+            timeout: Request timeout
+            
+        Returns:
+            dict: Resume status
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            result = scanner.resume_arbitrary_scan(timeout=timeout)
+            return {"status": "resumed", "scannerName": scannerName, "result": result}
+        except Exception as e:
+            self.__logger.error(f"Error resuming arbitrary scan: {e}")
+            return {"error": str(e)}
+
+    @APIExport()
+    def getArbitraryScanState(self, scannerName: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get the current state of arbitrary point scanning.
+        
+        Returns:
+            dict: Scan state including running, paused, num_points, points
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            state = scanner.get_arbitrary_scan_state()
+            state["scannerName"] = scannerName
+            return state
+        except Exception as e:
+            self.__logger.error(f"Error getting arbitrary scan state: {e}")
+            return {"error": str(e)}
+
+    # ========================
+    # Affine Transform API
+    # ========================
+
+    @APIExport()
+    def getAffineTransform(self, scannerName: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get the current affine transformation matrix for camera-to-galvo mapping.
+        
+        Returns:
+            dict: Affine transform with keys a11, a12, tx, a21, a22, ty
+            
+        Example:
+            GET /api/GalvoScannerController/getAffineTransform
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            return {
+                "scannerName": scannerName,
+                "affine_transform": scanner.get_affine_transform_dict()
+            }
+        except Exception as e:
+            self.__logger.error(f"Error getting affine transform: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def setAffineTransform(self, scannerName: Optional[str] = None,
+                           a11: Optional[float] = None, a12: Optional[float] = None,
+                           tx: Optional[float] = None, a21: Optional[float] = None,
+                           a22: Optional[float] = None, ty: Optional[float] = None,
+                           save: bool = True) -> Dict[str, Any]:
+        """
+        Set the affine transformation matrix for camera-to-galvo mapping.
+        
+        Args:
+            scannerName: Scanner device name
+            a11, a12, tx, a21, a22, ty: Affine matrix elements
+            save: Whether to persist the transform to disk
+            
+        Returns:
+            dict: Updated affine transform
+            
+        Example:
+            POST /api/GalvoScannerController/setAffineTransform?a11=2.0&a22=2.0&tx=100&ty=200
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            transform = scanner.set_affine_transform(
+                a11=a11, a12=a12, tx=tx, a21=a21, a22=a22, ty=ty
+            )
+            
+            if save:
+                config_path = scanner.save_affine_config()
+                self.__logger.info(f"Saved affine config to {config_path}")
+            
+            return {
+                "status": "transform_updated",
+                "scannerName": scannerName,
+                "affine_transform": transform,
+                "saved": save
+            }
+        except Exception as e:
+            self.__logger.error(f"Error setting affine transform: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def resetAffineTransform(self, scannerName: Optional[str] = None,
+                             save: bool = True) -> Dict[str, Any]:
+        """
+        Reset affine transform to identity matrix.
+        
+        Args:
+            scannerName: Scanner device name
+            save: Whether to persist
+            
+        Returns:
+            dict: Reset affine transform
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        
+        try:
+            scanner = self._master.galvoScannersManager[scannerName]
+            scanner.reset_affine_transform()
+            
+            if save:
+                scanner.save_affine_config()
+            
+            return {
+                "status": "transform_reset",
+                "scannerName": scannerName,
+                "affine_transform": scanner.get_affine_transform_dict()
+            }
+        except Exception as e:
+            self.__logger.error(f"Error resetting affine transform: {e}")
+            return {"error": str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def runAffineCalibration(self, calibration_data: str,
+                             scannerName: Optional[str] = None,
+                             save: bool = True) -> Dict[str, Any]:
+        """
+        Compute affine transform from calibration point pairs.
+        
+        The calibration_data must contain at least 3 corresponding pairs
+        of camera pixel coordinates and galvo DAC coordinates.
+        
+        Args:
+            calibration_data: JSON string with format:
+                {
+                    "cam_points": [[cx1,cy1], [cx2,cy2], [cx3,cy3]],
+                    "galvo_points": [[gx1,gy1], [gx2,gy2], [gx3,gy3]]
+                }
+            scannerName: Scanner device name
+            save: Whether to persist the computed transform
+            
+        Returns:
+            dict: Computed affine transform
+            
+        Example:
+            POST /api/GalvoScannerController/runAffineCalibration?calibration_data={"cam_points":[[100,100],[400,100],[100,400]],"galvo_points":[[500,500],[3500,500],[500,3500]]}
+        """
+        if not hasattr(self._master, 'galvoScannersManager'):
+            return {"error": "No galvo scanners manager available"}
+        
+        scannerName = self._resolveScanner(scannerName)
+        if scannerName is None:
+            return {"error": "No galvo scanner available"}
+        
+        try:
+            if isinstance(calibration_data, str):
+                cal_data = json.loads(calibration_data)
+            else:
+                cal_data = calibration_data
+            
+            cam_points = [tuple(p) for p in cal_data.get('cam_points', [])]
+            galvo_points = [tuple(p) for p in cal_data.get('galvo_points', [])]
+            
+            if len(cam_points) < 3 or len(galvo_points) < 3:
+                return {"error": "At least 3 point pairs required for calibration"}
+            
+            if len(cam_points) != len(galvo_points):
+                return {"error": "Number of camera and galvo points must match"}
+            
+            scanner = self._master.galvoScannersManager[scannerName]
+            transform = scanner.compute_affine_from_calibration(cam_points, galvo_points)
+            
+            if save:
+                config_path = scanner.save_affine_config()
+                self.__logger.info(f"Saved calibration to {config_path}")
+            
+            return {
+                "status": "calibration_complete",
+                "scannerName": scannerName,
+                "affine_transform": transform,
+                "num_points_used": len(cam_points),
+                "saved": save
+            }
+        except json.JSONDecodeError as e:
+            return {"error": f"Invalid calibration data JSON: {e}"}
+        except Exception as e:
+            self.__logger.error(f"Error running affine calibration: {e}")
+            return {"error": str(e)}
+
+    @APIExport()
+    def getCalibrationPoints(self, scannerName: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get suggested galvo positions for the 3-point calibration workflow.
+        
+        Returns 3 well-separated galvo DAC positions for calibration.
+        
+        Returns:
+            dict: Three galvo positions for calibration
+        """
+        # Return 3 well-separated points across the DAC range
+        return {
+            "calibration_galvo_points": [
+                {"x": 1024, "y": 1024, "label": "Top-Left"},
+                {"x": 3072, "y": 1024, "label": "Top-Right"},
+                {"x": 2048, "y": 3072, "label": "Bottom-Center"}
+            ],
+            "instructions": (
+                "For each point: 1) Galvo moves to position, "
+                "2) Laser turns on, 3) Click the bright spot in camera view, "
+                "4) Click 'Confirm' to record the pair."
+            )
+        }
 
     # ========================
     # Helper Methods

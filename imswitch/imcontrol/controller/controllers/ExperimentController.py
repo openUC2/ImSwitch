@@ -31,12 +31,26 @@ from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ExperimentPerformanceMode,
     ExperimentNormalMode,
 )
+from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult
 
 from pydantic import Field
 
 # -----------------------------------------------------------
 # Reuse the existing sub-models:
 # -----------------------------------------------------------
+
+
+class FocusMapFromPointsRequest(BaseModel):
+    """Request body for computeFocusMapFromPoints endpoint."""
+    points: List[Dict[str, float]]
+    group_id: str = "manual"
+    group_name: str = "Manual Points"
+    method: str = "rbf"
+    smoothing_factor: float = 0.1
+    z_offset: float = 0.0
+    clamp_enabled: bool = False
+    z_min: float = 0.0
+    z_max: float = 0.0
 
 
 class NeighborPoint(BaseModel):
@@ -132,6 +146,56 @@ class ParameterValue(BaseModel):
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
     ome_write_individual_tiffs: bool = Field(False, description="Whether to write individual TIFF files per frame")
 
+class FocusMapConfig(BaseModel):
+    """Configuration for optional focus mapping (Z surface estimation over XY)."""
+    enabled: bool = Field(False, description="Enable focus mapping before acquisition")
+
+    # Grid generation
+    rows: int = Field(3, description="Number of grid rows for focus measurement")
+    cols: int = Field(3, description="Number of grid columns for focus measurement")
+    add_margin: bool = Field(False, description="Shrink grid inward to avoid edge effects")
+
+    # Fit strategy
+    fit_by_region: bool = Field(True, description="Fit per well / scan region (True) or global (False)")
+    use_manual_map: bool = Field(False, description="Reuse a pre-existing manual/global map for all groups via interpolation instead of measuring per group")
+    method: str = Field("spline", description="Fit method: spline, rbf, or constant")
+    smoothing_factor: float = Field(0.1, description="Smoothing factor for surface fit")
+
+    # Runtime behavior
+    apply_during_scan: bool = Field(True, description="Move Z per XY using focus map during acquisition")
+    z_offset: float = Field(0.0, description="Global Z offset applied to interpolated values")
+    clamp_enabled: bool = Field(False, description="Clamp interpolated Z to min/max range")
+    z_min: float = Field(0.0, description="Minimum allowed Z value when clamping")
+    z_max: float = Field(0.0, description="Maximum allowed Z value when clamping")
+
+    # Autofocus integration
+    autofocus_profile: Optional[str] = Field(None, description="Reference to AF controller preset")
+    settle_ms: int = Field(0, description="Extra settle time in ms after Z move")
+    store_debug_artifacts: bool = Field(True, description="Store focus points + fit stats as JSON")
+    channel_offsets: Optional[Dict[str, float]] = Field(default=None, description="Per-illumination-channel Z offset (µm)")
+
+    # Autofocus parameters – passed through to doAutofocusBackground
+    af_range: float = Field(100.0, description="Autofocus Z range (±µm from current Z)")
+    af_resolution: float = Field(10.0, description="Autofocus step size (µm)")
+    af_cropsize: int = Field(2048, description="Crop size for focus quality algorithm")
+    af_algorithm: str = Field("LAPE", description="Focus quality algorithm: LAPE, GLVA, JPEG")
+    af_settle_time: float = Field(0.1, description="Settle time (s) after each Z step")
+    af_static_offset: float = Field(0.0, description="Static Z offset applied after autofocus (µm)")
+    af_two_stage: bool = Field(False, description="Use two-stage autofocus (coarse + fine)")
+    af_n_gauss: int = Field(0, description="Gaussian kernel size for focus algorithm")
+    af_illumination_channel: str = Field("", description="Illumination channel for autofocus")
+    af_mode: str = Field("software", description="Autofocus mode: software (Z-sweep) or hardware (FocusLock)")
+    af_max_attempts: int = Field(2, description="Max retry attempts for hardware autofocus")
+    af_target_setpoint: Optional[float] = Field(None, description="Target focus setpoint for hardware AF")
+
+    # Scan areas – passed from the frontend so that computeFocusMap knows the
+    # correct XY bounds even when no experiment has been started yet.
+    scan_areas: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="List of scan area dicts with areaId, areaName, bounds (minX/maxX/minY/maxY)"
+    )
+
+
 class Experiment(BaseModel):
     # From your old "Experiment" BaseModel:
     name: str
@@ -141,6 +205,9 @@ class Experiment(BaseModel):
     # NEW: Pre-calculated scan data from frontend
     scanAreas: Optional[List[ScanArea]] = None
     scanMetadata: Optional[ScanMetadata] = None
+
+    # Focus mapping configuration (disabled by default)
+    focusMap: Optional[FocusMapConfig] = Field(default=None, description="Optional focus mapping configuration")
 
     # From your old "ExperimentModel":
     timepoints: int = Field(1, description="Number of timepoints for time-lapse")
@@ -313,6 +380,9 @@ class ExperimentController(ImConWidgetController):
         # Initialize experiment execution modes
         self.performance_mode = ExperimentPerformanceMode(self)
         self.normal_mode = ExperimentNormalMode(self)
+
+        # Initialize focus map manager
+        self.focus_map_manager = FocusMapManager(logger=self._logger)
 
         # Initialize omero  parameters  # TODO: Maybe not needed!
         self.omero_url = self._master.experimentManager.omeroServerUrl
@@ -711,6 +781,31 @@ class ExperimentController(ImConWidgetController):
         if not self.mDetector._running:
             self.mDetector.startAcquisition()
 
+        # Store scan areas for focus map API access
+        self._last_scan_areas = None
+        self._focus_map_fit_by_region = True
+        self._focus_map_settle_ms = 0
+        if mExperiment.scanAreas:
+            self._last_scan_areas = [
+                {
+                    "areaId": sa.areaId,
+                    "areaName": sa.areaName,
+                    "bounds": sa.bounds.dict() if hasattr(sa.bounds, 'dict') else {
+                        "minX": sa.bounds.minX, "maxX": sa.bounds.maxX,
+                        "minY": sa.bounds.minY, "maxY": sa.bounds.maxY,
+                    },
+                }
+                for sa in mExperiment.scanAreas
+            ]
+
+        # ── Focus Mapping (optional) ──────────────────────────────────────
+        focusMapConfig = mExperiment.focusMap
+        if focusMapConfig is not None and focusMapConfig.enabled:
+            self._logger.info("Focus mapping enabled – computing Z surface per scan group")
+            self._focus_map_fit_by_region = focusMapConfig.fit_by_region
+            self._focus_map_settle_ms = focusMapConfig.settle_ms
+            self._run_focus_map_phase(mExperiment, focusMapConfig)
+
         # Generate the list of points to scan from pre-calculated coordinates
         snake_tiles = self.generate_snake_tiles(mExperiment) # TODO: Is this still needed?
         # remove none values from all_points list
@@ -957,22 +1052,41 @@ class ExperimentController(ImConWidgetController):
     def autofocus(self, minZ: float=0, maxZ: float=0, stepSize: float=0,
                   illuminationChannel: str="", mode: str="software",
                   max_attempts: int=2,
-                  target_focus_setpoint: Optional[float] = None) -> Optional[float]:
+                  target_focus_setpoint: Optional[float] = None,
+                  af_range: float = 100.0,
+                  af_resolution: float = 10.0,
+                  af_cropsize: int = 2048,
+                  af_algorithm: str = "LAPE",
+                  af_settle_time: float = 0.1,
+                  af_static_offset: float = 0.0,
+                  af_two_stage: bool = False,
+                  af_n_gauss: int = 0) -> Optional[float]:
         """Perform autofocus using either hardware or software method.
 
         Args:
-            minZ: Minimum Z position for autofocus (software mode only)
-            maxZ: Maximum Z position for autofocus (software mode only)
-            stepSize: Step size for autofocus scan (software mode only)
+            minZ: Legacy minimum Z position (overridden by af_range)
+            maxZ: Legacy maximum Z position (overridden by af_range)
+            stepSize: Legacy step size (overridden by af_resolution)
             illuminationChannel: Selected illumination channel for autofocus
             mode: "hardware" (fast, one-shot) or "software" (slow, Z-sweep)
+            max_attempts: Max retry attempts for hardware AF
+            target_focus_setpoint: Target setpoint for hardware AF
+            af_range: Autofocus Z range ±µm from current Z
+            af_resolution: Z step size for autofocus
+            af_cropsize: Crop size for focus algorithm
+            af_algorithm: Focus quality algorithm (LAPE, GLVA, JPEG)
+            af_settle_time: Settle time in seconds
+            af_static_offset: Static Z offset after autofocus
+            af_two_stage: Use two-stage (coarse+fine) autofocus
+            af_n_gauss: Gaussian kernel size
 
         Returns:
             float: Best focus Z position, or None if autofocus failed
         """
         self._logger.debug(
             f"Performing autofocus (mode={mode}) with parameters "
-            f"minZ={minZ}, maxZ={maxZ}, stepSize={stepSize}, channel={illuminationChannel}"
+            f"af_range={af_range}, af_resolution={af_resolution}, "
+            f"af_algorithm={af_algorithm}, channel={illuminationChannel}"
         )
 
         # Route to appropriate autofocus method
@@ -982,25 +1096,42 @@ class ExperimentController(ImConWidgetController):
                                            illuminationChannel=illuminationChannel)
         else:
             return self.autofocus_software(
+                af_range=af_range,
+                af_resolution=af_resolution,
+                af_cropsize=af_cropsize,
+                af_algorithm=af_algorithm,
+                af_settle_time=af_settle_time,
+                af_static_offset=af_static_offset,
+                af_two_stage=af_two_stage,
+                af_n_gauss=af_n_gauss,
+                illuminationChannel=illuminationChannel,
                 minZ=minZ,
                 maxZ=maxZ,
                 stepSize=stepSize,
-                illuminationChannel=illuminationChannel
             )
 
-    def autofocus_software(self, minZ: float=0, maxZ: float=0, stepSize: float=0, illuminationChannel: str=""):
+    def autofocus_software(self, af_range: float = 100.0, af_resolution: float = 10.0,
+                           af_cropsize: int = 2048, af_algorithm: str = "LAPE",
+                           af_settle_time: float = 0.1, af_static_offset: float = 0.0,
+                           af_two_stage: bool = False, af_n_gauss: int = 0,
+                           illuminationChannel: str = "",
+                           minZ: float = 0, maxZ: float = 0, stepSize: float = 0):
         """Perform software-based autofocus using AutofocusController (Z-sweep).
 
-        Args:
-            minZ: Minimum Z position for autofocus (not used - uses rangez instead)
-            maxZ: Maximum Z position for autofocus (not used - uses rangez instead)
-            stepSize: Step size for autofocus scan
-            illuminationChannel: Selected illumination channel for autofocus
+        All parameters are passed through from FocusMapConfig or experiment settings.
+        Legacy minZ/maxZ/stepSize params are kept for backward compatibility but
+        are overridden by af_range/af_resolution when those are non-default.
 
         Returns:
             float: Best focus Z position, or None if autofocus failed
         """
-        self._logger.debug("Performing software autofocus (Z-sweep)... with parameters minZ, maxZ, stepSize, illuminationChannel: %s, %s, %s, %s", minZ, maxZ, stepSize, illuminationChannel)
+        self._logger.debug(
+            "Performing software autofocus (Z-sweep)... "
+            "af_range=%s, af_resolution=%s, af_algorithm=%s, af_cropsize=%s, "
+            "af_settle_time=%s, af_n_gauss=%s, af_two_stage=%s, illumination=%s",
+            af_range, af_resolution, af_algorithm, af_cropsize,
+            af_settle_time, af_n_gauss, af_two_stage, illuminationChannel
+        )
 
         # Get the autofocus controller
         autofocusController = self._master.getController('Autofocus')
@@ -1012,33 +1143,45 @@ class ExperimentController(ImConWidgetController):
         # Set illumination if specified
         if illuminationChannel and hasattr(self, '_master') and hasattr(self._master, 'lasersManager'):
             try:
-                # Turn on the specified illumination channel for autofocus
                 self._logger.debug(f"Setting illumination channel {illuminationChannel} for autofocus")
-                # TODO: Set appropriate intensity - this would require getting current intensity or using a default
-                # For now, we'll let the autofocus controller handle illumination
             except Exception as e:
                 self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
 
         try:
-            # Calculate range from min/max
-            rangez = abs(maxZ - minZ) / 2.0 if maxZ > minZ else 50.0
-            resolutionz = stepSize if stepSize > 0 else 10.0
+            # Determine rangez: prefer af_range, fall back to legacy minZ/maxZ
+            if af_range > 0:
+                rangez = af_range
+            elif maxZ > minZ:
+                rangez = abs(maxZ - minZ) / 2.0
+            else:
+                rangez = 50.0
 
-            # Call autofocus directly - the method is already decorated with @APIExport
-            #     def doAutofocusBackground(self, rangez:float=100, resolutionz:float=10, defocusz:float=0, axis:str=gAxis, tSettle:float=0.1, isDebug:bool=False, nGauss:int=7, nCropsize:int=2048, focusAlgorithm:str="LAPE", static_offset:float=0.0, twoStage:bool=False):
-            result = autofocusController.doAutofocusBackground(
+            # Determine resolution: prefer af_resolution, fall back to legacy stepSize
+            resolutionz = af_resolution if af_resolution > 0 else (stepSize if stepSize > 0 else 10.0)
+
+            # Call autofocus – use autoFocus which starts doAutofocusBackground
+            # in a thread with proper state management and validation.
+            # Then wait for the AF thread to finish before reading the result.
+            autofocusController.autoFocus(
                 rangez=rangez,
                 resolutionz=resolutionz,
                 defocusz=0,
-                axis="Z",
-                tSettle =0.1, # TODO: Implement via frontend parameters
+                tSettle=af_settle_time,
                 isDebug=False,
-                nGauss=7,
-                nCropsize=2048,
-                focusAlgorithm="LAPE",
-                static_offset=0.0,
-                twoStage=False
+                nGauss=af_n_gauss,
+                nCropsize=af_cropsize,
+                focusAlgorithm=af_algorithm,
+                static_offset=af_static_offset,
+                twoStage=af_two_stage
             )
+
+            # Wait for autofocus thread to finish (it runs in _AutofocusThead)
+            af_thread = getattr(autofocusController, '_AutofocusThead', None)
+            if af_thread is not None and af_thread.is_alive():
+                af_thread.join(timeout=120)  # 2 min timeout
+
+            # Read the resulting Z position
+            result = self.mStage.getPosition().get("Z", None)
 
             self._logger.debug("Autofocus completed successfully")
             return result
@@ -1317,6 +1460,13 @@ class ExperimentController(ImConWidgetController):
     @APIExport()
     def stopExperiment(self):
         """Stop the experiment. Works for both normal and performance modes."""
+        # Abort any in-progress focus map computation first so
+        # the synchronous _run_focus_map_phase loop exits early.
+        try:
+            self.focus_map_manager.request_abort()
+        except Exception:
+            pass
+
         # Check workflow manager status (normal mode)
         workflow_status = self.workflow_manager.get_status()["status"]
 
@@ -1405,7 +1555,8 @@ class ExperimentController(ImConWidgetController):
                       zstart:float=0, zstep:float=0, nz:int=1,
                       tsettle:float=90, tExposure:float=50,
                       illumination:List[int]=None, led:float=None,
-                      tPeriod:int=1, nTimes:int=1):
+                      tPeriod:int=1, nTimes:int=1,
+                      isSnakeScan:bool=True):
         """Full workflow: arm camera ➔ launch writer ➔ execute scan.
         
         Args:
@@ -1424,6 +1575,7 @@ class ExperimentController(ImConWidgetController):
             led: LED intensity (0-255)
             tPeriod: Period between time points (s)
             nTimes: Number of time points
+            isSnakeScan: If True, apply snake (serpentine) scan pattern; if False, use raster
         """
         self.fastStageScanIsRunning = True
         self._stop() # ensure all prior runs are stopped
@@ -1471,8 +1623,8 @@ class ExperimentController(ImConWidgetController):
                     z = zstart + iz * zstep
                     x = xstart + ix * xstep
                     y = ystart + iy * ystep
-                    # Snake pattern
-                    if iy % 2 == 1:
+                    # Snake pattern: reverse X direction on odd rows
+                    if isSnakeScan and iy % 2 == 1:
                         x = xstart + (nx - 1 - ix) * xstep
                 
                     # If there's at least one valid illumination or LED set, take only one image as "default"
@@ -2019,6 +2171,546 @@ class ExperimentController(ImConWidgetController):
         )
 
         return image
+
+    # ================================================================
+    # Focus Map – internal helpers
+    # ================================================================
+
+    def _run_focus_map_phase(self, mExperiment, config: FocusMapConfig):
+        """
+        Run focus mapping before the main acquisition loop.
+
+        Iterates over all scan areas (groups), measures focus on a grid,
+        and fits a Z surface for each group.  Called from startWellplateExperiment
+        when focusMap.enabled == True.
+        """
+        # Store config for channel_offsets access during acquisition
+        self._focus_map_config = config
+        self.focus_map_manager.clear_abort()
+        areas = []
+        if mExperiment.scanAreas:
+            for sa in mExperiment.scanAreas:
+                areas.append({
+                    "areaId": sa.areaId,
+                    "areaName": sa.areaName,
+                    "bounds": {
+                        "minX": sa.bounds.minX,
+                        "maxX": sa.bounds.maxX,
+                        "minY": sa.bounds.minY,
+                        "maxY": sa.bounds.maxY,
+                    },
+                })
+        else:
+            # Fallback: derive bounds from pointList
+            if mExperiment.pointList:
+                xs = [pt.x for pt in mExperiment.pointList]
+                ys = [pt.y for pt in mExperiment.pointList]
+                areas.append({
+                    "areaId": "default",
+                    "areaName": "All Points",
+                    "bounds": {
+                        "minX": min(xs), "maxX": max(xs),
+                        "minY": min(ys), "maxY": max(ys),
+                    },
+                })
+
+        if not areas:
+            self._logger.warning("Focus map: no areas found – skipping")
+            return
+
+        # ----------------------------------------------------------
+        # Option: reuse a pre-existing manual / global map for all
+        # groups by interpolation instead of measuring a new grid.
+        # ----------------------------------------------------------
+        if config.use_manual_map:
+            source_fm = self._find_reusable_manual_map()
+            if source_fm is not None:
+                self._logger.info(
+                    f"Focus map: reusing manual map [{source_fm.group_id}] "
+                    f"for {len(areas)} group(s) via interpolation"
+                )
+                for area in areas:
+                    gid = area["areaId"]
+                    if self.focus_map_manager.has_fitted_map(gid):
+                        self._logger.info(
+                            f"Focus map [{gid}]: already fitted – skipping interpolation"
+                        )
+                        continue
+                    try:
+                        new_fm = source_fm.interpolate_to_region(
+                            group_id=gid,
+                            group_name=area["areaName"],
+                            bounds=area["bounds"],
+                            rows=max(config.rows, 3),
+                            cols=max(config.cols, 3),
+                            logger=self._logger,
+                        )
+                        self.focus_map_manager._maps[gid] = new_fm
+                        self._logger.info(
+                            f"Focus map [{gid}]: interpolated from [{source_fm.group_id}] "
+                            f"({new_fm.n_points} pts, fitted={new_fm.is_fitted})"
+                        )
+                    except Exception as e:
+                        self._logger.warning(
+                            f"Focus map [{gid}]: interpolation from manual map failed ({e}), "
+                            f"falling back to measurement"
+                        )
+                        self._compute_focus_map_for_group(
+                            group_id=gid,
+                            group_name=area["areaName"],
+                            bounds=area["bounds"],
+                            config=config,
+                        )
+                return
+            else:
+                self._logger.warning(
+                    "Focus map: use_manual_map is enabled but no fitted manual/global map found – "
+                    "falling back to per-group measurement"
+                )
+
+        if config.fit_by_region:
+            # Fit separately per region – skip groups that already have a valid fit
+            for area in areas:
+                gid = area["areaId"]
+                if self.focus_map_manager.has_fitted_map(gid):
+                    self._logger.info(
+                        f"Focus map [{gid}]: using pre-computed map (already fitted)"
+                    )
+                    continue
+                self._compute_focus_map_for_group(
+                    group_id=gid,
+                    group_name=area["areaName"],
+                    bounds=area["bounds"],
+                    config=config,
+                )
+        else:
+            # Fit globally: merge all bounds
+            all_min_x = min(a["bounds"]["minX"] for a in areas)
+            all_max_x = max(a["bounds"]["maxX"] for a in areas)
+            all_min_y = min(a["bounds"]["minY"] for a in areas)
+            all_max_y = max(a["bounds"]["maxY"] for a in areas)
+            merged = {
+                "minX": all_min_x, "maxX": all_max_x,
+                "minY": all_min_y, "maxY": all_max_y,
+            }
+            if self.focus_map_manager.has_fitted_map("global"):
+                self._logger.info("Focus map [global]: using pre-computed map (already fitted)")
+            else:
+                self._compute_focus_map_for_group(
+                    group_id="global",
+                    group_name="Global Fit",
+                    bounds=merged,
+                    config=config,
+                )
+
+    def _find_reusable_manual_map(self) -> "Optional[FocusMap]":
+        """
+        Look for a pre-existing fitted focus map that can be reused as
+        a global template for all groups.  Preference order:
+          1. "manual" (from "Fit from Points" in the UI)
+          2. "global" (from a previous global computation)
+          3. any other fitted map
+        Returns None if nothing suitable is found.
+        """
+        from imswitch.imcontrol.model.focus_map import FocusMap  # noqa: local import
+        for candidate_id in ["manual", "global"]:
+            fm = self.focus_map_manager.get(candidate_id)
+            if fm is not None and fm.is_fitted:
+                return fm
+        # Fallback: any fitted map
+        for fm in self.focus_map_manager.get_all().values():
+            if fm.is_fitted:
+                return fm
+        return None
+
+    # ================================================================
+    # Focus Map API endpoints
+    # ================================================================
+
+    @APIExport(requestType="POST")
+    def computeFocusMap(self, focusMapConfig: Optional[FocusMapConfig] = None,
+                        group_id: Optional[str] = None):
+        """
+        Compute focus map for one or all scan groups.
+
+        Runs autofocus on a grid of positions within each group's bounds,
+        fits a Z surface, and stores the results for use during acquisition.
+
+        Args:
+            focusMapConfig: Override config (uses experiment default if None).
+                            May include scan_areas from the frontend so that
+                            the correct XY bounds are known even before an
+                            experiment has been started.
+            group_id: If provided, only compute for this group. Otherwise compute for all.
+
+        Returns:
+            Dict with focus map results per group
+        """
+        if focusMapConfig is None:
+            focusMapConfig = FocusMapConfig(enabled=True)
+        focusMapConfig.af_n_gauss=0  # TODO: Force n_gauss=0 for autofocus during focus mapping to speed it up and avoid fitting issues at low SNR. The main purpose of the focus map is to get a general Z surface, not perfect autofocus results at each point, so this is an acceptable tradeoff. The config parameter is still kept for potential future use if we want to allow more flexible autofocus settings during focus mapping.
+        # Store config for channel_offsets access during acquisition
+        self._focus_map_config = focusMapConfig
+
+        # Clear any previous abort request
+        self.focus_map_manager.clear_abort()
+
+        self._logger.info(
+            f"Computing focus map: method={focusMapConfig.method}, "
+            f"grid={focusMapConfig.rows}x{focusMapConfig.cols}, "
+            f"group_id={group_id}"
+        )
+
+        # Determine scan area bounds – prefer scan_areas passed in the config,
+        # then fall back to last experiment areas, then to current stage pos.
+        results = {}
+
+        if focusMapConfig.scan_areas is not None and len(focusMapConfig.scan_areas) > 0:
+            # Caller provided scan areas directly (e.g. from frontend)
+            self._last_scan_areas = focusMapConfig.scan_areas
+        
+        effective_scan_areas = getattr(self, '_last_scan_areas', None)
+        if effective_scan_areas is None or len(effective_scan_areas) == 0:
+            # Fallback: use current stage position as single area
+            pos = self.mStage.getPosition()
+            effective_scan_areas = [{
+                "areaId": "current",
+                "areaName": "Current Position",
+                "bounds": {
+                    "minX": pos.get("X", 0) - 500,
+                    "maxX": pos.get("X", 0) + 500,
+                    "minY": pos.get("Y", 0) - 500,
+                    "maxY": pos.get("Y", 0) + 500,
+                },
+            }]
+
+        for area in effective_scan_areas:
+            area_id = area.get("areaId", "default")
+            area_name = area.get("areaName", area_id)
+
+            if group_id is not None and area_id != group_id:
+                continue
+
+            bounds = area.get("bounds", {})
+            result = self._compute_focus_map_for_group(
+                group_id=area_id,
+                group_name=area_name,
+                bounds=bounds,
+                config=focusMapConfig,
+            )
+            results[area_id] = result
+
+        return results
+
+    def _compute_focus_map_for_group(self, group_id: str, group_name: str,
+                                     bounds: Dict[str, float],
+                                     config: FocusMapConfig) -> Dict[str, Any]:
+        """
+        Compute focus map for a single group by moving stage and running autofocus.
+
+        Args:
+            group_id: Identifier for this scan group
+            group_name: Human-readable name
+            bounds: Dict with minX, maxX, minY, maxY
+            config: FocusMapConfig
+
+        Returns:
+            FocusMapResult as dict
+        """
+        fm = self.focus_map_manager.get_or_create(
+            group_id=group_id,
+            group_name=group_name,
+            method=config.method,
+            smoothing_factor=config.smoothing_factor,
+            z_offset=config.z_offset,
+            clamp_enabled=config.clamp_enabled,
+            z_min=config.z_min,
+            z_max=config.z_max,
+        )
+        # Always clear points when explicitly (re)computing a focus map.
+        # Precomputed maps are protected by the skip-logic in _run_focus_map_phase
+        # and computeFocusMap; this function is only reached when we truly want
+        # to measure from scratch.
+        fm.clear_points()
+
+        # Generate measurement grid
+        grid = FocusMap.generate_grid(
+            bounds=bounds,
+            rows=config.rows,
+            cols=config.cols,
+            add_margin=config.add_margin,
+        )
+        self._logger.info(f"Focus map [{group_id}]: measuring {len(grid)} points")
+
+        # Measure each grid point
+        for i, (gx, gy) in enumerate(grid):
+            # Check abort flag
+            if self.focus_map_manager.abort_requested:
+                self._logger.warning(f"Focus map [{group_id}]: aborted by user at point {i+1}/{len(grid)}")
+                break
+            try:
+                # Move stage to measurement position
+                self.move_stage_xy(posX=gx, posY=gy, relative=False)
+                time.sleep(0.1)  # Settle time
+
+                # Run autofocus to find best Z using config parameters
+                best_z = self.autofocus(
+                    mode=config.af_mode,
+                    af_range=config.af_range,
+                    af_resolution=config.af_resolution,
+                    af_cropsize=config.af_cropsize,
+                    af_algorithm=config.af_algorithm,
+                    af_settle_time=config.af_settle_time,
+                    af_static_offset=config.af_static_offset,
+                    af_two_stage=config.af_two_stage,
+                    af_n_gauss=config.af_n_gauss,
+                    illuminationChannel=config.af_illumination_channel,
+                    max_attempts=config.af_max_attempts,
+                    target_focus_setpoint=config.af_target_setpoint,
+                )
+
+                if best_z is None:
+                    # If autofocus failed, read current Z as fallback
+                    best_z = self.mStage.getPosition().get("Z", 0)
+                    self._logger.warning(
+                        f"Focus map [{group_id}]: autofocus failed at ({gx:.1f}, {gy:.1f}), "
+                        f"using current Z={best_z:.3f}"
+                    )
+
+                fm.add_point(gx, gy, float(best_z))
+                self._logger.debug(
+                    f"Focus map [{group_id}]: point {i+1}/{len(grid)} "
+                    f"at ({gx:.1f}, {gy:.1f}) → Z={best_z:.3f}"
+                )
+                # settle for a moment 
+                time.sleep(0.5)
+
+            except Exception as e:
+                self._logger.error(f"Focus map [{group_id}]: failed at ({gx:.1f}, {gy:.1f}): {e}")
+
+        # Fit the surface
+        try:
+            stats = fm.fit()
+            self._logger.info(
+                f"Focus map [{group_id}]: fitted {stats.method}, "
+                f"MAE={stats.mean_abs_error:.4f}, n={stats.n_points}"
+            )
+        except ValueError as e:
+            self._logger.error(f"Focus map [{group_id}]: fit failed: {e}")
+            return fm.to_result().to_dict()
+
+        # Save artifacts if requested
+        if config.store_debug_artifacts:
+            try:
+                save_dir = os.path.join(self.save_dir, "focus_maps")
+                fm.save(save_dir)
+            except Exception as e:
+                self._logger.warning(f"Failed to save focus map artifacts: {e}")
+
+        return fm.to_result().to_dict()
+
+    @APIExport(requestType="GET")
+    def getFocusMap(self, group_id: Optional[str] = None):
+        """
+        Get saved focus maps.
+
+        Args:
+            group_id: If provided, get only this group. Otherwise get all.
+
+        Returns:
+            Focus map data per group
+        """
+        if group_id is not None:
+            fm = self.focus_map_manager.get(group_id)
+            if fm is None:
+                raise HTTPException(status_code=404, detail=f"No focus map for group '{group_id}'")
+            return fm.to_result().to_dict()
+        return self.focus_map_manager.to_dict()
+
+    @APIExport(requestType="POST")
+    def getFocusMapPreview(self, group_id: str, resolution: int = 30):
+        """
+        Get a preview grid for visualization of a focus map.
+
+        Args:
+            group_id: Group to preview
+            resolution: Grid resolution for preview
+
+        Returns:
+            Dict with x, y, z arrays and raw points
+        """
+        fm = self.focus_map_manager.get(group_id)
+        if fm is None or not fm.is_fitted:
+            raise HTTPException(status_code=404, detail=f"No fitted focus map for group '{group_id}'")
+
+        return fm.generate_preview_grid(resolution=resolution)
+
+    @APIExport(requestType="POST")
+    def clearFocusMap(self, group_id: Optional[str] = None):
+        """
+        Clear focus map(s).
+
+        Args:
+            group_id: If provided, clear only this group. Otherwise clear all.
+
+        Returns:
+            Status message
+        """
+        self.focus_map_manager.clear(group_id)
+        target = f"group '{group_id}'" if group_id else "all groups"
+        self._logger.info(f"Cleared focus map for {target}")
+        return {"status": "cleared", "target": target}
+
+    @APIExport(requestType="POST")
+    def interruptFocusMap(self):
+        """
+        Interrupt an ongoing focus map computation.
+
+        Sets the abort flag so the measurement loop stops at the next grid point.
+        The map that was being computed will still try to fit with whatever
+        points have been collected so far.
+
+        Returns:
+            Status message
+        """
+        self.focus_map_manager.request_abort()
+        self._logger.info("Focus map computation interrupt requested")
+        return {"status": "interrupt_requested"}
+
+    @APIExport(requestType="GET")
+    def saveFocusMaps(self, path: str = ""):
+        """
+        Save all current focus maps to disk as JSON files.
+
+        Args:
+            path: Directory to save into. Empty string uses default location.
+
+        Returns:
+            Dict with saved file info
+        """
+        if not path:
+            path = os.path.join(self.save_dir, "focus_maps")
+        os.makedirs(path, exist_ok=True)
+        saved = self.focus_map_manager.save_all(path)
+        self._logger.info(f"Saved {len(saved)} focus maps to {path}")
+        return {"saved_files": saved, "count": len(saved), "path": path}
+
+    @APIExport(requestType="GET")
+    def loadFocusMaps(self, path: str = ""):
+        """
+        Load focus maps from disk, restoring previously saved maps.
+
+        Args:
+            path: Directory to load from. Empty string uses default location.
+
+        Returns:
+            Dict with loaded map info
+        """
+        if not path:
+            path = os.path.join(self.save_dir, "focus_maps")
+        if not os.path.isdir(path):
+            return {"loaded_count": 0, "path": path, "error": "Directory not found"}
+        count = self.focus_map_manager.load_all(path)
+        self._logger.info(f"Loaded {count} focus maps from {path}")
+        maps_dict = self.focus_map_manager.to_dict()
+        return {"loaded_count": count, "path": path, "maps": maps_dict}
+
+    @APIExport(requestType="POST")
+    def computeFocusMapFromPoints(self, request: FocusMapFromPointsRequest):
+        """
+        Compute a focus map from manually specified XYZ points.
+
+        Instead of running autofocus on a grid, the user provides pre-measured
+        reference points (e.g. from clicking on the wellplate viewer and
+        recording the current stage Z).
+
+        Args:
+            request: FocusMapFromPointsRequest with points and fit config
+
+        Returns:
+            FocusMapResult as dict
+        """
+        points = request.points
+        group_id = request.group_id
+        group_name = request.group_name
+        method = request.method
+        smoothing_factor = request.smoothing_factor
+        z_offset = request.z_offset
+        clamp_enabled = request.clamp_enabled
+        z_min = request.z_min
+        z_max = request.z_max
+
+        if not points or len(points) < 1:
+            return {"error": "At least 1 point is required"}
+
+        self._logger.info(
+            f"Computing focus map from {len(points)} manual points, "
+            f"method={method}, group_id={group_id}"
+        )
+
+        fm = self.focus_map_manager.get_or_create(
+            group_id=group_id,
+            group_name=group_name,
+            method=method,
+            smoothing_factor=smoothing_factor,
+            z_offset=z_offset,
+            clamp_enabled=clamp_enabled,
+            z_min=z_min,
+            z_max=z_max,
+        )
+        fm.clear_points()
+
+        # Add all manual points
+        for pt in points:
+            x = pt.get("x", 0)
+            y = pt.get("y", 0)
+            z = pt.get("z", 0)
+            fm.add_point(float(x), float(y), float(z))
+
+        # Fit the surface
+        try:
+            stats = fm.fit()
+            self._logger.info(
+                f"Focus map [{group_id}]: fitted {stats.method} from manual points, "
+                f"MAE={stats.mean_abs_error:.4f}, n={stats.n_points}"
+            )
+        except ValueError as e:
+            self._logger.error(f"Focus map [{group_id}]: fit failed: {e}")
+            return fm.to_result().to_dict()
+
+        return fm.to_result().to_dict()
+
+    def apply_focus_map_z(self, x: float, y: float, group_id: str = "default",
+                          channel: Optional[str] = None) -> Optional[float]:
+        """
+        Get the focus-mapped Z for a given XY position during acquisition.
+
+        This is called by the normal mode experiment execution to adjust Z
+        before acquiring at each tile position.
+
+        Args:
+            x: X position
+            y: Y position
+            group_id: Scan group identifier
+            channel: Optional illumination channel name. If provided and
+                     channel_offsets are configured in the FocusMapConfig,
+                     the per-channel offset will be added to the result.
+
+        Returns:
+            Estimated Z position, or None if no map available
+        """
+        z = self.focus_map_manager.interpolate(x, y, group_id)
+        if z is not None and channel:
+            # Apply per-channel Z offset if configured
+            focus_map_config = getattr(self, '_focus_map_config', None)
+            if focus_map_config and focus_map_config.channel_offsets:
+                channel_offset = focus_map_config.channel_offsets.get(channel, 0.0)
+                if channel_offset != 0.0:
+                    self._logger.debug(
+                        f"Applying channel offset for '{channel}': {channel_offset} µm"
+                    )
+                    z += channel_offset
+        return z
 
 
 # Copyright (C) 2025 Benedict Diederich

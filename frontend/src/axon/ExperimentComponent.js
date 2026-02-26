@@ -107,11 +107,19 @@ const ExperimentComponent = () => {
     console.log(`Total scan areas: ${scanConfig.scanAreas.length}`);
     console.log(`Total positions: ${scanConfig.metadata.totalPositions}`);
 
+    // Zero out intensities for channels that are not enabled for experiment acquisition
+    const channelEnabled = experimentState.parameterValue.channelEnabledForExperiment || [];
+    const rawIntensities = experimentState.parameterValue.illuIntensities || [];
+    const filteredIntensities = rawIntensities.map((val, idx) =>
+      channelEnabled[idx] === true ? val : 0
+      );
+
     //create experiment request with pre-calculated coordinates
     const experimentRequest = {
       name: experimentState.name,
       parameterValue: {
         ...experimentState.parameterValue,
+        illuIntensities: filteredIntensities,
         resortPointListToSnakeCoordinates: false, // IMPORTANT: Tell backend NOT to resort
         is_snakescan: wellSelectorState.areaSelectSnakescan,
         overlapWidth: wellSelectorState.mode === 'area' ? wellSelectorState.areaSelectOverlap : experimentState.parameterValue.overlapWidth,

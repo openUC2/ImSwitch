@@ -410,7 +410,7 @@ function App() {
             flexGrow: 1,
             display: "flex",
             position: "absolute",
-            p: isMobile ? 1 : 3,
+            p: selectedPlugin === "JupyterNotebook" ? 0 : isMobile ? 1 : 3,
             left: drawerWidth,
             width: "calc(100% - " + drawerWidth + "px)",
             height: "calc(100vh - 64px)",
@@ -421,7 +421,7 @@ function App() {
                 duration: theme.transitions.duration.leavingScreen,
               }),
             minHeight: "calc(100vh - 64px)",
-            overflow: "auto",
+            overflow: selectedPlugin === "JupyterNotebook" ? "hidden" : "auto",
           }}
         >
           {selectedPlugin === "LiveView" && (
@@ -448,12 +448,16 @@ function App() {
             <StageCenterCalibrationWizard />
           )}
           {selectedPlugin === "HoloController" && <HoloController />}
-          {selectedPlugin === "OffAxisHoloController" && <OffAxisHoloController />}
+          {selectedPlugin === "OffAxisHoloController" && (
+            <OffAxisHoloController />
+          )}
           {selectedPlugin === "DPCController" && <DPCController />}
           {selectedPlugin === "JupyterNotebook" && (
-            <JupyterProvider>
-              <JupyterExecutor />
-            </JupyterProvider>
+            <Box sx={{ width: "100%", height: "100%", minHeight: 0 }}>
+              <JupyterProvider>
+                <JupyterExecutor />
+              </JupyterProvider>
+            </Box>
           )}
           {selectedPlugin === "Infinity Scanning" && <LargeFovScanController />}
           {selectedPlugin === "Blockly" && <BlocklyController />}

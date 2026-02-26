@@ -7,12 +7,10 @@ import {
   Box,
   IconButton,
   Tooltip,
-  Chip,
 } from "@mui/material";
 import { OpenInNew, Refresh, Edit } from "@mui/icons-material";
 import { useSelector } from "react-redux";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
-import { testNotebookUrl } from "../utils/notebookValidator";
 
 const JupyterExecutor = () => {
   // Get connection settings from Redux
@@ -22,26 +20,7 @@ const JupyterExecutor = () => {
   const [jupyterUrl, setJupyterUrl] = useState(null);
   const [editableUrl, setEditableUrl] = useState("");
   const [isEditing, setIsEditing] = useState(false);
-  const [urlStatus, setUrlStatus] = useState({ proxied: null, direct: null });
   const [iframeKey, setIframeKey] = useState(0);
-
-  // Test if a URL is accessible
-  const testUrl = async (url) => {
-    try {
-      console.log(`Testing URL: ${url}`);
-      // the response is not used here because testNotebookUrl handles it
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-      const isValid = await testNotebookUrl(url);
-      console.log(`URL ${url} - Notebook valid: ${isValid}`);
-      clearTimeout(timeoutId);
-      return isValid;
-    } catch (error) {
-      console.error(`URL ${url} - Error:`, error);
-      return false;
-    }
-  };
 
   useEffect(() => {
     const fetchNotebookUrl = async () => {
@@ -55,43 +34,14 @@ const JupyterExecutor = () => {
         // Extract the path from the notebook URL
         const urlObj = new URL(notebookUrl);
         const jupyterPath = urlObj.pathname; // e.g., /jupyter/
-        const jupyterPort = urlObj.port; // e.g., 8888
-
         // Construct both possible URLs:
         // 1. Proxied URL through the ImSwitch API server (Caddy reverse proxy in Docker) e.g. http://localhost:80/jupyter/
         const proxiedUrl = `${hostIP}:${hostPort}${jupyterPath}`;
 
-        // 2. Direct URL to Jupyter server (for local development) e.g. http://localhost:8888/jupyter/
-        const directUrl = `${hostIP}:${jupyterPort}${jupyterPath}`;
+        console.log("Using proxied Jupyter URL:", proxiedUrl);
 
-        // Test both URLs to see which one works
-        console.log("Testing Jupyter URLs...");
-        console.log("Proxied URL:", proxiedUrl);
-        console.log("Direct URL:", directUrl);
-
-        const [proxiedWorks, directWorks] = await Promise.all([
-          testUrl(proxiedUrl),
-          testUrl(directUrl),
-        ]);
-
-        setUrlStatus({ proxied: proxiedWorks, direct: directWorks });
-
-        // Prefer proxied URL if it works, otherwise use direct URL
-        let finalUrl;
-        if (proxiedWorks) {
-          finalUrl = proxiedUrl;
-          console.log("✓ Using proxied Jupyter URL:", proxiedUrl);
-        } else if (directWorks) {
-          finalUrl = directUrl;
-          console.log("✓ Using direct Jupyter URL:", directUrl);
-        } else {
-          // If neither works, default to direct URL and let user adjust
-          finalUrl = directUrl;
-          console.warn("⚠ Neither URL responded, defaulting to:", directUrl);
-        }
-
-        setJupyterUrl(finalUrl);
-        setEditableUrl(finalUrl);
+        setJupyterUrl(proxiedUrl);
+        setEditableUrl(proxiedUrl);
       } catch (error) {
         console.error("Error fetching Jupyter URL:", error);
       }
@@ -121,35 +71,13 @@ const JupyterExecutor = () => {
   };
 
   return (
-    <>
+    <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {/* Top-Bar with URL editor and controls */}
-      <AppBar position="static">
+      <AppBar position="static" sx={{ flex: "0 0 auto" }}>
         <Toolbar>
           <Typography variant="h6" sx={{ flexGrow: 0, marginRight: 2 }}>
             Jupyter Executor
           </Typography>
-
-          {/* URL Status Indicators */}
-          {urlStatus.proxied !== null && (
-            <Tooltip title="Proxied URL (through ImSwitch)">
-              <Chip
-                label="Proxied"
-                size="small"
-                color={urlStatus.proxied ? "success" : "default"}
-                sx={{ marginRight: 1 }}
-              />
-            </Tooltip>
-          )}
-          {urlStatus.direct !== null && (
-            <Tooltip title="Direct URL (to Jupyter port)">
-              <Chip
-                label="Direct"
-                size="small"
-                color={urlStatus.direct ? "success" : "default"}
-                sx={{ marginRight: 2 }}
-              />
-            </Tooltip>
-          )}
 
           {/* Editable URL field */}
           <Box sx={{ flexGrow: 1, display: "flex", alignItems: "center" }}>
@@ -219,19 +147,21 @@ const JupyterExecutor = () => {
       </AppBar>
 
       {/* Notebook (iframe) */}
-      <div
-        style={{
-          width: "100%",
-          height: "calc(100vh - 64px)",
-          position: "relative",
-        }}
-      >
+      <Box sx={{ width: "100%", flex: "1 1 auto", minHeight: 0 }}>
         {jupyterUrl ? (
           <iframe
             key={iframeKey}
             src={jupyterUrl}
-            style={{ width: "100%", height: "100%", border: "none" }}
+            style={{
+              width: "100%",
+              height: "100%",
+              display: "block",
+              boxSizing: "border-box",
+              backgroundColor: "white",
+            }}
             title="Jupyter Notebook"
+            onLoad={() => console.log("iframe loaded successfully")}
+            onError={(e) => console.error("iframe load error:", e)}
           />
         ) : (
           <Box
@@ -247,8 +177,8 @@ const JupyterExecutor = () => {
             Loading Jupyter Notebook...
           </Box>
         )}
-      </div>
-    </>
+      </Box>
+    </Box>
   );
 };
 

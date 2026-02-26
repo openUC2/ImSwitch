@@ -177,10 +177,20 @@ class RecordingController(ImConWidgetController):
 
         # by default
         if mSaveFormat is None:
-                mSaveFormat = SaveFormat.TIFF
+            mSaveFormat = SaveFormat.TIFF
         else:
-                # Convert integer to SaveFormat enum (from API call)
+            # Convert user/API input to SaveFormat enum with validation
+            try:
                 mSaveFormat = SaveFormat(mSaveFormat)
+            except (ValueError, TypeError):
+                valid_values = [sf.value for sf in SaveFormat]
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Invalid save format '{mSaveFormat}'. "
+                        f"Valid values are: {valid_values}"
+                    ),
+                )
 
         timeStampDay = datetime.datetime.now().strftime("%Y_%m_%d")
         relativeFolder = os.path.join("recordings", timeStampDay)

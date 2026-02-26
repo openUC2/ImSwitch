@@ -6,7 +6,7 @@ import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSl
 const ImJoyView = ({ sharedImage }) => {
   // Get connection settings from Redux
   const { ip: hostIP, apiPort: hostPort } = useSelector(
-    getConnectionSettingsState
+    getConnectionSettingsState,
   );
   const [imjoyAPI, setImjoyAPI] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -62,7 +62,9 @@ const ImJoyView = ({ sharedImage }) => {
     }
 
     initImJoy();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Open shared image when both API and image data are ready
@@ -107,7 +109,7 @@ const ImJoyView = ({ sharedImage }) => {
     if (!imjoyAPI) return;
     try {
       const response = await fetch(
-        `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapNumpyToFastAPI?resizeFactor=1`
+        `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapNumpyToFastAPI?resizeFactor=1`,
       );
       const arrayBuffer = await response.arrayBuffer();
       let ij = await imjoyAPI.getWindow("ImageJ.JS");
@@ -139,13 +141,13 @@ const ImJoyView = ({ sharedImage }) => {
       }}
     >
       {/* Header section - fixed height */}
-      <Box sx={{ display: "flex", flexDirection: "column", gap: 1, flexShrink: 0 }}>
-        <Typography variant="h6">
-          ImJoy Integration Page
-        </Typography>
-        <Button 
-          variant="contained" 
-          onClick={handleSnapAndSend} 
+      <Box
+        sx={{ display: "flex", flexDirection: "column", gap: 1, flexShrink: 0 }}
+      >
+        <Typography variant="h6">ImJoy Integration Page</Typography>
+        <Button
+          variant="contained"
+          onClick={handleSnapAndSend}
           disabled={!imjoyAPI}
           sx={{ alignSelf: "flex-start" }}
         >
@@ -162,9 +164,9 @@ const ImJoyView = ({ sharedImage }) => {
       {/* Menu container - fixed height */}
       <Box
         id="imjoy-menu-container"
-        sx={{ 
-          width: "100%", 
-          height: 40, 
+        sx={{
+          width: "100%",
+          height: 40,
           border: "1px solid #ccc",
           flexShrink: 0,
         }}

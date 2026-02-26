@@ -410,7 +410,12 @@ function App() {
             flexGrow: 1,
             display: "flex",
             position: "absolute",
-            p: selectedPlugin === "JupyterNotebook" || selectedPlugin === "ImJoy" ? 0 : isMobile ? 1 : 3,
+            p:
+              selectedPlugin === "JupyterNotebook" || selectedPlugin === "ImJoy"
+                ? 0
+                : isMobile
+                  ? 1
+                  : 3,
             left: drawerWidth,
             width: "calc(100% - " + drawerWidth + "px)",
             height: "calc(100vh - 64px)",
@@ -421,7 +426,10 @@ function App() {
                 duration: theme.transitions.duration.leavingScreen,
               }),
             minHeight: "calc(100vh - 64px)",
-            overflow: selectedPlugin === "JupyterNotebook" || selectedPlugin === "ImJoy" ? "hidden" : "auto",
+            overflow:
+              selectedPlugin === "JupyterNotebook" || selectedPlugin === "ImJoy"
+                ? "hidden"
+                : "auto",
           }}
         >
           {selectedPlugin === "LiveView" && (

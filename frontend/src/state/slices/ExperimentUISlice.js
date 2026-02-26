@@ -11,6 +11,7 @@ export const DIMENSIONS = Object.freeze({
   POSITIONS: "positions",
   CHANNELS: "channels",
   Z_FOCUS: "zFocus",
+  FOCUS_MAP: "focusMap",
   TIME: "time",
   TILING: "tiling",
   OUTPUT: "output",
@@ -48,6 +49,11 @@ const initialExperimentUIState = {
       // Sub-state for Z/Focus mode selection
       mode: Z_FOCUS_MODES.SINGLE_Z,
     },
+    [DIMENSIONS.FOCUS_MAP]: {
+      enabled: false,
+      configured: false,
+      summary: "Disabled",
+    },
     [DIMENSIONS.TIME]: {
       enabled: false,
       configured: false,
@@ -80,6 +86,7 @@ const initialExperimentUIState = {
     [DIMENSIONS.POSITIONS]: false,
     [DIMENSIONS.CHANNELS]: false,
     [DIMENSIONS.Z_FOCUS]: false,
+    [DIMENSIONS.FOCUS_MAP]: false,
     [DIMENSIONS.TIME]: false,
     [DIMENSIONS.TILING]: false,
     [DIMENSIONS.OUTPUT]: false,

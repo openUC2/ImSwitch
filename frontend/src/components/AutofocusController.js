@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { 
   Paper, 
   Grid, 
@@ -12,7 +12,9 @@ import {
   Box,
   Divider,
   Switch,
-  FormControlLabel
+  FormControlLabel,
+  Alert,
+  CircularProgress
 } from "@mui/material";
 import Plot from "react-plotly.js";
 import { useDispatch, useSelector } from "react-redux";
@@ -26,6 +28,13 @@ import apiAutofocusControllerSetLiveMonitoringParameters from "../backendapi/api
 
 const AutofocusController = ({ hostIP, hostPort }) => {
   const dispatch = useDispatch();
+  
+  // Local state for backend sync and status
+  const [backendState, setBackendState] = useState(null);
+  const [currentZ, setCurrentZ] = useState(null);
+  const [positionError, setPositionError] = useState(null);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   
   // Access autofocus state from Redux
   const autofocusState = useSelector(autofocusSlice.getAutofocusState);
@@ -102,26 +111,98 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     }
   }, [availableIlluminations, illuminationChannel, dispatch]);
 
-  const handleStart = () => {
-    // Use selected illumination channel or fallback to currently active one
-    const selectedChannel = illuminationChannel || availableIlluminations[0];
-    const url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocus?rangez=${rangeZ}&resolutionz=${resolutionZ}&defocusz=${defocusZ}&illuminationChannel=${encodeURIComponent(selectedChannel || '')}&tSettle=${tSettle}&isDebug=${isDebug}&nGauss=${nGauss}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&static_offset=${staticOffset}&twoStage=${twoStage}`;
-    fetch(url, { method: "GET" })
-      .then((response) => response.json())
-      .then(() => {
+  // Fetch backend autofocus status on mount and periodically
+  const fetchAutofocusStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`${hostIP}:${hostPort}/imswitch/api/AutofocusController/getAutofocusStatus`);
+      if (response.ok) {
+        const status = await response.json();
+        setBackendState(status.state);
+        setCurrentZ(status.currentZ);
+        setPositionError(status.positionError);
+        
+        // Sync running state with backend
+        if (status.isRunning !== isRunning) {
+          dispatch(autofocusSlice.setIsRunning(status.isRunning));
+        }
+        if (status.isLiveMonitoring !== isLiveMonitoring) {
+          dispatch(autofocusSlice.setIsLiveMonitoring(status.isLiveMonitoring));
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching autofocus status:", error);
+    }
+  }, [hostIP, hostPort, isRunning, isLiveMonitoring, dispatch]);
+
+  // Fetch status on mount
+  useEffect(() => {
+    fetchAutofocusStatus();
+  }, []);
+
+  // Periodic status sync while running
+  useEffect(() => {
+    if (isRunning || isStarting) {
+      const interval = setInterval(fetchAutofocusStatus, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [isRunning, isStarting, fetchAutofocusStatus]);
+
+  const handleStart = async () => {
+    // Prevent double-clicks
+    if (isRunning || isStarting) {
+      console.warn("Autofocus already running or starting");
+      return;
+    }
+    
+    setIsStarting(true);
+    setPositionError(null);
+    
+    try {
+      // Use selected illumination channel or fallback to currently active one
+      const selectedChannel = illuminationChannel || availableIlluminations[0];
+      const url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocus?rangez=${rangeZ}&resolutionz=${resolutionZ}&defocusz=${defocusZ}&illuminationChannel=${encodeURIComponent(selectedChannel || '')}&tSettle=${tSettle}&isDebug=${isDebug}&nGauss=${nGauss}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&static_offset=${staticOffset}&twoStage=${twoStage}`;
+      const response = await fetch(url, { method: "GET" });
+      const result = await response.json();
+      
+      if (result.status === "error") {
+        setPositionError(result.message);
+        console.error("Autofocus start error:", result.message);
+      } else if (result.status === "started") {
         dispatch(autofocusSlice.setIsRunning(true));
         dispatch(autofocusSlice.setShowPlot(false)); // Hide plot when starting a new run
         dispatch(autofocusSlice.clearPlotData());  // Clear old data
-      })
-      .catch((error) => console.error("Error starting autofocus:", error));
+      }
+    } catch (error) {
+      console.error("Error starting autofocus:", error);
+      setPositionError("Failed to start autofocus: " + error.message);
+    } finally {
+      setIsStarting(false);
+    }
   };
 
-  const handleStop = () => {
-    const url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/stopAutoFocus`;
-    fetch(url, { method: "GET" })
-      .then((response) => response.json())
-      .then(() => dispatch(autofocusSlice.setIsRunning(false)))
-      .catch((error) => console.error("Error stopping autofocus:", error));
+  const handleStop = async () => {
+    if (!isRunning || isStopping) {
+      return;
+    }
+    
+    setIsStopping(true);
+    
+    try {
+      const url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/stopAutoFocus`;
+      const response = await fetch(url, { method: "GET" });
+      const result = await response.json();
+      
+      if (result.status === "stopped") {
+        dispatch(autofocusSlice.setIsRunning(false));
+        setBackendState(result.state);
+      }
+    } catch (error) {
+      console.error("Error stopping autofocus:", error);
+    } finally {
+      setIsStopping(false);
+      // Fetch current status to ensure sync
+      setTimeout(fetchAutofocusStatus, 500);
+    }
   };
 
   const togglePlot = () => {
@@ -316,17 +397,52 @@ const AutofocusController = ({ hostIP, hostPort }) => {
           />
         </Grid>
 
+        {/* Status Display */}
+        {(currentZ !== null || positionError || backendState) && (
+          <Grid item xs={12}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+              {currentZ !== null && (
+                <Typography variant="body2" color="textSecondary">
+                  Current Z: {currentZ.toFixed(2)}
+                </Typography>
+              )}
+              {backendState && backendState !== 'idle' && (
+                <Typography variant="body2" color="primary">
+                  State: {backendState}
+                </Typography>
+              )}
+            </Box>
+          </Grid>
+        )}
+
+        {/* Error Display */}
+        {positionError && (
+          <Grid item xs={12}>
+            <Alert severity="error" onClose={() => setPositionError(null)}>
+              {positionError}
+            </Alert>
+          </Grid>
+        )}
+
         <Grid item xs={12}>
-          <Button variant="contained" color="primary" onClick={handleStart}>
-            Start Autofocus
+          <Button 
+            variant="contained" 
+            color="primary" 
+            onClick={handleStart}
+            disabled={isRunning || isStarting}
+            startIcon={isStarting ? <CircularProgress size={16} color="inherit" /> : null}
+          >
+            {isStarting ? "Starting..." : "Start Autofocus"}
           </Button>
           <Button
             variant="contained"
             color="secondary"
             onClick={handleStop}
             style={{ marginLeft: "10px" }}
+            disabled={!isRunning || isStopping}
+            startIcon={isStopping ? <CircularProgress size={16} color="inherit" /> : null}
           >
-            Stop Autofocus
+            {isStopping ? "Stopping..." : "Stop Autofocus"}
           </Button>
           {plotData && (
             <Button
@@ -336,6 +452,15 @@ const AutofocusController = ({ hostIP, hostPort }) => {
             >
               {showPlot ? "Close Plot" : "Show Plot"}
             </Button>
+          )}
+          {isRunning && (
+            <Typography 
+              variant="body2" 
+              color="primary" 
+              style={{ marginLeft: "20px", display: 'inline' }}
+            >
+              Autofocus running...
+            </Typography>
           )}
         </Grid>
 

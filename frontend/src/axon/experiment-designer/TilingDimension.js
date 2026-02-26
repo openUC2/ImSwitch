@@ -14,9 +14,11 @@ import {
   AccordionSummary,
   AccordionDetails,
   Chip,
+  Tooltip,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
@@ -262,9 +264,14 @@ const TilingDimension = () => {
             
             <Box sx={{ display: "flex", gap: 2 }}>
               <Box sx={{ flex: 1 }}>
-                <Typography variant="caption" sx={{ fontWeight: 500 }}>
-                  Width Overlap
-                </Typography>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                  <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                    Width Overlap
+                  </Typography>
+                  <Tooltip title="Horizontal overlap between adjacent tiles. Negative values create gaps, positive values overlap for stitching." arrow>
+                    <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                  </Tooltip>
+                </Box>
                 <Slider
                   value={Math.round(parameterValue.overlapWidth * 100)}
                   min={-1000}
@@ -283,9 +290,14 @@ const TilingDimension = () => {
               </Box>
 
               <Box sx={{ flex: 1 }}>
-                <Typography variant="caption" sx={{ fontWeight: 500 }}>
-                  Height Overlap
-                </Typography>
+                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                  <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                    Height Overlap
+                  </Typography>
+                  <Tooltip title="Vertical overlap between adjacent tiles. Negative values create gaps, positive values overlap for stitching." arrow>
+                    <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                  </Tooltip>
+                </Box>
                 <Slider
                   value={Math.round(parameterValue.overlapHeight * 100)}
                   min={-1000}
@@ -306,9 +318,14 @@ const TilingDimension = () => {
 
             {/* Stage speed */}
             <Box>
-              <Typography variant="caption" sx={{ fontWeight: 500 }}>
-                Stage Speed
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Stage Speed
+                </Typography>
+                <Tooltip title="Speed of stage movement between tiles. Lower speeds reduce vibration but increase total scan time." arrow>
+                  <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
               <FormControl size="small" fullWidth sx={{ mt: 0.5 }}>
                 <Select
                   value={parameterValue.speed || 20000}

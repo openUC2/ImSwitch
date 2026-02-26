@@ -4,6 +4,7 @@ import TrackMotionTab from './FRAMESettings/TrackMotionTab';
 import SetLasersTab from './FRAMESettings/SetLasersTab';
 import TestHomingTab from './FRAMESettings/TestHomingTab';
 import PixelCalibrationTab from './FRAMESettings/PixelCalibrationTab';
+import ManualPixelCalibrationTab from './FRAMESettings/ManualPixelCalibrationTab';
 import ObjectiveControllerTab from './FRAMESettings/ObjectiveControllerTab';
 
 /**
@@ -14,6 +15,7 @@ import ObjectiveControllerTab from './FRAMESettings/ObjectiveControllerTab';
  * - Set Lasers (laser channel configuration)
  * - Test Homing (axis homing verification)
  * - Pixel Calibration (stage affine calibration)
+ * - Manual Pixel Calibration (two-point pixel-size calibration)
  * - Objective Controller (objective management)
  */
 const FRAMESettings = () => {
@@ -40,6 +42,7 @@ const FRAMESettings = () => {
         <Tab label="Set Lasers" />
         <Tab label="Test Homing" />
         <Tab label="Pixel Calibration" />
+        <Tab label="Manual Pixel Calibration" />
         <Tab label="Objective Controller" />
       </Tabs>
 
@@ -48,7 +51,8 @@ const FRAMESettings = () => {
         {selectedTab === 1 && <SetLasersTab />}
         {selectedTab === 2 && <TestHomingTab />}
         {selectedTab === 3 && <PixelCalibrationTab />}
-        {selectedTab === 4 && <ObjectiveControllerTab />}
+        {selectedTab === 4 && <ManualPixelCalibrationTab />}
+        {selectedTab === 5 && <ObjectiveControllerTab />}
       </Box>
     </Paper>
   );

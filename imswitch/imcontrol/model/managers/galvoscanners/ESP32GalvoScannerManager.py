@@ -5,7 +5,7 @@ This module implements the galvo scanner manager for ESP32/UC2 hardware
 using the UC2-REST galvo.py interface.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, List, Any, Optional
 from imswitch.imcommon.model import initLogger
 from .GalvoScannerManager import GalvoScannerManager
 
@@ -67,6 +67,10 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
         except Exception as e:
             self.__logger.error(f"Failed to initialize ESP32 Galvo Scanner: {e}")
             self._galvo = None
+        
+        # Try to load persisted affine calibration
+        if self.load_affine_config():
+            self.__logger.info(f"Loaded affine calibration for '{name}'")
 
     def start_scan(self, nx: int = None, ny: int = None,
                    x_min: int = None, x_max: int = None,
@@ -257,6 +261,88 @@ class ESP32GalvoScannerManager(GalvoScannerManager):
             return {"status": "dac_configured", "channel": channel}
         except Exception as e:
             self.__logger.error(f"Failed to set DAC: {e}")
+            return {"error": str(e)}
+
+    # ========================
+    # Arbitrary Points Methods
+    # ========================
+
+    def set_arbitrary_points(self, points: List[Dict], laser_trigger: str = "AUTO",
+                              timeout: int = 1) -> Dict[str, Any]:
+        """
+        Send arbitrary points to the ESP32 scanner hardware.
+        
+        Args:
+            points: List of point dicts with 'x', 'y', 'dwell_us', optional 'laser_intensity'
+                    (already in DAC coordinates 0-4095). Max 265 points.
+            laser_trigger: Trigger mode
+            timeout: Request timeout
+            
+        Returns:
+            dict: Response from hardware
+        """
+        if self._galvo is None:
+            return {"error": "Galvo not initialized"}
+        
+        if len(points) > 265:
+            return {"error": "Maximum 265 points supported"}
+        if len(points) == 0:
+            return {"error": "At least 1 point required"}
+        
+        try:
+            self._arbitrary_points = points
+            result = self._galvo.set_arbitrary_points(
+                points=points, laser_trigger=laser_trigger, timeout=timeout
+            )
+            self._arb_scan_running = True
+            self._arb_scan_paused = False
+            self.__logger.info(f"Started arbitrary point scan with {len(points)} points")
+            return result or {"status": "started", "num_points": len(points)}
+        except Exception as e:
+            self.__logger.error(f"Failed to set arbitrary points: {e}")
+            return {"error": str(e)}
+
+    def stop_arbitrary_scan(self, timeout: int = 1) -> Dict[str, Any]:
+        """Stop arbitrary point scanning."""
+        if self._galvo is None:
+            return {"error": "Galvo not initialized"}
+        
+        try:
+            result = self._galvo.stop_arbitrary_points(timeout=timeout)
+            self._arb_scan_running = False
+            self._arb_scan_paused = False
+            self.__logger.info("Stopped arbitrary point scan")
+            return result or {"status": "stopped"}
+        except Exception as e:
+            self.__logger.error(f"Failed to stop arbitrary scan: {e}")
+            return {"error": str(e)}
+
+    def pause_arbitrary_scan(self, timeout: int = 1) -> Dict[str, Any]:
+        """Pause arbitrary point scanning."""
+        if self._galvo is None:
+            return {"error": "Galvo not initialized"}
+        
+        try:
+            result = self._galvo.pause_arbitrary_points(timeout=timeout)
+            self._arb_scan_paused = True
+            self.__logger.info("Paused arbitrary point scan")
+            return result or {"status": "paused"}
+        except Exception as e:
+            self.__logger.error(f"Failed to pause arbitrary scan: {e}")
+            return {"error": str(e)}
+
+    def resume_arbitrary_scan(self, timeout: int = 1) -> Dict[str, Any]:
+        """Resume arbitrary point scanning from paused position."""
+        if self._galvo is None:
+            return {"error": "Galvo not initialized"}
+        
+        try:
+            result = self._galvo.resume_arbitrary_points(timeout=timeout)
+            self._arb_scan_paused = False
+            self.__logger.info("Resumed arbitrary point scan")
+            return result or {"status": "resumed"}
+        except Exception as e:
+            self.__logger.error(f"Failed to resume arbitrary scan: {e}")
             return {"error": str(e)}
 
 

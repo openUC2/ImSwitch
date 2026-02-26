@@ -168,9 +168,14 @@ const OutputDimension = () => {
           >
             {/* Trigger Mode Selection */}
             <Box sx={{ mb: 2 }}>
-              <Typography variant="caption" sx={{ fontWeight: 500, mb: 1, display: "block" }}>
-                Trigger Mode
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 1 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Trigger Mode
+                </Typography>
+                <Tooltip title="Hardware trigger uses TTL signals for precise timing. Software trigger uses callbacks, offering more flexibility but slightly higher latency." arrow>
+                  <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
               <FormControl size="small" fullWidth>
                 <Select
                   value={parameterValue.performanceTriggerMode || "hardware"}
@@ -238,9 +243,14 @@ const OutputDimension = () => {
 
           <Box sx={{ display: "flex", gap: 2 }}>
             <Box sx={{ flex: 1 }}>
-              <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-                tPre (Settle Time)
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  tPre (Settle Time)
+                </Typography>
+                <Tooltip title="Time before exposure starts. Allows stage vibrations to settle and illumination to stabilize after switching." arrow>
+                  <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
               <TextField
                 type="number"
                 size="small"
@@ -258,9 +268,14 @@ const OutputDimension = () => {
             </Box>
 
             <Box sx={{ flex: 1 }}>
-              <Typography variant="caption" sx={{ fontWeight: 500, mb: 0.5, display: "block" }}>
-                tPost (Exposure / Acquisition)
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 0.5 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  tPost (Exposure / Acquisition)
+                </Typography>
+                <Tooltip title="Duration of the exposure/acquisition phase. The camera captures for this duration before moving to the next action." arrow>
+                  <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
               <TextField
                 type="number"
                 size="small"
@@ -391,9 +406,14 @@ const OutputDimension = () => {
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
             {/* Compression options */}
             <Box>
-              <Typography variant="caption" sx={{ fontWeight: 500, mb: 1, display: "block" }}>
-                Compression (Zarr)
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 1 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Compression (Zarr)
+                </Typography>
+                <Tooltip title="Blosc compression is used by default for OME-Zarr, providing fast read/write with ~2-4x size reduction." arrow>
+                  <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
               <Typography variant="caption" color="textSecondary">
                 OME-Zarr files use blosc compression by default for optimal balance of speed and size.
               </Typography>
@@ -401,9 +421,14 @@ const OutputDimension = () => {
 
             {/* Chunking options */}
             <Box>
-              <Typography variant="caption" sx={{ fontWeight: 500, mb: 1, display: "block" }}>
-                Chunking Strategy
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 1 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Chunking Strategy
+                </Typography>
+                <Tooltip title="Chunking splits data into tiles for efficient random access and parallel I/O. Default: 256×256 pixels per chunk." arrow>
+                  <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
               <Typography variant="caption" color="textSecondary">
                 Data is automatically chunked for efficient access patterns. Default chunk size: 256x256 pixels.
               </Typography>
@@ -411,9 +436,14 @@ const OutputDimension = () => {
 
             {/* Metadata */}
             <Box>
-              <Typography variant="caption" sx={{ fontWeight: 500, mb: 1, display: "block" }}>
-                Metadata
-              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 1 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Metadata
+                </Typography>
+                <Tooltip title="OME-XML metadata includes channel names, pixel sizes, timestamps, objective info, and full acquisition parameters for reproducibility." arrow>
+                  <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                </Tooltip>
+              </Box>
               <Typography variant="caption" color="textSecondary">
                 Full OME metadata is included automatically, containing acquisition parameters, 
                 channel information, physical pixel sizes, and timestamps.

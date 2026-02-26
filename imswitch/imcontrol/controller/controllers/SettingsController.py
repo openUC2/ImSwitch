@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
@@ -646,6 +646,25 @@ class SettingsController(ImConWidgetController):
             'isRGB': mRGB,
             'mode': camMode
         }
+
+        # Include white-balance info when available (RGB cameras)
+        detector = self._master.detectorsManager.getCurrentDetector()
+        if mRGB:
+            try:
+                mParameterDict['awb_mode'] = detector.parameters.get('awb_mode', None)
+                if mParameterDict['awb_mode'] is not None:
+                    mParameterDict['awb_mode'] = mParameterDict['awb_mode'].value
+            except Exception:
+                mParameterDict['awb_mode'] = None
+            try:
+                red_p = detector.parameters.get('red_gain', None)
+                blue_p = detector.parameters.get('blue_gain', None)
+                mParameterDict['red_gain'] = red_p.value if red_p is not None else None
+                mParameterDict['blue_gain'] = blue_p.value if blue_p is not None else None
+            except Exception:
+                mParameterDict['red_gain'] = None
+                mParameterDict['blue_gain'] = None
+
         return mParameterDict
 
     @APIExport()
@@ -678,10 +697,15 @@ class SettingsController(ImConWidgetController):
         self.adjustFrame(detector=detector)
 
     @APIExport(runOnUIThread=True)
-    def setDetectorParameter(self, detectorName: str, parameterName: str, value: Any) -> None:
+    def setDetectorParameter(self, detectorName: str=None, parameterName: str=None, value: Any=None) -> None:
         """ Sets the specified detector-specific parameter to the specified
         value. """
-
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+        if parameterName is None:
+            return
+        if value is None:
+            return
         if (parameterName in ['Trigger source'] and
                 self.getCurrentParams().allDetectorsFrame.value()):
             # Special case for certain parameters that will follow the "update all detectors" option
@@ -801,6 +825,175 @@ class SettingsController(ImConWidgetController):
         if detectorName is None:
             detectorName = self._master.detectorsManager.getCurrentDetectorName()
         self.setDetectorParameter(detectorName, 'previewMaxValue', maxValue)
+
+    # ========================
+    # White Balance API
+    # ========================
+
+    @APIExport(runOnUIThread=True)
+    def setWhiteBalance(self, mode: str = 'auto',
+                        detectorName: Optional[str] = None) -> dict:
+        """Set the white-balance / AWB mode for an RGB camera.
+
+        Supported modes:
+        - ``auto``   – continuous automatic white balance
+        - ``manual`` – lock gains to the current red_gain / blue_gain values
+        - ``once``   – run AWB once, lock the resulting gains
+
+        For non-RGB detectors the call is a no-op and returns an error.
+
+        Args:
+            mode: One of ``auto``, ``manual``, ``once``.
+            detectorName: Detector to configure.  ``None`` → current detector.
+
+        Returns:
+            dict with ``status`` and, after ``once``, the locked ``red_gain`` /
+            ``blue_gain``.
+
+        Example::
+
+            GET /api/SettingsController/setWhiteBalance?mode=auto
+            GET /api/SettingsController/setWhiteBalance?mode=once&detectorName=WidefieldCamera
+        """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+
+        detector = self._master.detectorsManager[detectorName]
+
+        if not getattr(detector, '_isRGB', False):
+            return {'error': f'{detectorName} is not an RGB camera – white balance not available'}
+
+        if 'awb_mode' not in detector.parameters:
+            return {'error': f'{detectorName} does not expose awb_mode parameter'}
+
+        mode = mode.lower()
+        if mode not in ('auto', 'manual', 'once'):
+            return {'error': f'Unknown mode "{mode}". Use auto, manual or once.'}
+
+        try:
+            detector.setParameter('awb_mode', mode)
+
+            result = {
+                'status': 'ok',
+                'detectorName': detectorName,
+                'awb_mode': mode,
+            }
+
+            # After "once", read back the locked gains so the caller knows
+            if mode == 'once':
+                try:
+                    result['red_gain'] = detector.getParameter('red_gain')
+                    result['blue_gain'] = detector.getParameter('blue_gain')
+                except Exception:
+                    pass
+
+            return result
+
+        except Exception as e:
+            return {'error': str(e)}
+
+    @APIExport(runOnUIThread=True)
+    def setColourGains(self, redGain: float = 1.0, blueGain: float = 1.0,
+                       detectorName: Optional[str] = None) -> dict:
+        """Set per-channel colour gains (red / blue) for manual white balance.
+
+        If the camera is not in ``manual`` AWB mode the gains are stored but
+        only take effect once the mode is switched to ``manual``.
+
+        Typical range is 0.5 – 8.0 depending on the sensor.
+
+        Args:
+            redGain: Red channel gain.
+            blueGain: Blue channel gain.
+            detectorName: Detector to configure.  ``None`` → current detector.
+
+        Returns:
+            dict with ``status`` and the applied values.
+
+        Example::
+
+            GET /api/SettingsController/setColourGains?redGain=1.5&blueGain=1.2
+        """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+
+        detector = self._master.detectorsManager[detectorName]
+
+        if not getattr(detector, '_isRGB', False):
+            return {'error': f'{detectorName} is not an RGB camera'}
+
+        errors = []
+        try:
+            detector.setParameter('red_gain', float(redGain))
+        except Exception as e:
+            errors.append(f'red_gain: {e}')
+
+        try:
+            detector.setParameter('blue_gain', float(blueGain))
+        except Exception as e:
+            errors.append(f'blue_gain: {e}')
+
+        if errors:
+            return {'error': '; '.join(errors)}
+
+        return {
+            'status': 'ok',
+            'detectorName': detectorName,
+            'red_gain': float(redGain),
+            'blue_gain': float(blueGain),
+        }
+
+    @APIExport()
+    def getWhiteBalance(self, detectorName: Optional[str] = None) -> dict:
+        """Return current white-balance mode and per-channel gains.
+
+        Works for any detector – non-RGB detectors return
+        ``awb_supported: false``.
+
+        Args:
+            detectorName: Detector to query.  ``None`` → current detector.
+
+        Returns:
+            dict with ``awb_supported``, ``awb_mode``, ``red_gain``,
+            ``blue_gain``.
+
+        Example::
+
+            GET /api/SettingsController/getWhiteBalance
+            GET /api/SettingsController/getWhiteBalance?detectorName=WidefieldCamera
+        """
+        if detectorName is None:
+            detectorName = self._master.detectorsManager.getCurrentDetectorName()
+
+        detector = self._master.detectorsManager[detectorName]
+        is_rgb = getattr(detector, '_isRGB', False)
+
+        result = {
+            'detectorName': detectorName,
+            'awb_supported': is_rgb and 'awb_mode' in detector.parameters,
+        }
+
+        if result['awb_supported']:
+            try:
+                result['awb_mode'] = detector.getParameter('awb_mode')
+            except Exception:
+                result['awb_mode'] = detector.parameters['awb_mode'].value
+
+            try:
+                result['red_gain'] = detector.getParameter('red_gain')
+            except Exception:
+                result['red_gain'] = detector.parameters.get('red_gain', None)
+                if result['red_gain'] is not None:
+                    result['red_gain'] = result['red_gain'].value
+
+            try:
+                result['blue_gain'] = detector.getParameter('blue_gain')
+            except Exception:
+                result['blue_gain'] = detector.parameters.get('blue_gain', None)
+                if result['blue_gain'] is not None:
+                    result['blue_gain'] = result['blue_gain'].value
+
+        return result
 
 _attrCategory = 'Detector'
 _modelAttr = 'Model'

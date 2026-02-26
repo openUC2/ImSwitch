@@ -100,10 +100,30 @@ export default function LiveView({ setFileManagerInitialPath }) {
   // Track previous activeTab to detect changes
   const prevActiveTabRef = React.useRef(activeTab);
 
+  // Track notification timeout for proper cleanup
+  const notificationTimeoutRef = React.useRef(null);
+
   const showNotification = (message, type = "success") => {
+    // Clear any existing timeout to prevent premature clearing of new notifications
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+    }
+
     dispatch(setNotification({ message, type }));
-    setTimeout(() => dispatch(clearNotification()), 3000);
+    notificationTimeoutRef.current = setTimeout(() => {
+      dispatch(clearNotification());
+      notificationTimeoutRef.current = null;
+    }, 3000);
   };
+
+  // Cleanup notification timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const formatLabels = {
     1: "TIFF",

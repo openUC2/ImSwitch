@@ -15,7 +15,6 @@ import MenuIcon from "@mui/icons-material/Menu";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import AxisControl from "./AxisControl.jsx";
 import JoystickControl from "./JoystickControl.jsx";
-import GamepadSpeedControl from "./GamepadSpeedControl.js";
 import VirtualJoystickControl from "./VirtualJoystickControl.js";
 import AutofocusController from "./AutofocusController";
 import DetectorParameters from "./DetectorParameters";
@@ -28,6 +27,10 @@ import ObjectiveSwitcher from "./ObjectiveSwitcher";
 import DetectorTriggerController from "./DetectorTriggerController";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
+import {
+  setNotification,
+  clearNotification,
+} from "../state/slices/NotificationSlice";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
 import ExtendedLEDMatrixController from "./ExtendedLEDMatrixController.jsx";
 
@@ -57,7 +60,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
   // Get connection settings from Redux
   const { ip: hostIP, apiPort: hostPort } = useSelector(
-    getConnectionSettingsState
+    getConnectionSettingsState,
   );
 
   // Access global Redux state
@@ -97,6 +100,39 @@ export default function LiveView({ setFileManagerInitialPath }) {
   // Track previous activeTab to detect changes
   const prevActiveTabRef = React.useRef(activeTab);
 
+  // Track notification timeout for proper cleanup
+  const notificationTimeoutRef = React.useRef(null);
+
+  const showNotification = (message, type = "success") => {
+    // Clear any existing timeout to prevent premature clearing of new notifications
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+    }
+
+    dispatch(setNotification({ message, type }));
+    notificationTimeoutRef.current = setTimeout(() => {
+      dispatch(clearNotification());
+      notificationTimeoutRef.current = null;
+    }, 3000);
+  };
+
+  // Cleanup notification timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const formatLabels = {
+    1: "TIFF",
+    3: "ZARR",
+    4: "MP4",
+    5: "PNG",
+    6: "JPG",
+  };
+
   // Handle detector tab switching - restart stream with new detector
   useEffect(() => {
     const prevTab = prevActiveTabRef.current;
@@ -104,8 +140,10 @@ export default function LiveView({ setFileManagerInitialPath }) {
 
     // If tab changed and stream is running, restart stream with new detector
     if (prevTab !== activeTab && isStreamRunning) {
-      console.log(`[LiveView] Tab changed from ${prevTab} to ${activeTab}, restarting stream...`);
-      
+      console.log(
+        `[LiveView] Tab changed from ${prevTab} to ${activeTab}, restarting stream...`,
+      );
+
       (async () => {
         try {
           // Stop current stream
@@ -119,7 +157,9 @@ export default function LiveView({ setFileManagerInitialPath }) {
           const protocol = liveStreamState.imageFormat || "jpeg";
           const newDetectorName = detectors[activeTab] || null;
           await apiLiveViewControllerStartLiveView(newDetectorName, protocol);
-          console.log(`[LiveView] Started ${protocol} stream for new detector: ${newDetectorName}`);
+          console.log(
+            `[LiveView] Started ${protocol} stream for new detector: ${newDetectorName}`,
+          );
         } catch (error) {
           console.error("[LiveView] Error switching detector stream:", error);
           // Ensure Redux state reflects actual state
@@ -127,7 +167,13 @@ export default function LiveView({ setFileManagerInitialPath }) {
         }
       })();
     }
-  }, [activeTab, isStreamRunning, detectors, liveStreamState.imageFormat, dispatch]);
+  }, [
+    activeTab,
+    isStreamRunning,
+    detectors,
+    liveStreamState.imageFormat,
+    dispatch,
+  ]);
 
   /* detectors */
   useEffect(() => {
@@ -135,7 +181,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
       try {
         // 'getDetectorNames' must return something array-like
         const r = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorNames`
+          `${hostIP}:${hostPort}/imswitch/api/SettingsController/getDetectorNames`,
         );
         const data = await r.json();
         // Check if data is an array before setting state
@@ -170,7 +216,6 @@ export default function LiveView({ setFileManagerInitialPath }) {
     })();
   }, [hostIP, hostPort, dispatch]);
   */
-
 
   /* Check if stream is running and auto-start if not active (only on initial mount or connection change) */
   useEffect(() => {
@@ -221,7 +266,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
         const protocol = liveStreamState.imageFormat || "jpeg"; // Default to JPEG
 
         console.log(
-          `Starting ${protocol} stream (imageFormat: ${liveStreamState.imageFormat})`
+          `Starting ${protocol} stream (imageFormat: ${liveStreamState.imageFormat})`,
         );
 
         // Start stream with current protocol (binary, jpeg, or webrtc)
@@ -245,13 +290,23 @@ export default function LiveView({ setFileManagerInitialPath }) {
   };
   async function snap(fileName, format) {
     // English comment: Example fetch for snapping an image with editable fileName
-    const response = await fetch(
-      `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?fileName=${fileName}&mSaveFormat=${format}`
-    );
-    const data = await response.json();
-    // data.relativePath might be "recordings/2025_05_20-11-12-44_PM"
-    const snapPath = `/${data.relativePath}`;
-    dispatch(liveViewSlice.setLastSnapPath(snapPath)); // Store in Redux
+    try {
+      const response = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?fileName=${encodeURIComponent(fileName)}&saveFormat=${encodeURIComponent(format)}`,
+      );
+      if (!response.ok) {
+        throw new Error(`Snap failed: ${response.status}`);
+      }
+      const data = await response.json();
+      // data.relativePath might be "recordings/2025_05_20-11-12-44_PM"
+      const snapPath = `/${data.relativePath}`;
+      dispatch(liveViewSlice.setLastSnapPath(snapPath)); // Store in Redux
+      const label = formatLabels[format] || "Unknown";
+      showNotification(`Image saved (${label})`, "success");
+    } catch (error) {
+      console.error("Snap failed:", error);
+      showNotification("Snap failed", "error");
+    }
   }
   function handleGoToImage() {
     if (lastSnapPath) {
@@ -259,16 +314,35 @@ export default function LiveView({ setFileManagerInitialPath }) {
     }
   }
   const startRec = async (format) => {
-    setIsRecording(true);
-    fetch(
-      `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${format}`
-    ).catch(() => {});
+    try {
+      const response = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${encodeURIComponent(format)}`,
+      );
+      if (!response.ok) {
+        throw new Error(`Start recording failed: ${response.status}`);
+      }
+      setIsRecording(true);
+      const label = formatLabels[format] || "Unknown";
+      showNotification(`Recording started (${label})`, "info");
+    } catch (error) {
+      console.error("Start recording failed:", error);
+      showNotification("Recording start failed", "error");
+    }
   };
   const stopRec = async () => {
-    setIsRecording(false);
-    fetch(`${hostIP}:${hostPort}/imswitch/api/RecordingController/stopRecording`).catch(
-      () => {}
-    );
+    try {
+      const response = await fetch(
+        `${hostIP}:${hostPort}/imswitch/api/RecordingController/stopRecording`,
+      );
+      if (!response.ok) {
+        throw new Error(`Stop recording failed: ${response.status}`);
+      }
+      setIsRecording(false);
+      showNotification("Recording saved", "success");
+    } catch (error) {
+      console.error("Stop recording failed:", error);
+      showNotification("Recording stop failed", "error");
+    }
   };
 
   return (

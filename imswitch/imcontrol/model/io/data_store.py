@@ -114,7 +114,7 @@ class AcquisitionDataStore:
                  write_zarr: bool = True,
                  write_tiff: bool = False,
                  write_individual_tiffs: bool = False,
-                 zarr_chunk_size: tuple = (1, 256, 256),
+                 zarr_chunk_size: tuple = (1, 1, 1, 256, 256),  # (t, c, z, y, x)
                  tiff_bigtiff: bool = True,
                  background_writes: bool = True,
                  on_write_complete: Optional[Callable[[str, int], None]] = None):

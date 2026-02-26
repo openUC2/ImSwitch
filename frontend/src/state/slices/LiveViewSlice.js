@@ -10,6 +10,8 @@ const initialLiveViewState = {
   isStreamRunning: false,
   lastSnapPath: null, // Store the last snapped image path
   showPositionController: false, // Persistent toggle for position controller visibility
+  snapFormat: 1, // Persist last selected snap format (1 = TIFF)
+  recordFormat: 4, // Persist last selected recording format (4 = MP4)
 };
 
 // Create slice
@@ -41,6 +43,12 @@ const liveViewSlice = createSlice({
     setShowPositionController: (state, action) => {
       state.showPositionController = action.payload;
     },
+    setSnapFormat: (state, action) => {
+      state.snapFormat = action.payload;
+    },
+    setRecordFormat: (state, action) => {
+      state.recordFormat = action.payload;
+    },
     resetState: (state) => {
       return initialLiveViewState;
     },
@@ -57,6 +65,8 @@ export const {
   setIsStreamRunning,
   setLastSnapPath,
   setShowPositionController,
+  setSnapFormat,
+  setRecordFormat,
   resetState,
 } = liveViewSlice.actions;
 

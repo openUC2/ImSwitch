@@ -801,7 +801,10 @@ class RecordingService(SignalInterface):
             SaveFormat.PNG: 'snap_png',
             SaveFormat.JPG: 'snap_jpg',
         }
-        return mapping.get(format, 'snap_tiff')
+        task_type = mapping.get(format)
+        if task_type is None:
+            raise ValueError(f"Unsupported format for snap: {format}. Only TIFF, PNG, JPG are supported.")
+        return task_type
     
     def _generate_filepath(self, basepath: str, detector_name: str, format: SaveFormat) -> str:
         """Generate full filepath with extension."""
@@ -840,17 +843,49 @@ class RecordingService(SignalInterface):
             self._logger.warning("Video recording already in progress")
             return False
         
-        self._video_writer = MP4Writer(filepath, fps=fps)
-        self._video_detector_name = detector_name
-        self._video_writer.start()
-        
-        # Connect frame callback for automatic frame capture
-        if auto_capture:
-            self._connect_frame_callback()
-        
-        self.sigRecordingStarted.emit()
-        self._logger.info(f"Video recording started: {filepath}")
-        return True
+        try:
+            # Ensure directory exists
+            filepath_dir = os.path.dirname(filepath)
+            if filepath_dir:
+                os.makedirs(filepath_dir, exist_ok=True)
+            
+            self._video_writer = MP4Writer(filepath, fps=fps)
+            self._video_detector_name = detector_name
+            self._video_writer.start()
+            
+            # Connect frame callback for automatic frame capture
+            if auto_capture:
+                self._connect_frame_callback()
+            
+            self.sigRecordingStarted.emit()
+            self._logger.info(f"Video recording started: {filepath}")
+            return True
+        except Exception as e:
+            # Log full traceback for easier debugging
+            self._logger.exception(f"Failed to start video recording: {e}")
+            
+            # Best-effort rollback of any side effects from the try block
+            if self._video_writer is not None:
+                try:
+                    if getattr(self._video_writer, "is_recording", False):
+                        self._video_writer.stop()
+                except Exception:
+                    # Ensure cleanup failures don't mask the original error
+                    self._logger.exception("Error while stopping video writer after failed start")
+                finally:
+                    self._video_writer = None
+            
+            # Disconnect frame callback if it may have been connected
+            try:
+                if getattr(self, "_frame_callback_connected", False):
+                    self._disconnect_frame_callback()
+            except Exception:
+                self._logger.exception("Error while disconnecting frame callback after failed start")
+            
+            # Reset detector name to avoid stale state on next attempt
+            self._video_detector_name = None
+            
+            return False
     
     def add_video_frame(self, frame: np.ndarray):
         """Add a frame to the current video recording."""

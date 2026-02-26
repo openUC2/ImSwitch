@@ -49,22 +49,29 @@ export default function StreamControls({
     (state) => state.liveStreamState.showHistogram,
   );
 
-  // Internal state for save format and file name
-  const [saveFormat, setSaveFormat] = useState(4); // Default: MP4
+  // Internal state for file name
   const [snapFileName, setSnapFileName] = useState("openUC2_snapshot");
   const [overlayOpen, setOverlayOpen] = useState(false);
 
-  const saveFormatOptions = [
+  // Separate format options for snap and record
+  const snapFormatOptions = [
     { value: 1, label: "TIFF" },
-    { value: 3, label: "ZARR" },
-    { value: 4, label: "MP4" },
     { value: 5, label: "PNG" },
     { value: 6, label: "JPG" },
+  ];
+
+  const recordFormatOptions = [
+    { value: 4, label: "MP4" },
+    { value: 1, label: "TIFF" },
+    { value: 3, label: "ZARR" },
   ];
 
   // Get stream stats from Redux (includes fps which indicates active frames)
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
+
+  const snapFormat = liveViewState.snapFormat;
+  const recordFormat = liveViewState.recordFormat;
 
   // Use Redux state as source of truth for stream status
   const isLiveViewActive = liveViewState.isStreamRunning;
@@ -314,16 +321,18 @@ export default function StreamControls({
 
         {/* Format and Name inputs */}
         <FormControl size="small" sx={{ minWidth: 120 }}>
-          <InputLabel id="save-format-label">Format</InputLabel>
+          <InputLabel id="snap-format-label">Snap Format</InputLabel>
           <Select
-            labelId="save-format-label"
-            id="save-format-select"
-            value={saveFormat}
-            label="Format"
-            onChange={(e) => setSaveFormat(e.target.value)}
+            labelId="snap-format-label"
+            id="snap-format-select"
+            value={snapFormat}
+            label="Snap Format"
+            onChange={(e) =>
+              dispatch(liveViewSlice.setSnapFormat(e.target.value))
+            }
             disabled={!isLiveViewActive}
           >
-            {saveFormatOptions.map((opt) => (
+            {snapFormatOptions.map((opt) => (
               <MenuItem key={opt.value} value={opt.value}>
                 {opt.label}
               </MenuItem>
@@ -335,9 +344,18 @@ export default function StreamControls({
           label="Image Name"
           size="small"
           value={snapFileName}
-          onChange={(e) => setSnapFileName(e.target.value)}
+          onChange={(e) => {
+            // Only allow alphanumeric, underscore, hyphen, and dot
+            const sanitized = e.target.value.replace(/[^a-zA-Z0-9_.-]/g, "");
+            setSnapFileName(sanitized);
+          }}
           sx={{ minWidth: 200, flex: 1 }}
           disabled={!isLiveViewActive}
+          helperText="Allowed: a-z, A-Z, 0-9, _ - ."
+          inputProps={{
+            pattern: "[a-zA-Z0-9_.-]*",
+            maxLength: 100,
+          }}
         />
 
         {/* Action buttons */}
@@ -345,7 +363,7 @@ export default function StreamControls({
           variant="contained"
           color="primary"
           size="small"
-          onClick={() => onSnap(snapFileName, saveFormat)}
+          onClick={() => onSnap(snapFileName, snapFormat)}
           startIcon={<CameraAlt />}
           disabled={!isLiveViewActive}
         >
@@ -361,12 +379,43 @@ export default function StreamControls({
           Go to image
         </Button>
 
+        {/* Record Format Dropdown (separate section) */}
+        <Box
+          sx={{
+            width: "100%",
+            borderTop: 1,
+            borderColor: "divider",
+            pt: 1.5,
+            mt: 1,
+          }}
+        />
+
+        <FormControl size="small" sx={{ minWidth: 130 }}>
+          <InputLabel id="record-format-label">Record Format</InputLabel>
+          <Select
+            labelId="record-format-label"
+            id="record-format-select"
+            value={recordFormat}
+            label="Record Format"
+            onChange={(e) =>
+              dispatch(liveViewSlice.setRecordFormat(e.target.value))
+            }
+            disabled={!isLiveViewActive}
+          >
+            {recordFormatOptions.map((opt) => (
+              <MenuItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
         {!isRecording ? (
           <Button
             variant="contained"
             color="secondary"
             size="small"
-            onClick={() => onStartRecord(saveFormat)}
+            onClick={() => onStartRecord(recordFormat)}
             startIcon={<FiberManualRecord />}
             disabled={!isLiveViewActive}
           >

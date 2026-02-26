@@ -37,7 +37,8 @@ const FileItem = ({
   const fileIcons = useFileIcons(iconSize);
   const { setCurrentPath, currentPathFiles } = useFileNavigation();
   const { setSelectedFiles } = useSelection();
-  const { clipBoard, handleCutCopy, setClipBoard, handlePasting } = useClipBoard();
+  const { clipBoard, handleCutCopy, setClipBoard, handlePasting } =
+    useClipBoard();
   const dragIconRef = useRef(null);
   const dragIcons = useFileIcons(dragIconSize);
 
@@ -134,7 +135,9 @@ const FileItem = ({
     if (e.target.checked) {
       setSelectedFiles((prev) => [...prev, file]);
     } else {
-      setSelectedFiles((prev) => prev.filter((f) => f.name !== file.name && f.path !== file.path));
+      setSelectedFiles((prev) =>
+        prev.filter((f) => f.name !== file.name && f.path !== file.path),
+      );
     }
 
     setFileSelected(e.target.checked);
@@ -179,7 +182,9 @@ const FileItem = ({
 
   useEffect(() => {
     setFileSelected(selectedFileIndexes.includes(index));
-    setCheckboxClassName(selectedFileIndexes.includes(index) ? "visible" : "hidden");
+    setCheckboxClassName(
+      selectedFileIndexes.includes(index) ? "visible" : "hidden",
+    );
   }, [selectedFileIndexes]);
 
   return (
@@ -217,7 +222,9 @@ const FileItem = ({
           <FaRegFolderOpen size={iconSize} />
         ) : (
           <>
-            {fileIcons[file.name?.split(".").pop()?.toLowerCase()] ?? <FaRegFile size={iconSize} />}
+            {fileIcons[file.name?.split(".").pop()?.toLowerCase()] ?? (
+              <FaRegFile size={iconSize} />
+            )}
           </>
         )}
 
@@ -246,8 +253,12 @@ const FileItem = ({
 
       {activeLayout === "list" && (
         <>
-          <div className="modified-date">{formatDate(file.updatedAt)}</div>
-          <div className="size">{file?.size > 0 ? getDataSize(file?.size) : ""}</div>
+          <div className="modified-date">
+            {formatDate(file.modifiedTime || file.updatedAt)}
+          </div>
+          <div className="size">
+            {file?.size > 0 ? getDataSize(file?.size) : ""}
+          </div>
         </>
       )}
 

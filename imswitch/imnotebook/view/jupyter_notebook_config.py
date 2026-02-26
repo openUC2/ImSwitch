@@ -12,7 +12,9 @@ try:
     c.NotebookApp.allow_credentials = True
     c.NotebookApp.allow_origin = '*'
     c.NotebookApp.allow_remote_access = True
+    c.NotebookApp.disable_check_xsrf = True  # Allow POST requests from iframes
     c.ServerApp.token = ''
     c.ServerApp.password = ''
+    c.ServerApp.disable_check_xsrf = True  # Allow POST requests from iframes (JupyterLab)
 except NameError:
     pass

@@ -32,6 +32,8 @@ from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ExperimentNormalMode,
 )
 from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult
+from imswitch.imcontrol.model.overview_registration import OverviewRegistrationService, PixelPoint, StagePoint, SlotDefinition
+
 
 from pydantic import Field
 
@@ -383,6 +385,20 @@ class ExperimentController(ImConWidgetController):
 
         # Initialize focus map manager
         self.focus_map_manager = FocusMapManager(logger=self._logger)
+
+        # Initialize overview camera registration service
+        self._overview_registration = OverviewRegistrationService()
+        self._overview_camera = None
+        self._overview_camera_name = None
+        try:
+            if hasattr(self._setupInfo, 'PixelCalibration') and hasattr(self._setupInfo.PixelCalibration, 'ObservationCamera'):
+                obs_cam_name = self._setupInfo.PixelCalibration.ObservationCamera
+                if obs_cam_name and obs_cam_name in allDetectorNames:
+                    self._overview_camera = self._master.detectorsManager[obs_cam_name]
+                    self._overview_camera_name = obs_cam_name
+                    self._logger.info(f"Overview camera initialized: {obs_cam_name}")
+        except Exception as e:
+            self._logger.warning(f"Could not initialize overview camera: {e}")
 
         # Initialize omero  parameters  # TODO: Maybe not needed!
         self.omero_url = self._master.experimentManager.omeroServerUrl
@@ -2711,6 +2727,298 @@ class ExperimentController(ImConWidgetController):
                     )
                     z += channel_offset
         return z
+
+    # ── Overview Camera Registration Endpoints ─────────────────────────────────
+
+    @APIExport(requestType="POST")
+    def getOverviewRegistrationConfig(self, layout_data: dict = None, layout_name: str = "Heidstar 4x Histosample"):
+        """
+        Get overview wizard configuration with slot definitions for a layout.
+
+        The frontend should POST its current wellLayout object (including any
+        offsets already applied) so that the slot corners returned here match
+        exactly what the WellSelector canvas renders.
+
+        Args:
+            layout_data: Full layout dict from the frontend (preferred).
+                         Must contain at least 'name', 'wells' (list).
+            layout_name: Fallback layout name used only when layout_data is None.
+
+        Returns:
+            Layout name, slot list with stage corners, corner convention,
+            camera availability, and saved status per slide.
+        """
+        # 1. Prefer the layout sent by the frontend (already has offsets applied)
+        if layout_data is not None and isinstance(layout_data, dict) and layout_data.get("wells"):
+            layout_dict = layout_data
+            layout_name = layout_data.get("name", layout_name)
+        else:
+            # 2. Try backend lookup
+            try:
+                layout = get_layout_by_name(layout_name)
+                if layout is None:
+                    raise ValueError(f"Layout '{layout_name}' not found")
+                if hasattr(layout, 'model_dump'):
+                    layout_dict = layout.model_dump()
+                elif hasattr(layout, 'dict'):
+                    layout_dict = layout.dict()
+                else:
+                    layout_dict = layout
+            except Exception:
+                # 3. Last-resort hardcoded Heidstar fallback
+                self._logger.warning(
+                    "No layout_data from frontend and backend lookup failed. "
+                    "Using hardcoded Heidstar fallback – coordinates may not match canvas!"
+                )
+                layout_dict = {
+                    "name": "Heidstar 4x Histosample",
+                    "unit": "um",
+                    "width": 127000,
+                    "height": 84000,
+                    "wells": [
+                        {"x": 18400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide1"},
+                        {"x": 48400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide2"},
+                        {"x": 78400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide3"},
+                        {"x": 108400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide4"},
+                    ],
+                }
+
+        slots = self._overview_registration.get_slot_definitions(layout_dict)
+        camera_name = self._overview_camera_name or "overviewcamera"
+        status = self._overview_registration.get_status(camera_name, layout_name)
+
+        return {
+            "layoutName": layout_dict.get("name", layout_name),
+            "cameraName": camera_name,
+            "cameraAvailable": self._overview_camera is not None,
+            "cornerConvention": "TL,TR,BR,BL",
+            "cornerLabels": ["1: Top-Left", "2: Top-Right", "3: Bottom-Right", "4: Bottom-Left"],
+            "slots": [s.model_dump() if hasattr(s, 'model_dump') else s.dict() for s in slots],
+            "status": status.get("slides", {}),
+        }
+
+    @APIExport(requestType="POST")
+    def snapOverviewImage(self, slot_id: str = "1", camera_name: str = ""):
+        """
+        Snap a single image from the overview camera for a given slot.
+
+        Args:
+            slot_id:     Slide slot index ("1" to "4")
+            camera_name: Camera name (auto-detected if empty)
+
+        Returns:
+            Snapshot metadata including base64-encoded image.
+        """
+        cam = self._overview_camera
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+
+        if cam is None:
+            raise HTTPException(status_code=400, detail="Overview camera not available")
+
+        frame = cam.getLatestFrame()
+        if frame is None:
+            raise HTTPException(status_code=500, detail="No frame from overview camera")
+
+        # Apply flip settings if available
+        try:
+            if hasattr(self._setupInfo, 'PixelCalibration'):
+                flip = getattr(self._setupInfo.PixelCalibration, 'ObservationCameraFlip', {})
+                if isinstance(flip, dict):
+                    if flip.get('flipY', False):
+                        frame = np.flip(frame, 0)
+                    if flip.get('flipX', False):
+                        frame = np.flip(frame, 1)
+        except Exception:
+            pass
+
+        # Get current stage position for traceability
+        stage_x, stage_y, stage_z = 0.0, 0.0, 0.0
+        try:
+            if self.mStage is not None:
+                pos = self.mStage.getPosition()
+                stage_x = pos.get("X", 0.0)
+                stage_y = pos.get("Y", 0.0)
+                stage_z = pos.get("Z", 0.0)
+        except Exception:
+            pass
+
+        # Make contiguous copy
+        frame = np.ascontiguousarray(frame)
+
+        # Save snapshot
+        meta = self._overview_registration.save_snapshot(
+            camera_name=cam_name,
+            layout_name="current",
+            slot_id=slot_id,
+            image=frame,
+            stage_x=stage_x,
+            stage_y=stage_y,
+            stage_z=stage_z,
+        )
+
+        # Encode as base64 JPEG for frontend display
+        import cv2
+        if len(frame.shape) == 2:
+            encode_frame = frame
+        else:
+            encode_frame = frame
+        _, jpg_buf = cv2.imencode(".jpg", encode_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        import base64
+        b64_image = base64.b64encode(jpg_buf.tobytes()).decode("ascii")
+
+        meta["imageBase64"] = b64_image
+        meta["imageMimeType"] = "image/jpeg"
+        meta["stagePosition"] = {"x": stage_x, "y": stage_y, "z": stage_z}
+        return meta
+
+    @APIExport(requestType="POST")
+    def registerOverviewSlide(self, registration_data: dict):
+        """
+        Save corner picks and compute per-slide registration (homography).
+
+        Args:
+            registration_data: dict with keys:
+                - cameraName (str)
+                - layoutName (str)
+                - slotId (str)
+                - slotName (str)
+                - snapshotId (str)
+                - snapshotTimestamp (str)
+                - imageWidth (int)
+                - imageHeight (int)
+                - cornersPx: [{x, y}, ...] – 4 clicked corners in image pixels
+                - slotStageCorners: [{x, y}, ...] – 4 target stage corners
+
+        Returns:
+            Registration metadata including homography and error metrics.
+        """
+        try:
+            corners_px = [
+                PixelPoint(x=c["x"], y=c["y"])
+                for c in registration_data["cornersPx"]
+            ]
+            slot_stage_corners = [
+                StagePoint(x=c["x"], y=c["y"])
+                for c in registration_data["slotStageCorners"]
+            ]
+
+            # Try to load the raw snapshot for warping
+            raw_image = None
+            snapshot_id = registration_data.get("snapshotId", "")
+            cam_name = registration_data.get("cameraName", self._overview_camera_name or "overviewcamera")
+            layout_name = registration_data.get("layoutName", "Heidstar 4x Histosample")
+
+            img_path = self._overview_registration.get_snapshot_image_path(
+                cam_name, "current", snapshot_id
+            )
+            if img_path:
+                import cv2
+                raw_image = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+
+            reg = self._overview_registration.register_slide(
+                camera_name=cam_name,
+                layout_name=layout_name,
+                slot_id=registration_data["slotId"],
+                slot_name=registration_data.get("slotName", f"Slide{registration_data['slotId']}"),
+                snapshot_id=snapshot_id,
+                snapshot_timestamp=registration_data.get("snapshotTimestamp", ""),
+                image_width=registration_data.get("imageWidth", 0),
+                image_height=registration_data.get("imageHeight", 0),
+                corners_px=corners_px,
+                slot_stage_corners=slot_stage_corners,
+                raw_image=raw_image,
+            )
+
+            return {
+                "success": True,
+                "slotId": reg.slotId,
+                "reprojectionError": reg.reprojectionError,
+                "hasOverlayImage": bool(reg.overlayImageRef),
+                "cornerOrder": reg.cornerOrder,
+                "createdAt": reg.createdAt,
+            }
+        except Exception as e:
+            self._logger.error(f"Registration failed: {e}", exc_info=True)
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @APIExport(requestType="GET")
+    def getOverviewRegistrationStatus(self, camera_name: str = "", layout_name: str = "Heidstar 4x Histosample"):
+        """
+        Get completion status for all slide registrations.
+
+        Args:
+            camera_name: Camera name (auto-detected if empty)
+            layout_name: Layout name
+
+        Returns:
+            Per-slide completion status and metadata.
+        """
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        return self._overview_registration.get_status(cam_name, layout_name)
+
+    @APIExport(requestType="POST")
+    def refreshOverviewSlideImage(self, slot_id: str = "1", camera_name: str = "", layout_name: str = "Heidstar 4x Histosample"):
+        """
+        Snap a new image and re-warp using existing registration for a slot.
+        Does not require new corner picking if registration already exists.
+
+        Args:
+            slot_id:     Slide slot index ("1" to "4")
+            camera_name: Camera name
+            layout_name: Layout name
+
+        Returns:
+            Updated overlay metadata.
+        """
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        cam = self._overview_camera
+        if cam is None:
+            raise HTTPException(status_code=400, detail="Overview camera not available")
+
+        frame = cam.getLatestFrame()
+        if frame is None:
+            raise HTTPException(status_code=500, detail="No frame from overview camera")
+
+        # Apply flips
+        try:
+            if hasattr(self._setupInfo, 'PixelCalibration'):
+                flip = getattr(self._setupInfo.PixelCalibration, 'ObservationCameraFlip', {})
+                if isinstance(flip, dict):
+                    if flip.get('flipY', False):
+                        frame = np.flip(frame, 0)
+                    if flip.get('flipX', False):
+                        frame = np.flip(frame, 1)
+        except Exception:
+            pass
+
+        frame = np.ascontiguousarray(frame)
+
+        try:
+            result = self._overview_registration.refresh_overlay_image(
+                camera_name=cam_name,
+                layout_name=layout_name,
+                slot_id=slot_id,
+                new_image=frame,
+            )
+            return {"success": True, **result}
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @APIExport(requestType="GET")
+    def getOverviewOverlayData(self, camera_name: str = "", layout_name: str = "Heidstar 4x Histosample"):
+        """
+        Get all overlay data for the WellSelector canvas rendering.
+        Returns base64-encoded overlay images + slot bounds per completed slide.
+
+        Args:
+            camera_name: Camera name (auto-detected if empty)
+            layout_name: Layout name
+
+        Returns:
+            Per-slide overlay images and stage bounds for canvas rendering.
+        """
+        cam_name = camera_name or self._overview_camera_name or "overviewcamera"
+        return self._overview_registration.get_overlay_data(cam_name, layout_name)
 
 
 # Copyright (C) 2025 Benedict Diederich

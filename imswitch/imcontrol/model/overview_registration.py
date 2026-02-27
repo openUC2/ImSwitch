@@ -224,7 +224,12 @@ class OverviewRegistrationService:
             return
         path = self._meta_path(camera_name, layout_name)
         with open(path, "w") as f:
-            f.write(store.json(indent=2))
+            # Pydantic v2 compat: use model_dump_json if available
+            if hasattr(store, 'model_dump_json'):
+                f.write(store.model_dump_json(indent=2))
+            else:
+                import json as _json
+                f.write(_json.dumps(store.dict(), indent=2))
         self._logger.info(f"Saved registration store to {path}")
 
     # ── Slot Definitions ─────────────────────────────────────────────────
@@ -327,13 +332,18 @@ class OverviewRegistrationService:
             overlay_fname = f"overlay_slot{slot_id}.png"
             overlay_path = os.path.join(sdir, overlay_fname)
 
-            # Determine output size: map stage slot to a reasonable pixel resolution
-            # Use ~2 px per µm as a reasonable default
+            # Determine output size: keep overlay small, frontend stretches to fill slot area.
+            # Cap the longest side at MAX_OVERLAY_PX to avoid huge images.
+            MAX_OVERLAY_PX = 1024
             stage_w = abs(slot_stage_corners[1].x - slot_stage_corners[0].x)
             stage_h = abs(slot_stage_corners[2].y - slot_stage_corners[1].y)
-            px_per_um = 0.5  # 0.5 px per µm → 500px per mm
-            out_w = max(100, int(stage_w * px_per_um))
-            out_h = max(100, int(stage_h * px_per_um))
+            aspect = stage_w / stage_h if stage_h > 0 else 1.0
+            if stage_w >= stage_h:
+                out_w = MAX_OVERLAY_PX
+                out_h = max(100, int(MAX_OVERLAY_PX / aspect))
+            else:
+                out_h = MAX_OVERLAY_PX
+                out_w = max(100, int(MAX_OVERLAY_PX * aspect))
 
             # We need a homography that maps image pixels → overlay pixels
             # overlay pixel (0,0) corresponds to slot TL in stage coords
@@ -465,14 +475,19 @@ class OverviewRegistrationService:
         overlay_fname = f"overlay_slot{slot_id}.png"
         overlay_path = os.path.join(sdir, overlay_fname)
 
-        # Compute output size
+        # Compute output size: cap at MAX_OVERLAY_PX, frontend stretches to fill slot area
+        MAX_OVERLAY_PX = 2048
         tl = slot_stage_corners[0]
         br = slot_stage_corners[2]
         stage_w = abs(br.x - tl.x)
         stage_h = abs(br.y - tl.y)
-        px_per_um = 0.5
-        out_w = max(100, int(stage_w * px_per_um))
-        out_h = max(100, int(stage_h * px_per_um))
+        aspect = stage_w / stage_h if stage_h > 0 else 1.0
+        if stage_w >= stage_h:
+            out_w = MAX_OVERLAY_PX
+            out_h = max(100, int(MAX_OVERLAY_PX / aspect))
+        else:
+            out_h = MAX_OVERLAY_PX
+            out_w = max(100, int(MAX_OVERLAY_PX * aspect))
 
         sx = out_w / (br.x - tl.x) if (br.x - tl.x) != 0 else 1
         sy = out_h / (br.y - tl.y) if (br.y - tl.y) != 0 else 1

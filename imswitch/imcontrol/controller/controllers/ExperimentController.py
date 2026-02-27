@@ -2744,8 +2744,14 @@ class ExperimentController(ImConWidgetController):
         """
         try:
             layout = get_layout_by_name(layout_name)
-            layout_dict = layout.dict() if hasattr(layout, 'dict') else layout
-            if layout_dict is None: raise ValueError("Layout dict is None")
+            if layout is None:
+                raise ValueError(f"Layout '{layout_name}' not found in backend")
+            if hasattr(layout, 'model_dump'):
+                layout_dict = layout.model_dump()
+            elif hasattr(layout, 'dict'):
+                layout_dict = layout.dict()
+            else:
+                layout_dict = layout
         except Exception:
             # Fallback: use hardcoded Heidstar layout
             layout_dict = {
@@ -2770,7 +2776,7 @@ class ExperimentController(ImConWidgetController):
             "cameraAvailable": self._overview_camera is not None,
             "cornerConvention": "TL,TR,BR,BL",
             "cornerLabels": ["1: Top-Left", "2: Top-Right", "3: Bottom-Right", "4: Bottom-Left"],
-            "slots": [s.dict() for s in slots],
+            "slots": [s.model_dump() if hasattr(s, 'model_dump') else s.dict() for s in slots],
             "status": status.get("slides", {}),
         }
 

@@ -818,6 +818,10 @@ class RecordingService(SignalInterface):
             SaveFormat.MP4: '.mp4',
         }
         ext = ext_map.get(format, '.tiff')
+        base_name = os.path.basename(basepath)
+        detector_token = f"_{detector_name}"
+        if detector_token in base_name:
+            return f"{basepath}{ext}"
         return f"{basepath}_{detector_name}{ext}"
     
     # =========================================================================

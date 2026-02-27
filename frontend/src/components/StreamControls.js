@@ -50,18 +50,19 @@ export default function StreamControls({
   );
 
   // Internal state for file name
-  const [snapFileName, setSnapFileName] = useState("openUC2_snapshot");
+  // Default is empty - detector name is now automatically included in timestamp-based filename
+  const [snapFileName, setSnapFileName] = useState("");
   const [overlayOpen, setOverlayOpen] = useState(false);
 
   // Separate format options for snap and record
   const snapFormatOptions = [
-    { value: 1, label: "TIFF" },
+    { value: 1, label: "TIFF (Default)" },
     { value: 5, label: "PNG" },
     { value: 6, label: "JPG" },
   ];
 
   const recordFormatOptions = [
-    { value: 4, label: "MP4" },
+    { value: 4, label: "MP4 (Default)" },
     { value: 1, label: "TIFF" },
     { value: 3, label: "ZARR" },
   ];
@@ -70,11 +71,20 @@ export default function StreamControls({
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
 
-  const snapFormat = liveViewState.snapFormat;
-  const recordFormat = liveViewState.recordFormat;
+  const snapFormat = liveViewState.snapFormat || 1;
+  const recordFormat = liveViewState.recordFormat || 4;
 
   // Use Redux state as source of truth for stream status
   const isLiveViewActive = liveViewState.isStreamRunning;
+  // Ensure defaults are set on component mount
+  useEffect(() => {
+    if (!liveViewState.snapFormat) {
+      dispatch(liveViewSlice.setSnapFormat(1));
+    }
+    if (!liveViewState.recordFormat) {
+      dispatch(liveViewSlice.setRecordFormat(4));
+    }
+  }, [dispatch, liveViewState.snapFormat, liveViewState.recordFormat]);
 
   // State for HUD data for overlay display
   const [hudData, setHudData] = useState({
@@ -341,8 +351,9 @@ export default function StreamControls({
         </FormControl>
 
         <TextField
-          label="Image Name"
+          label="Description (optional)"
           size="small"
+          placeholder="e.g., sample-001, z-stack-start"
           value={snapFileName}
           onChange={(e) => {
             // Only allow alphanumeric, underscore, hyphen, and dot
@@ -351,7 +362,7 @@ export default function StreamControls({
           }}
           sx={{ minWidth: 200, flex: 1 }}
           disabled={!isLiveViewActive}
-          helperText="Allowed: a-z, A-Z, 0-9, _ - ."
+          helperText="For snapshots & recordings. Filename: ISO8601_DetectorName_Description"
           inputProps={{
             pattern: "[a-zA-Z0-9_.-]*",
             maxLength: 100,
@@ -415,7 +426,7 @@ export default function StreamControls({
             variant="contained"
             color="secondary"
             size="small"
-            onClick={() => onStartRecord(recordFormat)}
+            onClick={() => onStartRecord(snapFileName, recordFormat)}
             startIcon={<FiberManualRecord />}
             disabled={!isLiveViewActive}
           >

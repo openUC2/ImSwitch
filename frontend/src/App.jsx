@@ -284,6 +284,14 @@ function App() {
     if (isMobile) setSidebarVisible(false);
   };
 
+  // Refresh files whenever the FileManager view is opened
+  useEffect(() => {
+    if (selectedPlugin === "FileManager") {
+      handleRefresh();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPlugin]);
+
   /*
   PLUGIN LOADING from ImSwitch
   */

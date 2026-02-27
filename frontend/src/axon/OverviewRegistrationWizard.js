@@ -27,8 +27,11 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 
 import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js";
 import * as connectionSettingsSlice from "../state/slices/ConnectionSettingsSlice.js";
+import * as experimentSlice from "../state/slices/ExperimentSlice.js";
+import * as positionSlice from "../state/slices/PositionSlice.js";
 
 import apiGetOverviewRegistrationConfig from "../backendapi/apiGetOverviewRegistrationConfig.js";
+import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
 import apiSnapOverviewImage from "../backendapi/apiSnapOverviewImage.js";
 import apiRegisterOverviewSlide from "../backendapi/apiRegisterOverviewSlide.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
@@ -67,6 +70,8 @@ const OverviewRegistrationWizard = () => {
   const connectionSettings = useSelector(
     connectionSettingsSlice.getConnectionSettingsState
   );
+  const experimentState = useSelector(experimentSlice.getExperimentState);
+  const positionState = useSelector(positionSlice.getPositionState);
 
   // Local state for stream
   const [streamUrl, setStreamUrl] = useState("");
@@ -104,7 +109,13 @@ const OverviewRegistrationWizard = () => {
   const loadConfig = async () => {
     dispatch(overviewRegSlice.setIsLoading(true));
     try {
+      // Send the frontend's current wellLayout (with offsets applied) to the
+      // backend so that slot stage corners match the canvas exactly.
+      const currentLayout = experimentState.wellLayout;
       const config = await apiGetOverviewRegistrationConfig(
+        currentLayout && currentLayout.wells && currentLayout.wells.length > 0
+          ? currentLayout
+          : null,
         regState.layoutName
       );
       dispatch(overviewRegSlice.setConfig(config));
@@ -594,6 +605,53 @@ const OverviewRegistrationWizard = () => {
               <Typography sx={{ color: CORNER_COLORS[3], fontSize: 11, fontWeight: "bold" }}>4</Typography>
             </Box>
           </Box>
+        </Box>
+
+        {/* Stage movement controls */}
+        <Box sx={{ mt: 2, mb: 1 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: "block" }}>
+            Move stage to align slide:
+          </Typography>
+          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5, maxWidth: 220 }}>
+            <Button
+              size="small" variant="outlined"
+              onClick={() => apiPositionerControllerMovePositioner({ axis: "Y", dist: -5000 })}
+              sx={{ minWidth: 60 }}
+            >
+              Y ▲
+            </Button>
+            <Box sx={{ display: "flex", gap: 0.5 }}>
+              <Button
+                size="small" variant="outlined"
+                onClick={() => apiPositionerControllerMovePositioner({ axis: "X", dist: -5000 })}
+                sx={{ minWidth: 60 }}
+              >
+                ◄ X
+              </Button>
+              <Box sx={{ width: 60, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Typography variant="caption" color="text.secondary">5 mm</Typography>
+              </Box>
+              <Button
+                size="small" variant="outlined"
+                onClick={() => apiPositionerControllerMovePositioner({ axis: "X", dist: 5000 })}
+                sx={{ minWidth: 60 }}
+              >
+                X ►
+              </Button>
+            </Box>
+            <Button
+              size="small" variant="outlined"
+              onClick={() => apiPositionerControllerMovePositioner({ axis: "Y", dist: 5000 })}
+              sx={{ minWidth: 60 }}
+            >
+              Y ▼
+            </Button>
+          </Box>
+          {positionState && (
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
+              Position: X={positionState.x?.toFixed(0) ?? "?"} Y={positionState.y?.toFixed(0) ?? "?"}
+            </Typography>
+          )}
         </Box>
 
         <Box sx={{ mt: 2, display: "flex", gap: 1 }}>

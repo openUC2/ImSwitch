@@ -2730,42 +2730,59 @@ class ExperimentController(ImConWidgetController):
 
     # ── Overview Camera Registration Endpoints ─────────────────────────────────
 
-    @APIExport(requestType="GET")
-    def getOverviewRegistrationConfig(self, layout_name: str = "Heidstar 4x Histosample"):
+    @APIExport(requestType="POST")
+    def getOverviewRegistrationConfig(self, layout_data: dict = None, layout_name: str = "Heidstar 4x Histosample"):
         """
         Get overview wizard configuration with slot definitions for a layout.
 
+        The frontend should POST its current wellLayout object (including any
+        offsets already applied) so that the slot corners returned here match
+        exactly what the WellSelector canvas renders.
+
         Args:
-            layout_name: Name of the wellplate layout
+            layout_data: Full layout dict from the frontend (preferred).
+                         Must contain at least 'name', 'wells' (list).
+            layout_name: Fallback layout name used only when layout_data is None.
 
         Returns:
             Layout name, slot list with stage corners, corner convention,
             camera availability, and saved status per slide.
         """
-        try:
-            layout = get_layout_by_name(layout_name)
-            if layout is None:
-                raise ValueError(f"Layout '{layout_name}' not found in backend")
-            if hasattr(layout, 'model_dump'):
-                layout_dict = layout.model_dump()
-            elif hasattr(layout, 'dict'):
-                layout_dict = layout.dict()
-            else:
-                layout_dict = layout
-        except Exception:
-            # Fallback: use hardcoded Heidstar layout
-            layout_dict = {
-                "name": "Heidstar 4x Histosample",
-                "unit": "um",
-                "width": 127000,
-                "height": 84000,
-                "wells": [
-                    {"x": 18400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide1"},
-                    {"x": 48400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide2"},
-                    {"x": 78400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide3"},
-                    {"x": 108400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide4"},
-                ],
-            }
+        # 1. Prefer the layout sent by the frontend (already has offsets applied)
+        if layout_data is not None and isinstance(layout_data, dict) and layout_data.get("wells"):
+            layout_dict = layout_data
+            layout_name = layout_data.get("name", layout_name)
+        else:
+            # 2. Try backend lookup
+            try:
+                layout = get_layout_by_name(layout_name)
+                if layout is None:
+                    raise ValueError(f"Layout '{layout_name}' not found")
+                if hasattr(layout, 'model_dump'):
+                    layout_dict = layout.model_dump()
+                elif hasattr(layout, 'dict'):
+                    layout_dict = layout.dict()
+                else:
+                    layout_dict = layout
+            except Exception:
+                # 3. Last-resort hardcoded Heidstar fallback
+                self._logger.warning(
+                    "No layout_data from frontend and backend lookup failed. "
+                    "Using hardcoded Heidstar fallback – coordinates may not match canvas!"
+                )
+                layout_dict = {
+                    "name": "Heidstar 4x Histosample",
+                    "unit": "um",
+                    "width": 127000,
+                    "height": 84000,
+                    "wells": [
+                        {"x": 18400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide1"},
+                        {"x": 48400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide2"},
+                        {"x": 78400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide3"},
+                        {"x": 108400, "y": 40600, "shape": "rectangle", "width": 27000, "height": 74000, "name": "Slide4"},
+                    ],
+                }
+
         slots = self._overview_registration.get_slot_definitions(layout_dict)
         camera_name = self._overview_camera_name or "overviewcamera"
         status = self._overview_registration.get_status(camera_name, layout_name)

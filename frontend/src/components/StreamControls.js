@@ -362,7 +362,7 @@ export default function StreamControls({
           }}
           sx={{ minWidth: 200, flex: 1 }}
           disabled={!isLiveViewActive}
-          helperText="Optional description. Filename: ISO8601_DetectorName_Description"
+          helperText="For snapshots & recordings. Filename: ISO8601_DetectorName_Description"
           inputProps={{
             pattern: "[a-zA-Z0-9_.-]*",
             maxLength: 100,
@@ -426,7 +426,7 @@ export default function StreamControls({
             variant="contained"
             color="secondary"
             size="small"
-            onClick={() => onStartRecord(recordFormat)}
+            onClick={() => onStartRecord(snapFileName, recordFormat)}
             startIcon={<FiberManualRecord />}
             disabled={!isLiveViewActive}
           >

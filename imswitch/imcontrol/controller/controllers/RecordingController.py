@@ -549,22 +549,43 @@ class RecordingController(ImConWidgetController):
         return Response(im_bytes, headers=headers, media_type="image/png")
 
     @APIExport(runOnUIThread=True)
-    def startRecording(self, mSaveFormat: int = SaveFormat.TIFF) -> None:
-        """Starts recording with the set settings to the set file path using RecordingService.""" 
-        mSaveFormat = SaveFormat(mSaveFormat)
+    @APIExport(runOnUIThread=True)
+    def startRecording(self, mSaveFormat: int = SaveFormat.TIFF, fileName: Optional[str] = None) -> None:
+        """Starts recording with the set settings to the set file path using RecordingService.
+        
+        Parameters:
+        - mSaveFormat: Desired `SaveFormat` enum value (default: `SaveFormat.TIFF`).
+        - fileName: Optional description to append to the generated filename.
+        """
+        try:
+            # Ensure mSaveFormat is an int
+            mSaveFormat = int(mSaveFormat)
+            mSaveFormat = SaveFormat(mSaveFormat)
+        except (ValueError, TypeError) as e:
+            self.__logger.error(f"Invalid save format: {mSaveFormat}, error: {e}")
+            mSaveFormat = SaveFormat.TIFF
+
+        # Ensure fileName is a string or None
+        if not isinstance(fileName, (str, type(None))):
+            fileName = None
 
         # we probably call from the FASTAPI server
         if self.recording:  # Already recording
             return
 
-        timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-        folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "recordings", timeStamp)
+        # Use ISO 8601 date format, consistent with snap() method
+        timeStampDay = datetime.datetime.now().strftime("%Y-%m-%d")
+        folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "recordings", timeStampDay)
         if not os.path.exists(folder):
             os.makedirs(folder)
         time.sleep(0.01)
-        self.savename = os.path.join(folder, self.getFileName()) + "_rec"
 
         detectorsBeingCaptured = self.getDetectorNamesToCapture()
+        # Generate filename with detector info and description, consistent with snap()
+        # Use "rec" as default description if none provided
+        description = fileName if fileName else "rec"
+        filename = self.getFileName(description=description, detector_names=detectorsBeingCaptured)
+        self.savename = os.path.join(folder, filename)
         self.recMode = RecMode.UntilStop
         self.recordingArgs = {
             "detectorNames": detectorsBeingCaptured,

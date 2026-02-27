@@ -313,11 +313,14 @@ export default function LiveView({ setFileManagerInitialPath }) {
       setFileManagerInitialPath(lastSnapPath);
     }
   }
-  const startRec = async (format) => {
+  const startRec = async (description, format) => {
     try {
-      const response = await fetch(
-        `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${encodeURIComponent(format)}`,
-      );
+      let url = `${hostIP}:${hostPort}/imswitch/api/RecordingController/startRecording?mSaveFormat=${format}`;
+      // Add optional description if provided
+      if (description && description.trim()) {
+        url += `&fileName=${encodeURIComponent(description)}`;
+      }
+      const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`Start recording failed: ${response.status}`);
       }

@@ -56,13 +56,13 @@ export default function StreamControls({
 
   // Separate format options for snap and record
   const snapFormatOptions = [
-    { value: 1, label: "TIFF" },
+    { value: 1, label: "TIFF (Default)" },
     { value: 5, label: "PNG" },
     { value: 6, label: "JPG" },
   ];
 
   const recordFormatOptions = [
-    { value: 4, label: "MP4" },
+    { value: 4, label: "MP4 (Default)" },
     { value: 1, label: "TIFF" },
     { value: 3, label: "ZARR" },
   ];
@@ -71,11 +71,20 @@ export default function StreamControls({
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
 
-  const snapFormat = liveViewState.snapFormat;
-  const recordFormat = liveViewState.recordFormat;
+  const snapFormat = liveViewState.snapFormat || 1;
+  const recordFormat = liveViewState.recordFormat || 4;
 
   // Use Redux state as source of truth for stream status
   const isLiveViewActive = liveViewState.isStreamRunning;
+  // Ensure defaults are set on component mount
+  useEffect(() => {
+    if (!liveViewState.snapFormat) {
+      dispatch(liveViewSlice.setSnapFormat(1));
+    }
+    if (!liveViewState.recordFormat) {
+      dispatch(liveViewSlice.setRecordFormat(4));
+    }
+  }, [dispatch, liveViewState.snapFormat, liveViewState.recordFormat]);
 
   // State for HUD data for overlay display
   const [hudData, setHudData] = useState({

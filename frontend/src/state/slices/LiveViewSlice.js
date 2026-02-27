@@ -10,8 +10,8 @@ const initialLiveViewState = {
   isStreamRunning: false,
   lastSnapPath: null, // Store the last snapped image path
   showPositionController: false, // Persistent toggle for position controller visibility
-  snapFormat: 1, // Persist last selected snap format (1 = TIFF)
-  recordFormat: 4, // Persist last selected recording format (4 = MP4)
+  snapFormat: 1, // Default: 1 = TIFF. Persisted. Change via setSnapFormat action.
+  recordFormat: 4, // Default: 4 = MP4. Persisted. Change via setRecordFormat action.
 };
 
 // Create slice

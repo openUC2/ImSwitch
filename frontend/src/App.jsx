@@ -289,6 +289,7 @@ function App() {
     if (selectedPlugin === "FileManager") {
       handleRefresh();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPlugin]);
 
   /*

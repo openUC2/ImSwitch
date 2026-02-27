@@ -284,6 +284,13 @@ function App() {
     if (isMobile) setSidebarVisible(false);
   };
 
+  // Refresh files whenever the FileManager view is opened
+  useEffect(() => {
+    if (selectedPlugin === "FileManager") {
+      handleRefresh();
+    }
+  }, [selectedPlugin]);
+
   /*
   PLUGIN LOADING from ImSwitch
   */

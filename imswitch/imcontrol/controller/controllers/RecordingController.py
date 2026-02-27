@@ -192,7 +192,7 @@ class RecordingController(ImConWidgetController):
                     ),
                 )
 
-        timeStampDay = datetime.datetime.now().strftime("%Y_%m_%d")
+        timeStampDay = datetime.datetime.now().strftime("%Y-%m-%d")
         relativeFolder = os.path.join("recordings", timeStampDay)
         folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), relativeFolder)
         if not os.path.exists(folder):
@@ -201,8 +201,8 @@ class RecordingController(ImConWidgetController):
 
         detectorNames = self.getDetectorNamesToCapture()
         if name is None:
-            name = "_snap"
-        savename = os.path.join(folder, self.getFileName() + "_" + name)
+            name = ""
+        savename = os.path.join(folder, self.getFileName(description=name, detector_names=detectorNames))
 
         # Collect metadata attributes
         attrs = {
@@ -328,9 +328,42 @@ class RecordingController(ImConWidgetController):
             pass 
             #return self._widget.getSelectedSpecificDetectors()
 
-    def getFileName(self):
-        """Gets the filename of the data to save."""
-        filename = time.strftime("%Hh%Mm%Ss")
+    def getFileName(self, description: str = "", detector_names: list = None):
+        """
+        Generate a scientifically-meaningful filename with ISO 8601 timestamp.
+        
+        Args:
+            description: Optional user-provided description (e.g., "cell-005" or "z-stack-start")
+            detector_names: List of detector names to include in filename. If provided, uses first detector name.
+            
+        Returns:
+            Filename in format: YYYY-MM-DDTHH-MM-SS-ffffff_<detector>_<description>.ext
+            Example: 2026-02-27T14-32-45-123456_WidefieldCamera_cell-005
+        """
+        # ISO 8601 timestamp with microseconds for uniqueness and sortability
+        now = datetime.datetime.now()
+        iso_timestamp = now.strftime("%Y-%m-%dT%H-%M-%S")
+        microseconds = f"{now.microsecond:06d}"
+        timestamp = f"{iso_timestamp}-{microseconds}"
+        
+        # Add detector name if available
+        detector_part = ""
+        if detector_names and len(detector_names) > 0:
+            # Use first detector name (sanitize it to be filename-safe)
+            detector_name = detector_names[0]
+            # Remove special characters that could cause issues
+            safe_detector = detector_name.replace(" ", "_").replace("/", "_")
+            detector_part = f"_{safe_detector}"
+        
+        # Add description if provided (sanitize it)
+        description_part = ""
+        if description and description.strip():
+            # Sanitize description
+            safe_description = description.strip().replace(" ", "_").replace("/", "_")
+            description_part = f"_{safe_description}"
+        
+        # Combine all parts
+        filename = f"{timestamp}{detector_part}{description_part}"
         return filename
 
     def _get_detector_attrs(self, detector_name):

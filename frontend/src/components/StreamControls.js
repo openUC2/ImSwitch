@@ -50,7 +50,8 @@ export default function StreamControls({
   );
 
   // Internal state for file name
-  const [snapFileName, setSnapFileName] = useState("openUC2_snapshot");
+  // Default is empty - detector name is now automatically included in timestamp-based filename
+  const [snapFileName, setSnapFileName] = useState("");
   const [overlayOpen, setOverlayOpen] = useState(false);
 
   // Separate format options for snap and record
@@ -341,8 +342,9 @@ export default function StreamControls({
         </FormControl>
 
         <TextField
-          label="Image Name"
+          label="Description (optional)"
           size="small"
+          placeholder="e.g., sample-001, z-stack-start"
           value={snapFileName}
           onChange={(e) => {
             // Only allow alphanumeric, underscore, hyphen, and dot
@@ -351,7 +353,7 @@ export default function StreamControls({
           }}
           sx={{ minWidth: 200, flex: 1 }}
           disabled={!isLiveViewActive}
-          helperText="Allowed: a-z, A-Z, 0-9, _ - ."
+          helperText="Optional description. Filename: ISO8601_DetectorName_Description"
           inputProps={{
             pattern: "[a-zA-Z0-9_.-]*",
             maxLength: 100,

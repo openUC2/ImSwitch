@@ -337,8 +337,8 @@ class RecordingController(ImConWidgetController):
             detector_names: List of detector names to include in filename. If provided, uses first detector name.
             
         Returns:
-            Filename in format: YYYY-MM-DDTHH-MM-SS-ffffff_<detector>_<description>.ext
-            Example: 2026-02-27T14-32-45-123456_WidefieldCamera_cell-005
+            Filename in format: YYYY-MM-DDTHH-MM-SS-ffffff_<detector>_<description> (without extension)
+            Example (basename only): 2026-02-27T14-32-45-123456_WidefieldCamera_cell-005
         """
         # ISO 8601 timestamp with microseconds for uniqueness and sortability
         now = datetime.datetime.now()

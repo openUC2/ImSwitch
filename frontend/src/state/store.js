@@ -89,6 +89,18 @@ const lightsheetPersistConfig = {
 };
 
 //#####################################################################################
+// Nested persist config for focusMap state
+// Only persist UI accordion states, not transient data like results or computing flags
+const focusMapPersistConfig = {
+  key: "focusMap",
+  storage,
+  whitelist: [
+    "ui", // Persist accordion expand/collapse states (showManualPoints, showMeasuredPoints, showOverlayOnWellplate)
+  ],
+  // Don't persist: config, results, manualPoints (those are session-specific)
+};
+
+//#####################################################################################
 // Combine reducers
 const rootReducer = combineReducers({
   connectionSettingsState: connectionSettingsReducer,
@@ -135,7 +147,7 @@ const rootReducer = combineReducers({
   compositeAcquisitionState: compositeAcquisitionReducer,
   experimentUI: experimentUIReducer,
   galvoScannerState: galvoScannerReducer,
-  focusMap: focusMapReducer,
+  focusMap: persistReducer(focusMapPersistConfig, focusMapReducer), // Nested persist for UI accordion states
   overviewRegistrationState: overviewRegistrationReducer,
 });
 

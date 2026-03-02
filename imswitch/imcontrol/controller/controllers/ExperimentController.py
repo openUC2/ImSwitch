@@ -2285,8 +2285,55 @@ class ExperimentController(ImConWidgetController):
                 )
 
         if config.fit_by_region:
-            # Fit separately per region – skip groups that already have a valid fit
+            # Fit separately per region – skip groups that already have a valid fit.
+            # Detect degenerate areas (single-FOV with zero-size bounds) and combine
+            # them into a single global focus map instead of duplicating measurements.
+            DEGEN_THRESHOLD = 1.0  # microns – area extent smaller than this is degenerate
+            degenerate_areas = []
+            normal_areas = []
             for area in areas:
+                b = area["bounds"]
+                w = abs(b["maxX"] - b["minX"])
+                h = abs(b["maxY"] - b["minY"])
+                if w < DEGEN_THRESHOLD and h < DEGEN_THRESHOLD:
+                    degenerate_areas.append(area)
+                else:
+                    normal_areas.append(area)
+
+            # Handle degenerate areas: use the combined bounds of ALL areas
+            # so that the focus grid covers the exterior of the whole scan region.
+            if degenerate_areas:
+                all_areas_for_bounds = areas  # use all areas (normal + degenerate)
+                combined_bounds = {
+                    "minX": min(a["bounds"]["minX"] for a in all_areas_for_bounds),
+                    "maxX": max(a["bounds"]["maxX"] for a in all_areas_for_bounds),
+                    "minY": min(a["bounds"]["minY"] for a in all_areas_for_bounds),
+                    "maxY": max(a["bounds"]["maxY"] for a in all_areas_for_bounds),
+                }
+                self._logger.info(
+                    f"Focus map: {len(degenerate_areas)} degenerate (single-FOV) area(s) detected – "
+                    f"computing combined map using global bounds instead of per-area"
+                )
+                combined_gid = "global_combined"
+                if not self.focus_map_manager.has_fitted_map(combined_gid):
+                    self._compute_focus_map_for_group(
+                        group_id=combined_gid,
+                        group_name="Combined (single-FOV areas)",
+                        bounds=combined_bounds,
+                        config=config,
+                    )
+                # Assign the combined map to each degenerate area
+                combined_fm = self.focus_map_manager.get(combined_gid)
+                if combined_fm is not None and combined_fm.is_fitted:
+                    for area in degenerate_areas:
+                        gid = area["areaId"]
+                        self.focus_map_manager._maps[gid] = combined_fm
+                        self._logger.info(
+                            f"Focus map [{gid}]: assigned combined map (single-FOV area)"
+                        )
+
+            # Handle normal (non-degenerate) areas individually
+            for area in normal_areas:
                 gid = area["areaId"]
                 if self.focus_map_manager.has_fitted_map(gid):
                     self._logger.info(

@@ -139,13 +139,18 @@ const FocusMapDimension = () => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showAFSettings, setShowAFSettings] = useState(false);
   const [showChannelOffsets, setShowChannelOffsets] = useState(false);
-  const [showManualPoints, setShowManualPoints] = useState(false);
-  const [showMeasuredPoints, setShowMeasuredPoints] = useState(false);
+  // showManualPoints and showMeasuredPoints are persisted in Redux (focusMap.ui)
+  const showManualPoints = ui.showManualPoints ?? false;
+  const showMeasuredPoints = ui.showMeasuredPoints ?? false;
+  const setShowManualPoints = (val) => dispatch(focusMapSlice.setShowManualPoints(val));
+  const setShowMeasuredPoints = (val) => dispatch(focusMapSlice.setShowMeasuredPoints(val));
   const [previewData, setPreviewData] = useState(null);
   const [expandedFitGroup, setExpandedFitGroup] = useState(null);
   const [editingPointZ, setEditingPointZ] = useState(null); // { groupId, pointIndex, z }
   const [editingPointXY, setEditingPointXY] = useState(null); // { groupId, pointIndex, field: "x"|"y", value }
   const [goToInProgress, setGoToInProgress] = useState(null); // "groupId-pointIndex"
+  const [visiblePointCount, setVisiblePointCount] = useState({}); // { [groupId]: number } – pagination for measured points
+  const POINTS_PAGE_SIZE = 20; // Number of points to show at a time
 
   // ── Dimension summary ────────────────────────────────────────────────
   useEffect(() => {
@@ -1494,6 +1499,14 @@ const FocusMapDimension = () => {
                   const pts = result.points || [];
                   if (pts.length === 0) return null;
 
+                  // Compute Z range summary for the group
+                  const zValues = pts.map((p) => p.z).filter((z) => z != null && isFinite(z));
+                  const zMin = zValues.length > 0 ? Math.min(...zValues) : 0;
+                  const zMax = zValues.length > 0 ? Math.max(...zValues) : 0;
+                  const maxVisible = visiblePointCount[groupId] || POINTS_PAGE_SIZE;
+                  const visiblePts = pts.slice(0, maxVisible);
+                  const hasMore = pts.length > maxVisible;
+
                   return (
                     <Box key={groupId} sx={{ mb: 2 }}>
                       <Box
@@ -1511,6 +1524,12 @@ const FocusMapDimension = () => {
                           label={`${pts.length} pts`}
                           size="small"
                           variant="outlined"
+                        />
+                        <Chip
+                          label={`Z: ${zMin.toFixed(1)} – ${zMax.toFixed(1)} µm`}
+                          size="small"
+                          variant="outlined"
+                          color="info"
                         />
                         <Button
                           size="small"
@@ -1538,7 +1557,7 @@ const FocusMapDimension = () => {
                             </TableRow>
                           </TableHead>
                           <TableBody>
-                            {pts.map((pt, idx) => {
+                            {visiblePts.map((pt, idx) => {
                               const isEditing =
                                 editingPointZ?.groupId === groupId &&
                                 editingPointZ?.pointIndex === idx;
@@ -1791,6 +1810,42 @@ const FocusMapDimension = () => {
                           </TableBody>
                         </Table>
                       </TableContainer>
+                      {/* Pagination controls for large point lists */}
+                      {(hasMore || maxVisible > POINTS_PAGE_SIZE) && (
+                        <Box sx={{ display: "flex", gap: 1, mt: 0.5, alignItems: "center" }}>
+                          <Typography variant="caption" color="text.secondary">
+                            Showing {Math.min(maxVisible, pts.length)} of {pts.length} points
+                          </Typography>
+                          {hasMore && (
+                            <Button
+                              size="small"
+                              variant="text"
+                              onClick={() =>
+                                setVisiblePointCount((prev) => ({
+                                  ...prev,
+                                  [groupId]: (prev[groupId] || POINTS_PAGE_SIZE) + POINTS_PAGE_SIZE,
+                                }))
+                              }
+                            >
+                              Show More
+                            </Button>
+                          )}
+                          {maxVisible > POINTS_PAGE_SIZE && (
+                            <Button
+                              size="small"
+                              variant="text"
+                              onClick={() =>
+                                setVisiblePointCount((prev) => ({
+                                  ...prev,
+                                  [groupId]: POINTS_PAGE_SIZE,
+                                }))
+                              }
+                            >
+                              Collapse
+                            </Button>
+                          )}
+                        </Box>
+                      )}
                     </Box>
                   );
                 })}
@@ -1807,8 +1862,42 @@ const FocusMapDimension = () => {
               <FocusMapVisualization
                 data={previewData}
                 onClickPosition={async (worldX, worldY) => {
-                  // Move stage to clicked position on the heatmap
+                  // Move stage to clicked position on the heatmap, including
+                  // interpolated Z from the preview grid.
                   try {
+                    // Interpolate Z from the preview grid (bilinear)
+                    let targetZ = null;
+                    const grid = previewData?.preview_grid || (
+                      previewData?.x && previewData?.y && previewData?.z
+                        ? { x: previewData.x, y: previewData.y, z: previewData.z }
+                        : null
+                    );
+                    if (grid && grid.x && grid.y && grid.z) {
+                      const xs = grid.x;
+                      const ys = grid.y;
+                      const zs = grid.z;
+                      // Find bounding grid cell indices
+                      let ix0 = 0, ix1 = xs.length - 1;
+                      for (let i = 0; i < xs.length - 1; i++) {
+                        if (worldX >= xs[i] && worldX <= xs[i + 1]) { ix0 = i; ix1 = i + 1; break; }
+                      }
+                      let iy0 = 0, iy1 = ys.length - 1;
+                      for (let i = 0; i < ys.length - 1; i++) {
+                        if (worldY >= ys[i] && worldY <= ys[i + 1]) { iy0 = i; iy1 = i + 1; break; }
+                      }
+                      // Bilinear interpolation fractions
+                      const tx = xs[ix1] !== xs[ix0] ? (worldX - xs[ix0]) / (xs[ix1] - xs[ix0]) : 0;
+                      const ty = ys[iy1] !== ys[iy0] ? (worldY - ys[iy0]) / (ys[iy1] - ys[iy0]) : 0;
+                      const z00 = zs[iy0]?.[ix0] ?? 0;
+                      const z10 = zs[iy0]?.[ix1] ?? z00;
+                      const z01 = zs[iy1]?.[ix0] ?? z00;
+                      const z11 = zs[iy1]?.[ix1] ?? z00;
+                      targetZ = z00 * (1 - tx) * (1 - ty)
+                              + z10 * tx * (1 - ty)
+                              + z01 * (1 - tx) * ty
+                              + z11 * tx * ty;
+                    }
+
                     await apiPositionerControllerMovePositioner({
                       axis: "X",
                       dist: worldX,
@@ -1823,6 +1912,16 @@ const FocusMapDimension = () => {
                       isBlocking: false,
                       speed: 15000,
                     });
+                    // Move Z to the interpolated focus height
+                    if (targetZ != null && isFinite(targetZ)) {
+                      await apiPositionerControllerMovePositioner({
+                        axis: "Z",
+                        dist: targetZ,
+                        isAbsolute: true,
+                        isBlocking: false,
+                        speed: 15000,
+                      });
+                    }
                   } catch (err) {
                     console.error("Failed to move stage to heatmap position:", err);
                   }

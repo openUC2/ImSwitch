@@ -1,6 +1,29 @@
 from typing import TYPE_CHECKING, Any
-import psygnal.utils
-psygnal.utils.decompile() # https://github.com/pyapp-kit/psygnal/pull/331#issuecomment-2455192644
+
+# --- psygnal decompile guard ---------------------------------------------------
+# The compiled (mypyc) version of psygnal forbids interpreted classes from
+# inheriting compiled ones.  We *must* decompile before anything else imports
+# psygnal so that Python falls back to the pure-Python modules.
+# `decompile()` only renames .so / .pyd files on disk – if the compiled
+# extension was already loaded into memory by a previous import, the rename
+# alone cannot help the *current* process.  Therefore we also force a reload
+# of the critical sub-modules so that Python re-imports from .py files.
+# See https://github.com/pyapp-kit/psygnal/issues/330
+try:
+    import psygnal.utils as _psygnal_utils
+    _psygnal_utils.decompile()
+    # Reload already-imported sub-modules so the current process picks up the
+    # pure-Python versions instead of the (now renamed) compiled ones.
+    import importlib as _importlib, sys as _sys
+    for _mod_name in sorted(k for k in _sys.modules if k.startswith("psygnal")):
+        try:
+            _importlib.reload(_sys.modules[_mod_name])
+        except Exception:
+            pass
+except Exception:
+    pass
+# -------------------------------------------------------------------------------
+
 from psygnal import emit_queued
 import psygnal
 import asyncio

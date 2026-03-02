@@ -374,25 +374,24 @@ class CameraPicamera2:
 
     def _process_frame(self, array: np.ndarray) -> np.ndarray:
         """
-        Process captured frame (apply color conversion, flipping, flatfielding).
+        Process captured frame (apply flipping, flatfielding).
         
-        Picamera2 outputs RGB888 (R, G, B order).  The internal ImSwitch pipeline
-        expects BGR order (OpenCV convention).  We convert once here so that
-        cv2.imwrite / cv2.imencode produce correct colours without any extra step.
+        Picamera2 outputs RGB888 (R, G, B order).  Frames are kept in RGB
+        throughout the ImSwitch pipeline.  Conversion to BGR is done locally
+        only where needed (e.g. before cv2.imencode in stream workers).
         
         Args:
             array: Raw frame from camera (RGB888)
             
         Returns:
-            Processed frame in BGR order (or single-channel grayscale)
+            Processed frame in RGB order (or single-channel grayscale)
         """
-        # Convert RGB → BGR for OpenCV-compatible pipeline
-        if len(array.shape) == 3 and array.shape[2] == 3:
-            array = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
+        # NOTE: We intentionally do NOT convert RGB → BGR here.
+        # The pipeline keeps frames in RGB; only stream encoders convert as needed.
 
         # Convert to mono if needed
         if not self.isRGB and len(array.shape) == 3:
-            array = cv2.cvtColor(array, cv2.COLOR_BGR2GRAY)
+            array = cv2.cvtColor(array, cv2.COLOR_RGB2GRAY)
 
         # Apply flipping
         if self.flipImage[0]:  # Flip Y

@@ -23,15 +23,19 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const magnification1 = objectiveState.magnification1;
   const magnification2 = objectiveState.magnification2;
-  // Sample effect to track which slot is active
-  // If we have data from store, set the local currentSlot
+  // Fetch objective status on mount
   useEffect(() => {
     fetchObjectiveControllerGetStatus(dispatch);
+  }, [dispatch]);
+
+  // Track Redux state changes (e.g. from socket updates) and update
+  // local state + clear spinner when the objective has changed.
+  useEffect(() => {
     if (objectiveState.currentObjective != null) {
       setCurrentSlot(objectiveState.currentObjective);
-      setIsSwitching(false); // We got an update => done switching
+      setIsSwitching(false); // Objective update received => done switching
     }
-  }, [dispatch]);
+  }, [objectiveState.currentObjective]);
 
   useEffect(() => {
       //refresh status

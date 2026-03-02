@@ -678,11 +678,11 @@ const HoloController = () => {
       </Paper>
 
       {/* Video Streams */}
-      <Grid container spacing={2} mb={2}>
+      <Grid container spacing={2} mb={2} sx={{ alignItems: "stretch" }}>
         {/* Raw Camera Stream */}
-        <Grid item xs={12} md={6}>
-          <Card>
-            <CardContent>
+        <Grid item xs={12} md={6} sx={{ display: "flex" }}>
+          <Card sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
+            <CardContent sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
               <Typography variant="h6" gutterBottom>
                 Camera Stream
               </Typography>
@@ -690,32 +690,25 @@ const HoloController = () => {
                 sx={{
                   position: "relative",
                   width: "100%",
-                  paddingTop: "75%", // 4:3 aspect ratio for larger display
+                  flex: 1,
+                  minHeight: 300,
                   backgroundColor: "#000",
                   borderRadius: 1,
                   overflow: "hidden",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  transform: `scaleX(${holoState.flipX ? -1 : 1}) scaleY(${holoState.flipY ? -1 : 1}) rotate(${holoState.rotation || 0}deg)`,
                 }}
               >
-                {/* Container for transform (flip/rotation) */}
-                <Box
-                  sx={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    height: "100%",
-                    transform: `scaleX(${holoState.flipX ? -1 : 1}) scaleY(${holoState.flipY ? -1 : 1}) rotate(${holoState.rotation || 0}deg)`,
-                  }}
-                >
-                  {/* Use LiveViewControlWrapper for the camera stream with ROI overlay */}
-                  {/* Auto-selects JPEG/Binary/WebRTC viewer based on stream format */}
-                  <LiveViewControlWrapper
-                    onClick={handleLiveViewClick}
-                    onImageLoad={handleImageLoad}
-                    overlayContent={roiOverlay}
-                    enableStageMovement={false} // We handle our own click logic for ROI
-                  />
-                </Box>
+                {/* Use LiveViewControlWrapper for the camera stream with ROI overlay */}
+                {/* Auto-selects JPEG/Binary/WebRTC viewer based on stream format */}
+                <LiveViewControlWrapper
+                  onClick={handleLiveViewClick}
+                  onImageLoad={handleImageLoad}
+                  overlayContent={roiOverlay}
+                  enableStageMovement={false} // We handle our own click logic for ROI
+                />
               </Box>
               <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                 Click to set ROI center (auto-applies). Preview: {imageSize.width}×{imageSize.height}px | ROI: {roiSelection.size}px → {Math.round(roiSizeInPreview)}px preview
@@ -725,9 +718,9 @@ const HoloController = () => {
         </Grid>
 
         {/* Processed Hologram Stream */}
-        <Grid item xs={12} md={6}>
-          <Card>
-            <CardContent>
+        <Grid item xs={12} md={6} sx={{ display: "flex" }}>
+          <Card sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
+            <CardContent sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
               <Typography variant="h6" gutterBottom>
                 Processed Hologram
               </Typography>
@@ -735,10 +728,14 @@ const HoloController = () => {
                 sx={{
                   position: "relative",
                   width: "100%",
-                  paddingTop: "75%", // 4:3 aspect ratio - matches raw stream
+                  flex: 1,
+                  minHeight: 300,
                   backgroundColor: "#000",
                   borderRadius: 1,
                   overflow: "hidden",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
               >
                 <img
@@ -746,11 +743,8 @@ const HoloController = () => {
                   src={processedStreamUrl}
                   alt="Processed Hologram Stream"
                   style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    height: "100%",
+                    maxWidth: "100%",
+                    maxHeight: "100%",
                     objectFit: "contain",
                   }}
                 />

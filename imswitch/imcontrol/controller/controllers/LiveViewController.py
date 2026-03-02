@@ -358,6 +358,10 @@ class JPEGStreamWorker(StreamWorker):
             if self._params.subsampling_factor > 1:
                 frame = frame[::self._params.subsampling_factor, ::self._params.subsampling_factor]
 
+            # Convert RGB → BGR for JPEG encoding (OpenCV expects BGR)
+            if len(frame.shape) == 3 and frame.shape[2] == 3:
+                frame = self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
+
             # Encode as JPEG
             encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
             success, encoded = self._cv2.imencode('.jpg', frame, encode_params)
@@ -438,6 +442,10 @@ class MJPEGStreamWorker(StreamWorker):
             # Apply center crop if specified (before encoding)
             if self._params.crop_size > 0:
                 frame = apply_center_crop(frame, self._params.crop_size)
+
+            # Convert RGB → BGR for JPEG encoding (OpenCV expects BGR)
+            if len(frame.shape) == 3 and frame.shape[2] == 3: # TODO: Is this correct for all RGB cameras? 
+                frame = self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
 
             # Encode as JPEG
             encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]

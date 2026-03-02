@@ -205,16 +205,16 @@ const ChannelBlock = ({
                 </Tooltip>
               </Box>
               <FormControl size="small" fullWidth>
-                <Select
+                <TextField
+                  type="number"
+                  size="small"
                   value={exposure}
-                  onChange={(e) => onExposureChange(e.target.value)}
-                >
-                  {[0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000].map((val) => (
-                    <MenuItem key={val} value={val}>
-                      {val} ms
-                    </MenuItem>
-                  ))}
-                </Select>
+                  onChange={(e) => onExposureChange(parseFloat(e.target.value) || 0)}
+                  inputProps={{ min: 0, step: 0.1 }}
+                  InputProps={{
+                    endAdornment: <Typography variant="caption" sx={{ ml: 0.5, whiteSpace: 'nowrap' }}>ms</Typography>,
+                  }}
+                />
               </FormControl>
             </Box>
 
@@ -317,8 +317,8 @@ const ChannelsDimension = () => {
       const initIntensities = illuSources.map((_, idx) => intensities[idx] ?? 0);
       const initExposures = illuSources.map((_, idx) => exposures[idx] ?? 100);
       const initGains = illuSources.map((_, idx) => gains[idx] ?? 0);
-      // Default: all channels included in experiment
-      const initChannelEnabled = illuSources.map((_, idx) => channelEnabledForExperiment[idx] ?? true);
+      // Default: all channels excluded from experiment (user must explicitly enable)
+      const initChannelEnabled = illuSources.map((_, idx) => channelEnabledForExperiment[idx] ?? false);
 
       if (JSON.stringify(intensities) !== JSON.stringify(initIntensities)) {
         dispatch(experimentSlice.setIlluminationIntensities(initIntensities));

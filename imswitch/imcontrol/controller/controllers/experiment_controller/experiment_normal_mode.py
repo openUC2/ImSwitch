@@ -435,8 +435,12 @@ class ExperimentNormalMode(ExperimentModeBase):
             ))
             step_id += 1
 
-            # Move to per-point Z origin if different from current position
-            if point_z_origin is not None and len(z_positions) == 1:
+            # Move to per-point Z origin only if it actually differs from
+            # the global initial Z.  When no per-point Z was set, point_z_origin
+            # equals initial_z_position and no move is needed.
+            if (point_z_origin is not None
+                    and point_z_origin != initial_z_position
+                    and len(z_positions) == 1):
                 workflow_steps.append(WorkflowStep(
                     name=f"Move to per-point Z origin {point_z_origin:.1f}",
                     step_id=step_id,
@@ -447,28 +451,33 @@ class ExperimentNormalMode(ExperimentModeBase):
 
             # Apply focus map Z if available (pre-computed surface)
             # This replaces or supplements autofocus at each position.
-            # Resolve the group_id that was used when storing the focus map.
-            # _run_focus_map_phase stores under sa.areaId (e.g. "area_0").
-            # generate_snake_tiles stores centerIndex=area.areaId in tiles.
-            focus_map_group_id = (
-                m_point.get("centerIndex")
-                or m_point.get("areaName")
-                or m_point.get("wellId")
-                or "default"
-            )
-            focus_map_z = self.controller.apply_focus_map_z(
-                x=m_point["x"], y=m_point["y"], group_id=focus_map_group_id
-            )
-            if focus_map_z is None and not getattr(self.controller, '_focus_map_fit_by_region', True):
-                # Try global map as fallback
-                focus_map_z = self.controller.apply_focus_map_z(
-                    x=m_point["x"], y=m_point["y"], group_id="global"
+            # Only attempt lookups when the manager actually contains fitted
+            # maps, so experiments without focus mapping never produce
+            # spurious Z moves.
+            focus_map_z = None
+            if self.controller.focus_map_manager.get_all():
+                # Resolve the group_id that was used when storing the focus map.
+                # _run_focus_map_phase stores under sa.areaId (e.g. "area_0").
+                # generate_snake_tiles stores centerIndex=area.areaId in tiles.
+                focus_map_group_id = (
+                    m_point.get("centerIndex")
+                    or m_point.get("areaName")
+                    or m_point.get("wellId")
+                    or "default"
                 )
-            if focus_map_z is None:
-                # Try manual map as last-resort fallback (user-defined points)
                 focus_map_z = self.controller.apply_focus_map_z(
-                    x=m_point["x"], y=m_point["y"], group_id="manual"
+                    x=m_point["x"], y=m_point["y"], group_id=focus_map_group_id
                 )
+                if focus_map_z is None and not getattr(self.controller, '_focus_map_fit_by_region', True):
+                    # Try global map as fallback
+                    focus_map_z = self.controller.apply_focus_map_z(
+                        x=m_point["x"], y=m_point["y"], group_id="global"
+                    )
+                if focus_map_z is None:
+                    # Try manual map as last-resort fallback (user-defined points)
+                    focus_map_z = self.controller.apply_focus_map_z(
+                        x=m_point["x"], y=m_point["y"], group_id="manual"
+                    )
 
             if focus_map_z is not None:
                 # Move Z to the focus-mapped position

@@ -1176,6 +1176,7 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
               experimentSlice.createPoint({
                 x: well.x,
                 y: well.y,
+                z: positionState?.z ?? 0,
                 name: well.name,
                 shape: selectedShape,
                 rectPlusX:
@@ -1233,7 +1234,10 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
             shiftedPoint.y += getRasterHeightAsPx() / 2;
             //createNewPoint(calcPxPoint2PhyPoint(shiftedPoint));
             dispatch(
-              experimentSlice.createPoint(calcPxPoint2PhyPoint(shiftedPoint))
+              experimentSlice.createPoint({
+                ...calcPxPoint2PhyPoint(shiftedPoint),
+                z: positionState?.z ?? 0,
+              })
             );
           });
         } else {
@@ -1276,6 +1280,7 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
             experimentSlice.createPoint({
               x: centerPointPhy.x,
               y: centerPointPhy.y,
+              z: positionState?.z ?? 0,
               shape: Shape.RECTANGLE,
               rectPlusX: xPlus,
               rectMinusX: xMinus,
@@ -1495,9 +1500,10 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
           action: () => (
             //createNewPoint(calcPxPoint2PhyPoint(menuPositionLocal)),
             dispatch(
-              experimentSlice.createPoint(
-                calcPxPoint2PhyPoint(menuPositionLocal)
-              )
+              experimentSlice.createPoint({
+                ...calcPxPoint2PhyPoint(menuPositionLocal),
+                z: positionState?.z ?? 0,
+              })
             ),
             setShowMenu(false)
           ),

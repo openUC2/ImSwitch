@@ -284,6 +284,7 @@ const experimentSlice = createSlice({
         id: uuidv4(),
         x: action.payload.x,
         y: action.payload.y,
+        z: (action.payload.z != null) ? (action.payload.z) : (0),
         name: (action.payload.name != null) ? (action.payload.name) : (""),
         shape: (action.payload.shape != null) ? (action.payload.shape) : (""),
         rectPlusX: (action.payload.rectPlusX != null) ? (action.payload.rectPlusX) : (0),

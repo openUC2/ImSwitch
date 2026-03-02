@@ -58,6 +58,7 @@ class FocusMapFromPointsRequest(BaseModel):
 class NeighborPoint(BaseModel):
     x: float
     y: float
+    z: Optional[float] = None
     iX: int
     iY: int
 
@@ -66,6 +67,7 @@ class Point(BaseModel):
     name: str
     x: float
     y: float
+    z: Optional[float] = None  # Per-point Z origin for Z-stacking/autofocus
     iX: int = 0
     iY: int = 0
     neighborPointList: List[NeighborPoint] = Field(default_factory=list)
@@ -78,6 +80,7 @@ class ScanPosition(BaseModel):
     index: int
     x: float
     y: float
+    z: Optional[float] = None  # Per-position Z origin
     iX: int
     iY: int
 
@@ -94,6 +97,7 @@ class CenterPosition(BaseModel):
     """Center position of a scan area"""
     x: float
     y: float
+    z: Optional[float] = None
 
 class ScanArea(BaseModel):
     """Pre-calculated scan area with ordered positions"""
@@ -629,6 +633,7 @@ class ExperimentController(ImConWidgetController):
                         "iY": pos.iY,
                         "x": pos.x,
                         "y": pos.y,
+                        "z": pos.z if pos.z is not None else (area.centerPosition.z if area.centerPosition.z is not None else None),
                         "wellId": area.wellId,
                         "areaName": area.areaName,
                         "areaType": area.areaType
@@ -654,6 +659,7 @@ class ExperimentController(ImConWidgetController):
                         "iY": 0,
                         "x": centerPoint.x,
                         "y": centerPoint.y,
+                        "z": centerPoint.z,
                         "wellId": centerPoint.wellId,
                         "areaName": centerPoint.name,
                         "areaType": centerPoint.areaType or 'free_scan'
@@ -669,6 +675,7 @@ class ExperimentController(ImConWidgetController):
                             "iY": neighbor.iY,
                             "x": neighbor.x,
                             "y": neighbor.y,
+                            "z": neighbor.z if neighbor.z is not None else centerPoint.z,
                             "wellId": centerPoint.wellId,
                             "areaName": centerPoint.name,
                             "areaType": centerPoint.areaType or 'free_scan'
@@ -793,6 +800,9 @@ class ExperimentController(ImConWidgetController):
         # Set LED status to rainbow (busy)
         self.set_led_status("rainbow")
 
+        # Turn off all illumination sources to start from a clean state
+        self._switch_off_all_illumination()
+
         # Start the detector if not already running
         if not self.mDetector._running:
             self.mDetector.startAcquisition()
@@ -828,9 +838,13 @@ class ExperimentController(ImConWidgetController):
         snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
 
         # Generate Z-positions
+        # Use RELATIVE offsets from per-point z origin.
+        # The actual absolute Z is computed per-tile in the workflow using each point's z.
         currentZ = self.mStage.getPosition()["Z"]
         if isZStack:
-            z_positions = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize) + currentZ
+            # Store as offsets relative to origin (will be shifted per-point)
+            z_offsets = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize)
+            z_positions = z_offsets + currentZ  # Fallback: use current Z as base
         else:
             z_positions = [currentZ]  # Get current Z position
 

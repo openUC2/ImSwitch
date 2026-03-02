@@ -56,6 +56,12 @@ export function calculateScanCoordinates(experimentState, objectiveState, wellSe
     }
   });
 
+  // Apply snake/raster ordering to the AREAS themselves (not just tiles within each area).
+  // This reorders scanAreas so the stage travels efficiently across multi-area experiments.
+  if (scanConfig.scanAreas.length > 1) {
+    scanConfig.scanAreas = applyAreaLevelScanPattern(scanConfig.scanAreas, isSnakeScan, effectiveStepY);
+  }
+
   return scanConfig;
 }
 
@@ -97,6 +103,7 @@ function processScanPoint(point, pointIndex, experimentState, objectiveState, we
     rawPositions = [{
       x: point.x,
       y: point.y,
+      z: point.z ?? 0,
       iX: 0,
       iY: 0
     }];
@@ -154,7 +161,8 @@ function processScanPoint(point, pointIndex, experimentState, objectiveState, we
     wellId: wellId,
     centerPosition: {
       x: point.x,
-      y: point.y
+      y: point.y,
+      z: point.z ?? 0
     },
     bounds: bounds,
     scanPattern: isSnakeScan ? "snake" : "raster",
@@ -162,6 +170,7 @@ function processScanPoint(point, pointIndex, experimentState, objectiveState, we
       index: idx,
       x: pos.x,
       y: pos.y,
+      z: pos.z ?? (point.z ?? 0),
       iX: pos.iX,
       iY: pos.iY
     }))
@@ -267,6 +276,59 @@ function calculateBounds(positions) {
 }
 
 /**
+ * Apply scan-pattern ordering at the *area* level.
+ *
+ * Areas are grouped into rows by quantising their center-Y coordinate
+ * (bucket size = effectiveStepY, falling back to 10 % of the total Y span).
+ * Within each row the areas are sorted left-to-right by center-X.
+ * For snake mode the direction alternates per row (odd rows are reversed).
+ *
+ * @param {Array}   areas          - Array of scan-area objects (each has centerPosition {x,y})
+ * @param {boolean} isSnakeScan    - true  → snake (bidirectional), false → raster (monodirectional)
+ * @param {number}  effectiveStepY - Y step size used for row bucketing
+ * @returns {Array} Re-ordered copy of the areas array
+ */
+function applyAreaLevelScanPattern(areas, isSnakeScan, effectiveStepY) {
+  if (!areas || areas.length <= 1) return areas;
+
+  // Determine bucket size for grouping areas into rows.
+  // Use effectiveStepY if positive, otherwise fall back to 10 % of the Y span.
+  const ys = areas.map(a => a.centerPosition.y);
+  const ySpan = Math.max(...ys) - Math.min(...ys);
+  const bucket = effectiveStepY > 0 ? effectiveStepY : (ySpan > 0 ? ySpan * 0.1 : 1);
+
+  // Assign each area a row key (quantised Y)
+  const rowKey = (a) => Math.round(a.centerPosition.y / bucket);
+
+  // Group into rows
+  const rowMap = {};
+  areas.forEach(area => {
+    const key = rowKey(area);
+    if (!rowMap[key]) rowMap[key] = [];
+    rowMap[key].push(area);
+  });
+
+  // Sort rows top→bottom, each row left→right by center X
+  const sortedRowKeys = Object.keys(rowMap).map(Number).sort((a, b) => a - b);
+  sortedRowKeys.forEach(key => {
+    rowMap[key].sort((a, b) => a.centerPosition.x - b.centerPosition.x);
+  });
+
+  // Flatten – reverse odd rows for snake pattern
+  const ordered = [];
+  sortedRowKeys.forEach((key, rowIndex) => {
+    const row = rowMap[key];
+    if (isSnakeScan && rowIndex % 2 === 1) {
+      ordered.push(...[...row].reverse());
+    } else {
+      ordered.push(...row);
+    }
+  });
+
+  return ordered;
+}
+
+/**
  * Convert scan configuration to backend API format
  * Maintains compatibility with existing Experiment model
  */
@@ -295,6 +357,7 @@ function convertScanAreasToPointList(scanAreas) {
     name: area.areaName,
     x: area.centerPosition.x,
     y: area.centerPosition.y,
+    z: area.centerPosition.z ?? 0,
     iX: 0,
     iY: 0,
     wellId: area.wellId,
@@ -303,6 +366,7 @@ function convertScanAreasToPointList(scanAreas) {
     neighborPointList: area.positions.map(pos => ({
       x: pos.x,
       y: pos.y,
+      z: pos.z ?? 0,
       iX: pos.iX,
       iY: pos.iY
     }))

@@ -93,6 +93,12 @@ class ExperimentNormalMode(ExperimentModeBase):
                 shared_omero_key=shared_omero_key,
                 n_times=n_times,
             )
+        # Compute writer offset for multi-timepoint experiments.
+        # Each timepoint creates its own set of writers, so the flat
+        # file_writers list is indexed as: t * num_tiles + tile_index.
+        is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
+        writer_offset = t * len(snake_tiles) if not is_single_tiff_mode else 0
+
         # Create workflow steps for each tile
         for position_center_index, tiles in enumerate(snake_tiles):
             step_id = self._create_tile_workflow_steps(
@@ -101,13 +107,15 @@ class ExperimentNormalMode(ExperimentModeBase):
                 exposures, gains, t, is_auto_focus, autofocus_min,
                 autofocus_max, autofocus_step_size, autofocus_illumination_channel,
                 autofocus_mode, autofocus_max_attempts, autofocus_target_focus_setpoint, n_times,
-                t_pre_s=t_pre_s, t_post_s=t_post_s
+                t_pre_s=t_pre_s, t_post_s=t_post_s,
+                writer_offset=writer_offset
             )
 
         # Add finalization steps
         step_id = self._add_finalization_steps(
             workflow_steps, step_id, snake_tiles, illumination_sources,
-            illumination_intensities, t_period, t, n_times
+            illumination_intensities, t_period, t, n_times,
+            writer_offset=writer_offset
         )
 
         # Add step to set LED status to idle when done
@@ -337,7 +345,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                                     autofocus_target_focus_setpoint: float,
                                   n_times: int,
                                   t_pre_s: float = 0.09,
-                                  t_post_s: float = 0.05) -> int:
+                                  t_post_s: float = 0.05,
+                                  writer_offset: int = 0) -> int:
         """
         Create workflow steps for a single tile.
         
@@ -396,6 +405,27 @@ class ExperimentNormalMode(ExperimentModeBase):
             except Exception:
                 name = f"Move to point {m_point['x']}, {m_point['y']}"
 
+            # Determine per-point Z origin: use per-point z if provided,
+            # otherwise fall back to the global initial_z_position.
+            point_z_origin = m_point.get("z")
+            if point_z_origin is None:
+                point_z_origin = initial_z_position
+
+            # Compute per-point Z positions for Z-stacking.
+            # z_positions from the caller are absolute positions based on the
+            # global Z origin.  If this point has its own Z, recalculate them
+            # as offsets and re-apply around the per-point origin.
+            if point_z_origin is not None and point_z_origin != initial_z_position and len(z_positions) > 1:
+                # z_positions were computed as offsets + globalZ. Convert back
+                # to offsets and re-base around this point's Z.
+                z_offsets = np.array(z_positions) - initial_z_position
+                effective_z_positions = list(z_offsets + point_z_origin)
+            elif point_z_origin is not None and point_z_origin != initial_z_position and len(z_positions) == 1:
+                # Single Z (no stack) – use the per-point Z directly
+                effective_z_positions = [point_z_origin]
+            else:
+                effective_z_positions = z_positions
+
             # Move to XY position
             workflow_steps.append(WorkflowStep(
                 name=name,
@@ -404,6 +434,16 @@ class ExperimentNormalMode(ExperimentModeBase):
                 main_params={"posX": m_point["x"], "posY": m_point["y"], "relative": False},
             ))
             step_id += 1
+
+            # Move to per-point Z origin if different from current position
+            if point_z_origin is not None and len(z_positions) == 1:
+                workflow_steps.append(WorkflowStep(
+                    name=f"Move to per-point Z origin {point_z_origin:.1f}",
+                    step_id=step_id,
+                    main_func=self.controller.move_stage_z,
+                    main_params={"posZ": point_z_origin, "relative": False},
+                ))
+                step_id += 1
 
             # Apply focus map Z if available (pre-computed surface)
             # This replaces or supplements autofocus at each position.
@@ -462,10 +502,10 @@ class ExperimentNormalMode(ExperimentModeBase):
                 ))
                 step_id += 1
 
-            # Iterate over Z positions
-            for index_z, i_z in enumerate(z_positions):
+            # Iterate over Z positions (using per-point effective Z positions)
+            for index_z, i_z in enumerate(effective_z_positions):
                 # Move to Z position if we have more than one Z position
-                if (len(z_positions) > 1 or (len(z_positions) == 1 and m_index == 0)) and (i_z != 0 and len(z_positions) != 1): # TODO: The latter case is just to ensure that we don't have false values coming from the hardware
+                if (len(effective_z_positions) > 1 or (len(effective_z_positions) == 1 and m_index == 0)) and (i_z != 0 and len(effective_z_positions) != 1): # TODO: The latter case is just to ensure that we don't have false values coming from the hardware
                     workflow_steps.append(WorkflowStep(
                         name="Move to Z position",
                         step_id=step_id,
@@ -515,9 +555,11 @@ class ExperimentNormalMode(ExperimentModeBase):
                     gain = gains[illu_index] if illu_index < len(gains) else gains[0]
 
                     # In single TIFF mode, all positions within a timepoint use the same writer
-                    # The writer index corresponds to the timepoint for timelapse sequences
+                    # The writer index corresponds to the timepoint for timelapse sequences.
+                    # In multi-tile mode, offset by timepoint * num_tiles to address
+                    # the correct writer in the flat file_writers list.
                     is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-                    writer_index = t if is_single_tiff_mode else position_center_index
+                    writer_index = t if is_single_tiff_mode else (writer_offset + position_center_index)
 
                     workflow_steps.append(WorkflowStep(
                         name="Acquire frame",
@@ -558,7 +600,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     step_id += 1
 
             # Move back to the current Z position after processing all points in the tile
-            if len(z_positions) > 1 :
+            if len(effective_z_positions) > 1 :
                 workflow_steps.append(WorkflowStep(
                     name="Move back to current Z position",
                     step_id=step_id,
@@ -572,18 +614,20 @@ class ExperimentNormalMode(ExperimentModeBase):
 
 
         # Finalize OME writer for this tile (skip in single TIFF mode since we only have one writer)
-        # Always finalize tile writers since each timepoint creates its own writers
+        # Always finalize tile writers since each timepoint creates its own writers.
+        # Use writer_offset to address the correct writer in the flat list.
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
         should_finalize_tile = not is_single_tiff_mode
 
         if should_finalize_tile:
+            actual_writer_index = writer_offset + position_center_index
             workflow_steps.append(WorkflowStep(
                 name=f"Finalize OME writer for tile {position_center_index} (timepoint {t})",
                 step_id=step_id,
                 main_func=self.controller.dummy_main_func,
                 main_params={},
                 post_funcs=[self.controller.finalize_tile_ome_writer],
-                post_params={"tile_index": position_center_index},
+                post_params={"tile_index": actual_writer_index},
             ))
             step_id += 1
 
@@ -596,7 +640,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                               illumination_sources: List[str],
                               illumination_intensities: List[float],
                               t_period: float,
-                              t: int, n_times: int) -> int:
+                              t: int, n_times: int,
+                              writer_offset: int = 0) -> int:
         """
         Add finalization workflow steps.
         
@@ -612,16 +657,21 @@ class ExperimentNormalMode(ExperimentModeBase):
         Returns:
             Updated step ID
         """
-        # Always finalize OME writers since each timepoint creates its own writers
-        workflow_steps.append(WorkflowStep(
-            name=f"Finalize OME writers (timepoint {t})",
-            step_id=step_id,
-            main_func=self.controller.dummy_main_func,
-            main_params={},
-            post_funcs=[self.controller.finalize_current_ome_writer],
-            post_params={"time_index": t}
-        ))
-        step_id += 1
+        # Finalize OME writers for this timepoint.
+        # Per-tile finalization already handled individual tile writers above.
+        # On the last timepoint, do a full cleanup pass (no time_index → finalizes all).
+        # On intermediate timepoints, skip this step since tile writers are already finalized.
+        is_last_timepoint = (t == n_times - 1)
+        if is_last_timepoint:
+            workflow_steps.append(WorkflowStep(
+                name=f"Finalize all OME writers (final cleanup)",
+                step_id=step_id,
+                main_func=self.controller.dummy_main_func,
+                main_params={},
+                post_funcs=[self.controller.finalize_current_ome_writer],
+                post_params={}  # No time_index → finalizes all remaining writers
+            ))
+            step_id += 1
 
         # Turn off all illuminations
         for illu_index, illu_source in enumerate(illumination_sources):

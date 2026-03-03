@@ -83,7 +83,8 @@ export default function LiveView({ setFileManagerInitialPath }) {
   // Use Redux state instead of local state
   const detectors = liveViewState.detectors;
   const activeTab = liveViewState.activeTab;
-  const lastCapturePath = liveViewState.lastCapturePath || liveViewState.lastSnapPath; // compatibility with persisted old key
+  const lastCapturePath =
+    liveViewState.lastCapturePath || liveViewState.lastSnapPath; // compatibility with persisted old key
   const isStreamRunning = liveViewState.isStreamRunning;
 
   // Keep some local state for now (these may need their own slices later)

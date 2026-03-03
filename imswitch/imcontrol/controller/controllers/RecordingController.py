@@ -214,7 +214,6 @@ class RecordingController(ImConWidgetController):
 
 
         # Use RecordingService for snap operations
-        self.__logger.debug(f"Starting snap with format={mSaveFormat}, detectorNames={detectorNames}")
         try:
             result = self.recording_service.snap(
                 detector_names=detectorNames,
@@ -224,7 +223,6 @@ class RecordingController(ImConWidgetController):
                 attrs=attrs,
                 async_write=False,  # Synchronous write to ensure file is saved immediately
             )
-            self.__logger.debug(f"Snap completed: {result}")
         except Exception as e:
             self.__logger.error(f"Failed to snap: {e}")
             self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")

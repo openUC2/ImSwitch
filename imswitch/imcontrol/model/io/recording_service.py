@@ -658,7 +658,6 @@ class RecordingService(SignalInterface):
         if save_mode in (SaveMode.Disk, SaveMode.DiskAndRAM):
             for det_name, image in images.items():
                 filepath = self._generate_filepath(savepath, det_name, format)
-                # TODO: We essentially loose all our metadta: {'WidefieldCamera': {'Detector:WidefieldCamera:Model': 'VirtualCamera', 'Detector:WidefieldCamera:Pixel size': [...], 'Detector:WidefieldCamera:Binning': 1, 'Detector:WidefieldCamera:ROI': [...], 'Detector:WidefieldCamera:Param:exposure': 0, 'Detector:WidefieldCamera:Param:exposure_mode': 'Auto', 'Detector:WidefieldCamera:Param:gain': 0, 'Detector:WidefieldCamera:Param:blacklevel': 100, 'Detector:WidefieldCamera:Param:binning': 1, 'Detector:WidefieldCamera:Param:image_width': 1000, 'Detector:WidefieldCamera:Param:image_height': 1000, 'Detector:WidefieldCamera:Param:frame_rate': -1, 'Detector:WidefieldCamera:Param:mode': True, 'Detector:WidefieldCamera:Param:flat_fielding': True, 'Detector:WidefieldCamera:Param:trigger_source': 'Continous', 'Detector:WidefieldCamera:Param:Camera pixel size': 1.0, 'Detector:FocusLock:Model': 'VirtualCamera', 'Detector:FocusLock:Pixel size': [...], 'Detector:FocusLock:Binning': 1, ...}} to  {'Detector': 'WidefieldCamera', 'Channel': 'Brightfield_WidefieldCamera', 'DateTime': '2026-01-27T14:12:22.757871'}
                 metadata = self._build_metadata(det_name, image, attrs)
                 if async_write:
                     result = self._snap_async(det_name, image, filepath, format, metadata, callback)
@@ -759,10 +758,12 @@ class RecordingService(SignalInterface):
                 os.makedirs(dirname, exist_ok=True)
             
             if format in (SaveFormat.TIFF, SaveFormat.OME_TIFF):
-                if metadata:
-                    tiff.imwrite(filepath, image, metadata=metadata, imagej=False)
-                else:
-                    tiff.imwrite(filepath, image)
+                # Don't pass metadata to avoid tifffile bug with complex metadata
+                # TODO: Fix metadata structure to be OME-compatible
+                # if metadata:
+                #     tiff.imwrite(filepath, image, metadata=metadata, imagej=False)
+                # else:
+                tiff.imwrite(filepath, image, imagej=False)
             elif format == SaveFormat.PNG:
                 img = image.copy()
                 if img.dtype in (np.float32, np.float64):
@@ -820,6 +821,7 @@ class RecordingService(SignalInterface):
         ext = ext_map.get(format, '.tiff')
         base_name = os.path.basename(basepath)
         detector_token = f"_{detector_name}"
+        
         if detector_token in base_name:
             return f"{basepath}{ext}"
         return f"{basepath}_{detector_name}{ext}"

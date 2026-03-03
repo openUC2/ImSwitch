@@ -83,7 +83,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
   // Use Redux state instead of local state
   const detectors = liveViewState.detectors;
   const activeTab = liveViewState.activeTab;
-  const lastSnapPath = liveViewState.lastSnapPath; // Get from Redux
+  const lastCapturePath = liveViewState.lastCapturePath || liveViewState.lastSnapPath; // compatibility with persisted old key
   const isStreamRunning = liveViewState.isStreamRunning;
 
   // Keep some local state for now (these may need their own slices later)
@@ -300,7 +300,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
       const data = await response.json();
       // data.relativePath might be "recordings/2025_05_20-11-12-44_PM"
       const snapPath = `/${data.relativePath}`;
-      dispatch(liveViewSlice.setLastSnapPath(snapPath)); // Store in Redux
+      dispatch(liveViewSlice.setLastCapturePath(snapPath)); // Store in Redux
       const label = formatLabels[format] || "Unknown";
       showNotification(`Image saved (${label})`, "success");
     } catch (error) {
@@ -308,9 +308,18 @@ export default function LiveView({ setFileManagerInitialPath }) {
       showNotification("Snap failed", "error");
     }
   }
-  function handleGoToImage() {
-    if (lastSnapPath) {
-      setFileManagerInitialPath(lastSnapPath);
+  function getFolderPath(path) {
+    if (!path) return "/";
+    const normalized = String(path).replace(/\\/g, "/");
+    const looksLikeFile = /\/[^/]+\.[^/]+$/.test(normalized);
+    if (!looksLikeFile) return normalized;
+    const lastSlash = normalized.lastIndexOf("/");
+    return lastSlash > 0 ? normalized.slice(0, lastSlash) : "/";
+  }
+
+  function handleGoToFolder() {
+    if (lastCapturePath) {
+      setFileManagerInitialPath(getFolderPath(lastCapturePath));
     }
   }
   const startRec = async (description, format) => {
@@ -440,8 +449,8 @@ export default function LiveView({ setFileManagerInitialPath }) {
             isRecording={isRecording}
             onStartRecord={startRec}
             onStopRecord={stopRec}
-            onGoToImage={handleGoToImage}
-            lastSnapPath={lastSnapPath}
+            onGoToFolder={handleGoToFolder}
+            lastCapturePath={lastCapturePath}
           />
 
           <DetectorParameters hostIP={hostIP} hostPort={hostPort} />

@@ -229,8 +229,47 @@ class RecordingController(ImConWidgetController):
             self.__logger.error(f"Failed to snap: {e}")
             self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
             raise
-        
-        return {"fullPath": savename, "relativePath": relativeFolder}
+
+        saved_full_path = None
+
+        def _extract_result_fields(detector_result):
+            if detector_result is None:
+                return False, None
+            if isinstance(detector_result, dict):
+                return bool(detector_result.get("success")), detector_result.get("filepath")
+            return bool(getattr(detector_result, "success", False)), getattr(detector_result, "filepath", None)
+
+        if isinstance(result, dict):
+            for detector_name in detectorNames:
+                detector_result = result.get(detector_name)
+                is_success, filepath = _extract_result_fields(detector_result)
+                if is_success:
+                    saved_full_path = filepath
+                    if saved_full_path:
+                        break
+            if saved_full_path is None:
+                for detector_result in result.values():
+                    is_success, filepath = _extract_result_fields(detector_result)
+                    if is_success:
+                        saved_full_path = filepath
+                        if saved_full_path:
+                            break
+
+        if saved_full_path is None:
+            saved_full_path = savename
+
+        data_root = dirtools.UserFileDirs.getValidatedDataPath()
+        relative_file_path = None
+        try:
+            relative_file_path = "/" + os.path.relpath(saved_full_path, data_root).replace("\\", "/")
+        except Exception:
+            relative_file_path = None
+
+        return {
+            "fullPath": saved_full_path,
+            "relativePath": relativeFolder,
+            "relativeFilePath": relative_file_path,
+        }
 
     def snapNumpy(self) -> Dict[str, np.ndarray]:
         """

@@ -289,8 +289,24 @@ export default function LiveView({ setFileManagerInitialPath }) {
       dispatch(liveViewSlice.setIsStreamRunning(shouldStart));
     }
   };
-  async function snap(fileName, format) {
-    // English comment: Example fetch for snapping an image with editable fileName
+  function deriveCapturePaths(data) {
+    const normalizedRelativeFilePath = data.relativeFilePath
+      ? `/${String(data.relativeFilePath).replace(/^\/+/, "")}`
+      : null;
+    if (normalizedRelativeFilePath) {
+      const fileName = normalizedRelativeFilePath.split("/").pop() || "";
+      const folderPath = getFolderPath(normalizedRelativeFilePath);
+      return { folderPath, filePath: normalizedRelativeFilePath, fileName };
+    }
+
+    const folderPath = `/${data.relativePath}`;
+    const fullPath = String(data.fullPath || "").replace(/\\/g, "/");
+    const fileName = fullPath ? fullPath.split("/").pop() : "";
+    const filePath = fileName ? `${folderPath}/${fileName}` : folderPath;
+    return { folderPath, filePath, fileName };
+  }
+
+  async function runSnap(fileName, format) {
     try {
       const response = await fetch(
         `${hostIP}:${hostPort}/imswitch/api/RecordingController/snapImageToPath?fileName=${encodeURIComponent(fileName)}&saveFormat=${encodeURIComponent(format)}`,
@@ -299,16 +315,41 @@ export default function LiveView({ setFileManagerInitialPath }) {
         throw new Error(`Snap failed: ${response.status}`);
       }
       const data = await response.json();
-      // data.relativePath might be "recordings/2025_05_20-11-12-44_PM"
-      const snapPath = `/${data.relativePath}`;
-      dispatch(liveViewSlice.setLastCapturePath(snapPath)); // Store in Redux
+      const { filePath } = deriveCapturePaths(data);
+      dispatch(liveViewSlice.setLastCapturePath(filePath)); // Store latest capture path
       const label = formatLabels[format] || "Unknown";
       showNotification(`Image saved (${label})`, "success");
+      return data;
     } catch (error) {
       console.error("Snap failed:", error);
       showNotification("Snap failed", "error");
+      return null;
     }
   }
+
+  async function snap(fileName, format) {
+    await runSnap(fileName, format);
+  }
+
+  async function snapAndDownload(fileName, format) {
+    const data = await runSnap(fileName, format);
+    if (!data) return;
+
+    const { filePath, fileName: downloadedFileName } = deriveCapturePaths(data);
+    const downloadUrl = `${hostIP}:${hostPort}/imswitch/api/FileManager/download${encodeURI(filePath)}`;
+
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = downloadedFileName || "capture";
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    const label = formatLabels[format] || "Unknown";
+    showNotification(`Image downloaded (${label})`, "success");
+  }
+
   function getFolderPath(path) {
     if (!path) return "/";
     const normalized = String(path).replace(/\\/g, "/");
@@ -447,6 +488,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
             isStreamRunning={isStreamRunning}
             onToggleStream={toggleStream}
             onSnap={snap}
+            onSnapAndDownload={snapAndDownload}
             isRecording={isRecording}
             onStartRecord={startRec}
             onStopRecord={stopRec}

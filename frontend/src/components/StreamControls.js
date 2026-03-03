@@ -37,6 +37,7 @@ export default function StreamControls({
   isStreamRunning, // This prop is kept for backwards compatibility but we prefer Redux state
   onToggleStream,
   onSnap,
+  onSnapAndDownload,
   isRecording,
   onStartRecord,
   onStopRecord,
@@ -405,11 +406,23 @@ export default function StreamControls({
         {/* Go to Folder - Below Snap */}
         <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}>
           <Button
+            variant="contained"
+            color="primary"
+            size="small"
+            onClick={() => onSnapAndDownload(snapFileName, snapFormat)}
+            startIcon={<CameraAlt />}
+            disabled={!isLiveViewActive}
+            sx={{ whiteSpace: "nowrap", width: 180, height: 40, minHeight: 40 }}
+          >
+            Snap & Download
+          </Button>
+          <Button
             variant="outlined"
+            color="inherit"
             size="small"
             disabled={!lastCapturePath}
             onClick={onGoToFolder}
-            sx={{ width: 130, height: 40 }}
+            sx={{ width: 130, height: 40, opacity: 0.85 }}
           >
             Go to Folder
           </Button>

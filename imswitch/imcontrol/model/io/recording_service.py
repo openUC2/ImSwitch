@@ -23,6 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .io_utils import _safe_scalar_float
+
 try:
     import tifffile as tiff
 except ImportError:
@@ -658,7 +660,6 @@ class RecordingService(SignalInterface):
         if save_mode in (SaveMode.Disk, SaveMode.DiskAndRAM):
             for det_name, image in images.items():
                 filepath = self._generate_filepath(savepath, det_name, format)
-                # TODO: We essentially loose all our metadta: {'WidefieldCamera': {'Detector:WidefieldCamera:Model': 'VirtualCamera', 'Detector:WidefieldCamera:Pixel size': [...], 'Detector:WidefieldCamera:Binning': 1, 'Detector:WidefieldCamera:ROI': [...], 'Detector:WidefieldCamera:Param:exposure': 0, 'Detector:WidefieldCamera:Param:exposure_mode': 'Auto', 'Detector:WidefieldCamera:Param:gain': 0, 'Detector:WidefieldCamera:Param:blacklevel': 100, 'Detector:WidefieldCamera:Param:binning': 1, 'Detector:WidefieldCamera:Param:image_width': 1000, 'Detector:WidefieldCamera:Param:image_height': 1000, 'Detector:WidefieldCamera:Param:frame_rate': -1, 'Detector:WidefieldCamera:Param:mode': True, 'Detector:WidefieldCamera:Param:flat_fielding': True, 'Detector:WidefieldCamera:Param:trigger_source': 'Continous', 'Detector:WidefieldCamera:Param:Camera pixel size': 1.0, 'Detector:FocusLock:Model': 'VirtualCamera', 'Detector:FocusLock:Pixel size': [...], 'Detector:FocusLock:Binning': 1, ...}} to  {'Detector': 'WidefieldCamera', 'Channel': 'Brightfield_WidefieldCamera', 'DateTime': '2026-01-27T14:12:22.757871'}
                 metadata = self._build_metadata(det_name, image, attrs)
                 if async_write:
                     result = self._snap_async(det_name, image, filepath, format, metadata, callback)
@@ -759,8 +760,16 @@ class RecordingService(SignalInterface):
                 os.makedirs(dirname, exist_ok=True)
             
             if format in (SaveFormat.TIFF, SaveFormat.OME_TIFF):
+                # Write TIFF with metadata as description (safe approach)
                 if metadata:
-                    tiff.imwrite(filepath, image, metadata=metadata, imagej=False)
+                    try:
+                        import json
+                        # Store metadata as JSON description to avoid tifffile bugs
+                        desc_str = json.dumps(metadata, default=str)
+                        tiff.imwrite(filepath, image, description=desc_str)
+                    except Exception:
+                        # Fallback: write without metadata
+                        tiff.imwrite(filepath, image)
                 else:
                     tiff.imwrite(filepath, image)
             elif format == SaveFormat.PNG:
@@ -818,6 +827,11 @@ class RecordingService(SignalInterface):
             SaveFormat.MP4: '.mp4',
         }
         ext = ext_map.get(format, '.tiff')
+        base_name = os.path.basename(basepath)
+        detector_token = f"_{detector_name}"
+        
+        if detector_token in base_name:
+            return f"{basepath}{ext}"
         return f"{basepath}_{detector_name}{ext}"
     
     # =========================================================================
@@ -1151,8 +1165,10 @@ class RecordingService(SignalInterface):
             if pixel_size:
                 if isinstance(pixel_size, (list, tuple)) and len(pixel_size) > 0:
                     pixel_size = pixel_size[0] if len(pixel_size) == 1 else pixel_size[1]
-                metadata['PhysicalSizeX'] = float(pixel_size)
-                metadata['PhysicalSizeY'] = float(pixel_size)
+                pixel_size_val = _safe_scalar_float(pixel_size)
+                if pixel_size_val is not None:
+                    metadata['PhysicalSizeX'] = pixel_size_val
+                    metadata['PhysicalSizeY'] = pixel_size_val
                 metadata['PhysicalSizeXUnit'] = 'µm'
                 metadata['PhysicalSizeYUnit'] = 'µm'
             
@@ -1165,7 +1181,7 @@ class RecordingService(SignalInterface):
             ], flat_attrs)
             if exposure is not None:
                 try:
-                    exp_val = float(exposure)
+                    exp_val = _safe_scalar_float(exposure)
                     if exp_val > 0:
                         metadata['ExposureTime'] = exp_val / 1000.0  # Convert ms to s
                         metadata['ExposureTimeUnit'] = 's'
@@ -1180,7 +1196,9 @@ class RecordingService(SignalInterface):
             ], flat_attrs)
             if gain is not None:
                 try:
-                    metadata['Gain'] = float(gain)
+                    gain_val = _safe_scalar_float(gain)
+                    if gain_val is not None:
+                        metadata['Gain'] = gain_val
                 except (ValueError, TypeError):
                     pass
             
@@ -1218,7 +1236,9 @@ class RecordingService(SignalInterface):
                     key_str = str(key)
                     if 'Positioner:' in key_str and f':{axis}:Position' in key_str:
                         try:
-                            metadata[f'Position{axis}'] = float(_get_value(val))
+                            pos_val = _safe_scalar_float(val)
+                            if pos_val is not None:
+                                metadata[f'Position{axis}'] = pos_val
                             metadata[f'Position{axis}Unit'] = 'µm'
                         except (ValueError, TypeError):
                             pass
@@ -1244,11 +1264,13 @@ class RecordingService(SignalInterface):
                 wavelength = laser_data.get('WavelengthNm', 0)
                 if is_enabled and value:
                     try:
-                        if float(value) > 0:
+                        value_float = _safe_scalar_float(value)
+                        if value_float and value_float > 0:
+                            wavelength_float = _safe_scalar_float(wavelength) if wavelength else None
                             active_lasers.append({
                                 'Name': laser_name,
-                                'WavelengthNm': float(wavelength) if wavelength else None,
-                                'Power': float(value),
+                                'WavelengthNm': wavelength_float,
+                                'Power': value_float,
                             })
                     except (ValueError, TypeError):
                         pass
@@ -1270,11 +1292,15 @@ class RecordingService(SignalInterface):
             
             magnification = _search_attr(['Objective:Magnification'], attrs)
             if magnification:
-                metadata['Magnification'] = float(magnification)
+                magnification_val = _safe_scalar_float(magnification)
+                if magnification_val is not None:
+                    metadata['Magnification'] = magnification_val
             
             na = _search_attr(['Objective:NA'], attrs)
             if na:
-                metadata['NumericalAperture'] = float(na)
+                na_val = _safe_scalar_float(na)
+                if na_val is not None:
+                    metadata['NumericalAperture'] = na_val
             
             # Timestamp
             metadata['DateTime'] = datetime.datetime.now().isoformat()

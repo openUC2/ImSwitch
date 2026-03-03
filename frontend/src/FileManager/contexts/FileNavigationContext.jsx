@@ -6,6 +6,7 @@ const FileNavigationContext = createContext();
 export const FileNavigationProvider = ({ children, initialPath }) => {
   const { files } = useFiles();
   const isMountRef = useRef(false);
+  const lastAppliedInitialPathRef = useRef(null);
   const [currentPath, setCurrentPath] = useState("");
   const [currentFolder, setCurrentFolder] = useState(null);
   const [currentPathFiles, setCurrentPathFiles] = useState([]);
@@ -13,7 +14,9 @@ export const FileNavigationProvider = ({ children, initialPath }) => {
   useEffect(() => {
     if (Array.isArray(files) && files.length > 0) {
       setCurrentPathFiles(() => {
-        return files.filter((file) => file.path === `${currentPath}/${file.name}`);
+        return files.filter(
+          (file) => file.path === `${currentPath}/${file.name}`,
+        );
       });
 
       setCurrentFolder(() => {
@@ -22,22 +25,35 @@ export const FileNavigationProvider = ({ children, initialPath }) => {
     }
   }, [files, currentPath]);
 
-    useEffect(() => {
+  useEffect(() => {
     if (!isMountRef.current && Array.isArray(files) && files.length > 0) {
-      setCurrentPath(files.some((file) => file.path === initialPath) ? initialPath : '');
+      const nextPath = files.some((file) => file.path === initialPath)
+        ? initialPath
+        : "";
+      setCurrentPath(nextPath);
+      lastAppliedInitialPathRef.current = nextPath;
       isMountRef.current = true;
     }
   }, [initialPath, files]);
 
   // Handle changes to initialPath after initial mount
   useEffect(() => {
-    if (isMountRef.current && Array.isArray(files) && files.length > 0 && initialPath) {
+    if (
+      isMountRef.current &&
+      Array.isArray(files) &&
+      files.length > 0 &&
+      initialPath
+    ) {
+      if (lastAppliedInitialPathRef.current === initialPath) {
+        return;
+      }
       const pathExists = files.some((file) => file.path === initialPath);
-      if (pathExists && currentPath !== initialPath) {
+      if (pathExists) {
         setCurrentPath(initialPath);
+        lastAppliedInitialPathRef.current = initialPath;
       }
     }
-  }, [initialPath, files, currentPath]);
+  }, [initialPath, files]);
 
   return (
     <FileNavigationContext.Provider

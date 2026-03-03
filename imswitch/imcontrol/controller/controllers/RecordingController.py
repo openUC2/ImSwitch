@@ -10,6 +10,7 @@ is now provided by the centralized io/writers ecosystem.
 
 import os
 import time
+import traceback
 from typing import Optional, Union, List, Dict, Any
 import numpy as np
 import datetime
@@ -134,6 +135,7 @@ class RecordingController(ImConWidgetController):
             return True
         except Exception as e:
             self.__logger.error(f"Failed to start streaming recording: {e}")
+            self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
             self._streaming_adapter = None
             return False
     
@@ -192,7 +194,7 @@ class RecordingController(ImConWidgetController):
                     ),
                 )
 
-        timeStampDay = datetime.datetime.now().strftime("%Y_%m_%d")
+        timeStampDay = datetime.datetime.now().strftime("%Y-%m-%d")
         relativeFolder = os.path.join("recordings", timeStampDay)
         folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), relativeFolder)
         if not os.path.exists(folder):
@@ -201,8 +203,10 @@ class RecordingController(ImConWidgetController):
 
         detectorNames = self.getDetectorNamesToCapture()
         if name is None:
-            name = "_snap"
-        savename = os.path.join(folder, self.getFileName() + "_" + name)
+            name = ""
+        # Don't include detector names here - let RecordingService._generate_filepath() add them
+        # to avoid double detector names in multi-detector snaps
+        savename = os.path.join(folder, self.getFileName(description=name))
 
         # Collect metadata attributes
         attrs = {
@@ -212,17 +216,60 @@ class RecordingController(ImConWidgetController):
 
 
         # Use RecordingService for snap operations
-        result = self.recording_service.snap(
-            detector_names=detectorNames,
-            savepath=savename,
-            save_mode=SaveMode.Disk,
-            format=mSaveFormat,
-            attrs=attrs,
-            async_write=False,  # Synchronous write to ensure file is saved immediately
-        )
-        self.__logger.debug(f"Snap completed: {result}")
-        
-        return {"fullPath": savename, "relativePath": relativeFolder}
+        try:
+            result = self.recording_service.snap(
+                detector_names=detectorNames,
+                savepath=savename,
+                save_mode=SaveMode.Disk,
+                format=mSaveFormat,
+                attrs=attrs,
+                async_write=False,  # Synchronous write to ensure file is saved immediately
+            )
+        except Exception as e:
+            self.__logger.error(f"Failed to snap: {e}")
+            self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
+            raise
+
+        saved_full_path = None
+
+        def _extract_result_fields(detector_result):
+            if detector_result is None:
+                return False, None
+            if isinstance(detector_result, dict):
+                return bool(detector_result.get("success")), detector_result.get("filepath")
+            return bool(getattr(detector_result, "success", False)), getattr(detector_result, "filepath", None)
+
+        if isinstance(result, dict):
+            for detector_name in detectorNames:
+                detector_result = result.get(detector_name)
+                is_success, filepath = _extract_result_fields(detector_result)
+                if is_success:
+                    saved_full_path = filepath
+                    if saved_full_path:
+                        break
+            if saved_full_path is None:
+                for detector_result in result.values():
+                    is_success, filepath = _extract_result_fields(detector_result)
+                    if is_success:
+                        saved_full_path = filepath
+                        if saved_full_path:
+                            break
+
+        if saved_full_path is None:
+            saved_full_path = savename
+
+        data_root = dirtools.UserFileDirs.getValidatedDataPath()
+        relative_file_path = None
+        try:
+            relative_file_path = "/" + os.path.relpath(saved_full_path, data_root).replace("\\", "/")
+        except Exception:
+            relative_file_path = None
+
+        return {
+            "fullPath": saved_full_path,
+            "relativePath": relativeFolder,
+            "relativeFilePath": relative_file_path,
+        }
 
     def snapNumpy(self) -> Dict[str, np.ndarray]:
         """
@@ -328,9 +375,42 @@ class RecordingController(ImConWidgetController):
             pass 
             #return self._widget.getSelectedSpecificDetectors()
 
-    def getFileName(self):
-        """Gets the filename of the data to save."""
-        filename = time.strftime("%Hh%Mm%Ss")
+    def getFileName(self, description: str = "", detector_names: list = None):
+        """
+        Generate a scientifically-meaningful filename with ISO 8601 timestamp.
+        
+        Args:
+            description: Optional user-provided description (e.g., "cell-005" or "z-stack-start")
+            detector_names: List of detector names to include in filename. If provided, uses first detector name.
+            
+        Returns:
+            Filename in format: YYYY-MM-DDTHH-MM-SS-ffffff_<detector>_<description> (without extension)
+            Example (basename only): 2026-02-27T14-32-45-123456_WidefieldCamera_cell-005
+        """
+        # ISO 8601 timestamp with microseconds for uniqueness and sortability
+        now = datetime.datetime.now()
+        iso_timestamp = now.strftime("%Y-%m-%dT%H-%M-%S")
+        microseconds = f"{now.microsecond:06d}"
+        timestamp = f"{iso_timestamp}-{microseconds}"
+        
+        # Add detector name if available
+        detector_part = ""
+        if detector_names and len(detector_names) > 0:
+            # Use first detector name (sanitize it to be filename-safe)
+            detector_name = detector_names[0]
+            # Remove special characters that could cause issues
+            safe_detector = detector_name.replace(" ", "_").replace("/", "_")
+            detector_part = f"_{safe_detector}"
+        
+        # Add description if provided (sanitize it)
+        description_part = ""
+        if description and description.strip():
+            # Sanitize description
+            safe_description = description.strip().replace(" ", "_").replace("/", "_")
+            description_part = f"_{safe_description}"
+        
+        # Combine all parts
+        filename = f"{timestamp}{detector_part}{description_part}"
         return filename
 
     def _get_detector_attrs(self, detector_name):
@@ -516,22 +596,42 @@ class RecordingController(ImConWidgetController):
         return Response(im_bytes, headers=headers, media_type="image/png")
 
     @APIExport(runOnUIThread=True)
-    def startRecording(self, mSaveFormat: int = SaveFormat.TIFF) -> None:
-        """Starts recording with the set settings to the set file path using RecordingService.""" 
-        mSaveFormat = SaveFormat(mSaveFormat)
+    def startRecording(self, mSaveFormat: int = SaveFormat.TIFF, fileName: Optional[str] = None) -> None:
+        """Starts recording with the set settings to the set file path using RecordingService.
+        
+        Parameters:
+        - mSaveFormat: Desired `SaveFormat` enum value (default: `SaveFormat.TIFF`).
+        - fileName: Optional description to append to the generated filename.
+        """
+        try:
+            # Ensure mSaveFormat is an int
+            mSaveFormat = int(mSaveFormat)
+            mSaveFormat = SaveFormat(mSaveFormat)
+        except (ValueError, TypeError) as e:
+            self.__logger.error(f"Invalid save format: {mSaveFormat}, error: {e}")
+            mSaveFormat = SaveFormat.TIFF
+
+        # Ensure fileName is a string or None
+        if not isinstance(fileName, (str, type(None))):
+            fileName = None
 
         # we probably call from the FASTAPI server
         if self.recording:  # Already recording
             return
 
-        timeStamp = datetime.datetime.now().strftime("%Y_%m_%d-%I-%M-%S_%p")
-        folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "recordings", timeStamp)
+        # Use ISO 8601 date format, consistent with snap() method
+        timeStampDay = datetime.datetime.now().strftime("%Y-%m-%d")
+        folder = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), "recordings", timeStampDay)
         if not os.path.exists(folder):
             os.makedirs(folder)
         time.sleep(0.01)
-        self.savename = os.path.join(folder, self.getFileName()) + "_rec"
 
         detectorsBeingCaptured = self.getDetectorNamesToCapture()
+        # Generate filename with detector info and description, consistent with snap()
+        # Use "rec" as default description if none provided
+        description = fileName if fileName else "rec"
+        filename = self.getFileName(description=description, detector_names=detectorsBeingCaptured)
+        self.savename = os.path.join(folder, filename)
         self.recMode = RecMode.UntilStop
         self.recordingArgs = {
             "detectorNames": detectorsBeingCaptured,

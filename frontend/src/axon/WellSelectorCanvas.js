@@ -7,6 +7,7 @@ import * as experimentSlice from "../state/slices/ExperimentSlice.js";
 import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as focusMapSlice from "../state/slices/FocusMapSlice.js";
+import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js";
 
 import * as wsUtils from "./WellSelectorUtils.js";
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
@@ -72,6 +73,10 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const focusMapState = useSelector(focusMapSlice.getFocusMapState);
   const focusMapManualPoints = useSelector(focusMapSlice.getManualPoints);
+  const overviewRegState = useSelector(overviewRegSlice.getOverviewRegistrationState);
+
+  // Preloaded overlay images cache (HTML Image objects)
+  const overlayImagesRef = useRef({});
 
   //##################################################################################
   useImperativeHandle(ref, () => ({
@@ -146,6 +151,9 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     positionState,
     objectiveState,
     positionHistory,
+    overviewRegState.overlayEnabled,
+    overviewRegState.overlayOpacity,
+    overviewRegState.overlayData,
   ]);
 
   //##################################################################################
@@ -812,10 +820,60 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
     //------------ draw position trace
     drawPositionTrace(ctx);
 
+    //------------ draw overview camera overlay images
+    drawOverviewOverlay(ctx);
+
     //------------ draw focus map points overlay
     drawFocusMapOverlay(ctx);
 
     //ctx.restore();
+  };
+
+  //##################################################################################
+  // Draw overview camera overlay images on the well selector canvas
+  const drawOverviewOverlay = (ctx) => {
+    if (!overviewRegState.overlayEnabled) return;
+    const overlayData = overviewRegState.overlayData;
+    if (!overlayData || !overlayData.slides) return;
+
+    const alpha = overviewRegState.overlayOpacity;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    Object.values(overlayData.slides).forEach((slideData) => {
+      if (!slideData.imageBase64 || !slideData.stageBounds) return;
+
+      const bounds = slideData.stageBounds;
+      const imgKey = slideData.slotId + "_" + (slideData.updatedAt || "");
+
+      // Check if image is already cached
+      let cachedImg = overlayImagesRef.current[imgKey];
+      if (!cachedImg) {
+        // Load image and cache it
+        const img = new Image();
+        img.src = `data:${slideData.imageMimeType || "image/png"};base64,${slideData.imageBase64}`;
+        img.onload = () => {
+          overlayImagesRef.current[imgKey] = img;
+          // Trigger re-render by requesting animation frame
+          requestAnimationFrame(() => renderCanvas());
+        };
+        return; // Skip this slide until image is loaded
+      }
+
+      // Convert stage bounds to canvas pixel coordinates
+      const px = calcPhy2Px(bounds.minX);
+      const py = calcPhy2Px(bounds.minY);
+      const pw = calcPhy2Px(bounds.width);
+      const ph = calcPhy2Px(bounds.height);
+
+      try {
+        ctx.drawImage(cachedImg, px, py, pw, ph);
+      } catch (e) {
+        // Image may not be loaded yet
+      }
+    });
+
+    ctx.restore();
   };
 
   //##################################################################################

@@ -13,7 +13,9 @@ import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as parameterRangeSlice from "../../state/slices/ParameterRangeSlice";
 import * as objectiveSlice from "../../state/slices/ObjectiveSlice";
+import * as wellSelectorSlice from "../../state/slices/WellSelectorSlice";
 import { DIMENSIONS, Z_FOCUS_MODES } from "../../state/slices/ExperimentUISlice";
+import * as coordinateCalculator from "../CoordinateCalculator";
 
 /**
  * Summary stat item with icon
@@ -84,19 +86,34 @@ const ExperimentSummary = () => {
   const experimentUI = useSelector(experimentUISlice.getExperimentUIState);
   const parameterRange = useSelector(parameterRangeSlice.getParameterRangeState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+  const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   
   // Calculate summary values
   const summaryData = useMemo(() => {
     const dimensions = experimentUI.dimensions;
     const params = experimentState.parameterValue;
     
-    // Positions
-    const totalPositions = experimentState.pointList?.length || 0;
+    // Positions – use coordinate calculator to count all tiles, not just
+    // the raw pointList length (which is the number of scan areas).
+    let totalPositions = 0;
+    try {
+      const scanConfig = coordinateCalculator.calculateScanCoordinates(
+        experimentState,
+        objectiveState,
+        wellSelectorState
+      );
+      totalPositions = scanConfig.metadata.totalPositions || 0;
+    } catch {
+      // Fallback: use raw point list length
+      totalPositions = experimentState.pointList?.length || 0;
+    }
     
-    // Channels (count enabled illumination sources)
+    // Channels – count only those enabled for the experiment
+    const channelEnabled = params.channelEnabledForExperiment || [];
+    const allChannelCount = params.illumination?.length || parameterRange.illuSources?.length || 0;
     const enabledChannels = dimensions[DIMENSIONS.CHANNELS]?.enabled
-      ? (params.illumination?.length || parameterRange.illuSources?.length || 0)
-      : 1; // Single channel when disabled
+      ? (channelEnabled.filter(Boolean).length || allChannelCount)
+      : 1; // Single channel when dimension disabled
     
     // Z planes
     let zPlanes = 1;
@@ -166,7 +183,7 @@ const ExperimentSummary = () => {
       dataSize: dataSizeStr,
       totalImages,
     };
-  }, [experimentState, experimentUI, parameterRange, objectiveState]);
+  }, [experimentState, experimentUI, parameterRange, objectiveState, wellSelectorState]);
 
   return (
     <Box

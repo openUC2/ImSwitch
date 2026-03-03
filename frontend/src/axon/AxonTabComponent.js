@@ -9,9 +9,7 @@ import WebSocketComponent from "./WebSocketComponent";
 import PositionViewComponent from "./PositionViewComponent";
 import ParameterEditorWrapper from "./ParameterEditorWrapper";
 import ExperimentComponent from "./ExperimentComponent";
-import ObjectiveController from "../components/ObjectiveController";
 import ResizablePanel from "./ResizablePanel"; //<ResizablePanel></ResizablePanel> performace issues :/
-import ObjectiveSwitcher from "../components/ObjectiveSwitcher";
 import FocusLockMiniController from "../components/FocusLockMiniController";
 import PictureInPicture, { PiPToggleButton } from "./PictureInPicture";
 
@@ -66,7 +64,6 @@ const AxonTabComponent = () => {
 //              "Tile View",
               "Points",
               "Parameter",
-              "Objective", 
               "Focus Lock"
             ]}
           >
@@ -75,7 +72,6 @@ const AxonTabComponent = () => {
             <PointListEditorComponent />
             <ParameterEditorWrapper />
             {/*<ExperimentComponent />*/}
-            <ObjectiveSwitcher />
             <FocusLockMiniController />
           </GenericTabBar>
         </div>

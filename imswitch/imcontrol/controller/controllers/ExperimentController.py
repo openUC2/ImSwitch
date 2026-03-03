@@ -825,12 +825,19 @@ class ExperimentController(ImConWidgetController):
             ]
 
         # ── Focus Mapping (optional) ──────────────────────────────────────
+        # Store illumination info so autofocus_software can look up the
+        # correct intensity for the selected AF illumination channel.
+        self._illuminationIntensities = illuminationIntensities
+        self._illuminationSources = illuSources
         focusMapConfig = mExperiment.focusMap
         if focusMapConfig is not None and focusMapConfig.enabled:
             self._logger.info("Focus mapping enabled – computing Z surface per scan group")
             self._focus_map_fit_by_region = focusMapConfig.fit_by_region
             self._focus_map_settle_ms = focusMapConfig.settle_ms
             self._run_focus_map_phase(mExperiment, focusMapConfig)
+            # Turn off illumination again after focus mapping so the
+            # acquisition loop starts from a clean state.
+            self._switch_off_all_illumination()
 
         # Generate the list of points to scan from pre-calculated coordinates
         snake_tiles = self.generate_snake_tiles(mExperiment) # TODO: Is this still needed?
@@ -1170,10 +1177,21 @@ class ExperimentController(ImConWidgetController):
             self._logger.warning("AutofocusController not available - skipping autofocus")
             return None
 
-        # Set illumination if specified
+        # Activate illumination during autofocus so the camera sees contrast
         if illuminationChannel and hasattr(self, '_master') and hasattr(self._master, 'lasersManager'):
             try:
-                self._logger.debug(f"Setting illumination channel {illuminationChannel} for autofocus")
+                self._logger.debug(f"Activating illumination channel '{illuminationChannel}' for autofocus")
+                # Look up the current intensity from the experiment's channel settings
+                illu_intensity = 0
+                try:
+                    idx = list(self.allIlluNames).index(illuminationChannel)
+                    illu_intensity = self._illuminationIntensities[idx] if hasattr(self, '_illuminationIntensities') and idx < len(self._illuminationIntensities) else 0
+                except (ValueError, IndexError, AttributeError):
+                    pass
+                # If no stored intensity, use a safe default
+                if illu_intensity <= 0:
+                    illu_intensity = self._master.lasersManager[illuminationChannel].getValue() or 50
+                self.set_laser_power(power=illu_intensity, channel=illuminationChannel)
             except Exception as e:
                 self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
 

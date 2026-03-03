@@ -28,6 +28,7 @@ import TimeDimension from "./TimeDimension";
 import TilingDimension from "./TilingDimension";
 import OutputDimension from "./OutputDimension";
 import FocusMapDimension from "./FocusMapDimension";
+import ObjectiveSwitcher from "../../components/ObjectiveSwitcher";
 
 // Utilities
 import * as coordinateCalculator from "../CoordinateCalculator";
@@ -350,6 +351,9 @@ const ExperimentDesigner = () => {
 
         {/* Spacer */}
         <Box sx={{ flex: 1 }} />
+
+        {/* Objective Switcher – compact inline version */}
+        <ObjectiveSwitcher />
 
         {/* Viewer buttons */}
         <Tooltip title="Open Vizarr viewer">

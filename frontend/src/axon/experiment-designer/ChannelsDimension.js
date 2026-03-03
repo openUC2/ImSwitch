@@ -336,15 +336,18 @@ const ChannelsDimension = () => {
     }
   }, [illuSources]);
 
-  // Update summary when channels change
+  // Update summary when channels change – count only enabled channels
   useEffect(() => {
-    const channelCount = illuSources.length;
+    const enabledCount = (channelEnabledForExperiment || []).filter(Boolean).length;
+    const totalCount = illuSources.length;
     const summary =
-      channelCount === 0
+      totalCount === 0
         ? "No channels available"
-        : channelCount === 1
-        ? "1 channel"
-        : `${channelCount} channels`;
+        : enabledCount === 0
+        ? `0/${totalCount} channels`
+        : enabledCount === 1
+        ? `1/${totalCount} channel`
+        : `${enabledCount}/${totalCount} channels`;
 
     dispatch(
       experimentUISlice.setDimensionSummary({
@@ -355,10 +358,10 @@ const ChannelsDimension = () => {
     dispatch(
       experimentUISlice.setDimensionConfigured({
         dimension: DIMENSIONS.CHANNELS,
-        configured: channelCount > 0,
+        configured: enabledCount > 0,
       })
     );
-  }, [illuSources, dispatch]);
+  }, [illuSources, channelEnabledForExperiment, dispatch]);
 
   // Debounced laser intensity update (copied from IlluminationController)
   const debouncedSetLaserValue = useCallback((laserName, index, val) => {

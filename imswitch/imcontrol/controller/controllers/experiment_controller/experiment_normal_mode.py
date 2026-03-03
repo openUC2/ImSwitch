@@ -435,22 +435,10 @@ class ExperimentNormalMode(ExperimentModeBase):
             ))
             step_id += 1
 
-            # Move to per-point Z origin only if it actually differs from
-            # the global initial Z.  When no per-point Z was set, point_z_origin
-            # equals initial_z_position and no move is needed.
-            if (point_z_origin is not None
-                    and point_z_origin != initial_z_position
-                    and len(z_positions) == 1):
-                workflow_steps.append(WorkflowStep(
-                    name=f"Move to per-point Z origin {point_z_origin:.1f}",
-                    step_id=step_id,
-                    main_func=self.controller.move_stage_z,
-                    main_params={"posZ": point_z_origin, "relative": False},
-                ))
-                step_id += 1
-
-            # Apply focus map Z if available (pre-computed surface)
-            # This replaces or supplements autofocus at each position.
+            # Apply focus map Z if available (pre-computed surface).
+            # Lookup is done BEFORE the per-point Z origin move so we can
+            # skip the static Z move when a focus-mapped Z is available
+            # (it would be immediately overwritten, wasting time).
             # Only attempt lookups when the manager actually contains fitted
             # maps, so experiments without focus mapping never produce
             # spurious Z moves.
@@ -480,7 +468,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     )
 
             if focus_map_z is not None:
-                # Move Z to the focus-mapped position
+                # Move Z to the focus-mapped position (supersedes per-point Z)
                 settle_ms = getattr(self.controller, '_focus_map_settle_ms', 0)
                 settle_s = settle_ms / 1000.0 if settle_ms > 0 else 0
                 workflow_steps.append(WorkflowStep(
@@ -492,6 +480,19 @@ class ExperimentNormalMode(ExperimentModeBase):
                     post_params={"seconds": settle_s} if settle_s > 0 else None,
                 ))
                 step_id += 1
+            else:
+                # No focus map – move to per-point Z origin only if it
+                # actually differs from the global initial Z.
+                if (point_z_origin is not None
+                        and point_z_origin != initial_z_position
+                        and len(z_positions) == 1):
+                    workflow_steps.append(WorkflowStep(
+                        name=f"Move to per-point Z origin {point_z_origin:.1f}",
+                        step_id=step_id,
+                        main_func=self.controller.move_stage_z,
+                        main_params={"posZ": point_z_origin, "relative": False},
+                    ))
+                    step_id += 1
             
             # Perform autofocus if enabled (runs after focus map Z move if both active)
             if is_auto_focus:

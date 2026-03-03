@@ -25,6 +25,7 @@ import {
   Videocam,
   VideoLibrary,
   Settings,
+  GetApp,
 } from "@mui/icons-material";
 import StreamControlOverlay from "../components/StreamControlOverlay";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
@@ -361,7 +362,7 @@ export default function StreamControls({
             display: "flex",
             gap: 1,
             alignItems: "center",
-            flexWrap: "wrap",
+            flexWrap: "nowrap",
           }}
         >
           <Typography
@@ -401,21 +402,22 @@ export default function StreamControls({
           >
             Snap
           </Button>
-        </Box>
 
-        {/* Go to Folder - Below Snap */}
-        <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}>
           <Button
             variant="contained"
             color="primary"
             size="small"
             onClick={() => onSnapAndDownload(snapFileName, snapFormat)}
-            startIcon={<CameraAlt />}
+            startIcon={<GetApp />}
             disabled={!isLiveViewActive}
-            sx={{ whiteSpace: "nowrap", width: 180, height: 40, minHeight: 40 }}
+            sx={{ whiteSpace: "nowrap", width: 160, height: 40, minHeight: 40 }}
           >
             Snap & Download
           </Button>
+        </Box>
+
+        {/* Go to Folder - Below Snap */}
+        <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}>
           <Button
             variant="outlined"
             color="inherit"

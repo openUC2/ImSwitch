@@ -23,6 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .io_utils import _safe_scalar_float
+
 try:
     import tifffile as tiff
 except ImportError:
@@ -758,12 +760,18 @@ class RecordingService(SignalInterface):
                 os.makedirs(dirname, exist_ok=True)
             
             if format in (SaveFormat.TIFF, SaveFormat.OME_TIFF):
-                # Don't pass metadata to avoid tifffile bug with complex metadata
-                # TODO: Fix metadata structure to be OME-compatible
-                # if metadata:
-                #     tiff.imwrite(filepath, image, metadata=metadata, imagej=False)
-                # else:
-                tiff.imwrite(filepath, image, imagej=False)
+                # Write TIFF with metadata as description (safe approach)
+                if metadata:
+                    try:
+                        import json
+                        # Store metadata as JSON description to avoid tifffile bugs
+                        desc_str = json.dumps(metadata, default=str)
+                        tiff.imwrite(filepath, image, description=desc_str)
+                    except Exception:
+                        # Fallback: write without metadata
+                        tiff.imwrite(filepath, image)
+                else:
+                    tiff.imwrite(filepath, image)
             elif format == SaveFormat.PNG:
                 img = image.copy()
                 if img.dtype in (np.float32, np.float64):
@@ -1115,20 +1123,6 @@ class RecordingService(SignalInterface):
             elif isinstance(val, (np.integer, np.floating)):
                 return float(val)
             return val
-
-        def _safe_scalar_float(value, default=None):
-            """Safely convert scalar/list-like metadata values to float."""
-            if value is None:
-                return default
-            value = _get_value(value)
-            if isinstance(value, (list, tuple, np.ndarray)):
-                if len(value) == 0:
-                    return default
-                value = value[0]
-            try:
-                return float(value)
-            except (ValueError, TypeError):
-                return default
         
         def _search_attr(patterns: list, search_dict: dict):
             """Search for attribute using multiple key patterns."""

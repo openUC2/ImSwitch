@@ -14,21 +14,9 @@ import numpy as np
 
 from ..io import AcquisitionDataStore, SessionInfo
 from ..io.writers import WriterDetectorContext
+from .io_utils import _safe_scalar_float
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_scalar_float(value, default=None):
-    if value is None:
-        return default
-    if isinstance(value, (list, tuple, np.ndarray)):
-        if len(value) == 0:
-            return default
-        value = value[0]
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
 
 
 def _safe_pixel_size_um(value, default=1.0):

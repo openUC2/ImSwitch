@@ -204,7 +204,9 @@ class RecordingController(ImConWidgetController):
         detectorNames = self.getDetectorNamesToCapture()
         if name is None:
             name = ""
-        savename = os.path.join(folder, self.getFileName(description=name, detector_names=detectorNames))
+        # Don't include detector names here - let RecordingService._generate_filepath() add them
+        # to avoid double detector names in multi-detector snaps
+        savename = os.path.join(folder, self.getFileName(description=name))
 
         # Collect metadata attributes
         attrs = {
@@ -593,7 +595,6 @@ class RecordingController(ImConWidgetController):
         headers = {"Content-Disposition": 'inline; filename="test.png"'}
         return Response(im_bytes, headers=headers, media_type="image/png")
 
-    @APIExport(runOnUIThread=True)
     @APIExport(runOnUIThread=True)
     def startRecording(self, mSaveFormat: int = SaveFormat.TIFF, fileName: Optional[str] = None) -> None:
         """Starts recording with the set settings to the set file path using RecordingService.

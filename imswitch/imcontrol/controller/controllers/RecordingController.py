@@ -10,6 +10,7 @@ is now provided by the centralized io/writers ecosystem.
 
 import os
 import time
+import traceback
 from typing import Optional, Union, List, Dict, Any
 import numpy as np
 import datetime
@@ -134,6 +135,7 @@ class RecordingController(ImConWidgetController):
             return True
         except Exception as e:
             self.__logger.error(f"Failed to start streaming recording: {e}")
+            self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
             self._streaming_adapter = None
             return False
     
@@ -212,15 +214,21 @@ class RecordingController(ImConWidgetController):
 
 
         # Use RecordingService for snap operations
-        result = self.recording_service.snap(
-            detector_names=detectorNames,
-            savepath=savename,
-            save_mode=SaveMode.Disk,
-            format=mSaveFormat,
-            attrs=attrs,
-            async_write=False,  # Synchronous write to ensure file is saved immediately
-        )
-        self.__logger.debug(f"Snap completed: {result}")
+        self.__logger.debug(f"Starting snap with format={mSaveFormat}, detectorNames={detectorNames}")
+        try:
+            result = self.recording_service.snap(
+                detector_names=detectorNames,
+                savepath=savename,
+                save_mode=SaveMode.Disk,
+                format=mSaveFormat,
+                attrs=attrs,
+                async_write=False,  # Synchronous write to ensure file is saved immediately
+            )
+            self.__logger.debug(f"Snap completed: {result}")
+        except Exception as e:
+            self.__logger.error(f"Failed to snap: {e}")
+            self.__logger.error(f"Full traceback:\n{traceback.format_exc()}")
+            raise
         
         return {"fullPath": savename, "relativePath": relativeFolder}
 

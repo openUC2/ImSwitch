@@ -1113,6 +1113,20 @@ class RecordingService(SignalInterface):
             elif isinstance(val, (np.integer, np.floating)):
                 return float(val)
             return val
+
+        def _safe_scalar_float(value, default=None):
+            """Safely convert scalar/list-like metadata values to float."""
+            if value is None:
+                return default
+            value = _get_value(value)
+            if isinstance(value, (list, tuple, np.ndarray)):
+                if len(value) == 0:
+                    return default
+                value = value[0]
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return default
         
         def _search_attr(patterns: list, search_dict: dict):
             """Search for attribute using multiple key patterns."""
@@ -1155,8 +1169,10 @@ class RecordingService(SignalInterface):
             if pixel_size:
                 if isinstance(pixel_size, (list, tuple)) and len(pixel_size) > 0:
                     pixel_size = pixel_size[0] if len(pixel_size) == 1 else pixel_size[1]
-                metadata['PhysicalSizeX'] = float(pixel_size)
-                metadata['PhysicalSizeY'] = float(pixel_size)
+                pixel_size_val = _safe_scalar_float(pixel_size)
+                if pixel_size_val is not None:
+                    metadata['PhysicalSizeX'] = pixel_size_val
+                    metadata['PhysicalSizeY'] = pixel_size_val
                 metadata['PhysicalSizeXUnit'] = 'µm'
                 metadata['PhysicalSizeYUnit'] = 'µm'
             
@@ -1169,7 +1185,7 @@ class RecordingService(SignalInterface):
             ], flat_attrs)
             if exposure is not None:
                 try:
-                    exp_val = float(exposure)
+                    exp_val = _safe_scalar_float(exposure)
                     if exp_val > 0:
                         metadata['ExposureTime'] = exp_val / 1000.0  # Convert ms to s
                         metadata['ExposureTimeUnit'] = 's'
@@ -1184,7 +1200,9 @@ class RecordingService(SignalInterface):
             ], flat_attrs)
             if gain is not None:
                 try:
-                    metadata['Gain'] = float(gain)
+                    gain_val = _safe_scalar_float(gain)
+                    if gain_val is not None:
+                        metadata['Gain'] = gain_val
                 except (ValueError, TypeError):
                     pass
             
@@ -1222,7 +1240,9 @@ class RecordingService(SignalInterface):
                     key_str = str(key)
                     if 'Positioner:' in key_str and f':{axis}:Position' in key_str:
                         try:
-                            metadata[f'Position{axis}'] = float(_get_value(val))
+                            pos_val = _safe_scalar_float(val)
+                            if pos_val is not None:
+                                metadata[f'Position{axis}'] = pos_val
                             metadata[f'Position{axis}Unit'] = 'µm'
                         except (ValueError, TypeError):
                             pass
@@ -1248,11 +1268,13 @@ class RecordingService(SignalInterface):
                 wavelength = laser_data.get('WavelengthNm', 0)
                 if is_enabled and value:
                     try:
-                        if float(value) > 0:
+                        value_float = _safe_scalar_float(value)
+                        if value_float and value_float > 0:
+                            wavelength_float = _safe_scalar_float(wavelength) if wavelength else None
                             active_lasers.append({
                                 'Name': laser_name,
-                                'WavelengthNm': float(wavelength) if wavelength else None,
-                                'Power': float(value),
+                                'WavelengthNm': wavelength_float,
+                                'Power': value_float,
                             })
                     except (ValueError, TypeError):
                         pass
@@ -1274,11 +1296,15 @@ class RecordingService(SignalInterface):
             
             magnification = _search_attr(['Objective:Magnification'], attrs)
             if magnification:
-                metadata['Magnification'] = float(magnification)
+                magnification_val = _safe_scalar_float(magnification)
+                if magnification_val is not None:
+                    metadata['Magnification'] = magnification_val
             
             na = _search_attr(['Objective:NA'], attrs)
             if na:
-                metadata['NumericalAperture'] = float(na)
+                na_val = _safe_scalar_float(na)
+                if na_val is not None:
+                    metadata['NumericalAperture'] = na_val
             
             # Timestamp
             metadata['DateTime'] = datetime.datetime.now().isoformat()

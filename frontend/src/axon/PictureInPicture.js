@@ -1,9 +1,9 @@
 /**
  * PictureInPicture.js
  *
- * A draggable, resizable floating overlay that shows the live camera stream.
- * Stays visible across all tabs so the user can always monitor the microscope
- * while working in the Well Selector, Parameter editor, etc.
+ * A draggable, freely resizable floating overlay that shows the live camera
+ * stream.  Drag the title bar to reposition; drag the bottom-right corner
+ * handle to resize.  The live image always scales to fill the content area.
  */
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
@@ -17,132 +17,174 @@ import {
   PictureInPictureAlt,
   Close,
   DragIndicator,
-  OpenInFull,
-  CloseFullscreen,
 } from "@mui/icons-material";
 import LiveViewControlWrapper from "./LiveViewControlWrapper";
 
-// Size presets for the PiP window
-const SIZE_SMALL = { width: 280, height: 210 };
-const SIZE_LARGE = { width: 480, height: 360 };
+const DEFAULT_SIZE  = { width: 340, height: 270 };
+const MIN_SIZE      = { width: 160, height: 130 };
 
 /**
  * Floating PiP overlay for live camera stream.
  *
- * @param {boolean} visible - Whether the PiP window is shown
- * @param {function} onClose - Callback to hide the PiP
+ * @param {boolean}  visible  – Whether the PiP window is shown
+ * @param {function} onClose  – Callback to hide the PiP
  */
 const PictureInPicture = ({ visible, onClose }) => {
-  const [position, setPosition] = useState({ x: 16, y: 16 });
-  const [size, setSize] = useState(SIZE_SMALL);
+  const [position,   setPosition]   = useState({ x: 16, y: 16 });
+  const [size,       setSize]       = useState(DEFAULT_SIZE);
   const [isDragging, setIsDragging] = useState(false);
-  const [isLarge, setIsLarge] = useState(false);
-  const dragOffset = useRef({ x: 0, y: 0 });
-  const containerRef = useRef(null);
+  const [isResizing, setIsResizing] = useState(false);
 
-  // Start drag
-  const handleMouseDown = useCallback((e) => {
-    // Only drag from the header bar
-    if (e.target.closest(".pip-drag-handle")) {
-      setIsDragging(true);
-      dragOffset.current = {
-        x: e.clientX - position.x,
-        y: e.clientY - position.y,
-      };
-      e.preventDefault();
-    }
+  // Store mutable values that don't need to trigger re-renders
+  const dragOffset  = useRef({ x: 0, y: 0 });  // offset when drag started
+  const resizeStart = useRef({ mouseX: 0, mouseY: 0, width: 0, height: 0 });
+
+  // ── Drag (title bar) ────────────────────────────────────────────────────
+  const handleDragMouseDown = useCallback((e) => {
+    setIsDragging(true);
+    dragOffset.current = {
+      x: e.clientX - position.x,
+      y: e.clientY - position.y,
+    };
+    e.preventDefault();
   }, [position]);
 
-  // Drag move
   useEffect(() => {
     if (!isDragging) return;
-
-    const handleMouseMove = (e) => {
-      setPosition({
-        x: e.clientX - dragOffset.current.x,
-        y: e.clientY - dragOffset.current.y,
-      });
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    const onMove = (e) => setPosition({
+      x: e.clientX - dragOffset.current.x,
+      y: e.clientY - dragOffset.current.y,
+    });
+    const onUp = () => setIsDragging(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup",   onUp);
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup",   onUp);
     };
   }, [isDragging]);
 
-  // Toggle size
-  const toggleSize = useCallback(() => {
-    setIsLarge((prev) => !prev);
-    setSize((prev) => (prev === SIZE_SMALL ? SIZE_LARGE : SIZE_SMALL));
-  }, []);
+  // ── Resize (bottom-right handle) ────────────────────────────────────────
+  const handleResizeMouseDown = useCallback((e) => {
+    setIsResizing(true);
+    resizeStart.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      width:  size.width,
+      height: size.height,
+    };
+    e.preventDefault();
+    e.stopPropagation(); // don't start a drag too
+  }, [size]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const onMove = (e) => {
+      const dx = e.clientX - resizeStart.current.mouseX;
+      const dy = e.clientY - resizeStart.current.mouseY;
+      setSize({
+        width:  Math.max(MIN_SIZE.width,  resizeStart.current.width  + dx),
+        height: Math.max(MIN_SIZE.height, resizeStart.current.height + dy),
+      });
+    };
+    const onUp = () => setIsResizing(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup",   onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup",   onUp);
+    };
+  }, [isResizing]);
 
   if (!visible) return null;
 
+  const cursorStyle = isDragging ? "grabbing" : isResizing ? "nwse-resize" : "default";
+
   return (
     <Paper
-      ref={containerRef}
       elevation={8}
-      onMouseDown={handleMouseDown}
       sx={{
         position: "fixed",
-        left: position.x,
-        top: position.y,
-        width: size.width,
-        height: size.height,
-        zIndex: 1300,
+        left:     position.x,
+        top:      position.y,
+        width:    size.width,
+        height:   size.height,
+        zIndex:   1300,
         overflow: "hidden",
         borderRadius: "8px",
-        border: "2px solid",
-        borderColor: "primary.main",
-        display: "flex",
+        border:       "2px solid",
+        borderColor:  "primary.main",
+        display:      "flex",
         flexDirection: "column",
-        cursor: isDragging ? "grabbing" : "default",
-        userSelect: isDragging ? "none" : "auto",
+        cursor:   cursorStyle,
+        userSelect: (isDragging || isResizing) ? "none" : "auto",
       }}
     >
-      {/* Header / drag handle */}
+      {/* ── Title bar / drag handle ─────────────────────────────────── */}
       <Box
-        className="pip-drag-handle"
+        onMouseDown={handleDragMouseDown}
         sx={{
-          display: "flex",
-          alignItems: "center",
+          display:        "flex",
+          alignItems:     "center",
           justifyContent: "space-between",
           px: 0.5,
           py: 0.25,
           backgroundColor: "primary.main",
-          color: "primary.contrastText",
-          cursor: "grab",
-          minHeight: 28,
+          color:           "primary.contrastText",
+          cursor:          "grab",
+          minHeight:       28,
+          flexShrink:      0,
         }}
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
           <DragIndicator fontSize="small" />
           <span style={{ fontSize: 11, fontWeight: 600 }}>Live Preview</span>
         </Box>
-        <Box>
-          <Tooltip title={isLarge ? "Shrink" : "Expand"}>
-            <IconButton size="small" onClick={toggleSize} sx={{ color: "inherit", p: 0.25 }}>
-              {isLarge ? <CloseFullscreen fontSize="small" /> : <OpenInFull fontSize="small" />}
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Close PiP">
-            <IconButton size="small" onClick={onClose} sx={{ color: "inherit", p: 0.25 }}>
-              <Close fontSize="small" />
-            </IconButton>
-          </Tooltip>
+        <Tooltip title="Close">
+          <IconButton
+            size="small"
+            onClick={onClose}
+            onMouseDown={(e) => e.stopPropagation()} // don't trigger drag
+            sx={{ color: "inherit", p: 0.25 }}
+          >
+            <Close fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      {/* ── Live view content ────────────────────────────────────────── */}
+      {/* Use absolute fill so the live view canvas always covers the area
+          regardless of its own internal sizing preferences. */}
+      <Box sx={{ flex: 1, position: "relative", overflow: "hidden" }}>
+        <Box
+          sx={{
+            position: "absolute",
+            top: 0, left: 0,
+            width: "100%", height: "100%",
+          }}
+        >
+          <LiveViewControlWrapper enableStageMovement={false} />
         </Box>
       </Box>
 
-      {/* Live view content */}
-      <Box sx={{ flex: 1, position: "relative", overflow: "hidden" }}>
-        <LiveViewControlWrapper enableStageMovement={false} />
-      </Box>
+      {/* ── Resize handle (bottom-right corner) ─────────────────────── */}
+      <Box
+        onMouseDown={handleResizeMouseDown}
+        sx={{
+          position: "absolute",
+          right:    0,
+          bottom:   0,
+          width:    16,
+          height:   16,
+          cursor:   "nwse-resize",
+          // Visual cue: small triangle drawn with borders
+          borderTop:   "8px solid transparent",
+          borderLeft:  "8px solid transparent",
+          borderBottom: `8px solid rgba(255,255,255,0.5)`,
+          borderRight:  `8px solid rgba(255,255,255,0.5)`,
+          zIndex:   10,
+        }}
+      />
     </Paper>
   );
 };
@@ -164,3 +206,4 @@ export const PiPToggleButton = ({ onClick, active }) => (
 );
 
 export default PictureInPicture;
+

@@ -28,7 +28,7 @@ import TimeDimension from "./TimeDimension";
 import TilingDimension from "./TilingDimension";
 import OutputDimension from "./OutputDimension";
 import FocusMapDimension from "./FocusMapDimension";
-import ObjectiveSwitcher from "../../components/ObjectiveSwitcher";
+import ObjectiveDimension from "./ObjectiveDimension";
 
 // Utilities
 import * as coordinateCalculator from "../CoordinateCalculator";
@@ -126,6 +126,7 @@ const ExperimentDesigner = () => {
     [DIMENSIONS.TIME]: TimeDimension,
     [DIMENSIONS.TILING]: TilingDimension,
     [DIMENSIONS.OUTPUT]: OutputDimension,
+    [DIMENSIONS.OBJECTIVE]: ObjectiveDimension,
   };
 
   // Get active dimension component
@@ -351,9 +352,6 @@ const ExperimentDesigner = () => {
 
         {/* Spacer */}
         <Box sx={{ flex: 1 }} />
-
-        {/* Objective Switcher – compact inline version */}
-        <ObjectiveSwitcher />
 
         {/* Viewer buttons */}
         <Tooltip title="Open Vizarr viewer">

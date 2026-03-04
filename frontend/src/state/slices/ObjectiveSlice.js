@@ -5,7 +5,7 @@ const initialObjectiveState = {
   fovX: 40000,
   fovY: 20000,
 
-  currentObjective: 0,
+  currentObjective: null,  // null until first status fetch
   objectivName: "",
   
   pixelsize: 0.0,

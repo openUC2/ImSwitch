@@ -47,7 +47,13 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
     try {
       setIsSwitching(true);
       await apiObjectiveControllerMoveToObjective(slot, 0);
-      // When the socket update arrives, it should set objectiveState.currentObjective => triggers useEffect above
+      // Move completed – update slot and clear spinner immediately; no need to wait for
+      // a socket event that may never arrive.
+      dispatch(objectiveSlice.setCurrentObjective(slot));
+      setCurrentSlot(slot);
+      setIsSwitching(false);
+      // Also refresh full status to sync pixelsize / FOV etc.
+      fetchObjectiveControllerGetStatus(dispatch);
     } catch (e) {
       console.error(`Error switching to objective ${slot}`, e);
       setIsSwitching(false);
@@ -104,7 +110,7 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
             <Grid item>
               <Button
                 variant="contained"
-                color={currentSlot === 2 ? "secondary" : "primary"}
+                color={currentSlot === 1 ? "secondary" : "primary"}
                 onClick={() => switchTo(1)}
               >
                 {/* Button text */}

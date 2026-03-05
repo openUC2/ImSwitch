@@ -53,6 +53,7 @@ import experimentUIReducer from "./slices/ExperimentUISlice";
 import galvoScannerReducer from "./slices/GalvoScannerSlice";
 import focusMapReducer from "./slices/FocusMapSlice";
 import overviewRegistrationReducer from "./slices/OverviewRegistrationSlice";
+import frame3DViewerReducer from "./slices/Frame3DViewerSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -98,6 +99,19 @@ const focusMapPersistConfig = {
     "ui", // Persist accordion expand/collapse states (showManualPoints, showMeasuredPoints, showOverlayOnWellplate)
   ],
   // Don't persist: config, results, manualPoints (those are session-specific)
+};
+
+//#####################################################################################
+// Nested persist config for Frame 3D digital twin viewer
+// Persist axis mapping and camera state so user configuration is remembered
+const frame3DViewerPersistConfig = {
+  key: "frame3DViewer",
+  storage,
+  whitelist: [
+    "axisConfig",   // Persist axis offsets, scales, invert flags, and axis mappings
+    "cameraState",  // Persist 3D viewer camera position and target
+    "visibility",   // Persist visibility toggles
+  ],
 };
 
 //#####################################################################################
@@ -149,6 +163,7 @@ const rootReducer = combineReducers({
   galvoScannerState: galvoScannerReducer,
   focusMap: persistReducer(focusMapPersistConfig, focusMapReducer), // Nested persist for UI accordion states
   overviewRegistrationState: overviewRegistrationReducer,
+  frame3DViewer: persistReducer(frame3DViewerPersistConfig, frame3DViewerReducer),
 });
 
 //#####################################################################################

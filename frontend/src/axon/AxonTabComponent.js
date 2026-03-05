@@ -11,6 +11,7 @@ import ParameterEditorWrapper from "./ParameterEditorWrapper";
 import ExperimentComponent from "./ExperimentComponent";
 import ResizablePanel from "./ResizablePanel"; //<ResizablePanel></ResizablePanel> performace issues :/
 import FocusLockMiniController from "../components/FocusLockMiniController";
+import Frame3DViewerPanel from "./Frame3DViewerPanel.jsx";
 import PictureInPicture, { PiPToggleButton } from "./PictureInPicture";
 
 const AxonTabComponent = () => {
@@ -43,6 +44,7 @@ const AxonTabComponent = () => {
               "Parameter",
               "Points",
               "State",
+              "3D Twin",
             ]}
           >
             <WellSelectorComponent />
@@ -54,6 +56,7 @@ const AxonTabComponent = () => {
               <WebSocketComponent />
               <PositionViewComponent />
             </div>
+            <Frame3DViewerPanel />
           </GenericTabBar>
         </div>
         <div style={{ flex: 2 }}>

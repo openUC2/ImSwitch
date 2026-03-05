@@ -37,20 +37,14 @@ const Frame3DViewer = ({
   const basePosRef = useRef({}); // original world positions of groups after loading
   const animationIdRef = useRef(null);
   const cameraTimeoutRef = useRef(null);
+  const modelLoadedRef = useRef(false); // tracks whether GLB has been loaded
 
-  // ------------------------------------------------------------------
-  // Helper: apply offset / scale / invert to a raw position value
-  // ------------------------------------------------------------------
-  const applyMapping = useCallback(
-    (rawValue, configKey) => {
-      const cfg = axisConfig[configKey];
-      if (!cfg) return 0;
-      let v = (rawValue + cfg.offset) * cfg.scale;
-      if (cfg.invert) v = -v;
-      return v;
-    },
-    [axisConfig]
-  );
+  // Keep a mutable ref to the latest positions & axisConfig so the GLB
+  // onLoad callback can read the *current* values (not stale closure values).
+  const latestPositionsRef = useRef(positions);
+  const latestAxisConfigRef = useRef(axisConfig);
+  useEffect(() => { latestPositionsRef.current = positions; }, [positions]);
+  useEffect(() => { latestAxisConfigRef.current = axisConfig; }, [axisConfig]);
 
   // ------------------------------------------------------------------
   // GLB helpers (same logic as frame3d.html)
@@ -176,6 +170,17 @@ const Frame3DViewer = ({
           stageXY: groups.stageXY.position.clone(),
           turretY: groups.turretY.position.clone(),
         };
+        modelLoadedRef.current = true;
+
+        // Apply the *current* Redux positions immediately so the model
+        // reflects the real stage state on first load (not only after the
+        // next socket update).
+        applyPositionsToGroups(
+          groups,
+          basePosRef.current,
+          latestPositionsRef.current,
+          latestAxisConfigRef.current
+        );
 
         // Camera fit
         const box = new THREE.Box3().setFromObject(assemblyRoot);
@@ -253,33 +258,54 @@ const Frame3DViewer = ({
   }, [width, height]);
 
   // ------------------------------------------------------------------
+  // Shared helper: apply positions to groups using axis config
+  // ------------------------------------------------------------------
+  const applyPositionsToGroups = useCallback(
+    (groups, bp, pos, cfg) => {
+      if (!groups || !bp.stageXY) return;
+
+      const mapVal = (rawValue, configKey) => {
+        const c = cfg[configKey];
+        if (!c) return 0;
+        let v = (rawValue + c.offset) * c.scale;
+        if (c.invert) v = -v;
+        return v;
+      };
+
+      // Stage group: driven by stageX / stageY / stageZ mappings
+      const sx = mapVal(pos[cfg.stageX?.microscopeAxis] || 0, "stageX");
+      const sy = mapVal(pos[cfg.stageY?.microscopeAxis] || 0, "stageY");
+      const sz = mapVal(pos[cfg.stageZ?.microscopeAxis] || 0, "stageZ");
+
+      groups.stageXY.position.set(
+        bp.stageXY.x + sx,
+        bp.stageXY.y + sy,
+        bp.stageXY.z + sz
+      );
+
+      // Turret group: driven by turretX mapping (single axis – usually the objective focus)
+      const tx = mapVal(pos[cfg.turretX?.microscopeAxis] || 0, "turretX");
+      groups.turretY.position.set(
+        bp.turretY.x + tx,
+        bp.turretY.y,
+        bp.turretY.z
+      );
+    },
+    []
+  );
+
+  // ------------------------------------------------------------------
   // Update positions when microscope positions or axis config change
   // ------------------------------------------------------------------
   useEffect(() => {
-    if (!groupsRef.current || !basePosRef.current.stageXY) return;
-
-    const bp = basePosRef.current;
-    const g = groupsRef.current;
-
-    // Stage group: driven by stageX / stageY / stageZ mappings
-    const sx = applyMapping(positions[axisConfig.stageX?.microscopeAxis] || 0, "stageX");
-    const sy = applyMapping(positions[axisConfig.stageY?.microscopeAxis] || 0, "stageY");
-    const sz = applyMapping(positions[axisConfig.stageZ?.microscopeAxis] || 0, "stageZ");
-
-    g.stageXY.position.set(
-      bp.stageXY.x + sx,
-      bp.stageXY.y + sy,
-      bp.stageXY.z + sz
+    if (!modelLoadedRef.current) return;
+    applyPositionsToGroups(
+      groupsRef.current,
+      basePosRef.current,
+      positions,
+      axisConfig
     );
-
-    // Turret group: driven by turretX mapping (single axis – usually the objective focus)
-    const tx = applyMapping(positions[axisConfig.turretX?.microscopeAxis] || 0, "turretX");
-    g.turretY.position.set(
-      bp.turretY.x + tx,
-      bp.turretY.y,
-      bp.turretY.z
-    );
-  }, [positions, axisConfig, applyMapping]);
+  }, [positions, axisConfig, applyPositionsToGroups]);
 
   // ------------------------------------------------------------------
   // Visibility toggles

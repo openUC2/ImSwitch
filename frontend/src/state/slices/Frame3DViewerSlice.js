@@ -7,13 +7,14 @@ const initialState = {
   // Axis mapping: how microscope axes (x,y,z,a) map to the 3D model groups.
   // "stage" group is the XY stage (GLB nodes 51..55).
   // "turret" group is the objective turret (GLB nodes 56..63).
+  // Offsets are in model units (mm). Scale converts microscope steps (µm) → model mm.
   axisConfig: {
     // Stage group mappings  (microscope axis → 3D model axis of the stage group)
     stageX: { microscopeAxis: "x", modelAxis: "x", offset: 0, scale: 0.001, invert: false },
-    stageY: { microscopeAxis: "y", modelAxis: "y", offset: 0, scale: 0.001, invert: false },
-    stageZ: { microscopeAxis: "z", modelAxis: "z", offset: 0, scale: 0.001, invert: false },
-    // Turret group mapping  (typically only one axis – the focus/objective axis)
-    turretX: { microscopeAxis: "a", modelAxis: "x", offset: 0, scale: 0.001, invert: false },
+    stageY: { microscopeAxis: "y", modelAxis: "z", offset: 0, scale: 0.001, invert: false },
+    stageZ: { microscopeAxis: "z", modelAxis: "y", offset: 0, scale: 0.001, invert: true },
+    // Turret group mapping  (objective / focus axis)
+    turretX: { microscopeAxis: "a", modelAxis: "y", offset: 0, scale: 0.001, invert: false },
   },
   // Persisted camera state so the user's view angle is remembered
   cameraState: {

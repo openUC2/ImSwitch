@@ -43,10 +43,10 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
     }, [hostIP, hostPort]); // on host ip/port change
   
   // Switch to a different objective, show spinner until we get update from the socket
-  const switchTo = async (slot) => {
+  const switchTo = async (slot, skipZ = 0) => {
     try {
       setIsSwitching(true);
-      await apiObjectiveControllerMoveToObjective(slot, 0);
+      await apiObjectiveControllerMoveToObjective(slot, skipZ);
       // Move completed – update slot and clear spinner immediately; no need to wait for
       // a socket event that may never arrive.
       dispatch(objectiveSlice.setCurrentObjective(slot));
@@ -109,6 +109,17 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
             </Grid>
             <Grid item>
               <Button
+                variant="outlined"
+                color={currentSlot === 0 ? "secondary" : "primary"}
+                onClick={() => switchTo(0, false)}
+              >
+                {/* Combined objective + Z motion */}
+                Switch + Z{" "}
+                {magnification1 && `(${magnification1}×)`}
+              </Button>
+            </Grid>
+            <Grid item>
+              <Button
                 variant="contained"
                 color={currentSlot === 1 ? "secondary" : "primary"}
                 onClick={() => switchTo(1)}
@@ -123,6 +134,17 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                 ) : (
                   magnification2 && `(Mag: ${magnification2}×)`
                 )}
+              </Button>
+            </Grid>
+            <Grid item>
+              <Button
+                variant="outlined"
+                color={currentSlot === 1 ? "secondary" : "primary"}
+                onClick={() => switchTo(1, false)}
+              >
+                {/* Combined objective + Z motion */}
+                Switch + Z{" "}
+                {magnification2 && `(${magnification2}×)`}
               </Button>
             </Grid>
           </Grid>

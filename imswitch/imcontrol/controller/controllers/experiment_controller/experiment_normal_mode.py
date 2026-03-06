@@ -405,26 +405,11 @@ class ExperimentNormalMode(ExperimentModeBase):
             except Exception:
                 name = f"Move to point {m_point['x']}, {m_point['y']}"
 
-            # Determine per-point Z origin: use per-point z if provided,
-            # otherwise fall back to the global initial_z_position.
+            # Determine per-point Z base: prefer the point's own z, else fall
+            # back to the global initial Z captured at experiment start.
             point_z_origin = m_point.get("z")
             if point_z_origin is None:
                 point_z_origin = initial_z_position
-
-            # Compute per-point Z positions for Z-stacking.
-            # z_positions from the caller are absolute positions based on the
-            # global Z origin.  If this point has its own Z, recalculate them
-            # as offsets and re-apply around the per-point origin.
-            if point_z_origin is not None and point_z_origin != initial_z_position and len(z_positions) > 1:
-                # z_positions were computed as offsets + globalZ. Convert back
-                # to offsets and re-base around this point's Z.
-                z_offsets = np.array(z_positions) - initial_z_position
-                effective_z_positions = list(z_offsets + point_z_origin)
-            elif point_z_origin is not None and point_z_origin != initial_z_position and len(z_positions) == 1:
-                # Single Z (no stack) – use the per-point Z directly
-                effective_z_positions = [point_z_origin]
-            else:
-                effective_z_positions = z_positions
 
             # Move to XY position
             workflow_steps.append(WorkflowStep(
@@ -435,18 +420,13 @@ class ExperimentNormalMode(ExperimentModeBase):
             ))
             step_id += 1
 
-            # Apply focus map Z if available (pre-computed surface).
-            # Lookup is done BEFORE the per-point Z origin move so we can
-            # skip the static Z move when a focus-mapped Z is available
-            # (it would be immediately overwritten, wasting time).
-            # Only attempt lookups when the manager actually contains fitted
-            # maps, so experiments without focus mapping never produce
-            # spurious Z moves.
+            # Focus map Z lookup (happens after XY move to know the coordinate).
+            # Only attempt when the manager has fitted maps so experiments without
+            # focus mapping never produce spurious Z moves.
             focus_map_z = None
             if self.controller.focus_map_manager.get_all():
-                # Resolve the group_id that was used when storing the focus map.
+                # Resolve the group_id used when storing the focus map.
                 # _run_focus_map_phase stores under sa.areaId (e.g. "area_0").
-                # generate_snake_tiles stores centerIndex=area.areaId in tiles.
                 focus_map_group_id = (
                     m_point.get("centerIndex")
                     or m_point.get("areaName")
@@ -457,18 +437,30 @@ class ExperimentNormalMode(ExperimentModeBase):
                     x=m_point["x"], y=m_point["y"], group_id=focus_map_group_id
                 )
                 if focus_map_z is None and not getattr(self.controller, '_focus_map_fit_by_region', True):
-                    # Try global map as fallback
                     focus_map_z = self.controller.apply_focus_map_z(
                         x=m_point["x"], y=m_point["y"], group_id="global"
                     )
                 if focus_map_z is None:
-                    # Try manual map as last-resort fallback (user-defined points)
                     focus_map_z = self.controller.apply_focus_map_z(
                         x=m_point["x"], y=m_point["y"], group_id="manual"
                     )
 
+            # -------------------------------------------------------------------
+            # SINGLE SOURCE OF TRUTH for Z positions.
+            # z_positions are PURE RELATIVE OFFSETS sent by the frontend (e.g.
+            # [-10, -8, ..., 10] for a Z-stack, or [0.0] for single Z).
+            # base_z is the absolute reference for this tile:
+            #   1. focus_map_z  – interpolated surface (highest priority)
+            #   2. point_z_origin – per-scan-area Z from the frontend
+            #   3. initial_z_position – global Z measured at experiment start
+            # effective_z_positions = [base_z + offset for offset in z_positions]
+            # -------------------------------------------------------------------
+            base_z = focus_map_z if focus_map_z is not None else point_z_origin
+            effective_z_positions = [base_z + offset for offset in z_positions]
+
+            # If focus map provides a Z, emit a dedicated Z-move so the stage
+            # settles at the predicted position before any Z-stack or capture.
             if focus_map_z is not None:
-                # Move Z to the focus-mapped position (supersedes per-point Z)
                 settle_ms = getattr(self.controller, '_focus_map_settle_ms', 0)
                 settle_s = settle_ms / 1000.0 if settle_ms > 0 else 0
                 workflow_steps.append(WorkflowStep(
@@ -480,20 +472,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     post_params={"seconds": settle_s} if settle_s > 0 else None,
                 ))
                 step_id += 1
-            else:
-                # No focus map – move to per-point Z origin only if it
-                # actually differs from the global initial Z.
-                if (point_z_origin is not None
-                        and point_z_origin != initial_z_position
-                        and len(z_positions) == 1):
-                    workflow_steps.append(WorkflowStep(
-                        name=f"Move to per-point Z origin {point_z_origin:.1f}",
-                        step_id=step_id,
-                        main_func=self.controller.move_stage_z,
-                        main_params={"posZ": point_z_origin, "relative": False},
-                    ))
-                    step_id += 1
-            
+
             # Perform autofocus if enabled (runs after focus map Z move if both active)
             if is_auto_focus:
                 workflow_steps.append(WorkflowStep(
@@ -512,12 +491,18 @@ class ExperimentNormalMode(ExperimentModeBase):
                 ))
                 step_id += 1
 
-            # Iterate over Z positions (using per-point effective Z positions)
+            # Iterate over Z planes.
+            # z_positions are pure relative offsets; effective_z_positions = base_z + offset.
+            # For multi-plane Z-stacks, add a Z-move step for every plane.
+            # For single Z (z_positions = [0.0]), add one Z-move to base_z so the
+            # stage is always at the correct absolute Z before capture, even after
+            # a prior tile's focus-map or autofocus moved it elsewhere.
+            is_z_stack = len(effective_z_positions) > 1
             for index_z, i_z in enumerate(effective_z_positions):
-                # Move to Z position if we have more than one Z position
-                if (len(effective_z_positions) > 1 or (len(effective_z_positions) == 1 and m_index == 0)) and (i_z != 0 and len(effective_z_positions) != 1): # TODO: The latter case is just to ensure that we don't have false values coming from the hardware
+                # Move Z for every plane in a Z-stack, or once for single-Z
+                if is_z_stack or index_z == 0:
                     workflow_steps.append(WorkflowStep(
-                        name="Move to Z position",
+                        name=f"Move to Z {'plane ' + str(index_z) if is_z_stack else 'base position'} ({i_z:.1f} µm)",
                         step_id=step_id,
                         main_func=self.controller.move_stage_z,
                         main_params={"posZ": i_z, "relative": False},
@@ -532,15 +517,15 @@ class ExperimentNormalMode(ExperimentModeBase):
                     if illu_intensity <= 0:
                         continue
 
-                    # Apply per-channel focus map Z offset if configured
-                    # This adjusts Z relative to the focus-mapped position for chromatic shift compensation
+                    # Apply per-channel Z offset for chromatic shift compensation.
+                    # i_z is already the absolute Z position; add the channel offset on top.
                     if focus_map_z is not None:
                         channel_offset_z = 0.0
                         _fm_cfg = getattr(self.controller, '_focus_map_config', None)
                         if _fm_cfg and _fm_cfg.channel_offsets:
                             channel_offset_z = _fm_cfg.channel_offsets.get(illu_source, 0.0)
                         if channel_offset_z != 0.0:
-                            adjusted_z = focus_map_z + channel_offset_z + (i_z if i_z != 0 else 0)
+                            adjusted_z = i_z + channel_offset_z
                             workflow_steps.append(WorkflowStep(
                                 name=f"Channel Z offset ({illu_source}: {channel_offset_z:+.1f} µm)",
                                 step_id=step_id,
@@ -609,13 +594,14 @@ class ExperimentNormalMode(ExperimentModeBase):
                     ))
                     step_id += 1
 
-            # Move back to the current Z position after processing all points in the tile
-            if len(effective_z_positions) > 1 :
+            # After a Z-stack, return to base_z so the next tile starts from a
+            # known Z reference (important for timelapse repeatability).
+            if is_z_stack:
                 workflow_steps.append(WorkflowStep(
-                    name="Move back to current Z position",
+                    name=f"Return to base Z after Z-stack ({base_z:.1f} µm)",
                     step_id=step_id,
                     main_func=self.controller.move_stage_z,
-                    main_params={"posZ": initial_z_position, "relative": False},
+                    main_params={"posZ": base_z, "relative": False},
                     pre_funcs=[self.controller.wait_time],
                     pre_params={"seconds": t_pre_s},
                 ))

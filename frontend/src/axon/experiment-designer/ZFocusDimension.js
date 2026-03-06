@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   Box,
@@ -59,6 +59,22 @@ const ZFocusDimension = () => {
 
   // Check if focus map is enabled (for mutual-exclusion warning)
   const focusMapEnabled = useSelector(focusMapSlice.isFocusMapEnabled);
+
+  // Local string states for Z-stack inputs so the user can type negative
+  // values (e.g. "-10") without the field resetting to 0 on each keystroke.
+  const [zMinRaw, setZMinRaw] = useState(String(parameterValue.zStackMin ?? -10));
+  const [zMaxRaw, setZMaxRaw] = useState(String(parameterValue.zStackMax ?? 10));
+  const [zStepRaw, setZStepRaw] = useState(String(parameterValue.zStackStepSize ?? 1));
+
+  // Keep local strings in sync when Redux changes from outside (e.g. reset)
+  useEffect(() => { setZMinRaw(String(parameterValue.zStackMin)); }, [parameterValue.zStackMin]);
+  useEffect(() => { setZMaxRaw(String(parameterValue.zStackMax)); }, [parameterValue.zStackMax]);
+  useEffect(() => { setZStepRaw(String(parameterValue.zStackStepSize)); }, [parameterValue.zStackStepSize]);
+
+  // Commit helper: parse raw string and dispatch; on NaN restore to Redux value
+  const commitZMin  = () => { const v = parseFloat(zMinRaw);  if (!isNaN(v)) dispatch(experimentSlice.setZStackMin(v));  else setZMinRaw(String(parameterValue.zStackMin)); };
+  const commitZMax  = () => { const v = parseFloat(zMaxRaw);  if (!isNaN(v)) dispatch(experimentSlice.setZStackMax(v));  else setZMaxRaw(String(parameterValue.zStackMax)); };
+  const commitZStep = () => { const v = parseFloat(zStepRaw); if (!isNaN(v) && v > 0) dispatch(experimentSlice.setZStackStepSize(v)); else setZStepRaw(String(parameterValue.zStackStepSize)); };
 
   // Calculate Z stack info
   const zStackRange = parameterValue.zStackMax - parameterValue.zStackMin;
@@ -234,11 +250,13 @@ const ZFocusDimension = () => {
               label="Start (µm)"
               type="number"
               size="small"
-              value={parameterValue.zStackMin}
+              value={zMinRaw}
               onChange={(e) => {
-                const v = Number(e.target.value);
-                dispatch(experimentSlice.setZStackMin(v));
+                setZMinRaw(e.target.value);
+                const v = parseFloat(e.target.value);
+                if (!isNaN(v)) dispatch(experimentSlice.setZStackMin(v));
               }}
+              onBlur={commitZMin}
               inputProps={{ step: 1 }}
               helperText="Relative start offset"
               sx={{ width: 130 }}
@@ -249,11 +267,13 @@ const ZFocusDimension = () => {
               label="Stop (µm)"
               type="number"
               size="small"
-              value={parameterValue.zStackMax}
+              value={zMaxRaw}
               onChange={(e) => {
-                const v = Number(e.target.value);
-                dispatch(experimentSlice.setZStackMax(v));
+                setZMaxRaw(e.target.value);
+                const v = parseFloat(e.target.value);
+                if (!isNaN(v)) dispatch(experimentSlice.setZStackMax(v));
               }}
+              onBlur={commitZMax}
               inputProps={{ step: 1 }}
               helperText="Relative stop offset"
               sx={{ width: 130 }}
@@ -264,11 +284,13 @@ const ZFocusDimension = () => {
               label="Step Size (µm)"
               type="number"
               size="small"
-              value={parameterValue.zStackStepSize}
+              value={zStepRaw}
               onChange={(e) => {
-                const v = Math.max(0.01, Number(e.target.value));
-                dispatch(experimentSlice.setZStackStepSize(v));
+                setZStepRaw(e.target.value);
+                const v = parseFloat(e.target.value);
+                if (!isNaN(v) && v > 0) dispatch(experimentSlice.setZStackStepSize(v));
               }}
+              onBlur={commitZStep}
               inputProps={{ step: 0.5, min: 0.01 }}
               helperText="Distance per step"
               sx={{ width: 130 }}

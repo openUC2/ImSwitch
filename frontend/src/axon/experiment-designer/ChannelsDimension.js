@@ -65,6 +65,16 @@ const ChannelBlock = ({
 }) => {
   const theme = useTheme();
 
+  // Local string state for exposure so the user can type partial values
+  // (e.g. "100." or clear the field) without it snapping to 0.
+  const [exposureRaw, setExposureRaw] = useState(String(exposure ?? 100));
+  useEffect(() => { setExposureRaw(String(exposure)); }, [exposure]);
+  const commitExposure = () => {
+    const v = parseFloat(exposureRaw);
+    if (!isNaN(v) && v >= 0) onExposureChange(v);
+    else setExposureRaw(String(exposure));
+  };
+
   return (
     <Box
       sx={{
@@ -208,8 +218,13 @@ const ChannelBlock = ({
                 <TextField
                   type="number"
                   size="small"
-                  value={exposure}
-                  onChange={(e) => onExposureChange(parseFloat(e.target.value) || 0)}
+                  value={exposureRaw}
+                  onChange={(e) => {
+                    setExposureRaw(e.target.value);
+                    const v = parseFloat(e.target.value);
+                    if (!isNaN(v) && v >= 0) onExposureChange(v);
+                  }}
+                  onBlur={commitExposure}
                   inputProps={{ min: 0, step: 0.1 }}
                   InputProps={{
                     endAdornment: <Typography variant="caption" sx={{ ml: 0.5, whiteSpace: 'nowrap' }}>ms</Typography>,

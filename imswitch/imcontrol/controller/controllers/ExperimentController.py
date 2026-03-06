@@ -800,9 +800,6 @@ class ExperimentController(ImConWidgetController):
         # Set LED status to rainbow (busy)
         self.set_led_status("rainbow")
 
-        # Turn off all illumination sources to start from a clean state
-        self._switch_off_all_illumination()
-
         # Start the detector if not already running
         if not self.mDetector._running:
             self.mDetector.startAcquisition()
@@ -844,16 +841,17 @@ class ExperimentController(ImConWidgetController):
         # remove none values from all_points list
         snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
 
-        # Generate Z-positions
-        # Use RELATIVE offsets from per-point z origin.
-        # The actual absolute Z is computed per-tile in the workflow using each point's z.
-        currentZ = self.mStage.getPosition()["Z"]
+        # Generate Z-positions as PURE RELATIVE OFFSETS.
+        # The frontend sends zStackMin/zStackMax as µm offsets (e.g. -10 / +10).
+        # At workflow execution, each tile adds these offsets to its own Z base
+        # (focus-map Z, per-point Z, or the global initial Z captured below).
+        # This is the single authoritative place that converts UI values to offsets.
         if isZStack:
-            # Store as offsets relative to origin (will be shifted per-point)
-            z_offsets = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize)
-            z_positions = z_offsets + currentZ  # Fallback: use current Z as base
+            # Build a list of relative offsets; do NOT add currentZ here.
+            z_offsets_arr = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize)
+            z_positions = list(z_offsets_arr)
         else:
-            z_positions = [currentZ]  # Get current Z position
+            z_positions = [0.0]  # Single Z: zero offset → stay at the tile's base Z
 
         # Prepare directory and filename for saving
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")

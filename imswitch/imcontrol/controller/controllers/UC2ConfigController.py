@@ -1884,7 +1884,13 @@ class UC2ConfigController(ImConWidgetController):
 
         try:
             with _serial.Serial(port, baud, timeout=timeout) as ser:
-                time.sleep(0.5)  # wait for device boot
+                time.sleep(3)  # wait for device boot
+                # read couple of lines in case device prints something on boot
+                boot_output = ""
+                while ser.in_waiting:
+                    boot_output += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                if boot_output:
+                    self.__logger.info(f"Boot output from device:\n{boot_output.strip()}")
                 ser.write((cmd + "\n").encode("utf-8"))
                 ser.flush()
                 time.sleep(0.3)

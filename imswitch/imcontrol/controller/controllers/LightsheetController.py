@@ -882,6 +882,7 @@ class LightsheetController(ImConWidgetController):
             self.detector.startAcquisition()
 
             # Move to start
+            mCurrentZPosition = self.stages.getPosition().get(params.axis, params.currentPosition)
             self.stages.move(value=params.minPos, axis=params.axis, is_absolute=True, is_blocking=True)
             time.sleep(0.5)
 
@@ -1000,7 +1001,7 @@ class LightsheetController(ImConWidgetController):
                 time.sleep(0.01)  # Small delay to prevent CPU overload
 
             # Move back
-            self.stages.move(value=-totalDistance, axis=params.axis, is_absolute=False, is_blocking=True)
+            self.stages.move(value=mCurrentZPosition, axis=params.axis, is_absolute=True, is_blocking=False)
 
             # Now write all buffered frames to disk (fast acquisition, slower writing)
             self._logger.info(f"Acquisition complete. Writing {len(frame_buffer)} frames to disk...")
@@ -1088,9 +1089,9 @@ class LightsheetController(ImConWidgetController):
             if len(last_frames_preview) > 0:
                 self.lightsheetStack = np.array(last_frames_preview)
 
-            # Turn off illumination
-            if params.illuSource and params.illuSource in self._master.lasersManager.getAllDeviceNames():
-                laser = self._master.lasersManager[params.illuSource]
+            # Turn off all illumination 
+            for iIllu in self._master.lasersManager.getAllDeviceNames():
+                laser = self._master.lasersManager[iIllu]
                 laser.setValue(0)
 
         except Exception as e:

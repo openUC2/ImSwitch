@@ -10,11 +10,11 @@ const initialState = {
   // Offsets are in model units (mm). Scale converts microscope steps (µm) → model mm.
   axisConfig: {
     // Stage group mappings  (microscope axis → 3D model axis of the stage group)
-    stageX: { microscopeAxis: "x", modelAxis: "x", offset: 0, scale: 0.001, invert: false },
-    stageY: { microscopeAxis: "y", modelAxis: "z", offset: 0, scale: 0.001, invert: false },
+    stageX: { microscopeAxis: "x", modelAxis: "x", offset: -127000/2, scale: 0.001, invert: true },
+    stageY: { microscopeAxis: "y", modelAxis: "z", offset: -86000/2, scale: 0.001, invert: true },
     stageZ: { microscopeAxis: "z", modelAxis: "y", offset: 0, scale: 0.001, invert: true },
     // Turret group mapping  (objective / focus axis)
-    turretX: { microscopeAxis: "a", modelAxis: "y", offset: 0, scale: 0.001, invert: false },
+    turretX: { microscopeAxis: "a", modelAxis: "y", offset: -15000, scale: 0.001, invert: false },
   },
   // Persisted camera state so the user's view angle is remembered
   cameraState: {

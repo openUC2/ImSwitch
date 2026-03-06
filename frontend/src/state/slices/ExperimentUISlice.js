@@ -71,7 +71,7 @@ const initialExperimentUIState = {
       summary: "Default output",
     },
     [DIMENSIONS.OBJECTIVE]: {
-      enabled: false,
+      enabled: true,
       configured: false,
       summary: "Default objective",
     },

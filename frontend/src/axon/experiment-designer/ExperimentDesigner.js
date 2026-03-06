@@ -51,6 +51,7 @@ import apiExperimentControllerStartWellplateExperiment from "../../backendapi/ap
 import apiExperimentControllerStopExperiment from "../../backendapi/apiExperimentControllerStopExperiment";
 import apiExperimentControllerPauseWorkflow from "../../backendapi/apiExperimentControllerPauseWorkflow";
 import apiExperimentControllerResumeExperiment from "../../backendapi/apiExperimentControllerResumeExperiment";
+import apiExperimentControllerInterruptFocusMap from "../../backendapi/apiExperimentControllerInterruptFocusMap";
 import fetchGetExperimentStatus from "../../middleware/fetchExperimentControllerGetExperimentStatus";
 
 // Status enum
@@ -212,6 +213,8 @@ const ExperimentDesigner = () => {
 
   const handleStop = () => {
     dispatch(experimentStatusSlice.setStatus(Status.IDLE));
+    // Interrupt focus map immediately (in case we are in focus map phase)
+    apiExperimentControllerInterruptFocusMap().catch(() => {});
     apiExperimentControllerStopExperiment()
       .then(() => {
         infoPopupRef.current?.showMessage("Experiment stopped");

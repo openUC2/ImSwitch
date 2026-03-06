@@ -15,7 +15,6 @@ import {
   Select,
   MenuItem,
   InputLabel,
-  Slider,
   Switch,
   Tooltip,
   IconButton,
@@ -217,52 +216,87 @@ const ZFocusDimension = () => {
             backgroundColor: alpha(theme.palette.background.default, 0.5),
           }}
         >
-          <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 600 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
             Z-Stack Settings
           </Typography>
 
-          <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {/* Start position */}
-            <FormControl size="small" sx={{ minWidth: 150 }}>
-              <InputLabel>Start</InputLabel>
-              <Select
-                value={parameterValue.zStackMin}
-                onChange={(e) => dispatch(experimentSlice.setZStackMin(Number(e.target.value)))}
-                label="Start"
-              >
-                {[-100, -50, -20, 0, 20, 50, 80, 100].map((val) => (
-                  <MenuItem key={val} value={val}>{val} μm</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+          {/* Relative-position hint */}
+          <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 2 }}>
+            Values are <strong>relative offsets</strong> from the current Z position.
+            {focusMapEnabled
+              ? " With Focus Map enabled, this offset is applied on top of the per-position interpolated Z."
+              : " The stack is centred on the Z origin at each scan position."}
+          </Typography>
 
-            {/* Stop position */}
-            <FormControl size="small" sx={{ minWidth: 150 }}>
-              <InputLabel>Stop</InputLabel>
-              <Select
-                value={parameterValue.zStackMax}
-                onChange={(e) => dispatch(experimentSlice.setZStackMax(Number(e.target.value)))}
-                label="Stop"
-              >
-                {[20, 40, 60, 80, 100, 150, 200].map((val) => (
-                  <MenuItem key={val} value={val}>{val} μm</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+          <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "flex-start" }}>
+            {/* Start offset */}
+            <TextField
+              label="Start (µm)"
+              type="number"
+              size="small"
+              value={parameterValue.zStackMin}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                dispatch(experimentSlice.setZStackMin(v));
+              }}
+              inputProps={{ step: 1 }}
+              helperText="Relative start offset"
+              sx={{ width: 130 }}
+            />
+
+            {/* Stop offset */}
+            <TextField
+              label="Stop (µm)"
+              type="number"
+              size="small"
+              value={parameterValue.zStackMax}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                dispatch(experimentSlice.setZStackMax(v));
+              }}
+              inputProps={{ step: 1 }}
+              helperText="Relative stop offset"
+              sx={{ width: 130 }}
+            />
 
             {/* Step size */}
-            <FormControl size="small" sx={{ minWidth: 150 }}>
-              <InputLabel>Step Size</InputLabel>
-              <Select
-                value={parameterValue.zStackStepSize}
-                onChange={(e) => dispatch(experimentSlice.setZStackStepSize(Number(e.target.value)))}
-                label="Step Size"
-              >
-                {[0.5, 1, 2, 3, 5, 10, 20].map((val) => (
-                  <MenuItem key={val} value={val}>{val} μm</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            <TextField
+              label="Step Size (µm)"
+              type="number"
+              size="small"
+              value={parameterValue.zStackStepSize}
+              onChange={(e) => {
+                const v = Math.max(0.01, Number(e.target.value));
+                dispatch(experimentSlice.setZStackStepSize(v));
+              }}
+              inputProps={{ step: 0.5, min: 0.01 }}
+              helperText="Distance per step"
+              sx={{ width: 130 }}
+            />
+          </Box>
+
+          {/* Summary: planes & total range */}
+          <Box
+            sx={{
+              mt: 2,
+              px: 1.5,
+              py: 1,
+              borderRadius: 1,
+              backgroundColor: alpha(theme.palette.primary.main, 0.08),
+              display: "flex",
+              gap: 3,
+              flexWrap: "wrap",
+            }}
+          >
+            <Typography variant="caption">
+              <strong>{zStackSteps}</strong> planes
+            </Typography>
+            <Typography variant="caption">
+              Range: <strong>{(parameterValue.zStackMax - parameterValue.zStackMin).toFixed(1)} µm</strong>
+            </Typography>
+            <Typography variant="caption">
+              Step: <strong>{Number(parameterValue.zStackStepSize).toFixed(2)} µm</strong>
+            </Typography>
           </Box>
         </Box>
       )}

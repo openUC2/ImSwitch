@@ -296,7 +296,23 @@ const experimentSlice = createSlice({
       };
       
       console.log("createPoint newPoint", newPoint);
-      state.pointList.push(newPoint);
+      // Prevent duplicate points with the same physical position and shape
+      const isDuplicate = state.pointList.some((existing) =>
+        existing.x === newPoint.x &&
+        existing.y === newPoint.y &&
+        existing.shape === newPoint.shape &&
+        existing.rectPlusX === newPoint.rectPlusX &&
+        existing.rectPlusY === newPoint.rectPlusY &&
+        existing.rectMinusX === newPoint.rectMinusX &&
+        existing.rectMinusY === newPoint.rectMinusY &&
+        existing.circleRadiusX === newPoint.circleRadiusX &&
+        existing.circleRadiusY === newPoint.circleRadiusY
+      );
+      if (!isDuplicate) {
+        state.pointList.push(newPoint);
+      } else {
+        console.warn("[ExperimentSlice] Skipped duplicate point at", newPoint.x, newPoint.y);
+      }
     },
     addPoint: (state, action) => {
       console.log("addPoint");

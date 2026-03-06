@@ -1159,6 +1159,8 @@ const FocusMapDimension = () => {
                           z_max: config.z_max,
                         });
                         dispatch(focusMapSlice.updateFocusMapGroupResult({ groupId: "manual", result }));
+                        // Auto-enable "use manual map" so the fitted plane is actually used
+                        dispatch(focusMapSlice.setFocusMapUseManualMap(true));
                       } catch (err) {
                         dispatch(focusMapSlice.setFocusMapError(err.message || "Failed to fit from manual points"));
                       } finally {

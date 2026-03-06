@@ -38,8 +38,30 @@ export function calculateScanCoordinates(experimentState, objectiveState, wellSe
   const effectiveStepX = objectiveState.fovX * (1 - scanConfig.metadata.overlapWidth);
   const effectiveStepY = objectiveState.fovY * (1 - scanConfig.metadata.overlapHeight);
 
-  // Process each point in the point list
-  experimentState.pointList.forEach((point, pointIndex) => {
+  // Deduplicate pointList before processing – the UI may push identical
+  // points (e.g. CUP_SELECT / AREA_SELECT re-selects), which would cause
+  // the same physical position to be scanned multiple times.
+  const seen = new Set();
+  const uniquePoints = experimentState.pointList.filter((pt) => {
+    // Build a key from the properties that define a unique scan location
+    const key = [
+      pt.x, pt.y, pt.shape,
+      pt.rectPlusX, pt.rectPlusY, pt.rectMinusX, pt.rectMinusY,
+      pt.circleRadiusX, pt.circleRadiusY,
+    ].join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  if (uniquePoints.length < experimentState.pointList.length) {
+    console.warn(
+      `[CoordinateCalculator] Removed ${experimentState.pointList.length - uniquePoints.length} duplicate point(s)`
+    );
+  }
+
+  // Process each unique point in the point list
+  uniquePoints.forEach((point, pointIndex) => {
     const scanArea = processScanPoint(
       point, 
       pointIndex, 

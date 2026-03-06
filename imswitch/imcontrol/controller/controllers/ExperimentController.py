@@ -832,9 +832,9 @@ class ExperimentController(ImConWidgetController):
             self._focus_map_fit_by_region = focusMapConfig.fit_by_region
             self._focus_map_settle_ms = focusMapConfig.settle_ms
             self._run_focus_map_phase(mExperiment, focusMapConfig)
-            # Turn off illumination again after focus mapping so the
-            # acquisition loop starts from a clean state.
-            self._switch_off_all_illumination()
+        # Turn off illumination again after focus mapping so the
+        # acquisition loop starts from a clean state.
+        self._switch_off_all_illumination()
 
         # Generate the list of points to scan from pre-calculated coordinates
         snake_tiles = self.generate_snake_tiles(mExperiment) # TODO: Is this still needed?

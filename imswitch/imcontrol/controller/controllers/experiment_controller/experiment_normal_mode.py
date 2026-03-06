@@ -407,8 +407,11 @@ class ExperimentNormalMode(ExperimentModeBase):
 
             # Determine per-point Z base: prefer the point's own z, else fall
             # back to the global initial Z captured at experiment start.
+            # z=0.0 is the frontend default for sub-tiles that have no explicit
+            # per-point Z – treat it the same as None so we always use the real
+            # stage Z (initial_z_position) in that case.
             point_z_origin = m_point.get("z")
-            if point_z_origin is None:
+            if point_z_origin is None or point_z_origin == 0.0:
                 point_z_origin = initial_z_position
 
             # Move to XY position

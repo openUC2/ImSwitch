@@ -1769,6 +1769,29 @@ class UC2ConfigController(ImConWidgetController):
         flash_params = self._CHIP_FLASH_PARAMS.get(resolved_chip, self._CHIP_FLASH_PARAMS["esp32"])
         self._emit_usb_flash_status("flashing", 27, f"Chip: {resolved_chip}, offset: {flash_params['offset']}")
 
+        # 4c) For chips that flash at 0x0 (esp32s3, esp32c3, etc.) the binary must
+        #     include the bootloader ("merged" build).  espota binaries do NOT include
+        #     the bootloader and will cause boot-loops when flashed via esptool at 0x0.
+        #     Convention: merged binaries have a "_merged" postfix before .bin.
+        if flash_params["offset"] == "0x0" and fw_path:
+            fw_name = fw_path.name  # e.g. "firmware.bin"
+            if "_merged" not in fw_name:
+                # Try downloading the merged variant from the server
+                stem = fw_path.stem  # "firmware"
+                merged_name = f"{stem}_merged.bin"
+                merged_path = self._download_firmware_by_name(merged_name)
+                if merged_path:
+                    self.__logger.info(f"Using merged firmware for {resolved_chip}: {merged_name}")
+                    fw_path = merged_path
+                    self._emit_usb_flash_status("downloading", 22, f"Using merged firmware: {merged_name}")
+                else:
+                    self.__logger.warning(
+                        f"No merged firmware '{merged_name}' found on server. "
+                        f"Flashing '{fw_name}' at offset {flash_params['offset']} – "
+                        f"this may cause boot-loops if the binary is an OTA/espota build."
+                    )
+                    self._emit_usb_flash_status("flashing", 22, f"Warning: no merged firmware found, using {fw_name}")
+
         self.__logger.info(
             f"Flashing firmware via {flash_port} (baud={baud}, chip={resolved_chip}, "
             f"file={fw_path.name}, erase={erase_flash})"
@@ -1884,19 +1907,44 @@ class UC2ConfigController(ImConWidgetController):
 
         try:
             with _serial.Serial(port, baud, timeout=timeout) as ser:
-                time.sleep(3)  # wait for device boot
-                # read couple of lines in case device prints something on boot
+                # Wait for the device to finish booting.  Freshly-flashed ESP32s
+                # may print boot messages / SHA-256 lines for several seconds.
+                self.__logger.info(f"Waiting for device boot on {port}...")
+                boot_wait_s = 5  # generous wait for boot-loop detection
                 boot_output = ""
-                while ser.in_waiting:
-                    boot_output += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                deadline = time.time() + boot_wait_s
+                stable_count = 0
+                while time.time() < deadline:
+                    if ser.in_waiting:
+                        chunk = ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        boot_output += chunk
+                        stable_count = 0  # got data → reset stability counter
+                    else:
+                        stable_count += 1
+                        # If no data for ~1 s after initial output, device is booted
+                        if stable_count > 10 and boot_output:
+                            break
+                    time.sleep(0.1)
+
                 if boot_output:
-                    self.__logger.info(f"Boot output from device:\n{boot_output.strip()}")
+                    self.__logger.info(f"Boot output from device:\n{boot_output.strip()[-500:]}")
+
+                # Flush any remaining bytes in the input buffer
+                ser.reset_input_buffer()
+
                 ser.write((cmd + "\n").encode("utf-8"))
                 ser.flush()
-                time.sleep(0.3)
+                time.sleep(0.5)
                 response = ""
-                while ser.in_waiting:
-                    response += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                resp_deadline = time.time() + timeout
+                while time.time() < resp_deadline:
+                    if ser.in_waiting:
+                        response += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        time.sleep(0.05)
+                    else:
+                        if response:
+                            break
+                        time.sleep(0.1)
             self.__logger.info(f"CAN address response: {response.strip()}")
             self._emit_usb_flash_status("success", 100, f"✅ CAN address {address} assigned!")
             return {

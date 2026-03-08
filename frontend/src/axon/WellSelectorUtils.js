@@ -25,31 +25,35 @@ export function calculateRasterRect(
   const minY = center.y - rectMinusY;
   const maxY = center.y + rectPlusY;
 
-  // Raster sind an ihrem Zentrum ausgerichtet:
+  // Use integer grid indices for BFS to avoid floating-point key collisions.
+  // Positions are computed from indices: x = center.x + ix * rasterWidth
   const centerX = center.x;
   const centerY = center.y;
 
   const visited = new Set();
-
-  const toKey = (x, y) => `${x},${y}`;
+  const toKey = (ix, iy) => `${ix},${iy}`;
 
   function rectsOverlap(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
     return !(bx2 <= ax1 || bx1 >= ax2 || by2 <= ay1 || by1 >= ay2);
   }
 
-  const queue = [{ x: centerX, y: centerY }];
+  const queue = [{ ix: 0, iy: 0 }];
   const directions = [
-    { dx: rasterWidth, dy: 0 },
-    { dx: -rasterWidth, dy: 0 },
-    { dx: 0, dy: rasterHeight },
-    { dx: 0, dy: -rasterHeight },
+    { dix: 1, diy: 0 },
+    { dix: -1, diy: 0 },
+    { dix: 0, diy: 1 },
+    { dix: 0, diy: -1 },
   ];
 
   while (queue.length > 0) {
-    const { x, y } = queue.shift();
-    const key = toKey(x, y);
+    const { ix, iy } = queue.shift();
+    const key = toKey(ix, iy);
     if (visited.has(key)) continue;
     visited.add(key);
+
+    // Compute position deterministically from indices (avoids FP drift)
+    const x = centerX + ix * rasterWidth;
+    const y = centerY + iy * rasterHeight;
 
     // Raster-Ecken berechnen
     const rasterLeft = x - rasterWidth / 2;
@@ -69,16 +73,14 @@ export function calculateRasterRect(
         rasterBottom
       )
     ) {
-        const ix = Math.round((x - centerX) / rasterWidth);
-        const iy = Math.round((y - centerY) / rasterHeight);
       rasters.push({ x, y, iX: ix, iY: iy });
 
-      for (const { dx, dy } of directions) {
-        const nx = x + dx;
-        const ny = y + dy;
-        const nkey = toKey(nx, ny);
+      for (const { dix, diy } of directions) {
+        const nix = ix + dix;
+        const niy = iy + diy;
+        const nkey = toKey(nix, niy);
         if (!visited.has(nkey)) {
-          queue.push({ x: nx, y: ny });
+          queue.push({ ix: nix, iy: niy });
         }
       }
     }
@@ -101,9 +103,9 @@ export function calculateRasterOval(
   const a = radiusX; // horizontale Halbachse (nach rechts)
   const b = radiusY; // vertikale Halbachse (nach oben)
 
-  // Visited Set, um Duplikate zu vermeiden
+  // Use integer grid indices for BFS to avoid floating-point key collisions.
   const visited = new Set();
-  const toKey = (x, y) => `${x},${y}`;
+  const toKey = (ix, iy) => `${ix},${iy}`;
 
   // Funktion, um zu prüfen, ob ein Punkt (x, y) innerhalb des Ovals liegt
   const isInsideOval = (x, y) => {
@@ -112,34 +114,36 @@ export function calculateRasterOval(
     return (dx * dx) / (a * a) + (dy * dy) / (b * b) <= 1;
   };
 
-  // Queue für die Expansion, Startpunkt ist das Zentrum
-  const queue = [{ x: center.x, y: center.y }];
+  // Queue für die Expansion, Startpunkt ist das Zentrum (index 0,0)
+  const queue = [{ ix: 0, iy: 0 }];
   const directions = [
-    { dx: rasterWidth, dy: 0 }, // Rechts expandieren
-    { dx: -rasterWidth, dy: 0 }, // Links expandieren
-    { dx: 0, dy: rasterHeight }, // Oben expandieren
-    { dx: 0, dy: -rasterHeight }, // Unten expandieren
+    { dix: 1, diy: 0 },   // Rechts expandieren
+    { dix: -1, diy: 0 },  // Links expandieren
+    { dix: 0, diy: 1 },   // Oben expandieren
+    { dix: 0, diy: -1 },  // Unten expandieren
   ];
 
   while (queue.length > 0) {
-    const { x, y } = queue.shift();
-    const key = toKey(x, y);
+    const { ix, iy } = queue.shift();
+    const key = toKey(ix, iy);
     if (visited.has(key)) continue;
     visited.add(key);
 
+    // Compute position deterministically from indices (avoids FP drift)
+    const x = center.x + ix * rasterWidth;
+    const y = center.y + iy * rasterHeight;
+
     // Wenn das Raster innerhalb des Ovals liegt, füge es hinzu
     if (isInsideOval(x, y)) {
-        const ix = Math.round((x - center.x) / rasterWidth);
-        const iy = Math.round((y - center.y) / rasterHeight);
       rasters.push({ x: x, y: y, iX: ix, iY: iy });
 
       // Expansion in alle vier Richtungen
-      for (const { dx, dy } of directions) {
-        const nextX = x + dx;
-        const nextY = y + dy;
-        const nextKey = toKey(nextX, nextY);
-        if (!visited.has(nextKey)) {
-          queue.push({ x: nextX, y: nextY });
+      for (const { dix, diy } of directions) {
+        const nix = ix + dix;
+        const niy = iy + diy;
+        const nkey = toKey(nix, niy);
+        if (!visited.has(nkey)) {
+          queue.push({ ix: nix, iy: niy });
         }
       }
     }

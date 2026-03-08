@@ -794,7 +794,7 @@ class CameraHIK:
     def setPropertyValue(self, property_name, property_value):
         if property_name == "gain":
             self.set_gain(property_value)
-        elif property_name == "exposure":
+        elif property_name == "exposure" or property_name == "exposureTime":
             self.set_exposure_time(property_value)
         elif property_name == "exposure_mode":
             self.set_exposure_mode(property_value)

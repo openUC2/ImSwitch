@@ -1003,6 +1003,11 @@ class LightsheetController(ImConWidgetController):
 
                 time.sleep(0.01)  # Small delay to prevent CPU overload
 
+            # Turn off all illumination 
+            for iIllu in self._master.lasersManager.getAllDeviceNames():
+                laser = self._master.lasersManager[iIllu]
+                laser.setValue(0)
+
             # Move back
             self.stages.move(value=mCurrentZPosition, axis=params.axis, is_absolute=True, is_blocking=False)
 
@@ -1084,11 +1089,6 @@ class LightsheetController(ImConWidgetController):
             # Update preview stack
             if len(last_frames_preview) > 0:
                 self.lightsheetStack = np.array(last_frames_preview)
-
-            # Turn off all illumination 
-            for iIllu in self._master.lasersManager.getAllDeviceNames():
-                laser = self._master.lasersManager[iIllu]
-                laser.setValue(0)
 
         except Exception as e:
             self._logger.error(f"Error in continuous scan: {e}")

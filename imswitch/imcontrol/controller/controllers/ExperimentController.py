@@ -151,6 +151,7 @@ class ParameterValue(BaseModel):
     ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
     ome_write_individual_tiffs: bool = Field(False, description="Whether to write individual TIFF files per frame")
+    keepIlluminationOn: str = Field("auto", description="Illumination mode: 'auto' (single channel stays on), 'on' (always on), 'off' (per-frame toggle)")
 
 class FocusMapConfig(BaseModel):
     """Configuration for optional focus mapping (Z surface estimation over XY)."""
@@ -760,6 +761,20 @@ class ExperimentController(ImConWidgetController):
         if not any(illuminationIntensities):
             return HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
 
+        # Resolve keepIlluminationOn mode:
+        #  "auto" → True when exactly 1 active channel, False otherwise
+        #  "on"   → True always
+        #  "off"  → False always
+        keepIlluminationOnSetting = getattr(p, 'keepIlluminationOn', 'auto')
+        nActiveChannels = sum(1 for v in illuminationIntensities if v > 0)
+        if keepIlluminationOnSetting == "auto":
+            keepIlluminationOn = (nActiveChannels == 1)
+        elif keepIlluminationOnSetting == "on":
+            keepIlluminationOn = True
+        else:
+            keepIlluminationOn = False
+        self.__logger.info(f"Illumination mode: setting={keepIlluminationOnSetting}, activeChannels={nActiveChannels}, keepOn={keepIlluminationOn}")
+
         # check if we want to use performance mode
         self.ExperimentParams.performanceMode = p.performanceMode
         performanceMode = p.performanceMode
@@ -942,6 +957,7 @@ class ExperimentController(ImConWidgetController):
                     isRGB=self.mDetector._isRGB,
                     t_pre_s=p.performanceTPreMs / 1000.0,  # Convert ms to seconds
                     t_post_s=p.performanceTPostMs / 1000.0,  # Convert ms to seconds
+                    keep_illumination_on=keepIlluminationOn,
                 )
 
                 # Append workflow steps and file writers to the accumulated lists

@@ -74,6 +74,8 @@ class ExperimentNormalMode(ExperimentModeBase):
         t_post_s = kwargs.get('t_post_s', 0.05)  # Post-exposure time in seconds
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
+        # Illumination mode: keep illumination on for entire acquisition?
+        keep_illumination_on = kwargs.get('keep_illumination_on', False)
 
         # Initialize workflow components
         workflow_steps = []
@@ -99,6 +101,22 @@ class ExperimentNormalMode(ExperimentModeBase):
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
         writer_offset = t * len(snake_tiles) if not is_single_tiff_mode else 0
 
+        # If keep_illumination_on, turn on all active illumination sources once
+        # at the beginning instead of toggling per frame.
+        if keep_illumination_on:
+            for illu_index, illu_source in enumerate(illumination_sources):
+                illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
+                if illu_intensity > 0:
+                    workflow_steps.append(WorkflowStep(
+                        name=f"Turn on illumination (continuous): {illu_source}",
+                        step_id=step_id,
+                        main_func=self.controller.set_laser_power,
+                        main_params={"power": illu_intensity, "channel": illu_source},
+                        post_funcs=[self.controller.wait_time],
+                        post_params={"seconds": t_pre_s},
+                    ))
+                    step_id += 1
+
         # Create workflow steps for each tile
         for position_center_index, tiles in enumerate(snake_tiles):
             step_id = self._create_tile_workflow_steps(
@@ -108,14 +126,16 @@ class ExperimentNormalMode(ExperimentModeBase):
                 autofocus_max, autofocus_step_size, autofocus_illumination_channel,
                 autofocus_mode, autofocus_max_attempts, autofocus_target_focus_setpoint, n_times,
                 t_pre_s=t_pre_s, t_post_s=t_post_s,
-                writer_offset=writer_offset
+                writer_offset=writer_offset,
+                keep_illumination_on=keep_illumination_on,
             )
 
         # Add finalization steps
         step_id = self._add_finalization_steps(
             workflow_steps, step_id, snake_tiles, illumination_sources,
             illumination_intensities, t_period, t, n_times,
-            writer_offset=writer_offset
+            writer_offset=writer_offset,
+            keep_illumination_on=keep_illumination_on,
         )
 
         # Add step to set LED status to idle when done
@@ -346,7 +366,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   n_times: int,
                                   t_pre_s: float = 0.09,
                                   t_post_s: float = 0.05,
-                                  writer_offset: int = 0) -> int:
+                                  writer_offset: int = 0,
+                                  keep_illumination_on: bool = False) -> int:
         """
         Create workflow steps for a single tile.
         
@@ -378,26 +399,6 @@ class ExperimentNormalMode(ExperimentModeBase):
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
 
-        # Turn on illumination once at the beginning if only one source
-        active_sources_count = sum(np.array(illumination_intensities) > 0)
-        is_first_tile = (position_center_index == 0)
-
-        '''
-        if active_sources_count == 1 and is_first_tile:
-            for illu_index, illu_source in enumerate(illumination_sources):
-                illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
-                if illu_intensity > 0:
-                    workflow_steps.append(WorkflowStep(
-                        name="Turn on single illumination source for entire scan",
-                        step_id=step_id,
-                        main_func=self.controller.set_laser_power,
-                        main_params={"power": illu_intensity, "channel": illu_source},
-                        post_funcs=[self.controller.wait_time],
-                        post_params={"seconds": 0.05},
-                    ))
-                    step_id += 1
-                    break  # Only one active source
-        '''
         # Iterate over positions in the tile
         for m_index, m_point in enumerate(tiles):
             try:
@@ -538,15 +539,17 @@ class ExperimentNormalMode(ExperimentModeBase):
                             step_id += 1
 
                     # Turn on illumination - use tPre as settle time after activation
-                    workflow_steps.append(WorkflowStep(
-                        name="Turn on illumination",
-                        step_id=step_id,
-                        main_func=self.controller.set_laser_power,
-                        main_params={"power": illu_intensity, "channel": illu_source},
-                        post_funcs=[self.controller.wait_time],
-                        post_params={"seconds": t_pre_s},
-                    ))
-                    step_id += 1
+                    # Skip per-frame toggle when keep_illumination_on; light is already on.
+                    if not keep_illumination_on:
+                        workflow_steps.append(WorkflowStep(
+                            name="Turn on illumination",
+                            step_id=step_id,
+                            main_func=self.controller.set_laser_power,
+                            main_params={"power": illu_intensity, "channel": illu_source},
+                            post_funcs=[self.controller.wait_time],
+                            post_params={"seconds": t_pre_s},
+                        ))
+                        step_id += 1
 
                     # Acquire frame
                     exposure_time = exposures[illu_index] if illu_index < len(exposures) else exposures[0]
@@ -589,13 +592,15 @@ class ExperimentNormalMode(ExperimentModeBase):
                     step_id += 1
 
                     # Turn off illumination only if multiple sources (for switching between them)
-                    workflow_steps.append(WorkflowStep(
-                        name="Turn off illumination",
-                        step_id=step_id,
-                        main_func=self.controller.set_laser_power,
-                        main_params={"power": 0, "channel": illu_source},
-                    ))
-                    step_id += 1
+                    # Skip per-frame toggle when keep_illumination_on; finalization handles it.
+                    if not keep_illumination_on:
+                        workflow_steps.append(WorkflowStep(
+                            name="Turn off illumination",
+                            step_id=step_id,
+                            main_func=self.controller.set_laser_power,
+                            main_params={"power": 0, "channel": illu_source},
+                        ))
+                        step_id += 1
 
             # After a Z-stack, return to base_z so the next tile starts from a
             # known Z reference (important for timelapse repeatability).
@@ -640,7 +645,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                               illumination_intensities: List[float],
                               t_period: float,
                               t: int, n_times: int,
-                              writer_offset: int = 0) -> int:
+                              writer_offset: int = 0,
+                              keep_illumination_on: bool = False) -> int:
         """
         Add finalization workflow steps.
         
@@ -672,19 +678,23 @@ class ExperimentNormalMode(ExperimentModeBase):
             ))
             step_id += 1
 
-        # Turn off all illuminations
-        for illu_index, illu_source in enumerate(illumination_sources):
-            illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
-            if illu_intensity <= 0:
-                continue
+        # Turn off all illuminations.
+        # When keep_illumination_on is active, only turn off on the very last
+        # timepoint so the light stays on between timepoints for speed.
+        should_turn_off = (not keep_illumination_on) or is_last_timepoint
+        if should_turn_off:
+            for illu_index, illu_source in enumerate(illumination_sources):
+                illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
+                if illu_intensity <= 0:
+                    continue
 
-            workflow_steps.append(WorkflowStep(
-                name="Turn off illumination",
-                step_id=step_id,
-                main_func=self.controller.set_laser_power,
-                main_params={"power": 0, "channel": illu_source},
-            ))
-            step_id += 1
+                workflow_steps.append(WorkflowStep(
+                    name="Turn off illumination",
+                    step_id=step_id,
+                    main_func=self.controller.set_laser_power,
+                    main_params={"power": 0, "channel": illu_source},
+                ))
+                step_id += 1
 
         # Add timing calculation for proper period control (for all timepoints except implicit last)
         if n_times > 1:

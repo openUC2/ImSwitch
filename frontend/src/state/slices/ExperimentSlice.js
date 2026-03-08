@@ -84,6 +84,8 @@ const initialExperimentState = {
     overlapHeight: 0.0,  // 0.0 = no overlap (100% spacing), 0.1 = 10% overlap (90% spacing)
     // Snakescan pattern for tiling
     is_snakescan: false,  // Enable snakescan pattern (alternating row directions)
+    // Illumination mode
+    keepIlluminationOn: "auto",  // "auto" = on for single channel, off for multi | "on" = always keep on | "off" = per-frame toggle
   },
 };
 
@@ -277,6 +279,10 @@ const experimentSlice = createSlice({
       console.log("setIsSnakescan", action.payload);
       state.parameterValue.is_snakescan = action.payload;
     },
+    setKeepIlluminationOn: (state, action) => {
+      console.log("setKeepIlluminationOn", action.payload);
+      state.parameterValue.keepIlluminationOn = action.payload;
+    },
     //------------------------ points
     createPoint: (state, action) => {
       console.log("createPoint", action);
@@ -388,6 +394,7 @@ export const {
   setOverlapWidth,
   setOverlapHeight,
   setIsSnakescan,
+  setKeepIlluminationOn,
   createPoint,
   addPoint,
   removePoint,

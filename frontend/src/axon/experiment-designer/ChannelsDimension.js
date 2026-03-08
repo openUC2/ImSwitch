@@ -602,11 +602,40 @@ const ChannelsDimension = () => {
           <Typography variant="body2">Advanced Settings</Typography>
         </AccordionSummary>
         <AccordionDetails>
+          {/* Keep Illumination On mode */}
+          <Box sx={{ mb: 2 }}>
+            <Box sx={{ display: "flex", alignItems: "center", mb: 0.5 }}>
+              <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                Illumination Mode
+              </Typography>
+              <Tooltip
+                title={
+                  "Controls when illumination is toggled during acquisition:\n" +
+                  "• Auto – keeps illumination on for the entire scan when only one channel is active; toggles per-frame when multiple channels are used.\n" +
+                  "• Always On – illumination stays on from start to finish (faster, but may cause bleaching with multiple channels).\n" +
+                  "• Per-Frame – illumination is turned on/off around every single frame (safest for multi-channel, slowest)."
+                }
+                arrow
+              >
+                <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+              </Tooltip>
+            </Box>
+            <FormControl size="small" fullWidth>
+              <Select
+                value={parameterValue.keepIlluminationOn || "auto"}
+                onChange={(e) => dispatch(experimentSlice.setKeepIlluminationOn(e.target.value))}
+              >
+                <MenuItem value="auto">Auto (single channel → on, multi → per-frame)</MenuItem>
+                <MenuItem value="on">Always On</MenuItem>
+                <MenuItem value="off">Per-Frame Toggle</MenuItem>
+              </Select>
+            </FormControl>
+          </Box>
+
           <Typography variant="caption" color="textSecondary">
             Advanced camera and illumination parameters will be shown here.
             These settings are typically configured once and rarely changed.
           </Typography>
-          {/* Placeholder for advanced settings */}
         </AccordionDetails>
       </Accordion>
     </Box>

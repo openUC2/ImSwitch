@@ -1021,12 +1021,14 @@ class ExperimentController(ImConWidgetController):
         # but this is asynchronous – we need to wait briefly so the detector
         # registers the change before the next frame is captured.
         changed = False
-        if gain and gain >= 0:
+        if gain is not None and gain >= 0:
             self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "gain"], gain)
+            self._master.getController('Settings').setDetectorGain(None, gain)  # Ensure SettingsController is updated, TODO: we have to pass the correct detectorname in the future
             self._logger.debug(f"Setting gain to {gain}")
             changed = True
-        if exposure_time and exposure_time > 0:
+        if exposure_time is not None and exposure_time > 0:
             self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "exposureTime"], exposure_time)
+            self._master.getController('Settings').setDetectorExposureTime(None, exposure_time)  # Ensure SettingsController is updated, TODO: we have to pass the correct detectorname in the future
             self._logger.debug(f"Setting exposure time to {exposure_time}")
             changed = True
 
@@ -1503,7 +1505,7 @@ class ExperimentController(ImConWidgetController):
         try:
             if hasattr(self, "_initial_experiment_position") and self._initial_experiment_position:
                 pos = self._initial_experiment_position
-                self.__logger.info(
+                self._logger.info(
                     "Returning to initial position: X=%.2f, Y=%.2f, Z=%.2f",
                     pos["X"], pos["Y"], pos["Z"],
                 )
@@ -1511,9 +1513,9 @@ class ExperimentController(ImConWidgetController):
                 self.move_stage_z(pos["Z"], relative=False)
                 self._initial_experiment_position = None
             else:
-                self.__logger.debug("No initial experiment position stored, skipping return.")
+                self._logger.debug("No initial experiment position stored, skipping return.")
         except Exception as e:
-            self.__logger.warning("Failed to return to initial position: %s", e)
+            self._logger.warning("Failed to return to initial position: %s", e)
 
     @APIExport()
     def pauseWorkflow(self):
@@ -1577,7 +1579,7 @@ class ExperimentController(ImConWidgetController):
         try:
             if hasattr(self, "_initial_experiment_position") and self._initial_experiment_position:
                 pos = self._initial_experiment_position
-                self.__logger.info(
+                self._logger.info(
                     "Returning to initial position: X=%.2f, Y=%.2f, Z=%.2f",
                     pos["X"], pos["Y"], pos["Z"],
                 )
@@ -1585,7 +1587,7 @@ class ExperimentController(ImConWidgetController):
                 self.move_stage_z(pos["Z"], relative=False)
                 self._initial_experiment_position = None
         except Exception as e:
-            self.__logger.warning("Failed to return to initial position: %s", e)
+            self._logger.warning("Failed to return to initial position: %s", e)
 
         # Set LED status to idle
         self.set_led_status("idle")

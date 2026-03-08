@@ -27,7 +27,6 @@ if not IS_HEADLESS:
     from .LEDWidget import LEDWidget
     from .PositionerWidget import PositionerWidget
     from .StandaPositionerWidget import StandaPositionerWidget
-    from .StandaStageWidget import StandaStageWidget
     from .RecordingWidget import RecordingWidget
     from .SLMWidget import SLMWidget
     from .ScanWidgetBase import ScanWidgetBase

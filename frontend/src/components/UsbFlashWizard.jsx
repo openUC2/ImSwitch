@@ -870,6 +870,19 @@ const UsbFlashWizard = ({ open, onClose }) => {
           </List>
         </Paper>
       )}
+
+      {/* Start Over button to flash another device */}
+      <Box sx={{ mt: 3 }}>
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={handleStartOver}
+          startIcon={<RefreshIcon />}
+          size="large"
+        >
+          Flash Another Device
+        </Button>
+      </Box>
     </Box>
   );
 

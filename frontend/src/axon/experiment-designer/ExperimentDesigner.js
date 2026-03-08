@@ -100,6 +100,22 @@ const ExperimentDesigner = () => {
     return () => clearInterval(intervalId);
   }, [dispatch]);
 
+  // Warn the user before leaving/refreshing the page while an experiment is running
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (
+        experimentStatus.status === Status.RUNNING ||
+        experimentStatus.status === Status.PAUSED
+      ) {
+        e.preventDefault();
+        // Legacy browsers need returnValue to be set
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [experimentStatus.status]);
+
   // Update cached progress values
   useEffect(() => {
     if (experimentWorkflow.totalSteps !== undefined) {

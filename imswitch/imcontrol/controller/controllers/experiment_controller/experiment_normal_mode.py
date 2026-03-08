@@ -698,4 +698,14 @@ class ExperimentNormalMode(ExperimentModeBase):
             ))
             step_id += 1
 
+        # On the very last timepoint, return the stage to the initial XYZ position
+        if is_last_timepoint:
+            workflow_steps.append(WorkflowStep(
+                name="Return to initial XYZ position",
+                step_id=step_id,
+                main_func=self.controller.return_to_initial_position,
+                main_params={},
+            ))
+            step_id += 1
+
         return step_id

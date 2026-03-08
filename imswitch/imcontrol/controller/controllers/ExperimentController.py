@@ -902,6 +902,14 @@ class ExperimentController(ImConWidgetController):
             # Get the initial Z position at the start of each timepoint
             initial_z_position = self.mStage.getPosition()["Z"]
 
+            # Store the complete initial XYZ position for return-to-start
+            initial_position = self.mStage.getPosition()
+            self._initial_experiment_position = {
+                "X": initial_position.get("X", 0),
+                "Y": initial_position.get("Y", 0),
+                "Z": initial_z_position,
+            }
+
             for t in range(nTimes):
                 experiment_params = {
                     'mExperiment': mExperiment,
@@ -1008,12 +1016,32 @@ class ExperimentController(ImConWidgetController):
         return mFrame
 
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
-        if gain and gain >=0:
-            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "gain"], gain)  # [category, detectorname, ROI1, ROI2] attribute, value
+        # Set gain and exposure via the shared attribute signal.
+        # The signal triggers the detector driver to apply the new values,
+        # but this is asynchronous – we need to wait briefly so the detector
+        # registers the change before the next frame is captured.
+        changed = False
+        if gain and gain >= 0:
+            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "gain"], gain)
             self._logger.debug(f"Setting gain to {gain}")
-        if exposure_time and exposure_time >0:
-            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "exposureTime"],exposure_time) # category, detectorname, attribute, value
+            changed = True
+        if exposure_time and exposure_time > 0:
+            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "exposureTime"], exposure_time)
             self._logger.debug(f"Setting exposure time to {exposure_time}")
+            changed = True
+
+        # Give the detector enough time to apply the new register values.
+        # Most camera drivers need at least one frame period to latch new settings.
+        if changed:
+            # Wait proportional to exposure time so slow exposures have enough
+            # settle time, but cap at a reasonable maximum.
+            settle_time = min(max(0.05, (exposure_time or 50) / 1000.0), 0.5)
+            time.sleep(settle_time)
+            # Discard one stale frame that was captured with old settings
+            try:
+                self.mDetector.getLatestFrame(returnFrameNumber=False)
+            except Exception:
+                pass
 
     def dummy_main_func(self):
         self._logger.debug("Dummy main function called")
@@ -1470,6 +1498,22 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error setting detector parameter {parameter} to {value}: {e}")
 
+    def return_to_initial_position(self):
+        """Return the stage to the position stored at experiment start."""
+        try:
+            if hasattr(self, "_initial_experiment_position") and self._initial_experiment_position:
+                pos = self._initial_experiment_position
+                self.__logger.info(
+                    "Returning to initial position: X=%.2f, Y=%.2f, Z=%.2f",
+                    pos["X"], pos["Y"], pos["Z"],
+                )
+                self.move_stage_xy(pos["X"], pos["Y"], relative=False)
+                self.move_stage_z(pos["Z"], relative=False)
+                self._initial_experiment_position = None
+            else:
+                self.__logger.debug("No initial experiment position stored, skipping return.")
+        except Exception as e:
+            self.__logger.warning("Failed to return to initial position: %s", e)
 
     @APIExport()
     def pauseWorkflow(self):
@@ -1528,6 +1572,20 @@ class ExperimentController(ImConWidgetController):
         # Stop performance mode if running
         if performance_status["running"]:
             results["performance"] = self.performance_mode.stop_scan()
+
+        # Return to initial XYZ position if stored
+        try:
+            if hasattr(self, "_initial_experiment_position") and self._initial_experiment_position:
+                pos = self._initial_experiment_position
+                self.__logger.info(
+                    "Returning to initial position: X=%.2f, Y=%.2f, Z=%.2f",
+                    pos["X"], pos["Y"], pos["Z"],
+                )
+                self.move_stage_xy(pos["X"], pos["Y"], relative=False)
+                self.move_stage_z(pos["Z"], relative=False)
+                self._initial_experiment_position = None
+        except Exception as e:
+            self.__logger.warning("Failed to return to initial position: %s", e)
 
         # Set LED status to idle
         self.set_led_status("idle")

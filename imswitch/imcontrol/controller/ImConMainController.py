@@ -82,6 +82,13 @@ class ImConMainController(MainController):
                     "ArkitektManager unavailable; skipping ArkitektController."
                 )
                 continue
+            if widgetKey == "SiLA2" and not hasattr(
+                self.__masterController, "sila2Manager"
+            ):
+                self.__logger.warning(
+                    "SiLA2Manager unavailable; skipping SiLA2Controller."
+                )
+                continue
 
             controller_class = None
             # Try to get controller from controllers module (static import)

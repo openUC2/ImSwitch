@@ -342,13 +342,8 @@ class JPEGStreamWorker(StreamWorker):
             if frame is None:
                 self._logger.warning("Received None frame, skipping")
                 return None  # Not an error, but skip processing
-            if frame.dtype != np.uint8:
-                vmin = float(np.min(frame))
-                vmax = float(np.max(frame))
-                if vmax > vmin:
-                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
-                else:
-                    frame = np.zeros_like(frame, dtype=np.uint8)
+            if frame.dtype == np.uint16: # convert to uint8 if needed also for its dynamic range 
+                frame = (frame / 16).astype(np.uint8)   
 
             # Apply center crop if specified (before subsampling)
             if self._params.crop_size > 0:
@@ -357,6 +352,10 @@ class JPEGStreamWorker(StreamWorker):
             # Apply subsampling if needed
             if self._params.subsampling_factor > 1:
                 frame = frame[::self._params.subsampling_factor, ::self._params.subsampling_factor]
+
+            # Convert RGB → BGR for JPEG encoding (OpenCV expects BGR)
+            if len(frame.shape) == 3 and frame.shape[2] == 3:
+                frame = self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
 
             # Encode as JPEG
             encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]
@@ -438,6 +437,10 @@ class MJPEGStreamWorker(StreamWorker):
             # Apply center crop if specified (before encoding)
             if self._params.crop_size > 0:
                 frame = apply_center_crop(frame, self._params.crop_size)
+
+            # Convert RGB → BGR for JPEG encoding (OpenCV expects BGR)
+            if len(frame.shape) == 3 and frame.shape[2] == 3: # TODO: Is this correct for all RGB cameras? 
+                frame = self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
 
             # Encode as JPEG
             encode_params = [self._cv2.IMWRITE_JPEG_QUALITY, self._params.jpeg_quality]

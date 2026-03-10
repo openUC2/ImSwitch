@@ -173,7 +173,17 @@ class FocusMap:
         for y in ys:
             for x in xs:
                 grid.append((float(x), float(y)))
-        return grid
+
+        # Deduplicate grid points (handles degenerate single-FOV bounds where
+        # e.g. minX == maxX produces identical columns in the grid)
+        seen = set()
+        unique_grid = []
+        for p in grid:
+            key = (round(p[0], 3), round(p[1], 3))
+            if key not in seen:
+                seen.add(key)
+                unique_grid.append(p)
+        return unique_grid
 
     # ------------------------------------------------------------------
     # Point management

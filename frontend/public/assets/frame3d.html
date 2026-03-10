@@ -1,0 +1,231 @@
+<!-- index.html
+Put this file next to: FRAME_reduced-compressed.glb
+
+Run:
+  python -m http.server 8080
+Open:
+  http://localhost:8080
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>FRAME GLB sliders</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
+      #hint {
+        position: fixed; left: 10px; bottom: 10px;
+        color: #bbb; font: 12px/1.4 system-ui, sans-serif;
+        background: rgba(0,0,0,0.35); padding: 8px 10px; border-radius: 8px;
+      }
+    </style>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.176.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.176.0/examples/jsm/",
+          "lil-gui": "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.min.js"
+        }
+      }
+    </script>
+  </head>
+
+  <body>
+    <div id="hint">
+      Orbit: left mouse | Pan: right mouse | Zoom: wheel<br/>
+      Opens console with discovered node names
+    </div>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+      import GUI from "lil-gui";
+
+      // ---------- scene ----------
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x111111);
+
+      const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100000);
+      camera.position.set(250, 160, 250);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+      const key = new THREE.DirectionalLight(0xffffff, 1.2);
+      key.position.set(2, 3, 4);
+      scene.add(key);
+
+      scene.add(new THREE.AxesHelper(50));
+
+      const assemblyRoot = new THREE.Group();
+      scene.add(assemblyRoot);
+
+      // ---------- subgroups (you move these) ----------
+      const groups = {
+        base: new THREE.Group(),
+        stageXY: new THREE.Group(),
+        turretY: new THREE.Group()
+      };
+      Object.values(groups).forEach(g => assemblyRoot.add(g));
+
+      // ---------- helpers ----------
+      function extractIndex(name) {
+        // Matches: "Group 12", "Empty_56", "empty_56", "Empty 56", etc.
+        const m = (name || "").match(/(\d+)\s*$/);
+        return m ? parseInt(m[1], 10) : null;
+      }
+
+      function collectByIndexRange(root, minIdx, maxIdx) {
+        const hits = [];
+        root.traverse(obj => {
+          const idx = extractIndex(obj.name);
+          if (idx == null) return;
+          if (idx >= minIdx && idx <= maxIdx) hits.push(obj);
+        });
+        return hits;
+      }
+
+      function filterTopMost(objects) {
+        const set = new Set(objects);
+        return objects.filter(o => {
+          let p = o.parent;
+          while (p) {
+            if (set.has(p)) return false;
+            p = p.parent;
+          }
+          return true;
+        });
+      }
+
+      function attachAllPreserveWorld(targetGroup, objects) {
+        const top = filterTopMost(objects);
+        top.forEach(obj => targetGroup.attach(obj));
+        return top.length;
+      }
+
+      function addSliders(gui, label, group, opts = {}) {
+        const range = opts.range ?? 80;
+        const step = opts.step ?? 0.1;
+
+        const basePos = group.position.clone();
+        const state = { x: 0, y: 0, z: 0 };
+
+        const folder = gui.addFolder(label);
+
+        const apply = () => {
+          group.position.set(basePos.x + state.x, basePos.y + state.y, basePos.z + state.z);
+        };
+
+        if (opts.x !== false) folder.add(state, "x", -range, range, step).onChange(apply);
+        if (opts.y !== false) folder.add(state, "y", -range, range, step).onChange(apply);
+        if (opts.z !== false) folder.add(state, "z", -range, range, step).onChange(apply);
+
+        folder.add({
+          reset: () => {
+            state.x = 0; state.y = 0; state.z = 0;
+            apply();
+            folder.controllersRecursive().forEach(c => c.updateDisplay());
+          }
+        }, "reset");
+
+        folder.open();
+      }
+
+      // ---------- load GLB ----------
+      const glbUrl = "./FRAME_reduced-compressed.glb";
+      const loader = new GLTFLoader();
+
+      loader.load(
+        glbUrl,
+        (gltf) => {
+          const model = gltf.scene;
+          assemblyRoot.add(model);
+
+          // Debug: list all names that have a numeric suffix (so you can verify grouping)
+          const numericNames = [];
+          model.traverse(o => {
+            const idx = extractIndex(o.name);
+            if (idx != null) numericNames.push({ name: o.name, idx, type: o.type });
+          });
+          numericNames.sort((a, b) => a.idx - b.idx);
+          console.log("[FRAME] numeric-suffix nodes (sorted):", numericNames);
+
+          // Your grouping logic:
+          // base: 1..50
+          // stage: 51..55
+          // turret: 56..63
+          const baseNodes   = collectByIndexRange(model, 1, 50);
+          const stageNodes  = collectByIndexRange(model, 51, 55);
+          const turretNodes = collectByIndexRange(model, 56, 63);
+
+          const nBase   = attachAllPreserveWorld(groups.base, baseNodes);
+          const nStage  = attachAllPreserveWorld(groups.stageXY, stageNodes);
+          const nTurret = attachAllPreserveWorld(groups.turretY, turretNodes);
+
+          console.log(`[FRAME] attached to base: ${nBase}`);
+          console.log(`[FRAME] attached to stageXY: ${nStage}`);
+          console.log(`[FRAME] attached to turretY: ${nTurret}`);
+
+          // Camera fit
+          const box = new THREE.Box3().setFromObject(assemblyRoot);
+          const size = box.getSize(new THREE.Vector3());
+          const center = box.getCenter(new THREE.Vector3());
+
+          controls.target.copy(center);
+
+          const maxDim = Math.max(size.x, size.y, size.z);
+          camera.near = Math.max(0.1, maxDim / 1000);
+          camera.far = maxDim * 50;
+          camera.position.copy(center).add(new THREE.Vector3(maxDim * 1.2, maxDim * 0.6, maxDim * 1.2));
+          camera.updateProjectionMatrix();
+          controls.update();
+
+          // UI
+          const gui = new GUI({ title: "FRAME transforms (model units)" });
+
+          // Base normally fixed; keep sliders off by default but still useful for debugging.
+          addSliders(gui, "Base (1..50)", groups.base, { range: 80, step: 0.1 });
+
+          // XY stage: move in X/Y only
+          addSliders(gui, "XY Stage (51..55) [X,Y]", groups.stageXY, { range: 80, step: 0.1 });
+
+          // Turret: move in Y only
+          addSliders(gui, "Objective turret (56..63) [X]", groups.turretY, { range: 80, step: 0.1, y: false, z: false });
+
+          // Visibility toggles
+          const vis = { base: true, stage: true, turret: true };
+          const f = gui.addFolder("Visibility");
+          f.add(vis, "base").name("Base").onChange(v => groups.base.visible = v);
+          f.add(vis, "stage").name("XY stage").onChange(v => groups.stageXY.visible = v);
+          f.add(vis, "turret").name("Turret").onChange(v => groups.turretY.visible = v);
+          f.open();
+        },
+        undefined,
+        (err) => console.error("Failed to load GLB:", err)
+      );
+
+      // ---------- loop ----------
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    </script>
+  </body>
+</html>

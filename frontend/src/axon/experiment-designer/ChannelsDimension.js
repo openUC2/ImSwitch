@@ -65,6 +65,16 @@ const ChannelBlock = ({
 }) => {
   const theme = useTheme();
 
+  // Local string state for exposure so the user can type partial values
+  // (e.g. "100." or clear the field) without it snapping to 0.
+  const [exposureRaw, setExposureRaw] = useState(String(exposure ?? 100));
+  useEffect(() => { setExposureRaw(String(exposure)); }, [exposure]);
+  const commitExposure = () => {
+    const v = parseFloat(exposureRaw);
+    if (!isNaN(v) && v >= 0) onExposureChange(v);
+    else setExposureRaw(String(exposure));
+  };
+
   return (
     <Box
       sx={{
@@ -205,16 +215,21 @@ const ChannelBlock = ({
                 </Tooltip>
               </Box>
               <FormControl size="small" fullWidth>
-                <Select
-                  value={exposure}
-                  onChange={(e) => onExposureChange(e.target.value)}
-                >
-                  {[0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000].map((val) => (
-                    <MenuItem key={val} value={val}>
-                      {val} ms
-                    </MenuItem>
-                  ))}
-                </Select>
+                <TextField
+                  type="number"
+                  size="small"
+                  value={exposureRaw}
+                  onChange={(e) => {
+                    setExposureRaw(e.target.value);
+                    const v = parseFloat(e.target.value);
+                    if (!isNaN(v) && v >= 0) onExposureChange(v);
+                  }}
+                  onBlur={commitExposure}
+                  inputProps={{ min: 0, step: 0.1 }}
+                  InputProps={{
+                    endAdornment: <Typography variant="caption" sx={{ ml: 0.5, whiteSpace: 'nowrap' }}>ms</Typography>,
+                  }}
+                />
               </FormControl>
             </Box>
 
@@ -317,8 +332,8 @@ const ChannelsDimension = () => {
       const initIntensities = illuSources.map((_, idx) => intensities[idx] ?? 0);
       const initExposures = illuSources.map((_, idx) => exposures[idx] ?? 100);
       const initGains = illuSources.map((_, idx) => gains[idx] ?? 0);
-      // Default: all channels included in experiment
-      const initChannelEnabled = illuSources.map((_, idx) => channelEnabledForExperiment[idx] ?? true);
+      // Default: all channels excluded from experiment (user must explicitly enable)
+      const initChannelEnabled = illuSources.map((_, idx) => channelEnabledForExperiment[idx] ?? false);
 
       if (JSON.stringify(intensities) !== JSON.stringify(initIntensities)) {
         dispatch(experimentSlice.setIlluminationIntensities(initIntensities));
@@ -336,15 +351,18 @@ const ChannelsDimension = () => {
     }
   }, [illuSources]);
 
-  // Update summary when channels change
+  // Update summary when channels change – count only enabled channels
   useEffect(() => {
-    const channelCount = illuSources.length;
+    const enabledCount = (channelEnabledForExperiment || []).filter(Boolean).length;
+    const totalCount = illuSources.length;
     const summary =
-      channelCount === 0
+      totalCount === 0
         ? "No channels available"
-        : channelCount === 1
-        ? "1 channel"
-        : `${channelCount} channels`;
+        : enabledCount === 0
+        ? `0/${totalCount} channels`
+        : enabledCount === 1
+        ? `1/${totalCount} channel`
+        : `${enabledCount}/${totalCount} channels`;
 
     dispatch(
       experimentUISlice.setDimensionSummary({
@@ -355,10 +373,10 @@ const ChannelsDimension = () => {
     dispatch(
       experimentUISlice.setDimensionConfigured({
         dimension: DIMENSIONS.CHANNELS,
-        configured: channelCount > 0,
+        configured: enabledCount > 0,
       })
     );
-  }, [illuSources, dispatch]);
+  }, [illuSources, channelEnabledForExperiment, dispatch]);
 
   // Debounced laser intensity update (copied from IlluminationController)
   const debouncedSetLaserValue = useCallback((laserName, index, val) => {
@@ -584,11 +602,40 @@ const ChannelsDimension = () => {
           <Typography variant="body2">Advanced Settings</Typography>
         </AccordionSummary>
         <AccordionDetails>
+          {/* Keep Illumination On mode */}
+          <Box sx={{ mb: 2 }}>
+            <Box sx={{ display: "flex", alignItems: "center", mb: 0.5 }}>
+              <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                Illumination Mode
+              </Typography>
+              <Tooltip
+                title={
+                  "Controls when illumination is toggled during acquisition:\n" +
+                  "• Auto – keeps illumination on for the entire scan when only one channel is active; toggles per-frame when multiple channels are used.\n" +
+                  "• Always On – illumination stays on from start to finish (faster, but may cause bleaching with multiple channels).\n" +
+                  "• Per-Frame – illumination is turned on/off around every single frame (safest for multi-channel, slowest)."
+                }
+                arrow
+              >
+                <InfoOutlinedIcon sx={{ fontSize: 14, ml: 0.5, color: "text.disabled", cursor: "help" }} />
+              </Tooltip>
+            </Box>
+            <FormControl size="small" fullWidth>
+              <Select
+                value={parameterValue.keepIlluminationOn || "auto"}
+                onChange={(e) => dispatch(experimentSlice.setKeepIlluminationOn(e.target.value))}
+              >
+                <MenuItem value="auto">Auto (single channel → on, multi → per-frame)</MenuItem>
+                <MenuItem value="on">Always On</MenuItem>
+                <MenuItem value="off">Per-Frame Toggle</MenuItem>
+              </Select>
+            </FormControl>
+          </Box>
+
           <Typography variant="caption" color="textSecondary">
             Advanced camera and illumination parameters will be shown here.
             These settings are typically configured once and rarely changed.
           </Typography>
-          {/* Placeholder for advanced settings */}
         </AccordionDetails>
       </Accordion>
     </Box>

@@ -30,6 +30,7 @@ import {
   Divider,
   IconButton,
   Tooltip,
+  Chip,
 } from "@mui/material";
 import {
   Refresh as RefreshIcon,
@@ -40,6 +41,8 @@ import {
   Memory as MemoryIcon,
   CloudDownload as DownloadIcon,
   Settings as SettingsIcon,
+  DeleteForever as EraseIcon,
+  Router as CanIcon,
 } from "@mui/icons-material";
 
 // Redux slice
@@ -51,14 +54,46 @@ import apiUC2ConfigControllerFlashMasterFirmwareUSB from "../backendapi/apiUC2Co
 import apiUC2ConfigControllerGetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerGetOTAFirmwareServer";
 import apiUC2ConfigControllerSetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerSetOTAFirmwareServer";
 import apiUC2ConfigControllerListAllFirmwareFiles from "../backendapi/apiUC2ConfigControllerListAllFirmwareFiles";
+import apiUC2ConfigControllerSendCanAddress from "../backendapi/apiUC2ConfigControllerSendCanAddress";
 
 const steps = [
   "Firmware Server",
   "Select Firmware",
-  "Port Selection",
+  "Port & Options",
   "Flash Device",
+  "CAN Address",
   "Complete",
 ];
+
+// VID:PID → device type hint and auto-chip mapping
+const VID_PID_HINTS = {
+  "10c4:ea60": { label: "UC2 CAN HAT", chip: "esp32", color: "primary" },
+  "303a:1001": { label: "UC2 XIAO (S3)", chip: "esp32s3", color: "secondary" },
+  "1a86:55d4": { label: "UC2 XIAO (CH9102)", chip: "esp32s3", color: "secondary" },
+  "303a:0002": { label: "ESP32-S2", chip: "esp32s2", color: "default" },
+};
+
+// Known CAN bus addresses
+const CAN_ADDRESS_OPTIONS = [
+  { value: null, label: "Skip (no CAN assignment)" },
+  { value: 1, label: "Master (1)" },
+  { value: 10, label: "A axis (10)" },
+  { value: 11, label: "X axis (11)" },
+  { value: 12, label: "Y axis (12)" },
+  { value: 13, label: "Z axis (13)" },
+  { value: 30, label: "LED (30)" },
+];
+
+/**
+ * Helper: get device type hint from VID:PID
+ */
+const getDeviceHint = (port) => {
+  if (port?.vid != null && port?.pid != null) {
+    const key = port.vid.toString(16).padStart(4, "0") + ":" + port.pid.toString(16).padStart(4, "0");
+    return VID_PID_HINTS[key] || null;
+  }
+  return null;
+};
 
 /**
  * USB Flash Wizard Component
@@ -158,6 +193,13 @@ const UsbFlashWizard = ({ open, onClose }) => {
       // Start flashing
       await startFlashing();
       return; // Don't auto-advance; signal-driven progress does it
+    } else if (step === 4) {
+      // CAN address step - send if configured
+      if (usbFlashState.canAddress != null) {
+        await sendCanAddress();
+        return; // Will advance on success
+      }
+      // If skipped, just advance
     }
 
     dispatch(usbFlashSlice.nextStep());
@@ -173,6 +215,35 @@ const UsbFlashWizard = ({ open, onClose }) => {
     onClose();
   };
 
+  // Start over from scratch (used in error recovery)
+  const handleStartOver = () => {
+    dispatch(usbFlashSlice.resetWizard());
+  };
+
+  // Auto-detect chip type when a port is selected
+  const handlePortSelect = (portDevice) => {
+    dispatch(usbFlashSlice.setSelectedPort(portDevice));
+    if (portDevice && portDevice !== "auto") {
+      const portObj = usbFlashState.availablePorts.find((p) => p.device === portDevice);
+      const hint = portObj ? getDeviceHint(portObj) : null;
+      if (hint) {
+        dispatch(usbFlashSlice.setChipType(hint.chip));
+        // For XIAO, auto-enable skip disconnect
+        if (hint.chip === "esp32s3" || hint.chip === "esp32s2") {
+          dispatch(usbFlashSlice.setSkipDisconnect(true));
+        } else {
+          dispatch(usbFlashSlice.setSkipDisconnect(false));
+        }
+      } else {
+        dispatch(usbFlashSlice.setChipType("auto"));
+        dispatch(usbFlashSlice.setSkipDisconnect(false));
+      }
+    } else {
+      dispatch(usbFlashSlice.setChipType("auto"));
+      dispatch(usbFlashSlice.setSkipDisconnect(false));
+    }
+  };
+
   // --- Flashing ---
   const startFlashing = async () => {
     try {
@@ -182,13 +253,16 @@ const UsbFlashWizard = ({ open, onClose }) => {
       dispatch(usbFlashSlice.setFlashMessage("Starting flash process..."));
       dispatch(usbFlashSlice.clearMessages());
 
-      // Call the flash API - real-time progress comes via sigUSBFlashStatusUpdate
+      // Call the flash API with all parameters
       const result = await apiUC2ConfigControllerFlashMasterFirmwareUSB(
         usbFlashState.selectedPort,
         usbFlashState.portMatch,
         usbFlashState.baudRate,
         usbFlashState.selectedFirmware?.filename || null,
-        usbFlashState.reconnectAfter
+        usbFlashState.reconnectAfter,
+        usbFlashState.chipType,
+        usbFlashState.eraseFlash,
+        usbFlashState.skipDisconnect
       );
 
       dispatch(usbFlashSlice.setFlashResult(result));
@@ -198,7 +272,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
         dispatch(usbFlashSlice.setFlashProgress(100));
         dispatch(usbFlashSlice.setFlashMessage("Firmware flashed successfully!"));
         dispatch(usbFlashSlice.setSuccessMessage("Firmware has been updated successfully"));
-        dispatch(usbFlashSlice.nextStep()); // Move to completion step
+        dispatch(usbFlashSlice.nextStep()); // Move to CAN address step
       } else if (result.status === "warning") {
         dispatch(usbFlashSlice.setFlashStatus("success"));
         dispatch(usbFlashSlice.setFlashProgress(100));
@@ -221,6 +295,39 @@ const UsbFlashWizard = ({ open, onClose }) => {
     }
   };
 
+  // --- CAN address assignment ---
+  const sendCanAddress = async () => {
+    try {
+      dispatch(usbFlashSlice.setIsFlashing(true));
+      dispatch(usbFlashSlice.setFlashMessage("Assigning CAN address..."));
+
+      const port = usbFlashState.selectedPort || usbFlashState.flashResult?.port;
+      if (!port) {
+        dispatch(usbFlashSlice.setError("No port available for CAN address assignment"));
+        dispatch(usbFlashSlice.setIsFlashing(false));
+        return;
+      }
+
+      const result = await apiUC2ConfigControllerSendCanAddress(
+        port,
+        usbFlashState.canAddress,
+        usbFlashState.canBaudRate
+      );
+
+      if (result.status === "success") {
+        dispatch(usbFlashSlice.setSuccessMessage(`CAN address ${usbFlashState.canAddress} assigned successfully`));
+        dispatch(usbFlashSlice.nextStep()); // Move to completion
+      } else {
+        dispatch(usbFlashSlice.setError(result.message || "CAN address assignment failed"));
+      }
+    } catch (error) {
+      console.error("Error sending CAN address:", error);
+      dispatch(usbFlashSlice.setError("Failed to assign CAN address: " + error.message));
+    } finally {
+      dispatch(usbFlashSlice.setIsFlashing(false));
+    }
+  };
+
   // ======================================
   // Step renderers
   // ======================================
@@ -235,6 +342,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
       case 3:
         return renderFlashProgress();
       case 4:
+        return renderCanAddress();
+      case 5:
         return renderCompletion();
       default:
         return null;
@@ -373,15 +482,15 @@ const UsbFlashWizard = ({ open, onClose }) => {
     </Box>
   );
 
-  // --- Step 2: Port Selection ---
+  // --- Step 2: Port & Options ---
   const renderPortSelection = () => (
     <Box sx={{ mt: 2 }}>
       <Typography variant="h6" gutterBottom>
         <UsbIcon sx={{ mr: 1, verticalAlign: "middle" }} />
-        USB Port Selection
+        USB Port &amp; Flash Options
       </Typography>
       <Typography variant="body2" color="text.secondary" gutterBottom>
-        Select the serial port connected to the ESP32 or use auto-detection.
+        Select the serial port connected to the ESP32 device and configure flash options.
       </Typography>
 
       {usbFlashState.isLoadingPorts ? (
@@ -391,7 +500,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
       ) : (
         <Box sx={{ mt: 3 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
-            <Typography variant="subtitle2">Port Selection Mode:</Typography>
+            <Typography variant="subtitle2">Port Selection:</Typography>
             <Tooltip title="Refresh port list">
               <IconButton onClick={loadSerialPorts} size="small">
                 <RefreshIcon />
@@ -404,7 +513,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
               value={usbFlashState.selectedPort || "auto"}
               onChange={(e) => {
                 const value = e.target.value === "auto" ? null : e.target.value;
-                dispatch(usbFlashSlice.setSelectedPort(value));
+                handlePortSelect(value);
               }}
             >
               <FormControlLabel
@@ -421,22 +530,41 @@ const UsbFlashWizard = ({ open, onClose }) => {
               />
               <Divider sx={{ my: 1 }} />
               {usbFlashState.availablePorts.length > 0 ? (
-                usbFlashState.availablePorts.map((port) => (
-                  <FormControlLabel
-                    key={port.device}
-                    value={port.device}
-                    control={<Radio />}
-                    label={
-                      <Box>
-                        <Typography variant="body1">{port.device}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {port.description || port.manufacturer || port.product || "Unknown device"}
-                          {port.vid && port.pid && (" (VID:" + port.vid.toString(16) + " PID:" + port.pid.toString(16) + ")")}
-                        </Typography>
-                      </Box>
-                    }
-                  />
-                ))
+                usbFlashState.availablePorts.map((port) => {
+                  const hint = getDeviceHint(port);
+                  return (
+                    <FormControlLabel
+                      key={port.device}
+                      value={port.device}
+                      control={<Radio />}
+                      label={
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <Box>
+                            <Typography variant="body1">
+                              {port.device}
+                              {hint && (
+                                <Chip
+                                  label={hint.label}
+                                  color={hint.color}
+                                  size="small"
+                                  sx={{ ml: 1 }}
+                                />
+                              )}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {port.description || port.manufacturer || port.product || "Unknown device"}
+                              {port.vid != null && port.pid != null && (
+                                " (VID:" + port.vid.toString(16).padStart(4, "0") +
+                                " PID:" + port.pid.toString(16).padStart(4, "0") + ")"
+                              )}
+                              {hint && ` → auto: ${hint.chip}`}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      }
+                    />
+                  );
+                })
               ) : (
                 <Alert severity="warning" sx={{ mt: 1 }}>
                   No serial ports detected. Make sure the device is connected.
@@ -455,7 +583,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
             size="small"
           />
 
-          {/* Minimal flash options */}
+          {/* Flash options */}
           <Paper sx={{ p: 2, mt: 2 }}>
             <Typography variant="subtitle2" gutterBottom>
               <SettingsIcon sx={{ mr: 1, verticalAlign: "middle", fontSize: 18 }} />
@@ -476,6 +604,55 @@ const UsbFlashWizard = ({ open, onClose }) => {
               </Select>
             </FormControl>
 
+            <FormControl fullWidth margin="normal" size="small">
+              <InputLabel>Chip Type</InputLabel>
+              <Select
+                value={usbFlashState.chipType}
+                onChange={(e) => dispatch(usbFlashSlice.setChipType(e.target.value))}
+                label="Chip Type"
+              >
+                <MenuItem value="auto">Auto-detect (from VID:PID)</MenuItem>
+                <MenuItem value="esp32">ESP32 (HAT / standard)</MenuItem>
+                <MenuItem value="esp32s3">ESP32-S3 (XIAO)</MenuItem>
+                <MenuItem value="esp32s2">ESP32-S2</MenuItem>
+                <MenuItem value="esp32c3">ESP32-C3</MenuItem>
+              </Select>
+            </FormControl>
+
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={usbFlashState.eraseFlash}
+                  onChange={(e) => dispatch(usbFlashSlice.setEraseFlash(e.target.checked))}
+                />
+              }
+              label={
+                <Box>
+                  <Typography variant="body2">Erase flash before writing</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Full erase – useful for clean installs or switching firmware type
+                  </Typography>
+                </Box>
+              }
+            />
+
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={usbFlashState.skipDisconnect}
+                  onChange={(e) => dispatch(usbFlashSlice.setSkipDisconnect(e.target.checked))}
+                />
+              }
+              label={
+                <Box>
+                  <Typography variant="body2">Skip ImSwitch disconnect</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Enable for XIAO and other non-HAT devices that don't share the ImSwitch serial port
+                  </Typography>
+                </Box>
+              }
+            />
+
             <FormControlLabel
               control={
                 <Checkbox
@@ -483,7 +660,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
                   onChange={(e) => dispatch(usbFlashSlice.setReconnectAfter(e.target.checked))}
                 />
               }
-              label="Reconnect to device after flashing"
+              label="Reconnect ImSwitch to device after flashing"
             />
           </Paper>
 
@@ -491,6 +668,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
           {usbFlashState.selectedFirmware && (
             <Alert severity="info" sx={{ mt: 2 }}>
               <strong>Firmware:</strong> {usbFlashState.selectedFirmware.filename} ({(usbFlashState.selectedFirmware.size / 1024).toFixed(1)} KB)
+              {usbFlashState.chipType !== "auto" && <> &bull; <strong>Chip:</strong> {usbFlashState.chipType}</>}
+              {usbFlashState.eraseFlash && <> &bull; <Chip label="Erase first" size="small" color="warning" sx={{ ml: 0.5 }} /></>}
             </Alert>
           )}
         </Box>
@@ -548,9 +727,12 @@ const UsbFlashWizard = ({ open, onClose }) => {
         )}
 
         {usbFlashState.flashStatus === "failed" && (
-          <Box sx={{ mt: 2, textAlign: "center" }}>
+          <Box sx={{ mt: 2, textAlign: "center", display: "flex", gap: 2, justifyContent: "center" }}>
             <Button variant="outlined" color="primary" onClick={startFlashing}>
               Retry
+            </Button>
+            <Button variant="outlined" color="secondary" onClick={handleStartOver}>
+              Start Over
             </Button>
           </Box>
         )}
@@ -565,7 +747,71 @@ const UsbFlashWizard = ({ open, onClose }) => {
     </Box>
   );
 
-  // --- Step 4: Completion ---
+  // --- Step 4: CAN Address Assignment ---
+  const renderCanAddress = () => (
+    <Box sx={{ mt: 2 }}>
+      <Typography variant="h6" gutterBottom>
+        <CanIcon sx={{ mr: 1, verticalAlign: "middle" }} />
+        CAN Bus Address Assignment
+      </Typography>
+      <Typography variant="body2" color="text.secondary" gutterBottom>
+        Optionally assign a CAN bus address to the freshly-flashed device.
+        This tells the device which axis/role it serves on the CAN bus.
+      </Typography>
+
+      <Paper sx={{ p: 3, mt: 3 }}>
+        <FormControl component="fieldset" sx={{ width: "100%" }}>
+          <RadioGroup
+            value={usbFlashState.canAddress === null ? "skip" : String(usbFlashState.canAddress)}
+            onChange={(e) => {
+              const val = e.target.value === "skip" ? null : parseInt(e.target.value, 10);
+              dispatch(usbFlashSlice.setCanAddress(val));
+            }}
+          >
+            {CAN_ADDRESS_OPTIONS.map((opt) => (
+              <FormControlLabel
+                key={opt.value === null ? "skip" : opt.value}
+                value={opt.value === null ? "skip" : String(opt.value)}
+                control={<Radio />}
+                label={opt.label}
+              />
+            ))}
+          </RadioGroup>
+        </FormControl>
+
+        {usbFlashState.canAddress != null && (
+          <Box sx={{ mt: 2 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Serial Baud Rate</InputLabel>
+              <Select
+                value={usbFlashState.canBaudRate}
+                onChange={(e) => dispatch(usbFlashSlice.setCanBaudRate(e.target.value))}
+                label="Serial Baud Rate"
+              >
+                <MenuItem value={9600}>9600</MenuItem>
+                <MenuItem value={115200}>115200 (default)</MenuItem>
+                <MenuItem value={500000}>500000</MenuItem>
+              </Select>
+            </FormControl>
+
+            <Alert severity="info" sx={{ mt: 2 }}>
+              Will send <code>{`{"task":"/can_act","address":${usbFlashState.canAddress}}`}</code> to{" "}
+              {usbFlashState.selectedPort || usbFlashState.flashResult?.port || "auto-detected port"}
+            </Alert>
+          </Box>
+        )}
+      </Paper>
+
+      {usbFlashState.flashResult && (
+        <Alert severity="success" sx={{ mt: 2 }}>
+          Firmware was flashed successfully to <strong>{usbFlashState.flashResult.port}</strong>
+          {usbFlashState.flashResult.chip && <> (chip: {usbFlashState.flashResult.chip})</>}
+        </Alert>
+      )}
+    </Box>
+  );
+
+  // --- Step 5: Completion ---
   const renderCompletion = () => (
     <Box sx={{ mt: 2, textAlign: "center" }}>
       {usbFlashState.flashResult?.status === "success" ? (
@@ -624,6 +870,19 @@ const UsbFlashWizard = ({ open, onClose }) => {
           </List>
         </Paper>
       )}
+
+      {/* Start Over button to flash another device */}
+      <Box sx={{ mt: 3 }}>
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={handleStartOver}
+          startIcon={<RefreshIcon />}
+          size="large"
+        >
+          Flash Another Device
+        </Button>
+      </Box>
     </Box>
   );
 
@@ -651,7 +910,17 @@ const UsbFlashWizard = ({ open, onClose }) => {
     if (step === 0 && !usbFlashState.firmwareServerUrl) return true;
     if (step === 1 && !usbFlashState.selectedFirmware) return true;
     if (step === 3 && usbFlashState.isFlashing) return true;
+    if (step === 4 && usbFlashState.isFlashing) return true;
     return false;
+  };
+
+  // Label for "Next" button depending on step
+  const getNextLabel = () => {
+    const step = usbFlashState.currentStep;
+    if (step === 3) return "Start Flashing";
+    if (step === 4 && usbFlashState.canAddress != null) return "Assign CAN Address";
+    if (step === 4) return "Skip & Finish";
+    return "Next";
   };
 
   return (
@@ -697,20 +966,20 @@ const UsbFlashWizard = ({ open, onClose }) => {
 
       <DialogActions>
         <Button onClick={handleClose} disabled={usbFlashState.isFlashing}>
-          {usbFlashState.currentStep === 4 ? "Close" : "Cancel"}
+          {usbFlashState.currentStep === 5 ? "Close" : "Cancel"}
         </Button>
-        {usbFlashState.currentStep > 0 && usbFlashState.currentStep < 4 && (
+        {usbFlashState.currentStep > 0 && usbFlashState.currentStep < 5 && (
           <Button onClick={handleBack} disabled={usbFlashState.isFlashing}>
             Back
           </Button>
         )}
-        {usbFlashState.currentStep < 4 && (
+        {usbFlashState.currentStep < 5 && (
           <Button
             variant="contained"
             onClick={handleNext}
             disabled={isNextDisabled() || usbFlashState.isFlashing}
           >
-            {usbFlashState.currentStep === 3 ? "Start Flashing" : "Next"}
+            {getNextLabel()}
           </Button>
         )}
       </DialogActions>

@@ -74,6 +74,8 @@ class ExperimentNormalMode(ExperimentModeBase):
         t_post_s = kwargs.get('t_post_s', 0.05)  # Post-exposure time in seconds
         # New parameters for multi-timepoint support
         n_times = kwargs.get('n_times', 1)  # Total number of time points
+        # Illumination mode: keep illumination on for entire acquisition?
+        keep_illumination_on = kwargs.get('keep_illumination_on', False)
 
         # Initialize workflow components
         workflow_steps = []
@@ -93,6 +95,28 @@ class ExperimentNormalMode(ExperimentModeBase):
                 shared_omero_key=shared_omero_key,
                 n_times=n_times,
             )
+        # Compute writer offset for multi-timepoint experiments.
+        # Each timepoint creates its own set of writers, so the flat
+        # file_writers list is indexed as: t * num_tiles + tile_index.
+        is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
+        writer_offset = t * len(snake_tiles) if not is_single_tiff_mode else 0
+
+        # If keep_illumination_on, turn on all active illumination sources once
+        # at the beginning instead of toggling per frame.
+        if keep_illumination_on:
+            for illu_index, illu_source in enumerate(illumination_sources):
+                illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
+                if illu_intensity > 0:
+                    workflow_steps.append(WorkflowStep(
+                        name=f"Turn on illumination (continuous): {illu_source}",
+                        step_id=step_id,
+                        main_func=self.controller.set_laser_power,
+                        main_params={"power": illu_intensity, "channel": illu_source},
+                        post_funcs=[self.controller.wait_time],
+                        post_params={"seconds": t_pre_s},
+                    ))
+                    step_id += 1
+
         # Create workflow steps for each tile
         for position_center_index, tiles in enumerate(snake_tiles):
             step_id = self._create_tile_workflow_steps(
@@ -101,13 +125,17 @@ class ExperimentNormalMode(ExperimentModeBase):
                 exposures, gains, t, is_auto_focus, autofocus_min,
                 autofocus_max, autofocus_step_size, autofocus_illumination_channel,
                 autofocus_mode, autofocus_max_attempts, autofocus_target_focus_setpoint, n_times,
-                t_pre_s=t_pre_s, t_post_s=t_post_s
+                t_pre_s=t_pre_s, t_post_s=t_post_s,
+                writer_offset=writer_offset,
+                keep_illumination_on=keep_illumination_on,
             )
 
         # Add finalization steps
         step_id = self._add_finalization_steps(
             workflow_steps, step_id, snake_tiles, illumination_sources,
-            illumination_intensities, t_period, t, n_times
+            illumination_intensities, t_period, t, n_times,
+            writer_offset=writer_offset,
+            keep_illumination_on=keep_illumination_on,
         )
 
         # Add step to set LED status to idle when done
@@ -337,7 +365,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                                     autofocus_target_focus_setpoint: float,
                                   n_times: int,
                                   t_pre_s: float = 0.09,
-                                  t_post_s: float = 0.05) -> int:
+                                  t_post_s: float = 0.05,
+                                  writer_offset: int = 0,
+                                  keep_illumination_on: bool = False) -> int:
         """
         Create workflow steps for a single tile.
         
@@ -369,32 +399,21 @@ class ExperimentNormalMode(ExperimentModeBase):
         min_x, max_x, min_y, max_y, _, _ = self.compute_scan_ranges([tiles])
         m_pixel_size = self.controller.detectorPixelSize[-1] if hasattr(self.controller, 'detectorPixelSize') else 1.0
 
-        # Turn on illumination once at the beginning if only one source
-        active_sources_count = sum(np.array(illumination_intensities) > 0)
-        is_first_tile = (position_center_index == 0)
-
-        '''
-        if active_sources_count == 1 and is_first_tile:
-            for illu_index, illu_source in enumerate(illumination_sources):
-                illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
-                if illu_intensity > 0:
-                    workflow_steps.append(WorkflowStep(
-                        name="Turn on single illumination source for entire scan",
-                        step_id=step_id,
-                        main_func=self.controller.set_laser_power,
-                        main_params={"power": illu_intensity, "channel": illu_source},
-                        post_funcs=[self.controller.wait_time],
-                        post_params={"seconds": 0.05},
-                    ))
-                    step_id += 1
-                    break  # Only one active source
-        '''
         # Iterate over positions in the tile
         for m_index, m_point in enumerate(tiles):
             try:
                 name = f"Move to point {m_point['iterator']}"
             except Exception:
                 name = f"Move to point {m_point['x']}, {m_point['y']}"
+
+            # Determine per-point Z base: prefer the point's own z, else fall
+            # back to the global initial Z captured at experiment start.
+            # z=0.0 is the frontend default for sub-tiles that have no explicit
+            # per-point Z – treat it the same as None so we always use the real
+            # stage Z (initial_z_position) in that case.
+            point_z_origin = m_point.get("z")
+            if point_z_origin is None or point_z_origin == 0.0:
+                point_z_origin = initial_z_position
 
             # Move to XY position
             workflow_steps.append(WorkflowStep(
@@ -405,33 +424,47 @@ class ExperimentNormalMode(ExperimentModeBase):
             ))
             step_id += 1
 
-            # Apply focus map Z if available (pre-computed surface)
-            # This replaces or supplements autofocus at each position.
-            # Resolve the group_id that was used when storing the focus map.
-            # _run_focus_map_phase stores under sa.areaId (e.g. "area_0").
-            # generate_snake_tiles stores centerIndex=area.areaId in tiles.
-            focus_map_group_id = (
-                m_point.get("centerIndex")
-                or m_point.get("areaName")
-                or m_point.get("wellId")
-                or "default"
-            )
-            focus_map_z = self.controller.apply_focus_map_z(
-                x=m_point["x"], y=m_point["y"], group_id=focus_map_group_id
-            )
-            if focus_map_z is None and not getattr(self.controller, '_focus_map_fit_by_region', True):
-                # Try global map as fallback
-                focus_map_z = self.controller.apply_focus_map_z(
-                    x=m_point["x"], y=m_point["y"], group_id="global"
+            # Focus map Z lookup (happens after XY move to know the coordinate).
+            # Only attempt when the manager has fitted maps so experiments without
+            # focus mapping never produce spurious Z moves.
+            focus_map_z = None
+            if self.controller.focus_map_manager.get_all():
+                # Resolve the group_id used when storing the focus map.
+                # _run_focus_map_phase stores under sa.areaId (e.g. "area_0").
+                focus_map_group_id = (
+                    m_point.get("centerIndex")
+                    or m_point.get("areaName")
+                    or m_point.get("wellId")
+                    or "default"
                 )
-            if focus_map_z is None:
-                # Try manual map as last-resort fallback (user-defined points)
                 focus_map_z = self.controller.apply_focus_map_z(
-                    x=m_point["x"], y=m_point["y"], group_id="manual"
+                    x=m_point["x"], y=m_point["y"], group_id=focus_map_group_id
                 )
+                if focus_map_z is None and not getattr(self.controller, '_focus_map_fit_by_region', True):
+                    focus_map_z = self.controller.apply_focus_map_z(
+                        x=m_point["x"], y=m_point["y"], group_id="global"
+                    )
+                if focus_map_z is None:
+                    focus_map_z = self.controller.apply_focus_map_z(
+                        x=m_point["x"], y=m_point["y"], group_id="manual"
+                    )
 
+            # -------------------------------------------------------------------
+            # SINGLE SOURCE OF TRUTH for Z positions.
+            # z_positions are PURE RELATIVE OFFSETS sent by the frontend (e.g.
+            # [-10, -8, ..., 10] for a Z-stack, or [0.0] for single Z).
+            # base_z is the absolute reference for this tile:
+            #   1. focus_map_z  – interpolated surface (highest priority)
+            #   2. point_z_origin – per-scan-area Z from the frontend
+            #   3. initial_z_position – global Z measured at experiment start
+            # effective_z_positions = [base_z + offset for offset in z_positions]
+            # -------------------------------------------------------------------
+            base_z = focus_map_z if focus_map_z is not None else point_z_origin
+            effective_z_positions = [base_z + offset for offset in z_positions]
+
+            # If focus map provides a Z, emit a dedicated Z-move so the stage
+            # settles at the predicted position before any Z-stack or capture.
             if focus_map_z is not None:
-                # Move Z to the focus-mapped position
                 settle_ms = getattr(self.controller, '_focus_map_settle_ms', 0)
                 settle_s = settle_ms / 1000.0 if settle_ms > 0 else 0
                 workflow_steps.append(WorkflowStep(
@@ -443,7 +476,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                     post_params={"seconds": settle_s} if settle_s > 0 else None,
                 ))
                 step_id += 1
-            
+
             # Perform autofocus if enabled (runs after focus map Z move if both active)
             if is_auto_focus:
                 workflow_steps.append(WorkflowStep(
@@ -462,12 +495,18 @@ class ExperimentNormalMode(ExperimentModeBase):
                 ))
                 step_id += 1
 
-            # Iterate over Z positions
-            for index_z, i_z in enumerate(z_positions):
-                # Move to Z position if we have more than one Z position
-                if (len(z_positions) > 1 or (len(z_positions) == 1 and m_index == 0)) and (i_z != 0 and len(z_positions) != 1): # TODO: The latter case is just to ensure that we don't have false values coming from the hardware
+            # Iterate over Z planes.
+            # z_positions are pure relative offsets; effective_z_positions = base_z + offset.
+            # For multi-plane Z-stacks, add a Z-move step for every plane.
+            # For single Z (z_positions = [0.0]), add one Z-move to base_z so the
+            # stage is always at the correct absolute Z before capture, even after
+            # a prior tile's focus-map or autofocus moved it elsewhere.
+            is_z_stack = len(effective_z_positions) > 1
+            for index_z, i_z in enumerate(effective_z_positions):
+                # Move Z for every plane in a Z-stack, or once for single-Z
+                if is_z_stack or index_z == 0:
                     workflow_steps.append(WorkflowStep(
-                        name="Move to Z position",
+                        name=f"Move to Z {'plane ' + str(index_z) if is_z_stack else 'base position'} ({i_z:.1f} µm)",
                         step_id=step_id,
                         main_func=self.controller.move_stage_z,
                         main_params={"posZ": i_z, "relative": False},
@@ -482,15 +521,15 @@ class ExperimentNormalMode(ExperimentModeBase):
                     if illu_intensity <= 0:
                         continue
 
-                    # Apply per-channel focus map Z offset if configured
-                    # This adjusts Z relative to the focus-mapped position for chromatic shift compensation
+                    # Apply per-channel Z offset for chromatic shift compensation.
+                    # i_z is already the absolute Z position; add the channel offset on top.
                     if focus_map_z is not None:
                         channel_offset_z = 0.0
                         _fm_cfg = getattr(self.controller, '_focus_map_config', None)
                         if _fm_cfg and _fm_cfg.channel_offsets:
                             channel_offset_z = _fm_cfg.channel_offsets.get(illu_source, 0.0)
                         if channel_offset_z != 0.0:
-                            adjusted_z = focus_map_z + channel_offset_z + (i_z if i_z != 0 else 0)
+                            adjusted_z = i_z + channel_offset_z
                             workflow_steps.append(WorkflowStep(
                                 name=f"Channel Z offset ({illu_source}: {channel_offset_z:+.1f} µm)",
                                 step_id=step_id,
@@ -500,24 +539,28 @@ class ExperimentNormalMode(ExperimentModeBase):
                             step_id += 1
 
                     # Turn on illumination - use tPre as settle time after activation
-                    workflow_steps.append(WorkflowStep(
-                        name="Turn on illumination",
-                        step_id=step_id,
-                        main_func=self.controller.set_laser_power,
-                        main_params={"power": illu_intensity, "channel": illu_source},
-                        post_funcs=[self.controller.wait_time],
-                        post_params={"seconds": t_pre_s},
-                    ))
-                    step_id += 1
+                    # Skip per-frame toggle when keep_illumination_on; light is already on.
+                    if not keep_illumination_on:
+                        workflow_steps.append(WorkflowStep(
+                            name="Turn on illumination",
+                            step_id=step_id,
+                            main_func=self.controller.set_laser_power,
+                            main_params={"power": illu_intensity, "channel": illu_source},
+                            post_funcs=[self.controller.wait_time],
+                            post_params={"seconds": t_pre_s},
+                        ))
+                        step_id += 1
 
                     # Acquire frame
                     exposure_time = exposures[illu_index] if illu_index < len(exposures) else exposures[0]
                     gain = gains[illu_index] if illu_index < len(gains) else gains[0]
 
                     # In single TIFF mode, all positions within a timepoint use the same writer
-                    # The writer index corresponds to the timepoint for timelapse sequences
+                    # The writer index corresponds to the timepoint for timelapse sequences.
+                    # In multi-tile mode, offset by timepoint * num_tiles to address
+                    # the correct writer in the flat file_writers list.
                     is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
-                    writer_index = t if is_single_tiff_mode else position_center_index
+                    writer_index = t if is_single_tiff_mode else (writer_offset + position_center_index)
 
                     workflow_steps.append(WorkflowStep(
                         name="Acquire frame",
@@ -549,21 +592,24 @@ class ExperimentNormalMode(ExperimentModeBase):
                     step_id += 1
 
                     # Turn off illumination only if multiple sources (for switching between them)
-                    workflow_steps.append(WorkflowStep(
-                        name="Turn off illumination",
-                        step_id=step_id,
-                        main_func=self.controller.set_laser_power,
-                        main_params={"power": 0, "channel": illu_source},
-                    ))
-                    step_id += 1
+                    # Skip per-frame toggle when keep_illumination_on; finalization handles it.
+                    if not keep_illumination_on:
+                        workflow_steps.append(WorkflowStep(
+                            name="Turn off illumination",
+                            step_id=step_id,
+                            main_func=self.controller.set_laser_power,
+                            main_params={"power": 0, "channel": illu_source},
+                        ))
+                        step_id += 1
 
-            # Move back to the current Z position after processing all points in the tile
-            if len(z_positions) > 1 :
+            # After a Z-stack, return to base_z so the next tile starts from a
+            # known Z reference (important for timelapse repeatability).
+            if is_z_stack:
                 workflow_steps.append(WorkflowStep(
-                    name="Move back to current Z position",
+                    name=f"Return to base Z after Z-stack ({base_z:.1f} µm)",
                     step_id=step_id,
                     main_func=self.controller.move_stage_z,
-                    main_params={"posZ": initial_z_position, "relative": False},
+                    main_params={"posZ": base_z, "relative": False},
                     pre_funcs=[self.controller.wait_time],
                     pre_params={"seconds": t_pre_s},
                 ))
@@ -572,18 +618,20 @@ class ExperimentNormalMode(ExperimentModeBase):
 
 
         # Finalize OME writer for this tile (skip in single TIFF mode since we only have one writer)
-        # Always finalize tile writers since each timepoint creates its own writers
+        # Always finalize tile writers since each timepoint creates its own writers.
+        # Use writer_offset to address the correct writer in the flat list.
         is_single_tiff_mode = getattr(self.controller, '_ome_write_single_tiff', False)
         should_finalize_tile = not is_single_tiff_mode
 
         if should_finalize_tile:
+            actual_writer_index = writer_offset + position_center_index
             workflow_steps.append(WorkflowStep(
                 name=f"Finalize OME writer for tile {position_center_index} (timepoint {t})",
                 step_id=step_id,
                 main_func=self.controller.dummy_main_func,
                 main_params={},
                 post_funcs=[self.controller.finalize_tile_ome_writer],
-                post_params={"tile_index": position_center_index},
+                post_params={"tile_index": actual_writer_index},
             ))
             step_id += 1
 
@@ -596,7 +644,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                               illumination_sources: List[str],
                               illumination_intensities: List[float],
                               t_period: float,
-                              t: int, n_times: int) -> int:
+                              t: int, n_times: int,
+                              writer_offset: int = 0,
+                              keep_illumination_on: bool = False) -> int:
         """
         Add finalization workflow steps.
         
@@ -612,30 +662,39 @@ class ExperimentNormalMode(ExperimentModeBase):
         Returns:
             Updated step ID
         """
-        # Always finalize OME writers since each timepoint creates its own writers
-        workflow_steps.append(WorkflowStep(
-            name=f"Finalize OME writers (timepoint {t})",
-            step_id=step_id,
-            main_func=self.controller.dummy_main_func,
-            main_params={},
-            post_funcs=[self.controller.finalize_current_ome_writer],
-            post_params={"time_index": t}
-        ))
-        step_id += 1
-
-        # Turn off all illuminations
-        for illu_index, illu_source in enumerate(illumination_sources):
-            illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
-            if illu_intensity <= 0:
-                continue
-
+        # Finalize OME writers for this timepoint.
+        # Per-tile finalization already handled individual tile writers above.
+        # On the last timepoint, do a full cleanup pass (no time_index → finalizes all).
+        # On intermediate timepoints, skip this step since tile writers are already finalized.
+        is_last_timepoint = (t == n_times - 1)
+        if is_last_timepoint:
             workflow_steps.append(WorkflowStep(
-                name="Turn off illumination",
+                name=f"Finalize all OME writers (final cleanup)",
                 step_id=step_id,
-                main_func=self.controller.set_laser_power,
-                main_params={"power": 0, "channel": illu_source},
+                main_func=self.controller.dummy_main_func,
+                main_params={},
+                post_funcs=[self.controller.finalize_current_ome_writer],
+                post_params={}  # No time_index → finalizes all remaining writers
             ))
             step_id += 1
+
+        # Turn off all illuminations.
+        # When keep_illumination_on is active, only turn off on the very last
+        # timepoint so the light stays on between timepoints for speed.
+        should_turn_off = (not keep_illumination_on) or is_last_timepoint
+        if should_turn_off:
+            for illu_index, illu_source in enumerate(illumination_sources):
+                illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
+                if illu_intensity <= 0:
+                    continue
+
+                workflow_steps.append(WorkflowStep(
+                    name="Turn off illumination",
+                    step_id=step_id,
+                    main_func=self.controller.set_laser_power,
+                    main_params={"power": 0, "channel": illu_source},
+                ))
+                step_id += 1
 
         # Add timing calculation for proper period control (for all timepoints except implicit last)
         if n_times > 1:
@@ -646,6 +705,16 @@ class ExperimentNormalMode(ExperimentModeBase):
                 main_params={},
                 pre_funcs=[self.controller.wait_for_next_timepoint],
                 pre_params={"timepoint": t, "t_period": t_period}
+            ))
+            step_id += 1
+
+        # On the very last timepoint, return the stage to the initial XYZ position
+        if is_last_timepoint:
+            workflow_steps.append(WorkflowStep(
+                name="Return to initial XYZ position",
+                step_id=step_id,
+                main_func=self.controller.return_to_initial_position,
+                main_params={},
             ))
             step_id += 1
 

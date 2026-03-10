@@ -55,8 +55,6 @@ const LiveViewComponent = ({
       const fps = Math.round((counter.frames * 1000) / elapsed);
       dispatch(liveViewSlice.setStats({ fps, bps: 0 })); // bps not available for JPEG
 
-      console.log(`[LiveViewComponent] JPEG FPS: ${fps}`);
-
       // Reset counters
       counter.frames = 0;
       counter.lastTime = now;
@@ -113,7 +111,7 @@ const LiveViewComponent = ({
         liveViewSlice.setHistogramData({
           x: histogramX,
           y: histogram,
-        })
+        }),
       );
     } catch (error) {
       console.warn("JPEG histogram computation failed:", error);
@@ -180,7 +178,7 @@ const LiveViewComponent = ({
       // Compute histogram after rendering (for JPEG streams)
       computeHistogramFromCanvas();
     },
-    [computeHistogramFromCanvas]
+    [computeHistogramFromCanvas],
   );
 
   // Monitor container size changes
@@ -226,7 +224,7 @@ const LiveViewComponent = ({
 
       return { width: displayWidth, height: displayHeight };
     },
-    [containerSize]
+    [containerSize],
   );
 
   // Legacy pixel-perfect intensity scaling (for compatibility)
@@ -235,7 +233,7 @@ const LiveViewComponent = ({
       // This method is now deprecated - use applyIntensityWindowing instead
       return applyIntensityWindowing(image, minVal, maxVal);
     },
-    [applyIntensityWindowing]
+    [applyIntensityWindowing],
   );
   // Apply responsive sizing to the image
   const applyResponsiveSizing = useCallback(
@@ -250,7 +248,7 @@ const LiveViewComponent = ({
       applyIntensityWindowing(
         image,
         liveStreamState.minVal,
-        liveStreamState.maxVal
+        liveStreamState.maxVal,
       );
 
       setCanvasStyle({
@@ -281,7 +279,7 @@ const LiveViewComponent = ({
       liveStreamState.maxVal,
       containerSize,
       onImageLoad,
-    ]
+    ],
   );
 
   // Load and process image when it changes
@@ -341,7 +339,7 @@ const LiveViewComponent = ({
         applyIntensityWindowing(
           img,
           liveStreamState.minVal,
-          liveStreamState.maxVal
+          liveStreamState.maxVal,
         );
       };
       img.src = `data:image/jpeg;base64,${liveStreamState.liveViewImage}`;
@@ -384,7 +382,7 @@ const LiveViewComponent = ({
   const moveToPosition = useCallback(async (x, y) => {
     try {
       console.log(
-        `Moving to position X: ${x.toFixed(2)}, Y: ${y.toFixed(2)} µm`
+        `Moving to position X: ${x.toFixed(2)}, Y: ${y.toFixed(2)} µm`,
       );
 
       // Move X axis
@@ -405,8 +403,8 @@ const LiveViewComponent = ({
 
       console.log(
         `Successfully moved to position X: ${x.toFixed(2)}, Y: ${y.toFixed(
-          2
-        )} µm`
+          2,
+        )} µm`,
       );
     } catch (error) {
       console.error("Error moving to position:", error);
@@ -448,7 +446,7 @@ const LiveViewComponent = ({
 
       onClick(clickX, clickY, canvas.width, canvas.height, displayInfo);
     },
-    [onClick]
+    [onClick],
   );
 
   // Handle double-click to move to position
@@ -480,7 +478,7 @@ const LiveViewComponent = ({
 
       if (!adaptivePixelSize) {
         console.warn(
-          "Field of view (fovX) not available for position calculation"
+          "Field of view (fovX) not available for position calculation",
         );
         return;
       }
@@ -496,20 +494,20 @@ const LiveViewComponent = ({
 
       console.log(
         `Double-click at pixel (${clickX.toFixed(1)}, ${clickY.toFixed(
-          1
-        )}) -> real coordinates (${realX.toFixed(2)}, ${realY.toFixed(2)}) µm`
+          1,
+        )}) -> real coordinates (${realX.toFixed(2)}, ${realY.toFixed(2)}) µm`,
       );
       console.log(
         `Adaptive pixel size: ${adaptivePixelSize.toFixed(4)} µm/pixel (fovX: ${
           objectiveState.fovX
-        }, canvas width: ${canvas.width})`
+        }, canvas width: ${canvas.width})`,
       );
 
       // Move to the calculated position
       // Note: Y direction might need to be inverted depending on stage orientation
       moveToPosition(-realX, -realY); // Inverting Y as microscope Y often goes opposite to image Y
     },
-    [onDoubleClick, getAdaptivePixelSize, moveToPosition, objectiveState.fovX]
+    [onDoubleClick, getAdaptivePixelSize, moveToPosition, objectiveState.fovX],
   );
 
   // Calculate scale bar dimensions - using adaptive pixel size

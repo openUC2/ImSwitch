@@ -28,6 +28,7 @@ import TimeDimension from "./TimeDimension";
 import TilingDimension from "./TilingDimension";
 import OutputDimension from "./OutputDimension";
 import FocusMapDimension from "./FocusMapDimension";
+import ObjectiveDimension from "./ObjectiveDimension";
 
 // Utilities
 import * as coordinateCalculator from "../CoordinateCalculator";
@@ -50,6 +51,7 @@ import apiExperimentControllerStartWellplateExperiment from "../../backendapi/ap
 import apiExperimentControllerStopExperiment from "../../backendapi/apiExperimentControllerStopExperiment";
 import apiExperimentControllerPauseWorkflow from "../../backendapi/apiExperimentControllerPauseWorkflow";
 import apiExperimentControllerResumeExperiment from "../../backendapi/apiExperimentControllerResumeExperiment";
+import apiExperimentControllerInterruptFocusMap from "../../backendapi/apiExperimentControllerInterruptFocusMap";
 import fetchGetExperimentStatus from "../../middleware/fetchExperimentControllerGetExperimentStatus";
 
 // Status enum
@@ -98,6 +100,22 @@ const ExperimentDesigner = () => {
     return () => clearInterval(intervalId);
   }, [dispatch]);
 
+  // Warn the user before leaving/refreshing the page while an experiment is running
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (
+        experimentStatus.status === Status.RUNNING ||
+        experimentStatus.status === Status.PAUSED
+      ) {
+        e.preventDefault();
+        // Legacy browsers need returnValue to be set
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [experimentStatus.status]);
+
   // Update cached progress values
   useEffect(() => {
     if (experimentWorkflow.totalSteps !== undefined) {
@@ -125,6 +143,7 @@ const ExperimentDesigner = () => {
     [DIMENSIONS.TIME]: TimeDimension,
     [DIMENSIONS.TILING]: TilingDimension,
     [DIMENSIONS.OUTPUT]: OutputDimension,
+    [DIMENSIONS.OBJECTIVE]: ObjectiveDimension,
   };
 
   // Get active dimension component
@@ -210,6 +229,8 @@ const ExperimentDesigner = () => {
 
   const handleStop = () => {
     dispatch(experimentStatusSlice.setStatus(Status.IDLE));
+    // Interrupt focus map immediately (in case we are in focus map phase)
+    apiExperimentControllerInterruptFocusMap().catch(() => {});
     apiExperimentControllerStopExperiment()
       .then(() => {
         infoPopupRef.current?.showMessage("Experiment stopped");

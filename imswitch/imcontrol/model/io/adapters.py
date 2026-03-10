@@ -14,8 +14,26 @@ import numpy as np
 
 from ..io import AcquisitionDataStore, SessionInfo
 from ..io.writers import WriterDetectorContext
+from .io_utils import _safe_scalar_float
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_pixel_size_um(value, default=1.0):
+    """Return XY pixel size in µm from scalar or [Z, Y, X]-style values."""
+    if value is None:
+        return default
+
+    if isinstance(value, (list, tuple, np.ndarray)):
+        if len(value) == 0:
+            return default
+        if len(value) >= 3:
+            candidate = value[-1]
+        else:
+            candidate = value[-1]
+        return _safe_scalar_float(candidate, default=default)
+
+    return _safe_scalar_float(value, default=default)
 
 
 class DataStoreAdapter:
@@ -84,6 +102,8 @@ class DataStoreAdapter:
             pixel_size = getattr(detector, 'pixelSizeUm', 1.0)
             if pixel_size is None:
                 pixel_size = 1.0
+            pixel_size = _safe_pixel_size_um(pixel_size, default=1.0)
+            logger.debug(f"Detector {det_name} pixelSizeUm={getattr(detector, 'pixelSizeUm', None)} -> pixel_size_um={pixel_size}")
             
             # Get dtype
             dtype = 'uint16'
@@ -93,7 +113,7 @@ class DataStoreAdapter:
             contexts[det_name] = WriterDetectorContext(
                 name=det_name,
                 shape_px=shape_px,
-                pixel_size_um=float(pixel_size),
+                pixel_size_um=pixel_size,
                 dtype=dtype,
                 channel_name=det_name,
             )
@@ -176,27 +196,27 @@ class DataStoreAdapter:
         for key, value in attrs.items():
             key_lower = str(key).lower()
             if 'position' in key_lower and 'x' in key_lower:
-                stage_x = float(value) if value else None
+                stage_x = _safe_scalar_float(value)
             elif 'position' in key_lower and 'y' in key_lower:
-                stage_y = float(value) if value else None
+                stage_y = _safe_scalar_float(value)
             elif 'position' in key_lower and 'z' in key_lower:
-                stage_z = float(value) if value else None
+                stage_z = _safe_scalar_float(value)
         
         # Also try :X:Position style
         for key, value in attrs.items():
             key_str = str(key)
             if ':X:Position' in key_str:
-                stage_x = float(value) if value else None
+                stage_x = _safe_scalar_float(value)
             elif ':Y:Position' in key_str:
-                stage_y = float(value) if value else None
+                stage_y = _safe_scalar_float(value)
             elif ':Z:Position' in key_str:
-                stage_z = float(value) if value else None
+                stage_z = _safe_scalar_float(value)
         
         # Get exposure
         exposure_ms = None
         for key, value in attrs.items():
             if 'exposure' in str(key).lower():
-                exposure_ms = float(value) if value else None
+                exposure_ms = _safe_scalar_float(value)
                 break
         
         return WriterFrameEvent(
@@ -279,12 +299,14 @@ class StreamingDataStoreAdapter:
                 shape_px = (shape, shape)
             
             pixel_size = getattr(detector, 'pixelSizeUm', 1.0) or 1.0
+            pixel_size = _safe_pixel_size_um(pixel_size, default=1.0)
+            logger.debug(f"Streaming detector {det_name} pixelSizeUm={getattr(detector, 'pixelSizeUm', None)} -> pixel_size_um={pixel_size}")
             dtype = str(getattr(detector, 'dtype', 'uint16'))
             
             detector_contexts[det_name] = WriterDetectorContext(
                 name=det_name,
                 shape_px=shape_px,
-                pixel_size_um=float(pixel_size),
+                pixel_size_um=pixel_size,
                 dtype=dtype,
                 channel_name=det_name,
             )

@@ -58,6 +58,7 @@ class FocusMapFromPointsRequest(BaseModel):
 class NeighborPoint(BaseModel):
     x: float
     y: float
+    z: Optional[float] = None
     iX: int
     iY: int
 
@@ -66,6 +67,7 @@ class Point(BaseModel):
     name: str
     x: float
     y: float
+    z: Optional[float] = None  # Per-point Z origin for Z-stacking/autofocus
     iX: int = 0
     iY: int = 0
     neighborPointList: List[NeighborPoint] = Field(default_factory=list)
@@ -78,6 +80,7 @@ class ScanPosition(BaseModel):
     index: int
     x: float
     y: float
+    z: Optional[float] = None  # Per-position Z origin
     iX: int
     iY: int
 
@@ -94,6 +97,7 @@ class CenterPosition(BaseModel):
     """Center position of a scan area"""
     x: float
     y: float
+    z: Optional[float] = None
 
 class ScanArea(BaseModel):
     """Pre-calculated scan area with ordered positions"""
@@ -147,6 +151,7 @@ class ParameterValue(BaseModel):
     ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
     ome_write_individual_tiffs: bool = Field(False, description="Whether to write individual TIFF files per frame")
+    keepIlluminationOn: str = Field("auto", description="Illumination mode: 'auto' (single channel stays on), 'on' (always on), 'off' (per-frame toggle)")
 
 class FocusMapConfig(BaseModel):
     """Configuration for optional focus mapping (Z surface estimation over XY)."""
@@ -629,6 +634,7 @@ class ExperimentController(ImConWidgetController):
                         "iY": pos.iY,
                         "x": pos.x,
                         "y": pos.y,
+                        "z": pos.z if pos.z is not None else (area.centerPosition.z if area.centerPosition.z is not None else None),
                         "wellId": area.wellId,
                         "areaName": area.areaName,
                         "areaType": area.areaType
@@ -654,6 +660,7 @@ class ExperimentController(ImConWidgetController):
                         "iY": 0,
                         "x": centerPoint.x,
                         "y": centerPoint.y,
+                        "z": centerPoint.z,
                         "wellId": centerPoint.wellId,
                         "areaName": centerPoint.name,
                         "areaType": centerPoint.areaType or 'free_scan'
@@ -669,6 +676,7 @@ class ExperimentController(ImConWidgetController):
                             "iY": neighbor.iY,
                             "x": neighbor.x,
                             "y": neighbor.y,
+                            "z": neighbor.z if neighbor.z is not None else centerPoint.z,
                             "wellId": centerPoint.wellId,
                             "areaName": centerPoint.name,
                             "areaType": centerPoint.areaType or 'free_scan'
@@ -753,6 +761,20 @@ class ExperimentController(ImConWidgetController):
         if not any(illuminationIntensities):
             return HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
 
+        # Resolve keepIlluminationOn mode:
+        #  "auto" → True when exactly 1 active channel, False otherwise
+        #  "on"   → True always
+        #  "off"  → False always
+        keepIlluminationOnSetting = getattr(p, 'keepIlluminationOn', 'auto')
+        nActiveChannels = sum(1 for v in illuminationIntensities if v > 0)
+        if keepIlluminationOnSetting == "auto":
+            keepIlluminationOn = (nActiveChannels == 1)
+        elif keepIlluminationOnSetting == "on":
+            keepIlluminationOn = True
+        else:
+            keepIlluminationOn = False
+        self._logger.info(f"Illumination mode: setting={keepIlluminationOnSetting}, activeChannels={nActiveChannels}, keepOn={keepIlluminationOn}")
+
         # check if we want to use performance mode
         self.ExperimentParams.performanceMode = p.performanceMode
         performanceMode = p.performanceMode
@@ -815,24 +837,36 @@ class ExperimentController(ImConWidgetController):
             ]
 
         # ── Focus Mapping (optional) ──────────────────────────────────────
+        # Store illumination info so autofocus_software can look up the
+        # correct intensity for the selected AF illumination channel.
+        self._illuminationIntensities = illuminationIntensities
+        self._illuminationSources = illuSources
         focusMapConfig = mExperiment.focusMap
         if focusMapConfig is not None and focusMapConfig.enabled:
             self._logger.info("Focus mapping enabled – computing Z surface per scan group")
             self._focus_map_fit_by_region = focusMapConfig.fit_by_region
             self._focus_map_settle_ms = focusMapConfig.settle_ms
             self._run_focus_map_phase(mExperiment, focusMapConfig)
+        # Turn off illumination again after focus mapping so the
+        # acquisition loop starts from a clean state.
+        self._switch_off_all_illumination()
 
         # Generate the list of points to scan from pre-calculated coordinates
         snake_tiles = self.generate_snake_tiles(mExperiment) # TODO: Is this still needed?
         # remove none values from all_points list
         snake_tiles = [[pt for pt in tile if pt is not None] for tile in snake_tiles]
 
-        # Generate Z-positions
-        currentZ = self.mStage.getPosition()["Z"]
+        # Generate Z-positions as PURE RELATIVE OFFSETS.
+        # The frontend sends zStackMin/zStackMax as µm offsets (e.g. -10 / +10).
+        # At workflow execution, each tile adds these offsets to its own Z base
+        # (focus-map Z, per-point Z, or the global initial Z captured below).
+        # This is the single authoritative place that converts UI values to offsets.
         if isZStack:
-            z_positions = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize) + currentZ
+            # Build a list of relative offsets; do NOT add currentZ here.
+            z_offsets_arr = np.arange(zStackMin, zStackMax + zStackStepSize, zStackStepSize)
+            z_positions = list(z_offsets_arr)
         else:
-            z_positions = [currentZ]  # Get current Z position
+            z_positions = [0.0]  # Single Z: zero offset → stay at the tile's base Z
 
         # Prepare directory and filename for saving
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -883,6 +917,14 @@ class ExperimentController(ImConWidgetController):
             # Get the initial Z position at the start of each timepoint
             initial_z_position = self.mStage.getPosition()["Z"]
 
+            # Store the complete initial XYZ position for return-to-start
+            initial_position = self.mStage.getPosition()
+            self._initial_experiment_position = {
+                "X": initial_position.get("X", 0),
+                "Y": initial_position.get("Y", 0),
+                "Z": initial_z_position,
+            }
+
             for t in range(nTimes):
                 experiment_params = {
                     'mExperiment': mExperiment,
@@ -915,6 +957,7 @@ class ExperimentController(ImConWidgetController):
                     isRGB=self.mDetector._isRGB,
                     t_pre_s=p.performanceTPreMs / 1000.0,  # Convert ms to seconds
                     t_post_s=p.performanceTPostMs / 1000.0,  # Convert ms to seconds
+                    keep_illumination_on=keepIlluminationOn,
                 )
 
                 # Append workflow steps and file writers to the accumulated lists
@@ -989,12 +1032,34 @@ class ExperimentController(ImConWidgetController):
         return mFrame
 
     def set_exposure_time_gain(self, exposure_time: float, gain: float, context: WorkflowContext, metadata: Dict[str, Any]):
-        if gain and gain >=0:
-            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "gain"], gain)  # [category, detectorname, ROI1, ROI2] attribute, value
+        # Set gain and exposure via the shared attribute signal.
+        # The signal triggers the detector driver to apply the new values,
+        # but this is asynchronous – we need to wait briefly so the detector
+        # registers the change before the next frame is captured.
+        changed = False
+        if gain is not None and gain >= 0:
+            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "gain"], gain)
+            self._master.getController('Settings').setDetectorGain(None, gain)  # Ensure SettingsController is updated, TODO: we have to pass the correct detectorname in the future
             self._logger.debug(f"Setting gain to {gain}")
-        if exposure_time and exposure_time >0:
-            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "exposureTime"],exposure_time) # category, detectorname, attribute, value
+            changed = True
+        if exposure_time is not None and exposure_time > 0:
+            self._commChannel.sharedAttrs.sigAttributeSet(['Detector', None, None, "exposureTime"], exposure_time)
+            self._master.getController('Settings').setDetectorExposureTime(None, exposure_time)  # Ensure SettingsController is updated, TODO: we have to pass the correct detectorname in the future
             self._logger.debug(f"Setting exposure time to {exposure_time}")
+            changed = True
+
+        # Give the detector enough time to apply the new register values.
+        # Most camera drivers need at least one frame period to latch new settings.
+        if False and changed: # TODO: we should probably make this dependent on the exposure time - for very short exposures we can get away with a shorter wait, but for long exposures we need to wait longer - maybe something like max(0.1, exposure_time*1.5) or similar
+            # Wait proportional to exposure time so slow exposures have enough
+            # settle time, but cap at a reasonable maximum.
+            settle_time = min(max(0.05, (exposure_time or 50) / 1000.0), 0.5)
+            time.sleep(settle_time)
+            # Discard one stale frame that was captured with old settings
+            try:
+                self.mDetector.getLatestFrame(returnFrameNumber=False)
+            except Exception:
+                pass
 
     def dummy_main_func(self):
         self._logger.debug("Dummy main function called")
@@ -1156,10 +1221,21 @@ class ExperimentController(ImConWidgetController):
             self._logger.warning("AutofocusController not available - skipping autofocus")
             return None
 
-        # Set illumination if specified
+        # Activate illumination during autofocus so the camera sees contrast
         if illuminationChannel and hasattr(self, '_master') and hasattr(self._master, 'lasersManager'):
             try:
-                self._logger.debug(f"Setting illumination channel {illuminationChannel} for autofocus")
+                self._logger.debug(f"Activating illumination channel '{illuminationChannel}' for autofocus")
+                # Look up the current intensity from the experiment's channel settings
+                illu_intensity = 0
+                try:
+                    idx = list(self.allIlluNames).index(illuminationChannel)
+                    illu_intensity = self._illuminationIntensities[idx] if hasattr(self, '_illuminationIntensities') and idx < len(self._illuminationIntensities) else 0
+                except (ValueError, IndexError, AttributeError):
+                    pass
+                # If no stored intensity, use a safe default
+                if illu_intensity <= 0:
+                    illu_intensity = self._master.lasersManager[illuminationChannel].getValue() or 50
+                self.set_laser_power(power=illu_intensity, channel=illuminationChannel)
             except Exception as e:
                 self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
 
@@ -1440,6 +1516,22 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error setting detector parameter {parameter} to {value}: {e}")
 
+    def return_to_initial_position(self):
+        """Return the stage to the position stored at experiment start."""
+        try:
+            if hasattr(self, "_initial_experiment_position") and self._initial_experiment_position:
+                pos = self._initial_experiment_position
+                self._logger.info(
+                    "Returning to initial position: X=%.2f, Y=%.2f, Z=%.2f",
+                    pos["X"], pos["Y"], pos["Z"],
+                )
+                self.move_stage_xy(pos["X"], pos["Y"], relative=False)
+                self.move_stage_z(pos["Z"], relative=False)
+                self._initial_experiment_position = None
+            else:
+                self._logger.debug("No initial experiment position stored, skipping return.")
+        except Exception as e:
+            self._logger.warning("Failed to return to initial position: %s", e)
 
     @APIExport()
     def pauseWorkflow(self):
@@ -1498,6 +1590,20 @@ class ExperimentController(ImConWidgetController):
         # Stop performance mode if running
         if performance_status["running"]:
             results["performance"] = self.performance_mode.stop_scan()
+
+        # Return to initial XYZ position if stored
+        try:
+            if hasattr(self, "_initial_experiment_position") and self._initial_experiment_position:
+                pos = self._initial_experiment_position
+                self._logger.info(
+                    "Returning to initial position: X=%.2f, Y=%.2f, Z=%.2f",
+                    pos["X"], pos["Y"], pos["Z"],
+                )
+                self.move_stage_xy(pos["X"], pos["Y"], relative=False)
+                self.move_stage_z(pos["Z"], relative=False)
+                self._initial_experiment_position = None
+        except Exception as e:
+            self._logger.warning("Failed to return to initial position: %s", e)
 
         # Set LED status to idle
         self.set_led_status("idle")
@@ -2285,8 +2391,55 @@ class ExperimentController(ImConWidgetController):
                 )
 
         if config.fit_by_region:
-            # Fit separately per region – skip groups that already have a valid fit
+            # Fit separately per region – skip groups that already have a valid fit.
+            # Detect degenerate areas (single-FOV with zero-size bounds) and combine
+            # them into a single global focus map instead of duplicating measurements.
+            DEGEN_THRESHOLD = 1.0  # microns – area extent smaller than this is degenerate
+            degenerate_areas = []
+            normal_areas = []
             for area in areas:
+                b = area["bounds"]
+                w = abs(b["maxX"] - b["minX"])
+                h = abs(b["maxY"] - b["minY"])
+                if w < DEGEN_THRESHOLD and h < DEGEN_THRESHOLD:
+                    degenerate_areas.append(area)
+                else:
+                    normal_areas.append(area)
+
+            # Handle degenerate areas: use the combined bounds of ALL areas
+            # so that the focus grid covers the exterior of the whole scan region.
+            if degenerate_areas:
+                all_areas_for_bounds = areas  # use all areas (normal + degenerate)
+                combined_bounds = {
+                    "minX": min(a["bounds"]["minX"] for a in all_areas_for_bounds),
+                    "maxX": max(a["bounds"]["maxX"] for a in all_areas_for_bounds),
+                    "minY": min(a["bounds"]["minY"] for a in all_areas_for_bounds),
+                    "maxY": max(a["bounds"]["maxY"] for a in all_areas_for_bounds),
+                }
+                self._logger.info(
+                    f"Focus map: {len(degenerate_areas)} degenerate (single-FOV) area(s) detected – "
+                    f"computing combined map using global bounds instead of per-area"
+                )
+                combined_gid = "global_combined"
+                if not self.focus_map_manager.has_fitted_map(combined_gid):
+                    self._compute_focus_map_for_group(
+                        group_id=combined_gid,
+                        group_name="Combined (single-FOV areas)",
+                        bounds=combined_bounds,
+                        config=config,
+                    )
+                # Assign the combined map to each degenerate area
+                combined_fm = self.focus_map_manager.get(combined_gid)
+                if combined_fm is not None and combined_fm.is_fitted:
+                    for area in degenerate_areas:
+                        gid = area["areaId"]
+                        self.focus_map_manager._maps[gid] = combined_fm
+                        self._logger.info(
+                            f"Focus map [{gid}]: assigned combined map (single-FOV area)"
+                        )
+
+            # Handle normal (non-degenerate) areas individually
+            for area in normal_areas:
                 gid = area["areaId"]
                 if self.focus_map_manager.has_fitted_map(gid):
                     self._logger.info(

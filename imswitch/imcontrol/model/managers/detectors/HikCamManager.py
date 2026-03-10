@@ -70,8 +70,9 @@ class HikCamManager(DetectorManager):
 
         # Read actual values from camera hardware instead of using hardcoded defaults
         try:
-            hw_exposure = self._camera.get_exposuretime()  # returns (current, min, max)
-            initial_exposure = hw_exposure[0] if hw_exposure and hw_exposure[0] is not None else 100
+            hw_exposure = self._camera.get_exposuretime()  # returns (current, min, max) in µs
+            # SDK returns µs, UI expects ms → divide by 1000
+            initial_exposure = hw_exposure[0] / 1000 if hw_exposure and hw_exposure[0] is not None else 100
         except Exception:
             initial_exposure = 100
         try:
@@ -102,7 +103,7 @@ class HikCamManager(DetectorManager):
             'mode': DetectorBooleanParameter(group='Misc', value=name, editable=False), # auto or manual exposure settings
             'previewMinValue': DetectorNumberParameter(group='Misc', value=0, valueUnits='arb.u.',
                                     editable=True),
-            'previewMaxValue': DetectorNumberParameter(group='Misc', value=255, valueUnits='arb.u.',
+            'previewMaxValue': DetectorNumberParameter(group='Misc', value=self._getPreviewMaxValue(), valueUnits='arb.u.',
                                     editable=True),
             'trigger_source': DetectorListParameter(group='Acquisition mode',
                             value='Continous',
@@ -123,6 +124,19 @@ class HikCamManager(DetectorManager):
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=True)
 
+
+    def _getPreviewMaxValue(self):
+        """Return max preview value based on the camera's active pixel format bit depth."""
+        try:
+            fmt = getattr(self._camera, '_activePixelFormat', None)
+            if fmt is not None:
+                # Check against high-bit mono format set from hikcamera module
+                from imswitch.imcontrol.model.interfaces.hikcamera import _MONO_HIGHBIT_FORMATS
+                if fmt in _MONO_HIGHBIT_FORMATS:
+                    return 4095  # 12-bit
+        except Exception:
+            pass
+        return 255  # 8-bit default
 
     def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
         self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)

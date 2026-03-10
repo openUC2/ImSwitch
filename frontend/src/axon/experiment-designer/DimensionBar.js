@@ -11,6 +11,7 @@ import AccessTimeIcon from "@mui/icons-material/AccessTime";
 import GridOnIcon from "@mui/icons-material/GridOn";
 import SaveAltIcon from "@mui/icons-material/SaveAlt";
 import LandscapeIcon from "@mui/icons-material/Landscape";
+import BiotechIcon from "@mui/icons-material/Biotech";
 
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
@@ -53,6 +54,11 @@ const DIMENSION_CONFIG = {
     label: "Output",
     icon: SaveAltIcon,
     alwaysEnabled: true,
+  },
+  [DIMENSIONS.OBJECTIVE]: {
+    label: "Objective",
+    icon: BiotechIcon,
+    alwaysEnabled: false,
   },
 };
 

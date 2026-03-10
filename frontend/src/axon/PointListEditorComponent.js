@@ -86,8 +86,8 @@ const PointListEditorComponent = () => {
     dispatch(experimentSlice.setPointList([]));
   };
   //##################################################################################
-  const handleGotoButtonClick = (x, y) => {
-    console.log("handleGotoButtonClick", x, y);
+  const handleGotoButtonClick = (x, y, z) => {
+    console.log("handleGotoButtonClick", x, y, z);
     // Do something with x and y
     apiPositionerControllerMovePositioner({
       axis: "X",
@@ -128,6 +128,29 @@ const PointListEditorComponent = () => {
           error
         );
       });
+
+    // Also move Z if a valid z value is provided
+    if (z != null && z !== 0) {
+      apiPositionerControllerMovePositioner({
+        axis: "Z",
+        dist: z,
+        isAbsolute: true,
+        speed: 20000,
+      })
+        .then((positionerResponse) => {
+          console.log(
+            "apiPositionerControllerMovePositioner Z",
+            positionerResponse
+          );
+        })
+        .catch((error) => {
+          console.error(
+            "apiPositionerControllerMovePositioner Z",
+            "Error moving position:",
+            error
+          );
+        });
+    }
   };
 
   //##################################################################################
@@ -278,6 +301,20 @@ const PointListEditorComponent = () => {
                 />
               )}
 
+              {/* Input for z value */}
+              {viewMode == ViewMode.POSITION && <div>z:</div>}
+              {viewMode == ViewMode.POSITION && (
+                <Input
+                  type="number"
+                  value={item.z ?? 0}
+                  onChange={(e) =>
+                    handlePointChanged(index, "z", parseFloat(e.target.value))
+                  }
+                  placeholder="Z value"
+                  style={{ flex: 1 }} // Ensures inputs take equal space
+                />
+              )}
+
               {/* Input for shape value */}
               {viewMode == ViewMode.SHAPE && (
                 <>
@@ -412,7 +449,7 @@ const PointListEditorComponent = () => {
                 <Button
                   sx={{ padding: "0px" }}
                   disabled={false}
-                  onClick={() => handleGotoButtonClick(item.x, item.y)}
+                  onClick={() => handleGotoButtonClick(item.x, item.y, item.z)}
                 >
                   Goto
                 </Button>

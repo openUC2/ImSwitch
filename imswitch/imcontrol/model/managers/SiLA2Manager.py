@@ -8,55 +8,45 @@ microscope capabilities as SiLA2 features.
 """
 
 import asyncio
+import dataclasses
 import threading
-from typing import Optional, Dict, Any, List
+from typing import Any, Optional, Dict, List
 
 from imswitch.imcommon.model import initLogger
 
 try:
     from unitelabs.cdk import Connector
+    from unitelabs.cdk.config import (
+        ConnectorBaseConfig,
+        SiLAServerConfig,
+    )
     HAS_SILA2 = True
-except ImportError:
-    Connector = None
-    HAS_SILA2 = False
 
-import dataclasses
-from unitelabs.cdk.config import (
-    ConfigurationError,
-    ConnectorBaseConfig,
-    SiLAServerConfig,
-    delayed_default,
-    validate_config,
-)
-import typing_extensions as typing
+    @dataclasses.dataclass
+    class OpenUC2MicroscopeConfig(ConnectorBaseConfig):
+        """
+        SiLA2 Connector configuration for the OpenUC2 ImSwitch microscope.
 
-        
-@dataclasses.dataclass
-class openUC2MicroscopeConfig(ConnectorBaseConfig):
-    """Configuration for the openUC2 Microscope device connector."""
+        All fields are populated from the ImSwitch setup JSON (SiLA2Info) at
+        runtime; the defaults here serve as safe fallbacks.
+        """
 
-    sila_server: SiLAServerConfig = dataclasses.field(
-        default_factory=delayed_default(
-            lambda self: SiLAServerConfig(
-                name=f"{self.device} Connector",
-                description=f"A connector for the {self.device} openUC2 Microscope devices.",
+        sila_server: Any = dataclasses.field(
+            default_factory=lambda: SiLAServerConfig(
+                name="OpenUC2 ImSwitch",
+                description="SiLA2 server for OpenUC2 ImSwitch microscope control",
                 type="Microscope",
-                version=str(0.1), # TODO: FIXME!
-                vendor_url="https://openuc2.com/"
+                version="0.1.0",
+                vendor_url="https://openuc2.com/",
             )
         )
-    )
-    serial_port: str = "/dev/usb0"
 
-
-
-    @validate_config()
-    def validate_autodetect(self) -> typing.Self:
-        """Validate that if autodetect is enabled, a serial number has been provided."""
-        if self.autodetect and not self.serial_number:
-            msg = "Setting autodetect=True requires a 'serial_number' configuration value to also be set."
-            raise ConfigurationError(msg)
-        return self
+except ImportError:
+    Connector = None
+    ConnectorBaseConfig = None
+    SiLAServerConfig = None
+    OpenUC2MicroscopeConfig = None
+    HAS_SILA2 = False
 
 
 class SiLA2Manager:
@@ -179,9 +169,22 @@ class SiLA2Manager:
     async def _serve(self) -> None:
         """Create the Connector, register all features, and run forever."""
         cfg = self._config
-        
-        # use the openUC2MicroscopeConfig dataclass to validate and structure the configuration
-        self._connector = Connector(openUC2MicroscopeConfig)
+
+        # Build a typed config instance from the ImSwitch setup values
+        connector_config = OpenUC2MicroscopeConfig(
+            sila_server=SiLAServerConfig(
+                name=cfg.get("server_name", "OpenUC2 ImSwitch"),
+                description=cfg.get(
+                    "server_description",
+                    "SiLA2 server for OpenUC2 ImSwitch microscope control",
+                ),
+                type="Microscope",
+                version=cfg.get("server_version", "0.1.0"),
+                vendor_url=cfg.get("vendor_url", "https://openuc2.com/"),
+            )
+        )
+
+        self._connector = Connector(connector_config)
 
         for feature in self._features:
             self._connector.register(feature)
@@ -193,17 +196,23 @@ class SiLA2Manager:
             f"{cfg.get('server_host', '0.0.0.0')}:{cfg.get('server_port', 50052)}"
         )
 
-        # The Connector.serve() call blocks until cancelled.  If the CDK
-        # version does not expose a `serve` coroutine directly we fall back
-        # to keeping the loop alive indefinitely so that registered features
-        # can be discovered via SiLA2 service discovery.
-        if hasattr(self._connector, "serve"):
+        # The reference CDK pattern uses `app.start()` (UniteLabs CDK >= 0.2).
+        # Older builds exposed a `serve(host, port)` coroutine.  We try
+        # `start()` first, then `serve()`, and finally keep the loop alive
+        # as a last resort so that the asyncio thread does not exit.
+        if hasattr(self._connector, "start"):
+            await self._connector.start()
+        elif hasattr(self._connector, "serve"):
             await self._connector.serve(
                 host=cfg.get("server_host", "0.0.0.0"),
                 port=cfg.get("server_port", 50052),
             )
         else:
-            # Fallback – keep the event loop alive
+            # Last-resort fallback – keep the event loop alive
+            self.__logger.warning(
+                "SiLA2 Connector has neither start() nor serve() – "
+                "running in no-op mode (features will not be reachable)"
+            )
             while self._running:
                 await asyncio.sleep(1)
 

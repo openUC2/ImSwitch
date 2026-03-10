@@ -29,7 +29,7 @@ try:
     UnobservableProperty = sila.UnobservableProperty
     UnobservableCommand = sila.UnobservableCommand
     # sila.Response was removed in newer CDK versions; fall back to a no-op
-    Response = getattr(sila, "Response", _identity_decorator)
+    Response = getattr(sila, "Response", _identity_decorator) # TODO: This is old behavior 
 except ImportError:
     sila = None
 

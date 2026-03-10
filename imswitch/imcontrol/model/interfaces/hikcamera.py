@@ -39,11 +39,17 @@ PixelType_Gvsp_Mono12_Packed = 17563654
 PixelType_Gvsp_BayerRG10 = 17825805
 PixelType_Gvsp_BayerRG12 = 17825809
 
-# Set of pixel types that deliver >8-bit mono data (2 bytes per pixel)
+# Set of pixel types that deliver >8-bit mono data (2 bytes per pixel, unpacked)
 _MONO_HIGHBIT_FORMATS = {
     PixelType_Gvsp_Mono10,
     PixelType_Gvsp_Mono12,
     PixelType_Gvsp_Mono16,
+}
+
+# Bit-packed mono formats that need SDK conversion before use.
+# Mono10_Packed = 4 pixels in 5 bytes, Mono12_Packed = 2 pixels in 3 bytes
+# — these CANNOT be interpreted as plain uint16 arrays.
+_MONO_PACKED_FORMATS = {
     PixelType_Gvsp_Mono10_Packed,
     PixelType_Gvsp_Mono12_Packed,
 }
@@ -393,12 +399,31 @@ class CameraHIK:
             ts     = self._hw_timestamp(info)        # ← fixed
 
             # build NumPy view over the SDK buffer (zero-copy)
-            # For >8-bit mono formats, each pixel is 2 bytes (uint16)
+            # For >8-bit unpacked mono formats, each pixel is 2 bytes (uint16)
             if pix in _MONO_HIGHBIT_FORMATS:
                 buf = np.frombuffer(
                     (c_ubyte * nSize).from_address(addressof(pData.contents)),
                     dtype=np.uint16
                 )
+            elif pix in _MONO_PACKED_FORMATS:
+                # Bit-packed formats need SDK conversion to Mono16 first
+                nDst = w * h * 2  # 2 bytes per pixel in Mono16
+                dst  = (c_ubyte * nDst)()
+                conv = MV_CC_PIXEL_CONVERT_PARAM()
+                memset(byref(conv), 0, sizeof(conv))
+                conv.nWidth         = w
+                conv.nHeight        = h
+                conv.enSrcPixelType = pix
+                conv.enDstPixelType = PixelType_Gvsp_Mono16
+                conv.pSrcData       = pData
+                conv.nSrcDataLen    = nSize
+                conv.pDstBuffer     = dst
+                conv.nDstBufferSize = nDst
+                ret = self.camera.MV_CC_ConvertPixelType(conv)
+                if ret != 0:
+                    self.__logger.error(f"Packed mono convert failed 0x{ret:x}")
+                    return
+                buf = np.frombuffer(dst, dtype=np.uint16, count=w * h)
             else:
                 buf = np.frombuffer(
                     (c_ubyte * nSize).from_address(addressof(pData.contents)),
@@ -406,7 +431,7 @@ class CameraHIK:
                 )
 
             # reshape according to pixel type
-            if pix in _MONO_HIGHBIT_FORMATS:       # mono 10/12/16-bit
+            if pix in _MONO_HIGHBIT_FORMATS or pix in _MONO_PACKED_FORMATS:  # mono 10/12/16-bit
                 frame = buf.reshape(h, w)
             elif pix == PixelType_Gvsp_Mono8:              # mono 8-bit
                 frame = buf.reshape(h, w)

@@ -866,8 +866,6 @@ class LightsheetController(ImConWidgetController):
         # Buffer frames in memory for fast acquisition, then write after scan
         frame_buffer = []  # List of (frame_2d, z_position) tuples
         
-        # For keeping last frames for GUI preview
-        last_frames_preview = []
 
         try:
             # Turn on illumination
@@ -986,20 +984,17 @@ class LightsheetController(ImConWidgetController):
                     frame_buffer.append((frame_2d.copy(), calculatedZPos))
                     frameCount += 1
 
-                    # Keep last frames for preview (limit memory)
-                    if len(last_frames_preview) < 10:
-                        last_frames_preview.append(frame.copy())
-                    else:
-                        last_frames_preview.pop(0)
-                        last_frames_preview.append(frame.copy())
-
-                    # Update status
-                    currentPos = self.stages.getPosition().get(params.axis, params.minPos)
-                    self._scanStatus.currentFrame = frameCount
-                    self._scanStatus.currentPosition = currentPos
-                    progress = abs(currentPos - params.minPos) / abs(totalDistance) * 100
-                    self._scanStatus.progress = min(progress, 100)
-                    self._emitScanStatus()
+                    # Update status periodically (every 10 frames) to avoid
+                    # flooding the event system and blocking the main thread.
+                    # Use the time-calculated position instead of polling the
+                    # stage via serial I/O — getPosition() would block the
+                    # shared serial bus and starve live-view and other controllers.
+                    if frameCount % 10 == 0:
+                        self._scanStatus.currentFrame = frameCount
+                        self._scanStatus.currentPosition = calculatedZPos
+                        progress = abs(calculatedZPos - params.minPos) / abs(totalDistance) * 100
+                        self._scanStatus.progress = min(progress, 100)
+                        self._emitScanStatus()
 
                 time.sleep(0.01)  # Small delay to prevent CPU overload
 
@@ -1086,10 +1081,6 @@ class LightsheetController(ImConWidgetController):
             write_thread = threading.Thread(target=_write_frames_background, daemon=True)
             write_thread.start()
 
-            # Update preview stack
-            if len(last_frames_preview) > 0:
-                self.lightsheetStack = np.array(last_frames_preview)
-
         except Exception as e:
             self._logger.error(f"Error in continuous scan: {e}")
             self._scanStatus.errorMessage = str(e)
@@ -1099,9 +1090,6 @@ class LightsheetController(ImConWidgetController):
             self._scanStatus.progress = 100.0
             self._emitScanStatus()
             self.isLightsheetRunning = False
-
-            if len(last_frames_preview) > 0 and not IS_HEADLESS:
-                self.sigImageReceived.emit(self.lightsheetStack)
 
     # ========================================================================
     # Observation Camera Streaming (for sample positioning visualization)

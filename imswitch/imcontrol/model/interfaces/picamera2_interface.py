@@ -109,7 +109,7 @@ class CameraPicamera2:
 
         # Auto exposure/white balance
         self.exposure_auto = False
-        if 1:
+        if 0:
             self.awb_auto = True
 
             # White balance mode and manual colour gains
@@ -264,7 +264,7 @@ class CameraPicamera2:
                             "FrameRate": self.frame_rate,
                         }
                     )
-
+            # TODO: We apply noise reduction here - helpful? Probably not, maybe not choosing video mode but raw mode would be better for scientific imaging?#
             self.camera.configure(config)
 
             # Set initial controls
@@ -1206,7 +1206,7 @@ class MockCameraPicamera2:
     def recordFlatfieldImage(self, *args, **kwargs): pass
     def getFrameNumber(self): return self.frameNumber
     def reconnectCamera(self): pass
-    def set_white_balance_mode(self, mode): self.awb_mode = getattr(self, 'awb_mode', 'auto')
+    def set_white_balance_mode(self, mode): self.awb_mode = getattr(self, 'awb_mode', 'manual')
     def set_colour_gains(self, r, b): self.colour_gains = (r, b)
     def apply_tuning(self, tuning_dict): pass
     def load_tuning_file(self, path): pass

@@ -58,6 +58,7 @@ eventually install libraries for aiortc
 
 ```
 sudo apt install \
+    libpcap-dev \
     ffmpeg \
     libavformat-dev \
     libavcodec-dev \
@@ -74,20 +75,16 @@ sudo apt install \
 ### Optional For PiCamera in UV 
 
 ```
-apt-get update && apt install -y --no-install-recommends \
-         python3-picamera2 \
-     && apt-get clean \
-     && apt-get autoremove \
-     && rm -rf /var/cache/apt/archives/* \
-     && rm -rf /var/lib/apt/lists/*
-
 # then install picamera2
-uv pip install picamera2
-uv venv --system-site-packages -y
-
 cd ~/ImSwitch
 source .venv/bin/activate
-
+uv venv --system-site-packages -y
+sudo apt-get update && sudo apt install -y --no-install-recommends \
+         python3-picamera2 -y \
+     && sudo apt-get clean \
+     && sudo apt-get autoremove \
+     && sudo rm -rf /var/cache/apt/archives/* \
+     && sudo rm -rf /var/lib/apt/lists/*
 ```
 
 Next, follow the setup instructions for the development environment for the frontend in

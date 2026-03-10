@@ -1640,7 +1640,7 @@ class UC2ConfigController(ImConWidgetController):
     # Chip-specific esptool flash parameters
     _CHIP_FLASH_PARAMS = {
         "esp32":   {"offset": "0x10000", "flash_mode": "dio", "flash_freq": "80m", "flash_size": "4MB"},
-        "esp32s3": {"offset": "0x0",     "flash_mode": "dio", "flash_freq": "80m", "flash_size": "detect"},
+        "esp32s3": {"offset": "0x0",     "flash_mode": "dio", "flash_freq": "40m", "flash_size": "detect"},
         "esp32s2": {"offset": "0x10000", "flash_mode": "dio", "flash_freq": "80m", "flash_size": "detect"},
         "esp32c3": {"offset": "0x0",     "flash_mode": "dio", "flash_freq": "80m", "flash_size": "detect"},
     }
@@ -1772,26 +1772,24 @@ class UC2ConfigController(ImConWidgetController):
         # 4c) For chips that flash at 0x0 (esp32s3, esp32c3, etc.) the binary must
         #     include the bootloader ("merged" build).  espota binaries do NOT include
         #     the bootloader and will cause boot-loops when flashed via esptool at 0x0.
-        #     Convention: merged binaries have a "_merged" postfix before .bin.
+        #     Convention: merged binaries have a "_merged" postfix before .bin, if not, we flash at the correct offset of 0x10000 (if supported by the chip) or warn the user.
         if flash_params["offset"] == "0x0" and fw_path:
             fw_name = fw_path.name  # e.g. "firmware.bin"
             if "_merged" not in fw_name:
                 # Try downloading the merged variant from the server
-                stem = fw_path.stem  # "firmware"
-                merged_name = f"{stem}_merged.bin"
-                merged_path = self._download_firmware_by_name(merged_name)
-                if merged_path:
-                    self.__logger.info(f"Using merged firmware for {resolved_chip}: {merged_name}")
-                    fw_path = merged_path
-                    self._emit_usb_flash_status("downloading", 22, f"Using merged firmware: {merged_name}")
+                fw_path = self._download_firmware_by_name(fw_name)
+                flash_params["offset"] = "0x10000"  # flash at 0x10000 for non-merged binaries (if chip supports it)
+                if fw_path:
+                    self.__logger.info(f"Using standard firmware for {resolved_chip}: {fw_path} at offset {flash_params['offset']}")
+                    self._emit_usb_flash_status("downloading", 22, f"Using merged firmware: {fw_path.name}")
+                    erase_flash = False # we flash non-merged binaries at the correct offset, so no need to erase the whole flash
                 else:
                     self.__logger.warning(
-                        f"No merged firmware '{merged_name}' found on server. "
+                        f"No merged firmware '{fw_path}' found on server. "
                         f"Flashing '{fw_name}' at offset {flash_params['offset']} – "
                         f"this may cause boot-loops if the binary is an OTA/espota build."
                     )
                     self._emit_usb_flash_status("flashing", 22, f"Warning: no merged firmware found, using {fw_name}")
-
         self.__logger.info(
             f"Flashing firmware via {flash_port} (baud={baud}, chip={resolved_chip}, "
             f"file={fw_path.name}, erase={erase_flash})"

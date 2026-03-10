@@ -153,7 +153,7 @@ class CameraHIK:
                     format_set = True
                     break
                 else:
-                    self.__logger.debug(f"Failed to set pixel format 0x{pixel_format:x}, ret=0x{ret:x}")
+                    self.__logger.info(f"Failed to set pixel format 0x{pixel_format:x}, ret=0x{ret:x}")
 
             if not format_set:
                 self.__logger.warning("Could not set any RGB pixel format, camera may not work correctly")

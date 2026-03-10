@@ -773,7 +773,7 @@ class ExperimentController(ImConWidgetController):
             keepIlluminationOn = True
         else:
             keepIlluminationOn = False
-        self.__logger.info(f"Illumination mode: setting={keepIlluminationOnSetting}, activeChannels={nActiveChannels}, keepOn={keepIlluminationOn}")
+        self._logger.info(f"Illumination mode: setting={keepIlluminationOnSetting}, activeChannels={nActiveChannels}, keepOn={keepIlluminationOn}")
 
         # check if we want to use performance mode
         self.ExperimentParams.performanceMode = p.performanceMode
@@ -1050,7 +1050,7 @@ class ExperimentController(ImConWidgetController):
 
         # Give the detector enough time to apply the new register values.
         # Most camera drivers need at least one frame period to latch new settings.
-        if changed:
+        if False and changed: # TODO: we should probably make this dependent on the exposure time - for very short exposures we can get away with a shorter wait, but for long exposures we need to wait longer - maybe something like max(0.1, exposure_time*1.5) or similar
             # Wait proportional to exposure time so slow exposures have enough
             # settle time, but cap at a reasonable maximum.
             settle_time = min(max(0.05, (exposure_time or 50) / 1000.0), 0.5)

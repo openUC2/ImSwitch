@@ -342,13 +342,8 @@ class JPEGStreamWorker(StreamWorker):
             if frame is None:
                 self._logger.warning("Received None frame, skipping")
                 return None  # Not an error, but skip processing
-            if frame.dtype != np.uint8:
-                vmin = float(np.min(frame))
-                vmax = float(np.max(frame))
-                if vmax > vmin:
-                    frame = ((frame - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
-                else:
-                    frame = np.zeros_like(frame, dtype=np.uint8)
+            if frame.dtype == np.uint16: # convert to uint8 if needed also for its dynamic range 
+                frame = (frame / 16).astype(np.uint8)   
 
             # Apply center crop if specified (before subsampling)
             if self._params.crop_size > 0:

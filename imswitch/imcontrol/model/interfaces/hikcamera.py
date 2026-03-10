@@ -21,7 +21,7 @@ try:
 except Exception as e:
     print(e)
 
-# Pixel format constants
+# Pixel format constants — 8-bit
 PixelType_Gvsp_Mono8 = 17301505
 PixelType_Gvsp_Mono8_Signed = 17301506
 PixelType_Gvsp_RGB8_Packed = 35127316
@@ -29,6 +29,36 @@ PixelType_Gvsp_BayerRG8 = 17301512
 PixelType_Gvsp_BayerBG8 = 17301513
 PixelType_Gvsp_BayerGB8 = 17301514
 PixelType_Gvsp_BayerGR8 = 17301515
+
+# Pixel format constants — 10/12/16-bit (from SDK headers)
+PixelType_Gvsp_Mono10 = 17825795
+PixelType_Gvsp_Mono12 = 17825797
+PixelType_Gvsp_Mono16 = 17825799
+PixelType_Gvsp_Mono10_Packed = 17563652
+PixelType_Gvsp_Mono12_Packed = 17563654
+PixelType_Gvsp_BayerRG10 = 17825805
+PixelType_Gvsp_BayerRG12 = 17825809
+
+# Set of pixel types that deliver >8-bit mono data (2 bytes per pixel, unpacked)
+_MONO_HIGHBIT_FORMATS = {
+    PixelType_Gvsp_Mono10,
+    PixelType_Gvsp_Mono12,
+    PixelType_Gvsp_Mono16,
+}
+
+# Bit-packed mono formats that need SDK conversion before use.
+# Mono10_Packed = 4 pixels in 5 bytes, Mono12_Packed = 2 pixels in 3 bytes
+# — these CANNOT be interpreted as plain uint16 arrays.
+_MONO_PACKED_FORMATS = {
+    PixelType_Gvsp_Mono10_Packed,
+    PixelType_Gvsp_Mono12_Packed,
+}
+
+# Set of pixel types that deliver >8-bit Bayer data
+_BAYER_HIGHBIT_FORMATS = {
+    PixelType_Gvsp_BayerRG10,
+    PixelType_Gvsp_BayerRG12,
+}
 
 # Some possible YUV pixel formats:
 PixelType_Gvsp_YUV444_Packed = 35127328
@@ -102,6 +132,7 @@ class CameraHIK:
         self.__logger.info(f"Camera RGB mode: {self.isRGB}")
 
         # Set pixel format based on RGB mode
+        self._activePixelFormat = PixelType_Gvsp_Mono8  # default
         if self.isRGB:
             # Try different RGB/YUV formats for color cameras
             formats_to_try = [
@@ -118,20 +149,34 @@ class CameraHIK:
                 ret = self.camera.MV_CC_SetEnumValue("PixelFormat", pixel_format)
                 if ret == 0:
                     self.__logger.info(f"Successfully set pixel format to 0x{pixel_format:x} for RGB camera")
+                    self._activePixelFormat = pixel_format
                     format_set = True
                     break
                 else:
-                    self.__logger.debug(f"Failed to set pixel format 0x{pixel_format:x}, ret=0x{ret:x}")
+                    self.__logger.info(f"Failed to set pixel format 0x{pixel_format:x}, ret=0x{ret:x}")
 
             if not format_set:
                 self.__logger.warning("Could not set any RGB pixel format, camera may not work correctly")
         else:
-            # For mono cameras, try to set Mono8 format
-            ret = self.camera.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_Mono8)
-            if ret != 0:
-                self.__logger.warning(f"Failed to set Mono8 pixel format, ret=0x{ret:x}")
-            else:
-                self.__logger.info("Set pixel format to Mono8 for monochrome camera")
+            # For mono cameras, try highest bit-depth first, fall back to Mono8
+            mono_formats_to_try = [
+                (PixelType_Gvsp_Mono12, "Mono12"),
+                (PixelType_Gvsp_Mono10, "Mono10"),
+                (PixelType_Gvsp_Mono8, "Mono8"),
+            ]
+            format_set = False
+            for pixel_format, name in mono_formats_to_try:
+                ret = self.camera.MV_CC_SetEnumValue("PixelFormat", pixel_format)
+                if ret == 0:
+                    self.__logger.info(f"Set pixel format to {name} for monochrome camera")
+                    self._activePixelFormat = pixel_format
+                    format_set = True
+                    break
+                else:
+                    self.__logger.debug(f"Mono format {name} not supported, ret=0x{ret:x}")
+            if not format_set:
+                self.__logger.warning("Could not set any mono pixel format")
+                self._activePixelFormat = PixelType_Gvsp_Mono8
 
         # Mark camera as connected after successful initialization
         self.is_connected = True
@@ -354,13 +399,41 @@ class CameraHIK:
             ts     = self._hw_timestamp(info)        # ← fixed
 
             # build NumPy view over the SDK buffer (zero-copy)
-            buf = np.frombuffer(
-                (c_ubyte * nSize).from_address(addressof(pData.contents)),
-                dtype=np.uint8
-            )
+            # For >8-bit unpacked mono formats, each pixel is 2 bytes (uint16)
+            if pix in _MONO_HIGHBIT_FORMATS:
+                buf = np.frombuffer(
+                    (c_ubyte * nSize).from_address(addressof(pData.contents)),
+                    dtype=np.uint16
+                )
+            elif pix in _MONO_PACKED_FORMATS:
+                # Bit-packed formats need SDK conversion to Mono16 first
+                nDst = w * h * 2  # 2 bytes per pixel in Mono16
+                dst  = (c_ubyte * nDst)()
+                conv = MV_CC_PIXEL_CONVERT_PARAM()
+                memset(byref(conv), 0, sizeof(conv))
+                conv.nWidth         = w
+                conv.nHeight        = h
+                conv.enSrcPixelType = pix
+                conv.enDstPixelType = PixelType_Gvsp_Mono16
+                conv.pSrcData       = pData
+                conv.nSrcDataLen    = nSize
+                conv.pDstBuffer     = dst
+                conv.nDstBufferSize = nDst
+                ret = self.camera.MV_CC_ConvertPixelType(conv)
+                if ret != 0:
+                    self.__logger.error(f"Packed mono convert failed 0x{ret:x}")
+                    return
+                buf = np.frombuffer(dst, dtype=np.uint16, count=w * h)
+            else:
+                buf = np.frombuffer(
+                    (c_ubyte * nSize).from_address(addressof(pData.contents)),
+                    dtype=np.uint8
+                )
 
             # reshape according to pixel type
-            if pix == PixelType_Gvsp_Mono8:              # mono 8-bit
+            if pix in _MONO_HIGHBIT_FORMATS or pix in _MONO_PACKED_FORMATS:  # mono 10/12/16-bit
+                frame = buf.reshape(h, w)
+            elif pix == PixelType_Gvsp_Mono8:              # mono 8-bit
                 frame = buf.reshape(h, w)
             elif pix in (PixelType_Gvsp_RGB8_Packed,
                         PixelType_Gvsp_BayerRG8,
@@ -626,8 +699,15 @@ class CameraHIK:
         self.camera.MV_CC_SetFloatValue("BlackLevel", self.blacklevel)
 
     def set_pixel_format(self, format):
-        # Example pixel format setting for mono:
-        self.camera.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_Mono8_Signed)
+        # Apply the requested pixel format (or fall back to current)
+        if format is None:
+            format = getattr(self, '_activePixelFormat', PixelType_Gvsp_Mono8)
+        ret = self.camera.MV_CC_SetEnumValue("PixelFormat", format)
+        if ret == 0:
+            self._activePixelFormat = format
+            self.__logger.info(f"Pixel format set to 0x{format:x}")
+        else:
+            self.__logger.warning(f"Failed to set pixel format 0x{format:x}, ret=0x{ret:x}")
 
     def setBinning(self, binning=1):
         try:
@@ -739,7 +819,7 @@ class CameraHIK:
     def setPropertyValue(self, property_name, property_value):
         if property_name == "gain":
             self.set_gain(property_value)
-        elif property_name == "exposure":
+        elif property_name == "exposure" or property_name == "exposureTime":
             self.set_exposure_time(property_value)
         elif property_name == "exposure_mode":
             self.set_exposure_mode(property_value)

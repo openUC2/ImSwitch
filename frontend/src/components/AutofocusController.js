@@ -188,7 +188,7 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     setIsStopping(true);
     
     try {
-      const url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/stopAutoFocus`;
+      const url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/stopAutofocus`;
       const response = await fetch(url, { method: "GET" });
       const result = await response.json();
       

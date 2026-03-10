@@ -615,7 +615,7 @@ const OverviewRegistrationWizard = () => {
           <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5, maxWidth: 220 }}>
             <Button
               size="small" variant="outlined"
-              onClick={() => apiPositionerControllerMovePositioner({ axis: "Y", dist: -5000 })}
+              onClick={() => apiPositionerControllerMovePositioner({ axis: "Y", dist: -5000, speed: 10000 })}
               sx={{ minWidth: 60 }}
             >
               Y ▲
@@ -623,7 +623,7 @@ const OverviewRegistrationWizard = () => {
             <Box sx={{ display: "flex", gap: 0.5 }}>
               <Button
                 size="small" variant="outlined"
-                onClick={() => apiPositionerControllerMovePositioner({ axis: "X", dist: -5000 })}
+                onClick={() => apiPositionerControllerMovePositioner({ axis: "X", dist: -5000, speed: 10000})}
                 sx={{ minWidth: 60 }}
               >
                 ◄ X
@@ -633,7 +633,7 @@ const OverviewRegistrationWizard = () => {
               </Box>
               <Button
                 size="small" variant="outlined"
-                onClick={() => apiPositionerControllerMovePositioner({ axis: "X", dist: 5000 })}
+                onClick={() => apiPositionerControllerMovePositioner({ axis: "X", dist: 5000, speed: 10000 })}
                 sx={{ minWidth: 60 }}
               >
                 X ►
@@ -641,7 +641,7 @@ const OverviewRegistrationWizard = () => {
             </Box>
             <Button
               size="small" variant="outlined"
-              onClick={() => apiPositionerControllerMovePositioner({ axis: "Y", dist: 5000 })}
+              onClick={() => apiPositionerControllerMovePositioner({ axis: "Y", dist: 5000, speed: 10000 })}
               sx={{ minWidth: 60 }}
             >
               Y ▼

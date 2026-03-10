@@ -1,3 +1,4 @@
+import React, { useState } from "react";
 import LiveViewControlWrapper from "./LiveViewControlWrapper";
 import TileViewComponent from "./TileViewComponent";
 import ZarrTileViewController from "./ZarrTileView";
@@ -8,14 +9,31 @@ import WebSocketComponent from "./WebSocketComponent";
 import PositionViewComponent from "./PositionViewComponent";
 import ParameterEditorWrapper from "./ParameterEditorWrapper";
 import ExperimentComponent from "./ExperimentComponent";
-import ObjectiveController from "../components/ObjectiveController";
 import ResizablePanel from "./ResizablePanel"; //<ResizablePanel></ResizablePanel> performace issues :/
-import ObjectiveSwitcher from "../components/ObjectiveSwitcher";
 import FocusLockMiniController from "../components/FocusLockMiniController";
+import Frame3DViewerPanel from "./Frame3DViewerPanel.jsx";
+import PictureInPicture, { PiPToggleButton } from "./PictureInPicture";
 
 const AxonTabComponent = () => {
+  // PiP (picture-in-picture) floating live preview
+  const [pipVisible, setPipVisible] = useState(false);
+
   return (
     <div style={{ width: "100%" }}>
+      {/* PiP toggle button – always visible in the top-right corner */}
+      <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 8px 0 0" }}>
+        <PiPToggleButton
+          active={pipVisible}
+          onClick={() => setPipVisible((v) => !v)}
+        />
+      </div>
+
+      {/* Floating PiP overlay */}
+      <PictureInPicture
+        visible={pipVisible}
+        onClose={() => setPipVisible(false)}
+      />
+
       <div style={{ display: "flex" }}>
         <div style={{ flex: 3 }}>
           <GenericTabBar
@@ -26,6 +44,7 @@ const AxonTabComponent = () => {
               "Parameter",
               "Points",
               "State",
+              "3D Twin",
             ]}
           >
             <WellSelectorComponent />
@@ -37,6 +56,7 @@ const AxonTabComponent = () => {
               <WebSocketComponent />
               <PositionViewComponent />
             </div>
+            <Frame3DViewerPanel />
           </GenericTabBar>
         </div>
         <div style={{ flex: 2 }}>
@@ -47,7 +67,6 @@ const AxonTabComponent = () => {
 //              "Tile View",
               "Points",
               "Parameter",
-              "Objective", 
               "Focus Lock"
             ]}
           >
@@ -56,7 +75,6 @@ const AxonTabComponent = () => {
             <PointListEditorComponent />
             <ParameterEditorWrapper />
             {/*<ExperimentComponent />*/}
-            <ObjectiveSwitcher />
             <FocusLockMiniController />
           </GenericTabBar>
         </div>

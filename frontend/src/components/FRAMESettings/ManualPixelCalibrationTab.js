@@ -65,6 +65,7 @@ const ManualPixelCalibrationTab = () => {
   const [imageDims, setImageDims] = useState(null);       // { width, height } in preview pixels
   const [movementDistanceUm, setMovementDistanceUm] = useState(100);
   const [movementAxis, setMovementAxis] = useState('X');
+  const [backlashDistanceUm, setBacklashDistanceUm] = useState(50); // Backlash pre-move distance
   const [objectiveId, setObjectiveId] = useState('');     // empty = auto-detect
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
@@ -84,20 +85,43 @@ const ManualPixelCalibrationTab = () => {
     setError('');
   };
 
+  // ---- step 0: backlash compensation pre-move ----
+  const handleBacklashMove = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      setStatus(`Backlash pre-move: ${backlashDistanceUm} µm along ${movementAxis}…`);
+      await apiPositionerControllerMovePositioner({
+        axis: movementAxis,
+        dist: backlashDistanceUm,
+        isAbsolute: false,
+        isBlocking: true,
+      });
+      setStatus(
+        `Backlash compensation done. Now click on a recognisable feature in the image.`
+      );
+      setActiveStep(1);
+    } catch (err) {
+      setError(`Backlash move failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ---- step 1: mark first point ----
   const handleImageClick = useCallback(
     (pixelX, pixelY, imageWidth, imageHeight) => {
-      if (activeStep === 0) {
+      if (activeStep === 1) {
         // Mark point 1
         setPoint1({ x: pixelX, y: pixelY });
         setImageDims({ width: imageWidth, height: imageHeight });
         setStatus(`Point 1 marked at (${Math.round(pixelX)}, ${Math.round(pixelY)})`);
-        setActiveStep(1);
-      } else if (activeStep === 2) {
+        setActiveStep(2);
+      } else if (activeStep === 3) {
         // Mark point 2
         setPoint2({ x: pixelX, y: pixelY });
         setStatus(`Point 2 marked at (${Math.round(pixelX)}, ${Math.round(pixelY)})`);
-        setActiveStep(3);
+        setActiveStep(4);
       }
     },
     [activeStep],
@@ -119,7 +143,7 @@ const ManualPixelCalibrationTab = () => {
         `Stage moved ${movementDistanceUm} µm along ${movementAxis}. ` +
         'Now click the SAME feature again in the image.'
       );
-      setActiveStep(2);
+      setActiveStep(3);
     } catch (err) {
       setError(`Stage movement failed: ${err.message}`);
     } finally {
@@ -153,7 +177,7 @@ const ManualPixelCalibrationTab = () => {
       if (res.success) {
         setResult(res);
         setStatus('');
-        setActiveStep(4);
+        setActiveStep(5);
       } else {
         setError(res.error || 'Calibration failed');
       }
@@ -228,6 +252,7 @@ const ManualPixelCalibrationTab = () => {
 
   // Stepper labels
   const steps = [
+    'Backlash compensation move',
     'Mark feature (point 1)',
     'Move stage',
     'Mark same feature (point 2)',
@@ -245,10 +270,12 @@ const ManualPixelCalibrationTab = () => {
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               {activeStep === 0
-                ? 'Click on a recognisable feature in the image to set Point 1'
-                : activeStep === 2
-                  ? 'Click on the SAME feature again to set Point 2'
-                  : 'Live preview'}
+                ? 'First, perform backlash compensation move'
+                : activeStep === 1
+                  ? 'Click on a recognisable feature in the image to set Point 1'
+                  : activeStep === 3
+                    ? 'Click on the SAME feature again to set Point 2'
+                    : 'Live preview'}
             </Typography>
 
             <Box
@@ -377,14 +404,58 @@ const ManualPixelCalibrationTab = () => {
             </Typography>
 
             <Stepper activeStep={activeStep} orientation="vertical">
-              {/* Step 0 – mark point 1 */}
+              {/* Step 0 – backlash compensation */}
               <Step>
                 <StepLabel
                   StepIconProps={{
-                    icon: <CrosshairIcon color={activeStep === 0 ? 'primary' : 'inherit'} />,
+                    icon: <MoveIcon color={activeStep === 0 ? 'primary' : 'inherit'} />,
                   }}
                 >
                   {steps[0]}
+                </StepLabel>
+                <StepContent>
+                  <Typography variant="body2" sx={{ mb: 1 }}>
+                    Move the stage <strong>{backlashDistanceUm} µm</strong> along{' '}
+                    <strong>{movementAxis}</strong> to compensate for mechanical backlash
+                    before marking the first feature.
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
+                    <TextField
+                      label="Backlash (µm)"
+                      type="number"
+                      size="small"
+                      value={backlashDistanceUm}
+                      onChange={(e) => setBacklashDistanceUm(parseFloat(e.target.value) || 0)}
+                      sx={{ width: 120 }}
+                    />
+                    <Button
+                      variant="contained"
+                      size="small"
+                      startIcon={loading ? <CircularProgress size={18} /> : <MoveIcon />}
+                      onClick={handleBacklashMove}
+                      disabled={loading}
+                    >
+                      {loading ? 'Moving…' : `Move ${backlashDistanceUm} µm`}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => setActiveStep(1)}
+                    >
+                      Skip
+                    </Button>
+                  </Box>
+                </StepContent>
+              </Step>
+
+              {/* Step 1 – mark point 1 */}
+              <Step>
+                <StepLabel
+                  StepIconProps={{
+                    icon: <CrosshairIcon color={activeStep === 1 ? 'primary' : 'inherit'} />,
+                  }}
+                >
+                  {steps[1]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2">
@@ -394,14 +465,14 @@ const ManualPixelCalibrationTab = () => {
                 </StepContent>
               </Step>
 
-              {/* Step 1 – move stage */}
+              {/* Step 2 – move stage */}
               <Step>
                 <StepLabel
                   StepIconProps={{
-                    icon: <MoveIcon color={activeStep === 1 ? 'primary' : 'inherit'} />,
+                    icon: <MoveIcon color={activeStep === 2 ? 'primary' : 'inherit'} />,
                   }}
                 >
-                  {steps[1]}
+                  {steps[2]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2" sx={{ mb: 1 }}>
@@ -419,14 +490,14 @@ const ManualPixelCalibrationTab = () => {
                 </StepContent>
               </Step>
 
-              {/* Step 2 – mark point 2 */}
+              {/* Step 3 – mark point 2 */}
               <Step>
                 <StepLabel
                   StepIconProps={{
-                    icon: <CrosshairIcon color={activeStep === 2 ? 'primary' : 'inherit'} />,
+                    icon: <CrosshairIcon color={activeStep === 3 ? 'primary' : 'inherit'} />,
                   }}
                 >
-                  {steps[2]}
+                  {steps[3]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2">
@@ -436,14 +507,14 @@ const ManualPixelCalibrationTab = () => {
                 </StepContent>
               </Step>
 
-              {/* Step 3 – calculate */}
+              {/* Step 4 – calculate */}
               <Step>
                 <StepLabel
                   StepIconProps={{
-                    icon: <CalcIcon color={activeStep === 3 ? 'primary' : 'inherit'} />,
+                    icon: <CalcIcon color={activeStep === 4 ? 'primary' : 'inherit'} />,
                   }}
                 >
-                  {steps[3]}
+                  {steps[4]}
                 </StepLabel>
                 <StepContent>
                   <Typography variant="body2" sx={{ mb: 1 }}>
@@ -464,7 +535,7 @@ const ManualPixelCalibrationTab = () => {
             </Stepper>
 
             {/* Done state */}
-            {activeStep === 4 && (
+            {activeStep === 5 && (
               <Box sx={{ mt: 2, textAlign: 'center' }}>
                 <DoneIcon color="success" sx={{ fontSize: 48 }} />
                 <Typography variant="subtitle1" color="success.main">
@@ -491,6 +562,7 @@ const ManualPixelCalibrationTab = () => {
               How it works
             </Typography>
             <Typography variant="body2">
+              0. (Optional) Move stage to compensate for backlash.<br />
               1. Mark a feature in the live image (Point 1).<br />
               2. Move the stage by a <em>known</em> distance.<br />
               3. Mark the <em>same</em> feature again (Point 2).<br />

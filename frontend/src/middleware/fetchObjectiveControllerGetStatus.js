@@ -23,6 +23,10 @@ const fetchObjectiveControllerGetStatus = (dispatch) => {
       dispatch(objectiveSlice.setNA(config.NA))
       dispatch(objectiveSlice.setmagnification1(config.availableObjectivesNames[0]))
       dispatch(objectiveSlice.setmagnification2(config.availableObjectivesNames[1]))
+      // Sync runtime slot selection so the switcher spinner can resolve
+      if (config.currentObjective != null) {
+        dispatch(objectiveSlice.setCurrentObjective(config.currentObjective));
+      }
   
       //TODO add more objective results
       /*reposne: 

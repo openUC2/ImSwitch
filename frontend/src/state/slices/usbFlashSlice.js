@@ -6,7 +6,7 @@ import { createSlice } from "@reduxjs/toolkit";
  */
 
 const initialState = {
-  // Wizard step navigation (0: Firmware Server, 1: Select Firmware, 2: Port Selection, 3: Flash Progress, 4: Complete)
+  // Wizard step navigation (0: Firmware Server, 1: Select Firmware, 2: Port & Options, 3: Flash Progress, 4: CAN Address, 5: Complete)
   currentStep: 0,
   isWizardOpen: false,
 
@@ -28,6 +28,13 @@ const initialState = {
   // Flash options
   baudRate: 921600,
   reconnectAfter: true,
+  eraseFlash: false,
+  chipType: "auto", // "auto", "esp32", "esp32s3", "esp32s2", "esp32c3"
+  skipDisconnect: false, // Skip ImSwitch serial disconnect (for XIAO devices)
+
+  // Post-flash CAN address assignment
+  canAddress: null, // null = skip, or numeric CAN address (1, 10, 11, 12, 13, 30)
+  canBaudRate: 115200,
 
   // Flash progress
   isFlashing: false,
@@ -56,7 +63,7 @@ const usbFlashSlice = createSlice({
       state.isWizardOpen = action.payload;
     },
     nextStep: (state) => {
-      if (state.currentStep < 4) {
+      if (state.currentStep < 5) {
         state.currentStep += 1;
       }
     },
@@ -76,6 +83,12 @@ const usbFlashSlice = createSlice({
       state.successMessage = null;
       state.selectedFirmware = null;
       state.firmwareFiles = [];
+      state.isFlashing = false;
+      state.eraseFlash = false;
+      state.chipType = "auto";
+      state.skipDisconnect = false;
+      state.canAddress = null;
+      state.canBaudRate = 115200;
     },
 
     // Serial ports
@@ -115,6 +128,21 @@ const usbFlashSlice = createSlice({
     },
     setReconnectAfter: (state, action) => {
       state.reconnectAfter = action.payload;
+    },
+    setEraseFlash: (state, action) => {
+      state.eraseFlash = action.payload;
+    },
+    setChipType: (state, action) => {
+      state.chipType = action.payload;
+    },
+    setSkipDisconnect: (state, action) => {
+      state.skipDisconnect = action.payload;
+    },
+    setCanAddress: (state, action) => {
+      state.canAddress = action.payload;
+    },
+    setCanBaudRate: (state, action) => {
+      state.canBaudRate = action.payload;
     },
 
     // Flash progress
@@ -179,6 +207,11 @@ export const {
   setIsLoadingFirmware,
   setBaudRate,
   setReconnectAfter,
+  setEraseFlash,
+  setChipType,
+  setSkipDisconnect,
+  setCanAddress,
+  setCanBaudRate,
   setIsFlashing,
   setFlashStatus,
   setFlashProgress,

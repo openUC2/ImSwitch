@@ -73,6 +73,8 @@ const initialState = {
     error: null,
     lastComputeTime: null,
     showOverlayOnWellplate: true, // Toggle: draw focus map points on wellplate canvas
+    showManualPoints: false, // Accordion expand state (persisted)
+    showMeasuredPoints: false, // Accordion expand state (persisted)
   },
 };
 
@@ -226,6 +228,14 @@ const focusMapSlice = createSlice({
       state.ui.showOverlayOnWellplate = action.payload;
     },
 
+    setShowManualPoints: (state, action) => {
+      state.ui.showManualPoints = action.payload;
+    },
+
+    setShowMeasuredPoints: (state, action) => {
+      state.ui.showMeasuredPoints = action.payload;
+    },
+
     // ── Reset ───────────────────────────────────────────────
 
     resetFocusMapState: () => {
@@ -265,6 +275,8 @@ export const {
   setFocusMapError,
   clearFocusMapError,
   setShowOverlayOnWellplate,
+  setShowManualPoints,
+  setShowMeasuredPoints,
   resetFocusMapState,
 } = focusMapSlice.actions;
 
@@ -278,6 +290,8 @@ export const getFocusMapGroupResult = (groupId) => (state) =>
 export const isFocusMapEnabled = (state) => state.focusMap.config.enabled;
 export const getManualPoints = (state) => state.focusMap.manualPoints || [];
 export const getShowOverlayOnWellplate = (state) => state.focusMap.ui?.showOverlayOnWellplate ?? true;
+export const getShowManualPoints = (state) => state.focusMap.ui?.showManualPoints ?? false;
+export const getShowMeasuredPoints = (state) => state.focusMap.ui?.showMeasuredPoints ?? false;
 
 // Export reducer
 export default focusMapSlice.reducer;

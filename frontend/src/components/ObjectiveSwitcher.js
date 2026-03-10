@@ -23,15 +23,19 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const magnification1 = objectiveState.magnification1;
   const magnification2 = objectiveState.magnification2;
-  // Sample effect to track which slot is active
-  // If we have data from store, set the local currentSlot
+  // Fetch objective status on mount
   useEffect(() => {
     fetchObjectiveControllerGetStatus(dispatch);
+  }, [dispatch]);
+
+  // Track Redux state changes (e.g. from socket updates) and update
+  // local state + clear spinner when the objective has changed.
+  useEffect(() => {
     if (objectiveState.currentObjective != null) {
       setCurrentSlot(objectiveState.currentObjective);
-      setIsSwitching(false); // We got an update => done switching
+      setIsSwitching(false); // Objective update received => done switching
     }
-  }, [dispatch]);
+  }, [objectiveState.currentObjective]);
 
   useEffect(() => {
       //refresh status
@@ -39,11 +43,17 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
     }, [hostIP, hostPort]); // on host ip/port change
   
   // Switch to a different objective, show spinner until we get update from the socket
-  const switchTo = async (slot) => {
+  const switchTo = async (slot, skipZ = 0) => {
     try {
       setIsSwitching(true);
-      await apiObjectiveControllerMoveToObjective(slot, 0);
-      // When the socket update arrives, it should set objectiveState.currentObjective => triggers useEffect above
+      await apiObjectiveControllerMoveToObjective(slot, skipZ);
+      // Move completed – update slot and clear spinner immediately; no need to wait for
+      // a socket event that may never arrive.
+      dispatch(objectiveSlice.setCurrentObjective(slot));
+      setCurrentSlot(slot);
+      setIsSwitching(false);
+      // Also refresh full status to sync pixelsize / FOV etc.
+      fetchObjectiveControllerGetStatus(dispatch);
     } catch (e) {
       console.error(`Error switching to objective ${slot}`, e);
       setIsSwitching(false);
@@ -99,8 +109,19 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
             </Grid>
             <Grid item>
               <Button
+                variant="outlined"
+                color={currentSlot === 0 ? "secondary" : "primary"}
+                onClick={() => switchTo(0, false)}
+              >
+                {/* Combined objective + Z motion */}
+                Switch + Z{" "}
+                {magnification1 && `(${magnification1}×)`}
+              </Button>
+            </Grid>
+            <Grid item>
+              <Button
                 variant="contained"
-                color={currentSlot === 2 ? "secondary" : "primary"}
+                color={currentSlot === 1 ? "secondary" : "primary"}
                 onClick={() => switchTo(1)}
               >
                 {/* Button text */}
@@ -113,6 +134,17 @@ export default function ObjectiveSwitcher({ hostIP, hostPort }) {
                 ) : (
                   magnification2 && `(Mag: ${magnification2}×)`
                 )}
+              </Button>
+            </Grid>
+            <Grid item>
+              <Button
+                variant="outlined"
+                color={currentSlot === 1 ? "secondary" : "primary"}
+                onClick={() => switchTo(1, false)}
+              >
+                {/* Combined objective + Z motion */}
+                Switch + Z{" "}
+                {magnification2 && `(${magnification2}×)`}
               </Button>
             </Grid>
           </Grid>

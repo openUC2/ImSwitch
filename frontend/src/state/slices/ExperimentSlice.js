@@ -84,6 +84,8 @@ const initialExperimentState = {
     overlapHeight: 0.0,  // 0.0 = no overlap (100% spacing), 0.1 = 10% overlap (90% spacing)
     // Snakescan pattern for tiling
     is_snakescan: false,  // Enable snakescan pattern (alternating row directions)
+    // Illumination mode
+    keepIlluminationOn: "auto",  // "auto" = on for single channel, off for multi | "on" = always keep on | "off" = per-frame toggle
   },
 };
 
@@ -277,6 +279,10 @@ const experimentSlice = createSlice({
       console.log("setIsSnakescan", action.payload);
       state.parameterValue.is_snakescan = action.payload;
     },
+    setKeepIlluminationOn: (state, action) => {
+      console.log("setKeepIlluminationOn", action.payload);
+      state.parameterValue.keepIlluminationOn = action.payload;
+    },
     //------------------------ points
     createPoint: (state, action) => {
       console.log("createPoint", action);
@@ -284,6 +290,7 @@ const experimentSlice = createSlice({
         id: uuidv4(),
         x: action.payload.x,
         y: action.payload.y,
+        z: (action.payload.z != null) ? (action.payload.z) : (0),
         name: (action.payload.name != null) ? (action.payload.name) : (""),
         shape: (action.payload.shape != null) ? (action.payload.shape) : (""),
         rectPlusX: (action.payload.rectPlusX != null) ? (action.payload.rectPlusX) : (0),
@@ -295,7 +302,23 @@ const experimentSlice = createSlice({
       };
       
       console.log("createPoint newPoint", newPoint);
-      state.pointList.push(newPoint);
+      // Prevent duplicate points with the same physical position and shape
+      const isDuplicate = state.pointList.some((existing) =>
+        existing.x === newPoint.x &&
+        existing.y === newPoint.y &&
+        existing.shape === newPoint.shape &&
+        existing.rectPlusX === newPoint.rectPlusX &&
+        existing.rectPlusY === newPoint.rectPlusY &&
+        existing.rectMinusX === newPoint.rectMinusX &&
+        existing.rectMinusY === newPoint.rectMinusY &&
+        existing.circleRadiusX === newPoint.circleRadiusX &&
+        existing.circleRadiusY === newPoint.circleRadiusY
+      );
+      if (!isDuplicate) {
+        state.pointList.push(newPoint);
+      } else {
+        console.warn("[ExperimentSlice] Skipped duplicate point at", newPoint.x, newPoint.y);
+      }
     },
     addPoint: (state, action) => {
       console.log("addPoint");
@@ -371,6 +394,7 @@ export const {
   setOverlapWidth,
   setOverlapHeight,
   setIsSnakescan,
+  setKeepIlluminationOn,
   createPoint,
   addPoint,
   removePoint,

@@ -117,36 +117,35 @@ class PixelCalibrationController(LiveUpdatedController):
 
     def _getCurrentObjectiveId(self) -> str:
         """
-        Get the current objective ID (name) from ObjectiveManager.
+        Get the current objective ID (name) from the ObjectiveController.
         
-        The ObjectiveManager maintains the authoritative state for the current
-        objective slot, which is synchronized by the ObjectiveController.
-        
-        INDEXING CONVENTION:
-        - ObjectiveManager._currentObjective: 0-based (0 or 1)
-        - objectiveNames array: 0-indexed
-        - Return value: objective name string (e.g., "10x", "20x")
+        The ObjectiveController owns the authoritative runtime state for
+        which objective slot is active (_currentObjective). We prefer it
+        over the ObjectiveManager which only holds static config data.
         
         Returns:
             Objective ID string (e.g., "10x", "20x") or "default" if not available
         """
         try:
+            # Primary: use ObjectiveController (runtime state)
+            obj_ctrl = self._master._controllersRegistry.get("Objective", None)
+            if obj_ctrl is not None:
+                # Try the dedicated helper first
+                if hasattr(obj_ctrl, '_getCurrentObjectiveName'):
+                    name = obj_ctrl._getCurrentObjectiveName()
+                    if name and name != "default":
+                        return name
+
+                # Fallback: read status dict
+                if hasattr(obj_ctrl, 'getstatus'):
+                    status = obj_ctrl.getstatus()
+                    name = status.get('objectiveName', None)
+                    if name and name != "default":
+                        return name
+
+            # Last resort: fall back to manager config
             obj_mgr = self._master.objectiveManager
-
-            # Use the manager's built-in method for getting objective name
-            if hasattr(obj_mgr, 'getCurrentObjectiveName'):
-                name = obj_mgr.getCurrentObjectiveName()
-                if name and name != "default":
-                    return name
-
-            # Fallback: manual lookup using 0-based index
             if hasattr(obj_mgr, 'objectiveNames') and obj_mgr.objectiveNames:
-                current_slot_0based = getattr(obj_mgr, '_currentObjective', None)
-
-                if current_slot_0based is not None and 0 <= current_slot_0based < len(obj_mgr.objectiveNames):
-                    return obj_mgr.objectiveNames[current_slot_0based]
-
-                # Return first objective as default
                 return obj_mgr.objectiveNames[0]
 
             return "default"
@@ -2153,18 +2152,61 @@ class PixelCalibrationController(LiveUpdatedController):
                 f"→ pixel size = {pixel_size_um:.4f} µm/px"
             )
 
-            # --- build a simplified affine matrix (scale-only) --------------------
-            # Convention: [[scaleX, 0, 0], [0, scaleY, 0]]
-            # We set both axes to the same scale since we only measured one axis.
-            affine_matrix = [
-                [pixel_size_um, 0.0, 0.0],
-                [0.0, pixel_size_um, 0.0],
-            ]
+            # --- build affine matrix preserving existing rotation / flip ------
+            # If there is an existing affine calibration for this objective we
+            # keep its rotation / shear / flip and only replace the scale.
+            # Convention: [[a00, a01, tx], [a10, a11, ty]]
+            #   where the 2×2 sub-matrix = scale * rotation * flip
+            existing_affine = None
+            try:
+                cal = self.affineCalibrations.get(objectiveId, {})
+                existing_affine = cal.get('affine_matrix', None)
+            except Exception:
+                pass
+
+            if existing_affine is not None and len(existing_affine) >= 2:
+                # Decompose existing 2×2 into rotation/flip direction matrix and
+                # old scale so we can replace the scale while keeping direction.
+                a = np.array(existing_affine, dtype=float)
+                m = a[:2, :2]  # 2×2 sub-matrix
+                old_scale_x = np.linalg.norm(m[:, 0])
+                old_scale_y = np.linalg.norm(m[:, 1])
+                if old_scale_x > 0 and old_scale_y > 0:
+                    # Direction matrix (unit-scale rotation/flip)
+                    direction = np.array([
+                        [m[0, 0] / old_scale_x, m[0, 1] / old_scale_y],
+                        [m[1, 0] / old_scale_x, m[1, 1] / old_scale_y],
+                    ])
+                    new_m = direction * np.array([[pixel_size_um, pixel_size_um],
+                                                  [pixel_size_um, pixel_size_um]])
+                    affine_matrix = [
+                        [float(new_m[0, 0]), float(new_m[0, 1]), float(a[0, 2])],
+                        [float(new_m[1, 0]), float(new_m[1, 1]), float(a[1, 2])],
+                    ]
+                    rotation_deg = float(np.degrees(np.arctan2(direction[1, 0], direction[0, 0])))
+                    self._logger.info(
+                        f"Preserved existing rotation/flip (rot={rotation_deg:.1f}°) "
+                        f"and updated scale to {pixel_size_um:.4f} µm/px"
+                    )
+                else:
+                    # Degenerate existing matrix – fall back to scale-only
+                    affine_matrix = [
+                        [pixel_size_um, 0.0, 0.0],
+                        [0.0, pixel_size_um, 0.0],
+                    ]
+                    rotation_deg = 0.0
+            else:
+                # No prior calibration – use scale-only identity
+                affine_matrix = [
+                    [pixel_size_um, 0.0, 0.0],
+                    [0.0, pixel_size_um, 0.0],
+                ]
+                rotation_deg = 0.0
 
             metrics = {
                 "scale_x_um_per_pixel": pixel_size_um,
                 "scale_y_um_per_pixel": pixel_size_um,
-                "rotation_deg": 0.0,
+                "rotation_deg": rotation_deg,
                 "quality": "manual",
                 "method": "manual_two_point",
                 "displacement_px": float(displacement_px),

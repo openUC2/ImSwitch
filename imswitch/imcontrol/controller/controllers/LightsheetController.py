@@ -866,8 +866,6 @@ class LightsheetController(ImConWidgetController):
         # Buffer frames in memory for fast acquisition, then write after scan
         frame_buffer = []  # List of (frame_2d, z_position) tuples
         
-        # For keeping last frames for GUI preview
-        last_frames_preview = []
 
         try:
             # Turn on illumination
@@ -882,6 +880,7 @@ class LightsheetController(ImConWidgetController):
             self.detector.startAcquisition()
 
             # Move to start
+            mCurrentZPosition = self.stages.getPosition().get(params.axis, params.currentPosition)
             self.stages.move(value=params.minPos, axis=params.axis, is_absolute=True, is_blocking=True)
             time.sleep(0.5)
 
@@ -953,8 +952,11 @@ class LightsheetController(ImConWidgetController):
                 tiffPath = os.path.join(dirPath, f"{params.experimentName}.tif")
                 self.mFilePath = tiffPath
                 self._scanStatus.tiffPath = tiffPath
-                self._tiffWriter = SingleTiffWriter(tiffPath, bigtiff=True)
-                self._logger.info(f"TIFF writer initialized: {tiffPath}")
+                # Use tifffile directly with imagej=True so napari reads
+                # all pages as a proper Z-stack (not individual 2D images).
+                import tifffile
+                self._tiffWriter = tifffile.TiffWriter(tiffPath, bigtiff=True, imagej=True)
+                self._logger.info(f"TIFF writer (ImageJ stack) initialized: {tiffPath}")
 
             # Start continuous movement
             controller = MovementController(self.stages)
@@ -982,116 +984,102 @@ class LightsheetController(ImConWidgetController):
                     frame_buffer.append((frame_2d.copy(), calculatedZPos))
                     frameCount += 1
 
-                    # Keep last frames for preview (limit memory)
-                    if len(last_frames_preview) < 10:
-                        last_frames_preview.append(frame.copy())
-                    else:
-                        last_frames_preview.pop(0)
-                        last_frames_preview.append(frame.copy())
-
-                    # Update status
-                    currentPos = self.stages.getPosition().get(params.axis, params.minPos)
-                    self._scanStatus.currentFrame = frameCount
-                    self._scanStatus.currentPosition = currentPos
-                    progress = abs(currentPos - params.minPos) / abs(totalDistance) * 100
-                    self._scanStatus.progress = min(progress, 100)
-                    self._emitScanStatus()
+                    # Update status periodically (every 10 frames) to avoid
+                    # flooding the event system and blocking the main thread.
+                    # Use the time-calculated position instead of polling the
+                    # stage via serial I/O — getPosition() would block the
+                    # shared serial bus and starve live-view and other controllers.
+                    if frameCount % 10 == 0:
+                        self._scanStatus.currentFrame = frameCount
+                        self._scanStatus.currentPosition = calculatedZPos
+                        progress = abs(calculatedZPos - params.minPos) / abs(totalDistance) * 100
+                        self._scanStatus.progress = min(progress, 100)
+                        self._emitScanStatus()
 
                 time.sleep(0.01)  # Small delay to prevent CPU overload
 
-            # Move back
-            self.stages.move(value=-totalDistance, axis=params.axis, is_absolute=False, is_blocking=True)
-
-            # Now write all buffered frames to disk (fast acquisition, slower writing)
-            self._logger.info(f"Acquisition complete. Writing {len(frame_buffer)} frames to disk...")
-            
-            # Write to OME-Zarr if enabled
-            if self._omeWriter is not None:
-                self._logger.info("Writing buffered frames to OME-Zarr...")
-                for idx, (frame_data, z_pos) in enumerate(frame_buffer):
-                    try:
-                        frame_metadata = {
-                            "x": 0,
-                            "y": 0,
-                            "z": z_pos,
-                            "tile_index": 0,
-                            "time_index": 0,
-                            "z_index": idx,
-                            "channel_index": 0,
-                            "runningNumber": idx,
-                            "illuminationChannel": params.illuSource if params.illuSource else "Default",
-                            "illuminationValue": params.illuValue
-                        }
-                        self._omeWriter.write_frame(frame_data.astype(np.uint16), frame_metadata)
-                        
-                        # Update progress during writing
-                        write_progress = (idx + 1) / len(frame_buffer) * 100
-                        if idx % 10 == 0:  # Log every 10 frames
-                            self._logger.info(f"OME-Zarr writing progress: {write_progress:.1f}%")
-                    except Exception as e:
-                        self._logger.error(f"Error writing frame {idx} to OME-Zarr: {e}")
-                
-                self._logger.info(f"OME-Zarr writing complete: {len(frame_buffer)} frames written")
-
-            # Write to TIFF if enabled
-            if self._tiffWriter is not None:
-                self._logger.info("Writing buffered frames to TIFF...")
-                for idx, (frame_data, z_pos) in enumerate(frame_buffer):
-                    try:
-                        metadata = {
-                            "pixel_size": 1.0,
-                            "x": z_pos,
-                            "y": 0,
-                            "z": idx
-                        }
-                        self._tiffWriter.add_image(frame_data.astype(np.uint16), metadata)
-                        
-                        # Update progress during writing
-                        if idx % 10 == 0:
-                            write_progress = (idx + 1) / len(frame_buffer) * 100
-                            self._logger.info(f"TIFF writing progress: {write_progress:.1f}%")
-                    except Exception as e:
-                        self._logger.error(f"Error writing frame {idx} to TIFF: {e}")
-                
-                self._logger.info(f"TIFF writing complete: {len(frame_buffer)} frames written")
-
-            # Clear frame buffer to free memory
-            frame_buffer.clear()
-
-            # Finalize OME-Zarr writer in background thread to avoid blocking
-            if self._omeWriter is not None:
-                self._logger.info("Finalizing OME-Zarr writer in background...")
-                ome_writer_to_finalize = self._omeWriter
-                self._omeWriter = None
-                
-                def finalize_in_background():
-                    try:
-                        ome_writer_to_finalize.finalize()
-                        self._logger.info(f"OME-Zarr writer finalized: {zarrPath}")
-                    except Exception as e:
-                        self._logger.error(f"Error finalizing OME-Zarr writer: {e}")
-                
-                finalize_thread = threading.Thread(target=finalize_in_background)
-                finalize_thread.daemon = True
-                finalize_thread.start()
-
-            # Close TIFF writer
-            if self._tiffWriter is not None:
-                self._tiffWriter.close()
-                self._tiffWriter = None
-                self._logger.info(f"TIFF writer closed: {tiffPath}")
-
-            # Clear frame buffer to free memory (if not already cleared)
-            frame_buffer.clear()
-
-            # Update preview stack
-            if len(last_frames_preview) > 0:
-                self.lightsheetStack = np.array(last_frames_preview)
-
-            # Turn off illumination
-            if params.illuSource and params.illuSource in self._master.lasersManager.getAllDeviceNames():
-                laser = self._master.lasersManager[params.illuSource]
+            # Turn off all illumination 
+            for iIllu in self._master.lasersManager.getAllDeviceNames():
+                laser = self._master.lasersManager[iIllu]
                 laser.setValue(0)
+
+            # Move back
+            self.stages.move(value=mCurrentZPosition, axis=params.axis, is_absolute=True, is_blocking=False)
+
+            # Now write all buffered frames to disk in a background thread
+            # to avoid blocking websocket keepalive and other main-thread work.
+            self._logger.info(f"Acquisition complete. Dispatching {len(frame_buffer)} frames for background writing...")
+
+            # Capture local references for the background thread
+            local_frame_buffer = list(frame_buffer)
+            frame_buffer.clear()  # Free main-thread reference immediately
+            local_ome_writer = self._omeWriter
+            local_tiff_writer = self._tiffWriter
+            local_zarr_path = zarrPath
+            local_tiff_path = tiffPath
+            local_illu_source = params.illuSource
+            local_illu_value = params.illuValue
+            self._omeWriter = None
+            self._tiffWriter = None
+
+            def _write_frames_background():
+                """Write buffered frames to OME-Zarr and/or TIFF in background."""
+                try:
+                    # Write to OME-Zarr if enabled
+                    if local_ome_writer is not None:
+                        self._logger.info("Writing buffered frames to OME-Zarr...")
+                        for idx, (frame_data, z_pos) in enumerate(local_frame_buffer):
+                            try:
+                                frame_metadata = {
+                                    "x": 0,
+                                    "y": 0,
+                                    "z": z_pos,
+                                    "tile_index": 0,
+                                    "time_index": 0,
+                                    "z_index": idx,
+                                    "channel_index": 0,
+                                    "runningNumber": idx,
+                                    "illuminationChannel": local_illu_source if local_illu_source else "Default",
+                                    "illuminationValue": local_illu_value
+                                }
+                                local_ome_writer.write_frame(frame_data.astype(np.uint16), frame_metadata)
+                                if idx % 10 == 0:
+                                    self._logger.info(f"OME-Zarr writing progress: {(idx + 1) / len(local_frame_buffer) * 100:.1f}%")
+                            except Exception as e:
+                                self._logger.error(f"Error writing frame {idx} to OME-Zarr: {e}")
+                        self._logger.info(f"OME-Zarr writing complete: {len(local_frame_buffer)} frames written")
+
+                        # Finalize OME-Zarr writer
+                        try:
+                            local_ome_writer.finalize()
+                            self._logger.info(f"OME-Zarr writer finalized: {local_zarr_path}")
+                        except Exception as e:
+                            self._logger.error(f"Error finalizing OME-Zarr writer: {e}")
+
+                    # Write to TIFF if enabled — write plain pages so napari
+                    # interprets them as a Z-stack (ImageJ-compatible format).
+                    if local_tiff_writer is not None:
+                        self._logger.info("Writing buffered frames to TIFF...")
+                        for idx, (frame_data, z_pos) in enumerate(local_frame_buffer):
+                            try:
+                                local_tiff_writer.write(
+                                    frame_data.astype(np.uint16),
+                                    contiguous=True,
+                                )
+                                if idx % 10 == 0:
+                                    self._logger.info(f"TIFF writing progress: {(idx + 1) / len(local_frame_buffer) * 100:.1f}%")
+                            except Exception as e:
+                                self._logger.error(f"Error writing frame {idx} to TIFF: {e}")
+
+                        local_tiff_writer.close()
+                        self._logger.info(f"TIFF writing complete: {len(local_frame_buffer)} frames written to {local_tiff_path}")
+                except Exception as e:
+                    self._logger.error(f"Error in background frame writing: {e}")
+                finally:
+                    local_frame_buffer.clear()
+
+            write_thread = threading.Thread(target=_write_frames_background, daemon=True)
+            write_thread.start()
 
         except Exception as e:
             self._logger.error(f"Error in continuous scan: {e}")
@@ -1102,9 +1090,6 @@ class LightsheetController(ImConWidgetController):
             self._scanStatus.progress = 100.0
             self._emitScanStatus()
             self.isLightsheetRunning = False
-
-            if len(last_frames_preview) > 0 and not IS_HEADLESS:
-                self.sigImageReceived.emit(self.lightsheetStack)
 
     # ========================================================================
     # Observation Camera Streaming (for sample positioning visualization)

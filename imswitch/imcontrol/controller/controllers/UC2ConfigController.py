@@ -1629,6 +1629,41 @@ class UC2ConfigController(ImConWidgetController):
         except Exception as e:
             return False, f"Failed to run esptool: {e}"
 
+    # VID:PID to chip type mapping for auto-detection
+    _VID_PID_CHIP_MAP = {
+        (0x10c4, 0xea60): "esp32",    # CP2102 – UC2 CAN HAT (ESP32)
+        (0x303a, 0x1001): "esp32s3",   # USB JTAG/serial – UC2 XIAO (ESP32-S3)
+        (0x1a86, 0x55d4): "esp32s3",   # CH9102 – some XIAO boards
+        (0x303a, 0x0002): "esp32s2",   # ESP32-S2
+    }
+
+    # Chip-specific esptool flash parameters
+    _CHIP_FLASH_PARAMS = {
+        "esp32":   {"offset": "0x10000", "flash_mode": "dio", "flash_freq": "80m", "flash_size": "4MB"},
+        "esp32s3": {"offset": "0x0",     "flash_mode": "dio", "flash_freq": "40m", "flash_size": "detect"},
+        "esp32s2": {"offset": "0x10000", "flash_mode": "dio", "flash_freq": "80m", "flash_size": "detect"},
+        "esp32c3": {"offset": "0x0",     "flash_mode": "dio", "flash_freq": "80m", "flash_size": "detect"},
+    }
+
+    # Known CAN bus addresses
+    CAN_ADDRESSES = {
+        "master": 1, "x": 11, "y": 12, "z": 13, "a": 10, "led": 30,
+    }
+
+    def _detect_chip_from_port(self, port: str) -> str | None:
+        """Auto-detect ESP chip type from VID:PID of the given serial port."""
+        for p in list_ports.comports():
+            if p.device == port:
+                vid = getattr(p, "vid", None)
+                pid = getattr(p, "pid", None)
+                if vid is not None and pid is not None:
+                    chip = self._VID_PID_CHIP_MAP.get((vid, pid))
+                    if chip:
+                        self.__logger.info(f"Auto-detected chip={chip} from VID:{vid:04x} PID:{pid:04x} on {port}")
+                        return chip
+                break
+        return None
+
     @APIExport(runOnUIThread=False, requestType="POST")
     def flashMasterFirmwareUSB(
         self,
@@ -1637,27 +1672,48 @@ class UC2ConfigController(ImConWidgetController):
         baud: int = 921600,
         firmware_filename: str | None = None,
         reconnect_after: bool = True,
+        chip: str = "auto",
+        erase_flash: bool = False,
+        skip_disconnect: bool = False,
     ):
         """
-        Flash firmware to an ESP32 via USB serial using esptool.
+        Flash firmware to an ESP32/S2/S3 via USB serial using esptool.
 
-        - Disconnects ImSwitch from the ESP32 first.
+        - Optionally disconnects ImSwitch from the ESP32 first.
         - Downloads the selected firmware file from the configured firmware server.
-        - Flashes firmware to the detected (or provided) USB serial port at offset 0x10000.
+        - Auto-detects or accepts explicit chip type for correct flash parameters.
+        - Optionally erases flash before writing.
 
         Parameters:
           port: explicit serial port (e.g. "/dev/ttyACM0"). If None, auto-detect via 'match'.
-          match: substring to identify the HAT in serial port metadata (default "HAT").
+          match: substring to identify the device in serial port metadata (default "HAT").
           baud: flashing baudrate (default 921600).
           firmware_filename: name of the .bin file on the firmware server. If None, auto-detect master firmware.
           reconnect_after: if True, reconnect ImSwitch to the master after flashing.
+          chip: chip type – "auto", "esp32", "esp32s3", "esp32s2", "esp32c3" (default "auto").
+          erase_flash: if True, erase the entire flash before writing firmware.
+          skip_disconnect: if True, skip disconnecting ImSwitch serial before flashing (useful for XIAO).
         """
         with self._usb_flash_lock:
-            if not (HAS_ESPTOOL or True):
-                self._emit_usb_flash_status("failed", 0, "esptool not available", "Install with: pip install esptool")
-                return {"status": "error", "message": "esptool not available. Install with: pip install esptool"}
+            try:
+                return self._do_flash(
+                    port=port, match=match, baud=baud,
+                    firmware_filename=firmware_filename,
+                    reconnect_after=reconnect_after,
+                    chip=chip, erase_flash=erase_flash,
+                    skip_disconnect=skip_disconnect,
+                )
+            except Exception as exc:
+                self.__logger.error(f"Unexpected flash error: {exc}", exc_info=True)
+                self._emit_usb_flash_status("failed", 0, f"Unexpected error: {exc}")
+                return {"status": "error", "message": str(exc)}
 
-            # 1) disconnect master from ImSwitch
+    def _do_flash(self, *, port, match, baud, firmware_filename,
+                  reconnect_after, chip, erase_flash, skip_disconnect):
+        """Internal flash implementation – wrapped for clean error recovery."""
+
+        # 1) Optionally disconnect ImSwitch serial
+        if not skip_disconnect:
             self._emit_usb_flash_status("disconnecting", 5, "Disconnecting from ESP32...")
             try:
                 self.__logger.info("Disconnecting ImSwitch from master before USB flashing…")
@@ -1665,92 +1721,239 @@ class UC2ConfigController(ImConWidgetController):
                     self._master.UC2ConfigManager.interruptSerialCommunication()
                 except Exception:
                     pass
-                self._master.UC2ConfigManager.closeSerial()
+                try:
+                    self._master.UC2ConfigManager.closeSerial()
+                except AttributeError:
+                    # closeSerial may not exist on all builds
+                    self.__logger.warning("closeSerial not available, skipping")
+                except Exception as e:
+                    self.__logger.warning(f"closeSerial error (non-fatal): {e}")
             except Exception as e:
                 self.__logger.warning(f"Could not fully close serial before flashing: {e}")
-
             time.sleep(0.5)  # give OS time to release port
-            self._emit_usb_flash_status("downloading", 10, "Downloading firmware from server...")
+        else:
+            self._emit_usb_flash_status("disconnecting", 5, "Skipping disconnect (non-HAT device)")
+            time.sleep(0.2)
 
-            # 2) resolve firmware – either by explicit filename or auto-detect master
-            if firmware_filename:
-                fw_path = self._download_firmware_by_name(firmware_filename)
-            else:
-                fw_path = self._download_master_firmware()
-            if not fw_path:
-                self._emit_usb_flash_status("failed", 10, "Firmware not found on server")
-                return {"status": "error", "message": "Firmware not found/downloaded."}
+        self._emit_usb_flash_status("downloading", 10, "Downloading firmware from server...")
 
-            self._emit_usb_flash_status("downloading", 20, f"Firmware downloaded: {fw_path.name}")
+        # 2) Resolve firmware – either by explicit filename or auto-detect master
+        if firmware_filename:
+            fw_path = self._download_firmware_by_name(firmware_filename)
+        else:
+            fw_path = self._download_master_firmware()
+        if not fw_path:
+            self._emit_usb_flash_status("failed", 10, "Firmware not found on server")
+            return {"status": "error", "message": "Firmware not found/downloaded."}
 
-            # 3) resolve port
-            try:
-                flash_port = port or self._find_hat_serial_port(match=match)
-                self._emit_usb_flash_status("flashing", 25, f"Using port: {flash_port}")
-            except Exception as e:
-                self._emit_usb_flash_status("failed", 20, f"Failed to find serial port: {e}")
-                return {
-                    "status": "error",
-                    "message": f"Failed to resolve HAT serial port: {e}",
-                    "available_ports": self._list_serial_ports(),
-                }
+        self._emit_usb_flash_status("downloading", 20, f"Firmware downloaded: {fw_path.name}")
 
-            self.__logger.info(f"Flashing firmware via {flash_port} (baud={baud}, file={fw_path.name})")
+        # 3) Resolve port
+        try:
+            flash_port = port or self._find_hat_serial_port(match=match)
+            self._emit_usb_flash_status("flashing", 25, f"Using port: {flash_port}")
+        except Exception as e:
+            self._emit_usb_flash_status("failed", 20, f"Failed to find serial port: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to resolve serial port: {e}",
+                "available_ports": self._list_serial_ports(),
+            }
 
-            # 4) write flash at fixed offset 0x10000
-            self._emit_usb_flash_status("flashing", 30, "Writing firmware to device...")
-            write_args = [
+        # 4) Resolve chip type
+        resolved_chip = chip
+        if chip == "auto" or not chip:
+            detected = self._detect_chip_from_port(flash_port)
+            resolved_chip = detected or "esp32"  # fallback to esp32
+            self.__logger.info(f"Chip auto-detection: {detected or 'none'} → using {resolved_chip}")
+        flash_params = self._CHIP_FLASH_PARAMS.get(resolved_chip, self._CHIP_FLASH_PARAMS["esp32"])
+        self._emit_usb_flash_status("flashing", 27, f"Chip: {resolved_chip}, offset: {flash_params['offset']}")
+
+        # 4c) For chips that flash at 0x0 (esp32s3, esp32c3, etc.) the binary must
+        #     include the bootloader ("merged" build).  espota binaries do NOT include
+        #     the bootloader and will cause boot-loops when flashed via esptool at 0x0.
+        #     Convention: merged binaries have a "_merged" postfix before .bin, if not, we flash at the correct offset of 0x10000 (if supported by the chip) or warn the user.
+        if flash_params["offset"] == "0x0" and fw_path:
+            fw_name = fw_path.name  # e.g. "firmware.bin"
+            if "_merged" not in fw_name:
+                # Try downloading the merged variant from the server
+                fw_path = self._download_firmware_by_name(fw_name)
+                flash_params["offset"] = "0x10000"  # flash at 0x10000 for non-merged binaries (if chip supports it)
+                if fw_path:
+                    self.__logger.info(f"Using standard firmware for {resolved_chip}: {fw_path} at offset {flash_params['offset']}")
+                    self._emit_usb_flash_status("downloading", 22, f"Using merged firmware: {fw_path.name}")
+                    erase_flash = False # we flash non-merged binaries at the correct offset, so no need to erase the whole flash
+                else:
+                    self.__logger.warning(
+                        f"No merged firmware '{fw_path}' found on server. "
+                        f"Flashing '{fw_name}' at offset {flash_params['offset']} – "
+                        f"this may cause boot-loops if the binary is an OTA/espota build."
+                    )
+                    self._emit_usb_flash_status("flashing", 22, f"Warning: no merged firmware found, using {fw_name}")
+        self.__logger.info(
+            f"Flashing firmware via {flash_port} (baud={baud}, chip={resolved_chip}, "
+            f"file={fw_path.name}, erase={erase_flash})"
+        )
+
+        # 4b) Optionally erase flash first
+        if erase_flash:
+            self._emit_usb_flash_status("flashing", 28, "Erasing flash...")
+            erase_args = [
                 "--port", flash_port,
                 "--baud", str(baud),
-                "--chip", "esp32",
-                "write_flash",
-                "--flash_mode", "dio",
-                "--flash_freq", "80m",
-                "--flash_size", "4MB",
-                "0x10000",
-                str(fw_path),
+                "--chip", resolved_chip,
+                "erase_flash",
             ]
-            ok, msg = self._run_esptool(write_args)
+            ok, msg = self._run_esptool(erase_args)
             if not ok:
-                self._emit_usb_flash_status("failed", 50, "Firmware write failed", msg)
+                self._emit_usb_flash_status("failed", 29, "Flash erase failed", msg)
                 return {
                     "status": "error",
-                    "message": "write_flash failed",
+                    "message": "erase_flash failed",
                     "details": msg,
                     "port": flash_port,
-                    "firmware": str(fw_path),
                 }
+            self._emit_usb_flash_status("flashing", 30, "Flash erased successfully")
 
-            self._emit_usb_flash_status("flashing", 85, "Firmware written successfully!")
-
-            # 5) reconnect
-            if reconnect_after:
-                self._emit_usb_flash_status("reconnecting", 90, "Reconnecting to device...")
-                try:
-                    time.sleep(1.0)
-                    self.__logger.info("Reconnecting ImSwitch to master after flashing…")
-                    self._master.UC2ConfigManager.initSerial(baudrate=None)
-                    self._emit_usb_flash_status("success", 100, "✅ Firmware flashed and reconnected!")
-                except Exception as e:
-                    self._emit_usb_flash_status("warning", 95, "Flashed OK, but reconnect failed", str(e))
-                    return {
-                        "status": "warning",
-                        "message": "Flashed OK, but reconnect failed",
-                        "port": flash_port,
-                        "firmware": str(fw_path),
-                        "details": str(e),
-                    }
-            else:
-                self._emit_usb_flash_status("success", 100, "✅ Firmware flashed successfully!")
-
+        # 5) Write flash with chip-appropriate parameters
+        self._emit_usb_flash_status("flashing", 30, "Writing firmware to device...")
+        write_args = [
+            "--port", flash_port,
+            "--baud", str(baud),
+            "--chip", resolved_chip,
+            "write_flash",
+            "--flash_mode", flash_params["flash_mode"],
+            "--flash_freq", flash_params["flash_freq"],
+            "--flash_size", flash_params["flash_size"],
+            flash_params["offset"],
+            str(fw_path),
+        ]
+        ok, msg = self._run_esptool(write_args)
+        if not ok:
+            self._emit_usb_flash_status("failed", 50, "Firmware write failed", msg)
             return {
-                "status": "success",
-                "message": "Firmware flashed via USB",
+                "status": "error",
+                "message": "write_flash failed",
+                "details": msg,
                 "port": flash_port,
                 "firmware": str(fw_path),
-                "baud": int(baud),
-                "reconnect_after": bool(reconnect_after),
+                "chip": resolved_chip,
             }
+
+        self._emit_usb_flash_status("flashing", 85, "Firmware written successfully!")
+
+        # 6) Reconnect
+        if reconnect_after and not skip_disconnect:
+            self._emit_usb_flash_status("reconnecting", 90, "Reconnecting to device...")
+            try:
+                time.sleep(1.0)
+                self.__logger.info("Reconnecting ImSwitch to master after flashing…")
+                self._master.UC2ConfigManager.initSerial(baudrate=None)
+                self._emit_usb_flash_status("success", 100, "✅ Firmware flashed and reconnected!")
+            except Exception as e:
+                self._emit_usb_flash_status("warning", 95, "Flashed OK, but reconnect failed", str(e))
+                return {
+                    "status": "warning",
+                    "message": "Flashed OK, but reconnect failed",
+                    "port": flash_port,
+                    "firmware": str(fw_path),
+                    "chip": resolved_chip,
+                    "details": str(e),
+                }
+        else:
+            self._emit_usb_flash_status("success", 100, "✅ Firmware flashed successfully!")
+
+        return {
+            "status": "success",
+            "message": "Firmware flashed via USB",
+            "port": flash_port,
+            "firmware": str(fw_path),
+            "baud": int(baud),
+            "chip": resolved_chip,
+            "reconnect_after": bool(reconnect_after),
+        }
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def sendCanAddress(
+        self,
+        port: str = "",
+        address: int = 1,
+        baud: int = 115200,
+        timeout: float = 2.0,
+    ):
+        """
+        Send a CAN bus address assignment to a freshly-flashed device via serial.
+
+        Opens the serial port, sends a JSON command to set the CAN address, and closes.
+        Known addresses: master=1, a=10, x=11, y=12, z=13, led=30.
+
+        Parameters:
+          port: serial port device path (e.g. "/dev/ttyACM0").
+          address: CAN bus address to assign (e.g. 1 for master, 11 for X axis).
+          baud: serial baudrate for communication (default 115200).
+          timeout: serial read timeout in seconds (default 2.0).
+        """
+        import json as _json
+        import serial as _serial
+
+        if not port:
+            return {"status": "error", "message": "No serial port specified"}
+
+        cmd = _json.dumps({"task": "/can_act", "address": int(address)})
+        self.__logger.info(f"Sending CAN address {address} to {port} @ {baud} baud")
+        self._emit_usb_flash_status("flashing", 92, f"Assigning CAN address {address}...")
+
+        try:
+            with _serial.Serial(port, baud, timeout=timeout) as ser:
+                # Wait for the device to finish booting.  Freshly-flashed ESP32s
+                # may print boot messages / SHA-256 lines for several seconds.
+                self.__logger.info(f"Waiting for device boot on {port}...")
+                boot_wait_s = 5  # generous wait for boot-loop detection
+                boot_output = ""
+                deadline = time.time() + boot_wait_s
+                stable_count = 0
+                while time.time() < deadline:
+                    if ser.in_waiting:
+                        chunk = ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        boot_output += chunk
+                        stable_count = 0  # got data → reset stability counter
+                    else:
+                        stable_count += 1
+                        # If no data for ~1 s after initial output, device is booted
+                        if stable_count > 10 and boot_output:
+                            break
+                    time.sleep(0.1)
+
+                if boot_output:
+                    self.__logger.info(f"Boot output from device:\n{boot_output.strip()[-500:]}")
+
+                # Flush any remaining bytes in the input buffer
+                ser.reset_input_buffer()
+
+                ser.write((cmd + "\n").encode("utf-8"))
+                ser.flush()
+                time.sleep(0.5)
+                response = ""
+                resp_deadline = time.time() + timeout
+                while time.time() < resp_deadline:
+                    if ser.in_waiting:
+                        response += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        time.sleep(0.05)
+                    else:
+                        if response:
+                            break
+                        time.sleep(0.1)
+            self.__logger.info(f"CAN address response: {response.strip()}")
+            self._emit_usb_flash_status("success", 100, f"✅ CAN address {address} assigned!")
+            return {
+                "status": "success",
+                "message": f"CAN address {address} assigned on {port}",
+                "response": response.strip(),
+            }
+        except Exception as e:
+            self.__logger.error(f"Failed to send CAN address: {e}")
+            self._emit_usb_flash_status("failed", 92, f"CAN address assignment failed: {e}")
+            return {"status": "error", "message": str(e)}
 
     # Digital Input/Output API Methods
     @APIExport(runOnUIThread=False)

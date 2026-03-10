@@ -15,6 +15,7 @@ export const DIMENSIONS = Object.freeze({
   TIME: "time",
   TILING: "tiling",
   OUTPUT: "output",
+  OBJECTIVE: "objective",
 });
 
 // Z/Focus mode options
@@ -69,6 +70,11 @@ const initialExperimentUIState = {
       configured: false,
       summary: "Default output",
     },
+    [DIMENSIONS.OBJECTIVE]: {
+      enabled: true,
+      configured: false,
+      summary: "Default objective",
+    },
   },
 
   // Experiment-level metadata estimates (updated dynamically)
@@ -90,6 +96,7 @@ const initialExperimentUIState = {
     [DIMENSIONS.TIME]: false,
     [DIMENSIONS.TILING]: false,
     [DIMENSIONS.OUTPUT]: false,
+    [DIMENSIONS.OBJECTIVE]: false,
   },
 };
 

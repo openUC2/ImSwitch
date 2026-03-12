@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   IconButton,
@@ -26,8 +26,7 @@ import {
 } from "@mui/icons-material";
 import { setNotification } from "../state/slices/NotificationSlice";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
-import apiStorageControllerListExternalDrives from "../backendapi/apiStorageControllerListExternalDrives";
-import apiStorageControllerGetStorageStatus from "../backendapi/apiStorageControllerGetStorageStatus";
+import { getStorageState } from "../state/slices/StorageSlice";
 import apiStorageControllerSetActivePath from "../backendapi/apiStorageControllerSetActivePath";
 import apiStorageControllerGetConfigPaths from "../backendapi/apiStorageControllerGetConfigPaths";
 import apiUC2ConfigControllerGetDiskUsage from "../backendapi/apiUC2ConfigControllerGetDiskUsage";
@@ -40,21 +39,13 @@ import apiUC2ConfigControllerGetDiskUsage from "../backendapi/apiUC2ConfigContro
  * Note: Drives are automatically mounted by the OS. Use the admin panel for unmounting.
  *
  * @param {function} onStorageChange - Callback when storage location changes
- * @param {function} onFileManagerRefresh - Callback to refresh FileManager
- * @param {number} scanInterval - Interval for background scanning in ms (default: 10000)
  * @param {boolean} disabled - Disable button when backend is not connected
  */
-const StorageButton = ({
-  onStorageChange,
-  onFileManagerRefresh,
-  scanInterval = 60000,
-  disabled = false,
-}) => {
+const StorageButton = ({ onStorageChange, disabled = false }) => {
   const dispatch = useDispatch();
   const connectionSettings = useSelector(getConnectionSettingsState);
+  const storageState = useSelector(getStorageState);
   const [anchorEl, setAnchorEl] = useState(null);
-  const [externalDrives, setExternalDrives] = useState([]);
-  const [storageStatus, setStorageStatus] = useState(null);
   const [defaultPath, setDefaultPath] = useState(null);
   const [internalDiskUsage, setInternalDiskUsage] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -63,6 +54,12 @@ const StorageButton = ({
   const [previousDriveCount, setPreviousDriveCount] = useState(0);
 
   const open = Boolean(anchorEl);
+  const storageStatus = storageState.status;
+  const externalDrives = useMemo(
+    () => storageStatus.available_drives || [],
+    [storageStatus.available_drives],
+  );
+  const isLoadingStorage = loading || !storageState.hasReceivedSnapshot;
 
   // Format size in human-readable format
   const formatSize = (bytes) => {
@@ -73,23 +70,17 @@ const StorageButton = ({
     return `${mb.toFixed(2)} MB`;
   };
 
-  // Fetch storage status and external drives
+  // Fetch supplementary storage info that is not part of the storage snapshot.
   const fetchStorageInfo = useCallback(
     async (showLoading = true) => {
       console.log(
         "StorageButton: fetchStorageInfo called, showLoading:",
-        showLoading
+        showLoading,
       );
       if (showLoading) setLoading(true);
       setError(null);
 
       try {
-        // Get current storage status
-        console.log("StorageButton: Fetching storage status...");
-        const status = await apiStorageControllerGetStorageStatus();
-        console.log("StorageButton: Storage status:", status);
-        setStorageStatus(status);
-
         // Get default path if not already loaded
         if (!defaultPath) {
           const configPaths = await apiStorageControllerGetConfigPaths();
@@ -115,50 +106,6 @@ const StorageButton = ({
           console.error("Failed to fetch internal disk usage:", err);
           // Keep old value or set null
         }
-
-        // Get list of external drives
-        console.log("StorageButton: Fetching external drives...");
-        const drives = await apiStorageControllerListExternalDrives();
-        console.log("StorageButton: Raw API response:", drives);
-
-        // Filter out EFI system partitions and other non-user drives
-        const allDrives = drives.drives || [];
-        const newDrives = allDrives.filter((drive) => {
-          const name = (drive.name || "").toLowerCase();
-          const label = (drive.label || "").toLowerCase();
-          const path = (drive.path || "").toLowerCase();
-
-          // Filter out EFI partitions, boot partitions, and system partitions
-          const isSystemPartition =
-            name.includes("efi") ||
-            label.includes("efi") ||
-            path.includes("/boot") ||
-            path.includes("efi") ||
-            name.includes("boot") ||
-            label.includes("boot");
-
-          return !isSystemPartition;
-        });
-
-        console.log(
-          "StorageButton: Scanned drives (after filtering):",
-          newDrives.length,
-          newDrives
-        );
-
-        // Check for new drives
-        if (newDrives.length > previousDriveCount && previousDriveCount > 0) {
-          const newDrive = newDrives[newDrives.length - 1];
-          dispatch(
-            setNotification({
-              message: `New drive detected: ${newDrive.label || newDrive.path}`,
-              type: "info",
-            })
-          );
-        }
-
-        setExternalDrives(newDrives);
-        setPreviousDriveCount(newDrives.length);
       } catch (err) {
         console.error("Failed to fetch storage info:", err);
         if (showLoading) {
@@ -168,7 +115,7 @@ const StorageButton = ({
         if (showLoading) setLoading(false);
       }
     },
-    [previousDriveCount, dispatch, defaultPath]
+    [defaultPath],
   );
 
   // Select/switch to a drive
@@ -192,7 +139,7 @@ const StorageButton = ({
 
         const result = await apiStorageControllerSetActivePath(
           drivePath,
-          persist
+          persist,
         );
 
         console.log("StorageButton: Backend response:", result);
@@ -204,7 +151,7 @@ const StorageButton = ({
         const newActivePath = result.active_path || drivePath;
         console.log(
           "StorageButton: Active path after local switch:",
-          newActivePath
+          newActivePath,
         );
 
         if (onStorageChange) {
@@ -215,13 +162,13 @@ const StorageButton = ({
           setNotification({
             message: result.message || "Switched to local storage",
             type: "success",
-          })
+          }),
         );
       } else {
         // For external drives, use set_active_path
         const result = await apiStorageControllerSetActivePath(
           drivePath,
-          persist
+          persist,
         );
 
         console.log("StorageButton: Backend response:", result);
@@ -234,7 +181,7 @@ const StorageButton = ({
         const newActivePath = result.active_path || drivePath;
         console.log(
           "StorageButton: Notifying storage change to:",
-          newActivePath
+          newActivePath,
         );
 
         if (onStorageChange) {
@@ -245,11 +192,9 @@ const StorageButton = ({
           setNotification({
             message: result.message || "Switched to external storage",
             type: "success",
-          })
+          }),
         );
       }
-
-      // Don't call onFileManagerRefresh here - App.jsx handles it after path change
     } catch (err) {
       console.error("Failed to switch drive:", err);
       setError(`Failed to switch drive: ${err.message}`);
@@ -275,19 +220,19 @@ const StorageButton = ({
     fetchStorageInfo(false);
   }, [fetchStorageInfo]);
 
-  // Background scanning
   useEffect(() => {
-    console.log(
-      "StorageButton: Setting up background scan every",
-      scanInterval / 1000,
-      "seconds"
-    );
-    const interval = setInterval(() => {
-      fetchStorageInfo(false);
-    }, scanInterval);
+    if (externalDrives.length > previousDriveCount && previousDriveCount > 0) {
+      const newDrive = externalDrives[externalDrives.length - 1];
+      dispatch(
+        setNotification({
+          message: `New drive detected: ${newDrive.label || newDrive.path}`,
+          type: "info",
+        }),
+      );
+    }
 
-    return () => clearInterval(interval);
-  }, [scanInterval, fetchStorageInfo]);
+    setPreviousDriveCount(externalDrives.length);
+  }, [dispatch, externalDrives, previousDriveCount]);
 
   return (
     <>
@@ -377,7 +322,7 @@ const StorageButton = ({
           )}
 
           {/* Current Active Storage */}
-          {storageStatus && (
+          {storageState.hasReceivedSnapshot && (
             <Box
               sx={{
                 p: 2,
@@ -410,7 +355,7 @@ const StorageButton = ({
                   />
                   <Chip
                     label={`Total: ${formatSize(
-                      storageStatus.disk_usage.total
+                      storageStatus.disk_usage.total,
                     )}`}
                     size="small"
                     sx={{
@@ -480,7 +425,7 @@ const StorageButton = ({
                   const cleanIp = ip.replace(/^https?:\/\//, "");
                   window.open(
                     `http://${cleanIp}/admin/panel/storage/`,
-                    "_blank"
+                    "_blank",
                   );
                 }}
                 startIcon={<OpenInNewIcon fontSize="small" />}
@@ -500,7 +445,7 @@ const StorageButton = ({
               Internal Storage
             </Typography>
 
-            {loading ? (
+            {isLoadingStorage ? (
               <Box sx={{ display: "flex", justifyContent: "center", p: 2 }}>
                 <CircularProgress size={24} />
               </Box>
@@ -519,7 +464,7 @@ const StorageButton = ({
                     borderRadius: 1,
                     border: 1,
                     borderColor: !storageStatus?.active_path?.includes(
-                      "/media/"
+                      "/media/",
                     )
                       ? "success.main"
                       : "divider",
@@ -548,7 +493,7 @@ const StorageButton = ({
                         variant="body2"
                         sx={{
                           fontWeight: !storageStatus?.active_path?.includes(
-                            "/media/"
+                            "/media/",
                           )
                             ? "bold"
                             : "normal",
@@ -630,7 +575,7 @@ const StorageButton = ({
               External Drives ({externalDrives.length})
             </Typography>
 
-            {loading ? (
+            {isLoadingStorage ? (
               <Box sx={{ display: "flex", justifyContent: "center", p: 3 }}>
                 <CircularProgress size={24} />
               </Box>

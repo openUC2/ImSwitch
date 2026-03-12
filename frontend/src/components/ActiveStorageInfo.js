@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { useDispatch } from "react-redux";
+import React, { useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
 import { Box, Typography, Chip, Button, CircularProgress } from "@mui/material";
 import {
   SdStorage as SdStorageIcon,
   Folder as FolderIcon,
 } from "@mui/icons-material";
 import { setNotification } from "../state/slices/NotificationSlice";
-import apiStorageControllerGetStorageStatus from "../backendapi/apiStorageControllerGetStorageStatus";
+import { getStorageState } from "../state/slices/StorageSlice";
 import apiStorageControllerSetActivePath from "../backendapi/apiStorageControllerSetActivePath";
 
 /**
@@ -16,36 +16,10 @@ import apiStorageControllerSetActivePath from "../backendapi/apiStorageControlle
  */
 const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
   const dispatch = useDispatch();
-  const [storageStatus, setStorageStatus] = useState(null);
-  const [defaultPath, setDefaultPath] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const storageState = useSelector(getStorageState);
   const [switching, setSwitching] = useState(false);
-
-  const fetchStatus = useCallback(async () => {
-    try {
-      const status = await apiStorageControllerGetStorageStatus();
-      setStorageStatus(status);
-
-      // Get default local path
-      if (!defaultPath) {
-        // Use /home/pi/Datasets as the default local storage path
-        const localPath = "/home/pi/Datasets";
-        setDefaultPath(localPath);
-      }
-    } catch (error) {
-      console.error("Failed to fetch storage status:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, [defaultPath]);
-
-  useEffect(() => {
-    fetchStatus();
-
-    // Refresh every 10 seconds
-    const interval = setInterval(fetchStatus, 30000);
-    return () => clearInterval(interval);
-  }, [fetchStatus]);
+  const storageStatus = storageState.status;
+  const defaultPath = "/home/pi/Datasets";
 
   const handleSwitchToLocal = async () => {
     if (!defaultPath) return;
@@ -55,13 +29,11 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
       const result = await apiStorageControllerSetActivePath(defaultPath, true);
       console.log("ActiveStorageInfo: Switch to local result:", result);
 
-      await fetchStatus();
-
       // Notify parent about storage change (updates FileManager's initialPath)
       const newActivePath = result.active_path || defaultPath;
       console.log(
         "ActiveStorageInfo: Notifying storage change to:",
-        newActivePath
+        newActivePath,
       );
 
       if (onStorageChange) {
@@ -72,7 +44,7 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
         setNotification({
           message: "Switched to local storage",
           type: "success",
-        })
+        }),
       );
 
       // Trigger FileManager refresh if callback provided
@@ -85,14 +57,14 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
         setNotification({
           message: `Failed to switch: ${error.message}`,
           type: "error",
-        })
+        }),
       );
     } finally {
       setSwitching(false);
     }
   };
 
-  if (loading || !storageStatus?.active_path) {
+  if (!storageState.hasReceivedSnapshot || !storageStatus?.active_path) {
     return null;
   }
 
@@ -134,7 +106,7 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
       {storageStatus.disk_usage && (
         <Chip
           label={`${(storageStatus.disk_usage.free / 1024 ** 3).toFixed(
-            1
+            1,
           )} GB free`}
           size="small"
           sx={{

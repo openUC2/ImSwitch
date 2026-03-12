@@ -54,6 +54,7 @@ import galvoScannerReducer from "./slices/GalvoScannerSlice";
 import focusMapReducer from "./slices/FocusMapSlice";
 import overviewRegistrationReducer from "./slices/OverviewRegistrationSlice";
 import frame3DViewerReducer from "./slices/Frame3DViewerSlice";
+import storageReducer from "./slices/StorageSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -80,11 +81,11 @@ const lightsheetPersistConfig = {
   key: "lightsheet",
   storage,
   whitelist: [
-    "axisConfig",      // Persist axis offsets, scales, and invert flags
-    "cameraState",     // Persist 3D viewer camera position and zoom
-    "experimentName",  // Persist last used experiment name
-    "storageFormat",   // Persist last used storage format
-    "scanMode",        // Persist last used scan mode
+    "axisConfig", // Persist axis offsets, scales, and invert flags
+    "cameraState", // Persist 3D viewer camera position and zoom
+    "experimentName", // Persist last used experiment name
+    "storageFormat", // Persist last used storage format
+    "scanMode", // Persist last used scan mode
   ],
   // Don't persist: stagePositions, scanStatus, vtkImagePrimary, isRunning
 };
@@ -108,9 +109,9 @@ const frame3DViewerPersistConfig = {
   key: "frame3DViewer",
   storage,
   whitelist: [
-    "axisConfig",   // Persist axis offsets, scales, invert flags, and axis mappings
-    "cameraState",  // Persist 3D viewer camera position and target
-    "visibility",   // Persist visibility toggles
+    "axisConfig", // Persist axis offsets, scales, invert flags, and axis mappings
+    "cameraState", // Persist 3D viewer camera position and target
+    "visibility", // Persist visibility toggles
   ],
 };
 
@@ -163,7 +164,11 @@ const rootReducer = combineReducers({
   galvoScannerState: galvoScannerReducer,
   focusMap: persistReducer(focusMapPersistConfig, focusMapReducer), // Nested persist for UI accordion states
   overviewRegistrationState: overviewRegistrationReducer,
-  frame3DViewer: persistReducer(frame3DViewerPersistConfig, frame3DViewerReducer),
+  frame3DViewer: persistReducer(
+    frame3DViewerPersistConfig,
+    frame3DViewerReducer,
+  ),
+  storageState: storageReducer,
 });
 
 //#####################################################################################

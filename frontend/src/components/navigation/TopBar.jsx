@@ -14,7 +14,6 @@ const TopBar = ({
   setSidebarVisible,
   selectedPlugin,
   onSettingsNavigate,
-  onFileManagerRefresh,
   onStorageChange,
 }) => {
   // Get backend connection status
@@ -62,7 +61,6 @@ const TopBar = ({
         </Typography>
 
         <StorageButton
-          onFileManagerRefresh={onFileManagerRefresh}
           onStorageChange={onStorageChange}
           disabled={!isBackendConnected}
         />

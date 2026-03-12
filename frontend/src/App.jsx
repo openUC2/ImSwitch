@@ -31,7 +31,6 @@ import STORMControllerLocal from "./components/STORMControllerLocal.js";
 import StresstestController from "./components/StresstestController.js";
 import SystemSettings from "./components/SystemSettings.js";
 import SystemUpdateController from "./components/SystemUpdateController.jsx";
-import TimelapseController from "./components/TimelapseController.js";
 import UC2ConfigurationController from "./components/UC2ConfigurationController.jsx";
 import SerialDebugController from "./components/SerialDebugController.jsx";
 import WiFiController from "./components/WiFiController.jsx";
@@ -407,7 +406,6 @@ function App() {
           setSidebarVisible={setSidebarVisible}
           selectedPlugin={selectedPlugin}
           onSettingsNavigate={handlePluginChange} // Pass existing navigation handler
-          onFileManagerRefresh={handleRefresh}
           onStorageChange={handleStorageChange}
         />
 

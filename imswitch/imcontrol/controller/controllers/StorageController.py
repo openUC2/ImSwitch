@@ -9,7 +9,7 @@ using the simplified storage_paths module.
 from typing import Optional, Dict, Any
 from pydantic import BaseModel
 from fastapi import HTTPException
-from imswitch.imcommon.framework import Signal
+from imswitch.imcommon.framework import Signal, Timer
 from imswitch.imcommon.model import APIExport, initLogger
 from ..basecontrollers import ImConWidgetController
 import time
@@ -51,14 +51,23 @@ class StorageController(ImConWidgetController):
     """
 
     sigStorageDeviceChanged = Signal(dict)  # Emits: {'event': 'mounted'/'unmounted', 'timestamp': str, 'data': drive_info}
+    sigStorageStatusUpdate = Signal(dict)   # Emits the current storage snapshot for frontend Redux/WebSocket consumers
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self, tryInheritParent=False)
         self._monitor_started = False
+        self._status_emit_interval_ms = 5000
+        self._storage_status_timer = Timer()
+        self._storage_status_timer.timeout.connect(self._emit_storage_status_update)
 
         # Check if there's a saved storage path in setup config and use it
         self._load_persisted_path()
+
+        # Periodically push storage status to Socket.IO clients so the frontend
+        # does not need to poll via HTTP.
+        self._storage_status_timer.start(self._status_emit_interval_ms)
+        self._emit_storage_status_update()
 
         # Start USB monitoring automatically on initialization
         if False: # TODO: We should have this enablable through the config?
@@ -126,6 +135,71 @@ class StorageController(ImConWidgetController):
         self._monitor_started = True
         self._logger.info(f"Storage monitoring started with mount paths: {mount_paths}")
 
+    def _get_mount_paths(self):
+        """Return configured storage mount roots, or sensible platform defaults."""
+        config = get_config()
+        if config.ext_data_folder:
+            return [p.strip() for p in config.ext_data_folder.split(',') if p.strip()]
+        return ['/media', '/Volumes', '/datasets']
+
+    def _get_external_drives(self, active_path: Optional[str] = None):
+        """Scan and annotate available external drives."""
+        active_path = active_path or get_data_path()
+        drives = scan_external_drives(self._get_mount_paths())
+
+        for drive in drives:
+            drive_path = drive.get("path") or drive.get("mount_point")
+            if drive_path and "mount_point" not in drive:
+                drive["mount_point"] = drive_path
+            drive["is_active"] = bool(
+                active_path and drive_path and active_path.startswith(drive_path)
+            )
+
+        return drives
+
+    def _build_storage_status(self) -> Dict[str, Any]:
+        """Build a normalized storage snapshot for both HTTP and WebSocket consumers."""
+        config = get_config()
+        active_path = get_data_path()
+        config_path = get_config_path()
+        storage_info = get_storage_info(active_path)
+
+        total_bytes = int(round(storage_info.get("total_space_gb", 0.0) * (1024 ** 3)))
+        free_bytes = int(round(storage_info.get("free_space_gb", 0.0) * (1024 ** 3)))
+        used_bytes = max(total_bytes - free_bytes, 0)
+
+        return {
+            "active_path": active_path,
+            "active_data_path": active_path,
+            "config_path": config_path,
+            "fallback_path": config.data_folder if config.data_folder else None,
+            "scan_enabled": config.scan_ext_data_folder,
+            "mount_paths": self._get_mount_paths(),
+            "exists": storage_info["exists"],
+            "writable": storage_info["writable"],
+            "free_space_gb": storage_info["free_space_gb"],
+            "total_space_gb": storage_info["total_space_gb"],
+            "percent_used": storage_info["percent_used"],
+            "disk_usage": {
+                "free": free_bytes,
+                "used": used_bytes,
+                "total": total_bytes,
+                "free_gb": storage_info["free_space_gb"],
+                "total_gb": storage_info["total_space_gb"],
+                "used_gb": round(used_bytes / (1024 ** 3), 2),
+                "percent_used": storage_info["percent_used"],
+            },
+            "available_drives": self._get_external_drives(active_path),
+            "updated_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        }
+
+    def _emit_storage_status_update(self):
+        """Push the latest storage snapshot over Socket.IO via the signal bridge."""
+        try:
+            self.sigStorageStatusUpdate.emit(self._build_storage_status())
+        except Exception as e:
+            self._logger.error(f"Error emitting storage status update: {e}")
+
     @APIExport(runOnUIThread=False)
     def get_storage_status(self) -> Dict:
         """
@@ -135,29 +209,10 @@ class StorageController(ImConWidgetController):
             Dictionary with storage status information
         """
         try:
-            config = get_config()
-            data_path = get_data_path()
-            config_path = get_config_path()
-
-            # Get storage info for current data path
-            storage_info = get_storage_info(data_path)
-
-            # Build response
-            status = {
-                "active_path": data_path,
-                "config_path": config_path,
-                "fallback_path": config.data_folder if config.data_folder else None,
-                "scan_enabled": config.scan_ext_data_folder,
-                "mount_paths": config.ext_data_folder.split(',') if config.ext_data_folder else [],
-                "exists": storage_info["exists"],
-                "writable": storage_info["writable"],
-                "free_space_gb": storage_info["free_space_gb"],
-                "total_space_gb": storage_info["total_space_gb"],
-                "percent_used": storage_info["percent_used"]
-            }
+            status = self._build_storage_status()
 
             self._logger.info(
-                f"Storage status requested - active path: {data_path}"
+                f"Storage status requested - active path: {status['active_path']}"
             )
 
             return status
@@ -177,22 +232,7 @@ class StorageController(ImConWidgetController):
             Dictionary with list of external drives
         """
         try:
-            config = get_config()
-
-            # Get mount paths - use ext_data_folder if configured, otherwise use sensible defaults
-            if config.ext_data_folder:
-                mount_paths = [p.strip() for p in config.ext_data_folder.split(',')]
-            else:
-                # Default mount points for Docker and native environments
-                mount_paths = ['/media', '/Volumes', '/datasets']
-
-            # Scan for external drives
-            drives = scan_external_drives(mount_paths)
-
-            # Mark active drive
-            active_path = get_data_path()
-            for drive in drives:
-                drive["is_active"] = (drive["path"] == active_path)
+            drives = self._get_external_drives()
 
             self._logger.info(
                 f"External drives listed - found {len(drives)} drive(s)"
@@ -277,6 +317,8 @@ class StorageController(ImConWidgetController):
             self._logger.info(
                 f"Active storage path set to: {imswitch_data_path} (base: {path}, persist={persist})"
             )
+
+            self._emit_storage_status_update()
 
             return {
                 "success": True,

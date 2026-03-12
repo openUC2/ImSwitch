@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
+import { useSelector } from "react-redux";
 import {
   Box,
   Card,
@@ -20,12 +21,10 @@ import {
   Usb as UsbIcon,
   Folder as FolderIcon,
   CheckCircle as CheckCircleIcon,
-  Refresh as RefreshIcon,
   Storage as StorageIcon,
   HardDrive as HardDriveIcon,
 } from "@mui/icons-material";
-import apiStorageControllerListExternalDrives from "../../backendapi/apiStorageControllerListExternalDrives";
-import apiStorageControllerGetStorageStatus from "../../backendapi/apiStorageControllerGetStorageStatus";
+import { getStorageState } from "../../state/slices/StorageSlice";
 import apiStorageControllerSetActivePath from "../../backendapi/apiStorageControllerSetActivePath";
 
 /**
@@ -41,32 +40,12 @@ import apiStorageControllerSetActivePath from "../../backendapi/apiStorageContro
  * @param {function} onStorageChange - Callback when storage location changes
  */
 const StorageManager = ({ onStorageChange }) => {
-  const [externalDrives, setExternalDrives] = useState([]);
-  const [storageStatus, setStorageStatus] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const storageState = useSelector(getStorageState);
   const [error, setError] = useState(null);
   const [mounting, setMounting] = useState(null); // Track which drive is being mounted
-
-  // Fetch storage status and external drives
-  const fetchStorageInfo = async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      // Get current storage status
-      const status = await apiStorageControllerGetStorageStatus();
-      setStorageStatus(status);
-
-      // Get list of external drives
-      const drives = await apiStorageControllerListExternalDrives();
-      setExternalDrives(drives.drives || []);
-    } catch (err) {
-      console.error("Failed to fetch storage info:", err);
-      setError("Failed to load storage information. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const storageStatus = storageState.status;
+  const externalDrives = storageStatus.available_drives || [];
+  const loading = !storageState.hasReceivedSnapshot;
 
   // Mount/activate a drive
   const handleMountDrive = async (drivePath, persist = false) => {
@@ -76,13 +55,10 @@ const StorageManager = ({ onStorageChange }) => {
     try {
       const result = await apiStorageControllerSetActivePath(
         drivePath,
-        persist
+        persist,
       );
 
       if (result.status === "success") {
-        // Refresh storage status
-        await fetchStorageInfo();
-
         // Notify parent component
         if (onStorageChange) {
           onStorageChange(result.active_path);
@@ -97,11 +73,6 @@ const StorageManager = ({ onStorageChange }) => {
       setMounting(null);
     }
   };
-
-  // Load storage info on mount
-  useEffect(() => {
-    fetchStorageInfo();
-  }, []);
 
   // Format size in human-readable format
   const formatSize = (bytes) => {
@@ -128,10 +99,12 @@ const StorageManager = ({ onStorageChange }) => {
         >
           <StorageIcon /> Storage Management
         </Typography>
-        <Tooltip title="Refresh">
-          <IconButton onClick={fetchStorageInfo} disabled={loading}>
-            <RefreshIcon />
-          </IconButton>
+        <Tooltip title="Storage status updates automatically">
+          <span>
+            <IconButton disabled>
+              <StorageIcon />
+            </IconButton>
+          </span>
         </Tooltip>
       </Box>
 
@@ -200,10 +173,10 @@ const StorageManager = ({ onStorageChange }) => {
           ) : (
             <List>
               {externalDrives.map((drive, index) => {
-                const isActive = storageStatus?.active_data_path?.startsWith(
-                  drive.mount_point
-                );
-                const isMounting = mounting === drive.mount_point;
+                const drivePath = drive.path || drive.mount_point;
+                const isActive =
+                  storageStatus?.active_data_path?.startsWith(drivePath);
+                const isMounting = mounting === drivePath;
 
                 return (
                   <ListItem
@@ -214,9 +187,7 @@ const StorageManager = ({ onStorageChange }) => {
                         variant={isActive ? "outlined" : "contained"}
                         color={isActive ? "success" : "primary"}
                         size="small"
-                        onClick={() =>
-                          handleMountDrive(drive.mount_point, true)
-                        }
+                        onClick={() => handleMountDrive(drivePath, true)}
                         disabled={isActive || isMounting}
                         startIcon={
                           isMounting ? <CircularProgress size={16} /> : null
@@ -225,8 +196,8 @@ const StorageManager = ({ onStorageChange }) => {
                         {isActive
                           ? "Active"
                           : isMounting
-                          ? "Mounting..."
-                          : "Mount"}
+                            ? "Mounting..."
+                            : "Mount"}
                       </Button>
                     }
                   >
@@ -237,11 +208,11 @@ const StorageManager = ({ onStorageChange }) => {
                         />
                       </ListItemIcon>
                       <ListItemText
-                        primary={drive.device || drive.mount_point}
+                        primary={drive.device || drivePath}
                         secondary={
                           <Box>
                             <Typography variant="body2" component="span">
-                              {drive.mount_point}
+                              {drivePath}
                             </Typography>
                             {drive.size && (
                               <Typography

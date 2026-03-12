@@ -60,6 +60,19 @@ Z at each XY position, then stitches the MIPs into a single canvas.
 
 Output: `converted/mip_stitched/mip_stitched_{channel}_t{TTTT}.ome.tif`
 
+### `focus` — Best-focus plane selection, stitched (Fiji / napari)
+
+For each **channel × timepoint**, selects the sharpest Z-plane at each XY
+position using a normalised Laplacian-variance focus measure, then stitches the
+selected frames into a single canvas.  This is equivalent to a "post-processing
+autofocus": unlike MIP (which takes the brightest projection), it selects the
+plane that is actually in focus.
+
+Focus metric: $\frac{\text{Var}(\nabla^2 I)}{\langle I \rangle^2}$  
+(normalised Laplacian variance — higher = sharper).
+
+Output: `converted/best_focus/bestfocus_stitched_{channel}_t{TTTT}.ome.tif`
+
 ### `mip-composite` — MIP composite hyperstack (napari)
 
 Computes per-channel MIP-stitched canvases and merges them into a single
@@ -105,6 +118,7 @@ python convert_experiment_tiffs.py /path/to/experiment/tiles -o /path/to/output
 | `composite`     | napari    | Per-position TZCYX hyperstack            |
 | `stitch`        | Fiji      | Per-channel/Z stitched canvas            |
 | `mip`           | Fiji      | Z-MIP then stitch per channel            |
+| `focus`         | Fiji      | Best-focus Z-plane (Laplacian var) stitch |
 | `mip-composite` | napari    | All-channel MIP stitched composite       |
 | `tile-config`   | Fiji      | TileConfiguration.txt for precise stitch |
 

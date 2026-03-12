@@ -177,6 +177,28 @@ def _read_tile(info: TileInfo) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# Focus measure helper
+# ---------------------------------------------------------------------------
+
+def _focus_measure(frame: np.ndarray) -> float:
+    """
+    Return normalized Laplacian variance as a focus measure score.
+
+    Higher value → sharper image.
+    Uses a 3×3 discrete Laplacian approximation without scipy dependency.
+    """
+    f = frame.astype(np.float32)
+    # Discrete Laplacian: 4*center - top - bottom - left - right
+    lap = (4.0 * f[1:-1, 1:-1]
+           - f[:-2, 1:-1]   # top
+           - f[2:, 1:-1]    # bottom
+           - f[1:-1, :-2]   # left
+           - f[1:-1, 2:])   # right
+    mean_intensity = float(np.mean(f)) + 1e-6
+    return float(np.var(lap)) / (mean_intensity ** 2)
+
+
+# ---------------------------------------------------------------------------
 # Mode 1: Composite stack (per position, for napari)
 # Same (x, y) over all z planes + time + channels → TCZYX stack
 # ---------------------------------------------------------------------------
@@ -468,6 +490,79 @@ def build_mip_composite(grid: ExperimentGrid, out_dir: str):
 
 
 # ---------------------------------------------------------------------------
+# Mode 5: Best-focus plane selection (post-processing autofocus)
+# For each (x, y, channel, timepoint) score every Z-plane with a Laplacian-
+# variance focus measure and keep only the sharpest plane.  The resulting
+# "focused" image for each XY position is then stitched into a canvas.
+# ---------------------------------------------------------------------------
+
+def _best_focus_frame(grid: ExperimentGrid, x: int, y: int,
+                      c_idx: int, tp: int) -> Optional[np.ndarray]:
+    """
+    Return the sharpest Z-plane for a given position/channel/timepoint.
+    Uses normalised Laplacian variance as focus criterion.
+    Returns None if no tiles are available.
+    """
+    best_frame = None
+    best_score = -1.0
+    for zp in grid.z_positions:
+        key = (tp, x, y, zp, c_idx)
+        if key not in grid.lookup:
+            continue
+        frame = _read_tile(grid.lookup[key])
+        score = _focus_measure(frame)
+        if score > best_score:
+            best_score = score
+            best_frame = frame
+    return best_frame
+
+
+def build_best_focus_stitched(grid: ExperimentGrid, out_dir: str):
+    """
+    For each channel × timepoint, select the best-focus Z-plane at every
+    XY position and stitch the result into a single canvas — similar to MIP
+    but choosing the sharpest frame instead of the brightest projection.
+    """
+    print("\n=== Building best-focus stitched images (post-proc. autofocus) ===")
+    os.makedirs(out_dir, exist_ok=True)
+
+    first_tile = next(iter(grid.lookup.values()))
+    sample = _read_tile(first_tile)
+    h, w = sample.shape[:2]
+    dtype = sample.dtype
+
+    canvas_h, canvas_w, offset_map = _compute_canvas(grid, h, w)
+
+    for ch_name in grid.channels:
+        ch_tiles = [t for t in grid.lookup.values() if t.channel == ch_name]
+        if not ch_tiles:
+            continue
+        ci = ch_tiles[0].c_idx
+
+        for tp in grid.timepoints:
+            canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
+            placed = 0
+
+            for xv in grid.x_positions:
+                for yv in grid.y_positions:
+                    frame = _best_focus_frame(grid, xv, yv, ci, tp)
+                    if frame is None:
+                        continue
+                    row, col = offset_map[(xv, yv)]
+                    fh, fw = frame.shape[:2]
+                    canvas[row:row+fh, col:col+fw] = frame[:h, :w]
+                    placed += 1
+
+            if placed == 0:
+                continue
+
+            fname = f"bestfocus_stitched_{ch_name}_t{tp:04d}.ome.tif"
+            fpath = os.path.join(out_dir, fname)
+            tif.imwrite(fpath, canvas, compression="zlib")
+            print(f"  {fname}  canvas={canvas.shape}  tiles={placed}")
+
+
+# ---------------------------------------------------------------------------
 # Fiji TileConfiguration.txt (for precise Grid/Collection stitching)
 # ---------------------------------------------------------------------------
 
@@ -518,7 +613,7 @@ def write_tile_configuration(grid: ExperimentGrid, out_dir: str):
 # CLI
 # ---------------------------------------------------------------------------
 
-ALL_MODES = ["composite", "stitch", "mip", "mip-composite", "tile-config"]
+ALL_MODES = ["composite", "stitch", "mip", "mip-composite", "focus", "tile-config"]
 
 '''
 Explanation of modes:
@@ -601,6 +696,9 @@ def main():
 
     if "mip-composite" in modes:
         build_mip_composite(grid, os.path.join(out_dir, "mip_composite"))
+
+    if "focus" in modes:
+        build_best_focus_stitched(grid, os.path.join(out_dir, "best_focus"))
 
     if "tile-config" in modes:
         write_tile_configuration(grid, os.path.join(out_dir, "tile_config"))

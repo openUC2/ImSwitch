@@ -657,10 +657,6 @@ class UC2ConfigController(ImConWidgetController):
         return True
 
     @APIExport(runOnUIThread=False)
-    def getDiskUsage(self):
-        return dirtools.getDiskusage()
-
-    @APIExport(runOnUIThread=False)
     def getDataPath(self):
         return dirtools.UserFileDirs.getValidatedDataPath()
 
@@ -686,9 +682,8 @@ class UC2ConfigController(ImConWidgetController):
         return self._master.UC2ConfigManager.ESP32.serial.writeSerial(payload)
 
     @APIExport(runOnUIThread=True)
-    def is_connected(self):
+    def uc2_board_is_connected(self):
         return self._master.UC2ConfigManager.isConnected()
-
 
     @APIExport(runOnUIThread=True)
     def btpairing(self):

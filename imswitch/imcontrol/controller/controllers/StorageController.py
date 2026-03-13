@@ -333,6 +333,25 @@ class StorageController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error emitting storage status update: {e}")
 
+    def closeEvent(self):
+        """Cleanup timer resources when controller is closed."""
+        try:
+            if hasattr(self, "_storage_status_timer") and self._storage_status_timer:
+                try:
+                    self._storage_status_timer.timeout.disconnect(self._emit_storage_status_update)
+                except Exception:
+                    pass
+                self._storage_status_timer.stop()
+        except Exception as e:
+            self._logger.warning(f"Error during StorageController cleanup: {e}")
+
+    def __del__(self):
+        """Best-effort cleanup for non-Qt timer threads."""
+        try:
+            self.closeEvent()
+        except Exception:
+            pass
+
     @APIExport(runOnUIThread=False)
     def get_storage_status(self) -> Dict:
         """

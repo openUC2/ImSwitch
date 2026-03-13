@@ -6,7 +6,8 @@ listing external drives, managing storage paths, and monitoring USB drives
 using the simplified storage_paths module.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+import os
 from pydantic import BaseModel
 from fastapi import HTTPException
 from imswitch.imcommon.framework import Signal, Timer
@@ -52,7 +53,6 @@ class StorageController(ImConWidgetController):
 
     sigStorageDeviceChanged = Signal(dict)  # Emits: {'event': 'mounted'/'unmounted', 'timestamp': str, 'data': drive_info}
     sigStorageStatusUpdate = Signal(dict)   # Emits the current storage snapshot for frontend Redux/WebSocket consumers
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self, tryInheritParent=False)
@@ -157,39 +157,162 @@ class StorageController(ImConWidgetController):
 
         return drives
 
+    def _get_default_internal_storage_path(self) -> str:
+        """Return the default local storage path for the current platform/config."""
+        config = get_config()
+
+        if config.data_folder and os.path.isdir(config.data_folder):
+            return config.data_folder
+
+        default_path = os.path.join(os.path.expanduser("~"), "ImSwitchConfig", "data")
+        os.makedirs(default_path, exist_ok=True)
+        return default_path
+
+    def _is_external_storage_path(self, path: str) -> bool:
+        """Return whether a path points into one of the external mount roots."""
+        if not path:
+            return False
+
+        for mount_path in self._get_mount_paths():
+            normalized_mount = mount_path.rstrip("/")
+            if path == normalized_mount or path.startswith(f"{normalized_mount}/"):
+                return True
+
+        return False
+
+    def _build_disk_usage(self, storage_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize disk usage values into bytes and gigabytes."""
+        total_gb = storage_info.get("total_space_gb", 0.0)
+        free_gb = storage_info.get("free_space_gb", 0.0)
+        total_bytes = int(round(total_gb * (1024 ** 3)))
+        free_bytes = int(round(free_gb * (1024 ** 3)))
+        used_bytes = max(total_bytes - free_bytes, 0)
+
+        return {
+            "free": free_bytes,
+            "used": used_bytes,
+            "total": total_bytes,
+            "free_gb": free_gb,
+            "used_gb": round(used_bytes / (1024 ** 3), 2),
+            "total_gb": total_gb,
+            "percent_used": storage_info.get("percent_used", 0.0),
+        }
+
+    def _build_storage_device(
+        self,
+        path: str,
+        label: str,
+        *,
+        active_path: str,
+        storage_info: Optional[Dict[str, Any]] = None,
+        filesystem: str = "unknown",
+        is_internal: bool = False,
+        is_default: bool = False,
+        is_fallback: bool = False,
+    ) -> Dict[str, Any]:
+        """Build a normalized storage device entry for the frontend."""
+        storage_info = storage_info or get_storage_info(path)
+
+        return {
+            "path": path,
+            "mount_point": path,
+            "label": label,
+            "kind": "internal" if is_internal else "external",
+            "is_internal": is_internal,
+            "is_default": is_default,
+            "is_fallback": is_fallback,
+            "is_active": bool(active_path and path and active_path.startswith(path)),
+            "exists": storage_info.get("exists", False),
+            "writable": storage_info.get("writable", False),
+            "filesystem": filesystem,
+            "usage": self._build_disk_usage(storage_info),
+        }
+
+    def _get_storage_devices(self, active_path: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return all known storage devices with the internal device first."""
+        active_path = active_path or get_data_path()
+        internal_storage_path = self._get_default_internal_storage_path()
+
+        local_storage_info = get_storage_info(internal_storage_path)
+        devices = [
+            self._build_storage_device(
+                internal_storage_path,
+                "Internal Storage",
+                active_path=active_path,
+                storage_info=local_storage_info,
+                filesystem="local",
+                is_internal=True,
+                is_default=True,
+                is_fallback=True,
+            )
+        ]
+
+        for drive in self._get_external_drives(active_path):
+            drive_path = drive.get("path") or drive.get("mount_point")
+            if not drive_path:
+                continue
+
+            free_gb = drive.get("free_space_gb", 0.0)
+            total_gb = drive.get("total_space_gb", 0.0)
+            percent_used = round(((total_gb - free_gb) / total_gb) * 100, 2) if total_gb else 0.0
+
+            devices.append(
+                self._build_storage_device(
+                    drive_path,
+                    drive.get("label") or drive_path.split("/")[-1],
+                    active_path=active_path,
+                    storage_info={
+                        "path": drive_path,
+                        "exists": True,
+                        "writable": drive.get("writable", False),
+                        "free_space_gb": free_gb,
+                        "total_space_gb": total_gb,
+                        "percent_used": percent_used,
+                    },
+                    filesystem=drive.get("filesystem", "unknown"),
+                )
+            )
+
+        if active_path and not any(active_path.startswith(device["path"]) for device in devices):
+            devices.insert(
+                1,
+                self._build_storage_device(
+                    active_path,
+                    "Current Storage",
+                    active_path=active_path,
+                    storage_info=get_storage_info(active_path),
+                    filesystem="local" if not self._is_external_storage_path(active_path) else "unknown",
+                    is_internal=not self._is_external_storage_path(active_path),
+                ),
+            )
+
+        return devices
+
     def _build_storage_status(self) -> Dict[str, Any]:
         """Build a normalized storage snapshot for both HTTP and WebSocket consumers."""
         config = get_config()
         active_path = get_data_path()
         config_path = get_config_path()
-        storage_info = get_storage_info(active_path)
-
-        total_bytes = int(round(storage_info.get("total_space_gb", 0.0) * (1024 ** 3)))
-        free_bytes = int(round(storage_info.get("free_space_gb", 0.0) * (1024 ** 3)))
-        used_bytes = max(total_bytes - free_bytes, 0)
+        storage_devices = self._get_storage_devices(active_path)
+        active_device = next(
+            (device for device in storage_devices if device.get("is_active")),
+            None,
+        )
+        default_device = next(
+            (device for device in storage_devices if device.get("is_default")),
+            storage_devices[0] if storage_devices else None,
+        )
 
         return {
             "active_path": active_path,
             "active_data_path": active_path,
+            "active_device_path": active_device.get("path") if active_device else None,
             "config_path": config_path,
-            "fallback_path": config.data_folder if config.data_folder else None,
+            "default_device_path": default_device.get("path") if default_device else None,
+            "fallback_path": self._get_default_internal_storage_path(),
             "scan_enabled": config.scan_ext_data_folder,
             "mount_paths": self._get_mount_paths(),
-            "exists": storage_info["exists"],
-            "writable": storage_info["writable"],
-            "free_space_gb": storage_info["free_space_gb"],
-            "total_space_gb": storage_info["total_space_gb"],
-            "percent_used": storage_info["percent_used"],
-            "disk_usage": {
-                "free": free_bytes,
-                "used": used_bytes,
-                "total": total_bytes,
-                "free_gb": storage_info["free_space_gb"],
-                "total_gb": storage_info["total_space_gb"],
-                "used_gb": round(used_bytes / (1024 ** 3), 2),
-                "percent_used": storage_info["percent_used"],
-            },
-            "available_drives": self._get_external_drives(active_path),
+            "storage_devices": storage_devices,
             "updated_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         }
 

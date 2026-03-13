@@ -8,48 +8,109 @@ const toBytesFromGigabytes = (value) => {
   return Math.round(value * 1024 ** 3);
 };
 
-const normalizeDrive = (drive = {}) => {
-  const path = drive.path || drive.mount_point || "";
+const hasNumber = (value) => typeof value === "number" && !Number.isNaN(value);
+
+const normalizeUsage = (usage = {}) => {
+  const freeBytes = hasNumber(usage.free)
+    ? usage.free
+    : toBytesFromGigabytes(usage.free_gb ?? usage.free_space_gb);
+  const totalBytes = hasNumber(usage.total)
+    ? usage.total
+    : toBytesFromGigabytes(usage.total_gb ?? usage.total_space_gb);
+  const usedBytes = hasNumber(usage.used)
+    ? usage.used
+    : typeof freeBytes === "number" && typeof totalBytes === "number"
+      ? Math.max(totalBytes - freeBytes, 0)
+      : null;
+  const percentUsed = hasNumber(usage.percent_used)
+    ? usage.percent_used
+    : hasNumber(usage.percent)
+      ? usage.percent
+      : typeof usedBytes === "number" &&
+          typeof totalBytes === "number" &&
+          totalBytes > 0
+        ? Math.round((usedBytes / totalBytes) * 10000) / 100
+        : null;
+
+  if (
+    freeBytes === null &&
+    totalBytes === null &&
+    usedBytes === null &&
+    percentUsed === null
+  ) {
+    return null;
+  }
 
   return {
-    ...drive,
+    ...usage,
+    free: freeBytes,
+    total: totalBytes,
+    used: usedBytes,
+    percent_used: percentUsed,
+  };
+};
+
+const normalizeDevice = (device = {}, activePath = "", activeDataPath = "") => {
+  const path = device.path || device.mount_point || "";
+  const label =
+    device.label ||
+    device.name ||
+    path.split("/").filter(Boolean).pop() ||
+    "Storage";
+
+  return {
+    ...device,
     path,
-    mount_point: drive.mount_point || path,
-    is_active: Boolean(drive.is_active),
+    mount_point: device.mount_point || path,
+    label,
+    is_internal: Boolean(device.is_internal),
+    is_default: Boolean(device.is_default),
+    is_fallback: Boolean(device.is_fallback),
+    is_active: Boolean(
+      device.is_active ||
+      (activeDataPath && path && activeDataPath.startsWith(path)) ||
+      (activePath && path && activePath.startsWith(path)),
+    ),
+    usage: normalizeUsage(device.usage || device.disk_usage || device),
   };
 };
 
 export const normalizeStorageSnapshot = (snapshot = {}) => {
   const activePath = snapshot.active_path || snapshot.active_data_path || "";
-  const freeBytes =
-    snapshot.disk_usage?.free ?? toBytesFromGigabytes(snapshot.free_space_gb);
-  const totalBytes =
-    snapshot.disk_usage?.total ?? toBytesFromGigabytes(snapshot.total_space_gb);
-  const usedBytes =
-    snapshot.disk_usage?.used ??
-    (typeof freeBytes === "number" && typeof totalBytes === "number"
-      ? Math.max(totalBytes - freeBytes, 0)
-      : null);
-  const availableDrives = (
-    snapshot.available_drives ||
-    snapshot.drives ||
+  const activeDataPath = snapshot.active_data_path || activePath;
+  const storageDevices = (
+    snapshot.storage_devices ||
+    snapshot.devices ||
     []
-  ).map(normalizeDrive);
+  ).map((device) => normalizeDevice(device, activePath, activeDataPath));
+  const activeDevice =
+    storageDevices.find((device) => device.is_active) || null;
+  const defaultDevice =
+    storageDevices.find((device) => device.is_default) ||
+    storageDevices.find((device) => device.is_internal) ||
+    storageDevices[0] ||
+    null;
+  const internalDevice =
+    storageDevices.find((device) => device.is_internal) || null;
+  const externalDevices = storageDevices.filter(
+    (device) => !device.is_internal,
+  );
 
   return {
     ...snapshot,
     active_path: activePath,
-    active_data_path: snapshot.active_data_path || activePath,
-    disk_usage: {
-      ...snapshot.disk_usage,
-      free: freeBytes,
-      total: totalBytes,
-      used: usedBytes,
-      percent_used:
-        snapshot.disk_usage?.percent_used ?? snapshot.percent_used ?? null,
-    },
-    available_drives: availableDrives,
-    drives: availableDrives,
+    active_data_path: activeDataPath,
+    active_device_path:
+      snapshot.active_device_path || activeDevice?.path || null,
+    default_device_path:
+      snapshot.default_device_path || defaultDevice?.path || null,
+    fallback_path: snapshot.fallback_path || defaultDevice?.path || null,
+    storage_devices: storageDevices,
+    devices: storageDevices,
+    active_device: activeDevice,
+    default_device: defaultDevice,
+    internal_device: internalDevice,
+    external_devices: externalDevices,
     updated_at: snapshot.updated_at || null,
   };
 };

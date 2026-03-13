@@ -19,7 +19,6 @@ import {
 } from "@mui/material";
 import {
   Usb as UsbIcon,
-  Folder as FolderIcon,
   CheckCircle as CheckCircleIcon,
   Storage as StorageIcon,
   HardDrive as HardDriveIcon,
@@ -44,7 +43,8 @@ const StorageManager = ({ onStorageChange }) => {
   const [error, setError] = useState(null);
   const [mounting, setMounting] = useState(null); // Track which drive is being mounted
   const storageStatus = storageState.status;
-  const externalDrives = storageStatus.available_drives || [];
+  const externalDrives = storageStatus.external_devices || [];
+  const activeDevice = storageStatus.active_device || null;
   const loading = !storageState.hasReceivedSnapshot;
 
   // Mount/activate a drive
@@ -74,9 +74,8 @@ const StorageManager = ({ onStorageChange }) => {
     }
   };
 
-  // Format size in human-readable format
   const formatSize = (bytes) => {
-    if (!bytes) return "Unknown";
+    if (typeof bytes !== "number") return "Unknown";
     const gb = bytes / 1024 ** 3;
     if (gb >= 1) return `${gb.toFixed(2)} GB`;
     const mb = bytes / 1024 ** 2;
@@ -133,15 +132,15 @@ const StorageManager = ({ onStorageChange }) => {
             <Typography variant="body2" sx={{ mt: 1, fontFamily: "monospace" }}>
               {storageStatus.active_data_path || "Not set"}
             </Typography>
-            {storageStatus.disk_usage && (
+            {activeDevice?.usage && (
               <Box sx={{ mt: 1, display: "flex", gap: 2 }}>
                 <Chip
-                  label={`Free: ${formatSize(storageStatus.disk_usage.free)}`}
+                  label={`Free: ${formatSize(activeDevice.usage.free)}`}
                   size="small"
                   sx={{ bgcolor: "rgba(255, 255, 255, 0.2)" }}
                 />
                 <Chip
-                  label={`Total: ${formatSize(storageStatus.disk_usage.total)}`}
+                  label={`Total: ${formatSize(activeDevice.usage.total)}`}
                   size="small"
                   sx={{ bgcolor: "rgba(255, 255, 255, 0.2)" }}
                 />
@@ -174,8 +173,7 @@ const StorageManager = ({ onStorageChange }) => {
             <List>
               {externalDrives.map((drive, index) => {
                 const drivePath = drive.path || drive.mount_point;
-                const isActive =
-                  storageStatus?.active_data_path?.startsWith(drivePath);
+                const isActive = Boolean(drive.is_active);
                 const isMounting = mounting === drivePath;
 
                 return (
@@ -208,19 +206,20 @@ const StorageManager = ({ onStorageChange }) => {
                         />
                       </ListItemIcon>
                       <ListItemText
-                        primary={drive.device || drivePath}
+                        primary={drive.label || drivePath}
                         secondary={
                           <Box>
                             <Typography variant="body2" component="span">
                               {drivePath}
                             </Typography>
-                            {drive.size && (
+                            {drive.usage?.total && (
                               <Typography
                                 variant="body2"
                                 component="span"
                                 sx={{ ml: 2 }}
                               >
-                                {formatSize(drive.size)}
+                                {formatSize(drive.usage.used)} /{" "}
+                                {formatSize(drive.usage.total)}
                               </Typography>
                             )}
                             {drive.filesystem && (

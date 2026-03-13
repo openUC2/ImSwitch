@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import createAxiosInstance from '../../backendapi/createAxiosInstance';
 import {
   IconButton,
   Menu,
@@ -13,7 +12,6 @@ import {
   Typography,
   Box,
   Switch,
-  LinearProgress,
   Chip,
 } from "@mui/material";
 import {
@@ -30,13 +28,13 @@ import {
   Build,
   Article,
 } from "@mui/icons-material";
-import { formatDiskUsage } from "../../utils/formatUtils";
 import { useDeveloperMode } from "../../utils/useDeveloperMode";
 
 // Redux state management following Copilot Instructions
 import { toggleTheme, getThemeState } from "../../state/slices/ThemeSlice.js";
 import * as connectionSettingsSlice from "../../state/slices/ConnectionSettingsSlice.js";
 import * as uc2Slice from "../../state/slices/UC2Slice.js";
+import { getStorageState } from "../../state/slices/StorageSlice";
 
 /**
  * ImSwitch Settings Menu Component
@@ -46,7 +44,6 @@ import * as uc2Slice from "../../state/slices/UC2Slice.js";
 const SettingsMenu = ({ onNavigate }) => {
   const dispatch = useDispatch();
   const [anchorEl, setAnchorEl] = useState(null);
-  const [diskUsage, setDiskUsage] = useState(null);
   const open = Boolean(anchorEl);
 
   // Developer Mode Hook - enables backdoor access when backend is offline
@@ -54,49 +51,27 @@ const SettingsMenu = ({ onNavigate }) => {
 
   const { isDarkMode } = useSelector(getThemeState);
   const connectionSettings = useSelector(
-    connectionSettingsSlice.getConnectionSettingsState
+    connectionSettingsSlice.getConnectionSettingsState,
   );
 
   // Get actual backend connection status from UC2 slice - following Copilot Instructions
   const uc2State = useSelector(uc2Slice.getUc2State);
+  const storageState = useSelector(getStorageState);
   const isBackendConnected = uc2State.backendConnected; // API reachable (enables UI)
   const isHardwareConnected = uc2State.uc2Connected; // Hardware connected
 
+  const activeUsage = storageState.status.active_device?.usage || null;
+  const diskUsagePercent =
+    typeof activeUsage?.percent_used === "number"
+      ? activeUsage.percent_used
+      : null;
+  const diskUsage =
+    typeof diskUsagePercent === "number"
+      ? `${diskUsagePercent.toFixed(1)}%`
+      : null;
+
   // Developer Override: Allow access to all features when developer mode is active
   const allowAccess = isBackendConnected || isDeveloperMode;
-
-  // Fetch disk usage when backend is connected - following Copilot Instructions
-  useEffect(() => {
-    // Only fetch if backend is connected and menu is open
-    if (!isBackendConnected || !open) {
-      setDiskUsage(null);
-      return;
-    }
-
-    const fetchDiskUsage = async () => {
-      try {
-        const api = createAxiosInstance();
-        const response = await api.get('/UC2ConfigController/getDiskUsage');
-        const data = response.data;
-
-        // Handle the actual API response format - direct number
-        const usage = formatDiskUsage(data);
-
-        setDiskUsage(usage);
-      } catch (error) {
-        console.error("Error fetching disk usage:", error);
-        setDiskUsage("Error");
-        setDiskUsage("Error");
-      }
-    };
-
-    // Initial fetch when menu opens
-    fetchDiskUsage();
-
-    // Refresh every 30 seconds while menu is open
-    const intervalId = setInterval(fetchDiskUsage, 30000);
-    return () => clearInterval(intervalId);
-  }, [isBackendConnected, open]);
 
   const handleClick = (event) => {
     setAnchorEl(event.currentTarget);
@@ -161,10 +136,10 @@ const SettingsMenu = ({ onNavigate }) => {
               isDeveloperMode
                 ? "warning" // 🔧 Developer mode overrides status
                 : isBackendConnected
-                ? "success"
-                : hasConnectionSettings
-                ? "error"
-                : "warning"
+                  ? "success"
+                  : hasConnectionSettings
+                    ? "error"
+                    : "warning"
             }
             variant="dot"
             sx={{
@@ -214,8 +189,8 @@ const SettingsMenu = ({ onNavigate }) => {
                     ? "Connected"
                     : "API Connected"
                   : hasConnectionSettings
-                  ? "Connection Failed"
-                  : "Not Configured"
+                    ? "Connection Failed"
+                    : "Not Configured"
               }
               color={
                 isBackendConnected
@@ -223,8 +198,8 @@ const SettingsMenu = ({ onNavigate }) => {
                     ? "success" // ✅ Full connection
                     : "warning" // 🟡 API only, no hardware
                   : hasConnectionSettings
-                  ? "error" // ❌ Connection failed
-                  : "warning" // ⚠️ Not configured
+                    ? "error" // ❌ Connection failed
+                    : "warning" // ⚠️ Not configured
               }
               size="small"
               variant="outlined"
@@ -255,6 +230,27 @@ const SettingsMenu = ({ onNavigate }) => {
               Click "Backend Connection" to configure
             </Typography>
           )}
+
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Storage fontSize="inherit" color="action" />
+            <Chip
+              size="small"
+              variant="outlined"
+              label={
+                isBackendConnected
+                  ? storageState.hasReceivedSnapshot
+                    ? (diskUsage ?? "Disk usage unavailable")
+                    : "Disk usage loading..."
+                  : "Disk usage unavailable"
+              }
+              color={getDiskUsageColor(diskUsage)}
+              sx={{
+                height: 20,
+                fontSize: "0.75rem",
+                "& .MuiChip-label": { px: 1 },
+              }}
+            />
+          </Box>
         </Box>
 
         {/* Theme Toggle - Always available (local frontend state) */}
@@ -286,8 +282,8 @@ const SettingsMenu = ({ onNavigate }) => {
                 isBackendConnected
                   ? "success"
                   : hasConnectionSettings
-                  ? "error"
-                  : "warning"
+                    ? "error"
+                    : "warning"
               }
             />
           </ListItemIcon>
@@ -297,8 +293,8 @@ const SettingsMenu = ({ onNavigate }) => {
               isBackendConnected
                 ? "Connected - Configure settings"
                 : hasConnectionSettings
-                ? "Connection failed - Check settings"
-                : "Setup required"
+                  ? "Connection failed - Check settings"
+                  : "Setup required"
             }
           />
         </MenuItem>
@@ -420,7 +416,6 @@ const SettingsMenu = ({ onNavigate }) => {
             }
           />
         </MenuItem>
-
 
         {/* WiFi Configuration - Requires backend API calls for network management */}
         <MenuItem

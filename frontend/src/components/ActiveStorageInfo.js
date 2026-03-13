@@ -12,29 +12,26 @@ import apiStorageControllerSetActivePath from "../backendapi/apiStorageControlle
 /**
  * ActiveStorageInfo Component
  * Displays the currently active storage location in the FileManager
- * Provides quick access to switch back to local storage
+ * Provides quick access to switch back to the default internal storage.
  */
-const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
+const ActiveStorageInfo = ({ onStorageChange }) => {
   const dispatch = useDispatch();
   const storageState = useSelector(getStorageState);
   const [switching, setSwitching] = useState(false);
   const storageStatus = storageState.status;
-  const defaultPath = "/home/pi/Datasets";
+  const activeDevice = storageStatus.active_device;
+  const defaultDevice = storageStatus.default_device;
 
-  const handleSwitchToLocal = async () => {
-    if (!defaultPath) return;
+  const handleSwitchToDefault = async () => {
+    if (!defaultDevice?.path) return;
 
     setSwitching(true);
     try {
-      const result = await apiStorageControllerSetActivePath(defaultPath, true);
-      console.log("ActiveStorageInfo: Switch to local result:", result);
-
-      // Notify parent about storage change (updates FileManager's initialPath)
-      const newActivePath = result.active_path || defaultPath;
-      console.log(
-        "ActiveStorageInfo: Notifying storage change to:",
-        newActivePath,
+      const result = await apiStorageControllerSetActivePath(
+        defaultDevice.path,
+        true,
       );
+      const newActivePath = result.active_path || defaultDevice.path;
 
       if (onStorageChange) {
         onStorageChange(newActivePath);
@@ -42,17 +39,12 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
 
       dispatch(
         setNotification({
-          message: "Switched to local storage",
+          message: "Switched to internal storage",
           type: "success",
         }),
       );
-
-      // Trigger FileManager refresh if callback provided
-      if (onRefresh) {
-        onRefresh();
-      }
     } catch (error) {
-      console.error("Failed to switch to local storage:", error);
+      console.error("Failed to switch to internal storage:", error);
       dispatch(
         setNotification({
           message: `Failed to switch: ${error.message}`,
@@ -68,8 +60,8 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
     return null;
   }
 
-  // Check if it's an external drive (contains /media/)
-  const isExternalDrive = storageStatus.active_path.includes("/media/");
+  const isExternalDrive = Boolean(activeDevice && !activeDevice.is_internal);
+  const activeUsage = activeDevice?.usage;
 
   return (
     <Box
@@ -94,7 +86,9 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
           variant="caption"
           sx={{ fontWeight: "bold", display: "block" }}
         >
-          {isExternalDrive ? "External Storage Active" : "Local Storage Active"}
+          {isExternalDrive
+            ? "External Storage Active"
+            : "Internal Storage Active"}
         </Typography>
         <Typography
           variant="caption"
@@ -103,11 +97,9 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
           {storageStatus.active_path}
         </Typography>
       </Box>
-      {storageStatus.disk_usage && (
+      {activeUsage && (
         <Chip
-          label={`${(storageStatus.disk_usage.free / 1024 ** 3).toFixed(
-            1,
-          )} GB free`}
+          label={`${(activeUsage.free / 1024 ** 3).toFixed(1)} GB free`}
           size="small"
           sx={{
             bgcolor: "rgba(255, 255, 255, 0.3)",
@@ -120,7 +112,7 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
         <Button
           variant="outlined"
           size="small"
-          onClick={handleSwitchToLocal}
+          onClick={handleSwitchToDefault}
           disabled={switching}
           startIcon={
             switching ? (
@@ -138,7 +130,7 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
             },
           }}
         >
-          {switching ? "Switching..." : "Switch to Local"}
+          {switching ? "Switching..." : "Switch to Internal"}
         </Button>
       )}
     </Box>

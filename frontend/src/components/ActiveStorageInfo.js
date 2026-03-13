@@ -97,7 +97,7 @@ const ActiveStorageInfo = ({ onStorageChange }) => {
           {storageStatus.active_path}
         </Typography>
       </Box>
-      {activeUsage && (
+      {activeUsage && typeof activeUsage.free === "number" && (
         <Chip
           label={`${(activeUsage.free / 1024 ** 3).toFixed(1)} GB free`}
           size="small"

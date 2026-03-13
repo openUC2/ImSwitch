@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   IconButton,
@@ -46,6 +46,7 @@ const StorageButton = ({ onStorageChange, disabled = false }) => {
   const [error, setError] = useState(null);
   const [switching, setSwitching] = useState(null);
   const [previousDriveCount, setPreviousDriveCount] = useState(0);
+  const storageUsageAlertLevelRef = useRef(null);
 
   const open = Boolean(anchorEl);
   const storageStatus = storageState.status;
@@ -80,6 +81,13 @@ const StorageButton = ({ onStorageChange, disabled = false }) => {
       return (usage.used / usage.total) * 100;
     }
     return null;
+  };
+
+  const getUsageLevel = (percent) => {
+    if (typeof percent !== "number") return "normal";
+    if (percent >= 90) return "critical";
+    if (percent >= 75) return "warning";
+    return "normal";
   };
 
   const handleSelectDrive = async (drivePath, persist = true) => {
@@ -141,6 +149,37 @@ const StorageButton = ({ onStorageChange, disabled = false }) => {
 
     setPreviousDriveCount(externalDrives.length);
   }, [dispatch, externalDrives, previousDriveCount]);
+
+  useEffect(() => {
+    const usagePercent = getUsagePercent(activeDevice?.usage);
+    const currentLevel = getUsageLevel(usagePercent);
+    const previousLevel = storageUsageAlertLevelRef.current;
+
+    if (previousLevel === currentLevel) {
+      return;
+    }
+
+    storageUsageAlertLevelRef.current = currentLevel;
+
+    if (currentLevel === "normal") {
+      return;
+    }
+
+    const levelText = currentLevel === "critical" ? "critical" : "high";
+    const severity = currentLevel === "critical" ? "warning" : "info";
+    const storageLabel = activeDevice?.label || "active storage";
+    const usageText =
+      typeof usagePercent === "number"
+        ? `${usagePercent.toFixed(1)}%`
+        : "unknown";
+
+    dispatch(
+      setNotification({
+        message: `Storage usage ${levelText} on ${storageLabel} (${usageText} used).`,
+        type: severity,
+      }),
+    );
+  }, [activeDevice, dispatch]);
 
   return (
     <>

@@ -2,60 +2,100 @@
 """
 DetectorManager for Andor SDK3 cameras.
 
-Separates GUI-level logic from low-level SDK control
-(see ``interfaces/andor_camera.py``).
+Provides the same feature-set as HikCamManager so that ImSwitch can drive
+an Andor camera (e.g. Zyla, iXon) in exactly the same way as a HIK camera.
 """
 from __future__ import annotations
 
 from typing import List
 
 from imswitch.imcommon.model import initLogger
-from imswitch.imcommon.model.ImageUtils import rotate_and_flip  # your own helper
 from .DetectorManager import (
     DetectorManager,
     DetectorAction,
     DetectorNumberParameter,
     DetectorListParameter,
+    DetectorBooleanParameter,
 )
 
 
 
 class AndorCamManager(DetectorManager):
-    """ImSwitch wrapper around :class:`~interfaces.andor_camera.CameraAndor`."""
+    """
+    ImSwitch DetectorManager for Andor SDK3 cameras.
 
-    # ------------------------------------------------------------------#
-    # Construction                                                      #
-    # ------------------------------------------------------------------#
+    Mirrors the HikCamManager interface so both camera types can be used
+    interchangeably from scripts, widgets, and the REST API.
+
+    Manager properties (JSON / YAML):
+      - ``cameraListIndex``    int  - SDK camera index (0-based)
+      - ``cameraEffPixelsize`` float - physical pixel size in um
+      - ``mockstackpath``      str  - path for the mock stack (optional)
+      - ``mocktype``           str  - \"normal\" | \"random\" (optional)
+      - ``andor``              dict - key/value camera settings applied at startup
+    """
+
     def __init__(self, detectorInfo, name, **_extra):
         self.__logger = initLogger(self, instanceName=name)
         self.detectorInfo = detectorInfo
 
-        # ---- properties -------------------------------------------------
-        cam_idx = detectorInfo.managerProperties.get("cameraListIndex", 0)
-        px_um = detectorInfo.managerProperties.get("cameraEffPixelsize", 1)
-        andor_props = detectorInfo.managerProperties.get("andor", {})
+        # ---- properties from JSON ----------------------------------------
+        cam_idx    = detectorInfo.managerProperties.get("cameraListIndex", 0)
+        px_um      = detectorInfo.managerProperties.get("cameraEffPixelsize", 1.0)
+        andor_dict = detectorInfo.managerProperties.get("andor", {})
 
-        # ---- low-level camera ------------------------------------------
+        try:
+            self._mockstackpath = detectorInfo.managerProperties["mockstackpath"]
+        except KeyError:
+            self._mockstackpath = None
+        try:
+            self._mocktype = detectorInfo.managerProperties["mocktype"]
+        except KeyError:
+            self._mocktype = "normal"
+
+        # ---- open camera -------------------------------------------------
         self._camera = self._get_cam(cam_idx)
-        for prop, val in andor_props.items():
-            if prop == "roi":
-                self._camera.setROI(**val)
-            elif prop == "gain":
-                self._camera.set_gain(val)
-            elif prop == "exposure":
-                self._camera.set_exposure_time_ms(val)
-            elif prop == "trigger_source":
-                self._camera.set_trigger_source(val)
+
+        # Apply startup settings from JSON (same pattern as HikCamManager)
+        for prop, val in andor_dict.items():
+            self._camera.setPropertyValue(prop, val)
 
         fullShape = (self._camera.SensorWidth, self._camera.SensorHeight)
+        model     = self._camera.model
+        self._running             = False
+        self._adjustingParameters = False
 
-        # ---- parameters -------------------------------------------------
+        # Apply full-frame ROI on start
+        self.crop(hpos=0, vpos=0, hsize=fullShape[0], vsize=fullShape[1])
+
+        # Read real values from hardware
+        try:
+            hw_exp = self._camera.get_exposuretime()  # (cur, min, max) us
+            initial_exposure = hw_exp[0] / 1000.0 if hw_exp and hw_exp[0] is not None else 10.0
+        except Exception:
+            initial_exposure = 10.0
+        try:
+            hw_gain      = self._camera.get_gain()    # (cur, min, max)
+            initial_gain = hw_gain[0] if hw_gain and hw_gain[0] is not None else 0.0
+        except Exception:
+            initial_gain = 0.0
+
+        # ---- GUI parameters -----------------------------------------------
         parameters = {
             "exposure": DetectorNumberParameter(
-                group="Misc", value=self._camera.get_exposure_time_ms(), valueUnits="ms", editable=True
+                group="Misc",
+                value=initial_exposure,
+                valueUnits="ms",
+                editable=True,
             ),
             "gain": DetectorNumberParameter(
-                group="Misc", value=self._camera.get_gain(), valueUnits="arb.u.", editable=True
+                group="Misc",
+                value=initial_gain,
+                valueUnits="arb.u.",
+                editable=True,
+            ),
+            "blacklevel": DetectorNumberParameter(
+                group="Misc", value=0, valueUnits="arb.u.", editable=True
             ),
             "image_width": DetectorNumberParameter(
                 group="Misc", value=fullShape[0], valueUnits="px", editable=False
@@ -69,6 +109,27 @@ class AndorCamManager(DetectorManager):
             "frame_number": DetectorNumberParameter(
                 group="Misc", value=0, valueUnits="frames", editable=False
             ),
+            "exposure_mode": DetectorListParameter(
+                group="Misc",
+                value="manual",
+                options=["manual", "auto", "single"],
+                editable=True,
+            ),
+            "flat_fielding": DetectorBooleanParameter(
+                group="Misc", value=False, editable=True
+            ),
+            "mode": DetectorBooleanParameter(
+                group="Misc", value=name, editable=False
+            ),
+            "previewMinValue": DetectorNumberParameter(
+                group="Misc", value=0, valueUnits="arb.u.", editable=True
+            ),
+            "previewMaxValue": DetectorNumberParameter(
+                group="Misc",
+                value=self._getPreviewMaxValue(),
+                valueUnits="arb.u.",
+                editable=True,
+            ),
             "trigger_source": DetectorListParameter(
                 group="Acquisition mode",
                 value="Continuous",
@@ -76,12 +137,15 @@ class AndorCamManager(DetectorManager):
                 editable=True,
             ),
             "Camera pixel size": DetectorNumberParameter(
-                group="Miscellaneous", value=px_um, valueUnits="µm", editable=True
+                group="Miscellaneous", value=px_um, valueUnits="um", editable=True
             ),
         }
 
+        # ---- GUI actions -------------------------------------------------
         actions = {
-            "Flush buffers": DetectorAction(group="Misc", func=self.flushBuffers),
+            "More properties": DetectorAction(
+                group="Misc", func=self._camera.openPropertiesGUI
+            ),
         }
 
         super().__init__(
@@ -89,105 +153,227 @@ class AndorCamManager(DetectorManager):
             name,
             fullShape=fullShape,
             supportedBinnings=[1],
-            model="AndorSDK3",
+            model=model,
             parameters=parameters,
             actions=actions,
-            croppable=False,
+            croppable=True,
         )
 
-        self._running = False
 
-    # ------------------------------------------------------------------#
-    # Parameter overrides                                               #
-    # ------------------------------------------------------------------#
+    # -----------------------------------------------------------------------
+    # Preview helpers
+    # -----------------------------------------------------------------------
+    def _getPreviewMaxValue(self) -> int:
+        """Return max display value based on pixel encoding bit-depth."""
+        try:
+            enc = getattr(self._camera, "_activePixelFormat", "Mono16").lower()
+            if "16" in enc:
+                return 65535
+            if "12" in enc:
+                return 4095
+            if "8" in enc:
+                return 255
+        except Exception:
+            pass
+        return 65535  # Safe default for Andor (Mono16)
+
+    # -----------------------------------------------------------------------
+    # Parameter interface
+    # -----------------------------------------------------------------------
     def setParameter(self, name, value):
+        """Set a named parameter and forward it to the camera."""
         super().setParameter(name, value)
 
-        if name == "exposure":
-            self._camera.set_exposure_time_ms(value)
-        elif name == "gain":
-            self._camera.set_gain(value)
-        elif name == "trigger_source":
-            self._camera.set_trigger_source(value)
+        if name not in self._DetectorManager__parameters:
+            raise AttributeError(f'Non-existent parameter "{name}" specified')
 
+        value = self._camera.setPropertyValue(name, value)
         return value
 
     def getParameter(self, name):
-        if name == "exposure":
-            return self._camera.get_exposure_time_ms()
-        if name == "gain":
-            return self._camera.get_gain()
-        if name == "frame_number":
-            return self._camera.frameNumber
-        if name == "trigger_source":
-            return self._camera.cam.TriggerMode
-        return super().getParameter(name)
+        """Read a named parameter from the camera."""
+        if name not in self._parameters:
+            raise AttributeError(f'Non-existent parameter "{name}" specified')
+        return self._camera.getPropertyValue(name)
 
-    # ------------------------------------------------------------------#
-    # Acquisition                                                       #
-    # ------------------------------------------------------------------#
+    # -----------------------------------------------------------------------
+    # Flatfield
+    # -----------------------------------------------------------------------
+    def setFlatfieldImage(self, flatfieldImage, isFlatfielding: bool):
+        self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)
+
+    def recordFlatfieldImage(self):
+        """Average several frames and store as the flatfield reference."""
+        self._camera.recordFlatfieldImage()
+
+    # -----------------------------------------------------------------------
+    # Frame access
+    # -----------------------------------------------------------------------
+    def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
+        return self._camera.getLast(returnFrameNumber=returnFrameNumber)
+
+    def getChunk(self):
+        try:
+            return self._camera.getLastChunk()
+        except Exception:
+            return None
+
+    def flushBuffers(self):
+        self._camera.flushBuffer()
+
+    # -----------------------------------------------------------------------
+    # Trigger
+    # -----------------------------------------------------------------------
+    def setTriggerSource(self, source: str):
+        self._performSafeCameraAction(lambda: self._camera.setTriggerSource(source))
+        self.parameters["trigger_source"].value = source
+
+    def sendSoftwareTrigger(self):
+        """Send a software trigger to the camera."""
+        if self._camera.send_trigger():
+            self.__logger.debug("Software trigger sent successfully.")
+        else:
+            self.__logger.warning("Failed to send software trigger.")
+
+    def getCurrentTriggerType(self) -> str:
+        return self._camera.getTriggerSource()
+
+    def getTriggerTypes(self) -> List[str]:
+        return self._camera.getTriggerTypes()
+
+    # -----------------------------------------------------------------------
+    # Acquisition lifecycle
+    # -----------------------------------------------------------------------
     def startAcquisition(self):
         if not self._running:
             self._camera.start_live()
             self._running = True
+            self.__logger.debug("start_live")
 
     def stopAcquisition(self):
         if self._running:
-            self._camera.stop_live()
             self._running = False
+            self._camera.suspend_live()
+            self.__logger.debug("suspend_live")
 
-    # GUI helper
-    def flushBuffers(self):
-        self._camera.flushBuffer()
+    def stopAcquisitionForROIChange(self):
+        self._running = False
+        self._camera.stop_live()
+        self.__logger.debug("stop_live (for ROI change)")
 
-    # ------------------------------------------------------------------#
-    # Frame access                                                      #
-    # ------------------------------------------------------------------#
-    def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
-        frame = self._camera.getLast(returnFrameNumber=returnFrameNumber)
-        if isinstance(frame, tuple):
-            img, fid = frame
-        else:
-            img, fid = frame, None
+    # -----------------------------------------------------------------------
+    # ROI
+    # -----------------------------------------------------------------------
+    def crop(self, hpos, vpos, hsize, vsize):
+        """
+        Crop the sensor readout window.
 
-        if img is not None and is_resize:
-            img = rotate_and_flip(img)  # project-specific util
+        hpos  - horizontal start (px)
+        vpos  - vertical start (px)
+        hsize - width (px)
+        vsize - height (px)
+        """
+        def cropAction():
+            self.__logger.debug(
+                f"{self._camera.model}: crop to {hsize}x{vsize} at ({hpos},{vpos})"
+            )
+            self._camera.setROI(hpos, vpos, hsize, vsize)
+            self._shape      = (hsize, vsize)
+            self._frameStart = (hpos, vpos)
 
-        return (img, fid) if returnFrameNumber else img
+        try:
+            self._performSafeCameraAction(cropAction)
+        except Exception as e:
+            self.__logger.error(e)
 
-    # triggers
-    def sendSoftwareTrigger(self):
-        self._camera.send_trigger()
+    # -----------------------------------------------------------------------
+    # Safe action helper (mirrors HikCamManager._performSafeCameraAction)
+    # -----------------------------------------------------------------------
+    def _performSafeCameraAction(self, function):
+        """
+        Temporarily stop acquisition, run function, then resume if the stream
+        was already running. Prevents SDK errors when changing settings that
+        require the camera to be idle.
+        """
+        self._adjustingParameters = True
+        was_running = self._running
+        self.stopAcquisitionForROIChange()
+        function()
+        if was_running:
+            self.startAcquisition()
+        self._adjustingParameters = False
 
-    # ------------------------------------------------------------------#
-    # ImSwitch housekeeping                                             #
-    # ------------------------------------------------------------------#
-    def finalize(self):
-        super().finalize()
-        self._camera.close()
-
-    # pixel size metadata
+    # -----------------------------------------------------------------------
+    # Pixel size
+    # -----------------------------------------------------------------------
     @property
     def pixelSizeUm(self) -> List[float]:
         px = self.parameters["Camera pixel size"].value
         return [1.0, px, px]
 
-    def setPixelSizeUm(self, pixelSizeUm):
+    def setPixelSizeUm(self, pixelSizeUm: float):
         self.parameters["Camera pixel size"].value = pixelSizeUm
 
-    # ROI convenience
-    def crop(self, hpos, vpos, hsize, vsize):
-        self._camera.setROI(hpos, vpos, hsize, vsize)
+    # -----------------------------------------------------------------------
+    # Housekeeping
+    # -----------------------------------------------------------------------
+    def finalize(self) -> None:
+        super().finalize()
+        self.__logger.debug("Safely disconnecting the Andor camera ...")
+        self._camera.close()
 
+    def closeEvent(self):
+        self._camera.close()
 
-    def _get_cam(self, cameraId, isRGB = False, binning=1):
+    def openPropertiesDialog(self):
+        self._camera.openPropertiesGUI()
+
+    # -----------------------------------------------------------------------
+    # Status
+    # -----------------------------------------------------------------------
+    def getCameraStatus(self) -> dict:
+        """Return a comprehensive status dict (same structure as HikCamManager)."""
+        status = super().getCameraStatus()
+
+        status["cameraType"]            = "Andor"
+        status["isMock"]                = self._mocktype != "normal"
+        status["isConnected"]           = self._camera is not None
+        status["isAcquiring"]           = self._running
+        status["isAdjustingParameters"] = self._adjustingParameters
+
+        try:
+            params = self._camera.get_camera_parameters()
+            if params:
+                status.update(params)
+        except Exception as e:
+            self.__logger.debug(f"getCameraStatus params: {e}")
+
+        try:
+            status["triggerSource"] = self._camera.getTriggerSource()
+        except Exception as e:
+            self.__logger.debug(f"getCameraStatus trigger: {e}")
+
+        return status
+
+    # -----------------------------------------------------------------------
+    # Camera factory
+    # -----------------------------------------------------------------------
+    def _get_cam(self, cameraId):
+        """Open the Andor camera; fall back to the TIS mock on failure."""
         try:
             from imswitch.imcontrol.model.interfaces.andorcamera import andorcamera
-            self.__logger.debug(f'Trying to initialize Andor camera {cameraId}')
+            self.__logger.debug(f"Trying to initialize Andor camera {cameraId}")
             camera = andorcamera(camera_no=cameraId)
         except Exception as e:
             self.__logger.error(e)
-            self.__logger.warning(f'Failed to initialize CameraHik {cameraId}, loading TIS mocker')
+            self.__logger.warning(
+                f"Failed to initialize Andor camera {cameraId}, loading TIS mocker"
+            )
             from imswitch.imcontrol.model.interfaces.tiscamera_mock import MockCameraTIS
-            camera = MockCameraTIS(mocktype=self._mocktype, mockstackpath=self._mockstackpath,  isRGB=isRGB)
+            camera = MockCameraTIS(
+                mocktype=self._mocktype,
+                mockstackpath=self._mockstackpath,
+                isRGB=False,
+            )
+        self.__logger.info(f"Initialized camera, model: {camera.model}")
         return camera

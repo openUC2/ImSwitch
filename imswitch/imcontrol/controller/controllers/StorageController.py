@@ -142,6 +142,18 @@ class StorageController(ImConWidgetController):
             return [p.strip() for p in config.ext_data_folder.split(',') if p.strip()]
         return ['/media', '/Volumes', '/datasets']
 
+    def _is_path_within(self, candidate_path: Optional[str], root_path: Optional[str]) -> bool:
+        """Return True if candidate_path is the same as or inside root_path."""
+        if not candidate_path or not root_path:
+            return False
+
+        try:
+            normalized_candidate = os.path.normpath(candidate_path)
+            normalized_root = os.path.normpath(root_path)
+            return os.path.commonpath([normalized_candidate, normalized_root]) == normalized_root
+        except ValueError:
+            return False
+
     def _get_external_drives(self, active_path: Optional[str] = None):
         """Scan and annotate available external drives."""
         active_path = active_path or get_data_path()
@@ -151,9 +163,7 @@ class StorageController(ImConWidgetController):
             drive_path = drive.get("path") or drive.get("mount_point")
             if drive_path and "mount_point" not in drive:
                 drive["mount_point"] = drive_path
-            drive["is_active"] = bool(
-                active_path and drive_path and active_path.startswith(drive_path)
-            )
+            drive["is_active"] = self._is_path_within(active_path, drive_path)
 
         return drives
 
@@ -221,7 +231,7 @@ class StorageController(ImConWidgetController):
             "is_internal": is_internal,
             "is_default": is_default,
             "is_fallback": is_fallback,
-            "is_active": bool(active_path and path and active_path.startswith(path)),
+            "is_active": self._is_path_within(active_path, path),
             "exists": storage_info.get("exists", False),
             "writable": storage_info.get("writable", False),
             "filesystem": filesystem,
@@ -273,7 +283,7 @@ class StorageController(ImConWidgetController):
                 )
             )
 
-        if active_path and not any(active_path.startswith(device["path"]) for device in devices):
+        if active_path and not any(self._is_path_within(active_path, device.get("path")) for device in devices):
             devices.insert(
                 1,
                 self._build_storage_device(

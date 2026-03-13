@@ -527,9 +527,7 @@ const StorageButton = ({ onStorageChange, disabled = false }) => {
             ) : (
               <List dense>
                 {externalDrives.map((drive, index) => {
-                  const isActive =
-                    storageStatus?.active_path?.startsWith(drive.path) ||
-                    drive.is_active;
+                  const isActive = Boolean(drive.is_active);
                   const isSwitching = switching === drive.path;
 
                   return (

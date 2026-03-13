@@ -10,6 +10,38 @@ const toBytesFromGigabytes = (value) => {
 
 const hasNumber = (value) => typeof value === "number" && !Number.isNaN(value);
 
+const normalizePath = (value) => {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed === "/") {
+    return "/";
+  }
+
+  return trimmed.replace(/\/+$/, "");
+};
+
+const isPathActive = (path, activePath) => {
+  const base = normalizePath(path);
+  const active = normalizePath(activePath);
+
+  if (!base || !active) {
+    return false;
+  }
+
+  if (active === base) {
+    return true;
+  }
+
+  return active.startsWith(`${base}/`);
+};
+
 const normalizeUsage = (usage = {}) => {
   const freeBytes = hasNumber(usage.free)
     ? usage.free
@@ -71,8 +103,8 @@ const normalizeDevice = (device = {}, activePath = "", activeDataPath = "") => {
     is_active: Boolean(
       isAvailable &&
       (device.is_active ||
-        (activeDataPath && path && activeDataPath.startsWith(path)) ||
-        (activePath && path && activePath.startsWith(path))),
+        isPathActive(path, activeDataPath) ||
+        isPathActive(path, activePath)),
     ),
     usage: normalizeUsage(device.usage || device.disk_usage || device),
   };
@@ -113,7 +145,7 @@ export const normalizeStorageSnapshot = (snapshot = {}) => {
       device.is_available &&
       device.path &&
       rawActiveDataPath &&
-      rawActiveDataPath.startsWith(device.path),
+      isPathActive(device.path, rawActiveDataPath),
   );
 
   const storageDevices = normalizedDevices.map((device) => ({
@@ -122,7 +154,7 @@ export const normalizeStorageSnapshot = (snapshot = {}) => {
       effectiveActiveDevice &&
       device.path &&
       effectiveActivePath &&
-      effectiveActivePath.startsWith(device.path),
+      isPathActive(device.path, effectiveActivePath),
     ),
   }));
 

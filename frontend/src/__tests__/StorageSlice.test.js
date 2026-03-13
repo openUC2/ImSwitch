@@ -114,4 +114,36 @@ describe("normalizeStorageSnapshot", () => {
     expect(normalized.external_devices).toHaveLength(1);
     expect(normalized.external_devices[0].path).toBe("/media/usb1");
   });
+
+  test("uses boundary-aware path matching for active device selection", () => {
+    const snapshot = {
+      active_path: "/media/USB2/ImSwitchData",
+      active_data_path: "/media/USB2/ImSwitchData",
+      storage_devices: [
+        {
+          path: "/media/USB",
+          is_internal: false,
+          exists: true,
+        },
+        {
+          path: "/media/USB2",
+          is_internal: false,
+          exists: true,
+        },
+      ],
+    };
+
+    const normalized = normalizeStorageSnapshot(snapshot);
+
+    const usb = normalized.storage_devices.find(
+      (device) => device.path === "/media/USB",
+    );
+    const usb2 = normalized.storage_devices.find(
+      (device) => device.path === "/media/USB2",
+    );
+
+    expect(usb?.is_active).toBe(false);
+    expect(usb2?.is_active).toBe(true);
+    expect(normalized.active_device?.path).toBe("/media/USB2");
+  });
 });

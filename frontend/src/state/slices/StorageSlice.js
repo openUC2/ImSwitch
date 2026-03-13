@@ -70,9 +70,9 @@ const normalizeDevice = (device = {}, activePath = "", activeDataPath = "") => {
     is_fallback: Boolean(device.is_fallback),
     is_active: Boolean(
       isAvailable &&
-        (device.is_active ||
-          (activeDataPath && path && activeDataPath.startsWith(path)) ||
-          (activePath && path && activePath.startsWith(path))),
+      (device.is_active ||
+        (activeDataPath && path && activeDataPath.startsWith(path)) ||
+        (activePath && path && activePath.startsWith(path))),
     ),
     usage: normalizeUsage(device.usage || device.disk_usage || device),
   };
@@ -82,22 +82,30 @@ export const normalizeStorageSnapshot = (snapshot = {}) => {
   const rawActivePath = snapshot.active_path || snapshot.active_data_path || "";
   const rawActiveDataPath = snapshot.active_data_path || rawActivePath;
 
-  const normalizedDevices = (snapshot.storage_devices || snapshot.devices || []).map(
-    (device) => normalizeDevice(device, rawActivePath, rawActiveDataPath),
-  );
+  const normalizedDevices = (
+    snapshot.storage_devices ||
+    snapshot.devices ||
+    []
+  ).map((device) => normalizeDevice(device, rawActivePath, rawActiveDataPath));
 
   const defaultAvailableDevice =
-    normalizedDevices.find((device) => device.is_default && device.is_available) ||
-    normalizedDevices.find((device) => device.is_internal && device.is_available) ||
+    normalizedDevices.find(
+      (device) => device.is_default && device.is_available,
+    ) ||
+    normalizedDevices.find(
+      (device) => device.is_internal && device.is_available,
+    ) ||
     normalizedDevices.find((device) => device.is_available) ||
     normalizedDevices[0] ||
     null;
 
   const activeDeviceFromSnapshot =
-    normalizedDevices.find((device) => device.is_active && device.is_available) ||
-    null;
+    normalizedDevices.find(
+      (device) => device.is_active && device.is_available,
+    ) || null;
 
-  const effectiveActiveDevice = activeDeviceFromSnapshot || defaultAvailableDevice;
+  const effectiveActiveDevice =
+    activeDeviceFromSnapshot || defaultAvailableDevice;
   const effectiveActivePath = effectiveActiveDevice?.path || rawActivePath;
 
   const hasValidActivePath = normalizedDevices.some(
@@ -112,9 +120,9 @@ export const normalizeStorageSnapshot = (snapshot = {}) => {
     ...device,
     is_active: Boolean(
       effectiveActiveDevice &&
-        device.path &&
-        effectiveActivePath &&
-        effectiveActivePath.startsWith(device.path),
+      device.path &&
+      effectiveActivePath &&
+      effectiveActivePath.startsWith(device.path),
     ),
   }));
 
@@ -125,7 +133,9 @@ export const normalizeStorageSnapshot = (snapshot = {}) => {
     null;
 
   const activeDevice =
-    storageDevices.find((device) => device.is_active) || effectiveActiveDevice || null;
+    storageDevices.find((device) => device.is_active) ||
+    effectiveActiveDevice ||
+    null;
 
   const internalDevice =
     storageDevices.find((device) => device.is_internal) || null;
@@ -141,8 +151,10 @@ export const normalizeStorageSnapshot = (snapshot = {}) => {
     ...snapshot,
     active_path: activePath,
     active_data_path: activeDataPath,
-    active_device_path: activeDevice?.path || snapshot.active_device_path || null,
-    default_device_path: snapshot.default_device_path || defaultDevice?.path || null,
+    active_device_path:
+      activeDevice?.path || snapshot.active_device_path || null,
+    default_device_path:
+      snapshot.default_device_path || defaultDevice?.path || null,
     fallback_path: snapshot.fallback_path || defaultDevice?.path || null,
     storage_devices: storageDevices,
     devices: storageDevices,

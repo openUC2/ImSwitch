@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useSelector } from "react-redux";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
+import { getStorageState } from "../state/slices/StorageSlice";
 import * as uc2Slice from "../state/slices/UC2Slice.js";
 import {
   Box,
@@ -21,25 +22,33 @@ import {
   CheckCircle,
   ErrorOutline,
 } from "@mui/icons-material";
-import apiUC2ConfigControllerGetDiskUsage from "../backendapi/apiUC2ConfigControllerGetDiskUsage";
 
 export default function SystemSettings() {
   // Get connection settings from Redux
   const { ip: hostIP, apiPort: hostPort } = useSelector(
-    getConnectionSettingsState
+    getConnectionSettingsState,
   );
 
   // Get backend connection status
   const uc2State = useSelector(uc2Slice.getUc2State);
+  const storageState = useSelector(getStorageState);
   const isBackendConnected = uc2State.backendConnected; // API reachable (enables UI)
 
   // Safety toggles
   const [enableImSwitch, setEnableImSwitch] = useState(false);
   const [enableRaspi, setEnableRaspi] = useState(false);
   const [isImSwitchRunning, setIsImSwitchRunning] = useState(false);
-  const [diskUsage, setDiskUsage] = useState(null);
 
   const base = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController`;
+  const activeUsage = storageState.status.active_device?.usage || null;
+  const diskUsagePercent =
+    typeof activeUsage?.percent_used === "number"
+      ? activeUsage.percent_used
+      : null;
+  const diskUsage =
+    typeof diskUsagePercent === "number"
+      ? `${diskUsagePercent.toFixed(1)}%`
+      : null;
 
   // API communication
   const callEndpoint = async (url) => {
@@ -47,7 +56,7 @@ export default function SystemSettings() {
       const response = await fetch(url, { method: "GET" });
       if (!response.ok) {
         console.error(
-          `API call failed: ${response.status} ${response.statusText}`
+          `API call failed: ${response.status} ${response.statusText}`,
         );
       } else {
         const data = await response.json();
@@ -100,36 +109,6 @@ export default function SystemSettings() {
     const intervalId = setInterval(checkImSwitchStatus, 10000);
     return () => clearInterval(intervalId);
   }, [base, isBackendConnected]);
-
-  // Fetch disk usage using the standardized API
-  useEffect(() => {
-    // Only fetch if backend is connected
-    if (!isBackendConnected) {
-      setDiskUsage(null);
-      return;
-    }
-
-    const fetchDiskUsage = async () => {
-      try {
-        // Use the standardized API wrapper
-        const data = await apiUC2ConfigControllerGetDiskUsage();
-        console.log("Disk usage data:", data);
-
-        // API returns {raw, formatted, percent}
-        setDiskUsage(data.formatted);
-      } catch (error) {
-        console.error("Error fetching disk usage:", error);
-        setDiskUsage("Error loading");
-      }
-    };
-
-    // Initial fetch
-    fetchDiskUsage();
-
-    // Fetch every 30 seconds (less frequent for disk usage)
-    const intervalId = setInterval(fetchDiskUsage, 30000);
-    return () => clearInterval(intervalId);
-  }, [isBackendConnected]);
 
   // Helper function to get disk usage color based on percentage
   const getDiskUsageColor = (usage) => {
@@ -207,7 +186,9 @@ export default function SystemSettings() {
                 <Chip
                   label={
                     isBackendConnected
-                      ? diskUsage ?? "Loading..."
+                      ? storageState.hasReceivedSnapshot
+                        ? (diskUsage ?? "Unavailable")
+                        : "Loading..."
                       : "Backend disconnected"
                   }
                   color={getDiskUsageColor(diskUsage)}

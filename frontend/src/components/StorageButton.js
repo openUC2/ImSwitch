@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
   IconButton,
@@ -18,7 +18,6 @@ import {
 import {
   SdStorage as SdStorageIcon,
   CheckCircle as CheckCircleIcon,
-  Refresh as RefreshIcon,
   Close as CloseIcon,
   Eject as EjectIcon,
   OpenInNew as OpenInNewIcon,
@@ -26,11 +25,8 @@ import {
 } from "@mui/icons-material";
 import { setNotification } from "../state/slices/NotificationSlice";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
-import apiStorageControllerListExternalDrives from "../backendapi/apiStorageControllerListExternalDrives";
-import apiStorageControllerGetStorageStatus from "../backendapi/apiStorageControllerGetStorageStatus";
+import { getStorageState } from "../state/slices/StorageSlice";
 import apiStorageControllerSetActivePath from "../backendapi/apiStorageControllerSetActivePath";
-import apiStorageControllerGetConfigPaths from "../backendapi/apiStorageControllerGetConfigPaths";
-import apiUC2ConfigControllerGetDiskUsage from "../backendapi/apiUC2ConfigControllerGetDiskUsage";
 
 /**
  * StorageButton Component
@@ -40,216 +36,88 @@ import apiUC2ConfigControllerGetDiskUsage from "../backendapi/apiUC2ConfigContro
  * Note: Drives are automatically mounted by the OS. Use the admin panel for unmounting.
  *
  * @param {function} onStorageChange - Callback when storage location changes
- * @param {function} onFileManagerRefresh - Callback to refresh FileManager
- * @param {number} scanInterval - Interval for background scanning in ms (default: 10000)
  * @param {boolean} disabled - Disable button when backend is not connected
  */
-const StorageButton = ({
-  onStorageChange,
-  onFileManagerRefresh,
-  scanInterval = 60000,
-  disabled = false,
-}) => {
+const StorageButton = ({ onStorageChange, disabled = false }) => {
   const dispatch = useDispatch();
   const connectionSettings = useSelector(getConnectionSettingsState);
+  const storageState = useSelector(getStorageState);
   const [anchorEl, setAnchorEl] = useState(null);
-  const [externalDrives, setExternalDrives] = useState([]);
-  const [storageStatus, setStorageStatus] = useState(null);
-  const [defaultPath, setDefaultPath] = useState(null);
-  const [internalDiskUsage, setInternalDiskUsage] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [switching, setSwitching] = useState(null);
   const [previousDriveCount, setPreviousDriveCount] = useState(0);
+  const storageUsageAlertLevelRef = useRef(null);
 
   const open = Boolean(anchorEl);
+  const storageStatus = storageState.status;
+  const storageDevices = useMemo(
+    () => storageStatus.storage_devices || [],
+    [storageStatus.storage_devices],
+  );
+  const externalDrives = useMemo(
+    () => storageStatus.external_devices || [],
+    [storageStatus.external_devices],
+  );
+  const defaultDevice = storageStatus.default_device || null;
+  const activeDevice = storageStatus.active_device || null;
+  const isLoadingStorage = !storageState.hasReceivedSnapshot;
 
-  // Format size in human-readable format
   const formatSize = (bytes) => {
-    if (!bytes) return "Unknown";
+    if (typeof bytes !== "number") return "Unknown";
     const gb = bytes / 1024 ** 3;
     if (gb >= 1) return `${gb.toFixed(2)} GB`;
     const mb = bytes / 1024 ** 2;
     return `${mb.toFixed(2)} MB`;
   };
 
-  // Fetch storage status and external drives
-  const fetchStorageInfo = useCallback(
-    async (showLoading = true) => {
-      console.log(
-        "StorageButton: fetchStorageInfo called, showLoading:",
-        showLoading
-      );
-      if (showLoading) setLoading(true);
-      setError(null);
+  const getUsagePercent = (usage) => {
+    if (!usage) return null;
+    if (typeof usage.percent_used === "number") return usage.percent_used;
+    if (
+      typeof usage.used === "number" &&
+      typeof usage.total === "number" &&
+      usage.total > 0
+    ) {
+      return (usage.used / usage.total) * 100;
+    }
+    return null;
+  };
 
-      try {
-        // Get current storage status
-        console.log("StorageButton: Fetching storage status...");
-        const status = await apiStorageControllerGetStorageStatus();
-        console.log("StorageButton: Storage status:", status);
-        setStorageStatus(status);
+  const getUsageLevel = (percent) => {
+    if (typeof percent !== "number") return "normal";
+    if (percent >= 90) return "critical";
+    if (percent >= 75) return "warning";
+    return "normal";
+  };
 
-        // Get default path if not already loaded
-        if (!defaultPath) {
-          const configPaths = await apiStorageControllerGetConfigPaths();
-          console.log("StorageButton: Config paths from backend:", configPaths);
-
-          // Use /home/pi/Datasets as the default local storage path
-          const localPath = "/home/pi/Datasets";
-          console.log("StorageButton: Using local storage path:", localPath);
-          setDefaultPath(localPath);
-        }
-
-        // Get disk usage for internal storage from UC2ConfigController
-        try {
-          const diskUsageData = await apiUC2ConfigControllerGetDiskUsage();
-          console.log("Internal disk usage:", diskUsageData);
-
-          // API now returns {raw, formatted, percent}
-          setInternalDiskUsage({
-            percent: diskUsageData.percent,
-            formatted: diskUsageData.formatted,
-          });
-        } catch (err) {
-          console.error("Failed to fetch internal disk usage:", err);
-          // Keep old value or set null
-        }
-
-        // Get list of external drives
-        console.log("StorageButton: Fetching external drives...");
-        const drives = await apiStorageControllerListExternalDrives();
-        console.log("StorageButton: Raw API response:", drives);
-
-        // Filter out EFI system partitions and other non-user drives
-        const allDrives = drives.drives || [];
-        const newDrives = allDrives.filter((drive) => {
-          const name = (drive.name || "").toLowerCase();
-          const label = (drive.label || "").toLowerCase();
-          const path = (drive.path || "").toLowerCase();
-
-          // Filter out EFI partitions, boot partitions, and system partitions
-          const isSystemPartition =
-            name.includes("efi") ||
-            label.includes("efi") ||
-            path.includes("/boot") ||
-            path.includes("efi") ||
-            name.includes("boot") ||
-            label.includes("boot");
-
-          return !isSystemPartition;
-        });
-
-        console.log(
-          "StorageButton: Scanned drives (after filtering):",
-          newDrives.length,
-          newDrives
-        );
-
-        // Check for new drives
-        if (newDrives.length > previousDriveCount && previousDriveCount > 0) {
-          const newDrive = newDrives[newDrives.length - 1];
-          dispatch(
-            setNotification({
-              message: `New drive detected: ${newDrive.label || newDrive.path}`,
-              type: "info",
-            })
-          );
-        }
-
-        setExternalDrives(newDrives);
-        setPreviousDriveCount(newDrives.length);
-      } catch (err) {
-        console.error("Failed to fetch storage info:", err);
-        if (showLoading) {
-          setError("Failed to load storage information.");
-        }
-      } finally {
-        if (showLoading) setLoading(false);
-      }
-    },
-    [previousDriveCount, dispatch, defaultPath]
-  );
-
-  // Select/switch to a drive
   const handleSelectDrive = async (drivePath, persist = true) => {
-    console.log("StorageButton: Switching to path:", drivePath);
+    const targetDevice = storageDevices.find(
+      (device) => device.path === drivePath,
+    );
     setSwitching(drivePath);
     setError(null);
 
     try {
-      // Check if this is local storage (not in /media/)
-      const isLocal = !drivePath.includes("/media/");
+      const result = await apiStorageControllerSetActivePath(
+        drivePath,
+        persist,
+      );
+      const newActivePath = result.active_path || drivePath;
 
-      if (isLocal) {
-        // For local storage: Backend always creates ImSwitchData subfolder
-        // So we need to pass the parent directory, not the full path with ImSwitchData
-        console.log("StorageButton: Switching to local storage");
-
-        // Use the local path that was clicked (should be /home/pi/Datasets)
-        // Backend will create /home/pi/Datasets/ImSwitchData automatically
-        console.log("StorageButton: Using local base path:", drivePath);
-
-        const result = await apiStorageControllerSetActivePath(
-          drivePath,
-          persist
-        );
-
-        console.log("StorageButton: Backend response:", result);
-        console.log("StorageButton: Backend created path:", result.active_path);
-
-        await fetchStorageInfo(false);
-
-        // Use the active_path returned by backend (will be drivePath/ImSwitchData)
-        const newActivePath = result.active_path || drivePath;
-        console.log(
-          "StorageButton: Active path after local switch:",
-          newActivePath
-        );
-
-        if (onStorageChange) {
-          onStorageChange(newActivePath);
-        }
-
-        dispatch(
-          setNotification({
-            message: result.message || "Switched to local storage",
-            type: "success",
-          })
-        );
-      } else {
-        // For external drives, use set_active_path
-        const result = await apiStorageControllerSetActivePath(
-          drivePath,
-          persist
-        );
-
-        console.log("StorageButton: Backend response:", result);
-        console.log("StorageButton: result.active_path:", result.active_path);
-
-        // Backend returns success message directly or in result object
-        await fetchStorageInfo(false);
-
-        // Notify parent about storage change (this updates FileManager's initialPath)
-        const newActivePath = result.active_path || drivePath;
-        console.log(
-          "StorageButton: Notifying storage change to:",
-          newActivePath
-        );
-
-        if (onStorageChange) {
-          onStorageChange(newActivePath);
-        }
-
-        dispatch(
-          setNotification({
-            message: result.message || "Switched to external storage",
-            type: "success",
-          })
-        );
+      if (onStorageChange) {
+        onStorageChange(newActivePath);
       }
 
-      // Don't call onFileManagerRefresh here - App.jsx handles it after path change
+      dispatch(
+        setNotification({
+          message:
+            result.message ||
+            (targetDevice?.is_internal
+              ? "Switched to internal storage"
+              : "Switched to external storage"),
+          type: "success",
+        }),
+      );
     } catch (err) {
       console.error("Failed to switch drive:", err);
       setError(`Failed to switch drive: ${err.message}`);
@@ -261,7 +129,6 @@ const StorageButton = ({
   // Handle button click
   const handleClick = (event) => {
     setAnchorEl(event.currentTarget);
-    fetchStorageInfo();
   };
 
   const handleClose = () => {
@@ -269,25 +136,50 @@ const StorageButton = ({
     setError(null);
   };
 
-  // Initial load
   useEffect(() => {
-    console.log("StorageButton: Initial mount, starting scan...");
-    fetchStorageInfo(false);
-  }, [fetchStorageInfo]);
+    if (externalDrives.length > previousDriveCount && previousDriveCount > 0) {
+      const newDrive = externalDrives[externalDrives.length - 1];
+      dispatch(
+        setNotification({
+          message: `New drive detected: ${newDrive.label || newDrive.path}`,
+          type: "info",
+        }),
+      );
+    }
 
-  // Background scanning
+    setPreviousDriveCount(externalDrives.length);
+  }, [dispatch, externalDrives, previousDriveCount]);
+
   useEffect(() => {
-    console.log(
-      "StorageButton: Setting up background scan every",
-      scanInterval / 1000,
-      "seconds"
+    const usagePercent = getUsagePercent(activeDevice?.usage);
+    const currentLevel = getUsageLevel(usagePercent);
+    const previousLevel = storageUsageAlertLevelRef.current;
+
+    if (previousLevel === currentLevel) {
+      return;
+    }
+
+    storageUsageAlertLevelRef.current = currentLevel;
+
+    if (currentLevel === "normal") {
+      return;
+    }
+
+    const levelText = currentLevel === "critical" ? "critical" : "high";
+    const severity = currentLevel === "critical" ? "warning" : "info";
+    const storageLabel = activeDevice?.label || "active storage";
+    const usageText =
+      typeof usagePercent === "number"
+        ? `${usagePercent.toFixed(1)}%`
+        : "unknown";
+
+    dispatch(
+      setNotification({
+        message: `Storage usage ${levelText} on ${storageLabel} (${usageText} used).`,
+        type: severity,
+      }),
     );
-    const interval = setInterval(() => {
-      fetchStorageInfo(false);
-    }, scanInterval);
-
-    return () => clearInterval(interval);
-  }, [scanInterval, fetchStorageInfo]);
+  }, [activeDevice, dispatch]);
 
   return (
     <>
@@ -339,13 +231,6 @@ const StorageButton = ({
               <SdStorageIcon /> Select Storage
             </Typography>
             <Box>
-              <IconButton
-                size="small"
-                onClick={() => fetchStorageInfo()}
-                disabled={loading}
-              >
-                <RefreshIcon />
-              </IconButton>
               <IconButton size="small" onClick={handleClose}>
                 <CloseIcon />
               </IconButton>
@@ -377,7 +262,7 @@ const StorageButton = ({
           )}
 
           {/* Current Active Storage */}
-          {storageStatus && (
+          {storageState.hasReceivedSnapshot && (
             <Box
               sx={{
                 p: 2,
@@ -398,10 +283,10 @@ const StorageButton = ({
               >
                 {storageStatus.active_path || "Not set"}
               </Typography>
-              {storageStatus.disk_usage && (
+              {activeDevice?.usage && (
                 <Box sx={{ mt: 1, display: "flex", gap: 1 }}>
                   <Chip
-                    label={`Free: ${formatSize(storageStatus.disk_usage.free)}`}
+                    label={`Free: ${formatSize(activeDevice.usage.free)}`}
                     size="small"
                     sx={{
                       bgcolor: "rgba(255, 255, 255, 0.2)",
@@ -409,9 +294,7 @@ const StorageButton = ({
                     }}
                   />
                   <Chip
-                    label={`Total: ${formatSize(
-                      storageStatus.disk_usage.total
-                    )}`}
+                    label={`Total: ${formatSize(activeDevice.usage.total)}`}
                     size="small"
                     sx={{
                       bgcolor: "rgba(255, 255, 255, 0.2)",
@@ -480,7 +363,7 @@ const StorageButton = ({
                   const cleanIp = ip.replace(/^https?:\/\//, "");
                   window.open(
                     `http://${cleanIp}/admin/panel/storage/`,
-                    "_blank"
+                    "_blank",
                   );
                 }}
                 startIcon={<OpenInNewIcon fontSize="small" />}
@@ -500,11 +383,11 @@ const StorageButton = ({
               Internal Storage
             </Typography>
 
-            {loading ? (
+            {isLoadingStorage ? (
               <Box sx={{ display: "flex", justifyContent: "center", p: 2 }}>
                 <CircularProgress size={24} />
               </Box>
-            ) : defaultPath ? (
+            ) : defaultDevice ? (
               <List dense>
                 <ListItem
                   sx={{
@@ -513,14 +396,12 @@ const StorageButton = ({
                     alignItems: "center",
                     gap: 1,
                     p: 1,
-                    bgcolor: !storageStatus?.active_path?.includes("/media/")
+                    bgcolor: defaultDevice.is_active
                       ? "action.selected"
                       : "transparent",
                     borderRadius: 1,
                     border: 1,
-                    borderColor: !storageStatus?.active_path?.includes(
-                      "/media/"
-                    )
+                    borderColor: defaultDevice.is_active
                       ? "success.main"
                       : "divider",
                   }}
@@ -528,11 +409,7 @@ const StorageButton = ({
                   <ListItemIcon sx={{ minWidth: 32 }}>
                     <FolderIcon
                       fontSize="small"
-                      color={
-                        !storageStatus?.active_path?.includes("/media/")
-                          ? "success"
-                          : "action"
-                      }
+                      color={defaultDevice.is_active ? "success" : "action"}
                     />
                   </ListItemIcon>
                   <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -547,33 +424,36 @@ const StorageButton = ({
                       <Typography
                         variant="body2"
                         sx={{
-                          fontWeight: !storageStatus?.active_path?.includes(
-                            "/media/"
-                          )
+                          fontWeight: defaultDevice.is_active
                             ? "bold"
                             : "normal",
                         }}
                         noWrap
                       >
-                        Local Storage
+                        {defaultDevice.label}
                       </Typography>
-                      {internalDiskUsage?.percent !== undefined && (
+                      {typeof getUsagePercent(defaultDevice.usage) ===
+                        "number" && (
                         <Typography variant="caption" color="text.secondary">
-                          {internalDiskUsage.percent.toFixed(1)}% used
+                          {getUsagePercent(defaultDevice.usage).toFixed(1)}%
+                          used
                         </Typography>
                       )}
                     </Box>
-                    {internalDiskUsage?.percent !== undefined && (
+                    {typeof getUsagePercent(defaultDevice.usage) ===
+                      "number" && (
                       <LinearProgress
                         variant="determinate"
-                        value={internalDiskUsage.percent}
+                        value={getUsagePercent(defaultDevice.usage)}
                         sx={{
                           height: 6,
                           borderRadius: 1,
                           bgcolor: "action.hover",
                           "& .MuiLinearProgress-bar": {
                             bgcolor: (theme) => {
-                              const usage = internalDiskUsage.percent;
+                              const usage = getUsagePercent(
+                                defaultDevice.usage,
+                              );
                               if (usage > 90) return "error.main";
                               if (usage > 75) return "warning.main";
                               return "success.main";
@@ -582,17 +462,17 @@ const StorageButton = ({
                         }}
                       />
                     )}
-                    {Boolean(defaultPath) && (
+                    {defaultDevice.path && (
                       <Typography
                         variant="caption"
                         color="text.secondary"
                         sx={{ mt: 0.25, display: "block" }}
                       >
-                        {defaultPath}
+                        {defaultDevice.path}
                       </Typography>
                     )}
                   </Box>
-                  {!storageStatus?.active_path?.includes("/media/") ? (
+                  {defaultDevice.is_active ? (
                     <Chip
                       label="ACTIVE"
                       color="success"
@@ -605,15 +485,19 @@ const StorageButton = ({
                       variant="contained"
                       color="primary"
                       size="small"
-                      onClick={() => handleSelectDrive(defaultPath, true)}
-                      disabled={switching === defaultPath}
+                      onClick={() =>
+                        handleSelectDrive(defaultDevice.path, true)
+                      }
+                      disabled={switching === defaultDevice.path}
                       startIcon={
-                        switching === defaultPath ? (
+                        switching === defaultDevice.path ? (
                           <CircularProgress size={12} />
                         ) : null
                       }
                     >
-                      {switching === defaultPath ? "Switching..." : "SELECT"}
+                      {switching === defaultDevice.path
+                        ? "Switching..."
+                        : "SELECT"}
                     </Button>
                   )}
                 </ListItem>
@@ -630,7 +514,7 @@ const StorageButton = ({
               External Drives ({externalDrives.length})
             </Typography>
 
-            {loading ? (
+            {isLoadingStorage ? (
               <Box sx={{ display: "flex", justifyContent: "center", p: 3 }}>
                 <CircularProgress size={24} />
               </Box>
@@ -643,9 +527,7 @@ const StorageButton = ({
             ) : (
               <List dense>
                 {externalDrives.map((drive, index) => {
-                  const isActive =
-                    storageStatus?.active_path?.startsWith(drive.path) ||
-                    drive.is_active;
+                  const isActive = Boolean(drive.is_active);
                   const isSwitching = switching === drive.path;
 
                   return (
@@ -683,38 +565,29 @@ const StorageButton = ({
                             sx={{ fontWeight: isActive ? "bold" : "normal" }}
                             noWrap
                           >
-                            {drive.label || drive.path.split("/").pop()}
+                            {drive.label}
                           </Typography>
-                          {drive.free_space_gb && drive.total_space_gb && (
+                          {drive.usage && (
                             <Typography
                               variant="caption"
                               color="text.secondary"
                             >
-                              {(
-                                drive.total_space_gb - drive.free_space_gb
-                              ).toFixed(1)}{" "}
-                              GB / {drive.total_space_gb.toFixed(1)} GB
+                              {formatSize(drive.usage.used)} /{" "}
+                              {formatSize(drive.usage.total)}
                             </Typography>
                           )}
                         </Box>
-                        {drive.free_space_gb && drive.total_space_gb && (
+                        {typeof getUsagePercent(drive.usage) === "number" && (
                           <LinearProgress
                             variant="determinate"
-                            value={
-                              (1 - drive.free_space_gb / drive.total_space_gb) *
-                              100
-                            }
+                            value={getUsagePercent(drive.usage)}
                             sx={{
                               height: 6,
                               borderRadius: 1,
                               bgcolor: "action.hover",
                               "& .MuiLinearProgress-bar": {
                                 bgcolor: (theme) => {
-                                  const usage =
-                                    (1 -
-                                      drive.free_space_gb /
-                                        drive.total_space_gb) *
-                                    100;
+                                  const usage = getUsagePercent(drive.usage);
                                   if (usage > 90) return "error.main";
                                   if (usage > 75) return "warning.main";
                                   return "success.main";

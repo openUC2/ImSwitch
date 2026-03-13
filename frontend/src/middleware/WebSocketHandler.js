@@ -19,7 +19,7 @@ import * as canOtaSlice from "../state/slices/canOtaSlice.js";
 import * as usbFlashSlice from "../state/slices/usbFlashSlice.js";
 import * as laserSlice from "../state/slices/LaserSlice.js";
 import * as lightsheetSlice from "../state/slices/LightsheetSlice";
-
+import * as storageSlice from "../state/slices/StorageSlice.js";
 
 import { io } from "socket.io-client";
 
@@ -29,6 +29,9 @@ import { decode as msgpackDecode } from "@msgpack/msgpack";
 // Import API to check livestream status
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive.js";
 import { fetchWithTimeout } from "../utils/fetchWithTimeout";
+
+const isWebSocketDebugEnabled = () =>
+  typeof window !== "undefined" && Boolean(window.__IMSWITCH_DEBUG_WEBSOCKET__);
 
 //##################################################################################
 const WebSocketHandler = () => {
@@ -44,7 +47,7 @@ const WebSocketHandler = () => {
 
   // Access global Redux state
   const connectionSettingsState = useSelector(
-    connectionSettingsSlice.getConnectionSettingsState
+    connectionSettingsSlice.getConnectionSettingsState,
   );
   const hostIP = connectionSettingsState.ip;
   const hostPort = connectionSettingsState.apiPort;
@@ -65,7 +68,7 @@ const WebSocketHandler = () => {
         const response = await fetchWithTimeout(
           `${ip}:${port}/imswitch/api/UC2ConfigController/is_connected`,
           { method: "GET" },
-          10000
+          10000,
         );
 
         if (response.ok) {
@@ -75,7 +78,7 @@ const WebSocketHandler = () => {
           console.debug(
             `Backend API: Connected, Hardware: ${
               hardwareConnected ? "Connected" : "Disconnected"
-            }`
+            }`,
           );
 
           // Update BOTH statuses
@@ -100,7 +103,7 @@ const WebSocketHandler = () => {
         return false;
       }
     },
-    [hostIP, hostPort, dispatch] // Dependencies for useCallback
+    [hostIP, hostPort, dispatch], // Dependencies for useCallback
   );
 
   // Sync livestream status with backend
@@ -151,14 +154,14 @@ const WebSocketHandler = () => {
       const socketIOUrl = `${protocol}://${cleanIP}:${testPort}`;
 
       console.log(
-        `Testing Socket.IO connection to: ${socketIOUrl} (protocol: ${protocol})`
+        `Testing Socket.IO connection to: ${socketIOUrl} (protocol: ${protocol})`,
       );
       dispatch(webSocketSlice.setTestStatus("testing"));
 
       return new Promise((resolve) => {
         try {
           const testSocket = io(socketIOUrl, {
-            path: '/imswitch/socket.io/',
+            path: "/imswitch/socket.io/",
             transports: ["websocket"], // Force WebSocket transport
             timeout: 5000,
             forceNew: true, // Create new connection for test
@@ -177,7 +180,7 @@ const WebSocketHandler = () => {
             clearTimeout(timeout);
             dispatch(webSocketSlice.setTestStatus("success"));
             console.log(
-              `Socket.IO test: Connection successful via ${protocol}`
+              `Socket.IO test: Connection successful via ${protocol}`,
             );
             testSocket.disconnect(); // Disconnect test connection immediately
             resolve(true);
@@ -188,7 +191,7 @@ const WebSocketHandler = () => {
             dispatch(webSocketSlice.setTestStatus("failed"));
             console.log(
               `Socket.IO test: Connection failed via ${protocol}`,
-              error.message
+              error.message,
             );
             testSocket.disconnect();
             resolve(false);
@@ -203,7 +206,7 @@ const WebSocketHandler = () => {
         }
       });
     },
-    [hostIP, connectionSettingsState.websocketPort, dispatch]
+    [hostIP, connectionSettingsState.websocketPort, dispatch],
   );
 
   // Listen for manual connection check requests
@@ -219,7 +222,7 @@ const WebSocketHandler = () => {
       if (websocketPort) {
         const wsResult = await testWebSocketConnection(ip, websocketPort);
         console.log(
-          `Connection test results - HTTP: ${httpResult}, WebSocket: ${wsResult}`
+          `Connection test results - HTTP: ${httpResult}, WebSocket: ${wsResult}`,
         );
       }
     };
@@ -227,13 +230,13 @@ const WebSocketHandler = () => {
     // Add event listener for manual connection checks
     window.addEventListener(
       "imswitch:checkConnection",
-      handleManualConnectionCheck
+      handleManualConnectionCheck,
     );
 
     return () => {
       window.removeEventListener(
         "imswitch:checkConnection",
-        handleManualConnectionCheck
+        handleManualConnectionCheck,
       );
     };
   }, [checkUc2Connection, testWebSocketConnection]);
@@ -278,7 +281,7 @@ const WebSocketHandler = () => {
 
     // Create new socket instance for this component/tab
     const socket = io(address, {
-      path: '/imswitch/socket.io/',
+      path: "/imswitch/socket.io/",
       transports: ["websocket"],
       secure: protocol === "https", // Enable secure connection for HTTPS
     });
@@ -313,7 +316,7 @@ const WebSocketHandler = () => {
           binaryStreaming: capabilities.binary_streaming,
           messagepack: capabilities.messagepack,
           protocolVersion: capabilities.protocol_version,
-        })
+        }),
       );
     });
 
@@ -339,7 +342,7 @@ const WebSocketHandler = () => {
               // Extract the underlying ArrayBuffer
               frameData = decoded.data.buffer.slice(
                 decoded.data.byteOffset,
-                decoded.data.byteOffset + decoded.data.byteLength
+                decoded.data.byteOffset + decoded.data.byteLength,
               );
             } else if (Array.isArray(decoded.data)) {
               // MessagePack may decode binary as array - convert to ArrayBuffer
@@ -349,7 +352,7 @@ const WebSocketHandler = () => {
               console.error(
                 "Unexpected binary data format:",
                 typeof decoded.data,
-                decoded.data
+                decoded.data,
               );
               return;
             }
@@ -395,7 +398,7 @@ const WebSocketHandler = () => {
                 buffer: frameData,
                 metadata: metadata,
               },
-            })
+            }),
           );
         } else if (
           metadata &&
@@ -424,7 +427,7 @@ const WebSocketHandler = () => {
                 buffer: frameData,
                 metadata: null,
               },
-            })
+            }),
           );
         }
       } catch (error) {
@@ -541,8 +544,8 @@ const WebSocketHandler = () => {
             if (currentState.stats.frameCount % 30 === 0) {
               console.log(
                 `Frame latency: ${latency.toFixed(
-                  1
-                )}ms (avg: ${currentState.stats.avg_latency_ms.toFixed(1)}ms)`
+                  1,
+                )}ms (avg: ${currentState.stats.avg_latency_ms.toFixed(1)}ms)`,
               );
             }
           }
@@ -578,7 +581,7 @@ const WebSocketHandler = () => {
             liveStreamSlice.setHistogramData({
               x: dataJson.args.p0, // units
               y: dataJson.args.p1, // hist
-            })
+            }),
           );
         }
         //----------------------------------------------
@@ -591,8 +594,8 @@ const WebSocketHandler = () => {
         dispatch(experimentStateSlice.setStepName(dataJson.args.arg0.name));
         dispatch(
           experimentStateSlice.setTotalSteps(
-            dataJson.args.arg0.total_step_number
-          )
+            dataJson.args.arg0.total_step_number,
+          ),
         );
       } else if (dataJson.name === "sigExperimentImageUpdate") {
         console.log("sigExperimentImageUpdate", dataJson);
@@ -607,10 +610,10 @@ const WebSocketHandler = () => {
         dispatch(objectiveSlice.setPixelSize(dataJson.args.p0.pixelsize));
         dispatch(objectiveSlice.setNA(dataJson.args.p0.NA));
         dispatch(
-          objectiveSlice.setMagnification(dataJson.args.p0.magnification)
+          objectiveSlice.setMagnification(dataJson.args.p0.magnification),
         );
         dispatch(
-          objectiveSlice.setObjectiveName(dataJson.args.p0.objectiveName)
+          objectiveSlice.setObjectiveName(dataJson.args.p0.objectiveName),
         );
         dispatch(objectiveSlice.setFovX(dataJson.args.p0.FOV[0]));
         dispatch(objectiveSlice.setFovY(dataJson.args.p0.FOV[1]));
@@ -621,7 +624,7 @@ const WebSocketHandler = () => {
               # pixelsize, NA, magnification, objectiveName, FOVx, FOVy
         */
         //----------------------------------------------
-      } else if (dataJson.name == "sigUpdateMotorPosition") {
+      } else if (dataJson.name === "sigUpdateMotorPosition") {
         console.log("sigUpdateMotorPosition received:", dataJson);
         //parse
         try {
@@ -641,7 +644,7 @@ const WebSocketHandler = () => {
                 y: correctedPositions.Y,
                 z: correctedPositions.Z,
                 a: correctedPositions.A,
-              }).filter(([_, value]) => value !== undefined)
+              }).filter(([_, value]) => value !== undefined),
             );
 
             console.log("Position update to dispatch:", positionUpdate);
@@ -659,8 +662,8 @@ const WebSocketHandler = () => {
         console.log("sigUpdateLaserPower received:", dataJson);
         try {
           const laserData = dataJson.args?.p0;
-          
-          if (laserData && typeof laserData === 'object') {
+
+          if (laserData && typeof laserData === "object") {
             // Batch update all lasers in the signal
             dispatch(laserSlice.setLasersState(laserData));
           }
@@ -694,7 +697,7 @@ const WebSocketHandler = () => {
         try {
           // Expected format: dataJson.args.p0 = { isRunning, scanMode, currentPosition, totalPositions, currentFrame, progress, zarrPath, tiffPath, errorMessage }
           const scanStatus = dataJson.args?.p0;
-          
+
           if (scanStatus) {
             // Update lightsheet scan status in Redux
             dispatch(lightsheetSlice.setScanStatus(scanStatus));
@@ -710,7 +713,7 @@ const WebSocketHandler = () => {
           const otaStatus = dataJson.args?.p0;
 
           if (otaStatus && otaStatus.canId !== undefined) {
-            const { canId, status, message, progress, method } = otaStatus;
+            const { canId, status, message, progress } = otaStatus;
 
             // Determine status string and progress.
             // CAN streaming sends status as a string ("uploading", "success", "error", "initializing")
@@ -750,13 +753,17 @@ const WebSocketHandler = () => {
                 message: displayMessage,
                 progress: progressValue,
                 timestamp: new Date().toISOString(),
-              })
+              }),
             );
 
             // If update is completed or failed, check if all updates are done
             const terminalStates = [
-              "completed", "success", "failed", "error",
-              "wifi_failed", "ota_failed",
+              "completed",
+              "success",
+              "failed",
+              "error",
+              "wifi_failed",
+              "ota_failed",
             ];
             if (terminalStates.includes(statusString)) {
               const state = store.getState();
@@ -772,7 +779,7 @@ const WebSocketHandler = () => {
             }
 
             console.log(
-              `OTA update for device ${canId}: ${statusString} (${progressValue}%) - ${displayMessage}`
+              `OTA update for device ${canId}: ${statusString} (${progressValue}%) - ${displayMessage}`,
             );
           }
         } catch (error) {
@@ -785,27 +792,48 @@ const WebSocketHandler = () => {
         try {
           const flashStatus = dataJson.args?.p0;
           if (flashStatus) {
-            dispatch(usbFlashSlice.updateFlashProgress({
-              status: flashStatus.status,
-              progress: flashStatus.progress,
-              message: flashStatus.message,
-              details: flashStatus.details,
-            }));
+            dispatch(
+              usbFlashSlice.updateFlashProgress({
+                status: flashStatus.status,
+                progress: flashStatus.progress,
+                message: flashStatus.message,
+                details: flashStatus.details,
+              }),
+            );
 
             // Auto-advance to completion step on terminal states
             const terminalStates = ["success", "failed", "warning"];
             if (terminalStates.includes(flashStatus.status)) {
-              if (flashStatus.status === "success" || flashStatus.status === "warning") {
-                dispatch(usbFlashSlice.setFlashResult({
-                  status: flashStatus.status,
-                  message: flashStatus.message,
-                }));
+              if (
+                flashStatus.status === "success" ||
+                flashStatus.status === "warning"
+              ) {
+                dispatch(
+                  usbFlashSlice.setFlashResult({
+                    status: flashStatus.status,
+                    message: flashStatus.message,
+                  }),
+                );
               }
               dispatch(usbFlashSlice.setIsFlashing(false));
             }
           }
         } catch (error) {
           console.error("Error in sigUSBFlashStatusUpdate handler:", error);
+        }
+        //----------------------------------------------
+      } else if (dataJson.name === "sigStorageStatusUpdate") {
+        if (isWebSocketDebugEnabled()) {
+          console.log(
+            "[WS-DEBUG][storage] sigStorageStatusUpdate received:",
+            dataJson,
+          );
+        }
+        try {
+          const storageSnapshot = dataJson.args?.p0 || dataJson.args || {};
+          dispatch(storageSlice.setStorageSnapshot(storageSnapshot));
+        } catch (error) {
+          console.error("Error in sigStorageStatusUpdate handler:", error);
         }
         //----------------------------------------------
       } else if (dataJson.name === "sigUpdateOMEZarrStore") {
@@ -859,7 +887,7 @@ const WebSocketHandler = () => {
               const localizations = [];
               const minLength = Math.min(
                 localizationsData.x.length,
-                localizationsData.y.length
+                localizationsData.y.length,
               );
 
               for (let i = 0; i < minLength; i++) {
@@ -926,7 +954,7 @@ const WebSocketHandler = () => {
               setPointSignal,
               currentFocusMotorPosition,
               timestamp,
-            })
+            }),
           );
         } catch (error) {
           console.error("Error parsing focus value signal:", error);
@@ -947,7 +975,7 @@ const WebSocketHandler = () => {
             }
             if (stateData.is_calibrating !== undefined) {
               dispatch(
-                focusLockSlice.setIsCalibrating(stateData.is_calibrating)
+                focusLockSlice.setIsCalibrating(stateData.is_calibrating),
               );
             }
             if (stateData.is_measuring !== undefined) {
@@ -984,7 +1012,7 @@ const WebSocketHandler = () => {
               autofocusSlice.setPlotData({
                 x: dataJson.args.p0,
                 y: dataJson.args.p1,
-              })
+              }),
             );
           }
         } catch (error) {
@@ -1061,14 +1089,16 @@ const WebSocketHandler = () => {
               const base64 = btoa(binaryString);
 
               dispatch(
-                mazeGameSlice.setPreviewImage(`data:image/png;base64,${base64}`)
+                mazeGameSlice.setPreviewImage(
+                  `data:image/png;base64,${base64}`,
+                ),
               );
             } else {
               // If it's already a base64 string, use it directly
               dispatch(
                 mazeGameSlice.setPreviewImage(
-                  `data:image/png;base64,${rawImage}`
-                )
+                  `data:image/png;base64,${rawImage}`,
+                ),
               );
             }
           }
@@ -1119,7 +1149,7 @@ const WebSocketHandler = () => {
       socket.disconnect();
       socket.close();
     };
-  }, [dispatch, connectionSettingsState]);
+  }, [dispatch, connectionSettingsState, syncLivestreamStatus]);
 
   // Global UC2 connection monitoring (periodic checks with pause functionality)
   useEffect(() => {
@@ -1157,7 +1187,7 @@ const WebSocketHandler = () => {
     const handlePausePeriodicTests = (event) => {
       isPaused = event.detail.pause;
       console.log(
-        `Periodic connection tests ${isPaused ? "paused" : "resumed"}`
+        `Periodic connection tests ${isPaused ? "paused" : "resumed"}`,
       );
 
       if (isPaused) {
@@ -1170,7 +1200,7 @@ const WebSocketHandler = () => {
     // Add event listener
     window.addEventListener(
       "imswitch:pausePeriodicTests",
-      handlePausePeriodicTests
+      handlePausePeriodicTests,
     );
 
     // Start periodic checks initially
@@ -1180,7 +1210,7 @@ const WebSocketHandler = () => {
       // Cleanup
       window.removeEventListener(
         "imswitch:pausePeriodicTests",
-        handlePausePeriodicTests
+        handlePausePeriodicTests,
       );
       stopPeriodicChecks();
     };

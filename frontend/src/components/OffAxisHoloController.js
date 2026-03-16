@@ -8,8 +8,6 @@ import { useTheme } from "@mui/material/styles";
 import {
   Box,
   Button,
-  Card,
-  CardContent,
   Slider,
   Typography,
   Grid,
@@ -29,8 +27,6 @@ import {
   Paper,
   IconButton,
   Tooltip,
-  Tab,
-  Tabs,
 } from "@mui/material";
 import {
   PlayArrow as PlayArrowIcon,
@@ -39,9 +35,6 @@ import {
   Refresh as RefreshIcon,
   ExpandMore as ExpandMoreIcon,
   Settings as SettingsIcon,
-  CenterFocusStrong as CenterFocusStrongIcon,
-  Visibility as VisibilityIcon,
-  VisibilityOff as VisibilityOffIcon,
 } from "@mui/icons-material";
 
 // Redux slice
@@ -71,21 +64,6 @@ import {
   apiOffAxisHoloControllerSetUnwrapPhase,
   apiOffAxisHoloControllerSetShowFftSpace,
 } from "../backendapi/apiOffAxisHoloController";
-
-// Tab panel component
-function TabPanel(props) {
-  const { children, value, index, ...other } = props;
-  return (
-    <div
-      role="tabpanel"
-      hidden={value !== index}
-      id={`stream-tabpanel-${index}`}
-      {...other}
-    >
-      {value === index && <Box sx={{ pt: 2 }}>{children}</Box>}
-    </div>
-  );
-}
 
 const OffAxisHoloController = () => {
   const dispatch = useDispatch();
@@ -567,518 +545,243 @@ const OffAxisHoloController = () => {
   }, [fftImageSize, ccSelection]);
 
   return (
-    <Box sx={{ p: { xs: 1, sm: 2, md: 3 }, maxWidth: "100%" }}>
-      <Typography variant="h5" gutterBottom>
-        Off-Axis Hologram Processing
-      </Typography>
+    <Box sx={{ p: 1, maxWidth: "100%" }}>
 
-      {/* Control Buttons */}
-      <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
-        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-          <Button
-            variant="contained"
-            color="primary"
-            startIcon={<PlayArrowIcon />}
-            onClick={handleStartProcessing}
-            disabled={offAxisState.isProcessing && !offAxisState.isPaused}
-            sx={{ minWidth: { xs: "100%", sm: "auto" } }}
-          >
-            Start
+      {/* ── Compact header + controls ── */}
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+        <Typography variant="h6" sx={{ fontWeight: 600, mr: 0.5, whiteSpace: "nowrap" }}>
+          Off-Axis Holography
+        </Typography>
+        <Button size="small" variant="contained" color="primary" startIcon={<PlayArrowIcon />}
+          onClick={handleStartProcessing} disabled={offAxisState.isProcessing && !offAxisState.isPaused}>
+          Start
+        </Button>
+        {offAxisState.isPaused ? (
+          <Button size="small" variant="contained" color="success" startIcon={<PlayArrowIcon />}
+            onClick={handleResumeProcessing} disabled={!offAxisState.isProcessing}>
+            Resume
           </Button>
-
-          {offAxisState.isPaused ? (
-            <Button
-              variant="contained"
-              color="success"
-              startIcon={<PlayArrowIcon />}
-              onClick={handleResumeProcessing}
-              disabled={!offAxisState.isProcessing}
-              sx={{ minWidth: { xs: "100%", sm: "auto" } }}
-            >
-              Resume
-            </Button>
-          ) : (
-            <Button
-              variant="contained"
-              color="warning"
-              startIcon={<PauseIcon />}
-              onClick={handlePauseProcessing}
-              disabled={!offAxisState.isProcessing || offAxisState.isPaused}
-              sx={{ minWidth: { xs: "100%", sm: "auto" } }}
-            >
-              Pause
-            </Button>
-          )}
-
-          <Button
-            variant="contained"
-            color="error"
-            startIcon={<StopIcon />}
-            onClick={handleStopProcessing}
-            disabled={!offAxisState.isProcessing}
-            sx={{ minWidth: { xs: "100%", sm: "auto" } }}
-          >
-            Stop
+        ) : (
+          <Button size="small" variant="contained" color="warning" startIcon={<PauseIcon />}
+            onClick={handlePauseProcessing} disabled={!offAxisState.isProcessing || offAxisState.isPaused}>
+            Pause
           </Button>
+        )}
+        <Button size="small" variant="contained" color="error" startIcon={<StopIcon />}
+          onClick={handleStopProcessing} disabled={!offAxisState.isProcessing}>
+          Stop
+        </Button>
+        <Tooltip title="Reload parameters from backend">
+          <IconButton size="small" onClick={loadParameters}><RefreshIcon fontSize="small" /></IconButton>
+        </Tooltip>
+        <Chip label={offAxisState.isProcessing ? "Processing" : "Stopped"}
+          color={offAxisState.isProcessing ? "success" : "default"} size="small" />
+        {offAxisState.isPaused && <Chip label="Paused" color="warning" size="small" />}
+        <Chip label={`FFT: ${fftImageSize.width}×${fftImageSize.height}`} variant="outlined" size="small" />
+      </Stack>
 
-          <Button
-            variant="outlined"
-            startIcon={<RefreshIcon />}
-            onClick={loadParameters}
-            sx={{ minWidth: { xs: "100%", sm: "auto" } }}
+      {/* ── 3-panel stream row – equal height via flex stretch ── */}
+      <Box sx={{ display: "flex", gap: 1, mb: 1, alignItems: "stretch" }}>
+
+        {/* Camera stream (2 parts) */}
+        <Box sx={{ flex: "2 1 0", minWidth: 0, display: "flex", flexDirection: "column", gap: 0.25 }}>
+          <Typography variant="caption" color="text.secondary">
+            Camera — click to center ROI &nbsp;
+            <Box component="span" sx={{ opacity: 0.7 }}>ROI: {roiSelection.size}px · preview {Math.round(roiSizeInPreview)}px</Box>
+          </Typography>
+          <Box sx={{ flex: 1, position: "relative", bgcolor: "#000", borderRadius: 1, overflow: "hidden", minHeight: 180, lineHeight: 0 }}>
+            <LiveViewControlWrapper
+              onClick={handleLiveViewClick}
+              onImageLoad={handleImageLoad}
+              overlayContent={roiOverlay}
+              enableStageMovement={false}
+            />
+          </Box>
+        </Box>
+
+        {/* FFT Magnitude (1 part) */}
+        <Box sx={{ flex: "1 1 0", minWidth: 0, display: "flex", flexDirection: "column", gap: 0.25 }}>
+          <Typography variant="caption" color="text.secondary">
+            FFT — click sideband &nbsp;
+            <Box component="span" sx={{ opacity: 0.7 }}>
+              ({ccSelection.centerX}, {ccSelection.centerY}) {ccSelection.sizeX}×{ccSelection.sizeY}
+            </Box>
+          </Typography>
+          <Box
+            sx={{ flex: 1, position: "relative", bgcolor: "#000", borderRadius: 1, overflow: "hidden", cursor: "crosshair", minHeight: 180 }}
+            onClick={handleFftClick}
           >
-            Refresh
-          </Button>
-        </Stack>
+            <img
+              ref={fftImageRef}
+              src={fftStreamUrl}
+              alt="FFT"
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", imageRendering: "pixelated" }}
+            />
+            {ccOverlay}
+          </Box>
+        </Box>
 
-        {/* Status Chips */}
-        <Stack direction="row" spacing={1} mt={2} flexWrap="wrap" useFlexGap>
-          <Chip
-            label={offAxisState.isProcessing ? "Processing" : "Stopped"}
-            color={offAxisState.isProcessing ? "success" : "default"}
-            size="small"
-          />
-          {offAxisState.isPaused && (
-            <Chip label="Paused" color="warning" size="small" />
-          )}
-          <Chip
-            label={`FFT: ${fftImageSize.width}×${fftImageSize.height}`}
-            variant="outlined"
-            size="small"
-          />
-        </Stack>
-      </Paper>
+        {/* Reconstructed magnitude / phase (1 part) */}
+        <Box sx={{ flex: "1 1 0", minWidth: 0, display: "flex", flexDirection: "column", gap: 0.25 }}>
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Chip size="small" label="Magnitude" clickable
+              onClick={() => setActiveStreamTab(0)}
+              color={activeStreamTab === 0 ? "primary" : "default"}
+              variant={activeStreamTab === 0 ? "filled" : "outlined"} />
+            <Chip size="small" label="Phase" clickable
+              onClick={() => setActiveStreamTab(1)}
+              color={activeStreamTab === 1 ? "secondary" : "default"}
+              variant={activeStreamTab === 1 ? "filled" : "outlined"} />
+            <Box component="span" sx={{ typography: "caption", color: "text.secondary", opacity: 0.7, ml: 0.5 }}>
+              {offAxisState.showFftSpace ? "FFT crop" : "reconstructed"} · dz={`${(offAxisState.dz * 1e6).toFixed(0)}`}µm
+            </Box>
+          </Stack>
+          <Box sx={{ flex: 1, position: "relative", bgcolor: "#000", borderRadius: 1, overflow: "hidden", minHeight: 180 }}>
+            {/* Both streams kept mounted to avoid reconnection on tab switch */}
+            <img ref={magImageRef} src={magStreamUrl} alt="Magnitude"
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", imageRendering: "pixelated",
+                       display: activeStreamTab === 0 ? "block" : "none" }} />
+            <img ref={phaseImageRef} src={phaseStreamUrl} alt="Phase"
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", imageRendering: "pixelated",
+                       display: activeStreamTab === 1 ? "block" : "none" }} />
+          </Box>
+        </Box>
+      </Box>
 
-      {/* Video Streams Grid */}
-      <Grid container spacing={2} mb={2}>
-        {/* Camera Stream */}
-        <Grid item xs={12} md={6}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Camera Stream (Click to set ROI)
-              </Typography>
-              <Box
-                sx={{
-                  position: "relative",
-                  width: "100%",
-                  
-                  backgroundColor: "#000",
-                  borderRadius: 1,
-                  overflow: "hidden",
-                }}
-              >
-                <LiveViewControlWrapper
-                  onClick={handleLiveViewClick}
-                  onImageLoad={handleImageLoad}
-                  overlayContent={roiOverlay}
-                  enableStageMovement={false}
-                />
-              </Box>
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-                ROI: {roiSelection.size}px | Preview: {Math.round(roiSizeInPreview)}px
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
+      {/* ── Compact control strip: CC coords + dz + toggles ── */}
+      <Paper elevation={1} sx={{ p: 1, mb: 1 }}>
+        <Grid container spacing={1} alignItems="center">
 
-        {/* FFT Stream */}
-        <Grid item xs={12} md={6}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                FFT Magnitude (Click to select sideband)
-              </Typography>
-              <Box
-                sx={{
-                  position: "relative",
-                  width: "100%",
-                  paddingTop: "100%", // Square for FFT
-                  backgroundColor: "#000",
-                  borderRadius: 1,
-                  overflow: "hidden",
-                  cursor: "crosshair",
-                }}
-                onClick={handleFftClick}
-              >
-                <img
-                  ref={fftImageRef}
-                  src={fftStreamUrl}
-                  alt="FFT Stream"
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "contain",
-                    imageRendering: "pixelated",
-                  }}
-                />
-                {ccOverlay}
-              </Box>
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
-                Sideband: ({ccSelection.centerX}, {ccSelection.centerY}) Size: {ccSelection.sizeX}×{ccSelection.sizeY}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-            {/* Sideband ROI Controls */}
-      <Accordion>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Typography variant="h6">Sideband (CC) Selection</Typography>
-        </AccordionSummary>
-        <AccordionDetails>
-          <Grid container spacing={2}>
-            <Grid item xs={6} sm={3}>
-              <TextField
-                label="Center X"
-                type="number"
-                value={ccSelection.centerX}
-                onChange={(e) => {
-                  const value = parseInt(e.target.value) || 0;
-                  // Functional setState to avoid stale closure; send fresh values to backend
-                  setCcSelection((prev) => {
-                    const updated = { ...prev, centerX: value };
-                    apiOffAxisHoloControllerSetCcRoi({
-                      center_x: updated.centerX,
-                      center_y: updated.centerY,
-                      size_x: updated.sizeX,
-                      size_y: updated.sizeY,
-                    }).catch((err) => console.error("Failed to update sideband center X:", err));
-                    return updated;
-                  });
-                }}
-                size="small"
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={6} sm={3}>
-              <TextField
-                label="Center Y"
-                type="number"
-                value={ccSelection.centerY}
-                onChange={(e) => {
-                  const value = parseInt(e.target.value) || 0;
-                  setCcSelection((prev) => {
-                    const updated = { ...prev, centerY: value };
-                    apiOffAxisHoloControllerSetCcRoi({
-                      center_x: updated.centerX,
-                      center_y: updated.centerY,
-                      size_x: updated.sizeX,
-                      size_y: updated.sizeY,
-                    }).catch((err) => console.error("Failed to update sideband center Y:", err));
-                    return updated;
-                  });
-                }}
-                size="small"
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={6} sm={3}>
-              <TextField
-                label="Size X"
-                type="number"
-                value={ccSelection.sizeX}
-                onChange={(e) => {
-                  const value = parseInt(e.target.value) || 50;
-                  setCcSelection((prev) => {
-                    const updated = { ...prev, sizeX: value };
-                    apiOffAxisHoloControllerSetCcRoi({
-                      center_x: updated.centerX,
-                      center_y: updated.centerY,
-                      size_x: updated.sizeX,
-                      size_y: updated.sizeY,
-                    }).catch((err) => console.error("Failed to update sideband size X:", err));
-                    return updated;
-                  });
-                }}
-                size="small"
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={6} sm={3}>
-              <TextField
-                label="Size Y"
-                type="number"
-                value={ccSelection.sizeY}
-                onChange={(e) => {
-                  const value = parseInt(e.target.value) || 50;
-                  setCcSelection((prev) => {
-                    const updated = { ...prev, sizeY: value };
-                    apiOffAxisHoloControllerSetCcRoi({
-                      center_x: updated.centerX,
-                      center_y: updated.centerY,
-                      size_x: updated.sizeX,
-                      size_y: updated.sizeY,
-                    }).catch((err) => console.error("Failed to update sideband size Y:", err));
-                    return updated;
-                  });
-                }}
-                size="small"
-                fullWidth
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <Typography variant="caption" color="text.secondary">
-                Click on FFT image to select sideband center. Changes are applied automatically.
-              </Typography>
-            </Grid>
-            {/* Phase unwrap and display mode toggles */}
-            <Grid item xs={12} sm={6}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={offAxisState.phaseUnwrapEnabled}
-                    onChange={async (e) => {
-                      const enabled = e.target.checked;
-                      dispatch(offAxisHoloSlice.setPhaseUnwrapEnabled(enabled));
-                      try {
-                        await apiOffAxisHoloControllerSetUnwrapPhase(enabled);
-                      } catch (err) {
-                        console.error("Failed to toggle phase unwrap:", err);
-                        dispatch(offAxisHoloSlice.setPhaseUnwrapEnabled(!enabled));
-                      }
-                    }}
-                  />
-                }
-                label="Enable Phase Unwrapping"
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={offAxisState.showFftSpace}
-                    onChange={async (e) => {
-                      const enabled = e.target.checked;
-                      dispatch(offAxisHoloSlice.setShowFftSpace(enabled));
-                      try {
-                        await apiOffAxisHoloControllerSetShowFftSpace(enabled);
-                      } catch (err) {
-                        console.error("Failed to toggle show FFT space:", err);
-                        dispatch(offAxisHoloSlice.setShowFftSpace(!enabled));
-                      }
-                    }}
-                  />
-                }
-                label={offAxisState.showFftSpace ? "Showing: Cropped FFT (|C|, arg C)" : "Showing: Reconstructed field (|E|, φ)"}
-              />
+          {/* Sideband CC coordinates (4 compact number fields) */}
+          <Grid item xs={6} sm={3} md={3}>
+            <Grid container spacing={0.75}>
+              <Grid item xs={6}>
+                <TextField label="CC X" type="number" value={ccSelection.centerX}
+                  onChange={(e) => { const v = parseInt(e.target.value) || 0; setCcSelection(prev => { const u = { ...prev, centerX: v }; apiOffAxisHoloControllerSetCcRoi({ center_x: u.centerX, center_y: u.centerY, size_x: u.sizeX, size_y: u.sizeY }).catch(console.error); return u; }); }}
+                  size="small" fullWidth inputProps={{ style: { padding: "4px 6px" } }} />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField label="CC Y" type="number" value={ccSelection.centerY}
+                  onChange={(e) => { const v = parseInt(e.target.value) || 0; setCcSelection(prev => { const u = { ...prev, centerY: v }; apiOffAxisHoloControllerSetCcRoi({ center_x: u.centerX, center_y: u.centerY, size_x: u.sizeX, size_y: u.sizeY }).catch(console.error); return u; }); }}
+                  size="small" fullWidth inputProps={{ style: { padding: "4px 6px" } }} />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField label="Size X" type="number" value={ccSelection.sizeX}
+                  onChange={(e) => { const v = parseInt(e.target.value) || 50; setCcSelection(prev => { const u = { ...prev, sizeX: v }; apiOffAxisHoloControllerSetCcRoi({ center_x: u.centerX, center_y: u.centerY, size_x: u.sizeX, size_y: u.sizeY }).catch(console.error); return u; }); }}
+                  size="small" fullWidth inputProps={{ style: { padding: "4px 6px" } }} />
+              </Grid>
+              <Grid item xs={6}>
+                <TextField label="Size Y" type="number" value={ccSelection.sizeY}
+                  onChange={(e) => { const v = parseInt(e.target.value) || 50; setCcSelection(prev => { const u = { ...prev, sizeY: v }; apiOffAxisHoloControllerSetCcRoi({ center_x: u.centerX, center_y: u.centerY, size_x: u.sizeX, size_y: u.sizeY }).catch(console.error); return u; }); }}
+                  size="small" fullWidth inputProps={{ style: { padding: "4px 6px" } }} />
+              </Grid>
             </Grid>
           </Grid>
-        </AccordionDetails>
-      </Accordion>
 
+          {/* Toggles */}
+          <Grid item xs={6} sm={3} md={2}>
+            <Stack spacing={0.25}>
+              <FormControlLabel sx={{ m: 0 }} control={
+                <Switch size="small" checked={offAxisState.phaseUnwrapEnabled}
+                  onChange={async (e) => {
+                    const en = e.target.checked;
+                    dispatch(offAxisHoloSlice.setPhaseUnwrapEnabled(en));
+                    try { await apiOffAxisHoloControllerSetUnwrapPhase(en); }
+                    catch { dispatch(offAxisHoloSlice.setPhaseUnwrapEnabled(!en)); }
+                  }} />
+              } label={<Typography variant="caption">Unwrap Phase</Typography>} />
+              <FormControlLabel sx={{ m: 0 }} control={
+                <Switch size="small" checked={offAxisState.showFftSpace}
+                  onChange={async (e) => {
+                    const en = e.target.checked;
+                    dispatch(offAxisHoloSlice.setShowFftSpace(en));
+                    try { await apiOffAxisHoloControllerSetShowFftSpace(en); }
+                    catch { dispatch(offAxisHoloSlice.setShowFftSpace(!en)); }
+                  }} />
+              } label={<Typography variant="caption">{offAxisState.showFftSpace ? "Show FFT Crop" : "Show Reconstructed"}</Typography>} />
+            </Stack>
+          </Grid>
 
-      {/* Processed Streams Tabs */}
-      <Paper elevation={2} sx={{ mb: 2 }}>
-        <Box sx={{ borderBottom: 1, borderColor: "divider" }}>
-          <Tabs
-            value={activeStreamTab}
-            onChange={(e, v) => setActiveStreamTab(v)}
-            variant="fullWidth"
-          >
-            <Tab label="Magnitude (Amplitude)" />
-            <Tab label="Phase (Unwrapped)" />
-          </Tabs>
-        </Box>
-        <TabPanel value={activeStreamTab} index={0}>
-          <Box
-            sx={{
-              position: "relative",
-              width: "100%",
-              paddingTop: "75%",
-              backgroundColor: "#000",
-              borderRadius: 1,
-              overflow: "hidden",
-            }}
-          >
-            <img
-              ref={magImageRef}
-              src={magStreamUrl}
-              alt="Magnitude Stream"
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "contain",
-                imageRendering: "pixelated",
-              }}
+          {/* dz refocus slider */}
+          <Grid item xs={12} sm={6} md={7}>
+            <Typography variant="caption" color="text.secondary">
+              Digital Refocus dz: <strong>{(offAxisState.dz * 1e6).toFixed(0)} µm</strong>
+            </Typography>
+            <Slider
+              value={offAxisState.dz}
+              onChange={handleDzChange}
+              onChangeCommitted={handleDzCommit}
+              min={-15000e-6} max={15000e-6} step={1e-6}
+              valueLabelDisplay="auto"
+              valueLabelFormat={(v) => `${(v * 1e6).toFixed(0)} µm`}
+              marks={[{ value: -15000e-6, label: "-15mm" }, { value: 0, label: "0" }, { value: 15000e-6, label: "+15mm" }]}
+              size="small"
             />
-          </Box>
-        </TabPanel>
-        <TabPanel value={activeStreamTab} index={1}>
-          <Box
-            sx={{
-              position: "relative",
-              width: "100%",
-              paddingTop: "75%",
-              backgroundColor: "#000",
-              borderRadius: 1,
-              overflow: "hidden",
-            }}
-          >
-            <img
-              ref={phaseImageRef}
-              src={phaseStreamUrl}
-              alt="Phase Stream"
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "contain",
-                imageRendering: "pixelated",
-              }}
-            />
-          </Box>
-        </TabPanel>
+          </Grid>
+        </Grid>
       </Paper>
 
-      {/* Digital Refocus Slider */}
-      <Paper elevation={2} sx={{ p: 2, mb: 2 }}>
-        <Typography variant="h6" gutterBottom>
-          Digital Refocus (dz)
-        </Typography>
-        <Box sx={{ px: 2 }}>
-          <Slider
-            value={offAxisState.dz}
-            onChange={handleDzChange}
-            onChangeCommitted={handleDzCommit}
-            min={-15000e-6}
-            max={15000e-6}
-            step={1e-6}
-            valueLabelDisplay="on"
-            valueLabelFormat={(value) => `${(value * 1e6).toFixed(1)} µm`}
-            marks={[
-              { value: -15000e-6, label: "-15000 µm" },
-              { value: 0, label: "0" },
-              { value: 15000e-6, label: "15000 µm" },
-            ]}
-          />
-        </Box>
-      </Paper>
-
-      {/* Advanced Settings */}
-      <Accordion defaultExpanded>
+      {/* ── Combined settings accordion (ROI · Optics · Apodization) ── */}
+      <Accordion>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Typography variant="h6">
-            <SettingsIcon sx={{ mr: 1, verticalAlign: "middle" }} />
-            Advanced Settings (Crop Size for FFT)
+          <Typography variant="body2">
+            <SettingsIcon sx={{ fontSize: 15, mr: 0.5, verticalAlign: "middle" }} />
+            Settings — ROI · Optics · Apodization
           </Typography>
         </AccordionSummary>
-        <AccordionDetails>
-          <Grid container spacing={2}>
-            <Grid item xs={6} sm={4}>
-              <TextField
-                label="ROI Size (px)"
-                type="number"
-                value={roiSelection.size}
-                onChange={(e) =>
-                  setRoiSelection((prev) => ({
-                    ...prev,
-                    size: parseInt(e.target.value) || 512,
-                  }))
-                }
-                size="small"
-                fullWidth
-                inputProps={{ min: 64, max: 2048, step: 64 }}
-              />
+        <AccordionDetails sx={{ pt: 1 }}>
+          <Grid container spacing={1} alignItems="center">
+
+            {/* ROI */}
+            <Grid item xs={6} sm={3} md={2}>
+              <TextField label="ROI Size (px)" type="number" value={roiSelection.size}
+                onChange={(e) => setRoiSelection((prev) => ({ ...prev, size: parseInt(e.target.value) || 512 }))}
+                size="small" fullWidth inputProps={{ min: 64, max: 2048, step: 64 }} />
             </Grid>
-            <Grid item xs={6} sm={4}>
-              <Button variant="outlined" onClick={handleApplyRoi} fullWidth>
-                Apply ROI
+            <Grid item xs={6} sm={2} md={1}>
+              <Button variant="outlined" size="small" onClick={handleApplyRoi} fullWidth sx={{ height: "100%" }}>
+                Apply
               </Button>
             </Grid>
-            <Grid item xs={6} sm={4}>
-              <TextField
-                label="Pixel Size (µm)"
-                type="number"
+
+            {/* Optics */}
+            <Grid item xs={6} sm={3} md={2}>
+              <TextField label="Pixel Size (µm)" type="number"
                 value={(offAxisState.pixelsize * 1e6).toFixed(2)}
-                onChange={async (e) => {
-                  const value = parseFloat(e.target.value) * 1e-6;
-                  if (!isNaN(value) && value > 0) {
-                    await apiOffAxisHoloControllerSetPixelsize(value);
-                    dispatch(offAxisHoloSlice.setPixelsize(value));
-                  }
-                }}
-                size="small"
-                fullWidth
-                inputProps={{ step: 0.01 }}
-              />
+                onChange={async (e) => { const v = parseFloat(e.target.value) * 1e-6; if (!isNaN(v) && v > 0) { await apiOffAxisHoloControllerSetPixelsize(v); dispatch(offAxisHoloSlice.setPixelsize(v)); } }}
+                size="small" fullWidth inputProps={{ step: 0.01 }} />
             </Grid>
-            <Grid item xs={6} sm={4}>
-              <TextField
-                label="Wavelength (nm)"
-                type="number"
+            <Grid item xs={6} sm={3} md={2}>
+              <TextField label="Wavelength (nm)" type="number"
                 value={(offAxisState.wavelength * 1e9).toFixed(0)}
-                onChange={async (e) => {
-                  const value = parseFloat(e.target.value) * 1e-9;
-                  if (!isNaN(value) && value > 0) {
-                    await apiOffAxisHoloControllerSetWavelength(value);
-                    dispatch(offAxisHoloSlice.setWavelength(value));
-                  }
-                }}
-                size="small"
-                fullWidth
-                inputProps={{ step: 1 }}
-              />
+                onChange={async (e) => { const v = parseFloat(e.target.value) * 1e-9; if (!isNaN(v) && v > 0) { await apiOffAxisHoloControllerSetWavelength(v); dispatch(offAxisHoloSlice.setWavelength(v)); } }}
+                size="small" fullWidth inputProps={{ step: 1 }} />
             </Grid>
-            <Grid item xs={6} sm={4}>
+            <Grid item xs={6} sm={3} md={2}>
               <FormControl fullWidth size="small">
                 <InputLabel>Binning</InputLabel>
-                <Select
-                  value={offAxisState.binning}
-                  onChange={async (e) => {
-                    const value = e.target.value;
-                    await apiOffAxisHoloControllerSetBinning(value);
-                    dispatch(offAxisHoloSlice.setBinning(value));
-                  }}
-                  label="Binning"
-                >
+                <Select value={offAxisState.binning}
+                  onChange={async (e) => { const v = e.target.value; await apiOffAxisHoloControllerSetBinning(v); dispatch(offAxisHoloSlice.setBinning(v)); }}
+                  label="Binning">
                   <MenuItem value={1}>1×1</MenuItem>
                   <MenuItem value={2}>2×2</MenuItem>
                   <MenuItem value={4}>4×4</MenuItem>
                 </Select>
               </FormControl>
             </Grid>
-          </Grid>
-        </AccordionDetails>
-      </Accordion>
 
+            <Grid item xs={12}><Divider /></Grid>
 
-      {/* Apodization Controls */}
-      <Accordion>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Typography variant="h6">Apodization (Edge Damping)</Typography>
-        </AccordionSummary>
-        <AccordionDetails>
-          <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} sm={4}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={offAxisState.apodizationEnabled}
-                    onChange={handleToggleApodization}
-                  />
-                }
-                label="Enable Apodization"
-              />
+            {/* Apodization */}
+            <Grid item xs={12} sm={4} md={3}>
+              <FormControlLabel control={
+                <Switch size="small" checked={offAxisState.apodizationEnabled} onChange={handleToggleApodization} />
+              } label={<Typography variant="body2">Apodization (Edge Damping)</Typography>} />
             </Grid>
-            <Grid item xs={12} sm={4}>
-              <FormControl fullWidth size="small">
-                <InputLabel>Window Type</InputLabel>
-                <Select
-                  value={offAxisState.apodizationType}
-                  onChange={handleApodizationTypeChange}
-                  label="Window Type"
-                  disabled={!offAxisState.apodizationEnabled}
-                >
+            <Grid item xs={12} sm={4} md={3}>
+              <FormControl fullWidth size="small" disabled={!offAxisState.apodizationEnabled}>
+                <InputLabel>Window</InputLabel>
+                <Select value={offAxisState.apodizationType} onChange={handleApodizationTypeChange} label="Window">
                   <MenuItem value="tukey">Tukey</MenuItem>
                   <MenuItem value="hann">Hann</MenuItem>
                   <MenuItem value="hamming">Hamming</MenuItem>
@@ -1086,22 +789,16 @@ const OffAxisHoloController = () => {
                 </Select>
               </FormControl>
             </Grid>
-            <Grid item xs={12} sm={4}>
-              <Typography variant="caption">
-                Alpha (Tukey): {offAxisState.apodizationAlpha.toFixed(2)}
+            <Grid item xs={12} sm={4} md={6}>
+              <Typography variant="caption" color="text.secondary">
+                Tukey α: {offAxisState.apodizationAlpha.toFixed(2)}
               </Typography>
               <Slider
                 value={offAxisState.apodizationAlpha}
                 onChange={(e, v) => dispatch(offAxisHoloSlice.setApodizationAlpha(v))}
                 onChangeCommitted={handleApodizationAlphaCommit}
-                min={0}
-                max={1}
-                step={0.01}
-                disabled={
-                  !offAxisState.apodizationEnabled ||
-                  offAxisState.apodizationType !== "tukey"
-                }
-                size="small"
+                min={0} max={1} step={0.01} size="small"
+                disabled={!offAxisState.apodizationEnabled || offAxisState.apodizationType !== "tukey"}
               />
             </Grid>
           </Grid>

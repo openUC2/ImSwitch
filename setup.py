@@ -82,7 +82,6 @@ setup(
         "zarr>=3.0.0a0",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
-        "numba>=0.61.2",
         "mikro-next>=0.18.0",
         "arkitekt-next[all]==0.35.0",
         "koil>=2.0.5",
@@ -108,6 +107,9 @@ setup(
             "luma.oled",
             "smbus2",
             "smbus"
+        ],
+        'microEye': [
+                    "numba>=0.61.2"
         ],
         'Ashlar': [
             "ashlarUC2"

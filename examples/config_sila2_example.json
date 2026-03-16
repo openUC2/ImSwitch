@@ -1,0 +1,25 @@
+{
+  "_comment": "Example snippet showing how to add SiLA2 to an existing ImSwitch setup JSON.",
+  "_comment2": "Add these entries to your existing setup configuration file.",
+
+  "sila2": {
+    "enabled": true,
+    "serverName": "OpenUC2 ImSwitch",
+    "serverDescription": "SiLA2 server for OpenUC2 ImSwitch microscope control",
+    "serverHost": "0.0.0.0",
+    "serverPort": 50052,
+    "serverVersion": "0.1.0",
+    "vendorUrl": "https://openuc2.com"
+  },
+
+  "availableWidgets": [
+    "Settings",
+    "View",
+    "Recording",
+    "Image",
+    "Laser",
+    "Positioner",
+    "Experiment",
+    "SiLA2"
+  ]
+}

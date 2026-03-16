@@ -36,6 +36,10 @@ const initialOffAxisHoloState = {
   apodizationEnabled: false,
   apodizationType: "tukey", // "tukey", "hann", "hamming", "blackman"
   apodizationAlpha: 0.1, // tukey parameter
+
+  // Processing options
+  phaseUnwrapEnabled: true, // enable 2D phase unwrapping
+  showFftSpace: false, // show cropped FFT magnitude/phase instead of reconstructed field
   
   // Image transforms
   colorChannel: "green",
@@ -159,6 +163,14 @@ const offAxisHoloSlice = createSlice({
       state.processedCount = action.payload;
     },
     
+    // Processing options
+    setPhaseUnwrapEnabled: (state, action) => {
+      state.phaseUnwrapEnabled = action.payload;
+    },
+    setShowFftSpace: (state, action) => {
+      state.showFftSpace = action.payload;
+    },
+
     // UI state
     setShowDeveloperOptions: (state, action) => {
       state.showDeveloperOptions = action.payload;
@@ -185,6 +197,8 @@ const offAxisHoloSlice = createSlice({
       if (params.apodization_enabled !== undefined) state.apodizationEnabled = params.apodization_enabled;
       if (params.apodization_type !== undefined) state.apodizationType = params.apodization_type;
       if (params.apodization_alpha !== undefined) state.apodizationAlpha = params.apodization_alpha;
+      if (params.unwrap_phase !== undefined) state.phaseUnwrapEnabled = params.unwrap_phase;
+      if (params.show_fft_space !== undefined) state.showFftSpace = params.show_fft_space;
       if (params.color_channel !== undefined) state.colorChannel = params.color_channel;
       if (params.flip_x !== undefined) state.flipX = params.flip_x;
       if (params.flip_y !== undefined) state.flipY = params.flip_y;
@@ -229,6 +243,8 @@ export const {
   setApodizationEnabled,
   setApodizationType,
   setApodizationAlpha,
+  setPhaseUnwrapEnabled,
+  setShowFftSpace,
   setColorChannel,
   setFlipX,
   setFlipY,

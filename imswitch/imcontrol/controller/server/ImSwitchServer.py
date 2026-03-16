@@ -693,6 +693,14 @@ class ImSwitchServer(Worker):
                     name=meta["name"],
                 )
 
+    @api_router.get("/UC2ConfigController/is_connected")
+    def is_connected():
+        return True
+    
+    @api_router.get("/UC2ConfigController/getDiskUsage")
+    def getDiskUsage():
+        return dirtools.getDiskusage()
+
     # The reason why it's still called UC2ConfigController is because we don't want to change the API
     @api_router.get("/UC2ConfigController/returnAvailableSetups")
     def returnAvailableSetups():

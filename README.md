@@ -92,6 +92,53 @@ Next, follow the setup instructions for the development environment for the fron
 
 For detailed UV usage instructions, refer to [docs/uv-guide.md](docs/uv-guide.md).
 
+### Special Case for MAC (ARM64) running HIKRobotics Cameras (x86_64 drivers)
+
+The HikRobot MVS SDK 2.0.0 for macOS is x86_64 only. On Apple Silicon (M1/M2/M3) it must
+run under Rosetta 2. The libusb-based USB3 Vision transport layer initializer can hang
+inside `dlopen` on macOS 14+ under Rosetta. The most reliable solution is a dedicated
+i386/x86_64 conda/mamba environment.
+
+#### Option A: mamba with osx-64 (recommended — works like old conda setup)
+
+```bash
+# Create an x86_64 (osx-64) Python 3.11 environment
+CONDA_SUBDIR=osx-64 mamba create -n intel_env python=3.11 -y
+conda activate intel_env
+conda config --env --set subdir osx-64
+
+# Verify it's running as x86_64 under Rosetta
+python -c "import platform; print(platform.machine())"  # x86_64
+
+# Install ImSwitch
+cd ~/ImSwitch   # adjust path as needed
+pip install -e .
+
+# Run (Rosetta translates automatically when subdir=osx-64)
+python main.py --headless --http-port 8001
+```
+
+#### Option B: uv venv with python.org universal2 installer
+
+```bash
+# Download the universal2 installer (contains both x86_64 and arm64)
+# https://www.python.org/ftp/python/3.11.11/python-3.11.11-macos11.pkg
+# Install it, then:
+
+cd ~/ImSwitch
+uv venv --python /usr/local/bin/python3.11 .venv_x86_311
+
+# Verify architecture
+arch -x86_64 .venv_x86_311/bin/python3.11 -c "import platform; print(platform.machine())"
+# → x86_64
+
+source .venv_x86_311/bin/activate
+uv pip install -e .
+
+# Always launch under x86_64 so Rosetta uses the x86_64 dylibs
+arch -x86_64 python main.py --headless --http-port 8001
+```
+
 ### Running
 
 To run ImSwitch, first activate the virtual environment if you haven't already done so:

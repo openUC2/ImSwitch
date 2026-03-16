@@ -1484,6 +1484,7 @@ class ExperimentController(ImConWidgetController):
         if self._master.lasersManager[channel].enabled == 0:
             self._master.lasersManager[channel].setEnabled(1, getReturn=True)
         self._logger.debug(f"Setting laser power to {power} for channel {channel}")
+        time.sleep(0.04)  # Short delay to ensure power is set before next acquisition # TODO: Necessary?
         return power
 
 

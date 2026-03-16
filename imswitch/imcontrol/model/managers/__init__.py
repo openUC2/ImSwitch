@@ -36,4 +36,5 @@ from .LepmonManager import LepmonManager
 from .FlatfieldManager import FlatfieldManager
 from .PixelCalibrationManager import PixelCalibrationManager
 from .ArkitektManager import ArkitektManager
+from .SiLA2Manager import SiLA2Manager
 from .InstrumentMetadataManager import InstrumentMetadataManager

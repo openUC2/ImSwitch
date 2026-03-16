@@ -573,6 +573,30 @@ class FocusLockInfo:
     linear_range, timestamp, and lookup_table. """
 
 @dataclass(frozen=False)
+class SiLA2Info:
+    enabled: bool = True
+    """ Whether SiLA2 server integration is enabled. """
+
+    serverName: str = "OpenUC2 ImSwitch"
+    """ Display name of the SiLA2 server. """
+
+    serverDescription: str = "SiLA2 server for OpenUC2 ImSwitch microscope control"
+    """ Human-readable description of the server. """
+
+    serverHost: str = "0.0.0.0"
+    """ Host address the SiLA2 server binds to. """
+
+    serverPort: int = 50052
+    """ TCP port the SiLA2 server listens on. """
+
+    serverVersion: str = "0.1.0"
+    """ Semantic version of the SiLA2 server. """
+
+    vendorUrl: str = "https://openuc2.com"
+    """ Vendor URL reported in SiLA2 service discovery. """
+
+
+@dataclass(frozen=False)
 class ArkitektInfo:
     enabled: bool = True
     """ Whether Arkitekt integration is enabled. """
@@ -834,6 +858,10 @@ class SetupInfo:
     arkitekt: Optional[ArkitektInfo] = field(default_factory=lambda: None)
     """ Arkitekt integration settings. Required to be defined to use Arkitekt
     functionality. """
+
+    sila2: Optional[SiLA2Info] = field(default_factory=lambda: None)
+    """ SiLA2 server settings. Required to be defined to use SiLA2
+    remote-control functionality. """
 
     fovLock: Optional[FOVLockInfo] = field(default_factory=lambda: None)
     """ Focus lock settings. Required to be defined to use fov lock

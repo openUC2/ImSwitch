@@ -51,7 +51,7 @@ class UC2ConfigController(ImConWidgetController):
         # OTA update tracking
         self._ota_status = {}  # Dictionary to track OTA status by CAN ID
         self._ota_lock = threading.Lock()
-        self._firmware_server_url = "http://localhost/firmware"  # Firmware server URL (must end with /)
+        self._firmware_server_url = "http://host.docker.internal/firmware"  # Firmware server URL (must end with /)
         self._firmware_cache_dir = Path(tempfile.gettempdir()) / "uc2_ota_firmware_cache"
         self._firmware_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -657,10 +657,6 @@ class UC2ConfigController(ImConWidgetController):
         return True
 
     @APIExport(runOnUIThread=False)
-    def getDiskUsage(self):
-        return dirtools.getDiskusage()
-
-    @APIExport(runOnUIThread=False)
     def getDataPath(self):
         return dirtools.UserFileDirs.getValidatedDataPath()
 
@@ -686,9 +682,8 @@ class UC2ConfigController(ImConWidgetController):
         return self._master.UC2ConfigManager.ESP32.serial.writeSerial(payload)
 
     @APIExport(runOnUIThread=True)
-    def is_connected(self):
+    def uc2_board_is_connected(self):
         return self._master.UC2ConfigManager.isConnected()
-
 
     @APIExport(runOnUIThread=True)
     def btpairing(self):
@@ -742,7 +737,7 @@ class UC2ConfigController(ImConWidgetController):
         }
 
     @APIExport(runOnUIThread=False)
-    def setOTAFirmwareServer(self, server_url="http://localhost/firmware"):
+    def setOTAFirmwareServer(self, server_url="http://host.docker.internal/firmware"):
         """
         Set the firmware server URL for OTA updates.
         
@@ -752,7 +747,7 @@ class UC2ConfigController(ImConWidgetController):
         - id_20_esp32_seeed_xiao_esp32s3_can_slave_laser_debug.bin
         - id_21_esp32_seeed_xiao_esp32s3_can_slave_led_debug.bin
         
-        :param server_url: URL of the firmware server (default: http://localhost/firmware)
+        :param server_url: URL of the firmware server (default: http://host.docker.internal/firmware)
         :return: Status message with list of available firmware files
         """
         # Remove trailing slash if present

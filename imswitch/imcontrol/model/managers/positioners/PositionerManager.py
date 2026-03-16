@@ -31,7 +31,7 @@ class PositionerManager(ABC):
 
         # HOME
         initialHome={
-            axis: False for axis in positionerInfo.axes # TODO: Hardcoded - hsould be updated according to JSon?
+            axis: False for axis in positionerInfo.axes 
         }
         self._home = initialHome # is homed?
 
@@ -42,7 +42,8 @@ class PositionerManager(ABC):
         self._stop = initialStop # is stopped?
 
         self.__name = name
-        self.setSpeed(positionerInfo.managerProperties.get("initialSpeed"))
+        try:self.setSpeed(positionerInfo.managerProperties.get("initialSpeed"))
+        except: pass
         self.__forPositioning = positionerInfo.forPositioning
         self.__forScanning = positionerInfo.forScanning
         self.__resetOnClose = positionerInfo.resetOnClose

@@ -71,6 +71,12 @@ class OffAxisHoloParams:
     # Preview downsampling for MJPEG streams
     preview_max_size: int = 512  # max dimension for streamed previews
 
+    # Phase unwrapping
+    unwrap_phase: bool = True  # enable 2D phase unwrapping
+
+    # Display mode: if True, magnitude/phase streams show FFT-space crop instead of reconstructed field
+    show_fft_space: bool = False
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "pixelsize": self.pixelsize,
@@ -92,6 +98,8 @@ class OffAxisHoloParams:
             "apodization_type": self.apodization_type,
             "apodization_alpha": self.apodization_alpha,
             "preview_max_size": self.preview_max_size,
+            "unwrap_phase": self.unwrap_phase,
+            "show_fft_space": self.show_fft_space,
         }
 
 
@@ -202,6 +210,11 @@ class OffAxisHoloController(LiveUpdatedController):
         self._last_fft_magnitude = None
         self._last_crop_magnitude = None
         self._last_unwrapped_phase = None
+        self._last_crop_fft_magnitude = None
+        self._last_crop_fft_phase = None
+
+        # Cached Fourier-space field for fast dz re-propagation (avoids recomputing FFT)
+        self._cached_fourier_field = None
 
         # MJPEG streaming queues (separate for each stream type)
         self._mjpeg_queue_fft = queue.Queue(maxsize=5)
@@ -290,14 +303,20 @@ class OffAxisHoloController(LiveUpdatedController):
             self._last_fft_magnitude = results.get('fft_magnitude')
             self._last_crop_magnitude = results.get('crop_magnitude')
             self._last_unwrapped_phase = results.get('unwrapped_phase')
+            self._last_crop_fft_magnitude = results.get('crop_fft_magnitude')
+            self._last_crop_fft_phase = results.get('crop_fft_phase')
 
-            # Add to MJPEG streams if active
+            # Add to MJPEG streams if active; show_fft_space toggles which data fills the mag/phase queues
             if self._state.is_streaming_fft and self._last_fft_magnitude is not None:
                 self._add_to_mjpeg_stream(self._last_fft_magnitude, self._mjpeg_queue_fft, colormap='viridis')
-            if self._state.is_streaming_magnitude and self._last_crop_magnitude is not None:
-                self._add_to_mjpeg_stream(self._last_crop_magnitude, self._mjpeg_queue_magnitude)
-            if self._state.is_streaming_phase and self._last_unwrapped_phase is not None:
-                self._add_to_mjpeg_stream(self._last_unwrapped_phase, self._mjpeg_queue_phase, colormap='twilight')
+            if self._state.is_streaming_magnitude:
+                mag_data = self._last_crop_fft_magnitude if self._params.show_fft_space else self._last_crop_magnitude
+                if mag_data is not None:
+                    self._add_to_mjpeg_stream(mag_data, self._mjpeg_queue_magnitude)
+            if self._state.is_streaming_phase:
+                phase_data = self._last_crop_fft_phase if self._params.show_fft_space else self._last_unwrapped_phase
+                if phase_data is not None:
+                    self._add_to_mjpeg_stream(phase_data, self._mjpeg_queue_phase, colormap='twilight')
 
             # Emit signal for legacy GUI
             if self._last_crop_magnitude is not None:
@@ -427,6 +446,72 @@ class OffAxisHoloController(LiveUpdatedController):
 
         return Ef
 
+    def _apply_fresnel_in_fourier(self, F_field, dz):
+        """
+        Apply Fresnel propagation filter directly to a field already in Fourier space.
+        Avoids a redundant FT+IFT compared to _fresnel_propagator when the input
+        is already the FFT-shifted spectrum (e.g. the cached sideband padded array).
+
+        Args:
+            F_field: 2D complex array in Fourier (fftshift) space
+            dz: Propagation distance in meters
+
+        Returns:
+            Filtered Fourier-space field (apply _iFT afterward to get real-space E)
+        """
+        ps = self._params.pixelsize * self._params.binning
+        lambda0 = self._params.wavelength
+
+        ny, nx = F_field.shape[:2]
+        grid_size_x = ps * nx
+        grid_size_y = ps * ny
+
+        fx = np.linspace(-(nx-1)/2*(1/grid_size_x), (nx-1)/2*(1/grid_size_x), nx)
+        fy = np.linspace(-(ny-1)/2*(1/grid_size_y), (ny-1)/2*(1/grid_size_y), ny)
+
+        phase = 1j * np.pi * lambda0 * dz
+        hfx = np.exp(phase * fx**2)
+        hfy = np.exp(phase * fy**2)
+
+        G = F_field * hfx
+        G *= hfy[:, None]
+        return G
+
+    def _reprocess_with_current_dz(self):
+        """
+        Re-compute magnitude and phase from the cached Fourier-space field using the
+        current dz parameter.  Skips the full pipeline (no new camera frame needed).
+        Returns a results dict compatible with _on_holo_processed, or None.
+        """
+        if self._cached_fourier_field is None:
+            return None
+        try:
+            padded = self._cached_fourier_field
+            if self._params.dz != 0:
+                propagated = self._apply_fresnel_in_fourier(padded, self._params.dz)
+            else:
+                propagated = padded
+
+            E = self._iFT(propagated)
+            magnitude = np.abs(E)
+            phase = np.angle(E)
+
+            if self._params.unwrap_phase:
+                unwrapped_phase = self._unwrap_phase(phase)
+            else:
+                unwrapped_phase = phase
+
+            return {
+                'fft_magnitude': self._last_fft_magnitude,  # reuse cached FFT visualization
+                'crop_magnitude': self._downsample_for_preview(magnitude),
+                'unwrapped_phase': self._downsample_for_preview(unwrapped_phase),
+                'crop_fft_magnitude': self._last_crop_fft_magnitude,
+                'crop_fft_phase': self._last_crop_fft_phase,
+            }
+        except Exception as e:
+            self._logger.error(f"Error in fast dz reprocess: {e}")
+            return None
+
     def _apply_binning(self, image):
         """Apply binning to image if binning > 1"""
         if self._params.binning <= 1:
@@ -549,52 +634,59 @@ class OffAxisHoloController(LiveUpdatedController):
             
             # Crop the sideband
             C = F[y1:y2, x1:x2].copy()
-            
+
+            # === Step 2b: FFT-space crop magnitude/phase (for show_fft_space mode) ===
+            crop_fft_magnitude_preview = self._downsample_for_preview(np.abs(C))
+            crop_fft_phase_preview = self._downsample_for_preview(np.angle(C))
+
             # === Step 3: Apply apodization if enabled ===
             if self._params.apodization_enabled and C.shape[0] > 0 and C.shape[1] > 0:
                 window = self._create_apodization_window(C.shape)
                 C = C * window
             
-            # === Step 4: Shift to center and inverse FFT ===
-            # Create zero-padded array with sideband at center
+            # === Step 4: Shift sideband to center (zero-pad to original FFT size) ===
             padded = np.zeros_like(F)
             pad_h, pad_w = padded.shape
-            
-            # Calculate where to place the cropped region (centered)
             ph = C.shape[0]
             pw = C.shape[1]
             py1 = (pad_h - ph) // 2
             py2 = py1 + ph
             px1 = (pad_w - pw) // 2
             px2 = px1 + pw
-            
             padded[py1:py2, px1:px2] = C
-            
-            # Inverse FFT to get complex field
-            E = self._iFT(padded)
-            
-            # === Step 5: Digital refocus if dz != 0 ===
+
+            # Cache Fourier-space field for fast dz re-propagation (no new camera frame needed)
+            self._cached_fourier_field = padded
+
+            # === Step 5: Apply Fresnel propagation in Fourier space (saves one FT cycle) ===
             if self._params.dz != 0:
-                E = self._fresnel_propagator(E, self._params.dz)
-            
+                propagated = self._apply_fresnel_in_fourier(padded, self._params.dz)
+            else:
+                propagated = padded
+
+            # Inverse FFT to get complex field
+            E = self._iFT(propagated)
+
             # === Step 6: Extract magnitude and phase ===
             magnitude = np.abs(E)
             phase = np.angle(E)
-            
-            # === Step 7: Unwrap phase ===
-            if 0:
+
+            # === Step 7: Phase unwrapping (controlled by unwrap_phase param) ===
+            if self._params.unwrap_phase:
                 unwrapped_phase = self._unwrap_phase(phase)
             else:
-                unwrapped_phase = phase  # Skip unwrapping for now (can be slow)
-            
+                unwrapped_phase = phase
+
             # Downsample for preview
             magnitude_preview = self._downsample_for_preview(magnitude)
             phase_preview = self._downsample_for_preview(unwrapped_phase)
-            
+
             return {
                 'fft_magnitude': fft_mag_preview,
                 'crop_magnitude': magnitude_preview,
                 'unwrapped_phase': phase_preview,
+                'crop_fft_magnitude': crop_fft_magnitude_preview,
+                'crop_fft_phase': crop_fft_phase_preview,
             }
             
         except Exception as e:
@@ -797,8 +889,28 @@ class OffAxisHoloController(LiveUpdatedController):
 
     @APIExport(runOnUIThread=True)
     def set_dz_offaxisholo(self, dz: float) -> Dict[str, Any]:
-        """Set digital refocus distance in meters"""
-        return self.set_parameters_offaxisholo({"dz": dz})
+        """Set digital refocus distance in meters; instantly re-propagates the cached FFT field"""
+        result = self.set_parameters_offaxisholo({"dz": dz})
+        # Fast path: recompute magnitude/phase from cached Fourier field without waiting for a new frame
+        if self._cached_fourier_field is not None:
+            reprocessed = self._reprocess_with_current_dz()
+            if reprocessed is not None:
+                self._on_holo_processed(reprocessed)
+        return result
+
+    @APIExport(runOnUIThread=True)
+    def set_unwrap_phase_offaxisholo(self, enabled: bool) -> Dict[str, Any]:
+        """Enable or disable 2D phase unwrapping"""
+        return self.set_parameters_offaxisholo({"unwrap_phase": enabled})
+
+    @APIExport(runOnUIThread=True)
+    def set_show_fft_space_offaxisholo(self, enabled: bool) -> Dict[str, Any]:
+        """
+        Toggle display mode for magnitude/phase MJPEG streams.
+        If enabled, streams show the cropped FFT-space sideband (|C| and arg(C)).
+        If disabled (default), streams show the reconstructed real-space field.
+        """
+        return self.set_parameters_offaxisholo({"show_fft_space": enabled})
 
     @APIExport(runOnUIThread=True)
     def set_roi_offaxisholo(self, center_x: int = None, center_y: int = None, size: int = 512) -> Dict[str, Any]:

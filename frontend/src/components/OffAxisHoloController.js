@@ -68,6 +68,8 @@ import {
   apiOffAxisHoloControllerSetBinning,
   apiOffAxisHoloControllerSetPixelsize,
   apiOffAxisHoloControllerSetWavelength,
+  apiOffAxisHoloControllerSetUnwrapPhase,
+  apiOffAxisHoloControllerSetShowFftSpace,
 } from "../backendapi/apiOffAxisHoloController";
 
 // Tab panel component
@@ -180,6 +182,8 @@ const OffAxisHoloController = () => {
         offAxisHoloSlice.setApodizationType(params.apodization_type || "tukey")
       );
       dispatch(offAxisHoloSlice.setApodizationAlpha(params.apodization_alpha || 0.1));
+      dispatch(offAxisHoloSlice.setPhaseUnwrapEnabled(params.unwrap_phase !== undefined ? params.unwrap_phase : true));
+      dispatch(offAxisHoloSlice.setShowFftSpace(params.show_fft_space || false));
 
       // Update local selections
       setRoiSelection({
@@ -309,14 +313,11 @@ const OffAxisHoloController = () => {
         liveStreamState.streamSettings?.binary?.subsampling?.factor ||
         1;
 
-      const streamedWidth = imageSize.width;
-      const streamedHeight = imageSize.height;
-
-      const absoluteXInStream = streamedWidth / 2 + roiSelection.centerX;
-      const absoluteYInStream = streamedHeight / 2 + roiSelection.centerY;
-
-      const absoluteXFullSensor = Math.round(absoluteXInStream * streamSubsampling);
-      const absoluteYFullSensor = Math.round(absoluteYInStream * streamSubsampling);
+      // roiSelection.centerX/Y are in natural (subsampled) image coords (offset from center)
+      // Convert to absolute sensor pixel coordinates
+      const absoluteXFullSensor = Math.round((imageSize.width / 2 + roiSelection.centerX) * streamSubsampling);
+      const absoluteYFullSensor = Math.round((imageSize.height / 2 + roiSelection.centerY) * streamSubsampling);
+      // roiSelection.size is entered directly in sensor pixels
       const finalSize = Math.min(roiSelection.size, 2048);
 
       await apiOffAxisHoloControllerSetRoi({
@@ -417,22 +418,37 @@ const OffAxisHoloController = () => {
     setImageSize({ width, height });
   }, []);
 
-  // Handle click on camera stream for ROI selection
+  // Handle click on camera stream for ROI selection and immediate backend update
   const handleLiveViewClick = useCallback(
     (pixelX, pixelY, imgWidth, imgHeight) => {
-      const relativeX = pixelX - imgWidth / 2;
-      const relativeY = pixelY - imgHeight / 2;
+      // pixelX/Y and imgWidth/imgHeight are in natural image coords (subsampled sensor pixels)
+      const relativeX = Math.round(pixelX - imgWidth / 2);
+      const relativeY = Math.round(pixelY - imgHeight / 2);
 
-      setRoiSelection((prev) => ({
-        ...prev,
-        centerX: Math.round(relativeX),
-        centerY: Math.round(relativeY),
-      }));
+      setRoiSelection((prev) => {
+        const streamSubsampling =
+          liveStreamState.streamSettings?.jpeg?.subsampling?.factor ||
+          liveStreamState.streamSettings?.jpeg?.subsampling_factor ||
+          liveStreamState.streamSettings?.binary?.subsampling?.factor ||
+          1;
+        // Convert subsampled coords to real sensor pixel coords
+        const sensorCenterX = Math.round((imgWidth / 2 + relativeX) * streamSubsampling);
+        const sensorCenterY = Math.round((imgHeight / 2 + relativeY) * streamSubsampling);
+        // Immediately send to backend (size stays as previously set, already in sensor pixels)
+        apiOffAxisHoloControllerSetRoi({
+          center_x: sensorCenterX,
+          center_y: sensorCenterY,
+          size: prev.size,
+        }).catch((err) => console.error("Failed to auto-send ROI:", err));
+        return { ...prev, centerX: relativeX, centerY: relativeY };
+      });
     },
-    []
+    [liveStreamState.streamSettings]
   );
 
   // Handle click on FFT stream for sideband selection
+  // fftImageSize tracks the actual FFT dimensions (from backend state), so click coords
+  // map directly to full-resolution FFT pixel coordinates without extra scaling.
   const handleFftClick = useCallback(
     (event) => {
       if (!fftImageRef.current) return;
@@ -441,36 +457,28 @@ const OffAxisHoloController = () => {
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
 
-      // Scale to FFT image coordinates
-      const scaleX = fftImageSize.width / rect.width;
-      const scaleY = fftImageSize.height / rect.height;
+      // Map display click to actual FFT coordinates using the real FFT shape from state
+      const actualFftW = offAxisState.fftShape ? offAxisState.fftShape[1] : fftImageSize.width;
+      const actualFftH = offAxisState.fftShape ? offAxisState.fftShape[0] : fftImageSize.height;
 
-      const fftX = Math.round(x * scaleX);
-      const fftY = Math.round(y * scaleY);
+      const fftX = Math.round(x / rect.width * actualFftW);
+      const fftY = Math.round(y / rect.height * actualFftH);
 
-      console.log("FFT Click:", { fftX, fftY, fftImageSize });
+      console.log("FFT Click:", { fftX, fftY, actualFftW, actualFftH });
 
-      setCcSelection((prev) => ({
-        ...prev,
-        centerX: fftX,
-        centerY: fftY,
-      }));
-
-      // Auto-apply CC ROI
-      (async () => {
-        try {
-          await apiOffAxisHoloControllerSetCcRoi({
-            center_x: fftX,
-            center_y: fftY,
-            size_x: ccSelection.sizeX,
-            size_y: ccSelection.sizeY,
-          });
-        } catch (error) {
-          console.error("Failed to auto-apply CC ROI:", error);
-        }
-      })();
+      setCcSelection((prev) => {
+        const updated = { ...prev, centerX: fftX, centerY: fftY };
+        // Auto-apply CC ROI to backend
+        apiOffAxisHoloControllerSetCcRoi({
+          center_x: updated.centerX,
+          center_y: updated.centerY,
+          size_x: updated.sizeX,
+          size_y: updated.sizeY,
+        }).catch((error) => console.error("Failed to auto-apply CC ROI:", error));
+        return updated;
+      });
     },
-    [fftImageSize, ccSelection.sizeX, ccSelection.sizeY]
+    [fftImageSize, offAxisState.fftShape]
   );
 
   // ROI overlay for camera stream
@@ -704,14 +712,7 @@ const OffAxisHoloController = () => {
                     width: "100%",
                     height: "100%",
                     objectFit: "contain",
-                  }}
-                  onLoad={(e) => {
-                    if (e.target.naturalWidth && e.target.naturalHeight) {
-                      setFftImageSize({
-                        width: e.target.naturalWidth,
-                        height: e.target.naturalHeight,
-                      });
-                    }
+                    imageRendering: "pixelated",
                   }}
                 />
                 {ccOverlay}
@@ -736,20 +737,19 @@ const OffAxisHoloController = () => {
                 label="Center X"
                 type="number"
                 value={ccSelection.centerX}
-                onChange={async (e) => {
+                onChange={(e) => {
                   const value = parseInt(e.target.value) || 0;
-                  setCcSelection((prev) => ({ ...prev, centerX: value }));
-                  // Auto-update backend
-                  try {
-                    await apiOffAxisHoloControllerSetCcRoi(
-                      value,
-                      ccSelection.centerY,
-                      ccSelection.sizeX,
-                      ccSelection.sizeY
-                    );
-                  } catch (error) {
-                    console.error("Failed to update sideband center X:", error);
-                  }
+                  // Functional setState to avoid stale closure; send fresh values to backend
+                  setCcSelection((prev) => {
+                    const updated = { ...prev, centerX: value };
+                    apiOffAxisHoloControllerSetCcRoi({
+                      center_x: updated.centerX,
+                      center_y: updated.centerY,
+                      size_x: updated.sizeX,
+                      size_y: updated.sizeY,
+                    }).catch((err) => console.error("Failed to update sideband center X:", err));
+                    return updated;
+                  });
                 }}
                 size="small"
                 fullWidth
@@ -760,20 +760,18 @@ const OffAxisHoloController = () => {
                 label="Center Y"
                 type="number"
                 value={ccSelection.centerY}
-                onChange={async (e) => {
+                onChange={(e) => {
                   const value = parseInt(e.target.value) || 0;
-                  setCcSelection((prev) => ({ ...prev, centerY: value }));
-                  // Auto-update backend
-                  try {
-                    await apiOffAxisHoloControllerSetCcRoi(
-                      ccSelection.centerX,
-                      value,
-                      ccSelection.sizeX,
-                      ccSelection.sizeY
-                    );
-                  } catch (error) {
-                    console.error("Failed to update sideband center Y:", error);
-                  }
+                  setCcSelection((prev) => {
+                    const updated = { ...prev, centerY: value };
+                    apiOffAxisHoloControllerSetCcRoi({
+                      center_x: updated.centerX,
+                      center_y: updated.centerY,
+                      size_x: updated.sizeX,
+                      size_y: updated.sizeY,
+                    }).catch((err) => console.error("Failed to update sideband center Y:", err));
+                    return updated;
+                  });
                 }}
                 size="small"
                 fullWidth
@@ -784,20 +782,18 @@ const OffAxisHoloController = () => {
                 label="Size X"
                 type="number"
                 value={ccSelection.sizeX}
-                onChange={async (e) => {
+                onChange={(e) => {
                   const value = parseInt(e.target.value) || 50;
-                  setCcSelection((prev) => ({ ...prev, sizeX: value }));
-                  // Auto-update backend
-                  try {
-                    await apiOffAxisHoloControllerSetCcRoi(
-                      ccSelection.centerX,
-                      ccSelection.centerY,
-                      value,
-                      ccSelection.sizeY
-                    );
-                  } catch (error) {
-                    console.error("Failed to update sideband size X:", error);
-                  }
+                  setCcSelection((prev) => {
+                    const updated = { ...prev, sizeX: value };
+                    apiOffAxisHoloControllerSetCcRoi({
+                      center_x: updated.centerX,
+                      center_y: updated.centerY,
+                      size_x: updated.sizeX,
+                      size_y: updated.sizeY,
+                    }).catch((err) => console.error("Failed to update sideband size X:", err));
+                    return updated;
+                  });
                 }}
                 size="small"
                 fullWidth
@@ -808,20 +804,18 @@ const OffAxisHoloController = () => {
                 label="Size Y"
                 type="number"
                 value={ccSelection.sizeY}
-                onChange={async (e) => {
+                onChange={(e) => {
                   const value = parseInt(e.target.value) || 50;
-                  setCcSelection((prev) => ({ ...prev, sizeY: value }));
-                  // Auto-update backend
-                  try {
-                    await apiOffAxisHoloControllerSetCcRoi(
-                      ccSelection.centerX,
-                      ccSelection.centerY,
-                      ccSelection.sizeX,
-                      value
-                    );
-                  } catch (error) {
-                    console.error("Failed to update sideband size Y:", error);
-                  }
+                  setCcSelection((prev) => {
+                    const updated = { ...prev, sizeY: value };
+                    apiOffAxisHoloControllerSetCcRoi({
+                      center_x: updated.centerX,
+                      center_y: updated.centerY,
+                      size_x: updated.sizeX,
+                      size_y: updated.sizeY,
+                    }).catch((err) => console.error("Failed to update sideband size Y:", err));
+                    return updated;
+                  });
                 }}
                 size="small"
                 fullWidth
@@ -831,6 +825,47 @@ const OffAxisHoloController = () => {
               <Typography variant="caption" color="text.secondary">
                 Click on FFT image to select sideband center. Changes are applied automatically.
               </Typography>
+            </Grid>
+            {/* Phase unwrap and display mode toggles */}
+            <Grid item xs={12} sm={6}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={offAxisState.phaseUnwrapEnabled}
+                    onChange={async (e) => {
+                      const enabled = e.target.checked;
+                      dispatch(offAxisHoloSlice.setPhaseUnwrapEnabled(enabled));
+                      try {
+                        await apiOffAxisHoloControllerSetUnwrapPhase(enabled);
+                      } catch (err) {
+                        console.error("Failed to toggle phase unwrap:", err);
+                        dispatch(offAxisHoloSlice.setPhaseUnwrapEnabled(!enabled));
+                      }
+                    }}
+                  />
+                }
+                label="Enable Phase Unwrapping"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={offAxisState.showFftSpace}
+                    onChange={async (e) => {
+                      const enabled = e.target.checked;
+                      dispatch(offAxisHoloSlice.setShowFftSpace(enabled));
+                      try {
+                        await apiOffAxisHoloControllerSetShowFftSpace(enabled);
+                      } catch (err) {
+                        console.error("Failed to toggle show FFT space:", err);
+                        dispatch(offAxisHoloSlice.setShowFftSpace(!enabled));
+                      }
+                    }}
+                  />
+                }
+                label={offAxisState.showFftSpace ? "Showing: Cropped FFT (|C|, arg C)" : "Showing: Reconstructed field (|E|, φ)"}
+              />
             </Grid>
           </Grid>
         </AccordionDetails>
@@ -871,6 +906,7 @@ const OffAxisHoloController = () => {
                 width: "100%",
                 height: "100%",
                 objectFit: "contain",
+                imageRendering: "pixelated",
               }}
             />
           </Box>
@@ -897,6 +933,7 @@ const OffAxisHoloController = () => {
                 width: "100%",
                 height: "100%",
                 objectFit: "contain",
+                imageRendering: "pixelated",
               }}
             />
           </Box>

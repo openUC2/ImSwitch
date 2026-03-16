@@ -22,7 +22,50 @@ if platform == "linux" or platform == "linux2":
             print(e)
 elif platform == "darwin":
     try:
-        MvCamCtrldll = ctypes.cdll.LoadLibrary("/usr/local/lib/libMvCameraControl.dylib")
+        # Pre-load all GenICam/SDK dependencies with RTLD_GLOBAL in dependency order
+        # so that their symbols are globally visible. Without this, the default
+        # RTLD_LOCAL causes null vtable entries in MvCamCtrl::CTlFactory's static
+        # initializer, leading to SIGSEGV under Rosetta on macOS 14+.
+        #
+        # NOTE: If this still hangs on macOS 14+ under Rosetta, the libusb-based
+        # USB3 transport layer initializer is blocking inside dlopen. In that case
+        # use an i386 conda/mamba environment instead:
+        #   CONDA_SUBDIR=osx-64 mamba create -n intel_env python=3.11
+        #   conda activate intel_env && conda config --env --set subdir osx-64
+        #   pip install -e . && arch -x86_64 python main.py
+        _sdk_lib_dir = "/Library/MVS_SDK/lib/"
+        # Load in dependency order: low-level → GenApi → transport → main SDK
+        _sdk_deps = [
+            "libusb-1.0.0.dylib",
+            "liblog4cpp_clang61_v3_0.dylib",
+            "libLog_clang61_v3_0.dylib",
+            "libMathParser_clang61_v3_0.dylib",
+            "libXmlParser_clang61_v3_0.dylib",
+            "libGCBase_clang61_v3_0.dylib",
+            "libNodeMapData_clang61_v3_0.dylib",
+            "libGenApi_clang61_v3_0.dylib",
+            "libVideoRenderForMac.dylib",
+            "libMediaProcess.dylib",
+            "libMVGigEVisionSDK.dylib",
+            "libMVU3VisionSDK.dylib",
+        ]
+        for _dep in _sdk_deps:
+            try:
+                ctypes.CDLL(_sdk_lib_dir + _dep, ctypes.RTLD_GLOBAL)
+            except OSError as e:
+                print(f"HIK SDK dep load warning: {_dep}: {e}")
+
+        _mv_lib_paths = [
+            "/Library/MVS_SDK/lib/libMvCameraControl.dylib",
+            "/usr/local/lib/libMvCameraControl.dylib",
+        ]
+        MvCamCtrldll = None
+        for _mv_path in _mv_lib_paths:
+            try:
+                MvCamCtrldll = ctypes.CDLL(_mv_path, ctypes.RTLD_GLOBAL)
+                break
+            except OSError as e:
+                print(e)
     except Exception as e:
         print(e)
         MvCamCtrldll = None

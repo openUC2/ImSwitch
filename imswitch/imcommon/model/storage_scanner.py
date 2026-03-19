@@ -8,7 +8,7 @@ This module provides functionality to scan for external storage devices
 import os
 import shutil
 from typing import List, Optional, Dict, Any
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 
 
 @dataclass
@@ -21,8 +21,6 @@ class ExternalStorage:
     total_space_gb: float
     filesystem: str = "unknown"
     is_active: bool = False
-    exists: bool = True  # Whether the device is actually mounted/accessible
-    is_mounted: bool = field(default=False)  # Explicitly check if it's a mount point
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
@@ -57,26 +55,6 @@ class StorageScanner:
 
         normalized = os.path.normpath(base_path)
         return normalized in self.MOUNT_ROOTS
-
-    def is_device_accessible(self, path: str) -> bool:
-        """
-        Check if a path is accessible (readable).
-        This is a quick check that doesn't require write permissions.
-        
-        Args:
-            path: Path to check
-            
-        Returns:
-            True if the path is accessible and readable, False otherwise
-        """
-        if not path or not os.path.isdir(path):
-            return False
-        try:
-            # Quick accessibility check: list directory
-            os.listdir(path)
-            return True
-        except (OSError, PermissionError):
-            return False
 
     def is_writable_directory(self, path: str) -> bool:
         """
@@ -204,8 +182,6 @@ class StorageScanner:
                     if require_mount_point and not is_mounted:
                         continue
 
-                    # Check if accessible and writable
-                    accessible = self.is_device_accessible(full_path)
                     writable = self.is_writable_directory(full_path)
 
                     # Get disk usage
@@ -223,12 +199,10 @@ class StorageScanner:
                         total_space_gb=round(total_gb, 2),
                         filesystem=filesystem,
                         is_active=False,
-                        exists=accessible,
-                        is_mounted=is_mounted
                     )
                     # Under real mount roots, only actual mounted filesystems qualify.
                     # Under custom/test directories, a writable accessible subdirectory is enough.
-                    if accessible and writable and (is_mounted or not require_mount_point):
+                    if writable and (is_mounted or not require_mount_point):
                         detected_drives.append(storage)
 
             except Exception as e:

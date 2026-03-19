@@ -652,7 +652,8 @@ const UC2ConfigurationController = () => {
       });
   };
 
-  const isTemporarilyRestarting = isRestarting && !uc2Connected;
+  const isTemporarilyRestarting =
+    isRestarting && restartSoftware && !uc2Connected;
 
   return (
     <Box sx={{ p: 3, maxWidth: 1200, mx: "auto" }}>

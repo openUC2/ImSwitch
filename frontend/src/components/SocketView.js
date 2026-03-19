@@ -34,6 +34,7 @@ const SocketView = () => {
         flexDirection: "column",
         height: "100%",
         width: "100%",
+        minHeight: 0,
       }}
     >
       <Box sx={{ mb: 3 }}>
@@ -79,6 +80,7 @@ const SocketView = () => {
             flexDirection: "column",
             overflow: "auto",
             width: "100%",
+            minHeight: 0,
           }}
         >
           <Paper

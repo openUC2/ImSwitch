@@ -7,8 +7,9 @@ This module provides functionality to scan for external storage devices
 
 import os
 import shutil
+import stat
 from typing import List, Optional, Dict, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 
 @dataclass
@@ -21,6 +22,8 @@ class ExternalStorage:
     total_space_gb: float
     filesystem: str = "unknown"
     is_active: bool = False
+    exists: bool = True  # Whether the device is actually mounted/accessible
+    is_mounted: bool = field(default=False)  # Explicitly check if it's a mount point
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
@@ -46,6 +49,26 @@ class StorageScanner:
         """Initialize the storage scanner."""
         pass
 
+    def is_device_accessible(self, path: str) -> bool:
+        """
+        Check if a path is accessible (readable).
+        This is a quick check that doesn't require write permissions.
+        
+        Args:
+            path: Path to check
+            
+        Returns:
+            True if the path is accessible and readable, False otherwise
+        """
+        if not path or not os.path.isdir(path):
+            return False
+        try:
+            # Quick accessibility check: list directory
+            os.listdir(path)
+            return True
+        except (OSError, PermissionError):
+            return False
+
     def is_writable_directory(self, path: str) -> bool:
         """
         Check if a directory is writable by attempting to create and remove a test file.
@@ -64,6 +87,25 @@ class StorageScanner:
                 f.write("test")
             os.remove(test_file)
             return True
+        except Exception:
+            return False
+
+    def is_mount_point(self, path: str) -> bool:
+        """
+        Check if a path is an actual mount point in the filesystem.
+        This distinguishes between mounted external drives and regular directories.
+        
+        Args:
+            path: Path to check
+            
+        Returns:
+            True if the path is a mount point, False otherwise
+        """
+        if not path or not os.path.isdir(path):
+            return False
+        try:
+            # On POSIX systems (Linux, macOS), use ismount()
+            return os.path.ismount(path)
         except Exception:
             return False
 
@@ -147,7 +189,14 @@ class StorageScanner:
                     if self.is_system_volume(entry):
                         continue
 
-                    # Check if writable
+                    # **CRITICAL FIX**: Only include actual mount points
+                    # This filters out empty directories left behind when USB drives are removed
+                    is_mounted = self.is_mount_point(full_path)
+                    if not is_mounted:
+                        continue
+
+                    # Check if accessible and writable
+                    accessible = self.is_device_accessible(full_path)
                     writable = self.is_writable_directory(full_path)
 
                     # Get disk usage
@@ -164,9 +213,12 @@ class StorageScanner:
                         free_space_gb=round(free_gb, 2),
                         total_space_gb=round(total_gb, 2),
                         filesystem=filesystem,
-                        is_active=False
+                        is_active=False,
+                        exists=accessible,
+                        is_mounted=is_mounted
                     )
-                    if writable:
+                    # Only add if it's mounted, accessible, and writable
+                    if is_mounted and accessible and writable:
                         detected_drives.append(storage)
 
             except Exception as e:

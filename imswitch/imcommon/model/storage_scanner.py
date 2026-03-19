@@ -7,7 +7,6 @@ This module provides functionality to scan for external storage devices
 
 import os
 import shutil
-import stat
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, asdict, field
 
@@ -33,6 +32,8 @@ class ExternalStorage:
 class StorageScanner:
     """Scanner for external storage devices."""
 
+    MOUNT_ROOTS = {"/media", "/Volumes", "/datasets"}
+
     # System volumes to exclude from scanning
     SYSTEM_VOLUMES = {
         "Macintosh HD",
@@ -48,6 +49,14 @@ class StorageScanner:
     def __init__(self):
         """Initialize the storage scanner."""
         pass
+
+    def requires_mount_point(self, base_path: str) -> bool:
+        """Return whether child entries under this base path must be real mount points."""
+        if not base_path:
+            return False
+
+        normalized = os.path.normpath(base_path)
+        return normalized in self.MOUNT_ROOTS
 
     def is_device_accessible(self, path: str) -> bool:
         """
@@ -177,6 +186,8 @@ class StorageScanner:
             if not base_path or not os.path.exists(base_path):
                 continue
 
+            require_mount_point = self.requires_mount_point(base_path)
+
             try:
                 for entry in sorted(os.listdir(base_path)):
                     full_path = os.path.join(base_path, entry)
@@ -189,10 +200,8 @@ class StorageScanner:
                     if self.is_system_volume(entry):
                         continue
 
-                    # **CRITICAL FIX**: Only include actual mount points
-                    # This filters out empty directories left behind when USB drives are removed
                     is_mounted = self.is_mount_point(full_path)
-                    if not is_mounted:
+                    if require_mount_point and not is_mounted:
                         continue
 
                     # Check if accessible and writable
@@ -217,8 +226,9 @@ class StorageScanner:
                         exists=accessible,
                         is_mounted=is_mounted
                     )
-                    # Only add if it's mounted, accessible, and writable
-                    if is_mounted and accessible and writable:
+                    # Under real mount roots, only actual mounted filesystems qualify.
+                    # Under custom/test directories, a writable accessible subdirectory is enough.
+                    if accessible and writable and (is_mounted or not require_mount_point):
                         detected_drives.append(storage)
 
             except Exception as e:

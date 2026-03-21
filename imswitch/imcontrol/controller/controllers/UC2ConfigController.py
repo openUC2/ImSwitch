@@ -750,8 +750,8 @@ class UC2ConfigController(ImConWidgetController):
         :param server_url: URL of the firmware server (default: http://host.docker.internal/firmware)
         :return: Status message with list of available firmware files
         """
-        # Remove trailing slash if present
-        server_url = server_url.rstrip('/')
+        
+        
 
         try:
             # Test server connectivity
@@ -1634,10 +1634,10 @@ class UC2ConfigController(ImConWidgetController):
 
     # Chip-specific esptool flash parameters
     _CHIP_FLASH_PARAMS = {
-        "esp32":   {"offset": "0x10000", "flash_mode": "dio", "flash_freq": "80m", "flash_size": "4MB"},
-        "esp32s3": {"offset": "0x0",     "flash_mode": "dio", "flash_freq": "40m", "flash_size": "detect"},
-        "esp32s2": {"offset": "0x10000", "flash_mode": "dio", "flash_freq": "80m", "flash_size": "detect"},
-        "esp32c3": {"offset": "0x0",     "flash_mode": "dio", "flash_freq": "80m", "flash_size": "detect"},
+        "esp32":   {"offset": "0x10000", "flash-mode": "dio", "flash-freq": "80m", "flash-size": "4MB"},
+        "esp32s3": {"offset": "0x0",     "flash-mode": "dio", "flash-freq": "40m", "flash-size": "detect"},
+        "esp32s2": {"offset": "0x10000", "flash-mode": "dio", "flash-freq": "80m", "flash-size": "detect"},
+        "esp32c3": {"offset": "0x0",     "flash-mode": "dio", "flash-freq": "80m", "flash-size": "detect"},
     }
 
     # Known CAN bus addresses
@@ -1707,6 +1707,11 @@ class UC2ConfigController(ImConWidgetController):
                   reconnect_after, chip, erase_flash, skip_disconnect):
         """Internal flash implementation – wrapped for clean error recovery."""
 
+        # 0) Pre-flash safety hint: 12V power may interfere with XIAO USB flashing
+        self._emit_usb_flash_status("flashing", 2,
+            "⚡ Hint: If flashing fails on XIAO boards, turn off 12V power "
+            "(press the emergency stop button) before flashing.")
+
         # 1) Optionally disconnect ImSwitch serial
         if not skip_disconnect:
             self._emit_usb_flash_status("disconnecting", 5, "Disconnecting from ESP32...")
@@ -1759,32 +1764,43 @@ class UC2ConfigController(ImConWidgetController):
         resolved_chip = chip
         if chip == "auto" or not chip:
             detected = self._detect_chip_from_port(flash_port)
-            resolved_chip = detected or "esp32"  # fallback to esp32
+            resolved_chip = detected or "esp32s3"  # fallback to esp32
             self.__logger.info(f"Chip auto-detection: {detected or 'none'} → using {resolved_chip}")
         flash_params = self._CHIP_FLASH_PARAMS.get(resolved_chip, self._CHIP_FLASH_PARAMS["esp32"])
         self._emit_usb_flash_status("flashing", 27, f"Chip: {resolved_chip}, offset: {flash_params['offset']}")
 
-        # 4c) For chips that flash at 0x0 (esp32s3, esp32c3, etc.) the binary must
-        #     include the bootloader ("merged" build).  espota binaries do NOT include
-        #     the bootloader and will cause boot-loops when flashed via esptool at 0x0.
-        #     Convention: merged binaries have a "_merged" postfix before .bin, if not, we flash at the correct offset of 0x10000 (if supported by the chip) or warn the user.
-        if flash_params["offset"] == "0x0" and fw_path:
-            fw_name = fw_path.name  # e.g. "firmware.bin"
-            if "_merged" not in fw_name:
-                # Try downloading the merged variant from the server
-                fw_path = self._download_firmware_by_name(fw_name)
-                flash_params["offset"] = "0x10000"  # flash at 0x10000 for non-merged binaries (if chip supports it)
-                if fw_path:
-                    self.__logger.info(f"Using standard firmware for {resolved_chip}: {fw_path} at offset {flash_params['offset']}")
-                    self._emit_usb_flash_status("downloading", 22, f"Using merged firmware: {fw_path.name}")
-                    erase_flash = False # we flash non-merged binaries at the correct offset, so no need to erase the whole flash
-                else:
-                    self.__logger.warning(
-                        f"No merged firmware '{fw_path}' found on server. "
-                        f"Flashing '{fw_name}' at offset {flash_params['offset']} – "
-                        f"this may cause boot-loops if the binary is an OTA/espota build."
-                    )
-                    self._emit_usb_flash_status("flashing", 22, f"Warning: no merged firmware found, using {fw_name}")
+        # 4c) Determine correct flash offset based on whether the binary
+        #     is a "merged" build (bootloader + partitions + app) or a
+        #     standalone app-only build.
+        #
+        #     Merged binaries include the bootloader and MUST be flashed at
+        #     offset 0x0.  Non-merged (app-only) binaries MUST be flashed at
+        #     the app partition offset (0x10000 for both ESP32 and ESP32-S3).
+        #
+        #     Rules:
+        #     • merged binary  → offset 0x0, erase is safe
+        #     • non-merged     → offset 0x10000, erase is BLOCKED (would
+        #       wipe the bootloader / partition table already on the device)
+        fw_name = fw_path.name if fw_path else ""
+        is_merged = "_merged" in fw_name
+
+        if is_merged:
+            flash_params["offset"] = "0x0"
+            self.__logger.info(f"Merged firmware detected: {fw_name} → flashing at 0x0")
+        else:
+            # App-only binary → always flash at the app partition offset
+            flash_params["offset"] = "0x10000"
+            if erase_flash:
+                erase_flash = False
+                self.__logger.warning(
+                    "Erase flash disabled: non-merged firmware cannot be flashed "
+                    "after erasing (bootloader/partitions would be lost)."
+                )
+                self._emit_usb_flash_status("flashing", 22,
+                    "⚠️ Erase disabled – non-merged firmware needs existing bootloader")
+            self.__logger.info(
+                f"Non-merged firmware: {fw_name} → flashing at 0x10000"
+            )
         self.__logger.info(
             f"Flashing firmware via {flash_port} (baud={baud}, chip={resolved_chip}, "
             f"file={fw_path.name}, erase={erase_flash})"
@@ -1816,10 +1832,10 @@ class UC2ConfigController(ImConWidgetController):
             "--port", flash_port,
             "--baud", str(baud),
             "--chip", resolved_chip,
-            "write_flash",
-            "--flash_mode", flash_params["flash_mode"],
-            "--flash_freq", flash_params["flash_freq"],
-            "--flash_size", flash_params["flash_size"],
+            "write-flash",
+            "--flash-mode", flash_params["flash-mode"],
+            "--flash-freq", flash_params["flash-freq"],
+            "--flash-size", flash_params["flash-size"],
             flash_params["offset"],
             str(fw_path),
         ]
@@ -1828,7 +1844,7 @@ class UC2ConfigController(ImConWidgetController):
             self._emit_usb_flash_status("failed", 50, "Firmware write failed", msg)
             return {
                 "status": "error",
-                "message": "write_flash failed",
+                "message": "write-flash failed",
                 "details": msg,
                 "port": flash_port,
                 "firmware": str(fw_path),
@@ -1875,11 +1891,13 @@ class UC2ConfigController(ImConWidgetController):
         address: int = 1,
         baud: int = 115200,
         timeout: float = 2.0,
+        skip_flash: bool = False,
     ):
         """
         Send a CAN bus address assignment to a freshly-flashed device via serial.
 
         Opens the serial port, sends a JSON command to set the CAN address, and closes.
+        Also verifies the device booted correctly (no "invalid header" boot-loops).
         Known addresses: master=1, a=10, x=11, y=12, z=13, led=30.
 
         Parameters:
@@ -1887,6 +1905,7 @@ class UC2ConfigController(ImConWidgetController):
           address: CAN bus address to assign (e.g. 1 for master, 11 for X axis).
           baud: serial baudrate for communication (default 115200).
           timeout: serial read timeout in seconds (default 2.0).
+          skip_flash: if True, this is a standalone CAN address assignment (no prior flash).
         """
         import json as _json
         import serial as _serial
@@ -1922,6 +1941,22 @@ class UC2ConfigController(ImConWidgetController):
                 if boot_output:
                     self.__logger.info(f"Boot output from device:\n{boot_output.strip()[-500:]}")
 
+                # Detect boot-loop: "invalid header: 0xffffffff" repeated in output
+                if "invalid header" in boot_output.lower() or "0xffffffff" in boot_output:
+                    error_msg = (
+                        "Device appears to be in a boot-loop (invalid header: 0xffffffff). "
+                        "The firmware was likely not flashed correctly. "
+                        "Try flashing with a merged firmware (.._merged.bin) and erase flash enabled."
+                    )
+                    self.__logger.error(error_msg)
+                    self._emit_usb_flash_status("failed", 92, "❌ Boot-loop detected!", error_msg)
+                    return {
+                        "status": "error",
+                        "message": error_msg,
+                        "boot_output": boot_output.strip()[-500:],
+                        "boot_loop_detected": True,
+                    }
+
                 # Flush any remaining bytes in the input buffer
                 ser.reset_input_buffer()
 
@@ -1938,12 +1973,49 @@ class UC2ConfigController(ImConWidgetController):
                         if response:
                             break
                         time.sleep(0.1)
+
+                # Verify firmware is running by sending state_get
+                ser.reset_input_buffer()
+                state_cmd = _json.dumps({"task": "/state_get"})
+                ser.write((state_cmd + "\n").encode("utf-8"))
+                ser.flush()
+                time.sleep(0.5)
+                state_response = ""
+                state_deadline = time.time() + timeout
+                while time.time() < state_deadline:
+                    if ser.in_waiting:
+                        state_response += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        time.sleep(0.05)
+                    else:
+                        if state_response:
+                            break
+                        time.sleep(0.1)
+
+                firmware_ok = True
+                if "0xffffffff" in state_response or "invalid header" in state_response.lower():
+                    firmware_ok = False
+
             self.__logger.info(f"CAN address response: {response.strip()}")
+            self.__logger.info(f"State verification: {state_response.strip()[:200]}")
+
+            if not firmware_ok:
+                self._emit_usb_flash_status("failed", 95,
+                    "❌ Firmware verification failed (device not responding correctly)")
+                return {
+                    "status": "error",
+                    "message": "Firmware verification failed – device not responding correctly",
+                    "response": response.strip(),
+                    "state_response": state_response.strip()[:200],
+                    "boot_loop_detected": True,
+                }
+
             self._emit_usb_flash_status("success", 100, f"✅ CAN address {address} assigned!")
             return {
                 "status": "success",
                 "message": f"CAN address {address} assigned on {port}",
                 "response": response.strip(),
+                "state_response": state_response.strip()[:200],
+                "firmware_verified": True,
             }
         except Exception as e:
             self.__logger.error(f"Failed to send CAN address: {e}")

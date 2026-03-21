@@ -24,6 +24,7 @@ const initialState = {
   // Available firmware files (flat list from server)
   firmwareFiles: [], // [{ filename, size, mod_time, url }]
   selectedFirmware: null, // { filename, size, mod_time, url }
+  firmwareSearchQuery: "", // search/filter text for firmware list
 
   // Flash options
   baudRate: 921600,
@@ -82,6 +83,7 @@ const usbFlashSlice = createSlice({
       state.error = null;
       state.successMessage = null;
       state.selectedFirmware = null;
+      state.firmwareSearchQuery = "";
       state.firmwareFiles = [];
       state.isFlashing = false;
       state.eraseFlash = false;
@@ -117,6 +119,9 @@ const usbFlashSlice = createSlice({
     },
     setSelectedFirmware: (state, action) => {
       state.selectedFirmware = action.payload;
+    },
+    setFirmwareSearchQuery: (state, action) => {
+      state.firmwareSearchQuery = action.payload;
     },
     setIsLoadingFirmware: (state, action) => {
       state.isLoadingFirmware = action.payload;
@@ -205,6 +210,7 @@ export const {
   setFirmwareFiles,
   setSelectedFirmware,
   setIsLoadingFirmware,
+  setFirmwareSearchQuery,
   setBaudRate,
   setReconnectAfter,
   setEraseFlash,

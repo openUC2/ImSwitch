@@ -2,27 +2,15 @@ import webbrowser
 
 import psutil
 
-from imswitch import IS_HEADLESS, __version__
+from imswitch import  __version__
 from imswitch.imcommon.framework import Timer
 from imswitch.imcommon.model import dirtools, modulesconfigtools, ostools, APIExport
 from .basecontrollers import WidgetController
-
-if not IS_HEADLESS:
-    from imswitch.imcommon.view import guitools
-    from .CheckUpdatesController import CheckUpdatesController
-    from .PickModulesController import PickModulesController
 
 
 class MultiModuleWindowController(WidgetController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        self.pickModulesController = self._factory.createController(
-            PickModulesController, self._widget.pickModulesDialog
-        )
-        self.checkUpdatesController = self._factory.createController(
-            CheckUpdatesController, self._widget.checkUpdatesDialog
-        )
 
         self._moduleIdNameMap = {}
 

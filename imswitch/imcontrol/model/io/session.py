@@ -9,7 +9,9 @@ import json
 import os
 import time
 import uuid
-import fcntl
+try: import fcntl
+except ImportError:
+    fcntl = None # TODO: Implement cross-platform file locking for Windows if needed
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 from pathlib import Path

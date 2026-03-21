@@ -15,8 +15,6 @@ from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.framework import Signal
 
 
-from imswitch import IS_HEADLESS
-
 pi    = np.pi
 naxis = np.newaxis
 F     = lambda x: np.fft.fft2(x)

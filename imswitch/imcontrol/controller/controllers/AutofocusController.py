@@ -1,4 +1,3 @@
-from imswitch import IS_HEADLESS
 import time
 import numpy as np
 import threading
@@ -799,22 +798,12 @@ class AutofocusController(ImConWidgetController):
 
             # Plot data
             try:
-                if not IS_HEADLESS and hasattr(self._widget, "focusPlotCurve"):
-                    self._widget.focusPlotCurve.setData(absolute_positions[:len(allfocusvals)], allfocusvals)
-                else:
-                    self.sigUpdateFocusPlot.emit(absolute_positions[:len(allfocusvals)], allfocusvals)
+                self.sigUpdateFocusPlot.emit(absolute_positions[:len(allfocusvals)], allfocusvals)
             except Exception:
                 pass
 
             # Fit Gaussian to find best position
             x0_fit, fit_y = _robust_gaussian_fit(absolute_positions[:len(allfocusvals)], allfocusvals)
-
-            # Plot fit
-            try:
-                if fit_y is not None and not IS_HEADLESS and hasattr(self._widget, "focusPlotFitCurve"):
-                    self._widget.focusPlotFitCurve.setData(absolute_positions[:len(allfocusvals)], fit_y)
-            except Exception:
-                pass
 
             # Calculate and clamp best target position
             best_target = self._clampPosition(float(x0_fit) + static_offset, axis)
@@ -930,14 +919,7 @@ class AutofocusController(ImConWidgetController):
         zmin, zmax = (z_end, z_start) if z_end < z_start else (z_start, z_end)
         zs = np.clip(zs, zmin, zmax)
 
-        # Plot raw
-        try:
-            if not IS_HEADLESS and hasattr(self._widget, "focusPlotCurve"):
-                self._widget.focusPlotCurve.setData(zs, fvals)
-            else:
-                self.sigUpdateFocusPlot.emit(zs, fvals)
-        except Exception:
-            pass
+
 
         # Fit Gaussian
         if len(zs) >= 5:
@@ -945,12 +927,6 @@ class AutofocusController(ImConWidgetController):
         else:
             x0_fit, fit_y = (float(zs[np.argmax(fvals)]) if len(zs) else z0, None)
 
-        # Optional fit plot
-        try:
-            if fit_y is not None and not IS_HEADLESS and hasattr(self._widget, "focusPlotFitCurve"):
-                self._widget.focusPlotFitCurve.setData(zs, fit_y)
-        except Exception:
-            pass
 
         # Check abort before final move
         if self._getAutofocusState() == AutofocusState.ABORTED:

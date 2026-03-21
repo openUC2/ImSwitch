@@ -30,7 +30,7 @@ class LoggerDock(QDockWidget):
 class MainWindow(QMainWindow):
 
     def __init__(self, parent=None, homepage=None):
-        if not IS_QTWEBENGINE or IS_HEADLESS: return
+        if not IS_QTWEBENGINE or False: return
         super(MainWindow, self).__init__(parent)
         self.homepage = homepage
         self.windows = []

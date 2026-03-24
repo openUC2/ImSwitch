@@ -1875,7 +1875,6 @@ dependencies = [
     { name = "msgpack" },
     { name = "nanoimagingpack" },
     { name = "nidaqmx" },
-    { name = "numba" },
     { name = "numcodecs" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
@@ -1915,6 +1914,9 @@ lepmon = [
     { name = "rpi-gpio" },
     { name = "smbus" },
     { name = "smbus2" },
+]
+microeye = [
+    { name = "numba" },
 ]
 omero = [
     { name = "omero-py" },
@@ -1960,7 +1962,7 @@ requires-dist = [
     { name = "nanoimagingpack", specifier = "==2.1.4" },
     { name = "napari", extras = ["pyqt5"], marker = "extra == 'pyqt5'", specifier = ">=0.6.0" },
     { name = "nidaqmx", specifier = ">=0.5.7" },
-    { name = "numba", specifier = ">=0.61.2" },
+    { name = "numba", marker = "extra == 'microeye'", specifier = ">=0.61.2" },
     { name = "numcodecs", specifier = ">=0.13.1" },
     { name = "numpy", specifier = "==2.1.2" },
     { name = "omero-py", marker = "extra == 'omero'", specifier = ">=5.6.0" },
@@ -1994,7 +1996,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.19.0" },
     { name = "zarr", specifier = ">=3.0.0a0" },
 ]
-provides-extras = ["pyqt5", "lepmon", "ashlar", "imjoy", "dev", "omero"]
+provides-extras = ["pyqt5", "microeye", "lepmon", "ashlar", "imjoy", "dev", "omero"]
 
 [[package]]
 name = "in-n-out"

@@ -1490,7 +1490,13 @@ class UC2ConfigController(ImConWidgetController):
         firmware_filename = firmware_filename.lstrip("./")
         local_path = self._firmware_cache_dir / firmware_filename
         if local_path.exists():
-            return local_path
+            # remove firmware before downloading to ensure we get the latest version (in case firmware server updates the file but keeps the same name)
+            try:                
+                # delete existing file before download to ensure we get the latest version (in case firmware server updates the file but keeps the same name)
+                os.remove(local_path)
+            except Exception as e:
+                self.__logger.warning(f"Failed to delete existing firmware file {local_path}: {e}")
+                # If we can't delete the old file, we can still try to download and overwrite it, but log a warning
 
         url = f"{server_url}/{firmware_filename}"
         try:
@@ -1634,10 +1640,10 @@ class UC2ConfigController(ImConWidgetController):
 
     # Chip-specific esptool flash parameters
     _CHIP_FLASH_PARAMS = {
-        "esp32":   {"offset": "0x10000", "flash-mode": "dio", "flash-freq": "80m", "flash-size": "4MB"},
-        "esp32s3": {"offset": "0x0",     "flash-mode": "dio", "flash-freq": "40m", "flash-size": "detect"},
-        "esp32s2": {"offset": "0x10000", "flash-mode": "dio", "flash-freq": "80m", "flash-size": "detect"},
-        "esp32c3": {"offset": "0x0",     "flash-mode": "dio", "flash-freq": "80m", "flash-size": "detect"},
+        "esp32":   {"offset": "0x10000", "flash-mode": "dio",  "flash-freq": "80m", "flash-size": "4MB"},
+        "esp32s3": {"offset": "0x0",     "flash-mode": "qio",  "flash-freq": "80m", "flash-size": "4MB"},  # ← fixed
+        "esp32s2": {"offset": "0x10000", "flash-mode": "dio",  "flash-freq": "80m", "flash-size": "detect"},
+        "esp32c3": {"offset": "0x0",     "flash-mode": "dio",  "flash-freq": "80m", "flash-size": "detect"},
     }
 
     # Known CAN bus addresses
@@ -1702,6 +1708,110 @@ class UC2ConfigController(ImConWidgetController):
                 self.__logger.error(f"Unexpected flash error: {exc}", exc_info=True)
                 self._emit_usb_flash_status("failed", 0, f"Unexpected error: {exc}")
                 return {"status": "error", "message": str(exc)}
+
+    def _validate_firmware_binary(self, fw_path: Path, is_merged: bool, chip: str) -> dict:
+        """
+        Pre-flight sanity check on a firmware binary before flashing.
+
+        For merged binaries the ESP32 bootloader magic byte (0xE9) MUST be at
+        offset 0x0.  A common mistake is building with the wrong BOOT_ADDR
+        (e.g. 0x1000 instead of 0x0 for ESP32-S3), which produces a file that
+        starts with 4 KB of 0xFF padding – it flashes without error but the
+        chip always boot-loops with "invalid header: 0xffffffff".
+
+        Returns a dict with keys:
+            valid        – bool, False means do NOT flash
+            magic_offset – int, actual offset where 0xE9 was found
+            flash_mode   – str, decoded flash mode from the bootloader header
+            flash_freq   – str, decoded flash frequency from the bootloader header
+            warnings     – list[str], non-fatal issues to surface to the user
+            errors       – list[str], fatal issues that block flashing
+        """
+        flash_mode_map = {0: "QIO", 1: "QOUT", 2: "DIO", 3: "DOUT"}
+        flash_freq_map = {0x0: "40m", 0x1: "26m", 0x2: "20m", 0xF: "80m"}
+        flash_size_map = {0x0: "1MB", 0x1: "2MB", 0x2: "4MB", 0x3: "8MB", 0x4: "16MB"}
+
+        result = {
+            "valid": True,
+            "magic_offset": None,
+            "flash_mode": None,
+            "flash_freq": None,
+            "flash_size": None,
+            "warnings": [],
+            "errors": [],
+        }
+
+        try:
+            with open(fw_path, "rb") as f:
+                # Read enough to cover the 0x1000 offset (common wrong value)
+                header_region = f.read(0x11000)
+        except Exception as e:
+            result["errors"].append(f"Cannot read firmware file: {e}")
+            result["valid"] = False
+            return result
+
+        if len(header_region) < 8:
+            result["errors"].append(f"Firmware file too small ({len(header_region)} bytes)")
+            result["valid"] = False
+            return result
+
+        # Find first occurrence of ESP32 bootloader magic 0xE9
+        magic_offset = None
+        for i in range(min(len(header_region), 0x11000)):
+            if header_region[i] == 0xE9:
+                magic_offset = i
+                break
+
+        result["magic_offset"] = magic_offset
+
+        if magic_offset is None:
+            result["errors"].append("No ESP32 bootloader magic byte (0xE9) found in first 64 KB – not a valid firmware")
+            result["valid"] = False
+            return result
+
+        # Decode flash params from the bootloader header
+        hdr = header_region[magic_offset:magic_offset + 4]
+        fm   = flash_mode_map.get(hdr[2], f"unknown(0x{hdr[2]:02x})")
+        freq = flash_freq_map.get(hdr[3] & 0x0F, f"unknown(0x{hdr[3] & 0x0F:02x})")
+        size = flash_size_map.get((hdr[3] & 0xF0) >> 4, f"unknown")
+        result["flash_mode"] = fm
+        result["flash_freq"] = freq
+        result["flash_size"] = size
+
+        if is_merged:
+            # For merged binaries the magic MUST be at 0x0
+            if magic_offset != 0:
+                result["errors"].append(
+                    f"Merged binary has bootloader at 0x{magic_offset:x} instead of 0x0. "
+                    f"The binary was built with wrong BOOT_ADDR (likely 0x{magic_offset:x} "
+                    f"instead of 0x0000 for {chip}). "
+                    f"Flashing this at 0x0 will ALWAYS produce 'invalid header: 0xffffffff'. "
+                    f"→ Rebuild using the corrected CI YAML with BOOT_ADDR=0x0000."
+                )
+                result["valid"] = False
+
+            # Warn about suboptimal flash mode for S3
+            if chip == "esp32s3" and fm == "DIO":
+                result["warnings"].append(
+                    f"Flash mode in binary is DIO but QIO is recommended for ESP32-S3. "
+                    f"Rebuild with --flash_mode qio in merge_bin."
+                )
+            if chip == "esp32s3" and freq == "40m":
+                result["warnings"].append(
+                    f"Flash frequency in binary is 40m but 80m is recommended for ESP32-S3. "
+                    f"Rebuild with --flash_freq 80m in merge_bin."
+                )
+
+        self.__logger.info(
+            f"Firmware validation: magic@0x{magic_offset:x}, "
+            f"mode={fm}, freq={freq}, size={size}, valid={result['valid']}"
+        )
+        for w in result["warnings"]:
+            self.__logger.warning(f"Firmware warning: {w}")
+        for e in result["errors"]:
+            self.__logger.error(f"Firmware error: {e}")
+
+        return result
 
     def _do_flash(self, *, port, match, baud, firmware_filename,
                   reconnect_after, chip, erase_flash, skip_disconnect):
@@ -1801,6 +1911,40 @@ class UC2ConfigController(ImConWidgetController):
             self.__logger.info(
                 f"Non-merged firmware: {fw_name} → flashing at 0x10000"
             )
+
+        # ── Pre-flight binary validation ──────────────────────────────────────
+        # Check magic byte position and flash params baked into the binary BEFORE
+        # spending time erasing flash or writing a binary that will never boot.
+        validation = self._validate_firmware_binary(fw_path, is_merged, resolved_chip)
+        for w in validation["warnings"]:
+            self._emit_usb_flash_status("flashing", 28, f"⚠️ {w}")
+        if not validation["valid"]:
+            error_detail = " | ".join(validation["errors"])
+            self._emit_usb_flash_status(
+                "failed", 28,
+                f"❌ Binary validation failed – will not flash: {error_detail}"
+            )
+            return {
+                "status": "error",
+                "message": "Binary validation failed – flashing aborted to prevent boot-loop",
+                "details": error_detail,
+                "firmware": str(fw_path),
+                "magic_offset": f"0x{validation['magic_offset']:x}" if validation["magic_offset"] is not None else None,
+                "flash_mode_in_binary": validation["flash_mode"],
+                "flash_freq_in_binary": validation["flash_freq"],
+                "hint": (
+                    "Rebuild the firmware using the corrected CI YAML "
+                    "(BOOT_ADDR=0x0000, flash_mode=qio, flash_freq=80m for ESP32-S3). "
+                    "Then clear the firmware cache and retry."
+                ),
+            }
+        self._emit_usb_flash_status(
+            "flashing", 29,
+            f"✅ Binary OK: magic@0x{validation['magic_offset']:x}, "
+            f"mode={validation['flash_mode']}, freq={validation['flash_freq']}"
+        )
+        # ─────────────────────────────────────────────────────────────────────
+
         self.__logger.info(
             f"Flashing firmware via {flash_port} (baud={baud}, chip={resolved_chip}, "
             f"file={fw_path.name}, erase={erase_flash})"
@@ -1828,17 +1972,34 @@ class UC2ConfigController(ImConWidgetController):
 
         # 5) Write flash with chip-appropriate parameters
         self._emit_usb_flash_status("flashing", 30, "Writing firmware to device...")
-        write_args = [
-            "--port", flash_port,
-            "--baud", str(baud),
-            "--chip", resolved_chip,
-            "write-flash",
-            "--flash-mode", flash_params["flash-mode"],
-            "--flash-freq", flash_params["flash-freq"],
-            "--flash-size", flash_params["flash-size"],
-            flash_params["offset"],
-            str(fw_path),
-        ]
+        if is_merged:
+            '''
+            The Python code should NOT pass --flash-mode/--flash-freq for merged binaries. 
+            A merged binary has those settings baked into the bootloader already. 
+            Passing them to write_flash only works if esptool can find and patch 
+            the magic byte — which it can't here, so you're just creating confusion. 
+            The write call for a merged binary should be minimal:
+            '''
+            write_args = [
+                "--port", flash_port,
+                "--baud", str(baud),
+                "--chip", resolved_chip,
+                "write-flash",
+                "0x0",
+                str(fw_path),
+            ]
+        else:
+            write_args = [
+                "--port", flash_port,
+                "--baud", str(baud),
+                "--chip", resolved_chip,
+                "write-flash",
+                "--flash-mode", flash_params["flash-mode"],
+                "--flash-freq", flash_params["flash-freq"],
+                "--flash-size", flash_params["flash-size"],
+                flash_params["offset"],
+                str(fw_path),
+            ]
         ok, msg = self._run_esptool(write_args)
         if not ok:
             self._emit_usb_flash_status("failed", 50, "Firmware write failed", msg)

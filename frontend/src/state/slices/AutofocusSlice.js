@@ -16,6 +16,15 @@ const initialAutofocusState = {
   staticOffset: 0.0, // Static offset to add to final focus position
   twoStage: false, // Enable two-stage autofocus (coarse + fine scan)
   
+  // Autofocus mode: "scan" (Z-sweep) or "hillClimbing" (gradient search)
+  autofocusMode: "scan",
+  
+  // Hill-climbing parameters
+  hillClimbingInitialStep: 20,  // Starting step size (µm)
+  hillClimbingMinStep: 1,       // Convergence criterion (µm)
+  hillClimbingStepReduction: 0.5, // Step reduction factor on reversal
+  hillClimbingMaxIterations: 50,  // Safety iteration limit
+  
   // Runtime state
   isRunning: false,
   
@@ -71,6 +80,21 @@ const autofocusSlice = createSlice({
     },
     setTwoStage: (state, action) => {
       state.twoStage = action.payload;
+    },
+    setAutofocusMode: (state, action) => {
+      state.autofocusMode = action.payload;
+    },
+    setHillClimbingInitialStep: (state, action) => {
+      state.hillClimbingInitialStep = action.payload;
+    },
+    setHillClimbingMinStep: (state, action) => {
+      state.hillClimbingMinStep = action.payload;
+    },
+    setHillClimbingStepReduction: (state, action) => {
+      state.hillClimbingStepReduction = action.payload;
+    },
+    setHillClimbingMaxIterations: (state, action) => {
+      state.hillClimbingMaxIterations = action.payload;
     },
     
     // Runtime state
@@ -133,6 +157,11 @@ export const {
   setFocusAlgorithm,
   setStaticOffset,
   setTwoStage,
+  setAutofocusMode,
+  setHillClimbingInitialStep,
+  setHillClimbingMinStep,
+  setHillClimbingStepReduction,
+  setHillClimbingMaxIterations,
   setIsRunning,
   setPlotData,
   clearPlotData,

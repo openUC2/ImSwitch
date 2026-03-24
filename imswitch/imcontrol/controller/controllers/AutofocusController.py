@@ -456,6 +456,239 @@ class AutofocusController(ImConWidgetController):
         return {"status": "stopped", "state": self._getAutofocusState().value}
 
     @APIExport(runOnUIThread=True)
+    def autoFocusHillClimbing(self, initial_step: float = 20.0, min_step: float = 1.0,
+                               step_reduction: float = 0.5, max_iterations: int = 50,
+                               tSettle: float = 0.1, nCropsize: int = 2048,
+                               focusAlgorithm: str = "LAPE", nGauss: int = 0,
+                               static_offset: float = 0.0):
+        """
+        Hill-climbing autofocus using gradient-based contrast detection.
+
+        Instead of sweeping the entire Z range, this method iteratively searches
+        for the peak contrast by moving in the direction of increasing focus
+        value. When contrast decreases, the direction is reversed and the step
+        size is reduced. The search converges when the step size drops below
+        min_step.
+
+        Args:
+            initial_step: Starting step size in Z units (µm)
+            min_step: Minimum step size — convergence criterion
+            step_reduction: Factor to reduce step on direction reversal (0 < f < 1)
+            max_iterations: Safety limit on total iterations
+            tSettle: Settling time between Z moves (seconds)
+            nCropsize: Crop size for focus calculation
+            focusAlgorithm: Focus measurement method ("LAPE", "GLVA", or "JPEG")
+            nGauss: Gaussian blur sigma (0 to disable)
+            static_offset: Static offset added to final focus position
+
+        Returns:
+            dict with status information
+        """
+        # Thread-safe state check
+        with self._stateLock:
+            if self._autofocusState not in [AutofocusState.IDLE, AutofocusState.FINISHED,
+                                            AutofocusState.ERROR, AutofocusState.ABORTED]:
+                self.__logger.warning(f"Autofocus already running (state: {self._autofocusState.value})")
+                return {"status": "error",
+                        "message": f"Autofocus already running (state: {self._autofocusState.value})"}
+            self._autofocusState = AutofocusState.STARTING
+            self.isAutofusRunning = True
+
+        # Validate current position
+        current_z, is_valid, error_msg = self._getSafeCurrentZ()
+        if not is_valid:
+            self.__logger.error(f"Cannot start hill-climbing AF: {error_msg}")
+            self._setAutofocusState(AutofocusState.ERROR)
+            return {"status": "error", "message": error_msg}
+
+        self._AutofocusThead = threading.Thread(
+            target=self._doHillClimbingBackground,
+            args=(initial_step, min_step, step_reduction, max_iterations,
+                  tSettle, nCropsize, focusAlgorithm, nGauss, static_offset),
+            daemon=True
+        )
+        self._AutofocusThead.start()
+        return {"status": "started", "centerZ": current_z, "method": "hill_climbing"}
+
+    def _doHillClimbingBackground(self, initial_step: float = 20.0, min_step: float = 1.0,
+                                   step_reduction: float = 0.5, max_iterations: int = 50,
+                                   tSettle: float = 0.1, nCropsize: int = 2048,
+                                   focusAlgorithm: str = "LAPE", nGauss: int = 0,
+                                   static_offset: float = 0.0):
+        """
+        Hill-climbing autofocus background thread.
+
+        Algorithm:
+        1. Grab frame at current position, measure baseline focus F0
+        2. Move +initial_step, measure F1 to determine gradient direction
+        3. If F1 > F0: keep going in same direction
+           Else: reverse direction
+        4. Loop:
+           a. Move step_size in current direction
+           b. Grab frame, measure F_new
+           c. If F_new > F_best: update best, continue same direction
+           d. If F_new <= F_best: reduce step_size, reverse direction
+           e. If step_size < min_step or max_iterations reached: stop
+        5. Move to best_position + static_offset (clamped)
+        """
+        try:
+            self._setAutofocusState(AutofocusState.SCANNING)
+            self._commChannel.sigAutoFocusRunning.emit(True)
+            axis = gAxis
+
+            # Helper to measure focus at current position
+            def measure_focus():
+                frame = self.grabCameraFrame()
+                if frame is None:
+                    return None
+                img = frame.copy()
+                if img.dtype == np.uint8:
+                    img = img.astype(np.float32) / 255.0
+                elif img.dtype == np.uint16:
+                    img = img.astype(np.float32) / 65535.0
+                elif img.dtype not in [np.float32, np.float64]:
+                    img = img.astype(np.float32)
+                img = FrameProcessor.extract(img, min(img.shape[0], img.shape[1], nCropsize))
+                if img.ndim == 3:
+                    img = np.mean(img, axis=-1)
+                if nGauss > 0:
+                    img = gaussian(img, sigma=nGauss)
+                focus_val, _ = FrameProcessor.calculate_focus_measure_static(img, method=focusAlgorithm)
+                return float(focus_val)
+
+            # Step 1: Measure baseline at current position
+            current_z, is_valid, _ = self._getSafeCurrentZ(axis)
+            if not is_valid:
+                self._setAutofocusState(AutofocusState.ERROR)
+                self._commChannel.sigAutoFocusRunning.emit(False)
+                return None
+
+            z_start = current_z
+            f0 = measure_focus()
+            if f0 is None:
+                self.__logger.error("Hill-climbing: failed to grab initial frame")
+                self._setAutofocusState(AutofocusState.ERROR)
+                self._commChannel.sigAutoFocusRunning.emit(False)
+                return None
+
+            # Collect data for plotting
+            z_history = [current_z]
+            f_history = [f0]
+
+            best_z = current_z
+            best_f = f0
+            step_size = abs(initial_step)
+
+            # Step 2: Probe direction — move +step to determine gradient
+            probe_z = self._clampPosition(current_z + step_size, axis)
+            self.stages.move(value=probe_z, axis=axis, is_absolute=True, is_blocking=True)
+            time.sleep(tSettle)
+
+            if self._getAutofocusState() == AutofocusState.ABORTED:
+                self.stages.move(value=z_start, axis=axis, is_absolute=True, is_blocking=True)
+                self._commChannel.sigAutoFocusRunning.emit(False)
+                return None
+
+            f1 = measure_focus()
+            if f1 is None:
+                self.__logger.error("Hill-climbing: failed to grab probe frame")
+                self.stages.move(value=z_start, axis=axis, is_absolute=True, is_blocking=True)
+                self._setAutofocusState(AutofocusState.ERROR)
+                self._commChannel.sigAutoFocusRunning.emit(False)
+                return None
+
+            current_z = probe_z
+            z_history.append(current_z)
+            f_history.append(f1)
+
+            if f1 > best_f:
+                best_z = current_z
+                best_f = f1
+
+            # Determine initial direction
+            direction = 1.0 if f1 >= f0 else -1.0
+            if f1 < f0:
+                # Initial probe worsened — reverse direction
+                step_size *= step_reduction
+
+            # Step 3–4: Iterative hill-climb
+            for iteration in range(max_iterations):
+                # Check abort
+                if self._getAutofocusState() == AutofocusState.ABORTED:
+                    self.__logger.info(f"Hill-climbing aborted at iteration {iteration}")
+                    self.stages.move(value=z_start, axis=axis, is_absolute=True, is_blocking=True)
+                    self._commChannel.sigAutoFocusRunning.emit(False)
+                    return None
+
+                # Move in current direction
+                next_z = self._clampPosition(current_z + direction * step_size, axis)
+
+                # If clamped to same position, reverse direction
+                if abs(next_z - current_z) < 1e-6:
+                    direction *= -1.0
+                    step_size *= step_reduction
+                    if step_size < min_step:
+                        self.__logger.info(f"Hill-climbing converged at boundary (step={step_size:.3f})")
+                        break
+                    continue
+
+                self.stages.move(value=next_z, axis=axis, is_absolute=True, is_blocking=True)
+                time.sleep(tSettle)
+                current_z = next_z
+
+                f_new = measure_focus()
+                if f_new is None:
+                    self.__logger.warning(f"Hill-climbing: frame grab failed at iteration {iteration}")
+                    continue
+
+                z_history.append(current_z)
+                f_history.append(f_new)
+
+                if f_new > best_f:
+                    # Improving — update best and keep going
+                    best_z = current_z
+                    best_f = f_new
+                else:
+                    # Passed the peak — reverse and reduce step
+                    direction *= -1.0
+                    step_size *= step_reduction
+                    if step_size < min_step:
+                        self.__logger.info(
+                            f"Hill-climbing converged after {iteration + 1} iterations "
+                            f"(step={step_size:.3f} < min_step={min_step})"
+                        )
+                        break
+
+            # Step 5: Move to best position + offset
+            self._setAutofocusState(AutofocusState.MOVING_TO_FOCUS)
+            best_target = self._clampPosition(best_z + static_offset, axis)
+            self.stages.move(value=best_target, axis=axis, is_absolute=True, is_blocking=True)
+
+            # Emit plot data (sorted by Z for clean visualization)
+            z_arr = np.array(z_history)
+            f_arr = np.array(f_history)
+            sort_idx = np.argsort(z_arr)
+            try:
+                self.sigUpdateFocusPlot.emit(z_arr[sort_idx], f_arr[sort_idx])
+            except Exception:
+                pass
+
+            self._setAutofocusState(AutofocusState.FINISHED)
+            self._commChannel.sigAutoFocusRunning.emit(False)
+            self.sigUpdateFocusValue.emit({"bestzpos": best_target})
+            self.__logger.info(
+                f"Hill-climbing autofocus complete: best_z={best_target:.2f}, "
+                f"focus={best_f:.2f}, iterations={len(z_history)}"
+            )
+            return best_target
+
+        except Exception as e:
+            self.__logger.error(f"Hill-climbing autofocus error: {e}")
+            self._setAutofocusState(AutofocusState.ERROR)
+            self._commChannel.sigAutoFocusRunning.emit(False)
+            return None
+
+    @APIExport(runOnUIThread=True)
     def startLiveMonitoring(self, period: float = 0.5, method: str = "LAPE", nCropsize: int = 2048):
         """
         Start continuous live focus value monitoring.

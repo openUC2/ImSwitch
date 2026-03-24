@@ -7,6 +7,7 @@ import GenericTabBar from "./GenericTabBar";
 //import { FixedSizeList as List } from "react-window";
 
 import * as experimentSlice from "../state/slices/ExperimentSlice";
+import * as positionSlice from "../state/slices/PositionSlice.js";
 
 import apiPositionerControllerMovePositioner from "../backendapi/apiPositionerControllerMovePositioner.js";
 
@@ -40,6 +41,7 @@ const PointListEditorComponent = () => {
 
   // Access global Redux state
   const experimentState = useSelector(experimentSlice.getExperimentState);
+  const positionState = useSelector(positionSlice.getPositionState);
   //console.log("PointListEditorComponent", experimentState);
   //console.log("PointListEditorComponent", experimentState.pointList);
 
@@ -78,6 +80,12 @@ const PointListEditorComponent = () => {
     const newPoint = { x: 100000, y: 100000 };
     // Update Redux state
     dispatch(experimentSlice.createPoint(newPoint));
+  };
+
+  //##################################################################################
+  const handleSetCurrentZ = (index) => {
+    // Override the point's Z with the current stage Z position from Redux
+    handlePointChanged(index, "z", positionState.z);
   };
 
   //##################################################################################
@@ -444,7 +452,17 @@ const PointListEditorComponent = () => {
                 </>
               )}
 
-              {/* dummy button*/}
+              {/* Set current Z position */}
+              {viewMode == ViewMode.POSITION && (
+                <Button
+                  sx={{ padding: "0px" }}
+                  onClick={() => handleSetCurrentZ(index)}
+                  title="Set Z to current stage position"
+                >
+                  Set Z
+                </Button>
+              )}
+              {/* Goto button */}
               {viewMode != ViewMode.READONLY && (
                 <Button
                   sx={{ padding: "0px" }}

@@ -50,6 +50,11 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     focusAlgorithm,
     staticOffset,
     twoStage,
+    autofocusMode,
+    hillClimbingInitialStep,
+    hillClimbingMinStep,
+    hillClimbingStepReduction,
+    hillClimbingMaxIterations,
     isRunning, 
     plotData, 
     showPlot,
@@ -160,7 +165,15 @@ const AutofocusController = ({ hostIP, hostPort }) => {
     try {
       // Use selected illumination channel or fallback to currently active one
       const selectedChannel = illuminationChannel || availableIlluminations[0];
-      const url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocus?rangez=${rangeZ}&resolutionz=${resolutionZ}&defocusz=${defocusZ}&illuminationChannel=${encodeURIComponent(selectedChannel || '')}&tSettle=${tSettle}&isDebug=${isDebug}&nGauss=${nGauss}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&static_offset=${staticOffset}&twoStage=${twoStage}`;
+      
+      let url;
+      if (autofocusMode === "hillClimbing") {
+        // Hill-climbing autofocus
+        url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocusHillClimbing?initial_step=${hillClimbingInitialStep}&min_step=${hillClimbingMinStep}&step_reduction=${hillClimbingStepReduction}&max_iterations=${hillClimbingMaxIterations}&tSettle=${tSettle}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&nGauss=${nGauss}&static_offset=${staticOffset}`;
+      } else {
+        // Standard Z-sweep autofocus
+        url = `${hostIP}:${hostPort}/imswitch/api/AutofocusController/autoFocus?rangez=${rangeZ}&resolutionz=${resolutionZ}&defocusz=${defocusZ}&illuminationChannel=${encodeURIComponent(selectedChannel || '')}&tSettle=${tSettle}&isDebug=${isDebug}&nGauss=${nGauss}&nCropsize=${nCropsize}&focusAlgorithm=${focusAlgorithm}&static_offset=${staticOffset}&twoStage=${twoStage}`;
+      }
       const response = await fetch(url, { method: "GET" });
       const result = await response.json();
       
@@ -260,34 +273,101 @@ const AutofocusController = ({ hostIP, hostPort }) => {
         {/* Autofocus Scan Section */}
         <Grid item xs={12}>
           <Typography variant="h6" gutterBottom>
-            Autofocus Scan
+            Autofocus
           </Typography>
         </Grid>
-        
-        <Grid item xs={3}>
-          <TextField
-            label="Range Z"
-            value={rangeZ}
-            onChange={(e) => dispatch(autofocusSlice.setRangeZ(e.target.value))}
-            fullWidth
-          />
+
+        {/* Mode selector */}
+        <Grid item xs={12}>
+          <FormControl fullWidth>
+            <InputLabel>Autofocus Mode</InputLabel>
+            <Select
+              value={autofocusMode || "scan"}
+              onChange={(e) => dispatch(autofocusSlice.setAutofocusMode(e.target.value))}
+              label="Autofocus Mode"
+            >
+              <MenuItem value="scan">Z-Sweep (Scan)</MenuItem>
+              <MenuItem value="hillClimbing">Hill Climbing</MenuItem>
+            </Select>
+          </FormControl>
         </Grid>
-        <Grid item xs={3}>
-          <TextField
-            label="Resolution Z"
-            value={resolutionZ}
-            onChange={(e) => dispatch(autofocusSlice.setResolutionZ(e.target.value))}
-            fullWidth
-          />
-        </Grid>
-        <Grid item xs={3}>
-          <TextField
-            label="Defocus Z"
-            value={defocusZ}
-            onChange={(e) => dispatch(autofocusSlice.setDefocusZ(e.target.value))}
-            fullWidth
-          />
-        </Grid>
+
+        {/* Z-Sweep specific parameters */}
+        {autofocusMode !== "hillClimbing" && (
+          <>
+            <Grid item xs={3}>
+              <TextField
+                label="Range Z"
+                value={rangeZ}
+                onChange={(e) => dispatch(autofocusSlice.setRangeZ(e.target.value))}
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={3}>
+              <TextField
+                label="Resolution Z"
+                value={resolutionZ}
+                onChange={(e) => dispatch(autofocusSlice.setResolutionZ(e.target.value))}
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={3}>
+              <TextField
+                label="Defocus Z"
+                value={defocusZ}
+                onChange={(e) => dispatch(autofocusSlice.setDefocusZ(e.target.value))}
+                fullWidth
+              />
+            </Grid>
+          </>
+        )}
+
+        {/* Hill Climbing specific parameters */}
+        {autofocusMode === "hillClimbing" && (
+          <>
+            <Grid item xs={3}>
+              <TextField
+                label="Initial Step (\u00b5m)"
+                type="number"
+                value={hillClimbingInitialStep}
+                onChange={(e) => dispatch(autofocusSlice.setHillClimbingInitialStep(parseFloat(e.target.value)))}
+                inputProps={{ step: 1, min: 0.1 }}
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={3}>
+              <TextField
+                label="Min Step (\u00b5m)"
+                type="number"
+                value={hillClimbingMinStep}
+                onChange={(e) => dispatch(autofocusSlice.setHillClimbingMinStep(parseFloat(e.target.value)))}
+                inputProps={{ step: 0.1, min: 0.01 }}
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={3}>
+              <TextField
+                label="Step Reduction"
+                type="number"
+                value={hillClimbingStepReduction}
+                onChange={(e) => dispatch(autofocusSlice.setHillClimbingStepReduction(parseFloat(e.target.value)))}
+                inputProps={{ step: 0.1, min: 0.1, max: 0.9 }}
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={3}>
+              <TextField
+                label="Max Iterations"
+                type="number"
+                value={hillClimbingMaxIterations}
+                onChange={(e) => dispatch(autofocusSlice.setHillClimbingMaxIterations(parseInt(e.target.value)))}
+                inputProps={{ step: 1, min: 5, max: 200 }}
+                fullWidth
+              />
+            </Grid>
+          </>
+        )}
+
         <Grid item xs={3}>
           <FormControl fullWidth>
             <InputLabel>Illumination Channel</InputLabel>
@@ -384,18 +464,20 @@ const AutofocusController = ({ hostIP, hostPort }) => {
           />
         </Grid>
 
-        <Grid item xs={3}>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={twoStage}
-                onChange={(e) => dispatch(autofocusSlice.setTwoStage(e.target.checked))}
-                color="primary"
-              />
-            }
+        {autofocusMode !== "hillClimbing" && (
+          <Grid item xs={3}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={twoStage}
+                  onChange={(e) => dispatch(autofocusSlice.setTwoStage(e.target.checked))}
+                  color="primary"
+                />
+              }
             label="Two-Stage Focus"
           />
         </Grid>
+        )}
 
         {/* Status Display */}
         {(currentZ !== null || positionError || backendState) && (

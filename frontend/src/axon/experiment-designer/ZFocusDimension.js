@@ -355,11 +355,36 @@ const ZFocusDimension = () => {
                 value={parameterValue.autoFocusMode || "software"}
                 onChange={(e) => dispatch(experimentSlice.setAutoFocusMode(e.target.value))}
               >
-                <MenuItem value="software">Software (Z-Sweep)</MenuItem>
+                <MenuItem value="software">Software</MenuItem>
                 <MenuItem value="hardware">Hardware (FocusLock One-Shot)</MenuItem>
               </Select>
             </FormControl>
           </Box>
+
+          {/* Software autofocus method selector */}
+          {parameterValue.autoFocusMode !== "hardware" && (
+            <Box sx={{ mb: 2 }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+                <Typography variant="caption" sx={{ fontWeight: 500 }}>
+                  Software Method
+                </Typography>
+                <Tooltip title="Z-Sweep: scans through a range of Z positions and fits a Gaussian. Hill Climbing: iteratively searches for peak contrast by gradient ascent (faster, fewer images).">
+                  <IconButton size="small">
+                    <InfoIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+              <FormControl size="small" fullWidth>
+                <Select
+                  value={parameterValue.autoFocusSoftwareMethod || "scan"}
+                  onChange={(e) => dispatch(experimentSlice.setAutoFocusSoftwareMethod(e.target.value))}
+                >
+                  <MenuItem value="scan">Z-Sweep (Scan)</MenuItem>
+                  <MenuItem value="hillClimbing">Hill Climbing</MenuItem>
+                </Select>
+              </FormControl>
+            </Box>
+          )}
 
           {/* Hardware autofocus specific parameters */}
           {parameterValue.autoFocusMode === "hardware" && (
@@ -463,6 +488,7 @@ const ZFocusDimension = () => {
             {/* Software autofocus parameters */}
             {parameterValue.autoFocusMode !== "hardware" && (
               <>
+                {/* Common parameters (shared by scan and hill climbing) */}
                 <TextField
                   label="Settle Time (s)"
                   type="number"
@@ -470,24 +496,6 @@ const ZFocusDimension = () => {
                   value={parameterValue.autoFocusSettleTime || 0.1}
                   onChange={(e) => dispatch(experimentSlice.setAutoFocusSettleTime(Number(e.target.value)))}
                   inputProps={{ step: 0.01, min: 0, max: 10 }}
-                />
-
-                <TextField
-                  label="Range (±μm)"
-                  type="number"
-                  size="small"
-                  value={parameterValue.autoFocusRange || 100}
-                  onChange={(e) => dispatch(experimentSlice.setAutoFocusRange(Number(e.target.value)))}
-                  inputProps={{ step: 1, min: 1 }}
-                />
-
-                <TextField
-                  label="Resolution (μm)"
-                  type="number"
-                  size="small"
-                  value={parameterValue.autoFocusResolution || 10}
-                  onChange={(e) => dispatch(experimentSlice.setAutoFocusResolution(Number(e.target.value)))}
-                  inputProps={{ step: 0.1, min: 0.1 }}
                 />
 
                 <TextField
@@ -521,16 +529,80 @@ const ZFocusDimension = () => {
                   inputProps={{ step: 0.1, min: -100, max: 100 }}
                 />
 
-                <FormControlLabel
-                  control={
-                    <Switch
+                {/* Scan-specific parameters */}
+                {(parameterValue.autoFocusSoftwareMethod || "scan") === "scan" && (
+                  <>
+                    <TextField
+                      label="Range (±μm)"
+                      type="number"
                       size="small"
-                      checked={parameterValue.autoFocusTwoStage || false}
-                      onChange={(e) => dispatch(experimentSlice.setAutoFocusTwoStage(e.target.checked))}
+                      value={parameterValue.autoFocusRange || 100}
+                      onChange={(e) => dispatch(experimentSlice.setAutoFocusRange(Number(e.target.value)))}
+                      inputProps={{ step: 1, min: 1 }}
                     />
-                  }
-                  label={<Typography variant="caption">Two-Stage Focus</Typography>}
-                />
+
+                    <TextField
+                      label="Resolution (μm)"
+                      type="number"
+                      size="small"
+                      value={parameterValue.autoFocusResolution || 10}
+                      onChange={(e) => dispatch(experimentSlice.setAutoFocusResolution(Number(e.target.value)))}
+                      inputProps={{ step: 0.1, min: 0.1 }}
+                    />
+
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          size="small"
+                          checked={parameterValue.autoFocusTwoStage || false}
+                          onChange={(e) => dispatch(experimentSlice.setAutoFocusTwoStage(e.target.checked))}
+                        />
+                      }
+                      label={<Typography variant="caption">Two-Stage Focus</Typography>}
+                    />
+                  </>
+                )}
+
+                {/* Hill Climbing-specific parameters */}
+                {(parameterValue.autoFocusSoftwareMethod) === "hillClimbing" && (
+                  <>
+                    <TextField
+                      label="Initial Step (μm)"
+                      type="number"
+                      size="small"
+                      value={parameterValue.autoFocusHillClimbingInitialStep ?? 20}
+                      onChange={(e) => dispatch(experimentSlice.setAutoFocusHillClimbingInitialStep(Number(e.target.value)))}
+                      inputProps={{ step: 1, min: 1, max: 200 }}
+                    />
+
+                    <TextField
+                      label="Min Step (μm)"
+                      type="number"
+                      size="small"
+                      value={parameterValue.autoFocusHillClimbingMinStep ?? 1}
+                      onChange={(e) => dispatch(experimentSlice.setAutoFocusHillClimbingMinStep(Number(e.target.value)))}
+                      inputProps={{ step: 0.1, min: 0.1, max: 50 }}
+                    />
+
+                    <TextField
+                      label="Step Reduction Factor"
+                      type="number"
+                      size="small"
+                      value={parameterValue.autoFocusHillClimbingStepReduction ?? 0.5}
+                      onChange={(e) => dispatch(experimentSlice.setAutoFocusHillClimbingStepReduction(Number(e.target.value)))}
+                      inputProps={{ step: 0.05, min: 0.1, max: 0.9 }}
+                    />
+
+                    <TextField
+                      label="Max Iterations"
+                      type="number"
+                      size="small"
+                      value={parameterValue.autoFocusHillClimbingMaxIterations ?? 50}
+                      onChange={(e) => dispatch(experimentSlice.setAutoFocusHillClimbingMaxIterations(Number(e.target.value)))}
+                      inputProps={{ step: 1, min: 5, max: 200 }}
+                    />
+                  </>
+                )}
               </>
             )}
           </Box>

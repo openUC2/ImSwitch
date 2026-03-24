@@ -1042,13 +1042,6 @@ class AutofocusController(ImConWidgetController):
             # Fit Gaussian to find best position
             x0_fit, fit_y = _robust_gaussian_fit(absolute_positions[:len(allfocusvals)], allfocusvals)
 
-            # Plot fit
-            try:
-                if fit_y is not None and not IS_HEADLESS and hasattr(self._widget, "focusPlotFitCurve"):
-                    self._widget.focusPlotFitCurve.setData(absolute_positions[:len(allfocusvals)], fit_y)
-            except Exception:
-                pass
-
             # Calculate and clamp best target position
             best_target = self._clampPosition(float(x0_fit) + static_offset, axis)
             
@@ -1165,10 +1158,7 @@ class AutofocusController(ImConWidgetController):
 
         # Plot raw
         try:
-            if not IS_HEADLESS and hasattr(self._widget, "focusPlotCurve"):
-                self._widget.focusPlotCurve.setData(zs, fvals)
-            else:
-                self.sigUpdateFocusPlot.emit(zs, fvals)
+            self.sigUpdateFocusPlot.emit(zs, fvals)
         except Exception:
             pass
 
@@ -1178,12 +1168,6 @@ class AutofocusController(ImConWidgetController):
         else:
             x0_fit, fit_y = (float(zs[np.argmax(fvals)]) if len(zs) else z0, None)
 
-        # Optional fit plot
-        try:
-            if fit_y is not None and not IS_HEADLESS and hasattr(self._widget, "focusPlotFitCurve"):
-                self._widget.focusPlotFitCurve.setData(zs, fit_y)
-        except Exception:
-            pass
 
         # Check abort before final move
         if self._getAutofocusState() == AutofocusState.ABORTED:
@@ -1206,7 +1190,7 @@ class AutofocusController(ImConWidgetController):
 
 
 class FrameProcessor:
-    def __init__(self, nGauss=7, nCropsize=2048, isDebug=True, focusMethod="LAPE", binning=3):
+    def __init__(self, nGauss=7, nCropsize=2048, isDebug=True, focusMethod="LAPE", binning=3, noise_threshold=0.02):
         self.isRunning = True
         self.frame_queue = queue.Queue()
         self.allfocusvals = []
@@ -1218,6 +1202,8 @@ class FrameProcessor:
         self.isDebug = isDebug
         self.focusMethod = focusMethod
         self.binning = binning
+        # Minimum dynamic range (1st–99th percentile spread) to reject flat/noisy frames
+        self.noise_threshold = noise_threshold
 
     def setFlatfieldFrame(self, flatfieldFrame):
         self.flatFieldFrame = flatfieldFrame
@@ -1256,6 +1242,12 @@ class FrameProcessor:
         if self.nGauss > 0:
             img = gaussian(img, sigma=self.nGauss)
 
+        # Percentile-stretch image and reject flat/noisy frames
+        img, is_valid = self._preprocess_image(img, noise_threshold=self.noise_threshold)
+        if not is_valid:
+            self.allfocusvals.append(0.0)
+            return
+
         # Normalize for debug TIFF saving to prevent wraparound
         if self.isDebug:
             import tifffile as tif
@@ -1265,6 +1257,21 @@ class FrameProcessor:
 
         focusquality = self.calculate_focus_measure(img, method=self.focusMethod)
         self.allfocusvals.append(focusquality)
+
+    @staticmethod
+    def _preprocess_image(img, noise_threshold=0.02):
+        """Percentile-stretch float image to [0, 1].
+
+        Returns (normalized_img, is_valid).  ``is_valid`` is False when the
+        1st–99th percentile spread is below *noise_threshold*, which indicates
+        a flat or essentially-noisy frame whose focus score would be meaningless.
+        """
+        p_lo = np.percentile(img, 1)
+        p_hi = np.percentile(img, 99)
+        if (p_hi - p_lo) < noise_threshold:
+            return img, False
+        img_norm = np.clip((img - p_lo) / (p_hi - p_lo), 0.0, 1.0)
+        return img_norm, True
 
     @staticmethod
     def calculate_focus_measure_static(image, method="LAPE"):

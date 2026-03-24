@@ -2185,6 +2185,61 @@ class UC2ConfigController(ImConWidgetController):
 
     # Digital Input/Output API Methods
     @APIExport(runOnUIThread=False)
+    def probeDeviceState(
+        self,
+        port: str = "",
+        baud: int = 115200,
+        timeout: float = 2.0,
+    ):
+        """
+        Send ``{"task":"/state_get"}`` to the device and return the raw response.
+
+        Useful for verifying that the firmware is running correctly after flashing
+        without modifying the CAN address.
+
+        Parameters:
+          port: serial port device path (e.g. "/dev/ttyACM0").
+          baud: serial baudrate (115200 or 921600).
+          timeout: serial read timeout in seconds (default 2.0).
+        """
+        import json as _json
+        import serial as _serial
+
+        if not port:
+            return {"status": "error", "message": "No serial port specified"}
+
+        self.__logger.info(f"Probing device state on {port} @ {baud} baud")
+        try:
+            with _serial.Serial(port, baud, timeout=timeout) as ser:
+                ser.reset_input_buffer()
+                state_cmd = _json.dumps({"task": "/state_get"})
+                ser.write((state_cmd + "\n").encode("utf-8"))
+                ser.flush()
+                time.sleep(0.5)
+                state_response = ""
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    if ser.in_waiting:
+                        state_response += ser.read(ser.in_waiting).decode("utf-8", errors="replace")
+                        time.sleep(0.05)
+                    else:
+                        if state_response:
+                            break
+                        time.sleep(0.1)
+
+            self.__logger.info(f"Probe state response: {state_response.strip()[:200]}")
+            firmware_ok = not ("0xffffffff" in state_response or "invalid header" in state_response.lower())
+            return {
+                "status": "success" if firmware_ok else "warning",
+                "state_response": state_response.strip()[:500],
+                "firmware_ok": firmware_ok,
+            }
+        except Exception as e:
+            self.__logger.error(f"Failed to probe device state: {e}")
+            return {"status": "error", "message": str(e)}
+
+    # Digital Input/Output API Methods
+    @APIExport(runOnUIThread=False)
     def getDigitalIn(self, digitalinid=1, timeout=1, is_blocking=True):
         """
         Get the current value of a digital input.

@@ -32,6 +32,7 @@ import {
   Tooltip,
   Chip,
   InputAdornment,
+  Switch,
 } from "@mui/material";
 import {
   Refresh as RefreshIcon,
@@ -58,6 +59,7 @@ import apiUC2ConfigControllerGetOTAFirmwareServer from "../backendapi/apiUC2Conf
 import apiUC2ConfigControllerSetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerSetOTAFirmwareServer";
 import apiUC2ConfigControllerListAllFirmwareFiles from "../backendapi/apiUC2ConfigControllerListAllFirmwareFiles";
 import apiUC2ConfigControllerSendCanAddress from "../backendapi/apiUC2ConfigControllerSendCanAddress";
+import apiUC2ConfigControllerProbeDeviceState from "../backendapi/apiUC2ConfigControllerProbeDeviceState";
 
 const steps = [
   "Firmware Server",
@@ -338,6 +340,10 @@ const UsbFlashWizard = ({ open, onClose }) => {
       }
 
       if (result.status === "success") {
+        // Store state_response for display in the completion step
+        if (result.state_response !== undefined) {
+          dispatch(usbFlashSlice.setCanStateResponse(result.state_response));
+        }
         dispatch(usbFlashSlice.setSuccessMessage(
           `CAN address ${usbFlashState.canAddress} assigned successfully` +
           (result.firmware_verified ? " (firmware verified ✓)" : "")
@@ -349,6 +355,28 @@ const UsbFlashWizard = ({ open, onClose }) => {
     } catch (error) {
       console.error("Error sending CAN address:", error);
       dispatch(usbFlashSlice.setError("Failed to assign CAN address: " + error.message));
+    } finally {
+      dispatch(usbFlashSlice.setIsFlashing(false));
+    }
+  };
+
+  // --- Standalone device state probe (used in completion step) ---
+  const probeState = async () => {
+    const port = usbFlashState.selectedPort || usbFlashState.flashResult?.port;
+    if (!port) {
+      dispatch(usbFlashSlice.setError("No port available for probing"));
+      return;
+    }
+    try {
+      dispatch(usbFlashSlice.setIsFlashing(true));
+      const result = await apiUC2ConfigControllerProbeDeviceState(port, usbFlashState.canBaudRate);
+      dispatch(usbFlashSlice.setCanStateResponse(result.state_response || result.message || "No response"));
+      if (!result.firmware_ok) {
+        dispatch(usbFlashSlice.setError("Device may not be running firmware correctly (invalid header detected)"));
+      }
+    } catch (error) {
+      console.error("Error probing device state:", error);
+      dispatch(usbFlashSlice.setError("Probe failed: " + error.message));
     } finally {
       dispatch(usbFlashSlice.setIsFlashing(false));
     }
@@ -430,13 +458,11 @@ const UsbFlashWizard = ({ open, onClose }) => {
 
   // --- Step 1: Select Firmware ---
   const renderFirmwareSelection = () => {
-    // Filter firmware files by search query
+    // Filter by merged-firmware toggle first, then by search query
     const query = (usbFlashState.firmwareSearchQuery || "").toLowerCase();
-    const filteredFiles = query
-      ? usbFlashState.firmwareFiles.filter((fw) =>
-          fw.filename.toLowerCase().includes(query)
-        )
-      : usbFlashState.firmwareFiles;
+    const filteredFiles = usbFlashState.firmwareFiles
+      .filter((fw) => usbFlashState.showMergedFirmware || !fw.filename.includes("_merged"))
+      .filter((fw) => !query || fw.filename.toLowerCase().includes(query));
 
     return (
     <Box sx={{ mt: 2 }}>
@@ -463,7 +489,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
             placeholder="Search firmware files..."
             value={usbFlashState.firmwareSearchQuery || ""}
             onChange={(e) => dispatch(usbFlashSlice.setFirmwareSearchQuery(e.target.value))}
-            sx={{ mb: 2 }}
+            sx={{ mb: 1 }}
             InputProps={{
               startAdornment: (
                 <InputAdornment position="start">
@@ -472,6 +498,28 @@ const UsbFlashWizard = ({ open, onClose }) => {
               ),
             }}
           />
+
+          {/* Merged firmware opt-in toggle (off by default to avoid BOOT_ADDR errors) */}
+          <FormControlLabel
+            control={
+              <Switch
+                checked={usbFlashState.showMergedFirmware}
+                onChange={(e) => dispatch(usbFlashSlice.setShowMergedFirmware(e.target.checked))}
+                size="small"
+                color="warning"
+              />
+            }
+            label={<Typography variant="body2">Show merged firmware (advanced)</Typography>}
+            sx={{ mb: 1 }}
+          />
+          {usbFlashState.showMergedFirmware && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Merged binaries include the bootloader and partition table. Only use them when
+              flashing a brand-new device or when "erase flash" is required. If you see{" "}
+              <code>invalid header: 0xffffffff</code> after flashing, the binary was not built
+              with <code>BOOT_ADDR=0x0000</code> and cannot be used as a merged image.
+            </Alert>
+          )}
 
           <FormControl component="fieldset" sx={{ width: "100%" }}>
             <RadioGroup
@@ -943,9 +991,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
                 onChange={(e) => dispatch(usbFlashSlice.setCanBaudRate(e.target.value))}
                 label="Serial Baud Rate"
               >
-                <MenuItem value={9600}>9600</MenuItem>
                 <MenuItem value={115200}>115200 (default)</MenuItem>
-                <MenuItem value={500000}>500000</MenuItem>
+                <MenuItem value={921600}>921600 (high-speed)</MenuItem>
               </Select>
             </FormControl>
 
@@ -1031,6 +1078,63 @@ const UsbFlashWizard = ({ open, onClose }) => {
           </List>
         </Paper>
       )}
+
+      {/* Device state verification output from /state_get probe */}
+      {usbFlashState.canStateResponse && (
+        <Paper sx={{ p: 2, mt: 2, textAlign: "left" }}>
+          <Typography variant="subtitle2" gutterBottom>
+            <CheckCircleIcon color="success" sx={{ mr: 1, verticalAlign: "middle", fontSize: 18 }} />
+            Device State Verification:
+          </Typography>
+          <Typography
+            variant="body2"
+            component="pre"
+            sx={{
+              whiteSpace: "pre-wrap",
+              fontFamily: "monospace",
+              fontSize: "0.8rem",
+              mt: 1,
+              overflowX: "auto",
+            }}
+          >
+            {typeof usbFlashState.canStateResponse === "string"
+              ? usbFlashState.canStateResponse
+              : JSON.stringify(usbFlashState.canStateResponse, null, 2)}
+          </Typography>
+        </Paper>
+      )}
+
+      {/* Re-probe button + baud selector */}
+      <Paper sx={{ p: 2, mt: 2, textAlign: "left" }}>
+        <Typography variant="subtitle2" gutterBottom>
+          Probe Device State
+        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+          <FormControl size="small" sx={{ minWidth: 200 }}>
+            <InputLabel>Baud Rate</InputLabel>
+            <Select
+              value={usbFlashState.canBaudRate}
+              onChange={(e) => dispatch(usbFlashSlice.setCanBaudRate(e.target.value))}
+              label="Baud Rate"
+            >
+              <MenuItem value={115200}>115200 (default)</MenuItem>
+              <MenuItem value={921600}>921600 (high-speed)</MenuItem>
+            </Select>
+          </FormControl>
+          <Button
+            variant="outlined"
+            color="primary"
+            onClick={probeState}
+            disabled={usbFlashState.isFlashing}
+            startIcon={usbFlashState.isFlashing ? <CircularProgress size={16} /> : <CheckCircleIcon />}
+          >
+            {usbFlashState.isFlashing ? "Probing..." : "Probe Device"}
+          </Button>
+        </Box>
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
+          Sends {`{"task":"/state_get"}`} to the device and shows the firmware response.
+        </Typography>
+      </Paper>
 
       {/* Start Over button to flash another device */}
       <Box sx={{ mt: 3 }}>

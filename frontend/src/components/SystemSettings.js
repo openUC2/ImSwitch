@@ -39,9 +39,12 @@ export default function SystemSettings() {
   // Safety toggles
   const [enableImSwitch, setEnableImSwitch] = useState(false);
   const [isImSwitchRunning, setIsImSwitchRunning] = useState(false);
-  const [deviceAdminUrl] = useState(
-    () => `http://${hostIP}/admin/panel/boot/?mode=minimal&nav=hidden`,
-  );
+  const [deviceAdminUrl] = useState(() => {
+    const url = new URL("/admin/panel/boot/", hostIP);
+    url.searchParams.set("mode", "minimal");
+    url.searchParams.set("nav", "hidden");
+    return url.toString();
+  });
   const [deviceAdminLoaded, setDeviceAdminLoaded] = useState(false);
 
   const base = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController`;

@@ -42,13 +42,31 @@ export default function SystemSettings() {
   const [enableImSwitch, setEnableImSwitch] = useState(false);
   const [isImSwitchRunning, setIsImSwitchRunning] = useState(false);
   const deviceAdminUrl = (() => {
-    const url = new URL("/admin/panel/boot/", hostIP);
-    url.searchParams.set("mode", "minimal");
-    url.searchParams.set("nav", "hidden");
-    return url.toString();
+    if (!hostIP) {
+      return null;
+    }
+    try {
+      const url = new URL("/admin/panel/boot/", hostIP);
+      url.searchParams.set("mode", "minimal");
+      url.searchParams.set("nav", "hidden");
+      return url.toString();
+    } catch (e) {
+      console.error("Failed to construct device admin URL:", e);
+      return null;
+    }
   })();
   const canInspectDeviceAdmin =
-    new URL(deviceAdminUrl).origin === window.location.origin;
+    (() => {
+      if (!deviceAdminUrl) {
+        return false;
+      }
+      try {
+        return new URL(deviceAdminUrl).origin === window.location.origin;
+      } catch (e) {
+        console.error("Failed to inspect device admin URL:", e);
+        return false;
+      }
+    })();
   const [deviceAdminStatus, setDeviceAdminStatus] = useState("loading");
 
   const base = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController`;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSelector } from "react-redux";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 import { getStorageState } from "../state/slices/StorageSlice";
@@ -26,6 +26,8 @@ import {
 } from "@mui/icons-material";
 
 export default function SystemSettings() {
+  const deviceAdminFrameRef = useRef(null);
+
   // Get connection settings from Redux
   const { ip: hostIP, apiPort: hostPort } = useSelector(
     getConnectionSettingsState,
@@ -39,13 +41,15 @@ export default function SystemSettings() {
   // Safety toggles
   const [enableImSwitch, setEnableImSwitch] = useState(false);
   const [isImSwitchRunning, setIsImSwitchRunning] = useState(false);
-  const [deviceAdminUrl] = useState(() => {
+  const deviceAdminUrl = (() => {
     const url = new URL("/admin/panel/boot/", hostIP);
     url.searchParams.set("mode", "minimal");
     url.searchParams.set("nav", "hidden");
     return url.toString();
-  });
-  const [deviceAdminLoaded, setDeviceAdminLoaded] = useState(false);
+  })();
+  const canInspectDeviceAdmin =
+    new URL(deviceAdminUrl).origin === window.location.origin;
+  const [deviceAdminStatus, setDeviceAdminStatus] = useState("loading");
 
   const base = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController`;
   const activeUsage = storageState.status.active_device?.usage || null;
@@ -117,6 +121,45 @@ export default function SystemSettings() {
     const intervalId = setInterval(checkImSwitchStatus, 10000);
     return () => clearInterval(intervalId);
   }, [base, isBackendConnected]);
+
+  useEffect(() => {
+    setDeviceAdminStatus(canInspectDeviceAdmin ? "loading" : "unavailable");
+  }, [canInspectDeviceAdmin, deviceAdminUrl]);
+
+  const handleDeviceAdminLoad = () => {
+    const iframe = deviceAdminFrameRef.current;
+
+    if (!iframe) {
+      setDeviceAdminStatus("ready");
+      return;
+    }
+
+    try {
+      const iframeDocument =
+        iframe.contentDocument || iframe.contentWindow?.document;
+      const iframeText = [
+        iframeDocument?.title || "",
+        iframeDocument?.body?.innerText || "",
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      const looksMissing =
+        iframeText.includes("404") ||
+        iframeText.includes("not found") ||
+        iframeText.includes("requested url was not found");
+
+      setDeviceAdminStatus(looksMissing ? "missing" : "ready");
+    } catch {
+      // Cross-origin iframe content cannot be inspected. In that case,
+      // treat a successful load as available.
+      setDeviceAdminStatus("ready");
+    }
+  };
+
+  const handleDeviceAdminError = () => {
+    setDeviceAdminStatus("unavailable");
+  };
 
   // Helper function to get disk usage color based on percentage
   const getDiskUsageColor = (usage) => {
@@ -279,30 +322,36 @@ export default function SystemSettings() {
             <Typography variant="subtitle2" sx={{ mb: 1 }}>
               System Management
             </Typography>
-            {deviceAdminLoaded ? (
-              <Box
-                sx={{
-                  border: "1px solid #e0e0e0",
-                  borderRadius: 1,
-                  overflow: "hidden",
-                  mb: 2,
-                }}
-              >
+            <Box
+              sx={{
+                display: deviceAdminStatus === "ready" ? "block" : "none",
+                border: "1px solid #424242",
+                borderRadius: 1,
+                overflow: "hidden",
+                mb: 2,
+                backgroundColor: "#2a2a2a",
+              }}
+            >
+              {canInspectDeviceAdmin && (
                 <iframe
+                  ref={deviceAdminFrameRef}
                   src={deviceAdminUrl}
                   style={{
                     width: "100%",
                     height: "300px",
                     border: "none",
                     borderRadius: "4px",
+                    display: "block",
+                    backgroundColor: "#2a2a2a",
                   }}
                   title="Device Admin Panel - Reboot/Shutdown"
-                  onLoad={() => setDeviceAdminLoaded(true)}
-                  onError={() => setDeviceAdminLoaded(false)}
+                  onLoad={handleDeviceAdminLoad}
+                  onError={handleDeviceAdminError}
                   sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
                 />
-              </Box>
-            ) : (
+              )}
+            </Box>
+            {deviceAdminStatus !== "ready" && (
               <Box
                 sx={{
                   border: "1px solid #424242",
@@ -316,7 +365,13 @@ export default function SystemSettings() {
                 }}
               >
                 <Typography variant="body2" sx={{ color: "#b0b0b0", mb: 1 }}>
-                  Device admin panel not available. Please use the direct link:
+                  {!canInspectDeviceAdmin
+                    ? "The admin panel is not available at the expected same-origin URL in this setup."
+                    : deviceAdminStatus === "missing"
+                      ? "The admin panel was not found at the expected URL for this setup."
+                      : deviceAdminStatus === "unavailable"
+                        ? "The admin panel could not be loaded from this setup."
+                        : "Loading the admin panel. If it does not appear, please use the direct link:"}
                 </Typography>
                 <Link
                   href={deviceAdminUrl}

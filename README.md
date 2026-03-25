@@ -26,6 +26,15 @@ cd ImSwitch
 
 # Create a virtual environment and install ImSwitch with UV
 uv venv
+uv sync
+
+# then start it in headless mode with the API server:
+uv run python main.py --headless --http-port 8001
+```
+
+# Alternative installation with uv pip (not recommended, may cause dependency issues):
+
+```bash
 source .venv/bin/activate
 # Yes, we need to start using `uv sync` instead for reproducible installs with our lockfile...but we're still ignoring the lockfile right now:
 uv pip install -e .[dev]

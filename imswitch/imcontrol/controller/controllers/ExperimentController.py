@@ -576,7 +576,7 @@ class ExperimentController(ImConWidgetController):
             "write_individual_tiffs": getattr(self, '_ome_write_individual_tiffs', False)
         }
 
-
+    @APIExport(requestType="GET")
     def set_led_status(self, status: str = "idle"):
         """
         Set LED matrix status if available.

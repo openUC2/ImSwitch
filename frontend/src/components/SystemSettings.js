@@ -14,6 +14,7 @@ import {
   Alert,
   Chip,
   LinearProgress,
+  Link,
 } from "@mui/material";
 import {
   Computer,
@@ -21,6 +22,7 @@ import {
   Warning,
   CheckCircle,
   ErrorOutline,
+  OpenInNew,
 } from "@mui/icons-material";
 
 export default function SystemSettings() {
@@ -36,8 +38,11 @@ export default function SystemSettings() {
 
   // Safety toggles
   const [enableImSwitch, setEnableImSwitch] = useState(false);
-  const [enableRaspi, setEnableRaspi] = useState(false);
   const [isImSwitchRunning, setIsImSwitchRunning] = useState(false);
+  const [deviceAdminUrl] = useState(
+    () => `http://${hostIP}/admin/panel/boot/?mode=minimal&nav=hidden`,
+  );
+  const [deviceAdminLoaded, setDeviceAdminLoaded] = useState(false);
 
   const base = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController`;
   const activeUsage = storageState.status.active_device?.usage || null;
@@ -266,35 +271,66 @@ export default function SystemSettings() {
             </Typography>
           </Alert>
 
-          <FormControlLabel
-            control={
-              <Switch
-                checked={enableRaspi}
-                onChange={(e) => setEnableRaspi(e.target.checked)}
-              />
-            }
-            label="Enable Raspberry Pi reboot"
-            sx={{ mb: 2 }}
-          />
-
-          <Box sx={{ display: "flex", gap: 2 }}>
-            <Button
-              variant="contained"
-              color="error"
-              disabled={!enableRaspi || !isBackendConnected}
-              onClick={() => callEndpoint(`${base}/restartRaspi`)}
-            >
-              Reboot Raspberry Pi
-            </Button>
-
-            <Button
-              variant="outlined"
-              color="error"
-              disabled={!enableRaspi || !isBackendConnected}
-              onClick={() => callEndpoint(`${base}/shutdownRaspi`)}
-            >
-              Shutdown Raspberry Pi
-            </Button>
+          {/* Device-Admin iframe for reboot/shutdown */}
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              System Management
+            </Typography>
+            {deviceAdminLoaded ? (
+              <Box
+                sx={{
+                  border: "1px solid #e0e0e0",
+                  borderRadius: 1,
+                  overflow: "hidden",
+                  mb: 2,
+                }}
+              >
+                <iframe
+                  src={deviceAdminUrl}
+                  style={{
+                    width: "100%",
+                    height: "300px",
+                    border: "none",
+                    borderRadius: "4px",
+                  }}
+                  title="Device Admin Panel - Reboot/Shutdown"
+                  onLoad={() => setDeviceAdminLoaded(true)}
+                  onError={() => setDeviceAdminLoaded(false)}
+                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                />
+              </Box>
+            ) : (
+              <Box
+                sx={{
+                  border: "1px solid #424242",
+                  borderRadius: 1,
+                  p: 2,
+                  mb: 2,
+                  backgroundColor: "#2a2a2a",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 1,
+                }}
+              >
+                <Typography variant="body2" sx={{ color: "#b0b0b0", mb: 1 }}>
+                  Device admin panel not available. Please use the direct link:
+                </Typography>
+                <Link
+                  href={deviceAdminUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.5,
+                    color: "#64b5f6",
+                    "&:hover": { color: "#90caf9" },
+                  }}
+                >
+                  Reboot/Shutdown in device-admin <OpenInNew fontSize="small" />
+                </Link>
+              </Box>
+            )}
           </Box>
         </CardContent>
       </Card>

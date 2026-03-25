@@ -132,11 +132,6 @@ class StepperXYStageManager(PositionerManager):
             except Exception as exc:
                 self.__logger.warning(f"{name}: could not set microsteps: {exc}")
 
-        # Set default speed on the device
-        try:
-            self._set_device_speed(init_speed_x, init_speed_y)
-        except Exception as exc:
-            self.__logger.warning(f"{name}: could not set initial speed: {exc}")
 
     # ------------------------------------------------------------------
     # Low-level serial helpers
@@ -149,9 +144,9 @@ class StepperXYStageManager(PositionerManager):
         Thread-safe.
         """
         with self._lock:
-            self.__logger.debug(f"TX: {cmd!r}")
+            self.__logger.info(f"TX: {cmd!r}")
             reply = self._serial.query(cmd).strip()
-            self.__logger.debug(f"RX: {reply!r}")
+            self.__logger.info(f"RX: {reply!r}")
         if reply.startswith("ERR"):
             print(f"Device error for '{cmd}': {reply}")
         return reply

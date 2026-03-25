@@ -7,9 +7,17 @@ Filename convention produced by OMEWriter._write_individual_tiff:
     t{YYYYMMDD_HHMMSS}_x{X}_y{Y}_z{Z}_c{cIdx}_{channelName}_i{iter}_p{power}.tif
 
     X, Y, Z are in microns * 1000 (integer, sub-micron precision).
+    i{iter} is a global sequential counter across all channels and positions.
 
 Directory layout:
     <base_dir>/tiles/timepoint_XXXX/<filename>.tif
+
+IMPORTANT: The Z coordinate in the filename reflects the actual focus position
+at the time of capture (including sample tilt drift), so every XY tile has a
+slightly different Z value.  This means Z cannot be used as a grouping key for
+stitching.  Instead the script uses the JSON protocol file (if available) which
+stores integer grid indices (iX, iY) per iterator, or falls back to clustering
+the X/Y stage coordinates into grid indices automatically.
 
 Outputs (selectable via --mode):
     composite   – Per-position Z/T composite stack for napari (multi-channel)
@@ -24,11 +32,11 @@ Usage examples:
     # Convert all timepoints, all modes
     python convert_experiment_tiffs.py /path/to/base_dir/tiles
 
-    # Only composite stacks
-    python convert_experiment_tiffs.py /path/to/base_dir/tiles --mode composite
+    # Only stitch, auto-locate JSON protocol
+    python convert_experiment_tiffs.py /path/to/base_dir/tiles --mode stitch
 
-    # Only MIP stitched
-    python convert_experiment_tiffs.py /path/to/base_dir/tiles --mode mip
+    # Explicit JSON path
+    python convert_experiment_tiffs.py /path/to/base_dir/tiles --protocol /path/to/protocol.json --mode mip-composite
 
     # Specify output directory
     python convert_experiment_tiffs.py /path/to/base_dir/tiles -o /path/to/output
@@ -37,6 +45,7 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -84,6 +93,9 @@ class TileInfo:
     iterator: int
     power: int
     timepoint: int = 0   # filled from directory name
+    # Grid indices assigned from JSON protocol or coordinate clustering
+    ix: int = -1
+    iy: int = -1
 
 
 def parse_filename(filepath: str) -> Optional[TileInfo]:
@@ -106,11 +118,130 @@ def parse_filename(filepath: str) -> Optional[TileInfo]:
 
 
 # ---------------------------------------------------------------------------
+# JSON protocol loader
+# ---------------------------------------------------------------------------
+
+def _find_protocol_json(tiles_dir: str) -> Optional[str]:
+    """
+    Auto-locate the experiment protocol JSON next to the tiles directory.
+    Searches the parent and grandparent directories for a *_protocol.json file.
+    """
+    search_dirs = [
+        os.path.dirname(tiles_dir),                # e.g. .../experiment0_0_.../
+        os.path.dirname(os.path.dirname(tiles_dir)), # e.g. .../20260316_163004/
+    ]
+    for d in search_dirs:
+        for fname in sorted(os.listdir(d)):
+            if fname.endswith("_protocol.json"):
+                return os.path.join(d, fname)
+    return None
+
+
+def load_protocol_grid(json_path: str) -> Dict[int, Tuple[int, int]]:
+    """
+    Load the snake_tiles list from the protocol JSON and return a mapping
+    iterator → (iX, iY).  iX/iY are the integer grid column/row indices.
+    """
+    with open(json_path) as f:
+        data = json.load(f)
+
+    iterator_to_grid: Dict[int, Tuple[int, int]] = {}
+    for row in data.get("snake_tiles", []):
+        for entry in row:
+            it = entry.get("iterator")
+            ix = entry.get("iX")
+            iy = entry.get("iY")
+            if it is not None and ix is not None and iy is not None:
+                iterator_to_grid[it] = (int(ix), int(iy))
+    return iterator_to_grid
+
+
+def _cluster_to_indices(values: List[int]) -> Dict[int, int]:
+    """
+    Map a list of raw coordinate values (µm*1000) to 0-based integer indices
+    by sorting the unique values and assigning sequential indices.
+    """
+    unique = sorted(set(values))
+    return {v: i for i, v in enumerate(unique)}
+
+
+def assign_grid_indices(tiles: List[TileInfo], protocol_json: Optional[str]) -> None:
+    """
+    Assign ix/iy grid indices to every TileInfo in-place.
+
+    Strategy A (preferred): use the JSON protocol file which maps iterator → (iX, iY).
+      The tile filenames carry a frame-level iterator that advances by more than 1
+      per XY position (e.g. one step per channel + autofocus frame).  We therefore
+      group tiles by unique stage (x, y) coordinate, rank each group by its minimum
+      tile iterator, and match that rank to the correspondingly ranked JSON entry
+      (sorted by JSON iterator).  This is robust regardless of the per-frame
+      stepping multiplier.
+
+    Strategy B (fallback): cluster the raw X/Y stage coordinates into grid indices.
+    """
+    if protocol_json and os.path.isfile(protocol_json):
+        print(f"  Using protocol JSON: {os.path.basename(protocol_json)}")
+        iter_map = load_protocol_grid(protocol_json)
+
+        # Group tiles by unique (x, y) stage position; record the minimum tile
+        # iterator seen at each position so we can sort groups by scan order.
+        xy_groups: Dict[Tuple[int, int], List[TileInfo]] = {}
+        for tile in tiles:
+            key = (tile.x, tile.y)
+            xy_groups.setdefault(key, []).append(tile)
+
+        # Sort XY groups by their minimum tile iterator → scan order rank
+        ranked_xy = sorted(xy_groups.keys(),
+                           key=lambda k: min(t.iterator for t in xy_groups[k]))
+
+        # Sort JSON entries by their iterator value → scan order rank
+        ranked_json = sorted(iter_map.keys())  # JSON iterators 0..N-1
+
+        if len(ranked_xy) != len(ranked_json):
+            print(f"  WARNING: {len(ranked_xy)} unique XY positions but "
+                  f"{len(ranked_json)} JSON entries – using coordinate fallback")
+            x_map = _cluster_to_indices([t.x for t in tiles])
+            y_map = _cluster_to_indices([t.y for t in tiles])
+            for tile in tiles:
+                tile.ix = x_map[tile.x]
+                tile.iy = y_map[tile.y]
+            return
+
+        # Build xy → (iX, iY) mapping by matching ranks
+        xy_to_grid: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        for xy_key, json_iter in zip(ranked_xy, ranked_json):
+            xy_to_grid[xy_key] = iter_map[json_iter]
+
+        for tile in tiles:
+            ix, iy = xy_to_grid[(tile.x, tile.y)]
+            tile.ix = ix
+            tile.iy = iy
+
+        # Shift all indices so minimum is 0
+        min_ix = min(t.ix for t in tiles)
+        min_iy = min(t.iy for t in tiles)
+        for tile in tiles:
+            tile.ix -= min_ix
+            tile.iy -= min_iy
+
+        print(f"  Grid indices assigned from JSON for {len(tiles)}/{len(tiles)} tiles "
+              f"({len(ranked_xy)} unique XY positions)")
+    else:
+        # Fallback: derive grid indices from sorted unique X/Y coordinate values
+        print("  No protocol JSON found – deriving grid indices from stage coordinates")
+        x_map = _cluster_to_indices([t.x for t in tiles])
+        y_map = _cluster_to_indices([t.y for t in tiles])
+        for tile in tiles:
+            tile.ix = x_map[tile.x]
+            tile.iy = y_map[tile.y]
+
+
+# ---------------------------------------------------------------------------
 # Tile discovery
 # ---------------------------------------------------------------------------
 
-def discover_tiles(tiles_dir: str) -> List[TileInfo]:
-    """Walk the tiles directory and parse all TIFF filenames."""
+def discover_tiles(tiles_dir: str, protocol_json: Optional[str] = None) -> List[TileInfo]:
+    """Walk the tiles directory, parse all TIFF filenames, assign grid indices."""
     tiles: List[TileInfo] = []
     tiles_path = Path(tiles_dir)
 
@@ -129,9 +260,16 @@ def discover_tiles(tiles_dir: str) -> List[TileInfo]:
 
     if not tiles:
         print(f"No matching TIFF files found under {tiles_dir}")
-    else:
-        print(f"Discovered {len(tiles)} tiles across "
-              f"{len(set(t.timepoint for t in tiles))} timepoint(s)")
+        return tiles
+
+    print(f"Discovered {len(tiles)} tiles across "
+          f"{len(set(t.timepoint for t in tiles))} timepoint(s)")
+
+    # Auto-find JSON if not provided
+    if protocol_json is None:
+        protocol_json = _find_protocol_json(tiles_dir)
+
+    assign_grid_indices(tiles, protocol_json)
     return tiles
 
 
@@ -148,27 +286,35 @@ def _unique_sorted(values):
 class ExperimentGrid:
     """Describes the full dimensionality of the experiment."""
     timepoints: List[int] = field(default_factory=list)
-    x_positions: List[int] = field(default_factory=list)
-    y_positions: List[int] = field(default_factory=list)
-    z_positions: List[int] = field(default_factory=list)
+    ix_positions: List[int] = field(default_factory=list)   # grid column indices
+    iy_positions: List[int] = field(default_factory=list)   # grid row indices
     channels: List[str] = field(default_factory=list)
     c_indices: List[int] = field(default_factory=list)
 
-    # fast lookup: (t, x, y, z, c_idx) → TileInfo
-    lookup: Dict[Tuple[int, int, int, int, int], TileInfo] = field(default_factory=dict)
+    # lookup: (timepoint, ix, iy, c_idx) → list of TileInfo (multiple Z per position)
+    lookup: Dict[Tuple[int, int, int, int], List[TileInfo]] = field(default_factory=dict)
 
     @staticmethod
     def from_tiles(tiles: List[TileInfo]) -> "ExperimentGrid":
         grid = ExperimentGrid()
         grid.timepoints = _unique_sorted(t.timepoint for t in tiles)
-        grid.x_positions = _unique_sorted(t.x for t in tiles)
-        grid.y_positions = _unique_sorted(t.y for t in tiles)
-        grid.z_positions = _unique_sorted(t.z for t in tiles)
+        grid.ix_positions = _unique_sorted(t.ix for t in tiles)
+        grid.iy_positions = _unique_sorted(t.iy for t in tiles)
         grid.channels = _unique_sorted(t.channel for t in tiles)
         grid.c_indices = _unique_sorted(t.c_idx for t in tiles)
         for t in tiles:
-            grid.lookup[(t.timepoint, t.x, t.y, t.z, t.c_idx)] = t
+            key = (t.timepoint, t.ix, t.iy, t.c_idx)
+            grid.lookup.setdefault(key, []).append(t)
         return grid
+
+    def get_tiles(self, tp: int, ix: int, iy: int, c_idx: int) -> List[TileInfo]:
+        """Return all tiles (Z stack) for a given grid position / channel / timepoint."""
+        return self.lookup.get((tp, ix, iy, c_idx), [])
+
+    def get_single(self, tp: int, ix: int, iy: int, c_idx: int) -> Optional[TileInfo]:
+        """Return a single representative tile (first available) for a grid position."""
+        tiles = self.get_tiles(tp, ix, iy, c_idx)
+        return tiles[0] if tiles else None
 
 
 def _read_tile(info: TileInfo) -> np.ndarray:
@@ -200,71 +346,59 @@ def _focus_measure(frame: np.ndarray) -> float:
 
 # ---------------------------------------------------------------------------
 # Mode 1: Composite stack (per position, for napari)
-# Same (x, y) over all z planes + time + channels → TCZYX stack
+# Same (ix, iy) over all z planes + time + channels → TCZYX stack
 # ---------------------------------------------------------------------------
 
 def build_composite_stacks(grid: ExperimentGrid, out_dir: str):
     """
-    For every unique (x, y) position, build a TCZYX composite stack
+    For every unique (ix, iy) grid position, build a TCZYX composite stack
     that napari can open directly as a multi-channel hyperstack.
     """
     print("\n=== Building composite stacks (napari) ===")
     os.makedirs(out_dir, exist_ok=True)
 
-    xy_positions = [(x, y) for x in grid.x_positions for y in grid.y_positions]
-    # Filter to positions that actually have data
-    xy_with_data = set((t.x, t.y) for key, t in grid.lookup.items())
-    xy_positions = sorted(xy_with_data)
+    # Collect all (ix, iy) positions that have at least one tile
+    xy_positions = sorted(set((t.ix, t.iy)
+                              for tiles in grid.lookup.values()
+                              for t in tiles))
 
-    for ix, (x, y) in enumerate(xy_positions):
-        # Determine shape from first available tile
-        sample_key = None
-        for t in grid.timepoints:
-            for z in grid.z_positions:
-                for c in grid.c_indices:
-                    if (t, x, y, z, c) in grid.lookup:
-                        sample_key = (t, x, y, z, c)
-                        break
-                if sample_key:
-                    break
-            if sample_key:
-                break
-        if sample_key is None:
+    for pos_idx, (ix, iy) in enumerate(xy_positions):
+        # Find the Z-stack depth from the actual tiles at this position
+        all_z_tiles = []
+        for ci in grid.c_indices:
+            all_z_tiles.extend(grid.get_tiles(grid.timepoints[0], ix, iy, ci))
+        if not all_z_tiles:
             continue
+        nZ = max(len(grid.get_tiles(tp, ix, iy, ci))
+                 for tp in grid.timepoints for ci in grid.c_indices)
 
-        sample = _read_tile(grid.lookup[sample_key])
+        sample = _read_tile(all_z_tiles[0])
         h, w = sample.shape[:2]
         dtype = sample.dtype
 
         nT = len(grid.timepoints)
         nC = len(grid.c_indices)
-        nZ = len(grid.z_positions)
 
-        # ImageJ hyperstacks require TZCYXS axis order
+        # ImageJ hyperstacks: TZCYX
         stack = np.zeros((nT, nZ, nC, h, w), dtype=dtype)
 
         for it, tp in enumerate(grid.timepoints):
             for ic, ci in enumerate(grid.c_indices):
-                for iz, zp in enumerate(grid.z_positions):
-                    key = (tp, x, y, zp, ci)
-                    if key in grid.lookup:
-                        frame = _read_tile(grid.lookup[key])
-                        stack[it, iz, ic] = frame[:h, :w]
+                z_tiles = sorted(grid.get_tiles(tp, ix, iy, ci),
+                                 key=lambda t: t.z)
+                for iz, tile in enumerate(z_tiles):
+                    frame = _read_tile(tile)
+                    stack[it, iz, ic] = frame[:h, :w]
 
-        fname = f"composite_x{x}_y{y}.ome.tif"
+        fname = f"composite_ix{ix:03d}_iy{iy:03d}.ome.tif"
         fpath = os.path.join(out_dir, fname)
 
-        # Write as ImageJ-compatible hyperstack (axes must be TZCYX)
         metadata = {
             "axes": "TZCYX",
             "Channel": {"Name": grid.channels},
         }
-        tif.imwrite(
-            fpath, stack,
-            imagej=True,
-            metadata=metadata,
-        )
-        print(f"  [{ix+1}/{len(xy_positions)}] {fname}  "
+        tif.imwrite(fpath, stack, imagej=True, metadata=metadata)
+        print(f"  [{pos_idx+1}/{len(xy_positions)}] {fname}  "
               f"shape={stack.shape}  dtype={dtype}")
 
 
@@ -273,122 +407,114 @@ def build_composite_stacks(grid: ExperimentGrid, out_dir: str):
 # All XY positions in a grid for one channel → large canvas
 # ---------------------------------------------------------------------------
 
-def _compute_canvas(grid: ExperimentGrid, h: int, w: int):
+def _compute_canvas_from_grid(grid: ExperimentGrid, h: int, w: int):
     """
-    Compute canvas size and pixel offsets for XY positions.
-    Returns (canvas_h, canvas_w, offset_map) where offset_map
-    maps (x, y) → (row_px, col_px).
+    Compute canvas size and pixel offsets using iX/iY integer grid indices.
+    Returns (canvas_h, canvas_w, offset_map) where offset_map maps
+    (ix, iy) → (row_px, col_px).
     """
-    if len(grid.x_positions) < 2:
-        px_step_x = w
-    else:
-        # Estimate tile spacing in pixels from coordinate differences
-        dx = grid.x_positions[1] - grid.x_positions[0]
-        px_step_x = max(abs(dx), 1)  # Will be rescaled below
-
-    if len(grid.y_positions) < 2:
-        px_step_y = h
-    else:
-        dy = grid.y_positions[1] - grid.y_positions[0]
-        px_step_y = max(abs(dy), 1)
-
-    # Map microns*1000 to pixel offsets.
-    # The coordinate values are in µm*1000. We compute each tile's offset
-    # relative to the minimum coordinate and scale so that the spacing
-    # between adjacent tiles equals the tile width/height (simple grid layout,
-    # no sub-pixel overlap).  If the user needs precise overlap stitching they
-    # should use Fiji's Grid/Collection plugin on the individual TIFFs.
-    x_min = grid.x_positions[0]
-    y_min = grid.y_positions[0]
-
-    # Simple grid: assign integer grid indices
-    x_idx = {v: i for i, v in enumerate(grid.x_positions)}
-    y_idx = {v: i for i, v in enumerate(grid.y_positions)}
-
-    nRows = len(grid.y_positions)
-    nCols = len(grid.x_positions)
+    nCols = len(grid.ix_positions)
+    nRows = len(grid.iy_positions)
     canvas_h = nRows * h
     canvas_w = nCols * w
 
+    # Map grid index value → sequential position (in case indices are non-contiguous)
+    ix_seq = {v: i for i, v in enumerate(grid.ix_positions)}
+    iy_seq = {v: i for i, v in enumerate(grid.iy_positions)}
+
     offset_map = {}
-    for xv in grid.x_positions:
-        for yv in grid.y_positions:
-            col_px = x_idx[xv] * w
-            row_px = y_idx[yv] * h
-            offset_map[(xv, yv)] = (row_px, col_px)
+    for ix in grid.ix_positions:
+        for iy in grid.iy_positions:
+            col_px = ix_seq[ix] * w
+            row_px = iy_seq[iy] * h
+            offset_map[(ix, iy)] = (row_px, col_px)
 
     return canvas_h, canvas_w, offset_map
 
 
+def _channel_c_idx(grid: ExperimentGrid, ch_name: str) -> Optional[int]:
+    """Return the c_idx for a channel name, or None if not found."""
+    for tile_list in grid.lookup.values():
+        for t in tile_list:
+            if t.channel == ch_name:
+                return t.c_idx
+    return None
+
+
+def _mip_or_first(tiles: List[TileInfo]) -> np.ndarray:
+    """Return MIP of a Z-stack.  Falls back to single frame if only one tile."""
+    if len(tiles) == 1:
+        return _read_tile(tiles[0])
+    frames = [_read_tile(t) for t in tiles]
+    return np.max(np.stack(frames, axis=0), axis=0)
+
+
 def build_stitched_tiffs(grid: ExperimentGrid, out_dir: str):
     """
-    For every channel × timepoint × z-plane, stitch all XY tiles
-    onto a single canvas and save as OME-TIFF (Fiji-friendly).
+    For every channel × timepoint, stitch all XY grid positions onto a
+    single canvas using MIP over Z per position.  Produces one output
+    image per channel per timepoint.
+
+    NOTE: Because different XY positions may have different absolute Z
+    values (sample tilt / autofocus drift), there is no single Z-plane
+    that spans all tiles.  MIP is used to collapse the Z stack at each
+    position before compositing.
     """
     print("\n=== Building stitched OME-TIFFs (Fiji) ===")
     os.makedirs(out_dir, exist_ok=True)
 
-    # Determine tile shape from first available tile
-    first_tile = next(iter(grid.lookup.values()))
-    sample = _read_tile(first_tile)
+    first_tile_list = next(iter(grid.lookup.values()))
+    sample = _read_tile(first_tile_list[0])
     h, w = sample.shape[:2]
     dtype = sample.dtype
 
-    canvas_h, canvas_w, offset_map = _compute_canvas(grid, h, w)
-
-    total = len(grid.channels) * len(grid.timepoints) * len(grid.z_positions)
+    canvas_h, canvas_w, offset_map = _compute_canvas_from_grid(grid, h, w)
+    total = len(grid.channels) * len(grid.timepoints)
     count = 0
 
     for ch_name in grid.channels:
-        # Find the c_idx for this channel name
-        ch_tiles = [t for t in grid.lookup.values() if t.channel == ch_name]
-        if not ch_tiles:
+        ci = _channel_c_idx(grid, ch_name)
+        if ci is None:
             continue
-        ci = ch_tiles[0].c_idx
 
         for tp in grid.timepoints:
-            for zp in grid.z_positions:
-                count += 1
-                canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
+            count += 1
+            canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
+            placed = 0
 
-                placed = 0
-                for xv in grid.x_positions:
-                    for yv in grid.y_positions:
-                        key = (tp, xv, yv, zp, ci)
-                        if key not in grid.lookup:
-                            continue
-                        frame = _read_tile(grid.lookup[key])
-                        row, col = offset_map[(xv, yv)]
-                        fh, fw = frame.shape[:2]
-                        canvas[row:row+fh, col:col+fw] = frame[:h, :w]
-                        placed += 1
+            for ix in grid.ix_positions:
+                for iy in grid.iy_positions:
+                    tiles = grid.get_tiles(tp, ix, iy, ci)
+                    if not tiles:
+                        continue
+                    frame = _mip_or_first(sorted(tiles, key=lambda t: t.z))
+                    row, col = offset_map[(ix, iy)]
+                    fh, fw = frame.shape[:2]
+                    canvas[row:row+fh, col:col+fw] = frame[:h, :w]
+                    placed += 1
 
-                if placed == 0:
-                    continue
+            if placed == 0:
+                continue
 
-                fname = (f"stitched_{ch_name}"
-                         f"_t{tp:04d}_z{zp}.ome.tif")
-                fpath = os.path.join(out_dir, fname)
-                tif.imwrite(fpath, canvas, compression="zlib")
-                print(f"  [{count}/{total}] {fname}  "
-                      f"canvas={canvas.shape}  tiles={placed}")
+            fname = f"stitched_{ch_name}_t{tp:04d}.ome.tif"
+            fpath = os.path.join(out_dir, fname)
+            tif.imwrite(fpath, canvas, compression="zlib")
+            print(f"  [{count}/{total}] {fname}  "
+                  f"canvas={canvas.shape}  tiles={placed}")
 
 
 # ---------------------------------------------------------------------------
 # Mode 3: MIP per XY → stitch
-# For each (x, y, channel, timepoint) compute MIP over Z, then stitch
+# For each (ix, iy, channel, timepoint) compute MIP over Z, then stitch
 # ---------------------------------------------------------------------------
 
-def _compute_mip(grid: ExperimentGrid, x: int, y: int,
+def _compute_mip(grid: ExperimentGrid, ix: int, iy: int,
                  c_idx: int, tp: int) -> Optional[np.ndarray]:
-    """Compute max intensity projection over Z for a given position/channel/time."""
-    frames = []
-    for zp in grid.z_positions:
-        key = (tp, x, y, zp, c_idx)
-        if key in grid.lookup:
-            frames.append(_read_tile(grid.lookup[key]))
-    if not frames:
+    """Compute max intensity projection over Z for a given grid position/channel/time."""
+    tiles = grid.get_tiles(tp, ix, iy, c_idx)
+    if not tiles:
         return None
+    frames = [_read_tile(t) for t in sorted(tiles, key=lambda t: t.z)]
     return np.max(np.stack(frames, axis=0), axis=0)
 
 
@@ -400,29 +526,28 @@ def build_mip_stitched(grid: ExperimentGrid, out_dir: str):
     print("\n=== Building MIP-stitched images (Fiji) ===")
     os.makedirs(out_dir, exist_ok=True)
 
-    first_tile = next(iter(grid.lookup.values()))
-    sample = _read_tile(first_tile)
+    first_tile_list = next(iter(grid.lookup.values()))
+    sample = _read_tile(first_tile_list[0])
     h, w = sample.shape[:2]
     dtype = sample.dtype
 
-    canvas_h, canvas_w, offset_map = _compute_canvas(grid, h, w)
+    canvas_h, canvas_w, offset_map = _compute_canvas_from_grid(grid, h, w)
 
     for ch_name in grid.channels:
-        ch_tiles = [t for t in grid.lookup.values() if t.channel == ch_name]
-        if not ch_tiles:
+        ci = _channel_c_idx(grid, ch_name)
+        if ci is None:
             continue
-        ci = ch_tiles[0].c_idx
 
         for tp in grid.timepoints:
             canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
             placed = 0
 
-            for xv in grid.x_positions:
-                for yv in grid.y_positions:
-                    mip = _compute_mip(grid, xv, yv, ci, tp)
+            for ix in grid.ix_positions:
+                for iy in grid.iy_positions:
+                    mip = _compute_mip(grid, ix, iy, ci, tp)
                     if mip is None:
                         continue
-                    row, col = offset_map[(xv, yv)]
+                    row, col = offset_map[(ix, iy)]
                     fh, fw = mip.shape[:2]
                     canvas[row:row+fh, col:col+fw] = mip[:h, :w]
                     placed += 1
@@ -449,32 +574,31 @@ def build_mip_composite(grid: ExperimentGrid, out_dir: str):
     print("\n=== Building MIP composite (napari) ===")
     os.makedirs(out_dir, exist_ok=True)
 
-    first_tile = next(iter(grid.lookup.values()))
-    sample = _read_tile(first_tile)
+    first_tile_list = next(iter(grid.lookup.values()))
+    sample = _read_tile(first_tile_list[0])
     h, w = sample.shape[:2]
     dtype = sample.dtype
 
-    canvas_h, canvas_w, offset_map = _compute_canvas(grid, h, w)
+    canvas_h, canvas_w, offset_map = _compute_canvas_from_grid(grid, h, w)
 
     nT = len(grid.timepoints)
     nC = len(grid.channels)
 
-    # ImageJ hyperstacks require TZCYXS axis order; Z=1 since it's a projection
+    # ImageJ hyperstacks: TZCYX; Z=1 since MIP collapses the Z axis
     stack = np.zeros((nT, 1, nC, canvas_h, canvas_w), dtype=dtype)
 
     for ic, ch_name in enumerate(grid.channels):
-        ch_tiles = [t for t in grid.lookup.values() if t.channel == ch_name]
-        if not ch_tiles:
+        ci = _channel_c_idx(grid, ch_name)
+        if ci is None:
             continue
-        ci = ch_tiles[0].c_idx
 
         for it, tp in enumerate(grid.timepoints):
-            for xv in grid.x_positions:
-                for yv in grid.y_positions:
-                    mip = _compute_mip(grid, xv, yv, ci, tp)
+            for ix in grid.ix_positions:
+                for iy in grid.iy_positions:
+                    mip = _compute_mip(grid, ix, iy, ci, tp)
                     if mip is None:
                         continue
-                    row, col = offset_map[(xv, yv)]
+                    row, col = offset_map[(ix, iy)]
                     fh, fw = mip.shape[:2]
                     stack[it, 0, ic, row:row+fh, col:col+fw] = mip[:h, :w]
 
@@ -496,20 +620,17 @@ def build_mip_composite(grid: ExperimentGrid, out_dir: str):
 # "focused" image for each XY position is then stitched into a canvas.
 # ---------------------------------------------------------------------------
 
-def _best_focus_frame(grid: ExperimentGrid, x: int, y: int,
+def _best_focus_frame(grid: ExperimentGrid, ix: int, iy: int,
                       c_idx: int, tp: int) -> Optional[np.ndarray]:
     """
-    Return the sharpest Z-plane for a given position/channel/timepoint.
+    Return the sharpest Z-plane for a given grid position/channel/timepoint.
     Uses normalised Laplacian variance as focus criterion.
     Returns None if no tiles are available.
     """
     best_frame = None
     best_score = -1.0
-    for zp in grid.z_positions:
-        key = (tp, x, y, zp, c_idx)
-        if key not in grid.lookup:
-            continue
-        frame = _read_tile(grid.lookup[key])
+    for tile in sorted(grid.get_tiles(tp, ix, iy, c_idx), key=lambda t: t.z):
+        frame = _read_tile(tile)
         score = _focus_measure(frame)
         if score > best_score:
             best_score = score
@@ -526,29 +647,28 @@ def build_best_focus_stitched(grid: ExperimentGrid, out_dir: str):
     print("\n=== Building best-focus stitched images (post-proc. autofocus) ===")
     os.makedirs(out_dir, exist_ok=True)
 
-    first_tile = next(iter(grid.lookup.values()))
-    sample = _read_tile(first_tile)
+    first_tile_list = next(iter(grid.lookup.values()))
+    sample = _read_tile(first_tile_list[0])
     h, w = sample.shape[:2]
     dtype = sample.dtype
 
-    canvas_h, canvas_w, offset_map = _compute_canvas(grid, h, w)
+    canvas_h, canvas_w, offset_map = _compute_canvas_from_grid(grid, h, w)
 
     for ch_name in grid.channels:
-        ch_tiles = [t for t in grid.lookup.values() if t.channel == ch_name]
-        if not ch_tiles:
+        ci = _channel_c_idx(grid, ch_name)
+        if ci is None:
             continue
-        ci = ch_tiles[0].c_idx
 
         for tp in grid.timepoints:
             canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
             placed = 0
 
-            for xv in grid.x_positions:
-                for yv in grid.y_positions:
-                    frame = _best_focus_frame(grid, xv, yv, ci, tp)
+            for ix in grid.ix_positions:
+                for iy in grid.iy_positions:
+                    frame = _best_focus_frame(grid, ix, iy, ci, tp)
                     if frame is None:
                         continue
-                    row, col = offset_map[(xv, yv)]
+                    row, col = offset_map[(ix, iy)]
                     fh, fw = frame.shape[:2]
                     canvas[row:row+fh, col:col+fw] = frame[:h, :w]
                     placed += 1
@@ -576,17 +696,16 @@ def write_tile_configuration(grid: ExperimentGrid, out_dir: str):
     print("\n=== Writing TileConfiguration.txt (Fiji) ===")
     os.makedirs(out_dir, exist_ok=True)
 
-    first_tile = next(iter(grid.lookup.values()))
-    sample = _read_tile(first_tile)
+    first_tile_list = next(iter(grid.lookup.values()))
+    sample = _read_tile(first_tile_list[0])
     h, w = sample.shape[:2]
 
-    _, _, offset_map = _compute_canvas(grid, h, w)
+    _, _, offset_map = _compute_canvas_from_grid(grid, h, w)
 
     for ch_name in grid.channels:
-        ch_tiles = [t for t in grid.lookup.values() if t.channel == ch_name]
-        if not ch_tiles:
+        ci = _channel_c_idx(grid, ch_name)
+        if ci is None:
             continue
-        ci = ch_tiles[0].c_idx
 
         for tp in grid.timepoints:
             fname = f"TileConfiguration_{ch_name}_t{tp:04d}.txt"
@@ -596,13 +715,14 @@ def write_tile_configuration(grid: ExperimentGrid, out_dir: str):
                 f.write("dim = 2\n\n")
                 f.write("# Define the image coordinates\n")
 
-                for xv in grid.x_positions:
-                    for yv in grid.y_positions:
-                        key = (tp, xv, yv, grid.z_positions[0], ci)
-                        if key not in grid.lookup:
+                for ix in grid.ix_positions:
+                    for iy in grid.iy_positions:
+                        tiles = grid.get_tiles(tp, ix, iy, ci)
+                        if not tiles:
                             continue
-                        info = grid.lookup[key]
-                        row, col = offset_map[(xv, yv)]
+                        # Use first Z tile as representative for the position
+                        info = sorted(tiles, key=lambda t: t.z)[0]
+                        row, col = offset_map[(ix, iy)]
                         rel_path = os.path.relpath(info.filepath, out_dir)
                         f.write(f"{rel_path}; ; ({col}, {row})\n")
 
@@ -658,6 +778,13 @@ def main():
         default=["all"],
         help="Conversion mode(s) to run (default: all)",
     )
+    parser.add_argument(
+        "--protocol", "--json",
+        default=None,
+        metavar="JSON",
+        help=("Path to the experiment protocol JSON file "
+              "(auto-detected if omitted; contains iX/iY grid indices)"),
+    )
     args = parser.parse_args()
 
     tiles_dir = os.path.abspath(args.tiles_dir)
@@ -671,18 +798,23 @@ def main():
     if "all" in modes:
         modes = set(ALL_MODES)
 
-    # Discover and parse tiles
-    tiles = discover_tiles(tiles_dir)
+    # Discover and parse tiles (JSON protocol used for grid-index assignment)
+    tiles = discover_tiles(tiles_dir, protocol_json=args.protocol)
     if not tiles:
         sys.exit(1)
 
     grid = ExperimentGrid.from_tiles(tiles)
 
+    # Count unique Z per position (for info display)
+    n_z_per_pos = max(
+        (len(v) for v in grid.lookup.values()), default=0
+    )
     print(f"\nExperiment grid:")
-    print(f"  Timepoints : {len(grid.timepoints)}")
-    print(f"  XY positions: {len(grid.x_positions)} x {len(grid.y_positions)}")
-    print(f"  Z planes   : {len(grid.z_positions)}")
-    print(f"  Channels   : {grid.channels}")
+    print(f"  Timepoints  : {len(grid.timepoints)}")
+    print(f"  Grid columns: {len(grid.ix_positions)} (iX)")
+    print(f"  Grid rows   : {len(grid.iy_positions)} (iY)")
+    print(f"  Z per pos   : up to {n_z_per_pos}")
+    print(f"  Channels    : {grid.channels}")
 
     # Run requested conversions
     if "composite" in modes:

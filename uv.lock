@@ -1992,7 +1992,7 @@ requires-dist = [
     { name = "smbus", marker = "extra == 'lepmon'" },
     { name = "smbus2", marker = "extra == 'lepmon'" },
     { name = "tifffile", specifier = ">=2020.11.26" },
-    { name = "uc2-rest" },
+    { name = "uc2-rest", specifier = ">=0.2.0.33" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.19.0" },
     { name = "zarr", specifier = ">=3.0.0a0" },
 ]
@@ -5579,7 +5579,7 @@ wheels = [
 
 [[package]]
 name = "uc2-rest"
-version = "0.2.0.30"
+version = "0.2.0.33"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },

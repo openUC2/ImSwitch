@@ -67,6 +67,7 @@ dependencies = [
     "msgpack>=1.0.4",
     "esptool",
     "av==13.1.0",
+    "uc2-rest>=0.2.0.33"
 ]
 
 [project.optional-dependencies]

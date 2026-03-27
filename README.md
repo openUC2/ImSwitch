@@ -139,12 +139,15 @@ uv venv --python /usr/local/bin/python3.11 .venv_x86_311
 
 # Verify architecture
 arch -x86_64 .venv_x86_311/bin/python3.11 -c "import platform; print(platform.machine())"
+uv run main.py --venv .venv_x86_311 --headless --http-port 8001
+```
 # → x86_64
 
 source .venv_x86_311/bin/activate
 uv pip install -e .
 
 # Always launch under x86_64 so Rosetta uses the x86_64 dylibs
+source .venv_x86_311/bin/activate
 arch -x86_64 python main.py --headless --http-port 8001
 ```
 

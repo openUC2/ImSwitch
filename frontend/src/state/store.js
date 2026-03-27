@@ -55,6 +55,7 @@ import focusMapReducer from "./slices/FocusMapSlice";
 import overviewRegistrationReducer from "./slices/OverviewRegistrationSlice";
 import frame3DViewerReducer from "./slices/Frame3DViewerSlice";
 import storageReducer from "./slices/StorageSlice";
+import goniometerReducer from "./slices/GoniometerSlice";
 
 //#####################################################################################
 // Nested persist config for liveStreamState
@@ -169,6 +170,7 @@ const rootReducer = combineReducers({
     frame3DViewerReducer,
   ),
   storageState: storageReducer,
+  goniometerState: goniometerReducer,
 });
 
 //#####################################################################################

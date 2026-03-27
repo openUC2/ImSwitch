@@ -513,10 +513,6 @@ class ImSwitchServer(Worker):
 
         self._api = api
         self._uiapi = uiapi
-        self._name = setupInfo.pyroServerInfo.name
-        self._host = setupInfo.pyroServerInfo.host
-        self._port = setupInfo.pyroServerInfo.port
-
         self._paused = False
         self._canceled = False
 
@@ -539,7 +535,6 @@ class ImSwitchServer(Worker):
         # Create and start the server thread
         self.server_thread = ServerThread()
         self.server_thread.start()
-        self.__logger.debug("Started server with URI -> Fastapi:" + self._name + "@" + self._host + ":" + str(self._port))
 
 
     def stop(self):

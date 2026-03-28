@@ -65,6 +65,11 @@ class ExperimentNormalMode(ExperimentModeBase):
         autofocus_step_size = kwargs.get('autofocus_step_size', 1)
         autofocus_illumination_channel = kwargs.get('autofocus_illumination_channel', '')
         autofocus_mode = kwargs.get('autofocus_mode', 'software')  # 'hardware' or 'software'
+        autofocus_software_method = kwargs.get('autofocus_software_method', 'scan')  # 'scan' or 'hillClimbing'
+        autofocus_hc_initial_step = kwargs.get('autofocus_hc_initial_step', 20.0)
+        autofocus_hc_min_step = kwargs.get('autofocus_hc_min_step', 1.0)
+        autofocus_hc_step_reduction = kwargs.get('autofocus_hc_step_reduction', 0.5)
+        autofocus_hc_max_iterations = kwargs.get('autofocus_hc_max_iterations', 50)
         autofocus_max_attempts = kwargs.get('autofocus_max_attempts', 2)
         autofocus_target_focus_setpoint = kwargs.get('autofocus_target_focus_setpoint', None)
         initial_z_position = kwargs.get('initial_z_position', None)
@@ -125,6 +130,11 @@ class ExperimentNormalMode(ExperimentModeBase):
                 exposures, gains, t, is_auto_focus, autofocus_min,
                 autofocus_max, autofocus_step_size, autofocus_illumination_channel,
                 autofocus_mode, autofocus_max_attempts, autofocus_target_focus_setpoint, n_times,
+                autofocus_software_method=autofocus_software_method,
+                autofocus_hc_initial_step=autofocus_hc_initial_step,
+                autofocus_hc_min_step=autofocus_hc_min_step,
+                autofocus_hc_step_reduction=autofocus_hc_step_reduction,
+                autofocus_hc_max_iterations=autofocus_hc_max_iterations,
                 t_pre_s=t_pre_s, t_post_s=t_post_s,
                 writer_offset=writer_offset,
                 keep_illumination_on=keep_illumination_on,
@@ -170,8 +180,13 @@ class ExperimentNormalMode(ExperimentModeBase):
                 "step_size": autofocus_step_size,
                 "channel": autofocus_illumination_channel,
                 "mode": autofocus_mode,
+                "software_method": autofocus_software_method,
                 "max_attempts": autofocus_max_attempts,
-                "target_focus_setpoint": autofocus_target_focus_setpoint
+                "target_focus_setpoint": autofocus_target_focus_setpoint,
+                "hc_initial_step": autofocus_hc_initial_step,
+                "hc_min_step": autofocus_hc_min_step,
+                "hc_step_reduction": autofocus_hc_step_reduction,
+                "hc_max_iterations": autofocus_hc_max_iterations,
             },
             "workflow_steps": [self._serialize_workflow_step(step) for step in workflow_steps]
         }
@@ -367,7 +382,12 @@ class ExperimentNormalMode(ExperimentModeBase):
                                   t_pre_s: float = 0.09,
                                   t_post_s: float = 0.05,
                                   writer_offset: int = 0,
-                                  keep_illumination_on: bool = False) -> int:
+                                  keep_illumination_on: bool = False,
+                                  autofocus_software_method: str = "scan",
+                                  autofocus_hc_initial_step: float = 20.0,
+                                  autofocus_hc_min_step: float = 1.0,
+                                  autofocus_hc_step_reduction: float = 0.5,
+                                  autofocus_hc_max_iterations: int = 50) -> int:
         """
         Create workflow steps for a single tile.
         
@@ -490,7 +510,12 @@ class ExperimentNormalMode(ExperimentModeBase):
                         "illuminationChannel": autofocus_illumination_channel,
                         "max_attempts": autofocus_max_attempts,
                         "target_focus_setpoint": autofocus_target_focus_setpoint,
-                        "mode": autofocus_mode
+                        "mode": autofocus_mode,
+                        "af_software_method": autofocus_software_method,
+                        "af_hc_initial_step": autofocus_hc_initial_step,
+                        "af_hc_min_step": autofocus_hc_min_step,
+                        "af_hc_step_reduction": autofocus_hc_step_reduction,
+                        "af_hc_max_iterations": autofocus_hc_max_iterations,
                     },
                 ))
                 step_id += 1

@@ -59,8 +59,15 @@ const initialExperimentState = {
     autoFocusStaticOffset: 0.0, // Static offset to add to final focus position
     autoFocusTwoStage: false, // Enable two-stage autofocus (coarse + fine scan)
     autoFocusAlgorithm: "LAPE", // Focus measurement method (LAPE, GLVA, JPEG)
+    // Software autofocus method: "scan" (Z-sweep) or "hillClimbing" (gradient search)
+    autoFocusSoftwareMethod: "scan",
+    // Hill-climbing autofocus parameters
+    autoFocusHillClimbingInitialStep: 20,  // Starting step size (µm)
+    autoFocusHillClimbingMinStep: 1,       // Convergence criterion (µm)
+    autoFocusHillClimbingStepReduction: 0.5, // Step reduction factor on reversal
+    autoFocusHillClimbingMaxIterations: 50,  // Safety iteration limit
     // Hardware autofocus (FocusLock-based one-shot) parameters
-    autoFocusMode: "software", // "software" (Z-sweep) or "hardware" (one-shot using FocusLock)
+    autoFocusMode: "software", // "software" (Z-sweep/hill-climbing) or "hardware" (one-shot using FocusLock)
     autofocus_max_attempts: 3, // Max attempts for hardware autofocus
     autofocus_target_focus_setpoint: 0, // Target focus setpoint for hardware autofocus
     zStack: false,
@@ -189,6 +196,21 @@ const experimentSlice = createSlice({
     setAutoFocusMode: (state, action) => {
       console.log("setAutoFocusMode", action.payload);
       state.parameterValue.autoFocusMode = action.payload;
+    },
+    setAutoFocusSoftwareMethod: (state, action) => {
+      state.parameterValue.autoFocusSoftwareMethod = action.payload;
+    },
+    setAutoFocusHillClimbingInitialStep: (state, action) => {
+      state.parameterValue.autoFocusHillClimbingInitialStep = action.payload;
+    },
+    setAutoFocusHillClimbingMinStep: (state, action) => {
+      state.parameterValue.autoFocusHillClimbingMinStep = action.payload;
+    },
+    setAutoFocusHillClimbingStepReduction: (state, action) => {
+      state.parameterValue.autoFocusHillClimbingStepReduction = action.payload;
+    },
+    setAutoFocusHillClimbingMaxIterations: (state, action) => {
+      state.parameterValue.autoFocusHillClimbingMaxIterations = action.payload;
     },
     setAutoFocusMaxAttempts: (state, action) => {
       console.log("setAutoFocusMaxAttempts", action.payload);
@@ -374,6 +396,11 @@ export const {
   setAutoFocusTwoStage,
   setAutoFocusAlgorithm,
   setAutoFocusMode,
+  setAutoFocusSoftwareMethod,
+  setAutoFocusHillClimbingInitialStep,
+  setAutoFocusHillClimbingMinStep,
+  setAutoFocusHillClimbingStepReduction,
+  setAutoFocusHillClimbingMaxIterations,
   setAutoFocusMaxAttempts,
   setAutoFocusTargetSetpoint,
   setZStack,

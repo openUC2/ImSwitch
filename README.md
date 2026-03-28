@@ -26,6 +26,15 @@ cd ImSwitch
 
 # Create a virtual environment and install ImSwitch with UV
 uv venv
+uv sync
+
+# then start it in headless mode with the API server:
+uv run python main.py --headless --http-port 8001
+```
+
+# Alternative installation with uv pip (not recommended, may cause dependency issues):
+
+```bash
 source .venv/bin/activate
 # Yes, we need to start using `uv sync` instead for reproducible installs with our lockfile...but we're still ignoring the lockfile right now:
 uv pip install -e .[dev]
@@ -130,12 +139,15 @@ uv venv --python /usr/local/bin/python3.11 .venv_x86_311
 
 # Verify architecture
 arch -x86_64 .venv_x86_311/bin/python3.11 -c "import platform; print(platform.machine())"
+uv run main.py --venv .venv_x86_311 --headless --http-port 8001
+```
 # → x86_64
 
 source .venv_x86_311/bin/activate
 uv pip install -e .
 
 # Always launch under x86_64 so Rosetta uses the x86_64 dylibs
+source .venv_x86_311/bin/activate
 arch -x86_64 python main.py --headless --http-port 8001
 ```
 

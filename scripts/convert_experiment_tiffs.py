@@ -131,6 +131,8 @@ def _find_protocol_json(tiles_dir: str) -> Optional[str]:
         os.path.dirname(os.path.dirname(tiles_dir)), # e.g. .../20260316_163004/
     ]
     for d in search_dirs:
+        if not d or not os.path.isdir(d):  
+            continue      
         for fname in sorted(os.listdir(d)):
             if fname.endswith("_protocol.json"):
                 return os.path.join(d, fname)
@@ -363,10 +365,16 @@ def build_composite_stacks(grid: ExperimentGrid, out_dir: str):
                               for t in tiles))
 
     for pos_idx, (ix, iy) in enumerate(xy_positions):
-        # Find the Z-stack depth from the actual tiles at this position
-        all_z_tiles = []
-        for ci in grid.c_indices:
-            all_z_tiles.extend(grid.get_tiles(grid.timepoints[0], ix, iy, ci))
+        # Find the Z-stack depth from the actual tiles at this position.  
+        # Use the first available timepoint that has tiles for each channel,  
+        # rather than assuming everything exists at grid.timepoints[0].  
+        all_z_tiles = []  
+        for ci in grid.c_indices:  
+            for tp in grid.timepoints:  
+                tiles = grid.get_tiles(tp, ix, iy, ci)  
+                if tiles:  
+                    all_z_tiles.extend(tiles)  
+                    break          
         if not all_z_tiles:
             continue
         nZ = max(len(grid.get_tiles(tp, ix, iy, ci))

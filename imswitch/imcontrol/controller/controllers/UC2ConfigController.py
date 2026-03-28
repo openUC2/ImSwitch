@@ -1874,7 +1874,7 @@ class UC2ConfigController(ImConWidgetController):
         resolved_chip = chip
         if chip == "auto" or not chip:
             detected = self._detect_chip_from_port(flash_port)
-            resolved_chip = detected or "esp32s3"  # fallback to esp32
+            resolved_chip = detected or "esp32s3"  # fallback to esp32s3
             self.__logger.info(f"Chip auto-detection: {detected or 'none'} → using {resolved_chip}")
         flash_params = self._CHIP_FLASH_PARAMS.get(resolved_chip, self._CHIP_FLASH_PARAMS["esp32"])
         self._emit_usb_flash_status("flashing", 27, f"Chip: {resolved_chip}, offset: {flash_params['offset']}")

@@ -9,9 +9,31 @@ import json
 import os
 import time
 import uuid
-try: import fcntl
-except ImportError:
-    fcntl = None # TODO: Implement cross-platform file locking for Windows if needed
+try:  
+    import fcntl as _fcntl  
+except ImportError:  
+    _fcntl = None  # TODO: Implement cross-platform file locking for Windows if needed  
+
+
+class _FcntlShim:  
+    """  
+    Minimal shim used on platforms where the real ``fcntl`` module is unavailable.  
+
+    Any attempt to use file locking will raise a clear, explicit error instead  
+    of failing with an AttributeError on ``None``.  
+    """  
+
+    @staticmethod  
+    def flock(*args, **kwargs):  
+        raise RuntimeError(  
+            "File locking is not supported on this platform: the 'fcntl' module "  
+            "is unavailable. Cross-platform locking has not been implemented."  
+        )  
+
+
+# Use the real fcntl when available, otherwise fall back to the shim.  
+fcntl = _fcntl if _fcntl is not None else _FcntlShim() 
+
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 from pathlib import Path

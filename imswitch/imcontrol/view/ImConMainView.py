@@ -1,9 +1,6 @@
 from dataclasses import dataclass
-from imswitch import IS_HEADLESS
-# FIXME: We should probably create another file that does not import these files
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
-from . import widgets
 try:
     from importlib.metadata import entry_points
 except ImportError:
@@ -11,17 +8,7 @@ except ImportError:
 import importlib
 import importlib.util
 
-if not IS_HEADLESS:
-    from pyqtgraph.dockarea import Dock, DockArea
-    from qtpy import QtWidgets
-    from qtpy.QtWidgets import QMainWindow
-    from imswitch.imcommon.view import PickDatasetsDialog
-    from .PickSetupDialog import PickSetupDialog
-else:
-    QMainWindow = object
-
-
-class ImConMainView(QMainWindow):
+class ImConMainView(object):
     sigPickSetup = Signal()
     sigClosing = Signal()
 

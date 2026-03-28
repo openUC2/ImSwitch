@@ -24,57 +24,11 @@ class DetectorsManager(MultiManager, SignalInterface):
         self._activeAcqHandles = []
         self._activeAcqLVHandles = []
         self._activeAcqsMutex = Mutex()
-
-        '''
-        # Default parameters for the streaming  # TODO: Not sure if this is the best place to have them - maybe a dedicated dataclass?
-        self.detectorParams["compressionlevel"]=80
-        self.detectorParams["stream_compression_algorithm"]="lz4"
-        self.detectorParams["stream_subsampling_factor"]=4  # 8 or 16
-        self.detectorParams["stream_throttle_ms"]=50  # 1,2,4,8
-        '''
-        if IS_HEADLESS:
-            # get first detector name from dictionary
-            detectorName, detectorInfo = next(iter(detectorInfos.items()))
-            self._currentDetectorName = detectorName
-            return # In headless mode, we don't start the LV worker automatically - streaming is managed by LiveViewController
-        for detectorName, detectorInfo in detectorInfos.items():
-            self._currentDetectorName = None
-            if not self._subManagers[detectorName].forAcquisition:
-                continue
-            # Connect signals - this is only used to trigger live-view # TODO: We should think about a better way to handle this as we also have the sigImageUpdated and sigUpdateImage - basically whenever we have a sigImageUpdated, the sigUpdateImage is triggered, through the MasterController - why? I think this has to go that way as
-            self._subManagers[detectorName].sigImageUpdated.connect(
-                lambda image, init, scale, detectorName=detectorName: self.sigImageUpdated.emit(
-                    detectorName, image, init, scale, detectorName==self._currentDetectorName, self.detectorParams
-                )
-            )
-            # TODO: Use this instead?
-            '''
-            def update_image(detectorName, image, init, scale):
-            self.sigImageUpdated.emit(
-                detectorName,
-                image,
-                init,
-                scale,
-                detectorName == self._currentDetectorName
-            )
-            '''
-            self._subManagers[detectorName].sigNewFrame.connect(lambda: self.sigNewFrame.emit())
-
-            # Set as default if first detector
-            if self._currentDetectorName is None:
-                self._currentDetectorName = detectorName
-
-        # A timer will collect the new frame and update it through the communication channel
-        # In headless mode, we don't start the timer automatically - streaming is managed by LiveViewController
-        self._lvWorker = LVWorker(self, updatePeriod)
-        self._thread = Thread()
-        self._lvWorker.moveToThread(self._thread)
-        self._thread.started.connect(self._lvWorker.run)
-        self._thread.finished.connect(self._lvWorker.stop)
-
-        # Note: In headless mode, LVWorker is only started when live view acquisition is explicitly requested
-        # This avoids unnecessary resource consumption. The LiveViewController handles explicit streaming.
-
+    
+        # get first detector name from dictionary
+        detectorName, detectorInfo = next(iter(detectorInfos.items()))
+        self._currentDetectorName = detectorName
+        
     def updateGlobalDetectorParams(self, params):
         # we expect a dictionary with the parameters
         self.detectorParams.update(params)
@@ -149,11 +103,6 @@ class DetectorsManager(MultiManager, SignalInterface):
         if enableAcq:
             self.execOnAll(lambda c: c.startAcquisition(), condition=lambda c: c.forAcquisition)
             self.sigAcquisitionStarted.emit()
-        if enableLV and not IS_HEADLESS:
-            # In headless mode, don't start the LVWorker timer automatically
-            # Streaming is managed explicitly by LiveViewController
-            sleep(0.3)
-            self._thread.start()
 
         return handle
 

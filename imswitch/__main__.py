@@ -181,7 +181,7 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
             except ImportError:
                 logger.error('QtWebEngineWidgets not found, disabling imnotebook')
                 enabledModuleIds.remove('imnotebook')
-
+        if 'imscripting' in enabledModuleIds: enabledModuleIds.remove('imscripting') # remove legacy code
         modulePkgs = [importlib.import_module(pythontools.joinModulePath('imswitch', moduleId))
                     for moduleId in enabledModuleIds]
 

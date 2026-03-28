@@ -89,7 +89,7 @@ def getMainViewAndController(moduleCommChannel, *_args,
         logger.debug("Overriding data save path with: "+DEFAULT_DATA_PATH)
         options_rec = dataclasses.replace(options.recording, outputFolder=DEFAULT_DATA_PATH)
         options = dataclasses.replace(options, recording=options_rec)
-        view = ImConMainViewNoQt(options, setupInfo)
+    view = ImConMainViewNoQt(options, setupInfo)
     try:
         controller = ImConMainController(options, setupInfo, view, moduleCommChannel)
     except Exception as e:

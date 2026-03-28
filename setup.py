@@ -87,7 +87,8 @@ setup(
         "koil>=2.0.5",
         "msgpack>=1.0.4",
         "esptool", 
-        "omero-py"
+        "omero-py",
+        "uc2-rest>=0.2.0.33"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
@@ -106,7 +107,7 @@ setup(
             "RPi.GPIO",
             "luma.oled",
             "smbus2",
-            "smbus"
+            "smbus" 
         ],
         'microEye': [
                     "numba>=0.61.2"

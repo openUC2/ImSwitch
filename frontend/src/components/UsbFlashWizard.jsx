@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect } from "react";  
 import { useDispatch, useSelector } from "react-redux";
 import {
   Dialog,
@@ -31,6 +31,8 @@ import {
   IconButton,
   Tooltip,
   Chip,
+  InputAdornment,
+  Switch,
 } from "@mui/material";
 import {
   Refresh as RefreshIcon,
@@ -43,6 +45,8 @@ import {
   Settings as SettingsIcon,
   DeleteForever as EraseIcon,
   Router as CanIcon,
+  Search as SearchIcon,
+  FlashOn as FlashOnIcon,
 } from "@mui/icons-material";
 
 // Redux slice
@@ -55,6 +59,7 @@ import apiUC2ConfigControllerGetOTAFirmwareServer from "../backendapi/apiUC2Conf
 import apiUC2ConfigControllerSetOTAFirmwareServer from "../backendapi/apiUC2ConfigControllerSetOTAFirmwareServer";
 import apiUC2ConfigControllerListAllFirmwareFiles from "../backendapi/apiUC2ConfigControllerListAllFirmwareFiles";
 import apiUC2ConfigControllerSendCanAddress from "../backendapi/apiUC2ConfigControllerSendCanAddress";
+import apiUC2ConfigControllerProbeDeviceState from "../backendapi/apiUC2ConfigControllerProbeDeviceState";
 
 const steps = [
   "Firmware Server",
@@ -220,6 +225,16 @@ const UsbFlashWizard = ({ open, onClose }) => {
     dispatch(usbFlashSlice.resetWizard());
   };
 
+  // Skip directly to CAN address step (no flashing)
+  const handleSkipToCanAddress = () => {
+    dispatch(usbFlashSlice.clearMessages());
+    // Load serial ports for the CAN step
+    loadSerialPorts();
+    // Jump directly to the CAN address step (step 4)
+    dispatch(usbFlashSlice.setCurrentStep(4));
+    dispatch(usbFlashSlice.setFlashResult({ status: "skipped", message: "Flashing skipped" }));
+  };
+
   // Auto-detect chip type when a port is selected
   const handlePortSelect = (portDevice) => {
     dispatch(usbFlashSlice.setSelectedPort(portDevice));
@@ -314,8 +329,25 @@ const UsbFlashWizard = ({ open, onClose }) => {
         usbFlashState.canBaudRate
       );
 
+      if (result.boot_loop_detected) {
+        dispatch(usbFlashSlice.setError(
+          "Boot-loop detected! The device is showing 'invalid header: 0xffffffff'. " +
+          "The firmware was not flashed correctly. Try using a merged firmware (_merged.bin) " +
+          "with erase flash enabled."
+        ));
+        dispatch(usbFlashSlice.setIsFlashing(false));
+        return;
+      }
+
       if (result.status === "success") {
-        dispatch(usbFlashSlice.setSuccessMessage(`CAN address ${usbFlashState.canAddress} assigned successfully`));
+        // Store state_response for display in the completion step
+        if (result.state_response !== undefined) {
+          dispatch(usbFlashSlice.setCanStateResponse(result.state_response));
+        }
+        dispatch(usbFlashSlice.setSuccessMessage(
+          `CAN address ${usbFlashState.canAddress} assigned successfully` +
+          (result.firmware_verified ? " (firmware verified ✓)" : "")
+        ));
         dispatch(usbFlashSlice.nextStep()); // Move to completion
       } else {
         dispatch(usbFlashSlice.setError(result.message || "CAN address assignment failed"));
@@ -323,6 +355,28 @@ const UsbFlashWizard = ({ open, onClose }) => {
     } catch (error) {
       console.error("Error sending CAN address:", error);
       dispatch(usbFlashSlice.setError("Failed to assign CAN address: " + error.message));
+    } finally {
+      dispatch(usbFlashSlice.setIsFlashing(false));
+    }
+  };
+
+  // --- Standalone device state probe (used in completion step) ---
+  const probeState = async () => {
+    const port = usbFlashState.selectedPort || usbFlashState.flashResult?.port;
+    if (!port) {
+      dispatch(usbFlashSlice.setError("No port available for probing"));
+      return;
+    }
+    try {
+      dispatch(usbFlashSlice.setIsFlashing(true));
+      const result = await apiUC2ConfigControllerProbeDeviceState(port, usbFlashState.canBaudRate);
+      dispatch(usbFlashSlice.setCanStateResponse(result.state_response || result.message || "No response"));
+      if (!result.firmware_ok) {
+        dispatch(usbFlashSlice.setError("Device may not be running firmware correctly (invalid header detected)"));
+      }
+    } catch (error) {
+      console.error("Error probing device state:", error);
+      dispatch(usbFlashSlice.setError("Probe failed: " + error.message));
     } finally {
       dispatch(usbFlashSlice.setIsFlashing(false));
     }
@@ -403,7 +457,14 @@ const UsbFlashWizard = ({ open, onClose }) => {
   );
 
   // --- Step 1: Select Firmware ---
-  const renderFirmwareSelection = () => (
+  const renderFirmwareSelection = () => {
+    // Filter by merged-firmware toggle first, then by search query
+    const query = (usbFlashState.firmwareSearchQuery || "").toLowerCase();
+    const filteredFiles = usbFlashState.firmwareFiles
+      .filter((fw) => usbFlashState.showMergedFirmware || !fw.filename.includes("_merged"))
+      .filter((fw) => !query || fw.filename.toLowerCase().includes(query));
+
+    return (
     <Box sx={{ mt: 2 }}>
       <Typography variant="h6" gutterBottom>
         <MemoryIcon sx={{ mr: 1, verticalAlign: "middle" }} />
@@ -411,6 +472,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
       </Typography>
       <Typography variant="body2" color="text.secondary" gutterBottom>
         Choose the firmware file you want to flash to the device.
+        Use <strong>_merged</strong> binaries when flashing with "erase flash"
+        or when flashing a new device for the first time.
       </Typography>
 
       {usbFlashState.isLoadingFirmware ? (
@@ -419,6 +482,45 @@ const UsbFlashWizard = ({ open, onClose }) => {
         </Box>
       ) : usbFlashState.firmwareFiles.length > 0 ? (
         <Box sx={{ mt: 2 }}>
+          {/* Search bar */}
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="Search firmware files..."
+            value={usbFlashState.firmwareSearchQuery || ""}
+            onChange={(e) => dispatch(usbFlashSlice.setFirmwareSearchQuery(e.target.value))}
+            sx={{ mb: 1 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon color="action" />
+                </InputAdornment>
+              ),
+            }}
+          />
+
+          {/* Merged firmware opt-in toggle (off by default to avoid BOOT_ADDR errors) */}
+          <FormControlLabel
+            control={
+              <Switch
+                checked={usbFlashState.showMergedFirmware}
+                onChange={(e) => dispatch(usbFlashSlice.setShowMergedFirmware(e.target.checked))}
+                size="small"
+                color="warning"
+              />
+            }
+            label={<Typography variant="body2">Show merged firmware (advanced)</Typography>}
+            sx={{ mb: 1 }}
+          />
+          {usbFlashState.showMergedFirmware && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Merged binaries include the bootloader and partition table. Only use them when
+              flashing a brand-new device or when "erase flash" is required. If you see{" "}
+              <code>invalid header: 0xffffffff</code> after flashing, the binary was not built
+              with <code>BOOT_ADDR=0x0000</code> and cannot be used as a merged image.
+            </Alert>
+          )}
+
           <FormControl component="fieldset" sx={{ width: "100%" }}>
             <RadioGroup
               value={usbFlashState.selectedFirmware?.filename || ""}
@@ -429,7 +531,7 @@ const UsbFlashWizard = ({ open, onClose }) => {
                 dispatch(usbFlashSlice.setSelectedFirmware(selected || null));
               }}
             >
-              {usbFlashState.firmwareFiles.map((fw) => (
+              {filteredFiles.length > 0 ? filteredFiles.map((fw) => (
                 <Paper
                   key={fw.filename}
                   sx={{
@@ -451,6 +553,9 @@ const UsbFlashWizard = ({ open, onClose }) => {
                       <Box>
                         <Typography variant="body1" sx={{ fontFamily: "monospace" }}>
                           {fw.filename}
+                          {fw.filename.includes("_merged") && (
+                            <Chip label="merged" size="small" color="success" sx={{ ml: 1 }} />
+                          )}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
                           {(fw.size / 1024).toFixed(1)} KB
@@ -461,9 +566,17 @@ const UsbFlashWizard = ({ open, onClose }) => {
                     sx={{ width: "100%", m: 0 }}
                   />
                 </Paper>
-              ))}
+              )) : (
+                <Alert severity="info" sx={{ mt: 1 }}>
+                  No firmware files match "{usbFlashState.firmwareSearchQuery}".
+                </Alert>
+              )}
             </RadioGroup>
           </FormControl>
+
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+            Showing {filteredFiles.length} of {usbFlashState.firmwareFiles.length} files
+          </Typography>
 
           <Button
             size="small"
@@ -480,7 +593,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
         </Alert>
       )}
     </Box>
-  );
+    );
+  };
 
   // --- Step 2: Port & Options ---
   const renderPortSelection = () => (
@@ -630,11 +744,24 @@ const UsbFlashWizard = ({ open, onClose }) => {
                 <Box>
                   <Typography variant="body2">Erase flash before writing</Typography>
                   <Typography variant="caption" color="text.secondary">
-                    Full erase – useful for clean installs or switching firmware type
+                    Full erase – useful for clean installs or switching firmware type.
+                    Requires a <strong>merged</strong> firmware binary.
                   </Typography>
                 </Box>
               }
             />
+
+            {/* Warning: erase + non-merged */}
+            {usbFlashState.eraseFlash &&
+              usbFlashState.selectedFirmware &&
+              !usbFlashState.selectedFirmware.filename.includes("_merged") && (
+              <Alert severity="warning" sx={{ mt: 1, mb: 1 }}>
+                <strong>Warning:</strong> Erase flash is enabled but the selected firmware
+                (<code>{usbFlashState.selectedFirmware.filename}</code>) is not a merged binary.
+                The backend will automatically disable erase to protect the existing
+                bootloader. Use a <code>_merged.bin</code> firmware for erasing.
+              </Alert>
+            )}
 
             <FormControlLabel
               control={
@@ -664,14 +791,43 @@ const UsbFlashWizard = ({ open, onClose }) => {
             />
           </Paper>
 
+          {/* 12V power warning for XIAO boards */}
+          <Alert severity="warning" icon={<FlashOnIcon />} sx={{ mt: 2 }}>
+            <Typography variant="body2">
+              <strong>⚡ XIAO boards:</strong> If flashing fails or the device doesn't enter
+              download mode, try turning off the 12V power supply (press the emergency stop
+              button) before flashing. The XIAO USB boot pin may not trigger correctly
+              with 12V power connected.
+            </Typography>
+          </Alert>
+
           {/* Selected firmware summary */}
           {usbFlashState.selectedFirmware && (
             <Alert severity="info" sx={{ mt: 2 }}>
               <strong>Firmware:</strong> {usbFlashState.selectedFirmware.filename} ({(usbFlashState.selectedFirmware.size / 1024).toFixed(1)} KB)
+              {usbFlashState.selectedFirmware.filename.includes("_merged")
+                ? <Chip label="merged" size="small" color="success" sx={{ ml: 0.5 }} />
+                : <Chip label="app-only" size="small" color="default" sx={{ ml: 0.5 }} />
+              }
               {usbFlashState.chipType !== "auto" && <> &bull; <strong>Chip:</strong> {usbFlashState.chipType}</>}
               {usbFlashState.eraseFlash && <> &bull; <Chip label="Erase first" size="small" color="warning" sx={{ ml: 0.5 }} /></>}
             </Alert>
           )}
+
+          {/* Skip flash – just assign CAN address */}
+          <Divider sx={{ my: 2 }} />
+          <Button
+            variant="outlined"
+            color="secondary"
+            startIcon={<CanIcon />}
+            onClick={handleSkipToCanAddress}
+            fullWidth
+          >
+            Skip Flashing – Just Assign CAN Address
+          </Button>
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block", textAlign: "center" }}>
+            Use this if the device already has the correct firmware and you only need to set its CAN bus address.
+          </Typography>
         </Box>
       )}
     </Box>
@@ -755,11 +911,58 @@ const UsbFlashWizard = ({ open, onClose }) => {
         CAN Bus Address Assignment
       </Typography>
       <Typography variant="body2" color="text.secondary" gutterBottom>
-        Optionally assign a CAN bus address to the freshly-flashed device.
+        Assign a CAN bus address to the device.
         This tells the device which axis/role it serves on the CAN bus.
       </Typography>
 
-      <Paper sx={{ p: 3, mt: 3 }}>
+      {/* Port selection (when flash was skipped) */}
+      {usbFlashState.flashResult?.status === "skipped" && (
+        <Paper sx={{ p: 2, mt: 2, mb: 2 }}>
+          <Typography variant="subtitle2" gutterBottom>
+            <UsbIcon sx={{ mr: 1, verticalAlign: "middle", fontSize: 18 }} />
+            Select Serial Port
+          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+            <Tooltip title="Refresh port list">
+              <IconButton onClick={loadSerialPorts} size="small">
+                <RefreshIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
+          <FormControl component="fieldset" sx={{ width: "100%" }}>
+            <RadioGroup
+              value={usbFlashState.selectedPort || ""}
+              onChange={(e) => dispatch(usbFlashSlice.setSelectedPort(e.target.value))}
+            >
+              {usbFlashState.availablePorts.map((port) => {
+                const hint = getDeviceHint(port);
+                return (
+                  <FormControlLabel
+                    key={port.device}
+                    value={port.device}
+                    control={<Radio />}
+                    label={
+                      <Typography variant="body2">
+                        {port.device}
+                        {hint && (
+                          <Chip label={hint.label} color={hint.color} size="small" sx={{ ml: 1 }} />
+                        )}
+                      </Typography>
+                    }
+                  />
+                );
+              })}
+            </RadioGroup>
+          </FormControl>
+          {usbFlashState.availablePorts.length === 0 && (
+            <Alert severity="warning" sx={{ mt: 1 }}>
+              No serial ports detected. Connect the device and click refresh.
+            </Alert>
+          )}
+        </Paper>
+      )}
+
+      <Paper sx={{ p: 3, mt: usbFlashState.flashResult?.status === "skipped" ? 0 : 3 }}>
         <FormControl component="fieldset" sx={{ width: "100%" }}>
           <RadioGroup
             value={usbFlashState.canAddress === null ? "skip" : String(usbFlashState.canAddress)}
@@ -788,9 +991,8 @@ const UsbFlashWizard = ({ open, onClose }) => {
                 onChange={(e) => dispatch(usbFlashSlice.setCanBaudRate(e.target.value))}
                 label="Serial Baud Rate"
               >
-                <MenuItem value={9600}>9600</MenuItem>
                 <MenuItem value={115200}>115200 (default)</MenuItem>
-                <MenuItem value={500000}>500000</MenuItem>
+                <MenuItem value={921600}>921600 (high-speed)</MenuItem>
               </Select>
             </FormControl>
 
@@ -802,10 +1004,16 @@ const UsbFlashWizard = ({ open, onClose }) => {
         )}
       </Paper>
 
-      {usbFlashState.flashResult && (
+      {usbFlashState.flashResult && usbFlashState.flashResult.status === "success" && (
         <Alert severity="success" sx={{ mt: 2 }}>
           Firmware was flashed successfully to <strong>{usbFlashState.flashResult.port}</strong>
           {usbFlashState.flashResult.chip && <> (chip: {usbFlashState.flashResult.chip})</>}
+        </Alert>
+      )}
+
+      {usbFlashState.flashResult?.status === "skipped" && (
+        <Alert severity="info" sx={{ mt: 2 }}>
+          Flashing was skipped. Only CAN address assignment will be performed.
         </Alert>
       )}
     </Box>
@@ -870,6 +1078,63 @@ const UsbFlashWizard = ({ open, onClose }) => {
           </List>
         </Paper>
       )}
+
+      {/* Device state verification output from /state_get probe */}
+      {usbFlashState.canStateResponse && (
+        <Paper sx={{ p: 2, mt: 2, textAlign: "left" }}>
+          <Typography variant="subtitle2" gutterBottom>
+            <CheckCircleIcon color="success" sx={{ mr: 1, verticalAlign: "middle", fontSize: 18 }} />
+            Device State Verification:
+          </Typography>
+          <Typography
+            variant="body2"
+            component="pre"
+            sx={{
+              whiteSpace: "pre-wrap",
+              fontFamily: "monospace",
+              fontSize: "0.8rem",
+              mt: 1,
+              overflowX: "auto",
+            }}
+          >
+            {typeof usbFlashState.canStateResponse === "string"
+              ? usbFlashState.canStateResponse
+              : JSON.stringify(usbFlashState.canStateResponse, null, 2)}
+          </Typography>
+        </Paper>
+      )}
+
+      {/* Re-probe button + baud selector */}
+      <Paper sx={{ p: 2, mt: 2, textAlign: "left" }}>
+        <Typography variant="subtitle2" gutterBottom>
+          Probe Device State
+        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+          <FormControl size="small" sx={{ minWidth: 200 }}>
+            <InputLabel>Baud Rate</InputLabel>
+            <Select
+              value={usbFlashState.canBaudRate}
+              onChange={(e) => dispatch(usbFlashSlice.setCanBaudRate(e.target.value))}
+              label="Baud Rate"
+            >
+              <MenuItem value={115200}>115200 (default)</MenuItem>
+              <MenuItem value={921600}>921600 (high-speed)</MenuItem>
+            </Select>
+          </FormControl>
+          <Button
+            variant="outlined"
+            color="primary"
+            onClick={probeState}
+            disabled={usbFlashState.isFlashing}
+            startIcon={usbFlashState.isFlashing ? <CircularProgress size={16} /> : <CheckCircleIcon />}
+          >
+            {usbFlashState.isFlashing ? "Probing..." : "Probe Device"}
+          </Button>
+        </Box>
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
+          Sends {`{"task":"/state_get"}`} to the device and shows the firmware response.
+        </Typography>
+      </Paper>
 
       {/* Start Over button to flash another device */}
       <Box sx={{ mt: 3 }}>

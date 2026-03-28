@@ -85,11 +85,11 @@ class PositionerController(ImConWidgetController):
             else:
                 speed = 5000 # FIXME: default speed for headless mode
         # set speed for the positioner
-        self.setSpeed(positionerName=positionerName, speed=speed, axis=axis)
+        # self.setSpeed(positionerName=positionerName, speed=speed, axis=axis)
                 
         try:
             # special case for UC2 positioner that takes more arguments
-            self._master.positionersManager[positionerName].move(dist, axis, isAbsolute, isBlocking)
+            self._master.positionersManager[positionerName].move(dist, axis, isAbsolute, isBlocking, speed)
             if dist is None:
                 self.__logger.info(f"Moving {positionerName}, axis {axis}, at speed {str(speed)}")
                 self._master.positionersManager[positionerName].moveForeverByAxis(speed=speed, axis=axis, is_stop=~(abs(speed)>0))

@@ -14,6 +14,16 @@ from typing import Any, Optional, Dict, List
 
 from imswitch.imcommon.model import initLogger
 
+_shared_event_loop = None 
+
+# Function to set the shared event loop (called by ImSwitchServer)
+def set_shared_event_loop(loop):
+    """Set the shared event loop for thread-safe signal emission."""
+    global _shared_event_loop
+    _shared_event_loop = loop
+    print(f"Shared event loop set: {loop}")
+
+
 try:
     from unitelabs.cdk import Connector
     from unitelabs.cdk.config import (
@@ -66,6 +76,7 @@ class SiLA2Manager:
         self._features: List[Any] = []
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
+        self._serve_future = None  # concurrent.futures.Future from run_coroutine_threadsafe
         self._running = False
 
         if not HAS_SILA2:
@@ -115,6 +126,7 @@ class SiLA2Manager:
             self.__logger.error(f"Failed to load SiLA2 config from setupInfo: {e}")
             self._config = {"enabled": False}
 
+        # self._config = 
     # ------------------------------------------------------------------
     # Feature registration
     # ------------------------------------------------------------------
@@ -136,7 +148,7 @@ class SiLA2Manager:
     # ------------------------------------------------------------------
 
     def start_server(self) -> None:
-        """Create the Connector, register features, and start serving in a background thread."""
+        """Schedule the Connector on the shared FastAPI event loop, or fall back to a dedicated thread."""
         if not HAS_SILA2:
             self.__logger.warning("Cannot start SiLA2 server – unitelabs-cdk not available")
             return
@@ -147,17 +159,25 @@ class SiLA2Manager:
             self.__logger.warning("SiLA2 server is already running")
             return
 
-        self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(
-            target=self._run_server_loop,
-            daemon=True,
-            name="SiLA2-Server",
-        )
-        self._thread.start()
-        self.__logger.info("SiLA2 server thread started")
+        # Prefer the shared FastAPI/uvicorn event loop so we don't fight over
+        # the async runtime with a second loop running in a separate thread.
+        if _shared_event_loop is not None and _shared_event_loop.is_running():
+            self._loop = _shared_event_loop
+            self._serve_future = asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
+            self.__logger.info("SiLA2 server scheduled on shared FastAPI event loop")
+        else:
+            # Fall back: spin up a dedicated loop in a daemon thread.
+            self._loop = asyncio.new_event_loop()
+            self._thread = threading.Thread(
+                target=self._run_server_loop,
+                daemon=True,
+                name="SiLA2-Server",
+            )
+            self._thread.start()
+            self.__logger.info("SiLA2 server thread started (dedicated loop)")
 
     def _run_server_loop(self) -> None:
-        """Entry point for the background thread that runs the asyncio event loop."""
+        """Entry point for the dedicated fallback thread."""
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._serve())
@@ -183,13 +203,19 @@ class SiLA2Manager:
                 vendor_url=cfg.get("vendor_url", "https://openuc2.com/"),
             )
         )
-
+        # TODO: Hardcoded values => load from config.json
+        
+        connector_config.cloud_server_endpoint.hostname =  "00000000-0000-0000-0000-000000000000.dev.unitelabs.io"
+        connector_config.cloud_server_endpoint.port = 443
+        connector_config.cloud_server_endpoint.tls = True
+        
         self._connector = Connector(connector_config)
 
+        
         for feature in self._features:
             self._connector.register(feature)
             self.__logger.info(f"SiLA2: registered feature {type(feature).__name__}")
-
+        
         self._running = True
         self.__logger.info(
             f"SiLA2 Connector serving on "
@@ -208,17 +234,34 @@ class SiLA2Manager:
                 port=cfg.get("server_port", 50052),
             )
         else:
-            # Last-resort fallback – keep the event loop alive
             self.__logger.warning(
                 "SiLA2 Connector has neither start() nor serve() – "
                 "running in no-op mode (features will not be reachable)"
             )
+
+        # connector.start() / serve() may return immediately while the server
+        # continues running in background asyncio tasks.  Keep this coroutine
+        # alive so that cancellation (stop_server) can tear everything down
+        # cleanly and _running stays True for the lifetime of the server.
+        try:
             while self._running:
                 await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            self.__logger.info("SiLA2 _serve coroutine cancelled")
+        finally:
+            self._running = False
 
     # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
+
+    def stop_server(self) -> None:
+        """Stop the SiLA2 server gracefully."""
+        self._running = False
+        if self._serve_future is not None:
+            self._serve_future.cancel()
+            self._serve_future = None
+        self.__logger.info("SiLA2 server stopped")
 
     def is_enabled(self) -> bool:
         """Check whether SiLA2 integration is enabled and the CDK is available."""

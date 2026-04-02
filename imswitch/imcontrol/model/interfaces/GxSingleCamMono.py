@@ -1,9 +1,6 @@
 # version:1.0.1905.9051
 import gxipy as gx
 
-
-import napari
-
 def main():
     # create a device manager
     device_manager = gx.DeviceManager()

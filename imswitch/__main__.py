@@ -7,15 +7,14 @@ import os
 import imswitch
 from imswitch.config import get_config
 
-# python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes
-# python -m imswitch --headless --http-port 8001 --config-folder /Users/bene --config-file None
+# python -m imswitch --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes
+# python -m imswitch --http-port 8001 --config-folder /Users/bene --config-file None
 
 
-def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
+def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
          data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None, jupyter_port:int=None,
          default_firmware_route:str="http://localhost/firmware"):
     '''
-    is_headless: bool => start with or without qt [deprecated - only headless fornow!]
     default_config: str => path to the config file
     http_port: int => port number (default: 8001)
     ssl: bool => use ssl (default: True)
@@ -26,11 +25,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
     with_kernel: bool => start with embedded Jupyter kernel for external notebook connections
     jupyter_port: int => Jupyter notebook port (default: 8888)
 
-
-
-    To start imswitch in headless using the arguments, you can call the main file with the following arguments:
-        python main.py --headless or
-        python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes --with-kernel
+    To start imswitch using the arguments, you can call the main file with the following arguments:
+        python -m imswitch --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes --with-kernel
     '''
     try:
         print("Starting ImSwitch using version: ", imswitch.__version__)
@@ -54,17 +50,13 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         config.to_legacy_globals(imswitch)
         # Only parse command line arguments if no parameters were passed to main()
         # This prevents argparse conflicts when called from test threads
-        if (is_headless is None and default_config is None and http_port is None and
+        if (default_config is None and http_port is None and
             ssl is None and config_folder is None and
             data_folder is None and scan_ext_data_folder is None and ext_data_folder is None and
             with_kernel is None and jupyter_port is None):
             # @ethanjli this is the actual code that parses the variables from commandline - needs a review probably?
             try: # TODO: Google Colab does not support argparse
-                parser = argparse.ArgumentParser(description='Process some integers.')
-
-                # specify if run in headless mode
-                parser.add_argument('--headless', dest='headless', default=False, action='store_true',
-                                    help='run in headless mode')
+                parser = argparse.ArgumentParser(description='ImSwitch microscope control framework.')
 
                 # specify config file name - None for default
                 parser.add_argument('--config-file', dest='config_file', type=str, default=None,
@@ -134,7 +126,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         # Apply final configuration update to legacy globals (ensures consistency)
         config.to_legacy_globals(imswitch)
 
-        # FIXME: !!!! This is because the headless flag is loaded after commandline input
         from imswitch.imcommon import prepareApp, launchApp
         from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
         from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger

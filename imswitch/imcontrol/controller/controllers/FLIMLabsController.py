@@ -60,23 +60,6 @@ class FLIMLabsController(LiveUpdatedController):
         self.flim_ws.setcallback_linedata(self.displayFLIMImage)
 
         # Connect FLIMLabsWidget signals
-        if not imswitch.IS_HEADLESS:
-            # Connect CommunicationChannel signals
-
-            # scouting
-            self._widget.start_button_scouting.clicked.connect(self.start_scouting)
-            self._widget.stop_button_scouting.clicked.connect(self.stop_scouting)
-
-            # reference
-            self._widget.start_button_reference.clicked.connect(self.start_reference)
-            self._widget.stop_button_reference.clicked.connect(self.stop_reference)
-
-            # imaging
-            self._widget.start_button_imaging.clicked.connect(self.start_imaging)
-            self._widget.stop_button_imaging.clicked.connect(self.stop_imaging)
-
-            self.sigImageReceived.connect(self.displayFLIMImageNapari)
-
     def displayFLIMImage(self, image, name="FLIM Image", colormap='gray'):
         self.mImage = image
         self.mImageName = name

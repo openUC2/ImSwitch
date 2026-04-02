@@ -4,7 +4,6 @@ try:
 except:
     isNIP = False
 
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import LiveUpdatedController
@@ -40,9 +39,6 @@ class HistogrammController(LiveUpdatedController):
         self.sigHistogramComputed.emit(units, hist)
 
         # display the curve
-        if not IS_HEADLESS:
-            self._widget.setHistogrammData(units,hist)
-
     @APIExport(runOnUIThread=False)
     def histogrammActive(self):
         '''just a dummy endpoint to check if the histogramm is active'''

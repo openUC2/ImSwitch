@@ -2,7 +2,6 @@ from functools import partial
 
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
-from imswitch.imcontrol.view import guitools as guitools
 from imswitch.imcommon.model import initLogger
 
 class WellPlateController(ImConWidgetController):
@@ -40,12 +39,7 @@ class WellPlateController(ImConWidgetController):
         """Connect Wells (Buttons) to the Sample Pop-Up Method"""
         # Connect signals for all buttons
         for coords, btn in self._widget.Wells.items():
-            # Connect signals
-            #self.pars['UpButton' + parNameSuffix].clicked.connect(
-            #    lambda *args, axis=axis: self.sigStepUpClicked.emit(positionerName, axis)
-            #)
-            if isinstance(btn, guitools.BetterPushButton):
-                btn.clicked.connect(partial(self.moveToXY, coords))
+            btn.clicked.connect(partial(self.moveToXY, coords))
 
 
 class WellplateScanner():

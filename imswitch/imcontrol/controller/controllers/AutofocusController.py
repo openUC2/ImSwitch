@@ -1111,7 +1111,6 @@ class AutofocusController(ImConWidgetController):
                 last_fn = fn
 
             img = frame
-            # Note: flatfield correction not implemented in fast autofocus mode
 
             img_proc = FrameProcessor.extract(img, min(img.shape[0], img.shape[1], nCropsize))
             if img_proc.ndim == 3:

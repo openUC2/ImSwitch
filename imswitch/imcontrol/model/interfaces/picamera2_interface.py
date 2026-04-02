@@ -86,8 +86,6 @@ class CameraPicamera2:
         self.NBuffer = 5
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
-        self.flatfieldImage = None
-        self.isFlatfielding = False
 
         self.camera = None
         self.DEBUG = False
@@ -398,17 +396,6 @@ class CameraPicamera2:
             array = np.flipud(array)
         if self.flipImage[1]:  # Flip X
             array = np.fliplr(array)
-
-        # Apply flatfielding if enabled
-        if self.isFlatfielding and self.flatfieldImage is not None:
-            try:
-                # Normalize by flatfield
-                array = np.clip(
-                    array.astype(np.float32) / (self.flatfieldImage.astype(np.float32) + 1e-6) * 255,
-                    0, 255
-                ).astype(np.uint8)
-            except Exception as e:
-                self.__logger.error(f"Flatfield correction failed: {e}")
 
         return array
 
@@ -841,14 +828,6 @@ class CameraPicamera2:
         # For now, just store the value
         self.__logger.info(f"Frame rate set to {frame_rate} (requires restart)")
 
-    def set_flatfielding(self, is_flatfielding: bool):
-        """Enable/disable flatfielding"""
-        self.isFlatfielding = is_flatfielding
-
-    def setFlatfieldImage(self, flatfieldImage: np.ndarray, isFlatfieldEnabled: bool = True):
-        """Set flatfield correction image"""
-        self.flatfieldImage = flatfieldImage
-        self.isFlatfielding = isFlatfieldEnabled
 
     def set_blacklevel(self, blacklevel: int):
         """Set black level (not implemented for RPi camera)"""
@@ -962,7 +941,6 @@ class CameraPicamera2:
             "frame_rate": self.set_frame_rate,
             "blacklevel": self.set_blacklevel,
             "exposure_mode": self.set_exposure_mode,
-            "flat_fielding": self.set_flatfielding,
             "awb_mode": self.set_white_balance_mode,
         }
 
@@ -1004,7 +982,6 @@ class CameraPicamera2:
             "frame_rate": lambda: self.frame_rate,
             "blacklevel": lambda: 0,
             "exposure_mode": lambda: "auto" if self.exposure_auto else "manual",
-            "flat_fielding": lambda: self.isFlatfielding,
             "frame_number": lambda: self.frameNumber,
             "awb_mode": lambda: self.awb_mode,
             "red_gain": lambda: self.colour_gains[0],
@@ -1029,40 +1006,6 @@ class CameraPicamera2:
     def openPropertiesGUI(self):
         """Open properties GUI (not implemented)"""
         self.__logger.warning("Properties GUI not available")
-
-    def recordFlatfieldImage(self, nFrames: int = 10, nGauss: int = 5, nMedian: int = 5):
-        """Record flatfield image by averaging multiple frames"""
-        if not self.is_streaming:
-            self.__logger.error("Camera must be streaming to record flatfield")
-            return
-
-        self.__logger.info(f"Recording flatfield image ({nFrames} frames)...")
-
-        frames = []
-        for i in range(nFrames):
-            frame = self.getLast(timeout=2.0)
-            if frame is not None:
-                frames.append(frame.astype(np.float32))
-            time.sleep(0.1)
-
-        if len(frames) < nFrames:
-            self.__logger.warning(f"Only captured {len(frames)}/{nFrames} frames")
-
-        # Average frames
-        flatfield = np.mean(frames, axis=0).astype(np.uint8)
-
-        # Apply smoothing if requested
-        if nGauss > 0:
-            from skimage.filters import gaussian
-            flatfield = gaussian(flatfield, sigma=nGauss, preserve_range=True).astype(np.uint8)
-
-        if nMedian > 0:
-            from skimage.filters import median
-            from skimage.morphology import disk
-            flatfield = median(flatfield, disk(nMedian)).astype(np.uint8)
-
-        self.setFlatfieldImage(flatfield, True)
-        self.__logger.info("Flatfield image recorded")
 
     def getFrameNumber(self):
         """Get current frame number"""
@@ -1097,9 +1040,6 @@ class MockCameraPicamera2:
         self.gain = kwargs.get('gain', 1.0)
         self.frame_rate = kwargs.get('frame_rate', 30)
         self.trigger_source = "Continuous"
-
-        self.flatfieldImage = None
-        self.isFlatfielding = False
 
         self._grab_thread = None
         self._stop_event = threading.Event()
@@ -1189,10 +1129,6 @@ class MockCameraPicamera2:
     def set_camera_mode(self, auto): pass
     def set_gain(self, g): self.gain = g
     def set_frame_rate(self, fr): self.frame_rate = fr
-    def set_flatfielding(self, enabled): self.isFlatfielding = enabled
-    def setFlatfieldImage(self, img, enabled=True):
-        self.flatfieldImage = img
-        self.isFlatfielding = enabled
     def set_blacklevel(self, level): pass
     def set_pixel_format(self, fmt): pass
     def setBinning(self, binning): pass
@@ -1202,7 +1138,6 @@ class MockCameraPicamera2:
     def getPropertyValue(self, name): return 0
     def send_trigger(self): return True
     def openPropertiesGUI(self): pass
-    def recordFlatfieldImage(self, *args, **kwargs): pass
     def getFrameNumber(self): return self.frameNumber
     def reconnectCamera(self): pass
     def set_white_balance_mode(self, mode): self.awb_mode = getattr(self, 'awb_mode', 'manual')

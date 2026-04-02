@@ -518,15 +518,6 @@ class DPCController(ImConWidgetController):
         except:
             pass
 
-    # =========================
-    # Legacy GUI compatibility
-    # =========================
-
-    def toggleRecording(self):
-        """Toggle recording mode"""
-        if IS_HEADLESS:
-            return
-        self._params.save_images = not self._params.save_images
 
 '''#####################################
 # DPC PROCESSOR

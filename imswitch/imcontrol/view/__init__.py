@@ -1,3 +1,3 @@
-from .ImConMainView import ImConMainView, ImConMainViewNoQt
-from .guitools import ViewSetupInfo
+from .ImConMainView import ImConMainViewNoQt
+from .guitools.ViewSetupInfo import ViewSetupInfo
 

@@ -71,17 +71,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-PyQt5 = [
-    "qtpy >= 1.9",
-    "PyQt5 >= 5.15.2",
-    "QDarkStyle >= 3",
-    "QScintilla >= 2.12",
-    "PyQtWebEngine >= 5.15.2",
-    "pyqtgraph >= 0.12.1",
-    "napari[pyqt5] >= 0.6.0",
-    "lantzdev[qt] >= 0.5.2",
-    "qtpy >= 1.9",
-]
 Microeye = [
     "numba>=0.61.2",
 ]

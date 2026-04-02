@@ -1,6 +1,5 @@
 from typing import Dict, List
 
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import APIExport
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import initLogger
@@ -26,7 +25,6 @@ class PositionerController(ImConWidgetController):
             hasSpeed = hasattr(pManager, 'speed')
             hasHome = hasattr(pManager, 'home')
             hasStop = hasattr(pManager, 'stop')
-            if not IS_HEADLESS: self._widget.addPositioner(pName, pManager.axes, hasSpeed, hasHome, hasStop)
             for axis in pManager.axes:
                 self.setSharedAttr(pName, axis, _positionAttr, pManager.position[axis])
                 if hasSpeed:
@@ -44,13 +42,6 @@ class PositionerController(ImConWidgetController):
         self._commChannel.sigUpdateMotorPosition.connect(self._onMotorPositionUpdate)
 
         # Connect PositionerWidget signals
-        if not IS_HEADLESS:
-            self._widget.sigStepUpClicked.connect(self.stepUp)
-            self._widget.sigStepDownClicked.connect(self.stepDown)
-            self._widget.sigStepAbsoluteClicked.connect(self.moveAbsolute)
-            self._widget.sigHomeAxisClicked.connect(self.homeAxis)
-            self._widget.sigStopAxisClicked.connect(self.stopAxis)
-
     def closeEvent(self):
         self._master.positionersManager.execOnAll(
             lambda p: [p.setPosition(0, axis) for axis in p.axes],
@@ -77,13 +68,7 @@ class PositionerController(ImConWidgetController):
 
         # get all speed values from the GUI
         if speed is None:
-            if not IS_HEADLESS:
-                if axis =="XY":
-                    speed = self._widget.getSpeed(positionerName, "X")
-                else:
-                    speed = self._widget.getSpeed(positionerName, axis)
-            else:
-                speed = 5000 # FIXME: default speed for headless mode
+            speed = 5000 # FIXME: default speed for headless mode
         # set speed for the positioner
         # self.setSpeed(positionerName=positionerName, speed=speed, axis=axis)
                 
@@ -127,7 +112,6 @@ class PositionerController(ImConWidgetController):
             positionerName = self._master.positionersManager.getAllDeviceNames()[0]
         self._master.positionersManager[positionerName].setSpeed(speed, axis)
         self.setSharedAttr(positionerName, axis, _speedAttr, speed)
-        if not IS_HEADLESS: self._widget.setSpeedSize(positionerName, axis, speed)
 
     def _onMotorPositionUpdate(self, positionData: Dict = None):
         """
@@ -158,18 +142,11 @@ class PositionerController(ImConWidgetController):
             for single_axis in ("X", "Y"):
                 newPos = self._master.positionersManager[positionerName].position[single_axis]
                 self.setSharedAttr(positionerName, single_axis, _positionAttr, newPos)
-                if not IS_HEADLESS: 
-                    self._widget.updatePosition(positionerName, single_axis, newPos)
-        else:
             newPos = self._master.positionersManager[positionerName].position[axis]
             self.setSharedAttr(positionerName, axis, _positionAttr, newPos)
-            if not IS_HEADLESS: 
-                self._widget.updatePosition(positionerName, axis, newPos)
-
     def updateSpeed(self, positionerName, axis):
         newSpeed = self._master.positionersManager[positionerName].speed[axis]
         self.setSharedAttr(positionerName, axis, _speedAttr, newSpeed)
-        if not IS_HEADLESS: self._widget.updateSpeed(positionerName, axis, newSpeed)
 
     @APIExport(runOnUIThread=True)
     def homeAxis(self, positionerName:str=None, axis:str="X", isBlocking:bool=False, homeDirection:int=None, homeSpeed:float=None, homeEndstoppolarity:int=None, homeEndposRelease:float=None, homeTimeout:int=None):
@@ -241,7 +218,6 @@ class PositionerController(ImConWidgetController):
     def setPositionerStepSize(self, positionerName: str, stepSize: float) -> None:
         """ Sets the step size of the specified positioner to the specified
         number of micrometers. """
-        if not IS_HEADLESS: self._widget.setStepSize(positionerName, stepSize)
 
     @APIExport(runOnUIThread=True)
     def movePositioner(self, positionerName: Optional[str]=None, axis: Optional[str]="X", dist: Optional[float] = None, isAbsolute: bool = False, isBlocking: bool=False, speed: float=None) -> None:

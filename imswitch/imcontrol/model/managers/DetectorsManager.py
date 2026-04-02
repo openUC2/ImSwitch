@@ -1,6 +1,5 @@
 from time import sleep
 import numpy as np
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Mutex, Signal, SignalInterface, Thread, Timer, Worker
 from .MultiManager import MultiManager
 

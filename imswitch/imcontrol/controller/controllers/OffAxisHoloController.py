@@ -36,7 +36,6 @@ except:
 from imswitch.imcommon.model import initLogger, APIExport
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from ..basecontrollers import LiveUpdatedController
-from imswitch import IS_HEADLESS
 
 
 # =========================
@@ -234,9 +233,6 @@ class OffAxisHoloController(LiveUpdatedController):
         self._commChannel.sigUpdateImage.connect(self.update)
 
         # Legacy GUI setup
-        if not IS_HEADLESS:
-            self._setup_legacy_gui()
-
         self._logger.info("OffAxisHoloController initialized successfully")
         self._logger.info(f"  - Phase unwrap: {'skimage' if HAS_SKIMAGE_UNWRAP else 'numpy fallback'}")
         self._logger.info(f"  - Window functions: {'scipy' if HAS_SCIPY_SIGNAL else 'numpy fallback'}")
@@ -1243,11 +1239,6 @@ class OffAxisHoloController(LiveUpdatedController):
         """Legacy: Show or hide off-axis hologram processing"""
         if enabled:
             self.start_processing_offaxisholo()
-            if not IS_HEADLESS and hasattr(self, '_widget'):
-                try:
-                    self._widget.createPointsLayer()
-                except:
-                    pass
         else:
             self.stop_processing_offaxisholo()
 
@@ -1264,7 +1255,7 @@ class OffAxisHoloController(LiveUpdatedController):
 
     def selectCCCenter(self):
         """Legacy: Select cross-correlation center from GUI"""
-        if IS_HEADLESS or not hasattr(self, '_widget'):
+        if not hasattr(self, '_widget'):
             return
 
         try:
@@ -1280,7 +1271,7 @@ class OffAxisHoloController(LiveUpdatedController):
 
     def updateCCCenter(self):
         """Legacy: Update CC center from text fields"""
-        if IS_HEADLESS or not hasattr(self, '_widget'):
+        if not hasattr(self, '_widget'):
             return
 
         try:
@@ -1292,7 +1283,7 @@ class OffAxisHoloController(LiveUpdatedController):
 
     def updateCCRadius(self):
         """Legacy: Update CC radius from text field"""
-        if IS_HEADLESS or not hasattr(self, '_widget'):
+        if not hasattr(self, '_widget'):
             return
 
         try:
@@ -1303,8 +1294,7 @@ class OffAxisHoloController(LiveUpdatedController):
 
     def displayImage(self, im, name):
         """Legacy: Display image in napari widget"""
-        if IS_HEADLESS:
-            return
+        return
 
         if im.dtype == complex or np.iscomplexobj(im):
             self._widget.setImage(np.abs(im), name + "_abs")
@@ -1319,7 +1309,7 @@ class OffAxisHoloController(LiveUpdatedController):
 
     def _setup_legacy_gui(self):
         """Setup legacy GUI connections"""
-        if IS_HEADLESS or not hasattr(self, '_widget'):
+        if not hasattr(self, '_widget'):
             return
 
         try:

@@ -163,8 +163,6 @@ class CameraTucsen:
 
         self._open_camera(self.cameraNo)
         self.trigger_source = "Continuous"
-        self.isFlatfielding = False
-        self.flatfieldImage = None
 
         # Setup callback like HIK camera
         self._setup_callback()
@@ -485,9 +483,6 @@ class CameraTucsen:
             elif key in ("image_height", "height"):
                 # read-only; return current
                 return int(self.SensorHeight)
-            elif key in ("flat_fielding", "flatfielding"):
-                self.isFlatfielding = bool(property_value)
-                return self.isFlatfielding
             else:
                 self.__logger.warning(f"Unknown property '{property_name}'")
                 return self.getPropertyValue(property_name)
@@ -520,8 +515,6 @@ class CameraTucsen:
                 return self.model
             elif key in ("isrgb",):
                 return bool(self.isRGB)
-            elif key in ("flat_fielding", "flatfielding"):
-                return bool(self.isFlatfielding)
             else:
                 self.__logger.warning(f"Unknown property '{property_name}'")
                 return None
@@ -638,13 +631,6 @@ class CameraTucsen:
             else:
                 self.__logger.warning(f"Unsupported channels: {frame.ucChannels}")
                 return None
-            # Flatfield (optional)
-            if self.isFlatfielding and self.flatfieldImage is not None:
-                try:
-                    arr = arr.astype(np.float32)
-                    arr = arr - self.flatfieldImage
-                except Exception:
-                    pass
             return arr
         except Exception as e:
             self.__logger.error(f"Convert frame failed: {e}")
@@ -768,25 +754,6 @@ class CameraTucsen:
         except Exception as e:
             self.__logger.error(f"Failed to send trigger: {e}")
             return False
-
-    # -------- Flatfield stubs ------------------------------------------------
-    def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
-        self.flatfieldImage = flatfieldImage
-        self.isFlatfielding = bool(isFlatfielding)
-
-    def recordFlatfieldImage(self, n=16, median=False):
-        if not self._is_streaming.is_set():
-            return
-        frames = []
-        t_end = time.time() + 2.0  # simple time cap
-        while len(frames) < n and time.time() < t_end:
-            f = self.getLast(timeout=0.2)
-            if f is not None:
-                frames.append(f.astype(np.float32))
-        if frames:
-            stack = np.stack(frames, axis=0)
-            self.flatfieldImage = (np.median(stack, axis=0) if median else np.mean(stack, axis=0)).astype(np.float32)
-            self.isFlatfielding = True
 
     # -------- Close ----------------------------------------------------------
     def close(self):

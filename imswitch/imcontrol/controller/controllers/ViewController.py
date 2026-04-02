@@ -46,28 +46,19 @@ class ViewController(ImConWidgetController):
     @APIExport(runOnUIThread=True)
     def setLiveViewActive(self, active: bool) -> None:
         """ Sets whether the LiveView is active and updating. """
-        if IS_HEADLESS:
-            self.liveview(active)
-        else:
-            self._widget.setLiveViewActive(active)
-
+        self.liveview(active)
     #@APIExport(runOnUIThread=False)
     def getLiveViewActive(self) -> bool:
         """ Returns whether the LiveView is active and updating. """
-        if not IS_HEADLESS:
-            return self._widget.getLiveViewActive()
-        else:
-            return self._acqHandle is not None
+        return self._acqHandle is not None
 
     @APIExport(runOnUIThread=True)
     def setLiveViewGridVisible(self, visible: bool) -> None:
         """ Sets whether the LiveView grid is visible. """
-        if not IS_HEADLESS: self._widget.setLiveViewGridVisible(visible)
 
     @APIExport(runOnUIThread=True)
     def setLiveViewCrosshairVisible(self, visible: bool) -> None:
         """ Sets whether the LiveView crosshair is visible. """
-        if not IS_HEADLESS: self._widget.setLiveViewCrosshairVisible(visible)
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

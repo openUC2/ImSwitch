@@ -1,343 +1,430 @@
 """
 SiLA2Controller for OpenUC2 ImSwitch.
 
-Creates concrete SiLA2 feature implementations that delegate to ImSwitch
-managers and controllers, registers them with the SiLA2Manager, and starts
-the SiLA2 server.
-
-Pattern follows ArkitektController: the controller reads managers from
-``self._master`` and wires them to the SiLA2 feature implementations.
+Feature classes inherit sila.Feature directly and carry the @sila.* decorators
+on their own methods. 
 """
 
 import asyncio
 import base64
 import io
 import json
-import time
 from typing import Optional
 
 import numpy as np
 
 from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.model import initLogger, APIExport
-from imswitch.imcontrol.model.sila2_features import (
-    StageControlFeature,
-    ImagingControlFeature,
-    ExperimentControlFeature,
-)
+
+try:
+    from unitelabs.cdk import sila
+    HAS_CDK = True
+except ImportError:
+    sila = None
+    HAS_CDK = False
 
 # ---------------------------------------------------------------------------
-# Concrete feature implementations
+# Feature classes
 # ---------------------------------------------------------------------------
 
+if HAS_CDK:
 
-class _StageControlImpl(StageControlFeature):
-    """Concrete SiLA2 stage control backed by ImSwitch PositionersManager."""
+    class StageControlFeature(sila.Feature):
+        """Provides stage positioning commands for the OpenUC2 microscope."""
 
-    def __init__(self, master, logger):
-        super().__init__()
-        self._master = master
-        self._logger = logger
-
-    def _get_positioner(self, name: Optional[str] = None):
-        """Return the positioner manager instance."""
-        names = self._master.positionersManager.getAllDeviceNames()
-        if not names:
-            return None
-        positioner_name = name or names[0]
-        return self._master.positionersManager[positioner_name]
-
-    async def get_stage_position(self) -> str:
-        positioner = self._get_positioner()
-        if positioner is None:
-            return "0,0,0"
-        pos = positioner.getPosition()
-        x = pos.get("X", 0)
-        y = pos.get("Y", 0)
-        z = pos.get("Z", 0)
-        return f"{x},{y},{z}"
-
-    async def move_stage_to(
-        self,
-        x_um: float,
-        y_um: float,
-        z_um: float = 0.0,
-        speed: float = 10000.0,
-        is_blocking: bool = True,
-    ) -> bool:
-        positioner = self._get_positioner()
-        if positioner is None:
-            self._logger.error("No positioner available")
-            return False
-        try:
-            positioner.move(
-                value=(x_um, y_um),
-                axis="XY",
-                is_absolute=True,
-                is_blocking=is_blocking,
-                speed=(speed, speed),
+        def __init__(self, master, logger):
+            super().__init__(
+                originator="org.openuc2",
+                category="microscopy",
+                version="1.0",
             )
-            if z_um != 0.0:
-                positioner.move(
-                    value=z_um,
-                    axis="Z",
-                    is_absolute=True,
-                    is_blocking=is_blocking,
-                    speed=speed,
-                )
-            return True
-        except Exception as e:
-            self._logger.error(f"SiLA2 move_stage_to failed: {e}")
-            return False
+            self._master = master
+            self._logger = logger
 
-    async def move_stage_relative(
-        self,
-        dx_um: float = 0.0,
-        dy_um: float = 0.0,
-        dz_um: float = 0.0,
-        speed: float = 10000.0,
-        is_blocking: bool = True,
-    ) -> bool:
-        positioner = self._get_positioner()
-        if positioner is None:
-            self._logger.error("No positioner available")
-            return False
-        try:
-            if dx_um != 0.0 or dy_um != 0.0:
-                positioner.move(
-                    value=(dx_um, dy_um),
-                    axis="XY",
-                    is_absolute=False,
-                    is_blocking=is_blocking,
-                    speed=(speed, speed),
-                )
-            if dz_um != 0.0:
-                positioner.move(
-                    value=dz_um,
-                    axis="Z",
-                    is_absolute=False,
-                    is_blocking=is_blocking,
-                    speed=speed,
-                )
-            return True
-        except Exception as e:
-            self._logger.error(f"SiLA2 move_stage_relative failed: {e}")
-            return False
+        def _get_positioner(self, name: Optional[str] = None):
+            names = self._master.positionersManager.getAllDeviceNames()
+            if not names:
+                return None
+            return self._master.positionersManager[name or names[0]]
 
-    async def home_stage(self, is_blocking: bool = True) -> bool:
-        positioner = self._get_positioner()
-        if positioner is None:
-            return False
-        try:
-            if hasattr(positioner, "moveToSampleLoadingPosition"):
-                positioner.moveToSampleLoadingPosition(is_blocking=is_blocking)
-            elif hasattr(positioner, "home"):
-                positioner.home(is_blocking=is_blocking)
-            else:
-                self._logger.warning("Positioner has no home/loading position method")
+        @sila.UnobservableProperty()
+        async def get_stage_position(self) -> str:
+            """Retrieve the current XYZ position of the stage.
+
+            Returns:
+              StagePosition: Comma-separated X,Y,Z coordinates in micrometers.
+            """
+            p = self._get_positioner()
+            if p is None:
+                return "0,0,0"
+            pos = p.getPosition()
+            return f"{pos.get('X', 0)},{pos.get('Y', 0)},{pos.get('Z', 0)}"
+
+        @sila.ObservableProperty()
+        async def subscribe_stage_position(self) -> sila.Stream[str]:
+            """Stream the current XYZ position of the stage at 2 Hz.
+
+            Returns:
+              StagePosition: Comma-separated X,Y,Z coordinates in micrometers.
+            """
+            while True:
+                p = self._get_positioner()
+                if p is not None:
+                    pos = p.getPosition()
+                    yield f"{pos.get('X', 0)},{pos.get('Y', 0)},{pos.get('Z', 0)}"
+                else:
+                    yield "0,0,0"
+                await asyncio.sleep(0.5)
+
+        @sila.UnobservableCommand()
+        async def move_stage_to(
+            self,
+            x_um: float,
+            y_um: float,
+            z_um: float = 0.0,
+            speed: float = 10000.0,
+            is_blocking: bool = True,
+        ) -> bool:
+            """Move the stage to an absolute XYZ position.
+
+            Args:
+              x_um: Target X in micrometers.
+              y_um: Target Y in micrometers.
+              z_um: Target Z in micrometers.
+              speed: Movement speed in units per second.
+              is_blocking: Wait for movement to complete.
+
+            Returns:
+              Result: True if successful.
+            """
+            p = self._get_positioner()
+            if p is None:
+                self._logger.error("SiLA2 move_stage_to: no positioner available")
                 return False
-            return True
-        except Exception as e:
-            self._logger.error(f"SiLA2 home_stage failed: {e}")
-            return False
+            try:
+                p.move(value=(x_um, y_um), axis="XY", is_absolute=True,
+                       is_blocking=is_blocking, speed=(speed, speed))
+                if z_um != 0.0:
+                    p.move(value=z_um, axis="Z", is_absolute=True,
+                           is_blocking=is_blocking, speed=speed)
+                return True
+            except Exception as e:
+                self._logger.error(f"SiLA2 move_stage_to failed: {e}")
+                return False
 
+        @sila.UnobservableCommand()
+        async def move_stage_relative(
+            self,
+            dx_um: float = 0.0,
+            dy_um: float = 0.0,
+            dz_um: float = 0.0,
+            speed: float = 10000.0,
+            is_blocking: bool = True,
+        ) -> bool:
+            """Move the stage by a relative offset.
 
-class _ImagingControlImpl(ImagingControlFeature):
-    """Concrete SiLA2 imaging control backed by ImSwitch DetectorsManager / LasersManager."""
+            Args:
+              dx_um: Relative X in micrometers.
+              dy_um: Relative Y in micrometers.
+              dz_um: Relative Z in micrometers.
+              speed: Movement speed in units per second.
+              is_blocking: Wait for movement to complete.
 
-    def __init__(self, master, logger):
-        super().__init__()
-        self._master = master
-        self._logger = logger
+            Returns:
+              Result: True if successful.
+            """
+            p = self._get_positioner()
+            if p is None:
+                self._logger.error("SiLA2 move_stage_relative: no positioner available")
+                return False
+            try:
+                if dx_um != 0.0 or dy_um != 0.0:
+                    p.move(value=(dx_um, dy_um), axis="XY", is_absolute=False,
+                           is_blocking=is_blocking, speed=(speed, speed))
+                if dz_um != 0.0:
+                    p.move(value=dz_um, axis="Z", is_absolute=False,
+                           is_blocking=is_blocking, speed=speed)
+                return True
+            except Exception as e:
+                self._logger.error(f"SiLA2 move_stage_relative failed: {e}")
+                return False
 
-    def _get_detector(self, name: str = ""):
-        names = self._master.detectorsManager.getAllDeviceNames()
-        if not names:
-            return None
-        detector_name = name if name and name in names else names[0]
-        return self._master.detectorsManager[detector_name]
+        @sila.UnobservableCommand()
+        async def home_stage(self, is_blocking: bool = True) -> bool:
+            """Home the stage to the loading position.
 
-    async def get_available_detectors(self) -> str:
-        names = self._master.detectorsManager.getAllDeviceNames()
-        return ",".join(names)
+            Args:
+              is_blocking: Wait for homing to complete.
 
-    async def get_available_illumination_sources(self) -> str:
-        names = list(self._master.lasersManager.getAllDeviceNames())
-        return ",".join(names)
+            Returns:
+              Result: True if successful.
+            """
+            p = self._get_positioner()
+            if p is None:
+                return False
+            try:
+                if hasattr(p, "moveToSampleLoadingPosition"):
+                    p.moveToSampleLoadingPosition(is_blocking=is_blocking)
+                elif hasattr(p, "home"):
+                    p.home(is_blocking=is_blocking)
+                else:
+                    self._logger.warning("SiLA2 home_stage: positioner has no home method")
+                    return False
+                return True
+            except Exception as e:
+                self._logger.error(f"SiLA2 home_stage failed: {e}")
+                return False
 
-    async def snap_image(
-        self,
-        detector_name: str = "",
-        exposure_time_ms: float = -1.0,
-        gain: float = -1.0,
-    ) -> str:
-        detector = self._get_detector(detector_name)
-        if detector is None:
-            self._logger.error("No detector available for snap_image")
-            return ""
-        try:
-            # Optionally set exposure / gain
-            if exposure_time_ms > 0:
-                detector.setParameter("exposure", exposure_time_ms)
-            if gain >= 0:
-                detector.setParameter("gain", gain)
+    # -----------------------------------------------------------------------
 
-            # Acquire frame
-            frame = detector.getLatestFrame()
-            if frame is None:
+    class ImagingControlFeature(sila.Feature):
+        """Provides detector frame acquisition and illumination control."""
+
+        def __init__(self, master, logger):
+            super().__init__(
+                originator="org.openuc2",
+                category="microscopy",
+                version="1.0",
+            )
+            self._master = master
+            self._logger = logger
+
+        def _get_detector(self, name: str = ""):
+            names = self._master.detectorsManager.getAllDeviceNames()
+            if not names:
+                return None
+            return self._master.detectorsManager[name if name and name in names else names[0]]
+
+        @sila.UnobservableProperty()
+        async def get_available_detectors(self) -> str:
+            """Get a comma-separated list of available detector names.
+
+            Returns:
+              Detectors: Comma-separated detector names.
+            """
+            return ",".join(self._master.detectorsManager.getAllDeviceNames())
+
+        @sila.UnobservableProperty()
+        async def get_available_illumination_sources(self) -> str:
+            """Get a comma-separated list of available illumination source names.
+
+            Returns:
+              IlluminationSources: Comma-separated illumination source names.
+            """
+            return ",".join(self._master.lasersManager.getAllDeviceNames())
+
+        @sila.UnobservableCommand()
+        async def snap_image(
+            self,
+            detector_name: str = "",
+            exposure_time_ms: float = -1.0,
+            gain: float = -1.0,
+        ) -> str:
+            """Capture a single frame as a base64-encoded PNG.
+
+            Args:
+              detector_name: Name of detector (empty = first available).
+              exposure_time_ms: Exposure time in ms (-1 = use current).
+              gain: Camera gain (-1 = use current).
+
+            Returns:
+              FrameBase64: Base64-encoded PNG image data.
+            """
+            detector = self._get_detector(detector_name)
+            if detector is None:
+                self._logger.error("SiLA2 snap_image: no detector available")
+                return ""
+            try:
+                if exposure_time_ms > 0:
+                    detector.setParameter("exposure", exposure_time_ms)
+                if gain >= 0:
+                    detector.setParameter("gain", gain)
+                frame = detector.getLatestFrame()
+                if frame is None:
+                    return ""
+                from PIL import Image as PILImage
+                img = PILImage.fromarray(np.array(frame))
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                return base64.b64encode(buf.getvalue()).decode("ascii")
+            except Exception as e:
+                self._logger.error(f"SiLA2 snap_image failed: {e}")
                 return ""
 
-            arr = np.array(frame)
+        @sila.UnobservableCommand()
+        async def set_illumination(
+            self,
+            channel_name: str,
+            intensity: float,
+            enabled: bool = True,
+        ) -> bool:
+            """Set illumination channel intensity and state.
 
-            # Encode as PNG → base64
-            from PIL import Image as PILImage
+            Args:
+              channel_name: Name of the illumination channel.
+              intensity: Intensity value.
+              enabled: Whether the channel should be enabled.
 
-            if arr.ndim == 2:
-                img = PILImage.fromarray(arr)
-            else:
-                img = PILImage.fromarray(arr)
-
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            return b64
-        except Exception as e:
-            self._logger.error(f"SiLA2 snap_image failed: {e}")
-            return ""
-
-    async def set_illumination(
-        self,
-        channel_name: str,
-        intensity: float,
-        enabled: bool = True,
-    ) -> bool:
-        try:
-            laser_manager = self._master.lasersManager
-            all_names = laser_manager.getAllDeviceNames()
-            if channel_name not in all_names:
-                self._logger.error(
-                    f"Illumination channel '{channel_name}' not found. "
-                    f"Available: {all_names}"
-                )
+            Returns:
+              Result: True if successful.
+            """
+            try:
+                laser = self._master.lasersManager[channel_name]
+                laser.setValue(intensity)
+                laser.setEnabled(1 if enabled else 0)
+                return True
+            except Exception as e:
+                self._logger.error(f"SiLA2 set_illumination failed: {e}")
                 return False
-            laser = laser_manager[channel_name]
-            laser.setValue(intensity)
-            laser.setEnabled(1 if enabled else 0)
-            return True
-        except Exception as e:
-            self._logger.error(f"SiLA2 set_illumination failed: {e}")
-            return False
 
-    async def set_exposure_time(
-        self,
-        exposure_time_ms: float,
-        detector_name: str = "",
-    ) -> bool:
-        detector = self._get_detector(detector_name)
-        if detector is None:
-            return False
-        try:
-            detector.setParameter("exposure", exposure_time_ms)
-            return True
-        except Exception as e:
-            self._logger.error(f"SiLA2 set_exposure_time failed: {e}")
-            return False
+        @sila.UnobservableCommand()
+        async def set_exposure_time(
+            self,
+            exposure_time_ms: float,
+            detector_name: str = "",
+        ) -> bool:
+            """Set the exposure time for a detector.
 
+            Args:
+              exposure_time_ms: Exposure time in milliseconds.
+              detector_name: Name of detector (empty = first available).
 
-class _ExperimentControlImpl(ExperimentControlFeature):
-    """Concrete SiLA2 experiment control backed by ImSwitch ExperimentController."""
+            Returns:
+              Result: True if successful.
+            """
+            detector = self._get_detector(detector_name)
+            if detector is None:
+                return False
+            try:
+                detector.setParameter("exposure", exposure_time_ms)
+                return True
+            except Exception as e:
+                self._logger.error(f"SiLA2 set_exposure_time failed: {e}")
+                return False
 
-    def __init__(self, master, logger):
-        super().__init__()
-        self._master = master
-        self._logger = logger
-        self._experiment_controller = None
+    # -----------------------------------------------------------------------
 
-    def _get_experiment_controller(self):
-        """Lazily resolve the ExperimentController (registered after __init__)."""
-        if self._experiment_controller is None:
-            self._experiment_controller = self._master.getController("Experiment")
-        return self._experiment_controller
+    class ExperimentControlFeature(sila.Feature):
+        """Provides commands to submit and monitor automated experiments."""
 
-    async def start_experiment(self, experiment_json: str) -> str:
-        ec = self._get_experiment_controller()
-        if ec is None:
-            self._logger.error("ExperimentController not available – cannot start experiment")
-            return '{"error": "ExperimentController not available"}'
-
-        try:
-            # Parse the incoming JSON into the Experiment Pydantic model used
-            # by ExperimentController.startWellplateExperiment()
-            from imswitch.imcontrol.controller.controllers.ExperimentController import (
-                Experiment,
+        def __init__(self, master, logger):
+            super().__init__(
+                originator="org.openuc2",
+                category="microscopy",
+                version="1.0",
             )
+            self._master = master
+            self._logger = logger
+            self._experiment_controller = None
 
-            experiment = Experiment.model_validate_json(experiment_json)
-            self._logger.info(f"SiLA2: starting experiment '{experiment.name}'")
+        def _get_experiment_controller(self):
+            if self._experiment_controller is None:
+                self._experiment_controller = self._master.getController("Experiment")
+            return self._experiment_controller
 
-            # Delegate to the ExperimentController (runs synchronously in its
-            # own thread internally)
-            ec.startWellplateExperiment(experiment)
+        @sila.UnobservableCommand()
+        async def start_experiment(self, experiment_json: str) -> str:
+            """Start an automated experiment.
 
-            return json.dumps({"status": "started", "name": experiment.name})
-        except Exception as e:
-            self._logger.error(f"SiLA2 start_experiment failed: {e}")
-            return json.dumps({"error": str(e)})
+            Args:
+              experiment_json: JSON string describing the experiment.
 
-    async def get_experiment_status(self) -> str:
-        ec = self._get_experiment_controller()
-        if ec is None:
-            return json.dumps({"status": "unknown", "detail": "ExperimentController unavailable"})
-        try:
-            status = ec.getExperimentStatus()
-            return json.dumps(status) if isinstance(status, dict) else str(status)
-        except Exception as e:
-            self._logger.error(f"SiLA2 get_experiment_status failed: {e}")
-            return json.dumps({"error": str(e)})
+            Returns:
+              ExperimentId: Identifier for the experiment run.
+            """
+            ec = self._get_experiment_controller()
+            if ec is None:
+                return json.dumps({"error": "ExperimentController not available"})
+            try:
+                from imswitch.imcontrol.controller.controllers.ExperimentController import Experiment
+                experiment = Experiment.model_validate_json(experiment_json)
+                ec.startWellplateExperiment(experiment)
+                return json.dumps({"status": "started", "name": experiment.name})
+            except Exception as e:
+                self._logger.error(f"SiLA2 start_experiment failed: {e}")
+                return json.dumps({"error": str(e)})
 
-    async def pause_experiment(self) -> bool:
-        ec = self._get_experiment_controller()
-        if ec is None:
-            return False
-        try:
-            ec.pauseExperiment()
-            return True
-        except Exception as e:
-            self._logger.error(f"SiLA2 pause_experiment failed: {e}")
-            return False
+        @sila.UnobservableProperty()
+        async def get_experiment_status(self) -> str:
+            """Get the current status of the running experiment.
 
-    async def resume_experiment(self) -> bool:
-        ec = self._get_experiment_controller()
-        if ec is None:
-            return False
-        try:
-            ec.resumeExperiment()
-            return True
-        except Exception as e:
-            self._logger.error(f"SiLA2 resume_experiment failed: {e}")
-            return False
+            Returns:
+              ExperimentStatus: JSON string with status information.
+            """
+            ec = self._get_experiment_controller()
+            if ec is None:
+                return json.dumps({"status": "unknown"})
+            try:
+                status = ec.getExperimentStatus()
+                return json.dumps(status) if isinstance(status, dict) else str(status)
+            except Exception as e:
+                self._logger.error(f"SiLA2 get_experiment_status failed: {e}")
+                return json.dumps({"error": str(e)})
 
-    async def stop_experiment(self) -> bool:
-        ec = self._get_experiment_controller()
-        if ec is None:
-            return False
-        try:
-            ec.stopExperiment()
-            return True
-        except Exception as e:
-            self._logger.error(f"SiLA2 stop_experiment failed: {e}")
-            return False
+        @sila.UnobservableCommand()
+        async def pause_experiment(self) -> bool:
+            """Pause the currently running experiment.
 
-    async def get_experiment_schema(self) -> str:
-        try:
-            from imswitch.imcontrol.controller.controllers.ExperimentController import (
-                Experiment,
-            )
+            Returns:
+              Result: True if successful.
+            """
+            ec = self._get_experiment_controller()
+            if ec is None:
+                return False
+            try:
+                ec.pauseExperiment()
+                return True
+            except Exception as e:
+                self._logger.error(f"SiLA2 pause_experiment failed: {e}")
+                return False
 
-            return Experiment.model_json_schema()
-        except Exception as e:
-            self._logger.error(f"SiLA2 get_experiment_schema failed: {e}")
-            return json.dumps({"error": str(e)})
+        @sila.UnobservableCommand()
+        async def resume_experiment(self) -> bool:
+            """Resume a paused experiment.
+
+            Returns:
+              Result: True if successful.
+            """
+            ec = self._get_experiment_controller()
+            if ec is None:
+                return False
+            try:
+                ec.resumeExperiment()
+                return True
+            except Exception as e:
+                self._logger.error(f"SiLA2 resume_experiment failed: {e}")
+                return False
+
+        @sila.UnobservableCommand()
+        async def stop_experiment(self) -> bool:
+            """Stop the currently running experiment.
+
+            Returns:
+              Result: True if successful.
+            """
+            ec = self._get_experiment_controller()
+            if ec is None:
+                return False
+            try:
+                ec.stopExperiment()
+                return True
+            except Exception as e:
+                self._logger.error(f"SiLA2 stop_experiment failed: {e}")
+                return False
+
+        @sila.UnobservableCommand()
+        async def get_experiment_schema(self) -> str:
+            """Return the JSON schema for the Experiment data model.
+
+            Returns:
+              SchemaJson: JSON schema string for the Experiment model.
+            """
+            try:
+                from imswitch.imcontrol.controller.controllers.ExperimentController import Experiment
+                return json.dumps(Experiment.model_json_schema())
+            except Exception as e:
+                self._logger.error(f"SiLA2 get_experiment_schema failed: {e}")
+                return json.dumps({"error": str(e)})
 
 
 # ---------------------------------------------------------------------------
@@ -346,20 +433,16 @@ class _ExperimentControlImpl(ExperimentControlFeature):
 
 
 class SiLA2Controller(ImConWidgetController):
-    """
-    Controller for the SiLA2 integration in ImSwitch.
-
-    Creates concrete SiLA2 feature implementations that delegate to ImSwitch
-    hardware managers, registers them with the SiLA2Manager, and starts the
-    SiLA2 server.
-    """
+    """Controller for the SiLA2 integration in ImSwitch."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._logger = initLogger(self)
         self._logger.debug("Initializing SiLA2Controller")
 
-        # Guard: check that the SiLA2Manager is available and enabled
+        if not HAS_CDK:
+            self._logger.warning("unitelabs-cdk not installed; SiLA2 disabled.")
+            return
         if not getattr(self._master, "sila2Manager", None):
             self._logger.warning("SiLA2Manager unavailable; controller disabled.")
             return
@@ -368,17 +451,9 @@ class SiLA2Controller(ImConWidgetController):
             return
 
         manager = self._master.sila2Manager
-
-        # Create and register feature implementations
-        stage_feature = _StageControlImpl(self._master, self._logger)
-        imaging_feature = _ImagingControlImpl(self._master, self._logger)
-        experiment_feature = _ExperimentControlImpl(self._master, self._logger)
-
-        manager.register_feature(stage_feature)
-        manager.register_feature(imaging_feature)
-        manager.register_feature(experiment_feature)
-
-        # Start the SiLA2 server
+        manager.register_feature(StageControlFeature(self._master, self._logger))
+        manager.register_feature(ImagingControlFeature(self._master, self._logger))
+        manager.register_feature(ExperimentControlFeature(self._master, self._logger))
         manager.start_server()
         self._logger.info("SiLA2Controller initialized – server starting")
 

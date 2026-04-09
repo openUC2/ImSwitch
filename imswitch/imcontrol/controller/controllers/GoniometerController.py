@@ -1,23 +1,27 @@
 """
 Goniometer / Contact Angle Measurement Controller
 ===================================================
-Measures left and right contact angles of a sessile drop on a substrate.
+Measures left and right contact angles of a sessile drop on a substrate
+using the mirror-geometry algorithm (contact_angle_cropped.py).
+
+Assumes the droplet is cropped in view (or a crop ROI is set).
+The mirror reflection produces a symmetric lens shape; the widest horizontal
+line is the substrate baseline.
 
 Provides:
-- Snap image from camera
-- Automated contact angle measurement (Canny + contour + polynomial fit)
+- Snap image from camera (with optional crop ROI)
+- Automated contact angle measurement (Canny + widest contour + polynomial tangent)
 - Manual contact angle measurement (3-point tangent)
+- Crop ROI management (set_crop / reset_crop)
+- Live focus metric endpoint (Laplacian variance)
 - Measurement history with CSV/JSON export
 - Annotated result image download
 """
 
 import numpy as np
-import io
 import time
-import json
 import base64
 import traceback
-from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 
 try:
@@ -33,225 +37,139 @@ from imswitch import IS_HEADLESS
 
 
 # ──────────────────────────────────────────────
-#  Default config (mirrors contact_angle.py)
+#  Default config — mirror-geometry algorithm
 # ──────────────────────────────────────────────
 DEFAULT_CONFIG = dict(
+    # Edge detection
     canny_low=30,
     canny_high=100,
     blur_ksize=5,
-    bright_row_thresh=60,
-    roi_x_margin_frac=0.12,
-    roi_y_above_frac=0.3,
-    roi_y_below_px=60,
-    min_contour_length=100,
-    baseline_tolerance=5,
-    local_fit_frac=0.08,
-    poly_degree=3,
-    tangent_delta=1.0,
-    angle_range_low=5,
-    angle_range_high=175,
+    # Polynomial fit near contact points
+    fit_frac=0.15,        # fit radius as fraction of drop width
+    poly_degree=2,        # 2 = parabola (robust default)
+    tangent_delta=1.0,    # finite-difference step for tangent
+    # Validation
+    angle_range_low=1,
+    angle_range_high=179,
 )
 
 
 # ──────────────────────────────────────────────
-#  Contact-angle image processing functions
+#  Contact-angle image processing (mirror-geometry algorithm)
 # ──────────────────────────────────────────────
 
-def _find_roi(gray, config):
-    h, w = gray.shape
-    row_means = np.mean(gray, axis=1)
-    bright_rows = np.where(row_means > config['bright_row_thresh'])[0]
-    if len(bright_rows) == 0:
-        return (h // 4, 3 * h // 4, w // 6, 5 * w // 6)
-    substrate_row = bright_rows[-1]
-    y1 = max(0, substrate_row - int(h * config['roi_y_above_frac']))
-    y2 = min(h, substrate_row + config['roi_y_below_px'])
-    x1 = int(w * config['roi_x_margin_frac'])
-    x2 = int(w * (1 - config['roi_x_margin_frac']))
-    return (y1, y2, x1, x2)
-
-
-def _find_contours_in_roi(gray_roi, config):
+def _find_drop_contour(gray, config):
+    """Return the widest external contour (drop+reflection lens)."""
     k = config['blur_ksize']
     if k % 2 == 0:
         k += 1
-    blurred = cv2.GaussianBlur(gray_roi, (k, k), 1.5)
+    blurred = cv2.GaussianBlur(gray, (k, k), 1.5)
     edges = cv2.Canny(blurred, config['canny_low'], config['canny_high'])
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    return contours
+    if not contours:
+        return None
+    return max(contours, key=lambda c: cv2.boundingRect(c)[2])
 
 
-def _classify_contours(contours, min_length=100):
-    flat_lines = []
-    drops = []
-    for cnt in contours:
-        length = cv2.arcLength(cnt, False)
-        if length < min_length:
-            continue
-        x, y, bw, bh = cv2.boundingRect(cnt)
-        aspect = bw / (bh + 1e-6)
-        if aspect > 10 and bh < 15:
-            flat_lines.append((length, cnt))
-        elif aspect > 1.5:
-            drops.append((length, cnt))
-    drops.sort(key=lambda x: x[0], reverse=True)
-    baselines = []
-    if drops:
-        drop_pts = drops[0][1][:, 0, :]
-        drop_bottom = drop_pts[:, 1].max()
-        drop_height = drop_pts[:, 1].max() - drop_pts[:, 1].min()
-        for length, cnt in flat_lines:
-            line_y = cnt[:, 0, 1].mean()
-            if abs(line_y - drop_bottom) < drop_height * 0.4:
-                baselines.append((length, cnt))
-    baselines.sort(key=lambda x: x[0], reverse=True)
-    return baselines, drops
-
-
-def _determine_baseline(baselines, drop_contour, tolerance_frac=0.05):
-    if baselines:
-        pts = baselines[0][1][:, 0, :]
-        x = pts[:, 0].astype(float)
-        y = pts[:, 1].astype(float)
-        slope, intercept = np.polyfit(x, y, 1)
-        return slope, intercept, np.arctan(slope)
-    pts = drop_contour[:, 0, :]
-    y_max = pts[:, 1].max()
-    height = y_max - pts[:, 1].min()
-    threshold_y = y_max - height * tolerance_frac
-    bottom_pts = pts[pts[:, 1] >= threshold_y]
-    if len(bottom_pts) < 3:
-        return 0.0, float(y_max), 0.0
-    x = bottom_pts[:, 0].astype(float)
-    y = bottom_pts[:, 1].astype(float)
-    slope, intercept = np.polyfit(x, y, 1)
-    return slope, intercept, np.arctan(slope)
-
-
-def _find_contact_points(drop_contour, slope, intercept, tolerance=5, baseline_contour=None):
-    if baseline_contour is not None:
-        bl_pts = baseline_contour[:, 0, :]
-        bl_sorted = bl_pts[bl_pts[:, 0].argsort()]
-        left = bl_sorted[0]
-        right = bl_sorted[-1]
-        left_y = slope * left[0] + intercept
-        right_y = slope * right[0] + intercept
-        return (int(left[0]), int(round(left_y))), (int(right[0]), int(round(right_y)))
-    pts = drop_contour[:, 0, :]
-    denom = np.sqrt(1 + slope ** 2)
-    distances = np.abs(pts[:, 1] - (slope * pts[:, 0] + intercept)) / denom
-    near = pts[distances <= tolerance]
-    if len(near) < 2:
-        near = pts[distances <= tolerance * 3]
-    if len(near) < 2:
-        closest_idx = np.argsort(distances)[:20]
-        closest_pts = pts[closest_idx]
-        if len(closest_pts) >= 2:
-            sorted_by_x = closest_pts[closest_pts[:, 0].argsort()]
-            near = np.array([sorted_by_x[0], sorted_by_x[-1]])
-        else:
-            return None, None
-    sorted_pts = near[near[:, 0].argsort()]
-    left = sorted_pts[0]
-    right = sorted_pts[-1]
-    left_y = slope * left[0] + intercept
-    right_y = slope * right[0] + intercept
-    return (int(left[0]), int(round(left_y))), (int(right[0]), int(round(right_y)))
-
-
-def _extract_upper_contour(contour, slope, intercept, tolerance=5):
+def _find_tips(contour):
+    """Return (left_tip, right_tip) as the leftmost/rightmost contour points."""
     pts = contour[:, 0, :]
-    baseline_y_at_x = slope * pts[:, 0] + intercept
-    mask = pts[:, 1] < (baseline_y_at_x - tolerance)
-    upper = pts[mask]
+    left_tip = pts[np.argmin(pts[:, 0])]
+    right_tip = pts[np.argmax(pts[:, 0])]
+    return left_tip, right_tip
+
+
+def _compute_baseline(left_tip, right_tip):
+    """Baseline through the two tips. Returns (slope, intercept, tilt_deg)."""
+    dx = right_tip[0] - left_tip[0]
+    dy = right_tip[1] - left_tip[1]
+    if dx == 0:
+        return 0.0, float(left_tip[1]), 0.0
+    slope = dy / dx
+    intercept = left_tip[1] - slope * left_tip[0]
+    return slope, intercept, float(np.degrees(np.arctan(slope)))
+
+
+def _extract_upper_contour(contour, slope, intercept, tolerance=1):
+    """Points above the baseline, sorted by x."""
+    pts = contour[:, 0, :]
+    baseline_y = slope * pts[:, 0] + intercept
+    upper = pts[pts[:, 1] < baseline_y - tolerance]
     if len(upper) < 5:
         return pts[pts[:, 0].argsort()]
     return upper[upper[:, 0].argsort()]
 
 
-def _local_polynomial_fit(contour_pts, contact_x, radius, degree=3, side='left'):
+def _fit_local_polynomial(upper_pts, tip_x, radius, degree, side):
+    """Fit a polynomial y(x) locally near a contact tip."""
     if side == 'left':
-        mask = (contour_pts[:, 0] >= contact_x) & (contour_pts[:, 0] <= contact_x + radius)
+        mask = (upper_pts[:, 0] >= tip_x) & (upper_pts[:, 0] <= tip_x + radius)
     else:
-        mask = (contour_pts[:, 0] <= contact_x) & (contour_pts[:, 0] >= contact_x - radius)
-    local_pts = contour_pts[mask]
-    if len(local_pts) < degree + 1:
-        mask = np.abs(contour_pts[:, 0] - contact_x) <= radius * 2
-        local_pts = contour_pts[mask]
-    if len(local_pts) < degree + 1:
+        mask = (upper_pts[:, 0] <= tip_x) & (upper_pts[:, 0] >= tip_x - radius)
+    local = upper_pts[mask]
+    if len(local) < degree + 1:
         return None
     try:
-        return np.polyfit(local_pts[:, 0].astype(float), local_pts[:, 1].astype(float), degree)
+        return np.polyfit(local[:, 0].astype(float), local[:, 1].astype(float), degree)
     except np.linalg.LinAlgError:
         return None
 
 
-def _compute_tangent_angle(poly_coeffs, x_contact, baseline_slope, delta=1.0):
-    y_minus = np.polyval(poly_coeffs, x_contact - delta)
-    y_plus = np.polyval(poly_coeffs, x_contact + delta)
+def _compute_tangent_angle(poly, x_contact, baseline_slope, delta=1.0):
+    """Contact angle between polynomial tangent and baseline direction (degrees)."""
+    y_minus = np.polyval(poly, x_contact - delta)
+    y_plus = np.polyval(poly, x_contact + delta)
     tangent = np.array([2 * delta, y_plus - y_minus])
     baseline_dir = np.array([1.0, baseline_slope])
     cos_angle = np.dot(tangent, baseline_dir) / (
         np.linalg.norm(tangent) * np.linalg.norm(baseline_dir) + 1e-10
     )
-    return np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0)))
+    return float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
 
 
 def measure_contact_angles(gray, config=None, return_debug=False):
-    """Full pipeline: measure left and right contact angles."""
+    """Full pipeline: detect drop contour, find tips, build baseline, fit tangents."""
     if config is None:
         config = DEFAULT_CONFIG
 
-    result = {'left_angle': 9999, 'right_angle': 9999, 'success': False}
+   # resize image if it's too large for faster processing (optional)
+    max_dim = 500 # TODO: this is important otherwise the slope fit will fail for no particular reason, the contouring is flipping for some reason
+    if max(gray.shape) > max_dim:
+        scale = max_dim / max(gray.shape)
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+    result = {
+        'left_angle': None, 'right_angle': None,
+        'baseline_tilt_deg': None, 'success': False,
+        'left_contact': None, 'right_contact': None,
+    }
     debug = {}
 
-    y1, y2, x1, x2 = _find_roi(gray, config)
-    roi = gray[y1:y2, x1:x2]
-    debug['roi_bbox'] = (y1, y2, x1, x2)
-
-    contours = _find_contours_in_roi(roi, config)
-    if not contours:
+    contour = _find_drop_contour(gray, config)
+    if contour is None:
         return (result, debug) if return_debug else result
+    debug['contour'] = contour
 
-    baselines, drops = _classify_contours(contours, config['min_contour_length'])
-    debug['n_baselines'] = len(baselines)
-    debug['n_drops'] = len(drops)
+    left_tip, right_tip = _find_tips(contour)
+    result['left_contact'] = (int(left_tip[0]), int(left_tip[1]))
+    result['right_contact'] = (int(right_tip[0]), int(right_tip[1]))
 
-    if not drops:
-        return (result, debug) if return_debug else result
-
-    drop_contour = drops[0][1]
-    debug['contour'] = drop_contour
-
-    slope, intercept, baseline_angle = _determine_baseline(baselines, drop_contour)
-    result['baseline_slope'] = slope
-    result['baseline_angle_deg'] = np.degrees(baseline_angle)
+    slope, intercept, tilt = _compute_baseline(left_tip, right_tip)
+    result['baseline_tilt_deg'] = tilt
     debug['baseline_slope'] = slope
     debug['baseline_intercept'] = intercept
-    if baselines:
-        debug['baseline_contour'] = baselines[0][1]
 
-    tol = config['baseline_tolerance']
-    bl_cnt = baselines[0][1] if baselines else None
-    left_pt, right_pt = _find_contact_points(drop_contour, slope, intercept, tol, baseline_contour=bl_cnt)
-    if left_pt is None or right_pt is None:
+    upper = _extract_upper_contour(contour, slope, intercept)
+    debug['upper_contour'] = upper
+    if len(upper) < 10:
         return (result, debug) if return_debug else result
 
-    result['left_contact'] = (float(left_pt[0] + x1), float(left_pt[1] + y1))
-    result['right_contact'] = (float(right_pt[0] + x1), float(right_pt[1] + y1))
-    if result['left_contact'] is None or result['right_contact'] is None: 
-        result['left_contact'] = 99999
-    if result['right_contact'] is None:
-        result['right_contact'] = 99999
-    upper = _extract_upper_contour(drop_contour, slope, intercept, tol)
-    debug['upper_contour'] = upper
-
-    drop_width = abs(right_pt[0] - left_pt[0])
-    fit_radius = max(20, int(drop_width * config['local_fit_frac']))
+    drop_width = right_tip[0] - left_tip[0]
+    fit_radius = max(10, int(drop_width * config['fit_frac']))
     debug['fit_radius'] = fit_radius
 
-    poly_left = _local_polynomial_fit(upper, left_pt[0], fit_radius, config['poly_degree'], 'left')
-    poly_right = _local_polynomial_fit(upper, right_pt[0], fit_radius, config['poly_degree'], 'right')
+    poly_left = _fit_local_polynomial(upper, left_tip[0], fit_radius, config['poly_degree'], 'left')
+    poly_right = _fit_local_polynomial(upper, right_tip[0], fit_radius, config['poly_degree'], 'right')
     debug['poly_left'] = poly_left
     debug['poly_right'] = poly_right
 
@@ -259,65 +177,57 @@ def measure_contact_angles(gray, config=None, return_debug=False):
         return (result, debug) if return_debug else result
 
     delta = config['tangent_delta']
-    left_angle = _compute_tangent_angle(poly_left, left_pt[0], slope, delta)
-    right_angle = _compute_tangent_angle(poly_right, right_pt[0], slope, delta)
+    left_angle = _compute_tangent_angle(poly_left, left_tip[0], slope, delta)
+    right_angle = _compute_tangent_angle(poly_right, right_tip[0], slope, delta)
 
     lo, hi = config['angle_range_low'], config['angle_range_high']
     if lo <= left_angle <= hi:
         result['left_angle'] = left_angle
     if lo <= right_angle <= hi:
         result['right_angle'] = right_angle
-    if result['left_angle'] is None:
-        result['left_angle'] = 99999
-    if result['right_angle'] is None:
-        result['right_angle'] = 99999
-    result['success'] = result['left_angle'] != 99999 and result['right_angle'] != 99999
+
+    result['success'] = (result['left_angle'] is not None and result['right_angle'] is not None)
     return (result, debug) if return_debug else result
 
 
-def draw_result(frame, result, debug, config=None):
-    """Draw contact angle overlay on the frame."""
+def draw_result(frame, result, debug, config=None, crop_offset=None):
+    """Overlay measurement annotations.
+    crop_offset = (ox, oy) shifts contour/curve points from cropped into full-frame coords.
+    """
     if config is None:
         config = DEFAULT_CONFIG
 
     vis = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     h, w = vis.shape[:2]
-    y1, y2, x1, x2 = debug.get('roi_bbox', (0, h, 0, w))
 
-    cv2.rectangle(vis, (x1, y1), (x2, y2), (100, 100, 100), 1)
+    ox, oy = crop_offset if crop_offset else (0, 0)
 
     if 'contour' in debug:
         shifted = debug['contour'].copy()
-        shifted[:, 0, 0] += x1
-        shifted[:, 0, 1] += y1
-        cv2.drawContours(vis, [shifted], -1, (0, 0, 255), 2)
-
-    if 'baseline_contour' in debug:
-        bl = debug['baseline_contour'].copy()
-        bl[:, 0, 0] += x1
-        bl[:, 0, 1] += y1
-        cv2.drawContours(vis, [bl], -1, (0, 200, 0), 2)
+        shifted[:, 0, 0] += ox
+        shifted[:, 0, 1] += oy
+        cv2.drawContours(vis, [shifted], -1, (0, 0, 180), 1)
 
     if not result.get('success', False):
-        cv2.putText(vis, "Detection failed", (30, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+        cv2.putText(vis, "Detection failed", (30, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
         return vis
 
     slope = debug['baseline_slope']
     intercept = debug['baseline_intercept']
-    left_pt = result['left_contact']
+    left_pt = result['left_contact']   # already in full-frame coords
     right_pt = result['right_contact']
 
-    bx0, bx1_px = 0, w
-    by0 = int(slope * (bx0 - x1) + intercept + y1)
-    by1 = int(slope * (bx1_px - x1) + intercept + y1)
-    cv2.line(vis, (bx0, by0), (bx1_px, by1), (0, 255, 0), 2)
+    # Baseline across full image
+    y_left = int(slope * (0 - ox) + intercept + oy)
+    y_right = int(slope * (w - ox) + intercept + oy)
+    cv2.line(vis, (0, y_left), (w, y_right), (0, 255, 0), 2)
 
-    cv2.circle(vis, (int(left_pt[0]), int(left_pt[1])), 6, (255, 255, 0), -1)
-    cv2.circle(vis, (int(right_pt[0]), int(right_pt[1])), 6, (255, 255, 0), -1)
+    cv2.circle(vis, left_pt, 6, (0, 255, 255), -1)
+    cv2.circle(vis, right_pt, 6, (0, 255, 255), -1)
 
     fit_radius = debug.get('fit_radius', 60)
-    tangent_len = max(80, fit_radius)
+    tangent_len = max(80, int(fit_radius * 1.5))
 
     for side, poly, contact, angle in [
         ('left', debug.get('poly_left'), left_pt, result['left_angle']),
@@ -326,62 +236,59 @@ def draw_result(frame, result, debug, config=None):
         if poly is None or angle is None:
             continue
 
-        cx = contact[0] - x1
+        cx = contact[0] - ox  # contact x in cropped space
         if side == 'left':
             xs = np.linspace(cx, cx + fit_radius, 200)
         else:
             xs = np.linspace(cx - fit_radius, cx, 200)
         ys = np.polyval(poly, xs)
-        curve_pts = np.column_stack((xs + x1, ys + y1)).astype(np.int32)
-        for i in range(len(curve_pts) - 1):
-            cv2.line(vis, tuple(curve_pts[i]), tuple(curve_pts[i + 1]), (0, 255, 255), 2)
+        curve = np.column_stack((xs + ox, ys + oy)).astype(np.int32)
+        for i in range(len(curve) - 1):
+            cv2.line(vis, tuple(curve[i]), tuple(curve[i + 1]), (0, 255, 255), 2)
 
         delta = config['tangent_delta']
         dy = np.polyval(poly, cx + delta) - np.polyval(poly, cx - delta)
-        tangent_vec = np.array([2 * delta, dy])
-        tangent_vec = tangent_vec / (np.linalg.norm(tangent_vec) + 1e-10)
+        tvec = np.array([2 * delta, dy])
+        tvec = tvec / (np.linalg.norm(tvec) + 1e-10)
         pt = np.array([float(contact[0]), float(contact[1])])
         cv2.line(vis,
-                 tuple((pt - tangent_vec * tangent_len).astype(int)),
-                 tuple((pt + tangent_vec * tangent_len).astype(int)),
+                 tuple((pt - tvec * tangent_len).astype(int)),
+                 tuple((pt + tvec * tangent_len).astype(int)),
                  (255, 0, 255), 2)
 
         text = f"{angle:.1f} deg"
-        tx = int(contact[0]) - (20 if side == 'left' else 120)
-        ty = int(contact[1]) - 40
-        cv2.putText(vis, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        if side == 'left':
+            tx, ty = contact[0] + 12, contact[1] - 15
+        else:
+            tx, ty = contact[0] - 120, contact[1] - 15
+        cv2.putText(vis, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-    tilt = result.get('baseline_angle_deg', 0)
-    cv2.putText(vis, f"Baseline tilt: {tilt:.2f} deg", (30, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
+    tilt = result.get('baseline_tilt_deg', 0) or 0
+    cv2.putText(vis, f"Tilt: {tilt:+.2f} deg", (15, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    left_a = result['left_angle'] or 0
+    right_a = result['right_angle'] or 0
+    cv2.putText(vis, f"Avg: {(left_a + right_a) / 2:.1f} deg", (15, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     return vis
 
 
 def compute_manual_angle(baseline_pt1, baseline_pt2, tangent_pt):
     """Compute contact angle from 3 manually selected points.
 
-    baseline_pt1, baseline_pt2 define the substrate line.
-    tangent_pt and closest baseline point define the tangent direction.
-    The contact point is assumed to be the closest baseline endpoint.
+    baseline_pt1/2 define the substrate line; tangent_pt is on the drop edge.
+    The contact point is the closest baseline endpoint to tangent_pt.
     """
     b1 = np.array(baseline_pt1, dtype=float)
     b2 = np.array(baseline_pt2, dtype=float)
     tp = np.array(tangent_pt, dtype=float)
-
-    # Contact point is whichever baseline endpoint is closer to tangent_pt
-    d1 = np.linalg.norm(tp - b1)
-    d2 = np.linalg.norm(tp - b2)
-    contact = b1 if d1 < d2 else b2
-
+    contact = b1 if np.linalg.norm(tp - b1) < np.linalg.norm(tp - b2) else b2
     baseline_vec = b2 - b1
     tangent_vec = tp - contact
-
     cos_angle = np.dot(baseline_vec, tangent_vec) / (
         np.linalg.norm(baseline_vec) * np.linalg.norm(tangent_vec) + 1e-10
     )
-    angle = np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0)))
-    return float(angle)
+    return float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
 
 
 # ──────────────────────────────────────────────
@@ -390,10 +297,11 @@ def compute_manual_angle(baseline_pt1, baseline_pt2, tangent_pt):
 
 class GoniometerController(LiveUpdatedController):
     """
-    Goniometer – contact angle measurement controller.
+    Goniometer – contact angle measurement controller (mirror-geometry algorithm).
 
-    Provides snap, automated measurement, manual measurement,
-    measurement history, and result image download.
+    Provides snap, crop ROI management, automated measurement,
+    manual 3-point measurement, live focus metric, measurement history,
+    and annotated result image download.
     """
 
     sigGoniometerResult = Signal(object)
@@ -415,12 +323,15 @@ class GoniometerController(LiveUpdatedController):
             except Exception:
                 pass
 
-        # Processing config (mutable copy)
+        # Processing config
         self._config = dict(DEFAULT_CONFIG)
 
-        # Snapped image (numpy, kept in memory)
-        self._snapped_image = None  # BGR or gray
-        self._snapped_gray = None
+        # Snapped image (numpy)
+        self._snapped_image = None   # BGR
+        self._snapped_gray = None    # grayscale
+
+        # Crop ROI in full-frame camera pixel space: dict(x1, y1, x2, y2) or None
+        self._crop_roi: Optional[Dict[str, int]] = None
 
         # Last annotated result image (BGR)
         self._result_image = None
@@ -442,12 +353,25 @@ class GoniometerController(LiveUpdatedController):
             raise ValueError("No frame available from camera")
         return frame
 
-    def _encode_image_png(self, image):
-        """Encode a numpy image to PNG bytes."""
-        ok, buf = cv2.imencode('.png', image)
-        if not ok:
-            raise RuntimeError("PNG encoding failed")
-        return buf.tobytes()
+    def _normalise_frame(self, frame):
+        """Ensure uint8 BGR with percentile-based contrast stretch.
+
+        Normalises by the 1st–99th percentile so that a single hot pixel or
+        a near-uniformly-bright 16-bit frame does not collapse to white.
+        """
+        if frame.dtype != np.uint8:
+            f = frame.astype(np.float32)
+            lo = float(np.percentile(f, 1))
+            hi = float(np.percentile(f, 99))
+            if hi > lo:
+                f = np.clip((f - lo) / (hi - lo) * 255.0, 0.0, 255.0)
+            else:
+                # Fallback: simple bit-shift for 16-bit, zero for others
+                f = (frame >> 8).astype(np.float32) if frame.dtype == np.uint16 else np.zeros_like(frame, dtype=np.float32)
+            frame = f.astype(np.uint8)
+        if len(frame.shape) == 2:
+            return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        return frame
 
     def _image_to_base64(self, image):
         """Encode image to base64 data-URI (JPEG)."""
@@ -456,6 +380,19 @@ class GoniometerController(LiveUpdatedController):
             raise RuntimeError("JPEG encoding failed")
         b64 = base64.b64encode(buf.tobytes()).decode('ascii')
         return f"data:image/jpeg;base64,{b64}"
+
+    def _apply_crop(self, frame_bgr, frame_gray):
+        """Apply _crop_roi to both BGR and gray frames. Returns (bgr, gray, offset)."""
+        if self._crop_roi is None:
+            return frame_bgr, frame_gray, (0, 0)
+        h, w = frame_bgr.shape[:2]
+        x1 = max(0, self._crop_roi['x1'])
+        y1 = max(0, self._crop_roi['y1'])
+        x2 = min(w, self._crop_roi['x2'])
+        y2 = min(h, self._crop_roi['y2'])
+        if x2 <= x1 or y2 <= y1:
+            return frame_bgr, frame_gray, (0, 0)
+        return frame_bgr[y1:y2, x1:x2], frame_gray[y1:y2, x1:x2], (x1, y1)
 
     # ───────── API: configuration ─────────
 
@@ -478,30 +415,72 @@ class GoniometerController(LiveUpdatedController):
         self._config = dict(DEFAULT_CONFIG)
         return dict(self._config)
 
+    # ───────── API: crop ROI ─────────
+
+    @APIExport(runOnUIThread=True, requestType="POST")
+    def set_crop_goniometer(self,
+                             x1: int = 0, y1: int = 0,
+                             x2: int = 0, y2: int = 0) -> Dict[str, Any]:
+        """Set a crop ROI in full sensor-pixel coordinates.
+
+        The snap and processing pipeline will apply this crop.
+        x1, y1, x2, y2 are pixel indices in the full camera frame.
+        """
+        if x2 <= x1 or y2 <= y1:
+            return {"success": False, "error": "Invalid crop: x2>x1 and y2>y1 required"}
+        self._crop_roi = dict(x1=int(x1), y1=int(y1), x2=int(x2), y2=int(y2))
+        self._logger.info("Crop ROI set: %s", self._crop_roi)
+        return {"success": True, "crop_roi": self._crop_roi}
+
+    @APIExport(runOnUIThread=True, requestType="POST")
+    def reset_crop_goniometer(self) -> Dict[str, Any]:
+        """Clear the crop ROI so the full frame is used."""
+        self._crop_roi = None
+        return {"success": True, "crop_roi": None}
+
+    @APIExport(runOnUIThread=True)
+    def get_crop_goniometer(self) -> Dict[str, Any]:
+        """Return the current crop ROI (or null if none)."""
+        return {"crop_roi": self._crop_roi}
+
     # ───────── API: snap ─────────
 
     @APIExport(runOnUIThread=True)
     def snap_goniometer(self) -> Dict[str, Any]:
-        """Capture the current frame and return it as base64 JPEG."""
+        """Capture the current frame, apply crop if set, and return as base64 JPEG."""
         try:
-            frame = self._get_frame()
-            # Normalise to uint8 BGR for display / processing
-            if frame.dtype != np.uint8:
-                if frame.max() > 0:
-                    frame = (frame.astype(float) / frame.max() * 255).astype(np.uint8)
-                else:
-                    frame = np.zeros_like(frame, dtype=np.uint8)
-            if len(frame.shape) == 2:
-                self._snapped_gray = frame
-                self._snapped_image = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            raw = self._get_frame()
+            bgr = self._normalise_frame(raw)
+            if len(bgr.shape) == 3:
+                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
             else:
-                self._snapped_image = frame
-                self._snapped_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                gray = bgr
+                bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+            # Apply crop (stores cropped versions; offset used during drawing)
+            crop_bgr, crop_gray, offset = self._apply_crop(bgr, gray)
+
+            self._snapped_image = crop_bgr
+            self._snapped_gray = crop_gray
+            self._result_image = None
+
+            # Encode the cropped image for display
+            display_img = self._image_to_base64(self._snapped_image)
+
+            # If a crop is active, also encode a full-frame view with the crop rectangle drawn
+            preview_img = display_img
+            if self._crop_roi is not None:
+                full_vis = bgr.copy()
+                r = self._crop_roi
+                cv2.rectangle(full_vis, (r['x1'], r['y1']), (r['x2'], r['y2']), (80, 180, 255), 2)
+                preview_img = self._image_to_base64(full_vis)
 
             return {
                 "success": True,
-                "image": self._image_to_base64(self._snapped_image),
+                "image": display_img,
+                "preview_image": preview_img,
                 "shape": list(self._snapped_image.shape),
+                "crop_roi": self._crop_roi,
                 "timestamp": time.time(),
             }
         except Exception as e:
@@ -512,26 +491,42 @@ class GoniometerController(LiveUpdatedController):
 
     @APIExport(runOnUIThread=True)
     def measure_auto_goniometer(self) -> Dict[str, Any]:
-        """Run automated contact-angle measurement on the snapped image."""
+        """Run automated contact-angle measurement on the snapped (cropped) image."""
         if self._snapped_gray is None:
             return {"success": False, "error": "No image snapped yet"}
         try:
             result, debug = measure_contact_angles(
                 self._snapped_gray, self._config, return_debug=True
             )
-            self._result_image = draw_result(self._snapped_image, result, debug, self._config)
 
-            out = {
+            # Shift contact points into full-frame coords if crop was active
+            crop_offset = (self._crop_roi['x1'], self._crop_roi['y1']) if self._crop_roi else None
+            if crop_offset and result.get('left_contact') is not None:
+                result['left_contact'] = (
+                    result['left_contact'][0] + crop_offset[0],
+                    result['left_contact'][1] + crop_offset[1],
+                )
+                result['right_contact'] = (
+                    result['right_contact'][0] + crop_offset[0],
+                    result['right_contact'][1] + crop_offset[1],
+                )
+
+            # Draw on snapped image (already cropped so offset=None for contour coords,
+            # but we need the full frame for display if no crop)
+            self._result_image = draw_result(
+                self._snapped_image, result, debug, self._config, crop_offset=None
+            )
+
+            return {
                 "success": result.get("success", False),
-                "left_angle": float(result.get("left_angle", 0)) if result.get("left_angle") is not None else 99999,
-                "right_angle": float(result.get("right_angle", 0)) if result.get("right_angle") is not None else 99999,
-                "baseline_angle_deg": float(result.get("baseline_angle_deg", 0)) if result.get("baseline_angle_deg") is not None else 99999,
+                "left_angle": result.get("left_angle"),
+                "right_angle": result.get("right_angle"),
+                "baseline_tilt_deg": result.get("baseline_tilt_deg"),
                 "left_contact": result.get("left_contact"),
                 "right_contact": result.get("right_contact"),
                 "annotated_image": self._image_to_base64(self._result_image),
                 "timestamp": time.time(),
             }
-            return out
         except Exception as e:
             self._logger.error("measure_auto_goniometer failed: %s", traceback.format_exc())
             return {"success": False, "error": str(e)}
@@ -543,21 +538,19 @@ class GoniometerController(LiveUpdatedController):
                                   baseline_x1: float = 0, baseline_y1: float = 0,
                                   baseline_x2: float = 0, baseline_y2: float = 0,
                                   tangent_x: float = 0, tangent_y: float = 0) -> Dict[str, Any]:
-        """Compute contact angle from 3 user-selected points (baseline pair + tangent point)."""
+        """Compute contact angle from 3 user-selected points."""
         try:
             angle = compute_manual_angle(
                 (baseline_x1, baseline_y1),
                 (baseline_x2, baseline_y2),
                 (tangent_x, tangent_y),
             )
-            # Build annotated image if we have a snap
             annotated_b64 = None
             if self._snapped_image is not None:
                 vis = self._snapped_image.copy()
                 b1 = (int(baseline_x1), int(baseline_y1))
                 b2 = (int(baseline_x2), int(baseline_y2))
                 tp = (int(tangent_x), int(tangent_y))
-                # Determine contact point
                 d1 = np.linalg.norm(np.array(tp) - np.array(b1, dtype=float))
                 d2 = np.linalg.norm(np.array(tp) - np.array(b2, dtype=float))
                 contact = b1 if d1 < d2 else b2
@@ -579,6 +572,33 @@ class GoniometerController(LiveUpdatedController):
         except Exception as e:
             self._logger.error("measure_manual_goniometer failed: %s", traceback.format_exc())
             return {"success": False, "error": str(e)}
+
+    # ───────── API: focus metric ─────────
+
+    @APIExport(runOnUIThread=True)
+    def get_focus_metric_goniometer(self) -> Dict[str, Any]:
+        """Return a live focus sharpness metric (Laplacian variance) of the current frame.
+
+        Higher is sharper. Useful for manual focus alignment before measurement.
+        The crop ROI is applied if set, so the metric reflects only the droplet region.
+        """
+        try:
+            raw = self._get_frame()
+            bgr = self._normalise_frame(raw)
+            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if len(bgr.shape) == 3 else bgr
+
+            # Apply crop for more localised metric
+            _, gray_crop, _ = self._apply_crop(bgr, gray)
+
+            lap = cv2.Laplacian(gray_crop, cv2.CV_64F)
+            metric = float(np.var(lap))
+            return {
+                "success": True,
+                "focus_metric": metric,
+                "timestamp": time.time(),
+            }
+        except Exception as e:
+            return {"success": False, "focus_metric": 0.0, "error": str(e)}
 
     # ───────── API: measurement history ─────────
 
@@ -627,12 +647,11 @@ class GoniometerController(LiveUpdatedController):
                 return {"success": False, "error": "Encoding failed"}
             return Response(content=buf.tobytes(), media_type=media)
         except ImportError:
-            # Fallback: return base64
             return {"success": True, "image": self._image_to_base64(self._result_image)}
 
     @APIExport(runOnUIThread=True)
     def download_snapped_image_goniometer(self, format: str = "png"):
-        """Return the snapped (raw) image as a downloadable response."""
+        """Return the snapped (raw/cropped) image as a downloadable response."""
         if self._snapped_image is None:
             return {"success": False, "error": "No snapped image available"}
         try:

@@ -40,6 +40,9 @@ Usage examples:
 
     # Specify output directory
     python convert_experiment_tiffs.py /path/to/base_dir/tiles -o /path/to/output
+    
+        python convert_experiment_tiffs.py     /Users/bene/Downloads/20260408_140128/
+
 """
 
 from __future__ import annotations
@@ -270,6 +273,84 @@ def discover_tiles(tiles_dir: str, protocol_json: Optional[str] = None) -> List[
         protocol_json = _find_protocol_json(tiles_dir)
 
     assign_grid_indices(tiles, protocol_json)
+    return tiles
+
+
+# ---------------------------------------------------------------------------
+# Multi-experiment (timelapse) tile discovery
+# ---------------------------------------------------------------------------
+
+# Matches e.g. "20260408_140128_experiment0_44_experiment_0_"
+#                                              ^^ series index
+_EXPERIMENT_DIR_RE = re.compile(r"_experiment\d+_(\d+)_")
+
+
+def _is_multi_experiment_dir(base_dir: str) -> bool:
+    """Return True if base_dir contains experiment-series subdirectories."""
+    for entry in os.scandir(base_dir):
+        if entry.is_dir() and _EXPERIMENT_DIR_RE.search(entry.name):
+            return True
+    return False
+
+
+def discover_tiles_from_base_dir(
+    base_dir: str,
+    protocol_json: Optional[str] = None,
+) -> List[TileInfo]:
+    """
+    Discover tiles from a session base directory that contains one
+    experiment subdirectory per timepoint:
+
+        <base_dir>/
+            {date}_experiment0_{N}_experiment_{M}_/
+                tiles/
+                    timepoint_{XXXX}/
+                        <filename>.tif
+
+    The timelapse frame index is taken from N in the folder name.
+    """
+    tiles: List[TileInfo] = []
+    base_path = Path(base_dir)
+
+    experiment_dirs: List[Tuple[int, Path]] = []
+    for subdir in sorted(base_path.iterdir()):
+        if not subdir.is_dir():
+            continue
+        m = _EXPERIMENT_DIR_RE.search(subdir.name)
+        if m is None:
+            continue
+        experiment_dirs.append((int(m.group(1)), subdir))
+
+    if not experiment_dirs:
+        # Nothing matched — fall back to plain discover_tiles
+        return discover_tiles(base_dir, protocol_json)
+
+    for series_idx, exp_dir in sorted(experiment_dirs):
+        tiles_subdir = exp_dir / "tiles"
+        if not tiles_subdir.is_dir():
+            continue
+        for tp_dir in sorted(tiles_subdir.iterdir()):
+            if not tp_dir.is_dir():
+                continue
+            for tif_file in sorted(tp_dir.glob("*.tif")):
+                info = parse_filename(str(tif_file))
+                if info is not None:
+                    info.timepoint = series_idx
+                    tiles.append(info)
+
+    if not tiles:
+        print(f"No matching TIFF files found under {base_dir}")
+        return tiles
+
+    print(
+        f"Discovered {len(tiles)} tiles across "
+        f"{len(set(t.timepoint for t in tiles))} timepoints "
+        f"from {len(experiment_dirs)} experiment directories"
+    )
+
+    # No protocol JSON available for multi-experiment layouts —
+    # derive grid indices from stage coordinates.
+    assign_grid_indices(tiles, None)
     return tiles
 
 
@@ -689,6 +770,118 @@ def build_best_focus_stitched(grid: ExperimentGrid, out_dir: str):
 
 
 # ---------------------------------------------------------------------------
+# Mode 6: Timelapse concatenation
+# Same (ix, iy, channel) across all timepoints → T×C×Y×X hyperstack.
+# Handles both single-position and multi-position grids:
+#   - single position  → one T×C×Y×X file
+#   - multi-position   → one T×C×Y_canvas×X_canvas stitched file
+# ---------------------------------------------------------------------------
+
+def _get_frame_for_timepoint(
+    grid: ExperimentGrid, ix: int, iy: int, c_idx: int, tp: int, use_mip: bool
+) -> Optional[np.ndarray]:
+    """Return a single 2-D frame for the given (ix, iy, c_idx, tp) combination."""
+    tiles = sorted(grid.get_tiles(tp, ix, iy, c_idx), key=lambda t: t.z)
+    if not tiles:
+        return None
+    if use_mip and len(tiles) > 1:
+        return np.max(np.stack([_read_tile(t) for t in tiles], axis=0), axis=0)
+    # Single Z or no MIP requested: pick best-focus frame
+    if len(tiles) == 1:
+        return _read_tile(tiles[0])
+    # Multiple Z without MIP → best-focus
+    best, best_score = None, -1.0
+    for t in tiles:
+        f = _read_tile(t)
+        s = _focus_measure(f)
+        if s > best_score:
+            best_score, best = s, f
+    return best
+
+
+def build_timelapse(grid: ExperimentGrid, out_dir: str, use_mip: bool = False):
+    """
+    Concatenate images from the same (ix, iy, channel) across all timepoints
+    into a T×C×Y×X ImageJ/napari hyperstack.  For each unique (ix, iy)
+    position a separate output file is written.
+
+    When *use_mip* is True and multiple Z planes exist per (position, tp),
+    they are MIP-projected before stacking.  Otherwise the best-focus plane
+    (Laplacian variance) is selected.
+    """
+    label = "mip" if use_mip else "bestfocus"
+    print(f"\n=== Building timelapse stacks (Z={label}) ===")
+    os.makedirs(out_dir, exist_ok=True)
+
+    xy_positions = sorted(
+        set((t.ix, t.iy) for tiles in grid.lookup.values() for t in tiles)
+    )
+
+    # Find representative frame for shape / dtype
+    def _find_sample() -> Optional[np.ndarray]:
+        for tiles in grid.lookup.values():
+            if tiles:
+                return _read_tile(tiles[0])
+        return None
+
+    sample = _find_sample()
+    if sample is None:
+        print("  No tiles found – skipping")
+        return
+    h, w = sample.shape[:2]
+    dtype = sample.dtype
+
+    nT = len(grid.timepoints)
+    nC = len(grid.c_indices)
+    single_pos = len(xy_positions) == 1
+
+    if single_pos:
+        # Single XY position: output is T×C×Y×X directly.
+        ix, iy = xy_positions[0]
+        stack = np.zeros((nT, nC, h, w), dtype=dtype)
+        for it, tp in enumerate(grid.timepoints):
+            for ic, ci in enumerate(grid.c_indices):
+                frame = _get_frame_for_timepoint(grid, ix, iy, ci, tp, use_mip)
+                if frame is not None:
+                    stack[it, ic] = frame[:h, :w]
+
+        fname = f"timelapse_{label}.ome.tif"
+        fpath = os.path.join(out_dir, fname)
+        tif.imwrite(
+            fpath, stack, imagej=True,
+            metadata={"axes": "TCYX", "Channel": {"Name": grid.channels}},
+        )
+        print(f"  {fname}  shape={stack.shape}  dtype={dtype}  "
+              f"({nT} timepoints, {nC} channels)")
+    else:
+        # Multi-position: produce one stitched T×C×Y_canvas×X_canvas file.
+        _, _, offset_map = _compute_canvas_from_grid(grid, h, w)
+        canvas_h = len(grid.iy_positions) * h
+        canvas_w = len(grid.ix_positions) * w
+
+        stack = np.zeros((nT, nC, canvas_h, canvas_w), dtype=dtype)
+        for it, tp in enumerate(grid.timepoints):
+            for ic, ci in enumerate(grid.c_indices):
+                for ix, iy in xy_positions:
+                    frame = _get_frame_for_timepoint(grid, ix, iy, ci, tp, use_mip)
+                    if frame is None:
+                        continue
+                    row, col = offset_map[(ix, iy)]
+                    fh, fw = frame.shape[:2]
+                    stack[it, ic, row:row+fh, col:col+fw] = frame[:h, :w]
+
+        fname = f"timelapse_stitched_{label}.ome.tif"
+        fpath = os.path.join(out_dir, fname)
+        tif.imwrite(
+            fpath, stack, imagej=True,
+            metadata={"axes": "TCYX", "Channel": {"Name": grid.channels}},
+        )
+        print(f"  {fname}  shape={stack.shape}  dtype={dtype}  "
+              f"({nT} timepoints, {nC} channels, "
+              f"{len(xy_positions)} positions)")
+
+
+# ---------------------------------------------------------------------------
 # Fiji TileConfiguration.txt (for precise Grid/Collection stitching)
 # ---------------------------------------------------------------------------
 
@@ -739,7 +932,8 @@ def write_tile_configuration(grid: ExperimentGrid, out_dir: str):
 # CLI
 # ---------------------------------------------------------------------------
 
-ALL_MODES = ["composite", "stitch", "mip", "mip-composite", "focus", "tile-config"]
+ALL_MODES = ["composite", "stitch", "mip", "mip-composite", "focus", "tile-config",
+             "timelapse", "timelapse-mip"]
 
 '''
 Explanation of modes:
@@ -797,15 +991,19 @@ def main():
     if not os.path.isdir(tiles_dir):
         sys.exit(f"Not a directory: {tiles_dir}")
 
-    out_dir = args.output or os.path.join(os.path.dirname(tiles_dir), "converted")
+    out_dir = args.output or os.path.join(tiles_dir, "converted")
     os.makedirs(out_dir, exist_ok=True)
 
     modes = set(args.mode)
     if "all" in modes:
         modes = set(ALL_MODES)
 
-    # Discover and parse tiles (JSON protocol used for grid-index assignment)
-    tiles = discover_tiles(tiles_dir, protocol_json=args.protocol)
+    # Auto-detect layout: base dir with experiment subdirs vs plain tiles dir
+    if _is_multi_experiment_dir(tiles_dir):
+        print(f"Detected multi-experiment timelapse layout under: {tiles_dir}")
+        tiles = discover_tiles_from_base_dir(tiles_dir, protocol_json=args.protocol)
+    else:
+        tiles = discover_tiles(tiles_dir, protocol_json=args.protocol)
     if not tiles:
         sys.exit(1)
 
@@ -840,6 +1038,12 @@ def main():
 
     if "tile-config" in modes:
         write_tile_configuration(grid, os.path.join(out_dir, "tile_config"))
+
+    if "timelapse" in modes:
+        build_timelapse(grid, os.path.join(out_dir, "timelapse"), use_mip=False)
+
+    if "timelapse-mip" in modes:
+        build_timelapse(grid, os.path.join(out_dir, "timelapse_mip"), use_mip=True)
 
     print(f"\nAll outputs written to: {out_dir}")
 

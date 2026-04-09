@@ -18,6 +18,10 @@ import {
   Tooltip,
   Switch,
   FormControlLabel,
+  Select,
+  MenuItem,
+  InputLabel,
+  FormControl,
 } from "@mui/material";
 import {
   SystemUpdate,
@@ -33,6 +37,7 @@ import {
   AutoFixHigh as WizardIcon,
   Usb as UsbIcon,
   Bluetooth as BluetoothIcon,
+  LightbulbOutlined as LedIcon,
 } from "@mui/icons-material";
 
 import CanOtaWizard from "./CanOtaWizard";
@@ -57,9 +62,25 @@ const SystemUpdateController = () => {
   // Connection settings for direct API calls
   const { ip: hostIP, apiPort: hostPort } = useSelector(getConnectionSettingsState);
   const base = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController`;
+  const experimentBase = `${hostIP}:${hostPort}/imswitch/api/ExperimentController`;
 
   // UC2 Hardware Control toggle
   const [enableHardwareControl, setEnableHardwareControl] = useState(false);
+
+  // LED status control
+  const [ledStatus, setLedStatus] = useState("idle");
+  const [isSettingLed, setIsSettingLed] = useState(false);
+
+  const handleSetLedStatus = async (status) => {
+    setIsSettingLed(true);
+    try {
+      const url = `${experimentBase}/set_led_status?status=${encodeURIComponent(status)}`;
+      await callEndpoint(url);
+      setLedStatus(status);
+    } finally {
+      setIsSettingLed(false);
+    }
+  };
 
   // Direct API call helper
   const callEndpoint = async (url) => {
@@ -328,6 +349,56 @@ const SystemUpdateController = () => {
               onClick={() => callEndpoint(`${base}/btpairing`)}
             >
               Bluetooth Pairing
+            </Button>
+          </Box>
+        </CardContent>
+      </Card>
+
+      {/* LED Matrix Status Card */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+            <LedIcon color="primary" />
+            <Typography variant="h6">LED Matrix Status</Typography>
+            <Chip
+              label={isBackendConnected ? "Available" : "Disconnected"}
+              color={isBackendConnected ? "success" : "error"}
+              size="small"
+              variant="outlined"
+            />
+          </Box>
+
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Override the LED matrix status indicator on the connected device.
+          </Typography>
+
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+            <FormControl size="small" sx={{ minWidth: 180 }}>
+              <InputLabel id="led-status-label">Status</InputLabel>
+              <Select
+                labelId="led-status-label"
+                value={ledStatus}
+                label="Status"
+                onChange={(e) => setLedStatus(e.target.value)}
+                disabled={!isBackendConnected}
+              >
+                <MenuItem value="idle">Idle</MenuItem>
+                <MenuItem value="rainbow">Rainbow (Busy)</MenuItem>
+                <MenuItem value="error">Error</MenuItem>
+                <MenuItem value="scanning">Scanning</MenuItem>
+                <MenuItem value="done">Done</MenuItem>
+                <MenuItem value="on">On</MenuItem>
+                <MenuItem value="off">Off</MenuItem>
+              </Select>
+            </FormControl>
+
+            <Button
+              variant="contained"
+              startIcon={<LedIcon />}
+              onClick={() => handleSetLedStatus(ledStatus)}
+              disabled={!isBackendConnected || isSettingLed}
+            >
+              {isSettingLed ? "Setting..." : "Apply"}
             </Button>
           </Box>
         </CardContent>

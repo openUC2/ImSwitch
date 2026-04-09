@@ -30,6 +30,8 @@ class ExternalStorage:
 class StorageScanner:
     """Scanner for external storage devices."""
 
+    MOUNT_ROOTS = {"/media", "/Volumes", "/datasets"}
+
     # System volumes to exclude from scanning
     SYSTEM_VOLUMES = {
         "Macintosh HD",
@@ -45,6 +47,14 @@ class StorageScanner:
     def __init__(self):
         """Initialize the storage scanner."""
         pass
+
+    def requires_mount_point(self, base_path: str) -> bool:
+        """Return whether child entries under this base path must be real mount points."""
+        if not base_path:
+            return False
+
+        normalized = os.path.normpath(base_path)
+        return normalized in self.MOUNT_ROOTS
 
     def is_writable_directory(self, path: str) -> bool:
         """
@@ -64,6 +74,25 @@ class StorageScanner:
                 f.write("test")
             os.remove(test_file)
             return True
+        except Exception:
+            return False
+
+    def is_mount_point(self, path: str) -> bool:
+        """
+        Check if a path is an actual mount point in the filesystem.
+        This distinguishes between mounted external drives and regular directories.
+        
+        Args:
+            path: Path to check
+            
+        Returns:
+            True if the path is a mount point, False otherwise
+        """
+        if not path or not os.path.isdir(path):
+            return False
+        try:
+            # On POSIX systems (Linux, macOS), use ismount()
+            return os.path.ismount(path)
         except Exception:
             return False
 
@@ -135,6 +164,8 @@ class StorageScanner:
             if not base_path or not os.path.exists(base_path):
                 continue
 
+            require_mount_point = self.requires_mount_point(base_path)
+
             try:
                 for entry in sorted(os.listdir(base_path)):
                     full_path = os.path.join(base_path, entry)
@@ -147,7 +178,10 @@ class StorageScanner:
                     if self.is_system_volume(entry):
                         continue
 
-                    # Check if writable
+                    is_mounted = self.is_mount_point(full_path)
+                    if require_mount_point and not is_mounted:
+                        continue
+
                     writable = self.is_writable_directory(full_path)
 
                     # Get disk usage
@@ -164,9 +198,11 @@ class StorageScanner:
                         free_space_gb=round(free_gb, 2),
                         total_space_gb=round(total_gb, 2),
                         filesystem=filesystem,
-                        is_active=False
+                        is_active=False,
                     )
-                    if writable:
+                    # Under real mount roots, only actual mounted filesystems qualify.
+                    # Under custom/test directories, a writable accessible subdirectory is enough.
+                    if writable and (is_mounted or not require_mount_point):
                         detected_drives.append(storage)
 
             except Exception as e:

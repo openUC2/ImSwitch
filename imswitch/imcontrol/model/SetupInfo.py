@@ -744,13 +744,6 @@ class PulseStreamerInfo:
     ipAddress: Optional[str] = None
     """ IP address of Pulse Streamer hardware. """
 
-@dataclass(frozen=False)
-class PyroServerInfo:
-    name: Optional[str] = 'ImSwitchServer'
-    host: Optional[
-        str] = '0.0.0.0'  # - listen to all addresses on v6 # '0.0.0.0'- listen to all IP addresses # 127.0.0.1 - only locally
-    port: Optional[int] = 54333
-    active: Optional[bool] = False
 
 
 @dataclass_json(undefined=Undefined.INCLUDE)
@@ -896,7 +889,6 @@ class SetupInfo:
     pulseStreamer: PulseStreamerInfo = field(default_factory=PulseStreamerInfo)
     """ Pulse Streamer settings. """
 
-    pyroServerInfo: PyroServerInfo = field(default_factory=PyroServerInfo)
 
 
     _catchAll: CatchAll = None

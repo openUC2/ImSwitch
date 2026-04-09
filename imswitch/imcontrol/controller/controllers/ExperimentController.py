@@ -133,6 +133,11 @@ class ParameterValue(BaseModel):
     autoFocusStepSize: float
     autoFocusIlluminationChannel: str = "" # Selected illumination channel for autofocus
     autoFocusMode: str = "software" # "software" (Z-sweep) or "hardware" (one-shot using FocusLock)
+    autoFocusSoftwareMethod: str = "scan" # "scan" (Z-sweep) or "hillClimbing" (gradient ascent)
+    autoFocusHillClimbingInitialStep: float = 20.0
+    autoFocusHillClimbingMinStep: float = 1.0
+    autoFocusHillClimbingStepReduction: float = 0.5
+    autoFocusHillClimbingMaxIterations: int = 50
     autofocus_target_focus_setpoint: float = None
     autofocus_max_attempts: int = 2
     zStack: bool
@@ -192,6 +197,11 @@ class FocusMapConfig(BaseModel):
     af_n_gauss: int = Field(0, description="Gaussian kernel size for focus algorithm")
     af_illumination_channel: str = Field("", description="Illumination channel for autofocus")
     af_mode: str = Field("software", description="Autofocus mode: software (Z-sweep) or hardware (FocusLock)")
+    af_software_method: str = Field("scan", description="Software AF method: scan (Z-sweep) or hillClimbing")
+    af_hc_initial_step: float = Field(20.0, description="Hill climbing initial step size (µm)")
+    af_hc_min_step: float = Field(1.0, description="Hill climbing minimum step size (µm)")
+    af_hc_step_reduction: float = Field(0.5, description="Hill climbing step reduction factor")
+    af_hc_max_iterations: int = Field(50, description="Hill climbing max iterations")
     af_max_attempts: int = Field(2, description="Max retry attempts for hardware autofocus")
     af_target_setpoint: Optional[float] = Field(None, description="Target focus setpoint for hardware AF")
 
@@ -566,7 +576,7 @@ class ExperimentController(ImConWidgetController):
             "write_individual_tiffs": getattr(self, '_ome_write_individual_tiffs', False)
         }
 
-
+    @APIExport(requestType="GET")
     def set_led_status(self, status: str = "idle"):
         """
         Set LED matrix status if available.
@@ -798,6 +808,11 @@ class ExperimentController(ImConWidgetController):
         autofocusStepSize = p.autoFocusStepSize
         autofocusIlluminationChannel = getattr(p, 'autoFocusIlluminationChannel', "") or ""
         autofocusMode = getattr(p, 'autoFocusMode', 'software')  # Default to software if not specified
+        autofocusSoftwareMethod = getattr(p, 'autoFocusSoftwareMethod', 'scan')
+        autofocusHCInitialStep = getattr(p, 'autoFocusHillClimbingInitialStep', 20.0)
+        autofocusHCMinStep = getattr(p, 'autoFocusHillClimbingMinStep', 1.0)
+        autofocusHCStepReduction = getattr(p, 'autoFocusHillClimbingStepReduction', 0.5)
+        autofocusHCMaxIterations = getattr(p, 'autoFocusHillClimbingMaxIterations', 50)
         autofocus_target_focus_setpoint = getattr(p, 'autofocus_target_focus_setpoint', None)
         autofocus_max_attempts = getattr(p, 'autofocus_max_attempts', 2)
 
@@ -951,6 +966,11 @@ class ExperimentController(ImConWidgetController):
                     autofocus_step_size=autofocusStepSize,
                     autofocus_illumination_channel=autofocusIlluminationChannel,
                     autofocus_mode=autofocusMode,  # Pass autofocus mode
+                    autofocus_software_method=autofocusSoftwareMethod,
+                    autofocus_hc_initial_step=autofocusHCInitialStep,
+                    autofocus_hc_min_step=autofocusHCMinStep,
+                    autofocus_hc_step_reduction=autofocusHCStepReduction,
+                    autofocus_hc_max_iterations=autofocusHCMaxIterations,
                     autofocus_target_focus_setpoint=autofocus_target_focus_setpoint,
                     autofocus_max_attempts=autofocus_max_attempts,
                     t_period=tPeriod,
@@ -1141,7 +1161,12 @@ class ExperimentController(ImConWidgetController):
                   af_settle_time: float = 0.1,
                   af_static_offset: float = 0.0,
                   af_two_stage: bool = False,
-                  af_n_gauss: int = 0) -> Optional[float]:
+                  af_n_gauss: int = 0,
+                  af_software_method: str = "scan",
+                  af_hc_initial_step: float = 20.0,
+                  af_hc_min_step: float = 1.0,
+                  af_hc_step_reduction: float = 0.5,
+                  af_hc_max_iterations: int = 50) -> Optional[float]:
         """Perform autofocus using either hardware or software method.
 
         Args:
@@ -1189,6 +1214,11 @@ class ExperimentController(ImConWidgetController):
                 minZ=minZ,
                 maxZ=maxZ,
                 stepSize=stepSize,
+                af_software_method=af_software_method,
+                af_hc_initial_step=af_hc_initial_step,
+                af_hc_min_step=af_hc_min_step,
+                af_hc_step_reduction=af_hc_step_reduction,
+                af_hc_max_iterations=af_hc_max_iterations,
             )
 
     def autofocus_software(self, af_range: float = 100.0, af_resolution: float = 10.0,
@@ -1196,8 +1226,17 @@ class ExperimentController(ImConWidgetController):
                            af_settle_time: float = 0.1, af_static_offset: float = 0.0,
                            af_two_stage: bool = False, af_n_gauss: int = 0,
                            illuminationChannel: str = "",
-                           minZ: float = 0, maxZ: float = 0, stepSize: float = 0):
-        """Perform software-based autofocus using AutofocusController (Z-sweep).
+                           minZ: float = 0, maxZ: float = 0, stepSize: float = 0,
+                           af_software_method: str = "scan",
+                           af_hc_initial_step: float = 20.0,
+                           af_hc_min_step: float = 1.0,
+                           af_hc_step_reduction: float = 0.5,
+                           af_hc_max_iterations: int = 50):
+        """Perform software-based autofocus using AutofocusController.
+
+        Supports two methods:
+        - 'scan' (Z-sweep): scans through Z range and fits Gaussian to find peak
+        - 'hillClimbing': iterative gradient ascent for faster convergence
 
         All parameters are passed through from FocusMapConfig or experiment settings.
         Legacy minZ/maxZ/stepSize params are kept for backward compatibility but
@@ -1207,10 +1246,10 @@ class ExperimentController(ImConWidgetController):
             float: Best focus Z position, or None if autofocus failed
         """
         self._logger.debug(
-            "Performing software autofocus (Z-sweep)... "
+            "Performing software autofocus (method=%s)... "
             "af_range=%s, af_resolution=%s, af_algorithm=%s, af_cropsize=%s, "
             "af_settle_time=%s, af_n_gauss=%s, af_two_stage=%s, illumination=%s",
-            af_range, af_resolution, af_algorithm, af_cropsize,
+            af_software_method, af_range, af_resolution, af_algorithm, af_cropsize,
             af_settle_time, af_n_gauss, af_two_stage, illuminationChannel
         )
 
@@ -1240,32 +1279,50 @@ class ExperimentController(ImConWidgetController):
                 self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
 
         try:
-            # Determine rangez: prefer af_range, fall back to legacy minZ/maxZ
-            if af_range > 0:
-                rangez = af_range
-            elif maxZ > minZ:
-                rangez = abs(maxZ - minZ) / 2.0
+            if af_software_method == "hillClimbing":
+                # Hill-climbing autofocus: iterative gradient ascent
+                self._logger.debug(
+                    "Using hill-climbing AF: initial_step=%s, min_step=%s, "
+                    "step_reduction=%s, max_iterations=%s",
+                    af_hc_initial_step, af_hc_min_step,
+                    af_hc_step_reduction, af_hc_max_iterations
+                )
+                autofocusController.autoFocusHillClimbing(
+                    initial_step=af_hc_initial_step,
+                    min_step=af_hc_min_step,
+                    step_reduction=af_hc_step_reduction,
+                    max_iterations=af_hc_max_iterations,
+                    tSettle=af_settle_time,
+                    nCropsize=af_cropsize,
+                    focusAlgorithm=af_algorithm,
+                    nGauss=af_n_gauss,
+                    static_offset=af_static_offset,
+                )
             else:
-                rangez = 50.0
+                # Z-sweep autofocus: scan through range and fit Gaussian
+                # Determine rangez: prefer af_range, fall back to legacy minZ/maxZ
+                if af_range > 0:
+                    rangez = af_range
+                elif maxZ > minZ:
+                    rangez = abs(maxZ - minZ) / 2.0
+                else:
+                    rangez = 50.0
 
-            # Determine resolution: prefer af_resolution, fall back to legacy stepSize
-            resolutionz = af_resolution if af_resolution > 0 else (stepSize if stepSize > 0 else 10.0)
+                # Determine resolution: prefer af_resolution, fall back to legacy stepSize
+                resolutionz = af_resolution if af_resolution > 0 else (stepSize if stepSize > 0 else 10.0)
 
-            # Call autofocus – use autoFocus which starts doAutofocusBackground
-            # in a thread with proper state management and validation.
-            # Then wait for the AF thread to finish before reading the result.
-            autofocusController.autoFocus(
-                rangez=rangez,
-                resolutionz=resolutionz,
-                defocusz=0,
-                tSettle=af_settle_time,
-                isDebug=False,
-                nGauss=af_n_gauss,
-                nCropsize=af_cropsize,
-                focusAlgorithm=af_algorithm,
-                static_offset=af_static_offset,
-                twoStage=af_two_stage
-            )
+                autofocusController.autoFocus(
+                    rangez=rangez,
+                    resolutionz=resolutionz,
+                    defocusz=0,
+                    tSettle=af_settle_time,
+                    isDebug=False,
+                    nGauss=af_n_gauss,
+                    nCropsize=af_cropsize,
+                    focusAlgorithm=af_algorithm,
+                    static_offset=af_static_offset,
+                    twoStage=af_two_stage
+                )
 
             # Wait for autofocus thread to finish (it runs in _AutofocusThead)
             af_thread = getattr(autofocusController, '_AutofocusThead', None)
@@ -2637,6 +2694,11 @@ class ExperimentController(ImConWidgetController):
                     illuminationChannel=config.af_illumination_channel,
                     max_attempts=config.af_max_attempts,
                     target_focus_setpoint=config.af_target_setpoint,
+                    af_software_method=config.af_software_method,
+                    af_hc_initial_step=config.af_hc_initial_step,
+                    af_hc_min_step=config.af_hc_min_step,
+                    af_hc_step_reduction=config.af_hc_step_reduction,
+                    af_hc_max_iterations=config.af_hc_max_iterations,
                 )
 
                 if best_z is None:

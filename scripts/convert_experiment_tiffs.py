@@ -131,8 +131,8 @@ def _find_protocol_json(tiles_dir: str) -> Optional[str]:
         os.path.dirname(os.path.dirname(tiles_dir)), # e.g. .../20260316_163004/
     ]
     for d in search_dirs:
-        if not d or not os.path.isdir(d):  
-            continue      
+        if not d or not os.path.isdir(d):
+            continue
         for fname in sorted(os.listdir(d)):
             if fname.endswith("_protocol.json"):
                 return os.path.join(d, fname)
@@ -365,16 +365,16 @@ def build_composite_stacks(grid: ExperimentGrid, out_dir: str):
                               for t in tiles))
 
     for pos_idx, (ix, iy) in enumerate(xy_positions):
-        # Find the Z-stack depth from the actual tiles at this position.  
-        # Use the first available timepoint that has tiles for each channel,  
-        # rather than assuming everything exists at grid.timepoints[0].  
-        all_z_tiles = []  
-        for ci in grid.c_indices:  
-            for tp in grid.timepoints:  
-                tiles = grid.get_tiles(tp, ix, iy, ci)  
-                if tiles:  
-                    all_z_tiles.extend(tiles)  
-                    break          
+        # Find the Z-stack depth from the actual tiles at this position.
+        # Use the first available timepoint that has tiles for each channel,
+        # rather than assuming everything exists at grid.timepoints[0].
+        all_z_tiles = []
+        for ci in grid.c_indices:
+            for tp in grid.timepoints:
+                tiles = grid.get_tiles(tp, ix, iy, ci)
+                if tiles:
+                    all_z_tiles.extend(tiles)
+                    break
         if not all_z_tiles:
             continue
         nZ = max(len(grid.get_tiles(tp, ix, iy, ci))
@@ -751,9 +751,9 @@ Explanation of modes:
 - mip-composite: Compute per-channel MIP-stitched canvases and merge them into a multi-channel composite stack for napari. This allows viewing the MIP of all channels together in napari.
 - tile-config: Write a TileConfiguration.txt file for each channel and timepoint that maps each individual TIFF to its pixel position. This can be used with Fiji's Grid/Collection plugin
     for precise stitching with sub-pixel registration.
-    
+
 Sample usage:
-    # Convert all timepoints, all modes 
+    # Convert all timepoints, all modes
     python convert_experiment_tiffs.py /path/to/base_dir/tiles
     # Only composite stacks
     python convert_experiment_tiffs.py /path/to/base_dir/tiles --mode composite

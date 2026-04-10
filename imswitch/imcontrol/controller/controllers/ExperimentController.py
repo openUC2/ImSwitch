@@ -744,7 +744,6 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
-        # Extract key parameters
         exp_name = mExperiment.name
         p = mExperiment.parameterValue
 
@@ -767,9 +766,15 @@ class ExperimentController(ImConWidgetController):
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
 
-        # check if any of the illumination sources is turned on, if not, return error
-        if not any(illuminationIntensities):
-            return HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
+        # Detect passthrough mode: no illumination channels configured.
+        # In this mode we acquire frames without touching the current
+        # illumination, exposure, or gain settings on the device.
+        _passthrough_illumination = not any(illuminationIntensities)
+        if _passthrough_illumination:
+            self._logger.info(
+                "No illumination intensities set – entering passthrough mode: "
+                "current illumination/camera settings will not be changed."
+            )
 
         # Resolve keepIlluminationOn mode:
         #  "auto" → True when exactly 1 active channel, False otherwise
@@ -822,6 +827,19 @@ class ExperimentController(ImConWidgetController):
         if len(gains) != len(illuSources): gains = [-1]*len(illuSources)
         if len(exposures) != len(illuSources): exposures = [exposures[0]]*len(illuSources)
 
+        # Passthrough-mode overrides: use a single sentinel channel so the
+        # acquisition loop runs exactly once per position without modifying
+        # illumination, exposure, or gain.
+        if _passthrough_illumination:
+            illuSources = [illuSources[0]] if illuSources else ["default"]
+            illuminationIntensities = [1]  # sentinel: passes >0 gate; never sent to device
+            gains = [-1]   # set_exposure_time_gain skips when gain < 0
+            exposures = [0]  # set_exposure_time_gain skips when exposure_time <= 0
+            keepIlluminationOn = True  # never send set_laser_power commands
+            self._logger.info(
+                f"Passthrough mode: using channel '{illuSources[0]}' as sentinel, "
+                "illumination/exposure/gain unchanged."
+            )
 
         # Check if another workflow is running
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:

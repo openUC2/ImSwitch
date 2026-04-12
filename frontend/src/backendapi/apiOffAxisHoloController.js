@@ -237,6 +237,42 @@ export const apiOffAxisHoloControllerSetWavelength = async (wavelength) => {
   }
 };
 
+/**
+ * Enable or disable 2D phase unwrapping
+ * @param {boolean} enabled - Enable phase unwrapping
+ * @returns {Promise<Object>} Promise containing updated parameters
+ */
+export const apiOffAxisHoloControllerSetUnwrapPhase = async (enabled) => {
+  const instance = createAxiosInstance();
+  try {
+    const response = await instance.get("/OffAxisHoloController/set_unwrap_phase_offaxisholo", {
+      params: { enabled }
+    });
+    return response.data;
+  } catch (error) {
+    console.error("Error setting off-axis unwrap_phase:", error);
+    throw error;
+  }
+};
+
+/**
+ * Toggle between showing reconstructed field or raw FFT-space sideband
+ * @param {boolean} enabled - If true, mag/phase streams show FFT-space crop
+ * @returns {Promise<Object>} Promise containing updated parameters
+ */
+export const apiOffAxisHoloControllerSetShowFftSpace = async (enabled) => {
+  const instance = createAxiosInstance();
+  try {
+    const response = await instance.get("/OffAxisHoloController/set_show_fft_space_offaxisholo", {
+      params: { enabled }
+    });
+    return response.data;
+  } catch (error) {
+    console.error("Error setting off-axis show_fft_space:", error);
+    throw error;
+  }
+};
+
 export default {
   getParams: apiOffAxisHoloControllerGetParams,
   setParams: apiOffAxisHoloControllerSetParams,
@@ -252,4 +288,6 @@ export default {
   setBinning: apiOffAxisHoloControllerSetBinning,
   setPixelsize: apiOffAxisHoloControllerSetPixelsize,
   setWavelength: apiOffAxisHoloControllerSetWavelength,
+  setUnwrapPhase: apiOffAxisHoloControllerSetUnwrapPhase,
+  setShowFftSpace: apiOffAxisHoloControllerSetShowFftSpace,
 };

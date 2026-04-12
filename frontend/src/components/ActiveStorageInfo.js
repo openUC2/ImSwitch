@@ -1,68 +1,37 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { useDispatch } from "react-redux";
+import React, { useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
 import { Box, Typography, Chip, Button, CircularProgress } from "@mui/material";
 import {
   SdStorage as SdStorageIcon,
   Folder as FolderIcon,
 } from "@mui/icons-material";
 import { setNotification } from "../state/slices/NotificationSlice";
-import apiStorageControllerGetStorageStatus from "../backendapi/apiStorageControllerGetStorageStatus";
+import { getStorageState } from "../state/slices/StorageSlice";
 import apiStorageControllerSetActivePath from "../backendapi/apiStorageControllerSetActivePath";
 
 /**
  * ActiveStorageInfo Component
  * Displays the currently active storage location in the FileManager
- * Provides quick access to switch back to local storage
+ * Provides quick access to switch back to the default internal storage.
  */
-const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
+const ActiveStorageInfo = ({ onStorageChange }) => {
   const dispatch = useDispatch();
-  const [storageStatus, setStorageStatus] = useState(null);
-  const [defaultPath, setDefaultPath] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const storageState = useSelector(getStorageState);
   const [switching, setSwitching] = useState(false);
+  const storageStatus = storageState.status;
+  const activeDevice = storageStatus.active_device;
+  const defaultDevice = storageStatus.default_device;
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const status = await apiStorageControllerGetStorageStatus();
-      setStorageStatus(status);
-
-      // Get default local path
-      if (!defaultPath) {
-        // Use /home/pi/Datasets as the default local storage path
-        const localPath = "/home/pi/Datasets";
-        setDefaultPath(localPath);
-      }
-    } catch (error) {
-      console.error("Failed to fetch storage status:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, [defaultPath]);
-
-  useEffect(() => {
-    fetchStatus();
-
-    // Refresh every 10 seconds
-    const interval = setInterval(fetchStatus, 30000);
-    return () => clearInterval(interval);
-  }, [fetchStatus]);
-
-  const handleSwitchToLocal = async () => {
-    if (!defaultPath) return;
+  const handleSwitchToDefault = async () => {
+    if (!defaultDevice?.path) return;
 
     setSwitching(true);
     try {
-      const result = await apiStorageControllerSetActivePath(defaultPath, true);
-      console.log("ActiveStorageInfo: Switch to local result:", result);
-
-      await fetchStatus();
-
-      // Notify parent about storage change (updates FileManager's initialPath)
-      const newActivePath = result.active_path || defaultPath;
-      console.log(
-        "ActiveStorageInfo: Notifying storage change to:",
-        newActivePath
+      const result = await apiStorageControllerSetActivePath(
+        defaultDevice.path,
+        true,
       );
+      const newActivePath = result.active_path || defaultDevice.path;
 
       if (onStorageChange) {
         onStorageChange(newActivePath);
@@ -70,34 +39,29 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
 
       dispatch(
         setNotification({
-          message: "Switched to local storage",
+          message: "Switched to internal storage",
           type: "success",
-        })
+        }),
       );
-
-      // Trigger FileManager refresh if callback provided
-      if (onRefresh) {
-        onRefresh();
-      }
     } catch (error) {
-      console.error("Failed to switch to local storage:", error);
+      console.error("Failed to switch to internal storage:", error);
       dispatch(
         setNotification({
           message: `Failed to switch: ${error.message}`,
           type: "error",
-        })
+        }),
       );
     } finally {
       setSwitching(false);
     }
   };
 
-  if (loading || !storageStatus?.active_path) {
+  if (!storageState.hasReceivedSnapshot || !storageStatus?.active_path) {
     return null;
   }
 
-  // Check if it's an external drive (contains /media/)
-  const isExternalDrive = storageStatus.active_path.includes("/media/");
+  const isExternalDrive = Boolean(activeDevice && !activeDevice.is_internal);
+  const activeUsage = activeDevice?.usage;
 
   return (
     <Box
@@ -122,7 +86,9 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
           variant="caption"
           sx={{ fontWeight: "bold", display: "block" }}
         >
-          {isExternalDrive ? "External Storage Active" : "Local Storage Active"}
+          {isExternalDrive
+            ? "External Storage Active"
+            : "Internal Storage Active"}
         </Typography>
         <Typography
           variant="caption"
@@ -131,11 +97,9 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
           {storageStatus.active_path}
         </Typography>
       </Box>
-      {storageStatus.disk_usage && (
+      {activeUsage && typeof activeUsage.free === "number" && (
         <Chip
-          label={`${(storageStatus.disk_usage.free / 1024 ** 3).toFixed(
-            1
-          )} GB free`}
+          label={`${(activeUsage.free / 1024 ** 3).toFixed(1)} GB free`}
           size="small"
           sx={{
             bgcolor: "rgba(255, 255, 255, 0.3)",
@@ -148,7 +112,7 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
         <Button
           variant="outlined"
           size="small"
-          onClick={handleSwitchToLocal}
+          onClick={handleSwitchToDefault}
           disabled={switching}
           startIcon={
             switching ? (
@@ -166,7 +130,7 @@ const ActiveStorageInfo = ({ onRefresh, onStorageChange }) => {
             },
           }}
         >
-          {switching ? "Switching..." : "Switch to Local"}
+          {switching ? "Switching..." : "Switch to Internal"}
         </Button>
       )}
     </Box>

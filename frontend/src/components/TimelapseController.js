@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect } from "react";
 import { useSelector } from "react-redux";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 import {
@@ -37,7 +37,7 @@ const TimelapseController = () => {
     const fetchParameters = async () => {
       try {
         const response = await fetch(
-          `${hostIP}:${hostPort}/imswitch/api/TimelapseController/getCurrentTimelapseParameters`
+          `${hostIP}:${hostPort}/imswitch/api/TimelapseController/getCurrentTimelapseParameters`,
         );
         const data = await response.json();
         if (data.detail === "Not Found") {
@@ -88,7 +88,7 @@ const TimelapseController = () => {
         (exposureTime, index) => {
           const element = document.getElementById(`exposureTime${index}`);
           return element ? parseInt(element.value) : exposureTime;
-        }
+        },
       );
       parameters.gain = parameters.gain.map((gain, index) => {
         const element = document.getElementById(`gain${index}`);
@@ -99,7 +99,7 @@ const TimelapseController = () => {
         (acc, intensity, index) => {
           if (intensity > 0) {
             const exposureElement = document.getElementById(
-              `exposureTime${index}`
+              `exposureTime${index}`,
             );
             const gainElement = document.getElementById(`gain${index}`);
             acc.illuSources.push(parameters.illuSources[index]);
@@ -107,15 +107,17 @@ const TimelapseController = () => {
             acc.exposureTimes.push(
               exposureElement
                 ? parseInt(exposureElement.value)
-                : parameters.exposureTimes[index]
+                : parameters.exposureTimes[index],
             );
             acc.gain.push(
-              gainElement ? parseInt(gainElement.value) : parameters.gain[index]
+              gainElement
+                ? parseInt(gainElement.value)
+                : parameters.gain[index],
             );
           }
           return acc;
         },
-        { illuSources: [], illuIntensities: [], exposureTimes: [], gain: [] }
+        { illuSources: [], illuIntensities: [], exposureTimes: [], gain: [] },
       );
       filteredParameters.illuSourcesSelected = filteredParameters.illuSources;
       filteredParameters.autofocus_every_n_frames =
@@ -129,7 +131,7 @@ const TimelapseController = () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(filteredParameters),
-        }
+        },
       );
 
       const result = await response.json();
@@ -144,7 +146,7 @@ const TimelapseController = () => {
     try {
       const response = await fetch(
         `${hostIP}:${hostPort}/imswitch/api/TimelapseController/stop_workflow_tl`,
-        { method: "get" }
+        { method: "get" },
       );
       const result = await response.json();
       setIsRunning(false);
@@ -204,7 +206,7 @@ const TimelapseController = () => {
                 onChange={(e) =>
                   handleChange(
                     "autofocus_every_n_frames",
-                    parseInt(e.target.value)
+                    parseInt(e.target.value),
                   )
                 }
                 fullWidth
@@ -245,7 +247,7 @@ const TimelapseController = () => {
                       handleChange(
                         "exposureTimes",
                         parseInt(e.target.value),
-                        index
+                        index,
                       )
                     }
                     fullWidth

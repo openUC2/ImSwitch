@@ -5,11 +5,15 @@ const getSmartDefaults = () => {
   const location = window.location;
   const protocol = location.protocol.replace(":", ""); // 'http' or 'https'
   const hostname = location.hostname;
+  const isHttps = location.protocol === "https:";
+  // Use the actual port from the URL; fall back to standard defaults (443/80)
+  // for cases where the browser omits the port (e.g. https on 443, http on 80)
+  const port = location.port || (isHttps ? "443" : "80");
 
   return {
     ip: `${protocol}://${hostname}`,
-    websocketPort: 80, // Both services now defaults on same port
-    apiPort: 80,
+    websocketPort: port,
+    apiPort: port,
   };
 };
 

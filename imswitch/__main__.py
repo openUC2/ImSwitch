@@ -12,7 +12,8 @@ from imswitch.config import get_config
 
 
 def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
-         data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None, jupyter_port:int=None):
+         data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None, jupyter_port:int=None,
+         default_firmware_route:str="http://localhost/firmware"):
     '''
     is_headless: bool => start with or without qt
     default_config: str => path to the config file

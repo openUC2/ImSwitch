@@ -48,7 +48,10 @@ jobs:
           python3 -m pip install .
           # hacky workaround to ensure we get the right psygnal version: otherwise error: INTERNALERROR> TypeError: interpreted classes cannot inherit from compiled
           python3 -m pip uninstall psygnal -y || echo "psygnal uninstall failed (not installed)"
-          python3 -m pip install psygnal --no-binary :all:                
+          python3 -m pip install "psygnal==0.11.1"
+          # psygnal 0.11+ may ship compiled modules that break subclassing in ImSwitch.
+          # Decompile explicitly to force pure-Python modules.
+          python3 -c "import psygnal.utils; psygnal.utils.decompile()"
           python3 -m pip install ruff pytest
         shell: bash
 

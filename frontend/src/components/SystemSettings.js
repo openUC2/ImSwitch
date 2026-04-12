@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSelector } from "react-redux";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
+import { getStorageState } from "../state/slices/StorageSlice";
 import * as uc2Slice from "../state/slices/UC2Slice.js";
 import {
   Box,
@@ -13,6 +14,7 @@ import {
   Alert,
   Chip,
   LinearProgress,
+  Link,
 } from "@mui/material";
 import {
   Computer,
@@ -20,26 +22,63 @@ import {
   Warning,
   CheckCircle,
   ErrorOutline,
+  OpenInNew,
 } from "@mui/icons-material";
-import apiUC2ConfigControllerGetDiskUsage from "../backendapi/apiUC2ConfigControllerGetDiskUsage";
 
 export default function SystemSettings() {
+  const deviceAdminFrameRef = useRef(null);
+
   // Get connection settings from Redux
   const { ip: hostIP, apiPort: hostPort } = useSelector(
-    getConnectionSettingsState
+    getConnectionSettingsState,
   );
 
   // Get backend connection status
   const uc2State = useSelector(uc2Slice.getUc2State);
+  const storageState = useSelector(getStorageState);
   const isBackendConnected = uc2State.backendConnected; // API reachable (enables UI)
 
   // Safety toggles
   const [enableImSwitch, setEnableImSwitch] = useState(false);
-  const [enableRaspi, setEnableRaspi] = useState(false);
   const [isImSwitchRunning, setIsImSwitchRunning] = useState(false);
-  const [diskUsage, setDiskUsage] = useState(null);
+  const deviceAdminUrl = (() => {
+    if (!hostIP) {
+      return null;
+    }
+    try {
+      const url = new URL("/admin/panel/boot/", hostIP);
+      url.searchParams.set("mode", "minimal");
+      url.searchParams.set("nav", "hidden");
+      return url.toString();
+    } catch (e) {
+      console.error("Failed to construct device admin URL:", e);
+      return null;
+    }
+  })();
+  const canInspectDeviceAdmin =
+    (() => {
+      if (!deviceAdminUrl) {
+        return false;
+      }
+      try {
+        return new URL(deviceAdminUrl).origin === window.location.origin;
+      } catch (e) {
+        console.error("Failed to inspect device admin URL:", e);
+        return false;
+      }
+    })();
+  const [deviceAdminStatus, setDeviceAdminStatus] = useState("loading");
 
   const base = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController`;
+  const activeUsage = storageState.status.active_device?.usage || null;
+  const diskUsagePercent =
+    typeof activeUsage?.percent_used === "number"
+      ? activeUsage.percent_used
+      : null;
+  const diskUsage =
+    typeof diskUsagePercent === "number"
+      ? `${diskUsagePercent.toFixed(1)}%`
+      : null;
 
   // API communication
   const callEndpoint = async (url) => {
@@ -47,7 +86,7 @@ export default function SystemSettings() {
       const response = await fetch(url, { method: "GET" });
       if (!response.ok) {
         console.error(
-          `API call failed: ${response.status} ${response.statusText}`
+          `API call failed: ${response.status} ${response.statusText}`,
         );
       } else {
         const data = await response.json();
@@ -101,35 +140,44 @@ export default function SystemSettings() {
     return () => clearInterval(intervalId);
   }, [base, isBackendConnected]);
 
-  // Fetch disk usage using the standardized API
   useEffect(() => {
-    // Only fetch if backend is connected
-    if (!isBackendConnected) {
-      setDiskUsage(null);
+    setDeviceAdminStatus(canInspectDeviceAdmin ? "loading" : "unavailable");
+  }, [canInspectDeviceAdmin, deviceAdminUrl]);
+
+  const handleDeviceAdminLoad = () => {
+    const iframe = deviceAdminFrameRef.current;
+
+    if (!iframe) {
+      setDeviceAdminStatus("ready");
       return;
     }
 
-    const fetchDiskUsage = async () => {
-      try {
-        // Use the standardized API wrapper
-        const data = await apiUC2ConfigControllerGetDiskUsage();
-        console.log("Disk usage data:", data);
+    try {
+      const iframeDocument =
+        iframe.contentDocument || iframe.contentWindow?.document;
+      const iframeText = [
+        iframeDocument?.title || "",
+        iframeDocument?.body?.innerText || "",
+      ]
+        .join(" ")
+        .toLowerCase();
 
-        // API returns {raw, formatted, percent}
-        setDiskUsage(data.formatted);
-      } catch (error) {
-        console.error("Error fetching disk usage:", error);
-        setDiskUsage("Error loading");
-      }
-    };
+      const looksMissing =
+        iframeText.includes("404") ||
+        iframeText.includes("not found") ||
+        iframeText.includes("requested url was not found");
 
-    // Initial fetch
-    fetchDiskUsage();
+      setDeviceAdminStatus(looksMissing ? "missing" : "ready");
+    } catch {
+      // Cross-origin iframe content cannot be inspected. In that case,
+      // treat a successful load as available.
+      setDeviceAdminStatus("ready");
+    }
+  };
 
-    // Fetch every 30 seconds (less frequent for disk usage)
-    const intervalId = setInterval(fetchDiskUsage, 30000);
-    return () => clearInterval(intervalId);
-  }, [isBackendConnected]);
+  const handleDeviceAdminError = () => {
+    setDeviceAdminStatus("unavailable");
+  };
 
   // Helper function to get disk usage color based on percentage
   const getDiskUsageColor = (usage) => {
@@ -207,7 +255,9 @@ export default function SystemSettings() {
                 <Chip
                   label={
                     isBackendConnected
-                      ? diskUsage ?? "Loading..."
+                      ? storageState.hasReceivedSnapshot
+                        ? (diskUsage ?? "Unavailable")
+                        : "Loading..."
                       : "Backend disconnected"
                   }
                   color={getDiskUsageColor(diskUsage)}
@@ -285,35 +335,78 @@ export default function SystemSettings() {
             </Typography>
           </Alert>
 
-          <FormControlLabel
-            control={
-              <Switch
-                checked={enableRaspi}
-                onChange={(e) => setEnableRaspi(e.target.checked)}
-              />
-            }
-            label="Enable Raspberry Pi reboot"
-            sx={{ mb: 2 }}
-          />
-
-          <Box sx={{ display: "flex", gap: 2 }}>
-            <Button
-              variant="contained"
-              color="error"
-              disabled={!enableRaspi || !isBackendConnected}
-              onClick={() => callEndpoint(`${base}/restartRaspi`)}
+          {/* Device-Admin iframe for reboot/shutdown */}
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              System Management
+            </Typography>
+            <Box
+              sx={{
+                display: deviceAdminStatus === "ready" ? "block" : "none",
+                border: "1px solid #424242",
+                borderRadius: 1,
+                overflow: "hidden",
+                mb: 2,
+                backgroundColor: "#2a2a2a",
+              }}
             >
-              Reboot Raspberry Pi
-            </Button>
-
-            <Button
-              variant="outlined"
-              color="error"
-              disabled={!enableRaspi || !isBackendConnected}
-              onClick={() => callEndpoint(`${base}/shutdownRaspi`)}
-            >
-              Shutdown Raspberry Pi
-            </Button>
+              {canInspectDeviceAdmin && (
+                <iframe
+                  ref={deviceAdminFrameRef}
+                  src={deviceAdminUrl}
+                  style={{
+                    width: "100%",
+                    height: "300px",
+                    border: "none",
+                    borderRadius: "4px",
+                    display: "block",
+                    backgroundColor: "#2a2a2a",
+                  }}
+                  title="Device Admin Panel - Reboot/Shutdown"
+                  onLoad={handleDeviceAdminLoad}
+                  onError={handleDeviceAdminError}
+                  sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                />
+              )}
+            </Box>
+            {deviceAdminStatus !== "ready" && (
+              <Box
+                sx={{
+                  border: "1px solid #424242",
+                  borderRadius: 1,
+                  p: 2,
+                  mb: 2,
+                  backgroundColor: "#2a2a2a",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 1,
+                }}
+              >
+                <Typography variant="body2" sx={{ color: "#b0b0b0", mb: 1 }}>
+                  {!canInspectDeviceAdmin
+                    ? "The admin panel is not available at the expected same-origin URL in this setup."
+                    : deviceAdminStatus === "missing"
+                      ? "The admin panel was not found at the expected URL for this setup."
+                      : deviceAdminStatus === "unavailable"
+                        ? "The admin panel could not be loaded from this setup."
+                        : "Loading the admin panel. If it does not appear, please use the direct link:"}
+                </Typography>
+                <Link
+                  href={deviceAdminUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.5,
+                    color: "#64b5f6",
+                    "&:hover": { color: "#90caf9" },
+                  }}
+                >
+                  Reboot/Shutdown in device-admin <OpenInNew fontSize="small" />
+                </Link>
+              </Box>
+            )}
           </Box>
         </CardContent>
       </Card>

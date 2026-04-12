@@ -33,7 +33,6 @@ import {
   Tabs,
   TextField,
   Typography,
-  Chip,
 } from "@mui/material";
 import AceEditor from "react-ace";
 import "ace-builds/src-noconflict/mode-json";
@@ -78,6 +77,7 @@ const UC2ConfigurationController = () => {
   const hostPort = connectionSettings.apiPort || "8000";
 
   const [showConfigWizard, setShowConfigWizard] = React.useState(false);
+  const [isApplyWarningOpen, setIsApplyWarningOpen] = React.useState(false);
   const hasAutoSelectedRef = React.useRef(false);
 
   // Access global Redux state
@@ -142,6 +142,10 @@ const UC2ConfigurationController = () => {
         setTimeout(() => dispatch(clearNotification()), 3000);
       });
   }, [hostIP, hostPort, dispatch]);
+
+  const isExpectedRestartHttpStatus = useCallback((status) => {
+    return [502, 503, 504].includes(status);
+  }, []);
 
   const fetchCurrentSetup = useCallback(() => {
     const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/getCurrentSetupFilename`;
@@ -235,7 +239,7 @@ const UC2ConfigurationController = () => {
 
     // Start checking after 5 seconds
     setTimeout(checkStatus, 10000);
-  }, [hostIP, hostPort, dispatch]);
+  }, [hostIP, hostPort, dispatch, fetchAvailableSetups, fetchCurrentSetup]);
 
   useEffect(() => {
     fetchAvailableSetups();
@@ -245,7 +249,7 @@ const UC2ConfigurationController = () => {
     if (availableSetups.length > 0) {
       fetchCurrentSetup();
     }
-  }, [availableSetups]);
+  }, [availableSetups, fetchCurrentSetup]);
 
   // Note: Connection monitoring is now handled centrally by WebSocketHandler
   // This eliminates duplicate API calls and potential conflicts with ConnectionSettings testing
@@ -256,6 +260,24 @@ const UC2ConfigurationController = () => {
 
   const handleSetupChange = (event) => {
     dispatch(uc2Slice.setSelectedSetup(event.target.value));
+  };
+
+  const handleOpenApplyWarning = () => {
+    if (!selectedSetup) {
+      dispatch(
+        setNotification({
+          message: "Please select a setup before proceeding",
+          type: "warning",
+        }),
+      );
+      return;
+    }
+
+    setIsApplyWarningOpen(true);
+  };
+
+  const handleCloseApplyWarning = () => {
+    setIsApplyWarningOpen(false);
   };
 
   const handleSetSetup = () => {
@@ -328,9 +350,11 @@ const UC2ConfigurationController = () => {
       .catch((error) => {
         console.error("Error setting setup:", error);
 
-        // Only start restart monitor for network errors during expected restart
-        // HTTP errors (404, 500, etc.) should show error message instead
-        if (restartSoftware && !error.isHttpError) {
+        // During expected restart, transient network and gateway errors are normal.
+        if (
+          restartSoftware &&
+          (!error.isHttpError || isExpectedRestartHttpStatus(error.status))
+        ) {
           dispatch(
             setNotification({
               message: "ImSwitch is restarting... Please wait",
@@ -341,7 +365,7 @@ const UC2ConfigurationController = () => {
           return;
         }
 
-        // For HTTP errors or other issues, show error message
+        // For non-restart HTTP errors, show error message
         dispatch(
           setNotification({
             message: error.message || "Failed to set configuration",
@@ -628,6 +652,9 @@ const UC2ConfigurationController = () => {
       });
   };
 
+  const isTemporarilyRestarting =
+    isRestarting && restartSoftware && !uc2Connected;
+
   return (
     <Box sx={{ p: 3, maxWidth: 1200, mx: "auto" }}>
       {/* Header */}
@@ -642,14 +669,29 @@ const UC2ConfigurationController = () => {
 
       {/* Connection Status */}
       <Alert
-        severity={uc2Connected ? "success" : "error"}
+        severity={
+          uc2Connected ? "success" : isTemporarilyRestarting ? "info" : "error"
+        }
         sx={{ mb: 3 }}
-        icon={uc2Connected ? <CheckCircle /> : <ErrorOutline />}
+        icon={
+          uc2Connected ? (
+            <CheckCircle />
+          ) : isTemporarilyRestarting ? (
+            <RefreshIcon />
+          ) : (
+            <ErrorOutline />
+          )
+        }
       >
         <Typography variant="body2">
           {uc2Connected ? (
             <>
               <strong>UC2 Board Connected:</strong> All controls are available.
+            </>
+          ) : isTemporarilyRestarting ? (
+            <>
+              <strong>Restart in progress:</strong> Temporary disconnect is
+              expected while ImSwitch restarts.
             </>
           ) : (
             <>
@@ -759,7 +801,7 @@ const UC2ConfigurationController = () => {
 
               <Button
                 variant="contained"
-                onClick={handleSetSetup}
+                onClick={handleOpenApplyWarning}
                 disabled={!selectedSetup || isRestarting}
                 startIcon={
                   isRestarting ? (
@@ -773,6 +815,46 @@ const UC2ConfigurationController = () => {
               >
                 {isRestarting ? "Processing..." : "Apply Configuration"}
               </Button>
+
+              <Dialog
+                open={isApplyWarningOpen}
+                onClose={handleCloseApplyWarning}
+                maxWidth="sm"
+                fullWidth
+              >
+                <DialogTitle>Apply Configuration?</DialogTitle>
+                <DialogContent>
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    A wrong configuration can prevent the system from starting
+                    correctly. In this case, the device may become temporarily
+                    unreachable and require manual recovery on the system.
+                  </Alert>
+                  <Typography variant="body2">
+                    Selected configuration: <strong>{selectedSetup}</strong>
+                  </Typography>
+                  {restartSoftware && (
+                    <Typography variant="body2" sx={{ mt: 1 }}>
+                      Restart is enabled. A temporary disconnect during restart
+                      is expected.
+                    </Typography>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={handleCloseApplyWarning} color="inherit">
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      handleCloseApplyWarning();
+                      handleSetSetup();
+                    }}
+                    color="warning"
+                    variant="contained"
+                  >
+                    Apply Anyway
+                  </Button>
+                </DialogActions>
+              </Dialog>
 
               {/* Confirmation Dialog */}
               <Dialog open={isDialogOpen} onClose={handleDialogClose}>

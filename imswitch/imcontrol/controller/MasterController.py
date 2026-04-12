@@ -38,6 +38,7 @@ from imswitch.imcontrol.model import (
     ExperimentManager,
     ObjectiveManager,
     ArkitektManager,
+    SiLA2Manager,
     InstrumentMetadataManager,
 )
 
@@ -180,6 +181,13 @@ class MasterController:
                 )
             else:
                 self.arkitektManager = ArkitektManager(self.__setupInfo.arkitekt)
+        if "SiLA2" in self.__setupInfo.availableWidgets:
+            if SiLA2Manager is None:
+                self.__logger.warning(
+                    "SiLA2Manager unavailable; skipping SiLA2 initialization."
+                )
+            else:
+                self.sila2Manager = SiLA2Manager(self.__setupInfo.sila2)
         # load all implugin-related managers and add them to the class
         # try to get it from the plugins
         # If there is a imswitch_sim_manager, we want to add this as self.imswitch_sim_widget to the

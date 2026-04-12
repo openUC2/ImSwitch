@@ -48,6 +48,7 @@ class ArkitektController(ImConWidgetController):
         self.arkitekt_app.register(self.moveToSampleLoadingPosition)
         self.arkitekt_app.register(self.runTileScan)
         self.arkitekt_app.register(self.goToPosition)
+        self.arkitekt_app.register(self.acquireFrame)
         self.arkitekt_app.run_detached()
 
     def moveToSampleLoadingPosition(
@@ -67,6 +68,52 @@ class ArkitektController(ImConWidgetController):
         self._master.positionersManager[positionerName].moveToSampleLoadingPosition(
             speed=speed, is_blocking=is_blocking
         )
+
+    @APIExport(runOnUIThread=False)
+    def acquireFrame(self, frameSync: int = 3) -> Generator[Image, None, None]:
+        """Acquire a single frame from the detector.
+
+        Args:
+            frameSync (int): Number of frames to skip to ensure a fresh frame is acquired.
+                Default is 3.
+        Returns:
+            numpy.ndarray: Acquired image frame as a NumPy array.
+        """
+        # ensure we get a fresh frame
+        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        cTime = time.time()
+        lastFrameNumber=-1
+        while(1):
+            # get frame and frame number to get one that is newer than the one with illumination off eventually
+            mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
+            if lastFrameNumber==-1:
+                # first round
+                lastFrameNumber = currentFrameNumber
+            if time.time()-cTime> timeoutFrameRequest:
+                # in case exposure time is too long we need break at one point
+                if mFrame is None:
+                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
+                break
+            if currentFrameNumber <= lastFrameNumber+frameSync:
+                time.sleep(0.01) # off-load CPU
+            else:
+                break
+        # in order to be compatible with the from_array_like function we need to ensure we have a channel axis
+        if len(mFrame.shape) == 2:
+            mFrame = np.expand_dims(mFrame, axis=-1)
+        # now convert it to arkitekt format 
+        image = from_array_like(
+            xr.DataArray(
+                mFrame,
+                dims=["y", "x", "c"],
+                attrs={
+                    "frame_number": currentFrameNumber,
+                }
+            ),
+            name=f"Frame_{currentFrameNumber}",
+        )
+        yield image
+
 
     @APIExport(runOnUIThread=False)
     def goToPosition(

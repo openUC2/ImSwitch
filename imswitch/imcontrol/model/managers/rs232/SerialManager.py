@@ -65,6 +65,8 @@ class SerialManager:
         dsrdtr = bool(self._settings.get("dsrdtr", False))
         xonxoff = bool(self._settings.get("xonxoff", False))
 
+ 
+
         try:
             self._ser = serial.Serial(
                 port=port,
@@ -83,7 +85,35 @@ class SerialManager:
             self.__logger.info(f"{name}: opened {port} @ {baudrate} bps")
         except Exception as e:
             self.__logger.error(f"{name}: failed to open {port}: {e}")
-            raise
+            # TODO: check if port exists and if not do an autodetect by listing available ports and matching by name and use one that's plausible 
+            from serial.tools import list_ports
+            list_ports.comports()  # This is needed to trigger loading of platform-specific backend and avoid "No module named serial.tools.list_ports_xxx" error on some platforms
+            ports = list_ports.comports(include_links=False)
+            print("Choose the first available port from the list below or check your configuration:")
+            port = None
+            for p in ports:
+                print(f"  {p.device}: {p.description} [{p.hwid}]")
+                if p.description != "n/a" and port is None:
+                    port = p.device
+            if port is None:
+                raise RuntimeError("No serial ports found. Please check your configuration and connections.")
+            self._ser = serial.Serial(
+                port=p.device,
+                baudrate=baudrate,
+                bytesize=bytesize,
+                parity=parity,
+                stopbits=stopbits,
+                rtscts=rtscts,
+                dsrdtr=dsrdtr,
+                xonxoff=xonxoff,
+                timeout=timeout,
+                write_timeout=write_timeout,
+            )
+            self._ser.flushInput()
+            self._ser.flushOutput()
+            self.__logger.info(f"{name}: opened {port} @ {baudrate} bps")
+
+            
 
     # ---------------- Public API ----------------
 

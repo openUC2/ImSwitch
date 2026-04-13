@@ -12,10 +12,13 @@ from imswitch.imcommon.model import initLogger
 from imswitch.imcommon.model import dirtools
 import os
 # Import this to make sure that mikro_next is available when ArkitektManager is used
-#try: # TODO: TAKES Loong
-#    from mikro_next.api.schema import Image
-# except ImportError:
-#    Image = None
+try: # TODO: TAKES Loong
+    # Import here to avoid issues if arkitekt_next is not installed
+    from arkitekt_next import easy
+    from koil import Koil    
+    from mikro_next.api.schema import Image
+except ImportError:
+    Image = None
 
 
 def ensure_context_in_thread(context: Context):
@@ -126,10 +129,6 @@ class ArkitektManager:
             return
 
         try:
-            # Import here to avoid issues if arkitekt_next is not installed
-            from arkitekt_next import easy
-            from koil import Koil
-
             if self._config.get("redeem_token", None) == "":
                 redeem_token = None
             else:

@@ -37,11 +37,6 @@ from fastapi.staticfiles import StaticFiles
 # Import Socket.IO app from noqt framework
 from imswitch.imcommon.framework.noqt import get_socket_app, set_shared_event_loop
 
-try:
-    pass
-#    from arkitekt_next import easy
-except ImportError:
-    print("Arkitekt not found")
 
 
 PORT = __httpport__

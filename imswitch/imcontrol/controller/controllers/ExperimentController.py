@@ -1563,6 +1563,22 @@ class ExperimentController(ImConWidgetController):
         return power
 
 
+    def home_axis(self, axis: str, isBlocking: bool = True):
+        if axis not in ["X", "Y", "Z"]:
+            self._logger.error(f"Invalid axis '{axis}' specified for movement")
+            return None
+        self._logger.debug(f"Moving axis {axis} to home position with blocking={isBlocking}")
+        self.mStage.doHome(axis=axis, isBlocking=isBlocking)
+
+    @APIExport(requestType="POST")
+    def homeAllAxes(self):
+        """Home all stage axes (X, Y, Z) sequentially. Blocks until complete."""
+        self._logger.info("Homing all axes before experiment...")
+        for axis in ["X", "Y", "Z"]:
+            self.home_axis(axis=axis, isBlocking=True)
+        self._logger.info("All axes homed successfully.")
+        return {"status": "ok", "message": "All axes homed"}
+
 
     def move_stage_xy(self, posX: float = None, posY: float = None, relative: bool = False):
         # {"task":"/motor_act",     "motor":     {         "steppers": [             { "stepperid": 1, "position": -1000, "speed": 30000, "isabs": 0, "isaccel":1, "isen":0, "accel":500000}     ]}}

@@ -9,11 +9,13 @@ import {
   Chip,
   Alert,
   CircularProgress,
+  Slider,
 } from "@mui/material";
 import {
   PlayArrow as PlayArrowIcon,
   Stop as StopIcon,
   Home as HomeIcon,
+  FolderOpen as FolderOpenIcon,
 } from "@mui/icons-material";
 
 import * as experimentSlice from "../state/slices/ExperimentSlice.js";
@@ -30,8 +32,6 @@ import fetchGetExperimentStatus from "../middleware/fetchExperimentControllerGet
 
 import WellSelectorCanvas from "../axon/WellSelectorCanvas.js";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
-import GenericTabBar from "../axon/GenericTabBar.js";
-import PictureInPicture, { PiPToggleButton } from "../axon/PictureInPicture.js";
 import InfoPopup from "../axon/InfoPopup.js";
 
 // Status enum matching ExperimentComponent
@@ -44,24 +44,21 @@ const Status = Object.freeze({
 
 // Hardcoded ShitScope scan area dimensions (micrometers)
 const SHITSCOPE_SCAN_WIDTH = 3000; // 30 mm
-const SHITSCOPE_SCAN_HEIGHT = 1000; // 10 mm
+const SHITSCOPE_SCAN_HEIGHT = 2000; // 20 mm
 
 /**
  * ShitScope - Dedicated single-button scan application
  *
  * Simplified scan interface with:
- * - Fixed rectangular scan area (30x10 mm)
+ * - Fixed rectangular scan area (30x20 mm)
  * - Live view with overview canvas showing current position
  * - Pre-experiment homing of all axes
  * - Single start button to launch paving scan
  */
-const ShitScopeComponent = () => {
+const ShitScopeComponent = ({ onOpenFileManager }) => {
   const dispatch = useDispatch();
   const infoPopupRef = useRef(null);
   const canvasRef = useRef(null);
-
-  // PiP live preview
-  const [pipVisible, setPipVisible] = useState(false);
 
   // Homing state
   const [isHoming, setIsHoming] = useState(false);
@@ -107,9 +104,9 @@ const ShitScopeComponent = () => {
       })
     );
 
-    // Set overlap from wellSelector area mode
-    dispatch(wellSelectorSlice.setMode("area"));
-    dispatch(wellSelectorSlice.setAreaSelectSnakescan(true));
+    // Set mode to MOVE_CAMERA so canvas clicks move the stage instead of adding points
+    dispatch(wellSelectorSlice.setMode("camera"));
+    dispatch(wellSelectorSlice.setAreaSelectSnakescan(false));
 
     // Create a single point covering the entire scan area
     dispatch(experimentSlice.setPointList([]));
@@ -179,10 +176,8 @@ const ShitScopeComponent = () => {
         infoPopupRef.current.showMessage("Homing complete. Starting scan...");
       }
 
-      // Step 2: Sync state
-      dispatch(
-        experimentSlice.setIsSnakescan(wellSelectorState.areaSelectSnakescan)
-      );
+      // Step 2: Sync state – raster scan (never snake)
+      dispatch(experimentSlice.setIsSnakescan(false));
       dispatch(
         experimentSlice.setOverlapWidth(wellSelectorState.areaSelectOverlap)
       );
@@ -217,7 +212,7 @@ const ShitScopeComponent = () => {
           ...experimentState.parameterValue,
           illuIntensities: filteredIntensities,
           resortPointListToSnakeCoordinates: false,
-          is_snakescan: wellSelectorState.areaSelectSnakescan,
+          is_snakescan: false, // always raster
           overlapWidth: wellSelectorState.areaSelectOverlap,
           overlapHeight: wellSelectorState.areaSelectOverlap,
         },
@@ -284,24 +279,13 @@ const ShitScopeComponent = () => {
         sx={{
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
           mb: 1,
         }}
       >
         <Typography variant="h5" sx={{ fontWeight: "bold" }}>
           ShitScope
         </Typography>
-        <PiPToggleButton
-          active={pipVisible}
-          onClick={() => setPipVisible((v) => !v)}
-        />
       </Box>
-
-      {/* PiP overlay */}
-      <PictureInPicture
-        visible={pipVisible}
-        onClose={() => setPipVisible(false)}
-      />
 
       {/* Scan info chips */}
       <Box sx={{ display: "flex", gap: 1, mb: 2, flexWrap: "wrap" }}>
@@ -330,17 +314,22 @@ const ShitScopeComponent = () => {
         />
       </Box>
 
-      {/* Main layout: canvas + live view */}
+      {/* Main layout: canvas + live view + controls */}
       <Box sx={{ display: "flex", gap: 2 }}>
-        {/* Left panel: Well selector canvas (overview) */}
-        <Box sx={{ flex: 3 }}>
-          <GenericTabBar
-            id="shitscope-left"
-            tabNames={["Overview", "Live View"]}
-          >
+        {/* Left panel: Canvas overview always visible, live view always below */}
+        <Box sx={{ flex: 3, display: "flex", flexDirection: "column", gap: 1 }}>
+          <Box sx={{ flex: 1, minHeight: 220 }}>
+            <Typography variant="caption" color="text.secondary">
+              Overview – click to move stage
+            </Typography>
             <WellSelectorCanvas ref={canvasRef} />
+          </Box>
+          <Box sx={{ flex: 1, minHeight: 220 }}>
+            <Typography variant="caption" color="text.secondary">
+              Live View
+            </Typography>
             <LiveViewControlWrapper />
-          </GenericTabBar>
+          </Box>
         </Box>
 
         {/* Right panel: Controls */}
@@ -432,6 +421,29 @@ const ShitScopeComponent = () => {
               Home All Axes
             </Button>
 
+            {/* Overlap slider */}
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="body2" gutterBottom>
+                Tile Overlap:{" "}
+                <strong>
+                  {Math.round((wellSelectorState.areaSelectOverlap || 0) * 100)}%
+                </strong>
+              </Typography>
+              <Slider
+                min={0}
+                max={50}
+                step={1}
+                value={Math.round((wellSelectorState.areaSelectOverlap || 0) * 100)}
+                onChange={(_, v) =>
+                  dispatch(wellSelectorSlice.setAreaSelectOverlap(v / 100))
+                }
+                valueLabelDisplay="auto"
+                valueLabelFormat={(v) => `${v}%`}
+                disabled={isRunning || isHoming}
+                size="small"
+              />
+            </Box>
+
             {/* Progress */}
             {isRunning && cachedTotalSteps > 0 && (
               <Box sx={{ mb: 2 }}>
@@ -448,6 +460,19 @@ const ShitScopeComponent = () => {
                   Step {cachedStepId} / {cachedTotalSteps}
                 </Typography>
               </Box>
+            )}
+
+            {/* Open latest scan in file manager */}
+            {onOpenFileManager && (
+              <Button
+                variant="outlined"
+                fullWidth
+                startIcon={<FolderOpenIcon />}
+                onClick={() => onOpenFileManager("/ExperimentController")}
+                sx={{ mt: 1 }}
+              >
+                Open Scans Folder
+              </Button>
             )}
           </Paper>
         </Box>

@@ -119,6 +119,7 @@ class StepperXYStageManager(PositionerManager):
         except Exception as exc:
             print(f"Failed to initialize PositionerManager base class: {exc}")
         self.__logger = initLogger(self, instanceName=name)
+        self._commChannel = lowLevelManagers['commChannel']
         self._name = name
         self._lock = threading.Lock()
 
@@ -323,6 +324,11 @@ class StepperXYStageManager(PositionerManager):
                 self._position["Y"] += value[1]
             else:
                 self.__logger.warning(f"Axis '{axis}' is not supported (only X, Y, XY)")
+        # Emit position update in the same format as ESP32StageManager:
+        # { positionerName: { "X": ..., "Y": ..., "Z": ... } }
+        posDict = {self._name: dict(self._position)}
+        self._commChannel.sigUpdateMotorPosition.emit(posDict)
+
 
     def _move_xy_steps(self,
                        dx_steps: float,
@@ -358,15 +364,17 @@ class StepperXYStageManager(PositionerManager):
         # final approach is always from the same mechanical side.
         extra_x = 0
         extra_y = 0
-        if dx_dev != 0 and self._backlashX > 0:
+        if dx_dev != 0 and (self._backlashX) != 0:
             new_dir = 1 if dx_dev > 0 else -1
             if self._backlash_dir["X"] != 0 and new_dir != self._backlash_dir["X"]:
-                extra_x = self._backlashX * new_dir
+                # Overshoot in the direction of movement by abs(backlash) steps
+                extra_x = (self._backlashX) * new_dir
             self._backlash_dir["X"] = new_dir
-        if dy_dev != 0 and self._backlashY > 0:
+        if dy_dev != 0 and (self._backlashY) != 0:
             new_dir = 1 if dy_dev > 0 else -1
             if self._backlash_dir["Y"] != 0 and new_dir != self._backlash_dir["Y"]:
-                extra_y = self._backlashY * new_dir
+                # Overshoot in the direction of movement by abs(backlash) steps
+                extra_y = (self._backlashY) * new_dir
             self._backlash_dir["Y"] = new_dir
 
         if extra_x != 0 or extra_y != 0:
@@ -448,6 +456,14 @@ class StepperXYStageManager(PositionerManager):
         reply = self._send("PING")
         return "OK" in reply
 
+    def doHome(self, axis, isBlocking=False, homeDirection=None, homeSpeed=None, homeEndstoppolarity=None, homeEndposRelease=None, homeTimeout=None):
+        """Home the stage by moving toward the home position until a stall is detected or a timeout occurs."""
+        self.home(
+            home_speed=homeSpeed,
+            home_time_s=homeTimeout,
+            monitor_current=self._home_monitor_current
+        )
+
     def home(self,
              home_speed: Optional[int] = None,
              home_time_s: Optional[float] = None,
@@ -472,7 +488,7 @@ class StepperXYStageManager(PositionerManager):
             stop early when a stall is detected (motor hits end-of-travel).
             Defaults to the ``homeMonitorCurrent`` config value.
         """
-        speed = int(home_speed) if home_speed is not None else self._home_speed
+        speed = int(home_speed) if home_speed is not None else self._home_speed # TODO: Need to check that this is opposite from scanning 
         duration = float(home_time_s) if home_time_s is not None else self._home_time_s
         use_current = (
             monitor_current if monitor_current is not None
@@ -487,14 +503,14 @@ class StepperXYStageManager(PositionerManager):
         # interfere with the deliberately long continuous move.
         self._forever_moving = True
         try:
-            self._set_device_speed(speed, speed)
+            #self._set_device_speed(speed, speed)
             # Apply X/Y swap so the physical axes are correct
             big = speed * 9999  # large enough step count to run the full time
             dev_dx = -big
             dev_dy = -big
             if self._swapXY:
                 dev_dx, dev_dy = dev_dy, dev_dx
-            self._send(f"MOVE {dev_dx} {dev_dy} {speed}")
+            self._send(f"MOVE {-dev_dx} {dev_dy} {speed}")
 
             deadline = time.time() + duration
             stalled_x = False

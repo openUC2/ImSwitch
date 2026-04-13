@@ -107,15 +107,14 @@ class CameraPicamera2:
 
         # Auto exposure/white balance
         self.exposure_auto = False
-        if 0:
+        if 1:
             self.awb_auto = True
-
             # White balance mode and manual colour gains
             self.awb_mode = "auto"  # auto | manual | once
         else:
             self.awb_auto = False   
             self.awb_mode = "manual"
-        self.colour_gains = (1.0, 1.0)  # (red_gain, blue_gain)
+        self.colour_gains = (1.2, 1.2)  # (red_gain, blue_gain)
 
         # Tuning file support
         self.tuning_file = tuning_file

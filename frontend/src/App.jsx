@@ -450,7 +450,11 @@ function App() {
           {selectedPlugin === "GalvoScannerController" && (
             <GalvoScannerController />
           )}
-          {selectedPlugin === "ShitScope" && <ShitScopeComponent />}
+          {selectedPlugin === "ShitScope" && (
+            <ShitScopeComponent
+              onOpenFileManager={handleFileManagerInitialPathChange}
+            />
+          )}
           {selectedPlugin === "ImJoy" && (
             <ImJoyView sharedImage={sharedImage} />
           )}

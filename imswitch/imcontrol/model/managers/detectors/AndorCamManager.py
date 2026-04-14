@@ -1,12 +1,18 @@
 # managers/andor_cam_manager.py
 """
-DetectorManager for Andor SDK3 cameras.
+DetectorManager for Andor SDK2 / SDK3 cameras.
 
 Provides the same feature-set as HikCamManager so that ImSwitch can drive
 an Andor camera (e.g. Zyla, iXon) in exactly the same way as a HIK camera.
+
+The SDK version is chosen via the ``sdkVersion`` key in managerProperties
+(or inside the ``andorcam`` sub-dict).  Values: ``2`` or ``3``.
+Default is ``2`` on Windows (SDK2 is more widely supported) and ``3``
+elsewhere.
 """
 from __future__ import annotations
 
+import sys
 from typing import List
 
 from imswitch.imcommon.model import initLogger
@@ -22,17 +28,18 @@ from .DetectorManager import (
 
 class AndorCamManager(DetectorManager):
     """
-    ImSwitch DetectorManager for Andor SDK3 cameras.
+    ImSwitch DetectorManager for Andor SDK2 / SDK3 cameras.
 
     Mirrors the HikCamManager interface so both camera types can be used
     interchangeably from scripts, widgets, and the REST API.
 
     Manager properties (JSON / YAML):
-      - ``cameraListIndex``    int  - SDK camera index (0-based)
-      - ``cameraEffPixelsize`` float - physical pixel size in um
-      - ``mockstackpath``      str  - path for the mock stack (optional)
-      - ``mocktype``           str  - \"normal\" | \"random\" (optional)
-      - ``andor``              dict - key/value camera settings applied at startup
+      - ``cameraListIndex``    int   – SDK camera index (0-based)
+      - ``cameraEffPixelsize`` float – physical pixel size in µm
+      - ``mockstackpath``      str   – path for the mock stack (optional)
+      - ``mocktype``           str   – "normal" | "random" (optional)
+      - ``sdkVersion``         int   – 2 or 3 (default: 2 on Windows, 3 elsewhere)
+      - ``andorcam``           dict  – key/value camera settings applied at startup
     """
 
     def __init__(self, detectorInfo, name, **_extra):
@@ -42,7 +49,19 @@ class AndorCamManager(DetectorManager):
         # ---- properties from JSON ----------------------------------------
         cam_idx    = detectorInfo.managerProperties.get("cameraListIndex", 0)
         px_um      = detectorInfo.managerProperties.get("cameraEffPixelsize", 1.0)
-        andor_dict = detectorInfo.managerProperties.get("andor", {})
+        andor_dict = detectorInfo.managerProperties.get("andorcam", {})
+
+        # SDK version: read from top-level property, then from andorcam sub-dict,
+        # then default to 2 on Windows and 3 elsewhere.
+        _default_sdk = 2 if sys.platform == "win32" else 3
+        sdk_version  = int(
+            detectorInfo.managerProperties.get(
+                "sdkVersion",
+                andor_dict.get("sdkVersion", _default_sdk),
+            )
+        )
+        self._sdk_version = sdk_version
+        andor_dict = {k: v for k, v in andor_dict.items() if k != "sdkVersion"}
 
         try:
             self._mockstackpath = detectorInfo.managerProperties["mockstackpath"]
@@ -54,7 +73,7 @@ class AndorCamManager(DetectorManager):
             self._mocktype = "normal"
 
         # ---- open camera -------------------------------------------------
-        self._camera = self._get_cam(cam_idx)
+        self._camera = self._get_cam(cam_idx, sdk_version)
 
         # Apply startup settings from JSON (same pattern as HikCamManager)
         for prop, val in andor_dict.items():
@@ -335,7 +354,7 @@ class AndorCamManager(DetectorManager):
         """Return a comprehensive status dict (same structure as HikCamManager)."""
         status = super().getCameraStatus()
 
-        status["cameraType"]            = "Andor"
+        status["cameraType"]            = f"Andor SDK{self._sdk_version}"
         status["isMock"]                = self._mocktype != "normal"
         status["isConnected"]           = self._camera is not None
         status["isAcquiring"]           = self._running
@@ -358,16 +377,26 @@ class AndorCamManager(DetectorManager):
     # -----------------------------------------------------------------------
     # Camera factory
     # -----------------------------------------------------------------------
-    def _get_cam(self, cameraId):
-        """Open the Andor camera; fall back to the TIS mock on failure."""
+    def _get_cam(self, cameraId: int, sdk_version: int = 2):
+        """Open the Andor camera using the requested SDK version; fall back to TIS mock."""
         try:
-            from imswitch.imcontrol.model.interfaces.andorcamera import andorcamera
-            self.__logger.debug(f"Trying to initialize Andor camera {cameraId}")
-            camera = andorcamera(camera_no=cameraId)
+            if sdk_version == 2:
+                from imswitch.imcontrol.model.interfaces.andorcamera2 import andorcamera2
+                self.__logger.debug(
+                    f"Trying to initialize Andor SDK2 camera {cameraId}"
+                )
+                camera = andorcamera2(camera_no=cameraId)
+            else:
+                from imswitch.imcontrol.model.interfaces.andorcamera import andorcamera
+                self.__logger.debug(
+                    f"Trying to initialize Andor SDK3 camera {cameraId}"
+                )
+                camera = andorcamera(camera_no=cameraId)
         except Exception as e:
             self.__logger.error(e)
             self.__logger.warning(
-                f"Failed to initialize Andor camera {cameraId}, loading TIS mocker"
+                f"Failed to initialize Andor SDK{sdk_version} camera {cameraId}, "
+                "loading TIS mocker"
             )
             from imswitch.imcontrol.model.interfaces.tiscamera_mock import MockCameraTIS
             camera = MockCameraTIS(

@@ -17,7 +17,7 @@ class ImSwitchConfig:
 
     # Network settings
     http_port: int = 8001
-    ssl: bool = True
+    ssl: bool = False
 
     # File paths
     default_config: Optional[str] = None

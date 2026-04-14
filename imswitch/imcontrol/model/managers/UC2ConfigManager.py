@@ -18,9 +18,12 @@ class UC2ConfigManager(SignalInterface):
             return
         
         # Grab DigitalIn/Out Controller 
-        self._digitalIn = self.ESP32.digitalin
-        self._digitalOut = self.ESP32.digitalout
-
+        try:
+            self._digitalIn = self.ESP32.digitalin
+            self._digitalOut = self.ESP32.digitalout
+        except Exception as e:
+            self.__logger.error(f"Could not connect to DigitalIn/Out Controller: {e}")
+            return
     '''
     def saveState(self, state_general=None, state_pos=None, state_aber=None):
         if state_general is not None:

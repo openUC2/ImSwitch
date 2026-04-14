@@ -12,7 +12,7 @@ from .config import get_config
 # used to be, but actions will replace this with the current release TAG -> >2.1.0
 __version__ = "2.1.191"
 __httpport__ = 8001
-__ssl__ = True
+__ssl__ = False
 __jupyter_port__ = 8888
 __argparse__ = None
 __available_controllers__ = []

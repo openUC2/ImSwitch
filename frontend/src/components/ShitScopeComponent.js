@@ -23,6 +23,7 @@ import * as experimentStatusSlice from "../state/slices/ExperimentStatusSlice.js
 import * as experimentStateSlice from "../state/slices/ExperimentStateSlice.js";
 import * as wellSelectorSlice from "../state/slices/WellSelectorSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
+import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as coordinateCalculator from "../axon/CoordinateCalculator.js";
 
 import apiExperimentControllerStartWellplateExperiment from "../backendapi/apiExperimentControllerStartWellplateExperiment.js";
@@ -78,6 +79,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
   );
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
+  const positionState = useSelector(positionSlice.getPositionState);
 
   // Initialize the ShitScope layout on mount
   useEffect(() => {
@@ -93,8 +95,8 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
             id: "A1",
             name: "Scan Area",
             shape: "rectangle",
-            x: SHITSCOPE_SCAN_WIDTH / 2,
-            y: SHITSCOPE_SCAN_HEIGHT / 2,
+            x: SHITSCOPE_SCAN_WIDTH * 1.2 / 2,
+            y: SHITSCOPE_SCAN_HEIGHT * 1.2 / 2,
             width: SHITSCOPE_SCAN_WIDTH,
             height: SHITSCOPE_SCAN_HEIGHT,
             row: 0,
@@ -106,7 +108,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
 
     // Set mode to MOVE_CAMERA so canvas clicks move the stage instead of adding points
     dispatch(wellSelectorSlice.setMode("camera"));
-    dispatch(wellSelectorSlice.setAreaSelectSnakescan(false));
+    dispatch(wellSelectorSlice.setAreaSelectSnakescan(true));
 
     // Create a single point covering the entire scan area
     dispatch(experimentSlice.setPointList([]));
@@ -160,24 +162,11 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
   const isRunning = experimentStatusState.status === Status.RUNNING;
   const isIdle = experimentStatusState.status === Status.IDLE;
 
-  // ── Start experiment with homing pre-hook ──────────────────────────────
+  // ── Start experiment ───────────────────────────────────────────────────
   const handleStart = useCallback(async () => {
     try {
-      // Step 1: Home all axes
-      setIsHoming(true);
-      if (infoPopupRef.current) {
-        infoPopupRef.current.showMessage("Homing all axes...");
-      }
-
-      await apiExperimentControllerHomeAllAxes();
-      setIsHoming(false);
-
-      if (infoPopupRef.current) {
-        infoPopupRef.current.showMessage("Homing complete. Starting scan...");
-      }
-
-      // Step 2: Sync state – raster scan (never snake)
-      dispatch(experimentSlice.setIsSnakescan(false));
+      // Step 1: Sync state – raster scan (never snake)
+      dispatch(experimentSlice.setIsSnakescan(true  ));
       dispatch(
         experimentSlice.setOverlapWidth(wellSelectorState.areaSelectOverlap)
       );
@@ -185,9 +174,29 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
         experimentSlice.setOverlapHeight(wellSelectorState.areaSelectOverlap)
       );
 
-      // Step 3: Calculate scan coordinates
+      // Step 2: "We are here" – use current stage position as scan center so
+      // the scan starts from where the stage currently is without homing.
+      const weAreHerePoint = experimentState.pointList[0]
+        ? {
+            ...experimentState.pointList[0],
+            x: positionState.x,
+            y: positionState.y,
+          }
+        : null;
+      if (weAreHerePoint) {
+        // Also update canvas visualisation
+        dispatch(
+          experimentSlice.replacePoint({ index: 0, newPoint: weAreHerePoint })
+        );
+      }
+
+      // Step 3: Calculate scan coordinates using current stage position
+      const scanExperimentState = weAreHerePoint
+        ? { ...experimentState, pointList: [weAreHerePoint] }
+        : experimentState;
+
       const scanConfig = coordinateCalculator.calculateScanCoordinates(
-        experimentState,
+        scanExperimentState,
         objectiveState,
         wellSelectorState
       );
@@ -198,18 +207,18 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
 
       // Step 4: Filter illumination intensities
       const channelEnabled =
-        experimentState.parameterValue.channelEnabledForExperiment || [];
+        scanExperimentState.parameterValue.channelEnabledForExperiment || [];
       const rawIntensities =
-        experimentState.parameterValue.illuIntensities || [];
+        scanExperimentState.parameterValue.illuIntensities || [];
       const filteredIntensities = rawIntensities.map((val, idx) =>
         channelEnabled[idx] === true ? val : 0
       );
 
       // Step 5: Build experiment request
       const experimentRequest = {
-        name: experimentState.name || "ShitScope_Scan",
+        name: scanExperimentState.name || "ShitScope_Scan",
         parameterValue: {
-          ...experimentState.parameterValue,
+          ...scanExperimentState.parameterValue,
           illuIntensities: filteredIntensities,
           resortPointListToSnakeCoordinates: false,
           is_snakescan: true, // always raster
@@ -220,7 +229,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
         scanMetadata: scanConfig.metadata,
         pointList: coordinateCalculator.convertToBackendFormat(
           scanConfig,
-          experimentState
+          scanExperimentState
         ).pointList,
       };
 
@@ -232,7 +241,6 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
         infoPopupRef.current.showMessage("ShitScope scan started!");
       }
     } catch (err) {
-      setIsHoming(false);
       console.error("[ShitScope] Start failed:", err);
       if (infoPopupRef.current) {
         infoPopupRef.current.showMessage(
@@ -244,6 +252,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
     dispatch,
     experimentState,
     objectiveState,
+    positionState,
     wellSelectorState,
   ]);
 
@@ -317,7 +326,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
       {/* Main layout: canvas + live view + controls */}
       <Box sx={{ display: "flex", gap: 2 }}>
         {/* Left panel: Canvas overview always visible, live view always below */}
-        <Box sx={{ flex: 3, display: "flex", flexDirection: "column", gap: 1 }}>
+        <Box sx={{ flex: 3, display: "flex", flexDirection: "row", gap: 1 }}>
           <Box sx={{ flex: 1, minHeight: 220 }}>
             <Typography variant="caption" color="text.secondary">
               Overview – click to move stage
@@ -340,21 +349,8 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
             </Typography>
 
             {/* Status */}
-            <Alert
-              severity={
-                isRunning
-                  ? "info"
-                  : isHoming
-                    ? "warning"
-                    : "success"
-              }
-              sx={{ mb: 2 }}
-            >
-              {isHoming
-                ? "Homing axes..."
-                : isRunning
-                  ? "Scan running"
-                  : "Ready"}
+            <Alert severity={isRunning ? "info" : "success"} sx={{ mb: 2 }}>
+              {isRunning ? "Scan running" : "Ready"}
             </Alert>
 
             {/* Start / Stop button */}
@@ -364,17 +360,11 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
                 color="primary"
                 size="large"
                 fullWidth
-                startIcon={
-                  isHoming ? (
-                    <CircularProgress size={20} color="inherit" />
-                  ) : (
-                    <PlayArrowIcon />
-                  )
-                }
+                startIcon={<PlayArrowIcon />}
                 onClick={handleStart}
-                disabled={!isIdle || isHoming}
+                disabled={!isIdle}
               >
-                {isHoming ? "Homing..." : "Start Scan"}
+                Start Scan
               </Button>
 
               <Button
@@ -430,13 +420,16 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
                 </strong>
               </Typography>
               <Slider
-                min={0}
+                min={-50}
                 max={50}
                 step={1}
                 value={Math.round((wellSelectorState.areaSelectOverlap || 0) * 100)}
-                onChange={(_, v) =>
-                  dispatch(wellSelectorSlice.setAreaSelectOverlap(v / 100))
-                }
+                onChange={(_, v) => {
+                  const pct = v / 100;
+                  dispatch(wellSelectorSlice.setAreaSelectOverlap(pct));
+                  dispatch(experimentSlice.setOverlapWidth(pct));
+                  dispatch(experimentSlice.setOverlapHeight(pct));
+                }}
                 valueLabelDisplay="auto"
                 valueLabelFormat={(v) => `${v}%`}
                 disabled={isRunning || isHoming}

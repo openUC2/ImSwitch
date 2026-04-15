@@ -1292,20 +1292,6 @@ class OffAxisHoloController(LiveUpdatedController):
         except Exception as e:
             self._logger.warning(f"Failed to update CC radius: {e}")
 
-    def displayImage(self, im, name):
-        """Legacy: Display image in napari widget"""
-        return
-
-        if im.dtype == complex or np.iscomplexobj(im):
-            self._widget.setImage(np.abs(im), name + "_abs")
-            self._widget.setImage(np.angle(im), name + "_angle")
-        else:
-            self._widget.setImage(np.abs(im), name)
-
-    @APIExport(runOnUIThread=True)
-    def displayImageNapari(self, im, name):
-        """API: Display image in napari"""
-        self.displayImage(np.array(im), name)
 
     def _setup_legacy_gui(self):
         """Setup legacy GUI connections"""
@@ -1331,9 +1317,6 @@ class OffAxisHoloController(LiveUpdatedController):
                 self.changeRate(self._widget.getUpdateRate())
             if hasattr(self._widget, 'getShowOffAxisHoloChecked'):
                 self.setShowOffAxisHolo(self._widget.getShowOffAxisHoloChecked())
-
-            # Connect signal for displaying processed images
-            self.sigHoloImageComputed.connect(self.displayImage)
 
         except Exception as e:
             self._logger.warning(f"Could not setup all GUI connections: {e}")

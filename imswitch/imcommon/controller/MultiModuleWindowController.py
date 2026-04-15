@@ -20,33 +20,6 @@ class MultiModuleWindowController(WidgetController):
 
         self.updateRAMUsage()
 
-        # Connect signals
-        self._widget.sigPickModules.connect(self.pickModules)
-        self._widget.sigOpenUserDir.connect(self.openUserDir)
-        self._widget.sigShowDocs.connect(self.showDocs)
-        self._widget.sigCheckUpdates.connect(self.checkUpdates)
-        self._widget.sigShowAbout.connect(self.showAbout)
-
-        self._widget.sigModuleAdded.connect(self.moduleAdded)
-
-    def pickModules(self):
-        """ Let the user change which modules are active. """
-
-        self.pickModulesController.setModules(modulesconfigtools.getAvailableModules())
-        self.pickModulesController.setSelectedModules(modulesconfigtools.getEnabledModuleIds())
-        if not self._widget.showPickModulesDialogBlocking():
-            return
-        moduleIds = self.pickModulesController.getSelectedModules()
-        if not moduleIds:
-            return
-
-        proceed = guitools.askYesNoQuestion(self._widget, 'Warning',
-                                            'The software will restart. Continue?')
-        if not proceed:
-            return
-
-        modulesconfigtools.setEnabledModuleIds(moduleIds)
-        ostools.restartSoftware()
 
     def openUserDir(self):
         """ Shows the user files directory in system file explorer. """

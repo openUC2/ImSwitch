@@ -892,16 +892,6 @@ class InLineHoloController(LiveUpdatedController):
         dz = magnitude * 1e-3  # Convert to meters
         self.set_dz(dz)
 
-    def displayImage(self, im, name):
-        """Legacy: Display image in napari widget"""
-        return
-
-        if im.dtype == complex or np.iscomplexobj(im):
-            self._widget.setImage(np.abs(im), name + "_abs")
-            self._widget.setImage(np.angle(im), name + "_angle")
-        else:
-            self._widget.setImage(np.abs(im), name)
-
 
 
 # Copyright (C) 2020-2024 ImSwitch developers

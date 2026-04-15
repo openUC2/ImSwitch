@@ -5,6 +5,7 @@ Supports hardware encoding options while maintaining scientific camera features.
 """
 
 import collections
+import gc
 import json
 import numpy as np
 import time
@@ -325,47 +326,80 @@ class CameraPicamera2:
         """Thread function to continuously grab frames"""
         self.__logger.debug("Frame grabbing thread started")
 
+        _gc_counter = 0
         while not self._stop_event.is_set():
+            # Always initialise to None so the finally guard is safe even if
+            # capture_request() itself raises before assigning `request`.
+            request = None
+            array = None
+            frame_id = None
+
             try:
                 # Capture frame
                 request = self.camera.capture_request()
 
-                try:
-                    # Get frame data
-                    array = request.make_array("main")
-
-                    # Get metadata
-                    metadata = request.get_metadata()
-                    frame_id = metadata.get("FrameId", self.frameNumber + 1)
-                    timestamp = metadata.get("SensorTimestamp", int(time.time() * 1e6))
-
-                    # Process frame
-                    frame = self._process_frame(array)
-
-                    # Update frame number and timestamp
-                    self.frameNumber = frame_id
-                    self.timestamp = timestamp
-
-                    # Add to buffer
-                    self.frame_buffer.append(frame)
-                    self.frameid_buffer.append(frame_id)
-
-                    # Always keep latest frame cached (not consumed by getLast)
-                    # This allows multiple consumers to access the same frame
-                    self.lastFrameFromBuffer = frame
-                    self.lastFrameId = frame_id
-
-                    if self.DEBUG:
-                        self.__logger.debug(f"Frame {frame_id} captured, buffer size: {len(self.frame_buffer)}")
-
-                finally:
-                    # Always release the request
-                    request.release()
-
+                # Copy frame data and metadata before releasing the request.
+                # make_array() performs a copy, so the request object is no
+                # longer needed after this block.
+                array = request.make_array("main")
+                metadata = request.get_metadata()
+                frame_id = metadata.get("FrameId", self.frameNumber + 1)
+                timestamp = metadata.get("SensorTimestamp", int(time.time() * 1e6))
+                # Explicitly delete the metadata dict: it may hold C++ libcamera
+                # objects whose deleters are not called until GC runs, causing
+                # steady memory growth at high frame rates.
+                del metadata
             except Exception as e:
                 if not self._stop_event.is_set():
                     self.__logger.error(f"Error capturing frame: {e}")
                     time.sleep(0.01)  # Brief pause on error
+            finally:
+                # Release the request immediately after copying data.
+                # Holding the request during _process_frame() starves the
+                # camera buffer pool and causes capture_request() to block
+                # for an entire frame interval, causing ~1 s delays.
+                # Guard against NameError when capture_request() itself failed.
+                if request is not None:
+                    try:
+                        request.release()
+                    except Exception:
+                        pass
+
+            # Skip processing if the capture failed (array still None).
+            if array is None:
+                continue
+
+            # Process frame outside the request lifecycle
+            frame = self._process_frame(array)
+            # Drop the reference to the raw copy from make_array() now that
+            # _process_frame() has produced a standalone (contiguous) array.
+            # If frame were a numpy *view* of array, del array would be a no-op
+            # because the view keeps the base alive; _process_frame() is
+            # responsible for returning a copy, not a view (see below).
+            del array
+
+            # Update frame number and timestamp
+            self.frameNumber = frame_id
+            self.timestamp = timestamp
+
+            # Add to buffer
+            self.frame_buffer.append(frame)
+            self.frameid_buffer.append(frame_id)
+
+            # Always keep latest frame cached (not consumed by getLast)
+            # This allows multiple consumers to access the same frame
+            self.lastFrameFromBuffer = frame
+            self.lastFrameId = frame_id
+
+            if self.DEBUG:
+                self.__logger.debug(f"Frame {frame_id} captured, buffer size: {len(self.frame_buffer)}")
+
+            # Periodically run the cyclic GC to reclaim any reference cycles
+            # introduced by Picamera2 / libcamera Python wrappers.
+            _gc_counter += 1
+            if _gc_counter >= 300:  # ~10 s at 30 fps
+                gc.collect()
+                _gc_counter = 0
 
         self.__logger.debug("Frame grabbing thread stopped")
 
@@ -390,11 +424,16 @@ class CameraPicamera2:
         if not self.isRGB and len(array.shape) == 3:
             array = cv2.cvtColor(array, cv2.COLOR_RGB2GRAY)
 
-        # Apply flipping
+        # Apply flipping.
+        # np.flipud / np.fliplr return *views* (no data copy), which keeps the
+        # original array alive as long as the view exists.  Use
+        # np.ascontiguousarray() to force an independent copy so that callers
+        # (and the del-array optimisation in _grab_frames) can free the source
+        # buffer promptly without waiting for GC view-chain resolution.
         if self.flipImage[0]:  # Flip Y
-            array = np.flipud(array)
+            array = np.ascontiguousarray(array[::-1])
         if self.flipImage[1]:  # Flip X
-            array = np.fliplr(array)
+            array = np.ascontiguousarray(array[:, ::-1])
 
         return array
 
@@ -720,6 +759,14 @@ class CameraPicamera2:
             self.__logger.error(f"Error stopping camera: {e}")
 
         self.is_streaming = False
+
+        # Release all cached frame references so GC can reclaim the numpy
+        # memory without waiting for the next gc.collect() cycle.
+        self.frame_buffer.clear()
+        self.frameid_buffer.clear()
+        self.lastFrameFromBuffer = None
+        self.lastFrameId = -1
+
         self.__logger.info("Camera streaming stopped")
 
     def suspend_live(self):
@@ -885,22 +932,25 @@ class CameraPicamera2:
                     return frame, frame_id
                 return frame
 
-        # Wait for frame in buffer
-        t0 = time.time()
-        while not self.frame_buffer:
-            if time.time() - t0 > timeout:
-                self.__logger.warning(f"Timeout waiting for frame ({timeout}s)")
-                # Return last known frame or zeros
-                if self.lastFrameFromBuffer is not None:
-                    if returnFrameNumber:
-                        return self.lastFrameFromBuffer, self.lastFrameId
-                    return self.lastFrameFromBuffer
-                else:
+        # If the buffer is temporarily empty (e.g. after flushBuffer or between
+        # grabs) but the grab thread has already produced a cached frame, return
+        # it immediately instead of burning through the full timeout. The grab
+        # thread keeps lastFrameFromBuffer up-to-date on every captured frame.
+        if not self.frame_buffer:
+            if self.lastFrameFromBuffer is not None:
+                if returnFrameNumber:
+                    return self.lastFrameFromBuffer, self.lastFrameId
+                return self.lastFrameFromBuffer
+            # No cached frame yet (camera just started): wait up to timeout
+            t0 = time.time()
+            while not self.frame_buffer:
+                if time.time() - t0 > timeout:
+                    self.__logger.warning(f"Timeout waiting for first frame ({timeout}s)")
                     empty_frame = np.zeros((self.SensorHeight, self.SensorWidth, 3 if self.isRGB else 1), dtype=np.uint8)
                     if returnFrameNumber:
                         return empty_frame, -1
                     return empty_frame
-            time.sleep(0.001)
+                time.sleep(0.001)
 
         # Get latest frame
         latest_frame = self.frame_buffer.pop()

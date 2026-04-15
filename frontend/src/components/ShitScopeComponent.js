@@ -43,14 +43,14 @@ const Status = Object.freeze({
 });
 
 // Hardcoded ShitScope scan area dimensions (micrometers)
-const SHITSCOPE_SCAN_WIDTH = 3000; // 30 mm
-const SHITSCOPE_SCAN_HEIGHT = 2000; // 20 mm
+const SHITSCOPE_SCAN_WIDTH = 15000; // 15 mm
+const SHITSCOPE_SCAN_HEIGHT = 7000; // 7 mm
 
 /**
  * ShitScope - Dedicated single-button scan application
  *
  * Simplified scan interface with:
- * - Fixed rectangular scan area (30x20 mm)
+ * - Fixed rectangular scan area (15x7 mm)
  * - Live view with overview canvas showing current position
  * - Pre-experiment homing of all axes
  * - Single start button to launch paving scan
@@ -212,7 +212,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
           ...experimentState.parameterValue,
           illuIntensities: filteredIntensities,
           resortPointListToSnakeCoordinates: false,
-          is_snakescan: false, // always raster
+          is_snakescan: true, // always raster
           overlapWidth: wellSelectorState.areaSelectOverlap,
           overlapHeight: wellSelectorState.areaSelectOverlap,
         },

@@ -1308,7 +1308,7 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
   };
 
   //##################################################################################
-  const handleClick = async (e) => {
+  const handleClick = (e) => {
     const localPos = getLocalMousePosition(e);
     console.log(`handleClick: X: ${localPos.x}, Y: ${localPos.y}`);
 
@@ -1330,9 +1330,6 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
       console.log(`Added focus map manual point: X=${phyPos.x}, Y=${phyPos.y}, Z=${currentZ}`);
       return;
     }
-
-    // 2. The "Little Delay" (e.g., 500ms)
-    await sleep(500);
 
     //handle mode
     if (wellSelectorState.mode == Mode.MOVE_CAMERA) {

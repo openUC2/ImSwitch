@@ -53,9 +53,6 @@ def restartSoftware(module="imswitch", forceConfigFile=False):
     if forceConfigFile and config_file != "None":
         args.extend(["--config-file", config_file])
 
-    if headless:
-        args.append("--headless")
-
     if not is_ssl:
         args.append("--no-ssl")
 

@@ -44,14 +44,14 @@ const Status = Object.freeze({
 });
 
 // Hardcoded ShitScope scan area dimensions (micrometers)
-const SHITSCOPE_SCAN_WIDTH = 3000; // 30 mm
-const SHITSCOPE_SCAN_HEIGHT = 2000; // 20 mm
+const SHITSCOPE_SCAN_WIDTH = 15000; // 15 mm
+const SHITSCOPE_SCAN_HEIGHT = 7000; // 7 mm
 
 /**
  * ShitScope - Dedicated single-button scan application
  *
  * Simplified scan interface with:
- * - Fixed rectangular scan area (30x20 mm)
+ * - Fixed rectangular scan area (15x7 mm)
  * - Live view with overview canvas showing current position
  * - Pre-experiment homing of all axes
  * - Single start button to launch paving scan
@@ -95,8 +95,8 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
             id: "A1",
             name: "Scan Area",
             shape: "rectangle",
-            x: SHITSCOPE_SCAN_WIDTH / 2,
-            y: SHITSCOPE_SCAN_HEIGHT / 2,
+            x: SHITSCOPE_SCAN_WIDTH * 1.2 / 2,
+            y: SHITSCOPE_SCAN_HEIGHT * 1.2 / 2,
             width: SHITSCOPE_SCAN_WIDTH,
             height: SHITSCOPE_SCAN_HEIGHT,
             row: 0,
@@ -108,7 +108,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
 
     // Set mode to MOVE_CAMERA so canvas clicks move the stage instead of adding points
     dispatch(wellSelectorSlice.setMode("camera"));
-    dispatch(wellSelectorSlice.setAreaSelectSnakescan(false));
+    dispatch(wellSelectorSlice.setAreaSelectSnakescan(true));
 
     // Create a single point covering the entire scan area
     dispatch(experimentSlice.setPointList([]));
@@ -166,7 +166,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
   const handleStart = useCallback(async () => {
     try {
       // Step 1: Sync state – raster scan (never snake)
-      dispatch(experimentSlice.setIsSnakescan(false));
+      dispatch(experimentSlice.setIsSnakescan(true  ));
       dispatch(
         experimentSlice.setOverlapWidth(wellSelectorState.areaSelectOverlap)
       );
@@ -221,7 +221,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
           ...scanExperimentState.parameterValue,
           illuIntensities: filteredIntensities,
           resortPointListToSnakeCoordinates: false,
-          is_snakescan: false, // always raster
+          is_snakescan: true, // always raster
           overlapWidth: wellSelectorState.areaSelectOverlap,
           overlapHeight: wellSelectorState.areaSelectOverlap,
         },
@@ -420,7 +420,7 @@ const ShitScopeComponent = ({ onOpenFileManager }) => {
                 </strong>
               </Typography>
               <Slider
-                min={0}
+                min={-50}
                 max={50}
                 step={1}
                 value={Math.round((wellSelectorState.areaSelectOverlap || 0) * 100)}

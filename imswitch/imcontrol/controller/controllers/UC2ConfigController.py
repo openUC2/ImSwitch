@@ -90,20 +90,6 @@ class UC2ConfigController(ImConWidgetController):
                 self._logger.error(f"Could not register serial callbacks: {e}")
 
 
-        # Connect buttons to the logic handlers
-        return
-        # Connect buttons to the logic handlers
-        self._widget.setPositionXBtn.clicked.connect(self.set_positionX)
-        self._widget.setPositionYBtn.clicked.connect(self.set_positionY)
-        self._widget.setPositionZBtn.clicked.connect(self.set_positionZ)
-        self._widget.setPositionABtn.clicked.connect(self.set_positionA)
-
-        self._widget.autoEnableBtn.clicked.connect(self.set_auto_enable)
-        self._widget.unsetAutoEnableBtn.clicked.connect(self.unset_auto_enable)
-        self._widget.reconnectButton.clicked.connect(self.reconnect)
-        self._widget.closeConnectionButton.clicked.connect(self.closeConnection)
-        self._widget.btpairingButton.clicked.connect(self.btpairing)
-        self._widget.stopCommunicationButton.clicked.connect(self.interruptSerialCommunication)
 
     def _get_can_id_firmware_mapping(self):
         """
@@ -604,18 +590,6 @@ class UC2ConfigController(ImConWidgetController):
     def unset_auto_enable(self):
         # Add your logic to unset auto-enable for the motors here.
         self.stages.enalbeMotors(enable=True, enableauto=False)
-
-    def set_positionX(self):
-        self.set_motor_positions(None, x, None, None)
-
-    def set_positionY(self):
-        self.set_motor_positions(None, None, y, None)
-
-    def set_positionZ(self):
-        self.set_motor_positions(None, None, None, z)
-
-    def set_positionA(self):
-        self.set_motor_positions(a, None, None, None)
 
     def reconnectThread(self, baudrate=None):
         self._master.UC2ConfigManager.initSerial(baudrate=baudrate)

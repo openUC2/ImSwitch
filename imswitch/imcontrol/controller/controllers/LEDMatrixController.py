@@ -54,6 +54,7 @@ class LEDMatrixController(ImConWidgetController):
     @APIExport()
     def setIntensity(self, intensity:int=None):
         if intensity is None:
+            pass
         else:
             # this is only if the GUI/API is calling this function
             intensity = int(intensity)

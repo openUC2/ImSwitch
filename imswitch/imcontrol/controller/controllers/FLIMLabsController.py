@@ -66,8 +66,6 @@ class FLIMLabsController(LiveUpdatedController):
         self.mImageColormap = colormap
         self.sigImageReceived.emit()
 
-    def displayFLIMImageNapari(self):
-        self._widget.setImage(self.mImage, name=self.mImageName, colormap=self.mImageColormap)
 
     def start_scouting(self):
         mParametersScouting = self._widget.getScoutingParameters()

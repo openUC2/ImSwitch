@@ -327,6 +327,8 @@ class CameraPicamera2:
         self.__logger.debug("Frame grabbing thread started")
 
         _gc_counter = 0
+        _consecutive_errors = 0
+        _MAX_CONSECUTIVE_ERRORS = 10  # Trigger recovery after this many failures
         while not self._stop_event.is_set():
             # Always initialise to None so the finally guard is safe even if
             # capture_request() itself raises before assigning `request`.
@@ -349,10 +351,28 @@ class CameraPicamera2:
                 # objects whose deleters are not called until GC runs, causing
                 # steady memory growth at high frame rates.
                 del metadata
+                _consecutive_errors = 0  # Reset on success
             except Exception as e:
                 if not self._stop_event.is_set():
-                    self.__logger.error(f"Error capturing frame: {e}")
-                    time.sleep(0.01)  # Brief pause on error
+                    _consecutive_errors += 1
+                    self.__logger.error(f"Error capturing frame ({_consecutive_errors}x): {e}")
+                    if _consecutive_errors >= _MAX_CONSECUTIVE_ERRORS:
+                        self.__logger.warning(
+                            "Too many consecutive capture failures – "
+                            "camera may have stalled (V4L2 timeout). "
+                            "Attempting recovery by restarting pipeline."
+                        )
+                        try:
+                            self.camera.stop()
+                            time.sleep(0.5)
+                            self.camera.start()
+                            _consecutive_errors = 0
+                            self.__logger.info("Camera pipeline restarted successfully")
+                        except Exception as restart_err:
+                            self.__logger.error(f"Camera restart failed: {restart_err}")
+                            time.sleep(1.0)
+                    else:
+                        time.sleep(0.05)  # Brief pause on error
             finally:
                 # Release the request immediately after copying data.
                 # Holding the request during _process_frame() starves the

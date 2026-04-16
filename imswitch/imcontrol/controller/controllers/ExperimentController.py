@@ -1047,24 +1047,31 @@ class ExperimentController(ImConWidgetController):
     def acquire_frame(self, channel: str, frameSync: int = 2):
         self._logger.debug(f"Acquiring frame on channel {channel}")
 
-        # ensure we get a fresh frame (frameSync=3 to account for exposure/gain register latency)
-        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        # Make timeout dependent on exposure time so long exposures don't
+        # prematurely abort.  The camera needs at least (frameSync+1) frame
+        # periods to deliver a fresh frame after an illumination / gain change.
+        try:
+            exposure_s = self.mDetector.getLatestFrame.__self__._camera.exposure_time / 1e6
+        except Exception:
+            exposure_s = 0.1
+        timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
         cTime = time.time()
 
-        lastFrameNumber=-1
-        while(1):
+        lastFrameNumber = -1
+        mFrame = None
+        while True:
             # get frame and frame number to get one that is newer than the one with illumination off eventually
             mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
-            if lastFrameNumber==-1:
+            if lastFrameNumber == -1:
                 # first round
                 lastFrameNumber = currentFrameNumber
-            if time.time()-cTime> timeoutFrameRequest:
+            if time.time() - cTime > timeoutFrameRequest:
                 # in case exposure time is too long we need break at one point
                 if mFrame is None:
                     mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
                 break
-            if currentFrameNumber <= lastFrameNumber+frameSync:
-                time.sleep(0.01) # off-load CPU
+            if currentFrameNumber <= lastFrameNumber + frameSync:
+                time.sleep(0.01)  # off-load CPU
             else:
                 break
         return mFrame
@@ -1486,6 +1493,12 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Error saving OME frame: {e}")
             metadata["frame_saved"] = False
+
+        # Release the frame reference now that it has been saved (or failed).
+        # Without this, the numpy array stays alive in the metadata dict which
+        # is stored in WorkflowContext.data for every step, causing unbounded
+        # RAM growth during long wellplate experiments.
+        metadata.pop("result", None)
 
         '''
         if tiff_writer is None:

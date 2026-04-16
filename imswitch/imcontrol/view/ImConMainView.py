@@ -52,7 +52,13 @@ class ImConMainViewNoQt(object):
 
             # Case 1: there is a react widget under ImSwitch.imswitch.imcontrol.view.widgets.*
             module_name = f'imswitch.imcontrol.view.widgets.{widgetKey}ReactWidget'
-            module_spec = importlib.util.find_spec(module_name)
+            
+            # check if module_name exists to prevent "no module named..." exception prior to find_spec 
+            try:
+                module_spec = importlib.util.find_spec(module_name)
+            except Exception as e:
+                self.__logger.error(f"Error while checking for widget module {module_name}: {e}")
+                module_spec = None
             if module_spec is not None:
                 # The module exists, so we can import it
                 try:

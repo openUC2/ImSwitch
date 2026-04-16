@@ -131,6 +131,8 @@ def _find_protocol_json(tiles_dir: str) -> Optional[str]:
         os.path.dirname(os.path.dirname(tiles_dir)), # e.g. .../20260316_163004/
     ]
     for d in search_dirs:
+        if not d or not os.path.isdir(d):
+            continue
         for fname in sorted(os.listdir(d)):
             if fname.endswith("_protocol.json"):
                 return os.path.join(d, fname)
@@ -319,6 +321,9 @@ class ExperimentGrid:
 
 def _read_tile(info: TileInfo) -> np.ndarray:
     """Read a TIFF tile and return the pixel array."""
+    print(f"    Reading tile: {os.path.basename(info.filepath)}  "
+          f"(tp={info.timepoint}, ix={info.ix}, iy={info.iy}, c_idx={info.c_idx}, "
+          f"z={info.z}, channel='{info.channel}')")
     return tif.imread(info.filepath)
 
 
@@ -326,14 +331,39 @@ def _read_tile(info: TileInfo) -> np.ndarray:
 # Focus measure helper
 # ---------------------------------------------------------------------------
 
+def _is_rgb(frame: np.ndarray) -> bool:
+    """Return True for colour images stored as (H, W, C) with C in {3, 4}."""
+    return frame.ndim == 3 and frame.shape[2] in (3, 4)
+
+
+_4GB = 4 * 1024 ** 3  # standard TIFF size limit
+
+
+def _imwrite_auto(fpath: str, arr: np.ndarray, **kwargs):
+    """
+    Write a TIFF, automatically upgrading to BigTIFF when the array exceeds 4 GB.
+    imagej=True and bigtiff=True are mutually exclusive in tifffile, so imagej
+    is silently dropped when BigTIFF is required.
+    """
+    if arr.nbytes > _4GB:
+        kwargs.pop("imagej", None)   # incompatible with bigtiff
+        kwargs["bigtiff"] = True
+    tif.imwrite(fpath, arr, **kwargs)
+
+
 def _focus_measure(frame: np.ndarray) -> float:
     """
     Return normalized Laplacian variance as a focus measure score.
 
     Higher value → sharper image.
     Uses a 3×3 discrete Laplacian approximation without scipy dependency.
+    For RGB/RGBA images the luminance channel is used.
     """
-    f = frame.astype(np.float32)
+    if _is_rgb(frame):
+        # Weighted luminance: ITU-R BT.601
+        f = (0.299 * frame[:, :, 0] + 0.587 * frame[:, :, 1] + 0.114 * frame[:, :, 2]).astype(np.float32)
+    else:
+        f = frame.astype(np.float32)
     # Discrete Laplacian: 4*center - top - bottom - left - right
     lap = (4.0 * f[1:-1, 1:-1]
            - f[:-2, 1:-1]   # top
@@ -384,9 +414,16 @@ def build_composite_stacks(grid: ExperimentGrid, out_dir: str):
 
         nT = len(grid.timepoints)
         nC = len(grid.c_indices)
+        is_rgb = _is_rgb(sample)
 
-        # ImageJ hyperstacks: TZCYX
-        stack = np.zeros((nT, nZ, nC, h, w), dtype=dtype)
+        if is_rgb:
+            # RGB composite: store as (T, Z, C, H, W, S) — one S=3 axis for colour.
+            # Saved as TZCYXS so tifffile keeps colour intact.
+            nS = sample.shape[2]
+            stack = np.zeros((nT, nZ, nC, h, w, nS), dtype=dtype)
+        else:
+            # Greyscale: ImageJ TZCYX hyperstack
+            stack = np.zeros((nT, nZ, nC, h, w), dtype=dtype)
 
         for it, tp in enumerate(grid.timepoints):
             for ic, ci in enumerate(grid.c_indices):
@@ -399,11 +436,12 @@ def build_composite_stacks(grid: ExperimentGrid, out_dir: str):
         fname = f"composite_ix{ix:03d}_iy{iy:03d}.ome.tif"
         fpath = os.path.join(out_dir, fname)
 
-        metadata = {
-            "axes": "TZCYX",
-            "Channel": {"Name": grid.channels},
-        }
-        tif.imwrite(fpath, stack, imagej=True, metadata=metadata)
+        if is_rgb:
+            metadata = {"axes": "TZCYXS", "Channel": {"Name": grid.channels}}
+            _imwrite_auto(fpath, stack, photometric="rgb", metadata=metadata)
+        else:
+            metadata = {"axes": "TZCYX", "Channel": {"Name": grid.channels}}
+            _imwrite_auto(fpath, stack, imagej=True, metadata=metadata)
         print(f"  [{pos_idx+1}/{len(xy_positions)}] {fname}  "
               f"shape={stack.shape}  dtype={dtype}")
 
@@ -473,6 +511,7 @@ def build_stitched_tiffs(grid: ExperimentGrid, out_dir: str):
     sample = _read_tile(first_tile_list[0])
     h, w = sample.shape[:2]
     dtype = sample.dtype
+    is_rgb = _is_rgb(sample)
 
     canvas_h, canvas_w, offset_map = _compute_canvas_from_grid(grid, h, w)
     total = len(grid.channels) * len(grid.timepoints)
@@ -485,7 +524,10 @@ def build_stitched_tiffs(grid: ExperimentGrid, out_dir: str):
 
         for tp in grid.timepoints:
             count += 1
-            canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
+            if is_rgb:
+                canvas = np.zeros((canvas_h, canvas_w, sample.shape[2]), dtype=dtype)
+            else:
+                canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
             placed = 0
 
             for ix in grid.ix_positions:
@@ -504,7 +546,10 @@ def build_stitched_tiffs(grid: ExperimentGrid, out_dir: str):
 
             fname = f"stitched_{ch_name}_t{tp:04d}.ome.tif"
             fpath = os.path.join(out_dir, fname)
-            tif.imwrite(fpath, canvas, compression="zlib")
+            if is_rgb:
+                _imwrite_auto(fpath, canvas, photometric="rgb", compression="zlib")
+            else:
+                _imwrite_auto(fpath, canvas, compression="zlib")
             print(f"  [{count}/{total}] {fname}  "
                   f"canvas={canvas.shape}  tiles={placed}")
 
@@ -536,6 +581,7 @@ def build_mip_stitched(grid: ExperimentGrid, out_dir: str):
     sample = _read_tile(first_tile_list[0])
     h, w = sample.shape[:2]
     dtype = sample.dtype
+    is_rgb = _is_rgb(sample)
 
     canvas_h, canvas_w, offset_map = _compute_canvas_from_grid(grid, h, w)
 
@@ -545,7 +591,10 @@ def build_mip_stitched(grid: ExperimentGrid, out_dir: str):
             continue
 
         for tp in grid.timepoints:
-            canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
+            if is_rgb:
+                canvas = np.zeros((canvas_h, canvas_w, sample.shape[2]), dtype=dtype)
+            else:
+                canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
             placed = 0
 
             for ix in grid.ix_positions:
@@ -563,7 +612,10 @@ def build_mip_stitched(grid: ExperimentGrid, out_dir: str):
 
             fname = f"mip_stitched_{ch_name}_t{tp:04d}.ome.tif"
             fpath = os.path.join(out_dir, fname)
-            tif.imwrite(fpath, canvas, compression="zlib")
+            if is_rgb:
+                _imwrite_auto(fpath, canvas, photometric="rgb", compression="zlib")
+            else:
+                _imwrite_auto(fpath, canvas, compression="zlib")
             print(f"  {fname}  canvas={canvas.shape}  tiles={placed}")
 
 
@@ -584,14 +636,20 @@ def build_mip_composite(grid: ExperimentGrid, out_dir: str):
     sample = _read_tile(first_tile_list[0])
     h, w = sample.shape[:2]
     dtype = sample.dtype
+    is_rgb = _is_rgb(sample)
 
     canvas_h, canvas_w, offset_map = _compute_canvas_from_grid(grid, h, w)
 
     nT = len(grid.timepoints)
     nC = len(grid.channels)
 
-    # ImageJ hyperstacks: TZCYX; Z=1 since MIP collapses the Z axis
-    stack = np.zeros((nT, 1, nC, canvas_h, canvas_w), dtype=dtype)
+    if is_rgb:
+        # RGB composite: TZCYXS; Z=1 since MIP collapses the Z axis
+        nS = sample.shape[2]
+        stack = np.zeros((nT, 1, nC, canvas_h, canvas_w, nS), dtype=dtype)
+    else:
+        # ImageJ hyperstacks: TZCYX; Z=1 since MIP collapses the Z axis
+        stack = np.zeros((nT, 1, nC, canvas_h, canvas_w), dtype=dtype)
 
     for ic, ch_name in enumerate(grid.channels):
         ci = _channel_c_idx(grid, ch_name)
@@ -611,11 +669,12 @@ def build_mip_composite(grid: ExperimentGrid, out_dir: str):
     fname = "mip_composite.ome.tif"
     fpath = os.path.join(out_dir, fname)
 
-    metadata = {
-        "axes": "TZCYX",
-        "Channel": {"Name": grid.channels},
-    }
-    tif.imwrite(fpath, stack, imagej=True, metadata=metadata)
+    if is_rgb:
+        metadata = {"axes": "TZCYXS", "Channel": {"Name": grid.channels}}
+        _imwrite_auto(fpath, stack, photometric="rgb", metadata=metadata)
+    else:
+        metadata = {"axes": "TZCYX", "Channel": {"Name": grid.channels}}
+        _imwrite_auto(fpath, stack, imagej=True, metadata=metadata)
     print(f"  {fname}  shape={stack.shape}  dtype={dtype}")
 
 
@@ -657,6 +716,7 @@ def build_best_focus_stitched(grid: ExperimentGrid, out_dir: str):
     sample = _read_tile(first_tile_list[0])
     h, w = sample.shape[:2]
     dtype = sample.dtype
+    is_rgb = _is_rgb(sample)
 
     canvas_h, canvas_w, offset_map = _compute_canvas_from_grid(grid, h, w)
 
@@ -666,7 +726,10 @@ def build_best_focus_stitched(grid: ExperimentGrid, out_dir: str):
             continue
 
         for tp in grid.timepoints:
-            canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
+            if is_rgb:
+                canvas = np.zeros((canvas_h, canvas_w, sample.shape[2]), dtype=dtype)
+            else:
+                canvas = np.zeros((canvas_h, canvas_w), dtype=dtype)
             placed = 0
 
             for ix in grid.ix_positions:
@@ -684,7 +747,10 @@ def build_best_focus_stitched(grid: ExperimentGrid, out_dir: str):
 
             fname = f"bestfocus_stitched_{ch_name}_t{tp:04d}.ome.tif"
             fpath = os.path.join(out_dir, fname)
-            tif.imwrite(fpath, canvas, compression="zlib")
+            if is_rgb:
+                _imwrite_auto(fpath, canvas, photometric="rgb", compression="zlib")
+            else:
+                _imwrite_auto(fpath, canvas, compression="zlib")
             print(f"  {fname}  canvas={canvas.shape}  tiles={placed}")
 
 

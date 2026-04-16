@@ -7,15 +7,14 @@ import os
 import imswitch
 from imswitch.config import get_config
 
-# python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes
-# python -m imswitch --headless --http-port 8001 --config-folder /Users/bene --config-file None
+# python -m imswitch --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes
+# python -m imswitch --http-port 8001 --config-folder /Users/bene --config-file None
 
 
-def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
+def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
          data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None, jupyter_port:int=None,
          default_firmware_route:str="http://localhost/firmware"):
     '''
-    is_headless: bool => start with or without qt
     default_config: str => path to the config file
     http_port: int => port number (default: 8001)
     ssl: bool => use ssl (default: True)
@@ -26,11 +25,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
     with_kernel: bool => start with embedded Jupyter kernel for external notebook connections
     jupyter_port: int => Jupyter notebook port (default: 8888)
 
-
-
-    To start imswitch in headless using the arguments, you can call the main file with the following arguments:
-        python main.py --headless or
-        python -m imswitch --headless 1 --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes --with-kernel
+    To start imswitch using the arguments, you can call the main file with the following arguments:
+        python -m imswitch --config-file /Users/bene/ImSwitchConfig/imcontrol_setups/FRAME2b.json --scan-ext-data-folder true --ext-data-folder ~/Downloads --ext-data-folder /Volumes --with-kernel
     '''
     try:
         print("Starting ImSwitch using version: ", imswitch.__version__)
@@ -39,7 +35,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
 
         # Update configuration immediately with any provided parameters # @ethanjli this needs a review since we load this from docker - is there a better way to load from the compose file?
         config.update_from_args(
-            is_headless=True, #is_headless,
             default_config=default_config,
             http_port=http_port,
             ssl=ssl,
@@ -55,17 +50,13 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         config.to_legacy_globals(imswitch)
         # Only parse command line arguments if no parameters were passed to main()
         # This prevents argparse conflicts when called from test threads
-        if (is_headless is None and default_config is None and http_port is None and
+        if (default_config is None and http_port is None and
             ssl is None and config_folder is None and
             data_folder is None and scan_ext_data_folder is None and ext_data_folder is None and
             with_kernel is None and jupyter_port is None):
             # @ethanjli this is the actual code that parses the variables from commandline - needs a review probably?
             try: # TODO: Google Colab does not support argparse
-                parser = argparse.ArgumentParser(description='Process some integers.')
-
-                # specify if run in headless mode
-                parser.add_argument('--headless', dest='headless', default=False, action='store_true',
-                                    help='run in headless mode')
+                parser = argparse.ArgumentParser(description='ImSwitch microscope control framework.')
 
                 # specify config file name - None for default
                 parser.add_argument('--config-file', dest='config_file', type=str, default=None,
@@ -135,7 +126,6 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         # Apply final configuration update to legacy globals (ensures consistency)
         config.to_legacy_globals(imswitch)
 
-        # FIXME: !!!! This is because the headless flag is loaded after commandline input
         from imswitch.imcommon import prepareApp, launchApp
         from imswitch.imcommon.controller import ModuleCommunicationChannel, MultiModuleWindowController
         from imswitch.imcommon.model import modulesconfigtools, pythontools, initLogger
@@ -151,16 +141,14 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
         )
 
         # Enable signal emission for log messages if in headless mode
-        if True: #config.is_headless:
-            try:
-                from imswitch.imcommon.framework.noqt import sigLog
-                enable_signal_emission(sigLog)
-            except Exception as e:
-                logging.warning(f"Could not enable signal emission for logging: {e}")
+        try:
+            from imswitch.imcommon.framework.noqt import sigLog
+            enable_signal_emission(sigLog)
+        except Exception as e:
+            logging.warning(f"Could not enable signal emission for logging: {e}")
 
         logger = initLogger('main')
         logger.info(f'Starting ImSwitch {config.version}')
-        logger.info(f'Headless mode: {config.is_headless}')
         logger.info(f'SSL: {config.ssl}')
         logger.info(f'Config file: {config.default_config}')
         logger.info(f'Config folder: {config.config_folder}')
@@ -174,18 +162,8 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
 
         # TODO: check if port is already in use
 
-        if True: #config.is_headless:
-            app = None
-        else:
-            app = prepareApp()
+        app = None
         enabledModuleIds = modulesconfigtools.getEnabledModuleIds()
-
-        if 'imscripting' in enabledModuleIds:
-            if True: #config.is_headless:
-                enabledModuleIds.remove('imscripting')
-            else:
-                # Ensure that imscripting is added last
-                enabledModuleIds.append(enabledModuleIds.pop(enabledModuleIds.index('imscripting')))
 
         if 'imnotebook' in enabledModuleIds:
             # Ensure that imnotebook is added last
@@ -194,25 +172,14 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
             except ImportError:
                 logger.error('QtWebEngineWidgets not found, disabling imnotebook')
                 enabledModuleIds.remove('imnotebook')
-
+        if 'imscripting' in enabledModuleIds: enabledModuleIds.remove('imscripting') # remove legacy code
         modulePkgs = [importlib.import_module(pythontools.joinModulePath('imswitch', moduleId))
                     for moduleId in enabledModuleIds]
 
         # connect the different controllers through the communication channel
         moduleCommChannel = ModuleCommunicationChannel()
-
-        # only create the GUI if necessary
-        if False: #not config.is_headless:
-            from imswitch.imcommon.view import MultiModuleWindow, ModuleLoadErrorView
-            multiModuleWindow = MultiModuleWindow('ImSwitch')
-            multiModuleWindowController = MultiModuleWindowController.create(
-                multiModuleWindow, moduleCommChannel
-            )
-            multiModuleWindow.show(showLoadingScreen=True)
-            app.processEvents()  # Draw window before continuing
-        else:
-            multiModuleWindow = None
-            multiModuleWindowController = None
+        multiModuleWindow = None
+        multiModuleWindowController = None
 
         # Register modules
         for modulePkg in modulePkgs:
@@ -242,23 +209,13 @@ def main(is_headless:bool=None, default_config:str=None, http_port:int=None, ssl
                 logger.error(e)
                 logger.error(traceback.format_exc())
                 moduleCommChannel.unregister(modulePkg)
-                if False: #not config.is_headless:
-                    from imswitch.imcommon.view import ModuleLoadErrorView
-                    multiModuleWindow.addModule(moduleId, moduleName, ModuleLoadErrorView(e))
             else:
                 # Add module to window
-                if False: #not config.is_headless:
-                    multiModuleWindow.addModule(moduleId, moduleName, view)
                 moduleMainControllers[moduleId] = controller
 
                 # in case of the imnotebook, spread the notebook url
                 if moduleId == 'imnotebook':
                     config.jupyter_url = controller.webaddr
-
-                # Update loading progress
-                if False: #not config.is_headless:
-                    multiModuleWindow.updateLoadingProgress(i / len(modulePkgs))
-                    app.processEvents()  # Draw window before continuing
         logger.info('init done')
         launchApp(app, multiModuleWindow, moduleMainControllers.values())
     except Exception:

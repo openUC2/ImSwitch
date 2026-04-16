@@ -21,7 +21,6 @@ This implementation provides support for Tucsen cameras in ImSwitch, specificall
   - Trigger modes (Continuous, Software, External)
 - Frame buffering
 - ROI support (placeholder)
-- Flatfield correction support
 
 ## Configuration
 

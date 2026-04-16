@@ -9,30 +9,30 @@ import json
 import os
 import time
 import uuid
-try:  
-    import fcntl as _fcntl  
-except ImportError:  
-    _fcntl = None  # TODO: Implement cross-platform file locking for Windows if needed  
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None  # TODO: Implement cross-platform file locking for Windows if needed
 
 
-class _FcntlShim:  
-    """  
-    Minimal shim used on platforms where the real ``fcntl`` module is unavailable.  
+class _FcntlShim:
+    """
+    Minimal shim used on platforms where the real ``fcntl`` module is unavailable.
 
-    Any attempt to use file locking will raise a clear, explicit error instead  
-    of failing with an AttributeError on ``None``.  
-    """  
+    Any attempt to use file locking will raise a clear, explicit error instead
+    of failing with an AttributeError on ``None``.
+    """
 
-    @staticmethod  
-    def flock(*args, **kwargs):  
-        raise RuntimeError(  
-            "File locking is not supported on this platform: the 'fcntl' module "  
-            "is unavailable. Cross-platform locking has not been implemented."  
-        )  
+    @staticmethod
+    def flock(*args, **kwargs):
+        raise RuntimeError(
+            "File locking is not supported on this platform: the 'fcntl' module "
+            "is unavailable. Cross-platform locking has not been implemented."
+        )
 
 
-# Use the real fcntl when available, otherwise fall back to the shim.  
-fcntl = _fcntl if _fcntl is not None else _FcntlShim() 
+# Use the real fcntl when available, otherwise fall back to the shim.
+fcntl = _fcntl if _fcntl is not None else _FcntlShim()
 
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
@@ -46,43 +46,43 @@ logger = logging.getLogger(__name__)
 class SessionInfo:
     """
     Session-level metadata for an acquisition.
-    
+
     Contains all information needed to describe an acquisition session,
     from user-provided metadata to acquisition parameters.
     """
     # Required identifiers
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     base_path: str = ""
-    
+
     # Timestamps
     start_time: float = field(default_factory=time.time)
     end_time: Optional[float] = None
-    
+
     # User-provided metadata
     project: Optional[str] = None
     experiment: Optional[str] = None
     sample: Optional[str] = None
     user: Optional[str] = None
     description: Optional[str] = None
-    
+
     # Acquisition parameters
     n_time_points: int = 1
     n_z_planes: int = 1
     n_channels: int = 1
     time_interval_s: Optional[float] = None
     z_step_um: Optional[float] = None
-    
+
     # Grid/mosaic parameters
     n_positions: int = 1
     grid_shape: Optional[tuple] = None  # (nx, ny)
-    
+
     # Status
     status: str = "initialized"  # initialized, acquiring, completed, error
     frames_written: int = 0
-    
+
     # Additional metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Export as dictionary for JSON serialization."""
         return {
@@ -106,7 +106,7 @@ class SessionInfo:
             'frames_written': self.frames_written,
             'metadata': self.metadata,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SessionInfo':
         """Create from dictionary."""
@@ -116,14 +116,14 @@ class SessionInfo:
 class SessionFileLock:
     """
     File-based lock for session directory.
-    
+
     Ensures single-writer, multiple-reader access to session data.
     """
-    
+
     def __init__(self, lock_path: str):
         self.lock_path = lock_path
         self._lock_fd = None
-    
+
     def acquire_writer(self) -> bool:
         """Acquire exclusive write lock."""
         try:
@@ -138,7 +138,7 @@ class SessionFileLock:
                 self._lock_fd.close()
                 self._lock_fd = None
             return False
-    
+
     def release(self):
         """Release the lock."""
         if self._lock_fd:
@@ -148,12 +148,12 @@ class SessionFileLock:
             except:
                 pass
             self._lock_fd = None
-    
+
     def is_locked(self) -> bool:
         """Check if session is locked by another writer."""
         if not os.path.exists(self.lock_path):
             return False
-        
+
         try:
             with open(self.lock_path, 'r') as f:
                 fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -161,11 +161,11 @@ class SessionFileLock:
                 return False
         except (IOError, OSError):
             return True
-    
+
     def __enter__(self):
         self.acquire_writer()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
 
@@ -173,7 +173,7 @@ class SessionFileLock:
 class SessionManager:
     """
     Manages session directory layout and access.
-    
+
     Session Directory Structure:
     ```
     session_YYYYMMDD_HHMMSS_<uuid>/
@@ -185,34 +185,34 @@ class SessionManager:
         frames/                # Individual frame metadata (optional)
     ```
     """
-    
+
     SESSION_JSON = "session.json"
     DETECTORS_JSON = "detectors.json"
     LOCK_FILE = ".session.lock"
     ZARR_DIR = "data.ome.zarr"
-    
+
     def __init__(self, base_dir: str):
         """
         Initialize session manager.
-        
+
         Args:
             base_dir: Root directory for all sessions
         """
         self.base_dir = Path(base_dir)
         self._current_session: Optional[SessionInfo] = None
         self._current_lock: Optional[SessionFileLock] = None
-    
-    def create_session(self, session_info: SessionInfo, 
+
+    def create_session(self, session_info: SessionInfo,
                       hub_snapshot: Optional[Dict[str, Any]] = None,
                       detector_contexts: Optional[Dict[str, Dict[str, Any]]] = None) -> Path:
         """
         Create a new session directory with initial metadata.
-        
+
         Args:
             session_info: Session information
             hub_snapshot: Optional MetadataHub snapshot
             detector_contexts: Optional detector context dicts
-            
+
         Returns:
             Path to session directory
         """
@@ -220,20 +220,20 @@ class SessionManager:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         session_dir_name = f"session_{timestamp}_{session_info.session_id[:8]}"
         session_dir = self.base_dir / session_dir_name
-        
+
         # Create directory
         session_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Update session info with path
         session_info.base_path = str(session_dir)
         session_info.status = "initialized"
-        
+
         # Acquire write lock
         lock_path = session_dir / self.LOCK_FILE
         self._current_lock = SessionFileLock(str(lock_path))
         if not self._current_lock.acquire_writer():
             raise RuntimeError(f"Could not acquire write lock for session {session_info.session_id}")
-        
+
         # Write session.json
         session_data = {
             'session_info': session_info.to_dict(),
@@ -242,34 +242,34 @@ class SessionManager:
         }
         with open(session_dir / self.SESSION_JSON, 'w') as f:
             json.dump(session_data, f, indent=2)
-        
+
         # Write detectors.json
         if detector_contexts:
             with open(session_dir / self.DETECTORS_JSON, 'w') as f:
                 json.dump(detector_contexts, f, indent=2)
-        
+
         self._current_session = session_info
         logger.info(f"Created session directory: {session_dir}")
-        
+
         return session_dir
-    
+
     def finalize_session(self, session_info: Optional[SessionInfo] = None):
         """
         Finalize session and update metadata.
-        
+
         Args:
             session_info: Updated session info (or use current)
         """
         info = session_info or self._current_session
         if not info or not info.base_path:
             return
-        
+
         session_dir = Path(info.base_path)
-        
+
         # Update session info
         info.end_time = time.time()
         info.status = "completed"
-        
+
         # Read existing session.json and update
         session_json_path = session_dir / self.SESSION_JSON
         if session_json_path.exists():
@@ -279,47 +279,47 @@ class SessionManager:
             session_data['finalized_at'] = time.time()
             with open(session_json_path, 'w') as f:
                 json.dump(session_data, f, indent=2)
-        
+
         # Release lock
         if self._current_lock:
             self._current_lock.release()
             self._current_lock = None
-        
+
         self._current_session = None
         logger.info(f"Finalized session: {info.session_id}")
-    
+
     def list_sessions(self, limit: int = 100) -> List[Dict[str, Any]]:
         """
         List available sessions.
-        
+
         Args:
             limit: Maximum number of sessions to return
-            
+
         Returns:
             List of session summaries
         """
         sessions = []
-        
+
         if not self.base_dir.exists():
             return sessions
-        
+
         # Find all session directories
         for session_dir in sorted(self.base_dir.iterdir(), reverse=True):
             if not session_dir.is_dir() or not session_dir.name.startswith("session_"):
                 continue
-            
+
             session_json_path = session_dir / self.SESSION_JSON
             if not session_json_path.exists():
                 continue
-            
+
             try:
                 with open(session_json_path, 'r') as f:
                     data = json.load(f)
-                
+
                 info = data.get('session_info', {})
                 lock_path = session_dir / self.LOCK_FILE
                 lock = SessionFileLock(str(lock_path))
-                
+
                 sessions.append({
                     'session_id': info.get('session_id'),
                     'path': str(session_dir),
@@ -330,46 +330,46 @@ class SessionManager:
                     'frames_written': info.get('frames_written', 0),
                     'is_active': lock.is_locked(),
                 })
-                
+
                 if len(sessions) >= limit:
                     break
-                    
+
             except Exception as e:
                 logger.warning(f"Error reading session {session_dir}: {e}")
                 continue
-        
+
         return sessions
-    
+
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
         Get full session data by ID.
-        
+
         Args:
             session_id: Session UUID
-            
+
         Returns:
             Full session data or None
         """
         for session_dir in self.base_dir.iterdir():
             if not session_dir.is_dir():
                 continue
-            
+
             session_json_path = session_dir / self.SESSION_JSON
             if not session_json_path.exists():
                 continue
-            
+
             try:
                 with open(session_json_path, 'r') as f:
                     data = json.load(f)
-                
+
                 if data.get('session_info', {}).get('session_id') == session_id:
                     return data
-                    
+
             except Exception as e:
                 continue
-        
+
         return None
-    
+
     def get_zarr_path(self, session_dir: Path) -> Path:
         """Get path to OME-Zarr store for a session."""
         return session_dir / self.ZARR_DIR

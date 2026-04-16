@@ -113,8 +113,6 @@ class TucsenCamManager(DetectorManager):
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=True)
 
-    def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
-        self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)
 
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
@@ -254,11 +252,6 @@ class TucsenCamManager(DetectorManager):
     def closeEvent(self):
         self._camera.close()
 
-    def recordFlatfieldImage(self):
-        '''
-        record n images and average them before subtracting from the latest frame
-        '''
-        self._camera.recordFlatfieldImage()
 
 # Copyright (C) ImSwitch developers 2021
 # This file is part of ImSwitch.

@@ -400,9 +400,6 @@ class InstrumentInfo:
     filters: List[Dict[str, Any]] = field(default_factory=list)
     """ List of optical filters. Each entry: {name, filterType, wavelengthNm, bandwidthNm}. """
 
-@dataclass(frozen=False)
-class FlatfieldInfo:
-    pass
 
 @dataclass(frozen=False)
 class StorageInfo:
@@ -828,9 +825,6 @@ class SetupInfo:
 
     Lepmon: Optional[LepmonInfo] = field(default_factory=lambda: None)
     """ Lepmon settings. Required to be defined to use Lepmon functionality. """
-
-    Flatfield: Optional[FlatfieldInfo] = field(default_factory=lambda: None)
-    """ Flatfield settings. Required to be defined to use Flatfield functionality. """
 
     PixelCalibration: Optional[PixelCalibrationInfo] = field(default_factory=lambda: None)
     """ PixelCalibration settings. Required to be defined to use PixelCalibration functionality. """

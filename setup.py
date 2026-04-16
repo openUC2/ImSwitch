@@ -92,17 +92,6 @@ setup(
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
-        'PyQt5': [
-            "qtpy >= 1.9",
-            "PyQt5 >= 5.15.2",
-            "QDarkStyle >= 3",
-            "QScintilla >= 2.12",
-            "PyQtWebEngine >= 5.15.2",
-            "pyqtgraph >= 0.12.1",
-            "napari[pyqt5] == 0.6.4",
-            "lantzdev[qt] >= 0.5.2",
-            "qtpy >= 1.9"
-        ],
         'Lepmon': [
             "RPi.GPIO",
             "luma.oled",

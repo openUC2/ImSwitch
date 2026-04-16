@@ -744,7 +744,6 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
-        # Extract key parameters
         exp_name = mExperiment.name
         p = mExperiment.parameterValue
 
@@ -767,9 +766,15 @@ class ExperimentController(ImConWidgetController):
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
 
-        # check if any of the illumination sources is turned on, if not, return error
-        if not any(illuminationIntensities):
-            return HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
+        # Detect passthrough mode: no illumination channels configured.
+        # In this mode we acquire frames without touching the current
+        # illumination, exposure, or gain settings on the device.
+        _passthrough_illumination = not any(illuminationIntensities)
+        if _passthrough_illumination:
+            self._logger.info(
+                "No illumination intensities set – entering passthrough mode: "
+                "current illumination/camera settings will not be changed."
+            )
 
         # Resolve keepIlluminationOn mode:
         #  "auto" → True when exactly 1 active channel, False otherwise
@@ -822,6 +827,19 @@ class ExperimentController(ImConWidgetController):
         if len(gains) != len(illuSources): gains = [-1]*len(illuSources)
         if len(exposures) != len(illuSources): exposures = [exposures[0]]*len(illuSources)
 
+        # Passthrough-mode overrides: use a single sentinel channel so the
+        # acquisition loop runs exactly once per position without modifying
+        # illumination, exposure, or gain.
+        if _passthrough_illumination:
+            illuSources = [illuSources[0]] if illuSources else ["default"]
+            illuminationIntensities = [1]  # sentinel: passes >0 gate; never sent to device
+            gains = [-1]   # set_exposure_time_gain skips when gain < 0
+            exposures = [0]  # set_exposure_time_gain skips when exposure_time <= 0
+            keepIlluminationOn = True  # never send set_laser_power commands
+            self._logger.info(
+                f"Passthrough mode: using channel '{illuSources[0]}' as sentinel, "
+                "illumination/exposure/gain unchanged."
+            )
 
         # Check if another workflow is running
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
@@ -1026,27 +1044,34 @@ class ExperimentController(ImConWidgetController):
     ########################################
     # Hardware-related functions
     ########################################
-    def acquire_frame(self, channel: str, frameSync: int = 3):
+    def acquire_frame(self, channel: str, frameSync: int = 2):
         self._logger.debug(f"Acquiring frame on channel {channel}")
 
-        # ensure we get a fresh frame (frameSync=3 to account for exposure/gain register latency)
-        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        # Make timeout dependent on exposure time so long exposures don't
+        # prematurely abort.  The camera needs at least (frameSync+1) frame
+        # periods to deliver a fresh frame after an illumination / gain change.
+        try:
+            exposure_s = self.mDetector.getLatestFrame.__self__._camera.exposure_time / 1e6
+        except Exception:
+            exposure_s = 0.1
+        timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
         cTime = time.time()
 
-        lastFrameNumber=-1
-        while(1):
+        lastFrameNumber = -1
+        mFrame = None
+        while True:
             # get frame and frame number to get one that is newer than the one with illumination off eventually
             mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
-            if lastFrameNumber==-1:
+            if lastFrameNumber == -1:
                 # first round
                 lastFrameNumber = currentFrameNumber
-            if time.time()-cTime> timeoutFrameRequest:
+            if time.time() - cTime > timeoutFrameRequest:
                 # in case exposure time is too long we need break at one point
                 if mFrame is None:
                     mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
                 break
-            if currentFrameNumber <= lastFrameNumber+frameSync:
-                time.sleep(0.01) # off-load CPU
+            if currentFrameNumber <= lastFrameNumber + frameSync:
+                time.sleep(0.01)  # off-load CPU
             else:
                 break
         return mFrame
@@ -1469,6 +1494,12 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Error saving OME frame: {e}")
             metadata["frame_saved"] = False
 
+        # Release the frame reference now that it has been saved (or failed).
+        # Without this, the numpy array stays alive in the metadata dict which
+        # is stored in WorkflowContext.data for every step, causing unbounded
+        # RAM growth during long wellplate experiments.
+        metadata.pop("result", None)
+
         '''
         if tiff_writer is None:
             self._logger.debug("No TIFF writer found in context!")
@@ -1544,6 +1575,22 @@ class ExperimentController(ImConWidgetController):
         time.sleep(0.04)  # Short delay to ensure power is set before next acquisition # TODO: Necessary?
         return power
 
+
+    def home_axis(self, axis: str, isBlocking: bool = True):
+        if axis not in ["X", "Y", "Z"]:
+            self._logger.error(f"Invalid axis '{axis}' specified for movement")
+            return None
+        self._logger.debug(f"Moving axis {axis} to home position with blocking={isBlocking}")
+        self.mStage.doHome(axis=axis, isBlocking=isBlocking)
+
+    @APIExport(requestType="POST")
+    def homeAllAxes(self):
+        """Home all stage axes (X, Y, Z) sequentially. Blocks until complete."""
+        self._logger.info("Homing all axes before experiment...")
+        for axis in ["X", "Y", "Z"]:
+            self.home_axis(axis=axis, isBlocking=True)
+        self._logger.info("All axes homed successfully.")
+        return {"status": "ok", "message": "All axes homed"}
 
 
     def move_stage_xy(self, posX: float = None, posY: float = None, relative: bool = False):

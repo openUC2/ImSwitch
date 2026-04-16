@@ -3,8 +3,9 @@ SiLA2Manager for OpenUC2 ImSwitch.
 
 Manages the lifecycle of the SiLA2 server (UniteLabs CDK Connector).
 Configuration is loaded from setupInfo, analogous to ArkitektManager.
-The SiLA2 server runs in a background asyncio event loop and exposes
-microscope capabilities as SiLA2 features.
+
+The SiLA2 server runs in a dedicated daemon thread with its own asyncio
+event loop. 
 """
 
 import asyncio
@@ -65,7 +66,7 @@ class SiLA2Manager:
         self._connector: Optional[Any] = None
         self._features: List[Any] = []
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._thread: Optional[threading.Thread] = None
+        self._server_thread: Optional[threading.Thread] = None
         self._running = False
 
         if not HAS_SILA2:
@@ -115,6 +116,7 @@ class SiLA2Manager:
             self.__logger.error(f"Failed to load SiLA2 config from setupInfo: {e}")
             self._config = {"enabled": False}
 
+        # self._config = 
     # ------------------------------------------------------------------
     # Feature registration
     # ------------------------------------------------------------------
@@ -136,7 +138,12 @@ class SiLA2Manager:
     # ------------------------------------------------------------------
 
     def start_server(self) -> None:
-        """Create the Connector, register features, and start serving in a background thread."""
+        """Start the SiLA2 server in a dedicated background daemon thread.
+
+        The thread creates its own asyncio event loop and calls
+        Connector.start() directly, avoiding CDK's run() which requires
+        signal-handler access (set_wakeup_fd) restricted to the main thread.
+        """
         if not HAS_SILA2:
             self.__logger.warning("Cannot start SiLA2 server – unitelabs-cdk not available")
             return
@@ -146,31 +153,48 @@ class SiLA2Manager:
         if self._running:
             self.__logger.warning("SiLA2 server is already running")
             return
-
-        self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(
+        '''
+        TODO: Problematic since not main thread, but CDK's run() requires signal handling which is
+        main-thread-only. We call Connector.start() directly in the thread to avoid this, 
+        but it may still cause issues with some features that expect to be on the main thread. 
+        We should test this thoroughly and consider alternatives if it causes problems.
+        '''
+        self._server_thread = threading.Thread( 
             target=self._run_server_loop,
             daemon=True,
-            name="SiLA2-Server",
+            name="SiLA2Server",
         )
-        self._thread.start()
+        self._server_thread.start()
         self.__logger.info("SiLA2 server thread started")
 
     def _run_server_loop(self) -> None:
-        """Entry point for the background thread that runs the asyncio event loop."""
-        asyncio.set_event_loop(self._loop)
+        """Entry point for the SiLA2 daemon thread.
+
+        Creates a dedicated event loop, starts the Connector, then calls
+        loop.run_forever() so the Connector's background tasks keep running.
+        """
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
         try:
-            self._loop.run_until_complete(self._serve())
+            loop.run_until_complete(self._setup_connector())
+            self.__logger.info("SiLA2 Connector running – entering keep-alive loop")
+            loop.run_forever()
         except Exception as e:
-            self.__logger.error(f"SiLA2 server loop exited with error: {e}")
+            self.__logger.error(f"SiLA2 server error: {e}")
         finally:
             self._running = False
+            self._connector = None
+            try:
+                loop.close()
+            except Exception:
+                pass
+            self.__logger.info("SiLA2 server stopped")
 
-    async def _serve(self) -> None:
-        """Create the Connector, register all features, and run forever."""
+    async def _setup_connector(self) -> None:
+        """Build and start the CDK Connector inside the background event loop."""
         cfg = self._config
 
-        # Build a typed config instance from the ImSwitch setup values
         connector_config = OpenUC2MicroscopeConfig(
             sila_server=SiLAServerConfig(
                 name=cfg.get("server_name", "OpenUC2 ImSwitch"),
@@ -183,38 +207,27 @@ class SiLA2Manager:
                 vendor_url=cfg.get("vendor_url", "https://openuc2.com/"),
             )
         )
+        # TODO: Load from config.json instead of hardcoding
+        connector_config.cloud_server_endpoint.hostname = (
+            "00000000-0000-0000-0000-000000000000.dev.unitelabs.io"
+        )
+        connector_config.cloud_server_endpoint.port = 443
+        connector_config.cloud_server_endpoint.tls = True
 
-        self._connector = Connector(connector_config)
+        app = Connector(connector_config)
+        self._connector = app
 
         for feature in self._features:
-            self._connector.register(feature)
+            app.register(feature)
             self.__logger.info(f"SiLA2: registered feature {type(feature).__name__}")
 
+        # Non-blocking: starts the gRPC/SiLA2 listener; background tasks
+        # remain active as long as loop.run_forever() is running.
+        await app.start()
         self._running = True
         self.__logger.info(
-            f"SiLA2 Connector serving on "
-            f"{cfg.get('server_host', '0.0.0.0')}:{cfg.get('server_port', 50052)}"
+            f"SiLA2 Connector started: {cfg.get('server_name', 'OpenUC2 ImSwitch')}"
         )
-
-        # The reference CDK pattern uses `app.start()` (UniteLabs CDK >= 0.2).
-        # Older builds exposed a `serve(host, port)` coroutine.  We try
-        # `start()` first, then `serve()`, and finally keep the loop alive
-        # as a last resort so that the asyncio thread does not exit.
-        if hasattr(self._connector, "start"):
-            await self._connector.start()
-        elif hasattr(self._connector, "serve"):
-            await self._connector.serve(
-                host=cfg.get("server_host", "0.0.0.0"),
-                port=cfg.get("server_port", 50052),
-            )
-        else:
-            # Last-resort fallback – keep the event loop alive
-            self.__logger.warning(
-                "SiLA2 Connector has neither start() nor serve() – "
-                "running in no-op mode (features will not be reachable)"
-            )
-            while self._running:
-                await asyncio.sleep(1)
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -250,16 +263,17 @@ class SiLA2Manager:
     # Shutdown
     # ------------------------------------------------------------------
 
-    def shutdown(self) -> None:
-        """Stop the SiLA2 server and clean up resources."""
+    def stop_server(self) -> None:
+        """Signal the background event loop to stop (best-effort graceful stop)."""
         self._running = False
         if self._loop is not None and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-            self._thread = None
+        self.__logger.info("SiLA2 stop requested")
+
+    def shutdown(self) -> None:
+        """Alias for stop_server, called on cleanup."""
+        self.stop_server()
         self._connector = None
-        self.__logger.info("SiLA2 server shut down")
 
     def __del__(self):
         """Cleanup on garbage collection."""

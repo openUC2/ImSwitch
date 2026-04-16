@@ -185,6 +185,21 @@ def get_predefined_layouts() -> Dict[str, WellplateLayout]:
         offset_y=0
     )
 
+    # ShitScope - single rectangular scan area (50mm x 30mm)
+    layouts["shitscope"] = generate_wellplate_layout(
+        name="ShitScope",
+        description="ShitScope single-area scan layout (50x30 mm)",
+        rows=1,
+        cols=1,
+        well_spacing_x=30000,
+        well_spacing_y=10000,
+        well_shape="rectangle",
+        well_width=30000,
+        well_height=10000,
+        offset_x=0,
+        offset_y=0
+    )
+
     return layouts
 
 

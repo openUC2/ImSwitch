@@ -100,7 +100,6 @@ class CameraHIK:
         self.NBuffer = 3
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
-        self.flatfieldImage = None
         self.camera = None
         self.DEBUG = False
         # Binning
@@ -118,8 +117,6 @@ class CameraHIK:
         self.g_bExit = False
 
         self._open_camera(self.cameraNo)
-
-        self.isFlatfielding = False
 
         # use the parameter passed to __init__, or fall back to auto-detect
         if isRGB is not None:
@@ -685,15 +682,6 @@ class CameraHIK:
         if ret != 0:
             self.__logger.error("set AcquisitionFrameRate fail! ret[0x%x]" % ret)
 
-    def set_flatfielding(self, is_flatfielding):
-        self.isFlatfielding = is_flatfielding
-        if self.isFlatfielding:
-            self.recordFlatfieldImage()
-
-    def setFlatfieldImage(self, flatfieldImage, isFlatfieldEnabeled=True):
-        self.flatfieldImage = flatfieldImage
-        self.isFlatfielding = isFlatfieldEnabeled
-
     def set_blacklevel(self, blacklevel):
         self.blacklevel = blacklevel
         self.camera.MV_CC_SetFloatValue("BlackLevel", self.blacklevel)
@@ -829,8 +817,6 @@ class CameraHIK:
             self.roi_size = property_value
         elif property_name == "frame_rate":
             self.set_frame_rate(property_value)
-        elif property_name == "flat_fielding":
-            self.set_flatfielding(property_value)
         elif property_name == "trigger_source":
             self.setTriggerSource(property_value)
         elif property_name == 'mode':
@@ -919,20 +905,6 @@ class CameraHIK:
 
     def openPropertiesGUI(self):
         pass
-
-    def recordFlatfieldImage(self, nFrames=10, nGauss=5, nMedian=5):
-        for iFrame in range(nFrames):
-            frame = self.getLast()
-            if frame is None:
-                continue
-            if iFrame == 0:
-                flatfield = frame
-            else:
-                flatfield += frame
-        flatfield = flatfield / nFrames
-        flatfield = gaussian(flatfield, sigma=nGauss)
-        flatfield = median(flatfield, selem=np.ones((nMedian, nMedian)))
-        self.flatfieldImage = flatfield
 
     def getFrameNumber(self):
         return self.frameNumber

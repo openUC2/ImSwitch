@@ -47,7 +47,7 @@ const StageMapVisualization = ({ hostIP, hostPort, width = 400, height = 400 }) 
     try {
       // Move to clicked position
       await apiPositionerControllerMovePositioner({
-        positionerName: "ESP32Stage",
+        positionerName: null,
         axis: "X",
         dist: stageX,
         isAbsolute: true,
@@ -56,7 +56,7 @@ const StageMapVisualization = ({ hostIP, hostPort, width = 400, height = 400 }) 
       });
 
       await apiPositionerControllerMovePositioner({
-        positionerName: "ESP32Stage",
+        positionerName: null,
         axis: "Y",
         dist: stageY,
         isAbsolute: true,

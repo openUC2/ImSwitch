@@ -15,8 +15,6 @@ from ..basecontrollers import ImConWidgetController
 from imswitch.imcommon.framework import Signal
 
 
-from imswitch import IS_HEADLESS
-
 pi    = np.pi
 naxis = np.newaxis
 F     = lambda x: np.fft.fft2(x)
@@ -520,15 +518,6 @@ class DPCController(ImConWidgetController):
         except:
             pass
 
-    # =========================
-    # Legacy GUI compatibility
-    # =========================
-
-    def toggleRecording(self):
-        """Toggle recording mode"""
-        if IS_HEADLESS:
-            return
-        self._params.save_images = not self._params.save_images
 
 '''#####################################
 # DPC PROCESSOR

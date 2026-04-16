@@ -212,10 +212,6 @@ class Picamera2Manager(DetectorManager):
 
         # Prepare actions
         actions = {
-            'Record Flatfield': DetectorAction(
-                group='Misc',
-                func=self.recordFlatfieldImage
-            ),
             'Calibrate Lens Shading': DetectorAction(
                 group='Color',
                 func=self.calibrateLensShading
@@ -233,9 +229,6 @@ class Picamera2Manager(DetectorManager):
             croppable=False  # ROI not fully implemented yet
         )
 
-    def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
-        """Set flatfield correction image"""
-        self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)
 
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         """Get the latest frame from the camera"""
@@ -468,9 +461,6 @@ class Picamera2Manager(DetectorManager):
         """Handle close event"""
         self._camera.close()
 
-    def recordFlatfieldImage(self):
-        """Record flatfield image by averaging multiple frames"""
-        self._camera.recordFlatfieldImage()
 
 
 # Copyright (C) ImSwitch developers 2021

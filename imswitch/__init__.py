@@ -21,7 +21,6 @@ __available_controllers__ = []
 These are LEGACY flags for backward compatibility.
 New code should use the configuration system: from imswitch.config import get_config
 '''
-IS_HEADLESS = True  # Default to GUI mode
 DEFAULT_SETUP_FILE = None
 DEFAULT_CONFIG_PATH = None
 DEFAULT_DATA_PATH = None

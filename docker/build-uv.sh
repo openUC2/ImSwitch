@@ -26,7 +26,7 @@ source /root/.local/bin/env
 # Create UV virtual environment for ImSwitch
 mkdir -p /opt/imswitch
 cd /opt/imswitch
-uv venv --python 3.11 .venv
+uv venv --python 3.12 .venv
 
 # Clean up build-only tools
 

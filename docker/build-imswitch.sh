@@ -7,7 +7,10 @@ source /opt/imswitch/.venv/bin/activate
 # Install ImSwitch from our local copy of the repo
 cp -r /mnt/ImSwitch /tmp/ImSwitch
 cd /tmp/ImSwitch
-uv pip install /tmp/ImSwitch
+
+# use uv sync
+uv sync --no-dev 
+# uv pip install /tmp/ImSwitch
 # Note(ethanjli): we delete DLL files because they take up a significant amount of space, and
 # they should be useless in Linux anyways (as they're Windows-specific)
 shopt -s globstar

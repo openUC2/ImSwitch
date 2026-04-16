@@ -1887,7 +1887,7 @@ requires-dist = [
 ]
 provides-extras = ["microeye", "lepmon", "ashlar", "imjoy", "dev", "omero"]
 
-[[package]]oi wer Bock?
+[[package]]
 name = "inflection"
 version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }

@@ -1886,6 +1886,7 @@ dependencies = [
     { name = "lantzdev" },
     { name = "luddite" },
     { name = "matplotlib" },
+    { name = "mikro-next" },
     { name = "msgpack" },
     { name = "nanoimagingpack" },
     { name = "nidaqmx" },
@@ -1942,7 +1943,7 @@ omero = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.4" },
-    { name = "aiortc", specifier = ">=1.9.0,<1.11.0" },
+    { name = "aiortc", specifier = ">=1.9.0" },
     { name = "arkitekt-next", extras = ["all"], specifier = ">=0.39.5" },
     { name = "ashlaruc2", marker = "extra == 'ashlar'" },
     { name = "av", specifier = "==13.1.0" },
@@ -1956,7 +1957,7 @@ requires-dist = [
     { name = "imjoy", marker = "extra == 'imjoy'" },
     { name = "imjoy-rpc", marker = "extra == 'imjoy'" },
     { name = "imjoy-rpc", marker = "extra == 'imjoy'", specifier = "==0.5.59" },
-    { name = "imswitchclient", specifier = ">=0.1.2,<0.1.7" },
+    { name = "imswitchclient", specifier = ">=0.1.2" },
     { name = "jupyter" },
     { name = "jupyterlab", specifier = "==4.2.5" },
     { name = "koil", specifier = ">=2.0.5" },
@@ -1964,6 +1965,7 @@ requires-dist = [
     { name = "luddite", specifier = ">=1" },
     { name = "luma-oled", marker = "extra == 'lepmon'" },
     { name = "matplotlib", specifier = "==3.9.2" },
+    { name = "mikro-next", specifier = ">=1" },
     { name = "msgpack", specifier = ">=1.0.4" },
     { name = "nanoimagingpack", specifier = "==2.1.4" },
     { name = "nidaqmx", specifier = ">=0.5.7" },
@@ -2883,7 +2885,7 @@ wheels = [
 
 [[package]]
 name = "mikro-next"
-version = "0.19.0"
+version = "1.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dask" },
@@ -2898,9 +2900,9 @@ dependencies = [
     { name = "xarray" },
     { name = "zarr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/82/e9/25bee6319b71242add83d8fbe784fc66017bb915ef2d051a53fc12c0106e/mikro_next-0.19.0.tar.gz", hash = "sha256:736b35e16492e478c7f39994be6dd0987e71e590334cbec41fa7fc5e5695bc57", size = 64328, upload-time = "2025-11-06T14:56:32.802Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1a/f6/beda7d4689441b39b26e70c31114480824282f06502685a8f3c2b81de76e/mikro_next-1.0.2.tar.gz", hash = "sha256:c8eb4b75339d8844fc43adbf3c578ee806755c40c8af3ec87c535cfedcc62b6c", size = 75226, upload-time = "2026-04-09T14:18:00.423Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/f1/615647dc10f2ef49ab39547c75c48f01e8cd5b2aad7a383a0a9f751960be/mikro_next-0.19.0-py3-none-any.whl", hash = "sha256:0d01a6ca2d1846bbac0c308cde67c87379b0c3e37869bf5ee8d76e2fb4bb74ab", size = 71376, upload-time = "2025-11-06T14:56:31.526Z" },
+    { url = "https://files.pythonhosted.org/packages/64/f0/e0af9bcfd5eb871b77d20e57320b7c701f4eb0bf7e58632feb8a0fac0b8d/mikro_next-1.0.2-py3-none-any.whl", hash = "sha256:1226e76b0826b1d8679bb7f9d9b110d8e70676db59ee5640816865358e5ea402", size = 83019, upload-time = "2026-04-09T14:17:59.409Z" },
 ]
 
 [[package]]

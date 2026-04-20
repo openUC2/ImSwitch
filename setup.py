@@ -67,7 +67,7 @@ setup(
         "matplotlib == 3.9.2",
         "opencv-python",
         "dataclasses-json >= 0.5",
-        "aiortc >= 1.9.0",
+        "aiortc",
         "UC2-REST",
         "tk >= 0.1.0",
         "jupyter",

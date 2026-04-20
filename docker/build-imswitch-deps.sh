@@ -25,23 +25,25 @@ apt-get update && apt install -y --no-install-recommends \
 
 # Activate UV environment and install dependencies
 export PATH="/root/.local/bin:$PATH"
-source /opt/imswitch/.venv/bin/activate
 
-# Install psygnal without binaries
-uv pip install psygnal --no-binary :all:
-
-# Fix the version of OME-ZARR
-uv pip install zarr==2.11.3
-
-# Install deps listed in pyproject.toml, but don't install ImSwitch yet:
-mkdir -p /tmp/ImSwitch/imswitch
-cat >/tmp/ImSwitch/imswitch/__init__.py <<EOF
-# temporary placeholder to be overwritten
+# Set up the project directory with build metadata so uv sync can pre-install all
+# slow-changing dependencies without installing ImSwitch itself yet.
+# This creates a separately-cached Docker image layer from the rapidly-changing source.
+mkdir -p /opt/imswitch/imswitch
+cat >/opt/imswitch/imswitch/__init__.py <<EOF
+# temporary placeholder to be overwritten by build-imswitch.sh
 __version__ = "0.0.0"
 EOF
-cp /mnt/ImSwitch/pyproject.toml /tmp/ImSwitch/pyproject.toml
-cd /tmp/ImSwitch
-uv pip install /tmp/ImSwitch
+cp /mnt/ImSwitch/pyproject.toml /opt/imswitch/pyproject.toml
+cp /mnt/ImSwitch/uv.lock /opt/imswitch/uv.lock
+cd /opt/imswitch
+
+# Install all deps from the lockfile without installing ImSwitch itself.
+# Using --frozen ensures the lockfile is used as-is (no resolver conflicts).
+uv sync --no-install-project --frozen --python 3.11
+
+# Reinstall psygnal from source to work around binary-wheel ABI issues
+uv pip install psygnal --no-binary :all:
 
 # Clean up build-only tools
 

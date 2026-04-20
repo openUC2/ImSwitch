@@ -88,7 +88,9 @@ setup(
         "msgpack>=1.0.4",
         "esptool", 
         "omero-py",
-        "uc2-rest>=0.2.0.33"
+        "uc2-rest>=0.2.0.33", 
+        "unitelabs-sila", 
+        "unitelabs-cdk"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get

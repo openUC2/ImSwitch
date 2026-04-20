@@ -71,7 +71,10 @@ RUN --mount=type=bind,source=docker,target=/mnt/build /mnt/build/build-uv.sh
 ENV PATH=/root/.local/bin:/opt/imswitch/.venv/bin:$PATH
 
 RUN --mount=type=bind,source=docker/build-drivers.sh,target=/mnt/build/build-drivers.sh /mnt/build/build-drivers.sh
-ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32:"$LD_LIBRARY_PATH"
+ENV MVCAM_COMMON_RUNENV=/opt/MVS/lib
+# LD_LIBRARY_PATH is set separately; expanding $LD_LIBRARY_PATH before it is defined causes a
+# Dockerfile linter warning and is a no-op at build time anyway.
+ENV LD_LIBRARY_PATH=/opt/MVS/lib/64:/opt/MVS/lib/32
 ENV GENICAM_GENTL64_PATH="/opt/VimbaX/cti"
 
 # Larger slowly-changing dependencies are installed in a separate container image layer before the

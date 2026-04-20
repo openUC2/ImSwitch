@@ -23,9 +23,12 @@ bash /tmp/uv-installer.sh
 # Source UV environment to add to PATH (installs to /root/.local/bin)
 source /root/.local/bin/env
 
-# Create the ImSwitch project directory; the virtual environment is created by
-# uv sync in build-imswitch-deps.sh so that the lockfile drives Python version selection.
+# Create the ImSwitch project directory and the virtual environment.
+# The venv must exist BEFORE build-drivers.sh runs (it needs to pip-install
+# Python bindings for camera SDKs into it).
 mkdir -p /opt/imswitch
+cd /opt/imswitch
+uv venv --python 3.11 .venv
 
 # Clean up build-only tools
 

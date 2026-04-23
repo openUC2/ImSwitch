@@ -117,15 +117,15 @@ class VirtualStageManager(PositionerManager):
         if axis == "Z": self.home_z(isBlocking)
 
 
-    def home_x(self, isBlocking):
+    def home_x(self, is_blocking):
         self.move(value=0, axis="X", is_absolute=True)
         self.setPosition(axis="X", value=0)
 
-    def home_y(self,isBlocking):
+    def home_y(self,is_blocking):
         self.move(value=0, axis="Y", is_absolute=True)
         self.setPosition(axis="Y", value=0)
 
-    def home_z(self,isBlocking):
+    def home_z(self,is_blocking):
         self.move(value=0, axis="Z", is_absolute=True)
         self.setPosition(axis="Z", value=0)
 

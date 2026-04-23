@@ -49,6 +49,11 @@ class ArkitektController(ImConWidgetController):
         self.arkitekt_app.register(self.runTileScan)
         self.arkitekt_app.register(self.goToPosition)
         self.arkitekt_app.register(self.acquireFrame)
+        self.arkitekt_app.register(self.getStagePosition)
+        self.arkitekt_app.register(self.homeStageAxis)
+        self.arkitekt_app.register(self.setLaserState)
+        self.arkitekt_app.register(self.moveStage)
+        
         self.arkitekt_app.run_detached()
 
     def moveToSampleLoadingPosition(
@@ -68,7 +73,62 @@ class ArkitektController(ImConWidgetController):
         self._master.positionersManager[positionerName].moveToSampleLoadingPosition(
             speed=speed, is_blocking=is_blocking
         )
+        
+    
+    @APIExport(runOnUIThread=False)
+    def getStagePosition(self, positionerName: str | None = None) -> dict:
+        """Get current stage position."""
+        if positionerName is None:
+            positionerNames = self._master.positionersManager.getAllDeviceNames()
+            if len(positionerNames) == 0:
+                self._logger.warning("No positioners available to get stage position.")
+                return None
+            positionerName = positionerNames[0]
+        mStage = self._master.positionersManager[positionerName]
+        currentPositions = mStage.getPosition()
+        return currentPositions
+    
+    @APIExport(runOnUIThread=False)
+    def homeStageAxis(self, positionerName: str | None = None, axis: str = "X", is_blocking: bool = False):
+        """Home stage axis."""
+        if positionerName is None:
+            positionerNames = self._master.positionersManager.getAllDeviceNames()
+            if len(positionerNames) == 0:
+                self._logger.warning("No positioners available to home stage axis.")
+                return None
+            positionerName = positionerNames[0]
+        mStage = self._master.positionersManager[positionerName]
+        if axis == "X":
+            mStage.home_x(is_blocking=is_blocking)
+        elif axis == "Y":
+            mStage.home_y(is_blocking=is_blocking)
+        elif axis == "Z":
+            mStage.home_z(is_blocking=is_blocking)
 
+        
+    @APIExport(runOnUIThread=False) 
+    def setLaserState(self, laserName: str, isActive: bool, value: float = 100):
+        """Set laser state."""
+        if laserName not in self._master.lasersManager.getAllDeviceNames():
+            self._logger.warning(f"Laser {laserName} not available to set state.")
+            return
+        mLaser = self._master.lasersManager[laserName]
+        mLaser.setEnabled(isActive)
+        mLaser.setValue(value)
+        
+    @APIExport(runOnUIThread=False)
+    def moveStage(self, positionerName: str | None = None, axis: str = "X", distance: float = 100, is_absolute: bool = True, is_blocking: bool = True, speed: float = 10000):
+        """Move stage."""
+        if positionerName is None:
+            positionerNames = self._master.positionersManager.getAllDeviceNames()
+            if len(positionerNames) == 0:
+                self._logger.warning("No positioners available to move stage.")
+                return None
+            positionerName = positionerNames[0]
+        mStage = self._master.positionersManager[positionerName]
+        mStage.move(value=distance, axis=axis, is_absolute=is_absolute, is_blocking=is_blocking, speed=speed)  
+    
+    
     @APIExport(runOnUIThread=False)
     def acquireFrame(self, frameSync: int = 3) -> Generator[Image, None, None]:
         """Acquire a single frame from the detector.

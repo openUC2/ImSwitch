@@ -12,15 +12,23 @@ class LEDMatrixController(ImConWidgetController):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__logger = initLogger(self)
+        self.nLedsX = 0
+        self.nLedsY = 0
+        self._ledmatrixMode = ""
+        self.ledMatrix_name = None
+        self.ledMatrix = None
+
+        led_matrix_names = self._master.LEDMatrixsManager.getAllDeviceNames()
+        if len(led_matrix_names) == 0:
+            self.__logger.info("No LED matrix configured; LEDMatrixController disabled")
+            return
 
         # TODO: This must be easier?
         self.nLedsX = self._master.LEDMatrixsManager._subManagers['ESP32 LEDMatrix'].Nx
         self.nLedsY = self._master.LEDMatrixsManager._subManagers['ESP32 LEDMatrix'].Ny
 
-        self._ledmatrixMode = ""
-
         # get the name that looks like an LED Matrix
-        self.ledMatrix_name = self._master.LEDMatrixsManager.getAllDeviceNames()[0]
+        self.ledMatrix_name = led_matrix_names[0]
         self.ledMatrix = self._master.LEDMatrixsManager[self.ledMatrix_name]
 
         # initialize matrix
@@ -34,6 +42,19 @@ class LEDMatrixController(ImConWidgetController):
         self._widget.ButtonAllOff.clicked.connect(self.setAllLEDOff)
         self._widget.slider.sliderReleased.connect(self.setIntensity)
 
+    def _ensure_led_matrix(self):
+        if self.ledMatrix is None:
+            raise RuntimeError("No LED matrix configured in the active setup")
+
+    @APIExport()
+    def getstatus(self):
+        return {
+            "available": self.ledMatrix is not None,
+            "name": self.ledMatrix_name,
+            "nLedsX": self.nLedsX,
+            "nLedsY": self.nLedsY,
+        }
+
     @APIExport()
     def setAllLEDOn(self, getReturn=True):
         self.setAllLED(state=(1,1,1), getReturn=getReturn)
@@ -44,6 +65,7 @@ class LEDMatrixController(ImConWidgetController):
 
     @APIExport()
     def setAllLED(self, state:int=None, intensity:int=None, intensity_r:int=None, intensity_g:int=None, intensity_b:int=None, getReturn:bool=True):
+        self._ensure_led_matrix()
         if intensity_r is not None and intensity_g is not None and intensity_b is not None:
             intensity = (intensity_r, intensity_g, intensity_b)
             self.ledMatrix.setAll(intensity=intensity, state=(intensity_r>0, intensity_g>0, intensity_b>0),getReturn=getReturn)
@@ -55,6 +77,7 @@ class LEDMatrixController(ImConWidgetController):
 
     @APIExport()
     def setIntensity(self, intensity:int=None):
+        self._ensure_led_matrix()
         if intensity is None:
             if not IS_HEADLESS: intensity = int(self._widget.slider.value()//1)
         else:
@@ -65,6 +88,7 @@ class LEDMatrixController(ImConWidgetController):
 
     @APIExport()
     def setLED(self, LEDid:int, state:int=None):
+        self._ensure_led_matrix()
         self._ledmatrixMode = "single"
         self.ledMatrix.setLEDSingle(indexled=int(LEDid), state=state)
         pattern = self.ledMatrix.getPattern()
@@ -94,6 +118,7 @@ class LEDMatrixController(ImConWidgetController):
     @APIExport()
     def setRing(self, ringRadius: int, intensity: int, intensity_r: int=None, intensity_g: int=None, intensity_b: int=None) -> None:
         """ Sets the value of the LEDMatrix. """
+        self._ensure_led_matrix()
         #self.setIntensity(intensity=intensity)
         if intensity_r is not None and intensity_g is not None and intensity_b is not None:
             self.ledMatrix.setRing(radius=ringRadius, intensity=(intensity_r, intensity_g, intensity_b))
@@ -104,6 +129,7 @@ class LEDMatrixController(ImConWidgetController):
     @APIExport()
     def setCircle(self, circleRadius: int, intensity: int, intensity_r: int=None, intensity_g: int=None, intensity_b: int=None) -> None:
         """ Sets the value of the LEDMatrix. """
+        self._ensure_led_matrix()
         #self.setIntensity(intensity=intensity)
         if intensity_r is not None and intensity_g is not None and intensity_b is not None:
             self.ledMatrix.setCircle(radius=circleRadius, intensity=(intensity_r, intensity_g, intensity_b))
@@ -114,6 +140,7 @@ class LEDMatrixController(ImConWidgetController):
     @APIExport()
     def setHalves(self, intensity: int, direction: str, intensity_r: int=None, intensity_g: int=None, intensity_b: int=None) -> None:
         """ Sets the value of the LEDMatrix. """
+        self._ensure_led_matrix()
         #self.setIntensity(intensity=intensity)
         if intensity_r is not None and intensity_g is not None and intensity_b is not None:
             self.ledMatrix.setHalves(intensity=(intensity_r, intensity_g, intensity_b), region=direction)
@@ -124,6 +151,7 @@ class LEDMatrixController(ImConWidgetController):
     @APIExport()
     def setStatus(self, status:str="idle") -> None:
         """ Sets the value of the LEDMatrix. """
+        self._ensure_led_matrix()
         self.ledMatrix.setStatus(status=status)
         if not IS_HEADLESS: self._widget.leds[str(status)].setChecked(True)
 

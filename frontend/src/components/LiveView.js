@@ -9,22 +9,14 @@ import {
   IconButton,
   Drawer,
   useMediaQuery,
-  useTheme,
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import AxisControl from "./AxisControl.jsx";
-import JoystickControl from "./JoystickControl.jsx";
-import VirtualJoystickControl from "./VirtualJoystickControl.js";
-import AutofocusController from "./AutofocusController";
 import DetectorParameters from "./DetectorParameters";
 import StreamControls from "./StreamControls";
-import IlluminationController from "./IlluminationController";
 import apiLiveViewControllerStartLiveView from "../backendapi/apiLiveViewControllerStartLiveView";
 import apiLiveViewControllerStopLiveView from "../backendapi/apiLiveViewControllerStopLiveView";
 import apiViewControllerGetLiveViewActive from "../backendapi/apiViewControllerGetLiveViewActive";
-import ObjectiveSwitcher from "./ObjectiveSwitcher";
-import DetectorTriggerController from "./DetectorTriggerController";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
 import {
@@ -32,7 +24,7 @@ import {
   clearNotification,
 } from "../state/slices/NotificationSlice";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
-import ExtendedLEDMatrixController from "./ExtendedLEDMatrixController.jsx";
+import LiveViewRightPanelContent from "./LiveViewRightPanelContent.jsx";
 
 /*
 <ImageViewport
@@ -94,7 +86,6 @@ export default function LiveView({ setFileManagerInitialPath }) {
   const [stageControlTab, setStageControlTab] = useState(0); // 0 = Multiple Axis View, 1 = Joystick Control
 
   // Responsive design: collapsible right panel for mobile
-  const theme = useTheme();
   const isMobile = useMediaQuery("(max-width:600px)");
   const [rightPanelOpen, setRightPanelOpen] = useState(!isMobile);
 
@@ -537,7 +528,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
               height: "100%",
             }}
           >
-            <RightPanelContent
+            <LiveViewRightPanelContent
               stageControlTab={stageControlTab}
               setStageControlTab={setStageControlTab}
               hostIP={hostIP}
@@ -570,7 +561,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
               },
             }}
           >
-            <RightPanelContent
+            <LiveViewRightPanelContent
               stageControlTab={stageControlTab}
               setStageControlTab={setStageControlTab}
               hostIP={hostIP}
@@ -580,74 +571,5 @@ export default function LiveView({ setFileManagerInitialPath }) {
         )
       )}
     </Box>
-  );
-}
-
-// Extracted right panel content as a separate component for reuse
-function RightPanelContent({
-  stageControlTab,
-  setStageControlTab,
-  hostIP,
-  hostPort,
-}) {
-  return (
-    <>
-      <Box mb={3}>
-        <Typography variant="h6">Stage Control</Typography>
-
-        {/* Stage Control Tabs */}
-        <Tabs
-          value={stageControlTab}
-          onChange={(_, v) => setStageControlTab(v)}
-          sx={{ mb: 2 }}
-          variant="scrollable"
-          scrollButtons="auto"
-        >
-          <Tab label="Multiple Axis View" />
-          <Tab label="Joystick Control" />
-          <Tab label="Virtual Joystick (speed mode)" />
-        </Tabs>
-
-        {/* Multiple Axis View */}
-        {stageControlTab === 0 && (
-          <AxisControl hostIP={hostIP} hostPort={hostPort} />
-        )}
-
-        {/* Joystick Control */}
-        {stageControlTab === 1 && (
-          <JoystickControl hostIP={hostIP} hostPort={hostPort} />
-        )}
-
-        {/* Virtual Joystick Speed Control */}
-        {stageControlTab === 2 && (
-          <VirtualJoystickControl hostIP={hostIP} hostPort={hostPort} />
-        )}
-      </Box>
-
-      <Box mb={3}>
-        <Typography variant="h6">Autofocus</Typography>
-        <AutofocusController hostIP={hostIP} hostPort={hostPort} />
-      </Box>
-
-      <Box mb={3}>
-        <Typography variant="h6">Illumination</Typography>
-        <IlluminationController hostIP={hostIP} hostPort={hostPort} />
-      </Box>
-
-      <Box mb={3}>
-        <Typography variant="h6">Objective</Typography>
-        <ObjectiveSwitcher hostIP={hostIP} hostPort={hostPort} />
-      </Box>
-
-      <Box mb={3}>
-        <Typography variant="h6">Extended LED Matrix</Typography>
-        <ExtendedLEDMatrixController hostIP={hostIP} hostPort={hostPort} />
-      </Box>
-
-      <Box mb={3}>
-        <Typography variant="h6">Detector Trigger</Typography>
-        <DetectorTriggerController hostIP={hostIP} hostPort={hostPort} />
-      </Box>
-    </>
   );
 }

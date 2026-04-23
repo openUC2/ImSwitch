@@ -9,7 +9,6 @@ import time
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from imswitch.imcommon.model import initLogger
 from ..basecontrollers import LiveUpdatedController
-from imswitch import IS_HEADLESS
 
 
 class HoliSheetController(LiveUpdatedController):
@@ -62,61 +61,6 @@ class HoliSheetController(LiveUpdatedController):
         self.imageComputationWorker.set_PSFpara(self.PSFpara)
         #self.imageComputationWorker.sigHoliSheetImageComputed.connect(self.displayImage) # TODO: Why not poassible to connect this signal?
 
-        if IS_HEADLESS: return
-        self.imageComputationThread = Thread()
-        self.imageComputationWorker.moveToThread(self.imageComputationThread)
-        self.sigImageReceived.connect(self.imageComputationWorker.computeHoliSheetImage)
-        self.imageComputationThread.start()
-
-        # Connect CommunicationChannel signals
-        self._commChannel.sigUpdateImage.connect(self.update)
-
-        # select detectors
-        allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
-
-        try:
-            if allDetectorNames[0].lower().find("light"):
-                self.detectorLightsheetName = allDetectorNames[0]
-                self.detectorHoloName = allDetectorNames[1]
-            else:
-                self.detectorLightsheetName = allDetectorNames[1]
-                self.detectorHoloName = allDetectorNames[0]
-        except Exception:
-            self._logger.debug("No camera found - in debug mode?")
-
-        # get all Lasers
-        self.lasers = self._master.lasersManager.getAllDeviceNames()
-        self.laser = self.lasers[0]
-        try:
-            self._master.lasersManager[self.laser].setGalvo(channel=1, frequency=10, offset=0, amplitude=1, clk_div=0, phase=0, invert=1, timeout=1)
-        except  Exception as e:
-            self._logger.error(e)
-
-        # connect camera and stage
-        #self.camera = self._setupInfo.autofocus.camera
-        #self._master.detectorsManager[self.camera].startAcquisition()
-        self.positionerName = self._master.positionersManager.getAllDeviceNames()[0]
-        self.positioner = self._master.positionersManager[self.positionerName]
-        self.imageComputationWorker.setPositioner(self.positioner)
-
-        # Connect HoliSheetWidget signals
-        if self._widget is not None:
-            self._widget.sigShowToggled.connect(self.setShowHoliSheet)
-            self._widget.sigPIDToggled.connect(self.setPID)
-            self._widget.sigUpdateRateChanged.connect(self.changeRate)
-            self._widget.sigSliderFocusValueChanged.connect(self.valueFocusChanged)
-            self._widget.sigSliderPumpSpeedValueChanged.connect(self.valuePumpSpeedChanged)
-            self._widget.sigSliderRotationSpeedValueChanged.connect(self.valueRotationSpeedChanged)
-            self._widget.sigToggleLightsheet.connect(self.toggleLightsheet)
-            # Connect buttons
-            self._widget.snapRotationButton.clicked.connect(self.captureFullRotation)
-
-        self.changeRate(self._widget.getUpdateRate())
-        self.setShowHoliSheet(self._widget.getShowHoliSheetChecked())
-        #self.setPID(self._widget.getPIDChecked())
-
-        # start measurment thread (pressure)
-        self.startTime = time.time()
 
     def toggleLightsheet(self, enabled):
         """ Toggle lightsheet. """

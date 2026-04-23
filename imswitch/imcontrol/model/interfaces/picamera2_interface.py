@@ -5,6 +5,7 @@ Supports hardware encoding options while maintaining scientific camera features.
 """
 
 import collections
+import gc
 import json
 import numpy as np
 import time
@@ -86,8 +87,6 @@ class CameraPicamera2:
         self.NBuffer = 5
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
-        self.flatfieldImage = None
-        self.isFlatfielding = False
 
         self.camera = None
         self.DEBUG = False
@@ -109,15 +108,14 @@ class CameraPicamera2:
 
         # Auto exposure/white balance
         self.exposure_auto = False
-        if 0:
+        if 1:
             self.awb_auto = True
-
             # White balance mode and manual colour gains
             self.awb_mode = "auto"  # auto | manual | once
         else:
             self.awb_auto = False   
             self.awb_mode = "manual"
-        self.colour_gains = (1.0, 1.0)  # (red_gain, blue_gain)
+        self.colour_gains = (1.2, 1.2)  # (red_gain, blue_gain)
 
         # Tuning file support
         self.tuning_file = tuning_file
@@ -328,47 +326,100 @@ class CameraPicamera2:
         """Thread function to continuously grab frames"""
         self.__logger.debug("Frame grabbing thread started")
 
+        _gc_counter = 0
+        _consecutive_errors = 0
+        _MAX_CONSECUTIVE_ERRORS = 10  # Trigger recovery after this many failures
         while not self._stop_event.is_set():
+            # Always initialise to None so the finally guard is safe even if
+            # capture_request() itself raises before assigning `request`.
+            request = None
+            array = None
+            frame_id = None
+
             try:
                 # Capture frame
                 request = self.camera.capture_request()
 
-                try:
-                    # Get frame data
-                    array = request.make_array("main")
-
-                    # Get metadata
-                    metadata = request.get_metadata()
-                    frame_id = metadata.get("FrameId", self.frameNumber + 1)
-                    timestamp = metadata.get("SensorTimestamp", int(time.time() * 1e6))
-
-                    # Process frame
-                    frame = self._process_frame(array)
-
-                    # Update frame number and timestamp
-                    self.frameNumber = frame_id
-                    self.timestamp = timestamp
-
-                    # Add to buffer
-                    self.frame_buffer.append(frame)
-                    self.frameid_buffer.append(frame_id)
-
-                    # Always keep latest frame cached (not consumed by getLast)
-                    # This allows multiple consumers to access the same frame
-                    self.lastFrameFromBuffer = frame
-                    self.lastFrameId = frame_id
-
-                    if self.DEBUG:
-                        self.__logger.debug(f"Frame {frame_id} captured, buffer size: {len(self.frame_buffer)}")
-
-                finally:
-                    # Always release the request
-                    request.release()
-
+                # Copy frame data and metadata before releasing the request.
+                # make_array() performs a copy, so the request object is no
+                # longer needed after this block.
+                array = request.make_array("main")
+                metadata = request.get_metadata()
+                frame_id = metadata.get("FrameId", self.frameNumber + 1)
+                timestamp = metadata.get("SensorTimestamp", int(time.time() * 1e6))
+                # Explicitly delete the metadata dict: it may hold C++ libcamera
+                # objects whose deleters are not called until GC runs, causing
+                # steady memory growth at high frame rates.
+                del metadata
+                _consecutive_errors = 0  # Reset on success
             except Exception as e:
                 if not self._stop_event.is_set():
-                    self.__logger.error(f"Error capturing frame: {e}")
-                    time.sleep(0.01)  # Brief pause on error
+                    _consecutive_errors += 1
+                    self.__logger.error(f"Error capturing frame ({_consecutive_errors}x): {e}")
+                    if _consecutive_errors >= _MAX_CONSECUTIVE_ERRORS:
+                        self.__logger.warning(
+                            "Too many consecutive capture failures – "
+                            "camera may have stalled (V4L2 timeout). "
+                            "Attempting recovery by restarting pipeline."
+                        )
+                        try:
+                            self.camera.stop()
+                            time.sleep(0.5)
+                            self.camera.start()
+                            _consecutive_errors = 0
+                            self.__logger.info("Camera pipeline restarted successfully")
+                        except Exception as restart_err:
+                            self.__logger.error(f"Camera restart failed: {restart_err}")
+                            time.sleep(1.0)
+                    else:
+                        time.sleep(0.05)  # Brief pause on error
+            finally:
+                # Release the request immediately after copying data.
+                # Holding the request during _process_frame() starves the
+                # camera buffer pool and causes capture_request() to block
+                # for an entire frame interval, causing ~1 s delays.
+                # Guard against NameError when capture_request() itself failed.
+                if request is not None:
+                    try:
+                        request.release()
+                    except Exception:
+                        pass
+
+            # Skip processing if the capture failed (array still None).
+            if array is None:
+                continue
+
+            # Process frame outside the request lifecycle
+            frame = self._process_frame(array)
+            # Drop the reference to the raw copy from make_array() now that
+            # _process_frame() has produced a standalone (contiguous) array.
+            # If frame were a numpy *view* of array, del array would be a no-op
+            # because the view keeps the base alive; _process_frame() is
+            # responsible for returning a copy, not a view (see below).
+            del array
+
+            # Update frame number and timestamp
+            self.frameNumber = frame_id
+            self.timestamp = timestamp
+
+            # Add to buffer
+            self.frame_buffer.append(frame)
+            self.frameid_buffer.append(frame_id)
+
+            # Always keep latest frame cached (not consumed by getLast)
+            # This allows multiple consumers to access the same frame
+            self.lastFrameFromBuffer = frame
+            self.lastFrameId = frame_id
+
+            if self.DEBUG:
+                self.__logger.debug(f"Frame {frame_id} captured, buffer size: {len(self.frame_buffer)}")
+
+            # Periodically run the cyclic GC to reclaim any reference cycles
+            # introduced by Picamera2 / libcamera Python wrappers.
+            _gc_counter += 1
+            if _gc_counter >= 300:  # ~10 s at 30 fps
+                gc.collect()
+                _gc_counter = 0
 
         self.__logger.debug("Frame grabbing thread stopped")
 
@@ -393,22 +444,16 @@ class CameraPicamera2:
         if not self.isRGB and len(array.shape) == 3:
             array = cv2.cvtColor(array, cv2.COLOR_RGB2GRAY)
 
-        # Apply flipping
+        # Apply flipping.
+        # np.flipud / np.fliplr return *views* (no data copy), which keeps the
+        # original array alive as long as the view exists.  Use
+        # np.ascontiguousarray() to force an independent copy so that callers
+        # (and the del-array optimisation in _grab_frames) can free the source
+        # buffer promptly without waiting for GC view-chain resolution.
         if self.flipImage[0]:  # Flip Y
-            array = np.flipud(array)
+            array = np.ascontiguousarray(array[::-1])
         if self.flipImage[1]:  # Flip X
-            array = np.fliplr(array)
-
-        # Apply flatfielding if enabled
-        if self.isFlatfielding and self.flatfieldImage is not None:
-            try:
-                # Normalize by flatfield
-                array = np.clip(
-                    array.astype(np.float32) / (self.flatfieldImage.astype(np.float32) + 1e-6) * 255,
-                    0, 255
-                ).astype(np.uint8)
-            except Exception as e:
-                self.__logger.error(f"Flatfield correction failed: {e}")
+            array = np.ascontiguousarray(array[:, ::-1])
 
         return array
 
@@ -734,6 +779,14 @@ class CameraPicamera2:
             self.__logger.error(f"Error stopping camera: {e}")
 
         self.is_streaming = False
+
+        # Release all cached frame references so GC can reclaim the numpy
+        # memory without waiting for the next gc.collect() cycle.
+        self.frame_buffer.clear()
+        self.frameid_buffer.clear()
+        self.lastFrameFromBuffer = None
+        self.lastFrameId = -1
+
         self.__logger.info("Camera streaming stopped")
 
     def suspend_live(self):
@@ -841,14 +894,6 @@ class CameraPicamera2:
         # For now, just store the value
         self.__logger.info(f"Frame rate set to {frame_rate} (requires restart)")
 
-    def set_flatfielding(self, is_flatfielding: bool):
-        """Enable/disable flatfielding"""
-        self.isFlatfielding = is_flatfielding
-
-    def setFlatfieldImage(self, flatfieldImage: np.ndarray, isFlatfieldEnabled: bool = True):
-        """Set flatfield correction image"""
-        self.flatfieldImage = flatfieldImage
-        self.isFlatfielding = isFlatfieldEnabled
 
     def set_blacklevel(self, blacklevel: int):
         """Set black level (not implemented for RPi camera)"""
@@ -907,22 +952,25 @@ class CameraPicamera2:
                     return frame, frame_id
                 return frame
 
-        # Wait for frame in buffer
-        t0 = time.time()
-        while not self.frame_buffer:
-            if time.time() - t0 > timeout:
-                self.__logger.warning(f"Timeout waiting for frame ({timeout}s)")
-                # Return last known frame or zeros
-                if self.lastFrameFromBuffer is not None:
-                    if returnFrameNumber:
-                        return self.lastFrameFromBuffer, self.lastFrameId
-                    return self.lastFrameFromBuffer
-                else:
+        # If the buffer is temporarily empty (e.g. after flushBuffer or between
+        # grabs) but the grab thread has already produced a cached frame, return
+        # it immediately instead of burning through the full timeout. The grab
+        # thread keeps lastFrameFromBuffer up-to-date on every captured frame.
+        if not self.frame_buffer:
+            if self.lastFrameFromBuffer is not None:
+                if returnFrameNumber:
+                    return self.lastFrameFromBuffer, self.lastFrameId
+                return self.lastFrameFromBuffer
+            # No cached frame yet (camera just started): wait up to timeout
+            t0 = time.time()
+            while not self.frame_buffer:
+                if time.time() - t0 > timeout:
+                    self.__logger.warning(f"Timeout waiting for first frame ({timeout}s)")
                     empty_frame = np.zeros((self.SensorHeight, self.SensorWidth, 3 if self.isRGB else 1), dtype=np.uint8)
                     if returnFrameNumber:
                         return empty_frame, -1
                     return empty_frame
-            time.sleep(0.001)
+                time.sleep(0.001)
 
         # Get latest frame
         latest_frame = self.frame_buffer.pop()
@@ -962,7 +1010,6 @@ class CameraPicamera2:
             "frame_rate": self.set_frame_rate,
             "blacklevel": self.set_blacklevel,
             "exposure_mode": self.set_exposure_mode,
-            "flat_fielding": self.set_flatfielding,
             "awb_mode": self.set_white_balance_mode,
         }
 
@@ -1004,7 +1051,6 @@ class CameraPicamera2:
             "frame_rate": lambda: self.frame_rate,
             "blacklevel": lambda: 0,
             "exposure_mode": lambda: "auto" if self.exposure_auto else "manual",
-            "flat_fielding": lambda: self.isFlatfielding,
             "frame_number": lambda: self.frameNumber,
             "awb_mode": lambda: self.awb_mode,
             "red_gain": lambda: self.colour_gains[0],
@@ -1029,40 +1075,6 @@ class CameraPicamera2:
     def openPropertiesGUI(self):
         """Open properties GUI (not implemented)"""
         self.__logger.warning("Properties GUI not available")
-
-    def recordFlatfieldImage(self, nFrames: int = 10, nGauss: int = 5, nMedian: int = 5):
-        """Record flatfield image by averaging multiple frames"""
-        if not self.is_streaming:
-            self.__logger.error("Camera must be streaming to record flatfield")
-            return
-
-        self.__logger.info(f"Recording flatfield image ({nFrames} frames)...")
-
-        frames = []
-        for i in range(nFrames):
-            frame = self.getLast(timeout=2.0)
-            if frame is not None:
-                frames.append(frame.astype(np.float32))
-            time.sleep(0.1)
-
-        if len(frames) < nFrames:
-            self.__logger.warning(f"Only captured {len(frames)}/{nFrames} frames")
-
-        # Average frames
-        flatfield = np.mean(frames, axis=0).astype(np.uint8)
-
-        # Apply smoothing if requested
-        if nGauss > 0:
-            from skimage.filters import gaussian
-            flatfield = gaussian(flatfield, sigma=nGauss, preserve_range=True).astype(np.uint8)
-
-        if nMedian > 0:
-            from skimage.filters import median
-            from skimage.morphology import disk
-            flatfield = median(flatfield, disk(nMedian)).astype(np.uint8)
-
-        self.setFlatfieldImage(flatfield, True)
-        self.__logger.info("Flatfield image recorded")
 
     def getFrameNumber(self):
         """Get current frame number"""
@@ -1097,9 +1109,6 @@ class MockCameraPicamera2:
         self.gain = kwargs.get('gain', 1.0)
         self.frame_rate = kwargs.get('frame_rate', 30)
         self.trigger_source = "Continuous"
-
-        self.flatfieldImage = None
-        self.isFlatfielding = False
 
         self._grab_thread = None
         self._stop_event = threading.Event()
@@ -1189,10 +1198,6 @@ class MockCameraPicamera2:
     def set_camera_mode(self, auto): pass
     def set_gain(self, g): self.gain = g
     def set_frame_rate(self, fr): self.frame_rate = fr
-    def set_flatfielding(self, enabled): self.isFlatfielding = enabled
-    def setFlatfieldImage(self, img, enabled=True):
-        self.flatfieldImage = img
-        self.isFlatfielding = enabled
     def set_blacklevel(self, level): pass
     def set_pixel_format(self, fmt): pass
     def setBinning(self, binning): pass
@@ -1202,7 +1207,6 @@ class MockCameraPicamera2:
     def getPropertyValue(self, name): return 0
     def send_trigger(self): return True
     def openPropertiesGUI(self): pass
-    def recordFlatfieldImage(self, *args, **kwargs): pass
     def getFrameNumber(self): return self.frameNumber
     def reconnectCamera(self): pass
     def set_white_balance_mode(self, mode): self.awb_mode = getattr(self, 'awb_mode', 'manual')

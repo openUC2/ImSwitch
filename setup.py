@@ -67,14 +67,14 @@ setup(
         "matplotlib == 3.9.2",
         "opencv-python",
         "dataclasses-json >= 0.5",
-        "aiortc >= 1.9.0",
+        "aiortc",
         "UC2-REST",
         "tk >= 0.1.0",
         "jupyter",
         "python-multipart >= 0.0.5",
         "piexif >= 1.1.3",
         "NanoImagingPack==2.1.4",
-        "imswitchclient>=0.1.2",
+        "imswitchclient>=0.1.7",
         "psygnal",
         "python-socketio[asyncio]==5.11.4",
         "jupyterlab==4.2.5",
@@ -83,26 +83,17 @@ setup(
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
         "mikro-next>=0.18.0",
-        "arkitekt-next[all]==0.35.0",
+        "arkitekt-next[all]>=0.39.5",
         "koil>=2.0.5",
         "msgpack>=1.0.4",
         "esptool", 
         "omero-py",
-        "uc2-rest>=0.2.0.33"
+        "uc2-rest>=0.2.0.33", 
+        "unitelabs-sila", 
+        "unitelabs-cdk"
         ],
 
      extras_require={ # we assume that this is installed in a conda environment or via apt-get
-        'PyQt5': [
-            "qtpy >= 1.9",
-            "PyQt5 >= 5.15.2",
-            "QDarkStyle >= 3",
-            "QScintilla >= 2.12",
-            "PyQtWebEngine >= 5.15.2",
-            "pyqtgraph >= 0.12.1",
-            "napari[pyqt5] == 0.6.4",
-            "lantzdev[qt] >= 0.5.2",
-            "qtpy >= 1.9"
-        ],
         'Lepmon': [
             "RPi.GPIO",
             "luma.oled",

@@ -21,59 +21,52 @@ def restartSoftware(module="imswitch", forceConfigFile=False):
     """Restarts the software."""
     config = get_config()
 
-    if config.is_headless:
-        # we read the args from the config and restart the software using the same arguments
-        # we need to add the module name to the arguments
+    # we read the args from the config and restart the software using the same arguments
+    # we need to add the module name to the arguments
 
-        """
-        in docker:
-        params+=" --http-port ${HTTP_PORT:-8001}"
-        params+=" --config-folder ${CONFIG_PATH:-None}"
-        params+=" --ext-data-folder ${DATA_PATH:-None}"
-        params+=" --scan-ext-data-folder $(SCAN_EXT_DATA_PATH:-false)"
-        python3 /tmp/ImSwitch/main.py $params
-        """
-        headless = config.is_headless
-        http_port = str(config.http_port)
-        config_folder = str(config.config_folder) if config.config_folder else "None"
-        config_file = str(config.default_config) if config.default_config else "None"
-        is_ssl = config.ssl
-        scan_ext_data_folder = config.scan_ext_data_folder
-        ext_data_folder = config.ext_data_folder
+    """
+    in docker:
+    params+=" --http-port ${HTTP_PORT:-8001}"
+    params+=" --config-folder ${CONFIG_PATH:-None}"
+    params+=" --ext-data-folder ${DATA_PATH:-None}"
+    params+=" --scan-ext-data-folder $(SCAN_EXT_DATA_PATH:-false)"
+    python3 /tmp/ImSwitch/main.py $params
+    """
+    http_port = str(config.http_port)
+    config_folder = str(config.config_folder) if config.config_folder else "None"
+    config_file = str(config.default_config) if config.default_config else "None"
+    is_ssl = config.ssl
+    scan_ext_data_folder = config.scan_ext_data_folder
+    ext_data_folder = config.ext_data_folder
 
-        # Erstellen der Argumentliste
-        args = [
-            sys.executable,
-            os.path.abspath(sys.argv[0]),
-            "--http-port",
-            http_port,
-        ]
+    # Erstellen der Argumentliste
+    args = [
+        sys.executable,
+        os.path.abspath(sys.argv[0]),
+        "--http-port",
+        http_port,
+    ]
 
-        if config_folder != "None":
-            args.extend(["--config-folder", config_folder])
+    if config_folder != "None":
+        args.extend(["--config-folder", config_folder])
 
-        if forceConfigFile and config_file != "None":
-            args.extend(["--config-file", config_file])
+    if forceConfigFile and config_file != "None":
+        args.extend(["--config-file", config_file])
 
-        if headless:
-            args.append("--headless")
+    if not is_ssl:
+        args.append("--no-ssl")
 
-        if not is_ssl:
-            args.append("--no-ssl")
+    if scan_ext_data_folder:
+        args.append("--scan-ext-data-folder")
 
-        if scan_ext_data_folder:
-            args.append("--scan-ext-data-folder")
+    if ext_data_folder:
+        args.extend(["--ext-data-folder", ext_data_folder])
 
-        if ext_data_folder:
-            args.extend(["--ext-data-folder", ext_data_folder])
+    if config.data_folder:
+        args.extend(["--ext-data-folder", config.data_folder])
 
-        if config.data_folder:
-            args.extend(["--ext-data-folder", config.data_folder])
-
-        # execute script with new arguments
-        os.execv(sys.executable, args)
-    else:
-        os.execv(sys.executable, ['"' + sys.executable + '"', "-m", module])
+    # execute script with new arguments
+    os.execv(sys.executable, args)
 
 
 class OSToolsError(Exception):

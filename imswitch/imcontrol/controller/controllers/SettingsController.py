@@ -3,7 +3,6 @@ from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import APIExport
 from imswitch.imcontrol.model import configfiletools
 from imswitch.imcontrol.view import guitools as guitools
@@ -46,39 +45,10 @@ class SettingsController(ImConWidgetController):
 
         self.roiAdded = False
 
-        if not IS_HEADLESS:
-            # Set up detectors
-            for dName, dManager in self._master.detectorsManager:
-                if not dManager.forAcquisition:
-                    continue
-
-                self._widget.addDetector(
-                    dName, dManager.model, dManager.parameters, dManager.actions,
-                    dManager.supportedBinnings, self._setupInfo.rois
-                )
-            self.initParameters()
         self._commChannel.sharedAttrs.sigAttributeSet.connect(self.attrChanged)
         self.detectorSwitched(self._master.detectorsManager.getCurrentDetectorName())
         self.updateSharedAttrs()
-        if IS_HEADLESS: return
-
-
-        execOnAll = self._master.detectorsManager.execOnAll
-        execOnAll(lambda c: (self.updateParamsFromDetector(detector=c)),
-                  condition=lambda c: c.forAcquisition)
-        execOnAll(lambda c: (self.adjustFrame(detector=c)),
-                  condition=lambda c: c.forAcquisition)
-        execOnAll(lambda c: (self.updateFrame(detector=c)),
-                  condition=lambda c: c.forAcquisition)
-        execOnAll(lambda c: (self.updateFrameActionButtons(detector=c)),
-                  condition=lambda c: c.forAcquisition)
-
-
-        # Connect SettingsWidget signals
-        self._widget.sigROIChanged.connect(self.ROIchanged)
-        self._widget.sigDetectorChanged.connect(self.detectorSwitchClicked)
-        self._widget.sigNextDetectorClicked.connect(self.detectorNextClicked)
-
+        
     def addROI(self):
         """ Adds the ROI to ImageWidget viewbox through the CommunicationChannel. """
         if not self.roiAdded:
@@ -325,7 +295,7 @@ class SettingsController(ImConWidgetController):
 
     def updateParamsFromDetector(self, *, detector):
         """ Update the parameter values from the detector. """
-        if IS_HEADLESS: return
+        return
         params = self.allParams[detector.name]
 
         # Detector parameters
@@ -406,7 +376,7 @@ class SettingsController(ImConWidgetController):
         """ Called when the user switches to another detector. """
         newDetectorShape = self._master.detectorsManager[newDetectorName].shape
         self._commChannel.sigAdjustFrame.emit(newDetectorShape)
-        if IS_HEADLESS: return
+        return
         self._widget.setDisplayedDetector(newDetectorName)
         self._widget.setImageFrameVisible(self._master.detectorsManager[newDetectorName].croppable)
 

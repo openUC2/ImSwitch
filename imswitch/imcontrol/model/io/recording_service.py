@@ -630,6 +630,7 @@ class RecordingService(SignalInterface):
         
         results = {}
         images = {}
+        # TODO: Check if the detector is running 
         
         # Capture images from all detectors
         for det_name in detector_names:

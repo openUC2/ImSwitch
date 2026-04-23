@@ -1,20 +1,18 @@
 if __name__ == '__main__':
     from imswitch.__main__ import main
     '''
-    To start imswitch in headless with a remote config file, you can add additional arguments:
-    main(is_headless=True, 
-         default_config="/Users/bene/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json", 
+    To start imswitch with a remote config file, you can add additional arguments:
+    main(default_config="/Users/bene/ImSwitchConfig/imcontrol_setups/example_virtual_microscope.json", 
          http_port=8001, ssl=True, data_folder="/Users/bene/Downloads", jupyter_port=8888)
-    - is_headless: True or False
     - default_config: path to the config file
     - http_port: port number
     - ssl: True or False
     - data_folder: path to the data folder
     - jupyter_port: Jupyter notebook port number (default: 8888)
     example:
-    main(is_headless=True, data_folder="/Users/bene/Downloads")
+    main(data_folder="/Users/bene/Downloads")
     
-    # Anythin firewall related
+    # Anything firewall related
     
      sudo firewall-cmd --add-port=8001/tcp --permanent
      sudo firewall-cmd --add-port=8001/up --permanent     
@@ -29,4 +27,4 @@ if __name__ == '__main__':
     '''
     # DON'T CHANGE THIS!!!!
     # This has to be maintained for DOCKER!
-    main(is_headless=True, ssl=0)
+    main(ssl=0)

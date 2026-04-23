@@ -30,7 +30,6 @@ from imswitch.imcontrol.model import (
     FOVLockManager,
     RotatorsManager,
     LEDsManager,
-    FlatfieldManager,
     FlowStopManager,
     WorkflowManager,
     TimelapseManager,
@@ -162,8 +161,6 @@ class MasterController:
             self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
         if "Lepmon" in self.__setupInfo.availableWidgets:
             self.LepmonManager = LepmonManager(self.__setupInfo.Lepmon)
-        if "FlatField" in self.__setupInfo.availableWidgets:
-            self.FlatfieldManager = FlatfieldManager(self.__setupInfo.Flatfield)
         if "PixelCalibration" in self.__setupInfo.availableWidgets:
             self.PixelCalibrationManager = PixelCalibrationManager(
                 self.__setupInfo.PixelCalibration

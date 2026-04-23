@@ -1,4 +1,3 @@
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.controller import MainController
 from .ImScrMainViewController import ImScrMainViewController
 from .basecontrollers import ImScrWidgetControllerFactory
@@ -19,11 +18,6 @@ class ImScrMainController(MainController):
         self.mainViewController = self.__factory.createController(
             ImScrMainViewController, self.__mainView
         )
-
-        # Connect signals from ModuleCommunicationChannel
-        if IS_HEADLESS:
-            return
-        self.__mainView.sigClosing.connect(self.closeEvent)
 
     def closeEvent(self):
         self.__factory.closeAllCreatedControllers()

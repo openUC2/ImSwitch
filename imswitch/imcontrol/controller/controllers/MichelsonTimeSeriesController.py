@@ -24,7 +24,6 @@ from collections import deque
 from imswitch.imcommon.model import initLogger, APIExport
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import LiveUpdatedController
-from imswitch import IS_HEADLESS
 
 
 @dataclass

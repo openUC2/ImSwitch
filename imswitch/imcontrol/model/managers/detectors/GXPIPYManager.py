@@ -118,11 +118,6 @@ class GXPIPYManager(DetectorManager):
         super().__init__(detectorInfo, name, fullShape=fullShape, supportedBinnings=[1],
                          model=model, parameters=parameters, actions=actions, croppable=True)
 
-
-    def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
-        """Set flatfield image for correction."""
-        self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)
-
     def _updatePropertiesFromCamera(self):
         self.setParameter('Real exposure time', self._camera.getPropertyValue('exposure_time')[0])
         self.setParameter('Internal frame interval',
@@ -338,11 +333,6 @@ class GXPIPYManager(DetectorManager):
     def closeEvent(self):
         self._camera.close()
 
-    def recordFlatfieldImage(self):
-        '''
-        record n images and average them before subtracting from the latest frame
-        '''
-        self._camera.recordFlatfieldImage()
 
     def getCameraStatus(self):
         """ Returns comprehensive GXIPY camera status information. """

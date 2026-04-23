@@ -4,7 +4,6 @@ from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import initLogger
 from imswitch.imcontrol.controller.basecontrollers import LiveUpdatedController
 
-from imswitch import IS_HEADLESS
 
 
 from typing import Tuple, Optional
@@ -274,9 +273,6 @@ class ObjectiveController(LiveUpdatedController):
             self._updatePixelSize()
 
             # Update UI if not headless
-            if not IS_HEADLESS:
-                self._widget.setCurrentObjectiveInfo(self._currentObjective)
-
     @APIExport(runOnUIThread=True)
     def getCurrentObjective(self):
         """

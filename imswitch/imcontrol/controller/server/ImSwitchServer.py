@@ -37,11 +37,6 @@ from fastapi.staticfiles import StaticFiles
 # Import Socket.IO app from noqt framework
 from imswitch.imcommon.framework.noqt import get_socket_app, set_shared_event_loop
 
-try:
-    pass
-#    from arkitekt_next import easy
-except ImportError:
-    print("Arkitekt not found")
 
 
 PORT = __httpport__
@@ -452,10 +447,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.get("/", include_in_schema=False)
 async def root_redirect(request: Request):
     root_path = request.scope.get("root_path")
-    # Comments in English: Redirect to the React app
     return RedirectResponse(url=root_path+"/ui/index.html")
-
-
 class ServerThread(threading.Thread):
     def __init__(self):
         super().__init__()

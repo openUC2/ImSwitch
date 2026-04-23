@@ -42,11 +42,6 @@ class ImageController(LiveUpdatedController):
         self._commChannel.sigMemorySnapAvailable.connect(self.memorySnapAvailable)
         self._commChannel.sigSetExposure.connect(lambda t: self.setExposure(t))
 
-
-    @APIExport(runOnUIThread=False)
-    def displayImageNapari(self, layerName, mImage, isRGB=False, scale=(1,1), isCurrentDetector=None): # TODO: Flag of RGB is not used!
-        self._commChannel.sigUpdateImage.emit(layerName, mImage, scale, isCurrentDetector)
-
     def autoLevels(self, detectorNames=None, im=None):
         """ Set histogram levels automatically with current detector image."""
         if detectorNames is None:

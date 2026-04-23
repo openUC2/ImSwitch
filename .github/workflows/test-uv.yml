@@ -50,44 +50,24 @@ jobs:
         with:
           version: "latest"
 
-      - name: Install test deps with uv
+      - name: Install project with uv sync
         run: |
-          # Prefer dev requirements if present
-          if [ -f requirements-dev.txt ]; then
-            uv pip install --system -r requirements-dev.txt
-          else
-            uv pip install --system pytest
-          fi
-          # Install additional test dependencies that might be needed
-          uv pip install --system pytest-xvfb
-        shell: bash
-
-      - name: Install project with uv (editable)
-        run: |
-          echo "Installing project with UV..."
-          uv pip install --system -e .
-          echo "Checking if psygnal is installed..."
-          uv pip list | grep psygnal || echo "psygnal not found"
-          echo "Uninstalling psygnal..."
-          uv pip uninstall psygnal || echo "psygnal uninstall failed (not installed)"
-          echo "Installing pinned psygnal..."
-          uv pip install "psygnal==0.11.1" --system
-          # psygnal 0.11+ may ship compiled modules that break subclassing in ImSwitch.
-          # Decompile explicitly to force pure-Python modules.
-          python -c "import psygnal.utils; psygnal.utils.decompile()"
-          echo "Verifying installation..."
-          python -c "import dataclasses_json; print('dataclasses_json imported successfully')" || echo "dataclasses_json import failed"
-          python -c "import psygnal; print('psygnal imported successfully')" || echo "psygnal import failed"
+          # Use the lockfile to install all deps deterministically — no resolver runs,
+          # no pip conflicts.  The 'dev' extra brings in pytest.
+          uv sync --frozen --extra dev
+          # psygnal binary wheels can break ImSwitch's SignalInterface subclassing;
+          # reinstall from source to get pure-Python modules.
+          uv pip install psygnal --no-binary :all:
         shell: bash
 
       - name: Verify installation
         run: |
-          echo "=== UV pip list ==="
+          echo "=== UV venv packages ==="
           uv pip list
           echo "=== Python package verification ==="
-          python -c "import imswitch; print(f'ImSwitch version: {imswitch.__version__}')"
+          uv run python -c "import imswitch; print(f'ImSwitch version: {imswitch.__version__}')"
           echo "=== Testing critical imports ==="
-          python -c "from imswitch.imcontrol.model import Options; print('Options import successful')" || echo "Options import failed"
+          uv run python -c "from imswitch.imcontrol.model import Options; print('Options import successful')" || echo "Options import failed"
         shell: bash
 
       - name: Wait for frontend to build
@@ -107,16 +87,14 @@ jobs:
 
       - name: Run Unit Tests
         run: |
-          # Run unit tests directly from source directory
-          # The -p no:arkitekt_next disables the arkitekt pytest plugin which requires arkitekt_server
-          # Note: pytest.ini already configures this, but we add it explicitly for clarity
+          # -p no:arkitekt_next disables the arkitekt pytest plugin (requires a live arkitekt server)
           if [ "$RUNNER_OS" == "Linux" ]; then
-            xvfb-run --server-args "-screen 0 1920x1080x24" python3 -m pytest \
+            xvfb-run --server-args "-screen 0 1920x1080x24" uv run python -m pytest \
               imswitch/imcontrol/_test/unit \
               -p no:arkitekt_next \
               -v --tb=short
           else
-            python3 -m pytest \
+            uv run python -m pytest \
               imswitch/imcontrol/_test/unit \
               -p no:arkitekt_next \
               -v --tb=short

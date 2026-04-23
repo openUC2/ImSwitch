@@ -22,7 +22,6 @@ except:
 from imswitch.imcommon.model import initLogger, APIExport
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from ..basecontrollers import LiveUpdatedController
-from imswitch import IS_HEADLESS
 
 
 # =========================
@@ -174,9 +173,6 @@ class InLineHoloController(LiveUpdatedController):
         self._commChannel.sigUpdateImage.connect(self.update)
 
         # Legacy GUI setup
-        if not IS_HEADLESS:
-            self._setup_legacy_gui()
-
         self._logger.info("InLineHoloController initialized successfully")
 
     def __del__(self):
@@ -895,17 +891,6 @@ class InLineHoloController(LiveUpdatedController):
         """Legacy: Change inline propagation distance"""
         dz = magnitude * 1e-3  # Convert to meters
         self.set_dz(dz)
-
-    def displayImage(self, im, name):
-        """Legacy: Display image in napari widget"""
-        if IS_HEADLESS:
-            return
-
-        if im.dtype == complex or np.iscomplexobj(im):
-            self._widget.setImage(np.abs(im), name + "_abs")
-            self._widget.setImage(np.angle(im), name + "_angle")
-        else:
-            self._widget.setImage(np.abs(im), name)
 
 
 

@@ -107,9 +107,6 @@ class DetectorManager(SignalInterface):
         self.__actions = actions if actions is not None else {}
         self.__croppable = croppable
 
-        self.__flatfieldImage = None
-        self.__isFlatfielding = False
-
         self._minValueFramePreview = -1
         self._maxValueFramePreview = -1
 
@@ -204,8 +201,6 @@ class DetectorManager(SignalInterface):
 
         self._binning = binning
 
-    def setFlatfieldImage(self, flatieldImage, setFlatfielding):
-        pass
 
     @property
     def name(self) -> str:
@@ -330,10 +325,6 @@ class DetectorManager(SignalInterface):
     def finalize(self) -> None:
         """ Close/cleanup detector. """
         pass
-
-    def recordFlatfieldImage(self, image: np.ndarray) -> np.ndarray:
-        """ Performs flatfield correction on the specified image. """
-        return image
 
     def getIsRGB(self):
         return self.isRGB

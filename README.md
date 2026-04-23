@@ -25,7 +25,7 @@ git clone https://github.com/openUC2/ImSwitch
 cd ImSwitch
 
 # Create a virtual environment and install ImSwitch with UV
-uv venv
+uv venv --system-site-packages
 uv sync
 
 # then start it in headless mode with the API server:

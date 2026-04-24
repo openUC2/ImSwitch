@@ -7,12 +7,20 @@ from mikro_next.api.schema import (
     create_stage,
     PartialAffineTransformationViewInput,
 )
+from arkitekt_next import model
 from typing import Generator
 import os
 import datetime
 import tifffile as tif
 import time
 import numpy as np
+
+
+@model
+class Position:
+    x: int
+    y: int
+    z: int
 
 # =========================
 # Controller
@@ -76,7 +84,7 @@ class ArkitektController(ImConWidgetController):
         
     
     @APIExport(runOnUIThread=False)
-    def getStagePosition(self, positionerName: str | None = None) -> dict:
+    def getStagePosition(self, positionerName: str | None = None) -> Position:
         """Get current stage position."""
         if positionerName is None:
             positionerNames = self._master.positionersManager.getAllDeviceNames()
@@ -86,7 +94,7 @@ class ArkitektController(ImConWidgetController):
             positionerName = positionerNames[0]
         mStage = self._master.positionersManager[positionerName]
         currentPositions = mStage.getPosition()
-        return currentPositions
+        return Poistion(x=currentPositions["x"], y=currentPositions["y", z=currentPositions["z"])
     
     @APIExport(runOnUIThread=False)
     def homeStageAxis(self, positionerName: str | None = None, axis: str = "X", is_blocking: bool = False):

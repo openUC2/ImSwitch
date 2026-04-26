@@ -11,7 +11,7 @@ from imswitch.config import get_config
 # python -m imswitch --http-port 8001 --config-folder /Users/bene --config-file None
 
 
-def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
+def main(default_config:str=None, http_port:int=None, ssl:bool=False, config_folder:str=None,
          data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None, jupyter_port:int=None,
          default_firmware_route:str="http://localhost/firmware"):
     '''

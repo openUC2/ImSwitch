@@ -24,31 +24,56 @@ class ExperimentNormalMode(ExperimentModeBase):
     """
 
     def execute_experiment(self,
-                         snake_tiles: List[List[Dict]],
-                         illumination_intensities: List[float],
-                         illumination_sources: List[str],
+                         snake_tiles: List[List[Dict]] = None,
+                         illumination_intensities: List[float] = None,
+                         illumination_sources: List[str] = None,
                          isRGB: bool = False,
                          shared_file_writers: Optional[List[OMEWriter]] = None,
                          omero_connection_params: Optional[OMEROConnectionParams] = None,
                          shared_omero_key: Optional[str] = None,
+                         ctx=None,
                          **kwargs) -> Dict[str, Any]:
         """
         Execute experiment in normal mode.
-        
+
+        Preferred call form (used by ``ExperimentController.startWellplateExperiment``)::
+
+            self.execute_experiment(ctx=execution_context,
+                                    shared_file_writers=...,
+                                    omero_connection_params=...,
+                                    shared_omero_key=...)
+
+        The historical kwargs-based form is still supported for any
+        external callers; when ``ctx`` is provided it is flattened to
+        kwargs via ``ExecutionContext.to_kwargs()``.
+
         Args:
-            snake_tiles: List of tiles containing scan points
-            illumination_intensities: List of illumination values
-            illumination_sources: List of illumination source names
-            isRGB: Whether images are RGB
+            ctx: Optional :class:`ExecutionContext` carrying snake tiles,
+                Z offsets, resolved illumination/exposure/gain lists,
+                output paths, the validated ``Experiment`` model, and the
+                current timepoint index.
+            snake_tiles, illumination_intensities, illumination_sources,
+            isRGB: legacy positional/kwarg fallback when ``ctx`` is None.
             shared_file_writers: Optional shared writers from previous timepoints (for timelapse).
-                               If provided, reuses these writers instead of creating new ones.
             omero_connection_params: Optional OMERO connection parameters for streaming upload.
-            shared_omero_key: Optional key for shared OMERO uploader (for timelapse).
-            **kwargs: Additional parameters including z_positions, exposures, gains, etc.
-            
+            shared_omero_key: Optional key for shared OMERO uploader.
+            **kwargs: Additional parameters (z_positions, exposures, gains, etc.).
+
         Returns:
             Dictionary with execution results including workflow steps and file writers
         """
+        # If a typed ExecutionContext was provided, flatten it onto kwargs
+        # so the existing body below stays unchanged.  Caller-supplied
+        # kwargs win over ctx values to keep the override path open.
+        if ctx is not None:
+            ctx_kwargs = ctx.to_kwargs()
+            snake_tiles = ctx_kwargs.pop("snake_tiles")
+            illumination_intensities = ctx_kwargs.pop("illumination_intensities")
+            illumination_sources = ctx_kwargs.pop("illumination_sources")
+            isRGB = ctx_kwargs.pop("isRGB", isRGB)
+            for _key, _val in ctx_kwargs.items():
+                kwargs.setdefault(_key, _val)
+
         self._logger.debug("Normal mode is enabled. Creating workflow steps for precise control.")
 
         # Extract parameters

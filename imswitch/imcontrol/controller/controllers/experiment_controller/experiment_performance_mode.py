@@ -50,22 +50,42 @@ class ExperimentPerformanceMode(ExperimentModeBase):
         self._stagescan_complete_event = threading.Event()
 
     def execute_experiment(self,
-                         snake_tiles: List[List[Dict]],
-                         illumination_intensities: List[float],
-                         experiment_params: Dict[str, Any],
+                         snake_tiles: List[List[Dict]] = None,
+                         illumination_intensities: List[float] = None,
+                         experiment_params: Dict[str, Any] = None,
+                         ctx=None,
                          **kwargs) -> Dict[str, Any]:
         """
         Execute experiment in performance mode.
 
+        Preferred call form (used by ``ExperimentController.startWellplateExperiment``)::
+
+            self.execute_experiment(ctx=execution_context)
+
+        The historical kwargs-based form is still supported.
+
         Args:
-            snake_tiles: List of tiles containing scan points
-            illumination_intensities: List of illumination values
-            experiment_params: Dictionary containing experiment parameters
+            ctx: Optional :class:`ExecutionContext` to derive
+                ``snake_tiles``, ``illumination_intensities`` and
+                ``experiment_params`` from.
+            snake_tiles: List of tiles containing scan points (legacy).
+            illumination_intensities: List of illumination values (legacy).
+            experiment_params: Dictionary containing experiment parameters (legacy).
             **kwargs: Additional parameters
 
         Returns:
             Dictionary with execution results
         """
+        if ctx is not None:
+            snake_tiles = ctx.snake_tiles if snake_tiles is None else snake_tiles
+            illumination_intensities = (
+                ctx.illumination_intensities
+                if illumination_intensities is None
+                else illumination_intensities
+            )
+            if experiment_params is None:
+                experiment_params = ctx.performance_experiment_params()
+
         self._logger.debug("Performance mode is enabled. Executing on hardware directly.")
         
         # Extract trigger mode from experiment parameters

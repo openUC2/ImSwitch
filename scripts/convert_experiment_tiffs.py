@@ -40,6 +40,10 @@ Usage examples:
 
     # Specify output directory
     python convert_experiment_tiffs.py /path/to/base_dir/tiles -o /path/to/output
+    
+    
+    python /Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/MicronController/ImSwitch/scripts/convert_experiment_tiffs.py /Users/bene/ImSwitchConfig/data/ExperimentController/20260426_144145/20260426_144145_experiment0_0_experiment_0_/tiles/ --mode ashlar \
+    --pixel-size 0.5 --maximum-shift 50 --align-channel 0
 """
 
 from __future__ import annotations
@@ -755,6 +759,98 @@ def build_best_focus_stitched(grid: ExperimentGrid, out_dir: str):
 
 
 # ---------------------------------------------------------------------------
+# Mode 7: Ashlar-based stitching with sub-pixel alignment
+# ---------------------------------------------------------------------------
+
+def build_ashlar_stitched(grid: ExperimentGrid, out_dir: str,
+                          pixel_size: float = 1.0,
+                          maximum_shift: float = 50.0,
+                          align_channel: int = 0):
+    """
+    Stitch tiles using ASHLAR (Alignment by Simultaneous Harmonization of
+    Layer/Adjacency Registration) for sub-pixel-accurate stitching.
+
+    For each timepoint, all channels are stitched together using ashlar's
+    EdgeAligner so inter-tile shifts are globally optimised.  The result is
+    written as a pyramidal OME-TIFF per timepoint.
+
+    Parameters
+    ----------
+    grid : ExperimentGrid
+        Parsed tile grid.
+    out_dir : str
+        Output directory.
+    pixel_size : float
+        Physical pixel size in microns (used for position conversion).
+    maximum_shift : float
+        Maximum allowed per-tile corrective shift in microns (ashlar -m).
+    align_channel : int
+        Channel index used for alignment (ashlar -c).
+    """
+    try:
+        from ashlarUC2.scripts.ashlar import process_images, build_imswitch_reader
+    except ImportError:
+        try:
+            from ashlar.scripts.ashlar import process_images, build_imswitch_reader
+        except ImportError:
+            print("  ERROR: ashlarUC2 (or ashlar) is not installed. "
+                  "Install with: pip install ashlarUC2")
+            return
+
+    print("\n=== Building ashlar-stitched OME-TIFFs ===")
+    os.makedirs(out_dir, exist_ok=True)
+
+    for tp in grid.timepoints:
+        # Collect all tile file paths for this timepoint (all channels)
+        tile_paths = []
+        for key, tile_list in grid.lookup.items():
+            key_tp = key[0]
+            if key_tp != tp:
+                continue
+            # Use MIP representative tile when Z-stack exists
+            best = sorted(tile_list, key=lambda t: t.z)[0] if tile_list else None
+            if best is not None:
+                tile_paths.append(best.filepath)
+
+        if not tile_paths:
+            continue
+
+        # Deduplicate (same file could appear for different z-slices)
+        tile_paths = sorted(set(tile_paths))
+
+        out_file = os.path.join(out_dir, f"ashlar_stitched_t{tp:04d}.ome.tif")
+        print(f"  Timepoint {tp}: {len(tile_paths)} tiles → {os.path.basename(out_file)}")
+
+        reader = build_imswitch_reader(tile_paths, pixel_size=pixel_size)
+
+        result = process_images(
+            filepaths=[reader],
+            output=out_file,
+            align_channel=align_channel,
+            flip_x=False,
+            flip_y=False,
+            flip_mosaic_x=False,
+            flip_mosaic_y=False,
+            output_channels=None,
+            maximum_shift=maximum_shift,
+            stitch_alpha=0.01,
+            maximum_error=None,
+            filter_sigma=0,
+            pyramid=out_file.endswith(".ome.tif"),
+            tile_size=1024,
+            ffp=None,
+            dfp=None,
+            barrel_correction=0,
+            plates=False,
+            quiet=False,
+        )
+        if result and result != 0:
+            print(f"  WARNING: ashlar returned non-zero status {result}")
+        else:
+            print(f"  Written: {out_file}")
+
+
+# ---------------------------------------------------------------------------
 # Fiji TileConfiguration.txt (for precise Grid/Collection stitching)
 # ---------------------------------------------------------------------------
 
@@ -805,7 +901,7 @@ def write_tile_configuration(grid: ExperimentGrid, out_dir: str):
 # CLI
 # ---------------------------------------------------------------------------
 
-ALL_MODES = ["composite", "stitch", "mip", "mip-composite", "focus", "tile-config"]
+ALL_MODES = ["composite", "stitch", "mip", "mip-composite", "focus", "tile-config", "ashlar"]
 
 '''
 Explanation of modes:
@@ -857,6 +953,27 @@ def main():
         help=("Path to the experiment protocol JSON file "
               "(auto-detected if omitted; contains iX/iY grid indices)"),
     )
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        default=1.0,
+        metavar="MICRONS",
+        help="Physical pixel size in microns (used by ashlar mode, default: 1.0)",
+    )
+    parser.add_argument(
+        "--maximum-shift",
+        type=float,
+        default=50.0,
+        metavar="MICRONS",
+        help="Maximum per-tile alignment shift in microns for ashlar (default: 50)",
+    )
+    parser.add_argument(
+        "--align-channel",
+        type=int,
+        default=0,
+        metavar="CHANNEL",
+        help="Channel index used for ashlar alignment (default: 0)",
+    )
     args = parser.parse_args()
 
     tiles_dir = os.path.abspath(args.tiles_dir)
@@ -906,6 +1023,15 @@ def main():
 
     if "tile-config" in modes:
         write_tile_configuration(grid, os.path.join(out_dir, "tile_config"))
+
+    if "ashlar" in modes:
+        build_ashlar_stitched(
+            grid,
+            os.path.join(out_dir, "ashlar"),
+            pixel_size=args.pixel_size,
+            maximum_shift=args.maximum_shift,
+            align_channel=args.align_channel,
+        )
 
     print(f"\nAll outputs written to: {out_dir}")
 

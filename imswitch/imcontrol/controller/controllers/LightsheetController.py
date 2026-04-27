@@ -5,7 +5,6 @@ import time
 import cv2
 import numpy as np
 import tifffile as tif
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
@@ -235,8 +234,7 @@ class LightsheetController(ImConWidgetController):
                 self._logger.error(f"Error closing tiff writer: {e}")
             self._tiffWriter = None
 
-        if IS_HEADLESS:
-            return
+        return
         self._widget.startButton.setEnabled(True)
         self._widget.stopButton.setEnabled(False)
         self._widget.illuminationSlider.setValue(0)

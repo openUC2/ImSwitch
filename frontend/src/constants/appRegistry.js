@@ -618,6 +618,19 @@ export const APP_REGISTRY = {
     pluginId: "CompositeComponent",
   },
 
+  shitScope: {
+    id: "shitScope",
+    name: "ShitScope",
+    description:
+      "Dedicated single-button paving scan application with fixed 50x30mm scan area, live view, stage homing, and overview canvas.",
+    category: APP_CATEGORIES.APPS,
+    icon: CropFreeIcon,
+    enabled: false,
+    essential: false,
+    keywords: ["shitscope", "scan", "paving", "single", "dedicated", "customer"],
+    pluginId: "ShitScope",
+  },
+
   socketView: {
     id: "socketView",
     name: "Socket View Controller",

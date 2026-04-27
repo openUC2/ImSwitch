@@ -13,7 +13,6 @@ from imswitch.imcommon.framework import Signal
 
 
 
-from imswitch import IS_HEADLESS
 
 
 try:
@@ -139,23 +138,6 @@ class SIMController(ImConWidgetController):
 
         self.initFastAPISIM(self._master.simManager.fastAPISIMParams)
 
-        if IS_HEADLESS:
-            return
-        self._widget.start_button.clicked.connect(self.startSIM)
-        self._widget.stop_button.clicked.connect(self.stopSIM)
-
-        #self._widget.is488LaserButton.clicked.connect(self.toggle488Laser)
-        #self._widget.is635LaserButton.clicked.connect(self.toggle635Laser)
-        self._widget.checkbox_record_raw.stateChanged.connect(self.toggleRecording)
-        self._widget.checkbox_record_reconstruction.stateChanged.connect(self.toggleRecordReconstruction)
-        #self._widget.sigPatternID.connect(self.patternIDChanged)
-        self._widget.number_dropdown.currentIndexChanged.connect(self.patternIDChanged)
-        #self._widget.checkbox_reconstruction.stateChanged.connect(self.toggleRecording)
-        # read parameters from the widget
-        self._widget.start_timelapse_button.clicked.connect(self.startTimelapse)
-        self._widget.start_zstack_button.clicked.connect(self.startZstack)
-        self._widget.openFolderButton.clicked.connect(self.openFolder)
-        self.folder = self._widget.getRecFolder()
 
     def toggleRecording(self):
         self.isRecording = not self.isRecording

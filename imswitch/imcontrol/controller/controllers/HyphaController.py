@@ -2,7 +2,6 @@ from imswitch.imcontrol.controller.controllers.hypha.hypha_storage import HyphaD
 from imswitch.imcontrol.controller.controllers.hypha.hypha_executor import execute_code
 from imswitch.imcontrol.controller.basecontrollers import LiveUpdatedController
 from imswitch.imcommon.model import initLogger
-from imswitch import IS_HEADLESS
 try:
     isNIP = True
 except:
@@ -100,17 +99,10 @@ class MyMicroscope(object):
         except Exception as e:
             return e
 
-if IS_HEADLESS:
-    QThread = object
-    pyqtSignal = None
-else:
-    from PyQt5.QtCore import QThread, pyqtSignal
-
+QThread = object
+pyqtSignal = None
 class AsyncioThread(QThread):
     # We need this in order to get asynchronous behavior in the HyphaController for the GUI-case
-    if not IS_HEADLESS:
-        started = pyqtSignal()
-
     def __init__(self, loop):
         super().__init__()
         self.loop = loop
@@ -146,9 +138,6 @@ class HyphaController(LiveUpdatedController):
         self.datastore = HyphaDataStore()
 
         # connect signals
-        if not IS_HEADLESS:
-            self._widget.sigLoginHypha.connect(self._loginHypha)
-
         '''
         assign hardware functions
         '''

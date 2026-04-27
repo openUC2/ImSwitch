@@ -49,11 +49,12 @@ dependencies = [
     "matplotlib == 3.9.2",
     "opencv-python-headless",
     "aiortc >= 1.9.0",
-    "UC2-REST",
     "jupyter",
     "python-multipart >= 0.0.5",
     "piexif >= 1.1.3",
     "NanoImagingPack==2.1.4",
+    # Pin below 0.1.7: that PyPI release added imswitchuc2 as a dep, creating a
+    # circular dependency and an av==17 conflict with our aiortc-compatible av==13.
     "imswitchclient>=0.1.2",
     "psygnal",
     "python-socketio[asyncio]==5.11.4",
@@ -62,26 +63,19 @@ dependencies = [
     "zarr>=3.0.0a0",
     "numcodecs>=0.13.1",
     "aiohttp>=3.9.4",
-    "arkitekt-next[all]==0.30.1",
+    "arkitekt-next[all]==0.40.3",
     "koil>=2.0.5",
     "msgpack>=1.0.4",
     "esptool",
     "av==13.1.0",
-    "uc2-rest>=0.2.0.33"
+    "uc2-rest>=0.2.0.33",
+    "unitelabs-sila",
+    "unitelabs-cdk",
+    "opencv-python>=4.13.0.92",
+    "mikro-next>=1",
 ]
 
 [project.optional-dependencies]
-PyQt5 = [
-    "qtpy >= 1.9",
-    "PyQt5 >= 5.15.2",
-    "QDarkStyle >= 3",
-    "QScintilla >= 2.12",
-    "PyQtWebEngine >= 5.15.2",
-    "pyqtgraph >= 0.12.1",
-    "napari[pyqt5] >= 0.6.0",
-    "lantzdev[qt] >= 0.5.2",
-    "qtpy >= 1.9",
-]
 Microeye = [
     "numba>=0.61.2",
 ]

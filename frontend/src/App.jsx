@@ -42,6 +42,7 @@ import DemoController from "./components/DemoController.js";
 import AcceptanceTestComponent from "./components/AcceptanceTestComponent.jsx";
 import StageCenterCalibrationWizard from "./components/StageCenterCalibrationWizard.js";
 import GalvoScannerController from "./components/GalvoScannerController.jsx";
+import ShitScopeComponent from "./components/ShitScopeComponent.js";
 
 // ImSwitch Navigation Drawer
 import { NavigationDrawer, TopBar } from "./components/navigation";
@@ -449,6 +450,11 @@ function App() {
           {selectedPlugin === "WellPlate" && <AxonTabComponent />}
           {selectedPlugin === "GalvoScannerController" && (
             <GalvoScannerController />
+          )}
+          {selectedPlugin === "ShitScope" && (
+            <ShitScopeComponent
+              onOpenFileManager={handleFileManagerInitialPathChange}
+            />
           )}
           {selectedPlugin === "ImJoy" && (
             <ImJoyView sharedImage={sharedImage} />

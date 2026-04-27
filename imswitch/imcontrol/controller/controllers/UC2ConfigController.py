@@ -1,6 +1,5 @@
 import os
 import threading
-from imswitch import IS_HEADLESS
 import datetime
 from imswitch.imcommon.model import APIExport, initLogger, dirtools, ostools
 from imswitch.imcommon.framework import Signal
@@ -91,21 +90,6 @@ class UC2ConfigController(ImConWidgetController):
                 self._logger.error(f"Could not register serial callbacks: {e}")
 
 
-        # Connect buttons to the logic handlers
-        if IS_HEADLESS:
-            return
-        # Connect buttons to the logic handlers
-        self._widget.setPositionXBtn.clicked.connect(self.set_positionX)
-        self._widget.setPositionYBtn.clicked.connect(self.set_positionY)
-        self._widget.setPositionZBtn.clicked.connect(self.set_positionZ)
-        self._widget.setPositionABtn.clicked.connect(self.set_positionA)
-
-        self._widget.autoEnableBtn.clicked.connect(self.set_auto_enable)
-        self._widget.unsetAutoEnableBtn.clicked.connect(self.unset_auto_enable)
-        self._widget.reconnectButton.clicked.connect(self.reconnect)
-        self._widget.closeConnectionButton.clicked.connect(self.closeConnection)
-        self._widget.btpairingButton.clicked.connect(self.btpairing)
-        self._widget.stopCommunicationButton.clicked.connect(self.interruptSerialCommunication)
 
     def _get_can_id_firmware_mapping(self):
         """
@@ -592,13 +576,11 @@ class UC2ConfigController(ImConWidgetController):
 
         # retrieve the positions from the motor controller
         positions = self.stages.getPosition()
-        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Motor positions: A="+str(positions["A"])+", X="+str(positions["X"])+", \n Y="+str(positions["Y"])+", Z="+str(positions["Z"]))
         # update the GUI
         self._commChannel.sigUpdateMotorPosition.emit()
 
     def interruptSerialCommunication(self):
         self._master.UC2ConfigManager.interruptSerialCommunication()
-        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("We are intrrupting the last command")
 
     def set_auto_enable(self):
         # Add your logic to auto-enable the motors here.
@@ -609,33 +591,13 @@ class UC2ConfigController(ImConWidgetController):
         # Add your logic to unset auto-enable for the motors here.
         self.stages.enalbeMotors(enable=True, enableauto=False)
 
-    def set_positionX(self):
-        if not IS_HEADLESS: x = self._widget.motorXEdit.text()
-        self.set_motor_positions(None, x, None, None)
-
-    def set_positionY(self):
-        if not IS_HEADLESS: y = self._widget.motorYEdit.text()
-        self.set_motor_positions(None, None, y, None)
-
-    def set_positionZ(self):
-        if not IS_HEADLESS: z = self._widget.motorZEdit.text()
-        self.set_motor_positions(None, None, None, z)
-
-    def set_positionA(self):
-        if not IS_HEADLESS: a = self._widget.motorAEdit.text()
-        self.set_motor_positions(a, None, None, None)
-
     def reconnectThread(self, baudrate=None):
         self._master.UC2ConfigManager.initSerial(baudrate=baudrate)
-        if not IS_HEADLESS:
-            self._widget.reconnectDeviceLabel.setText("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
-        else:
-            self.__logger.debug("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
-            self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
+        self.__logger.debug("We are connected: "+str(self._master.UC2ConfigManager.isConnected()))
+        self.sigUC2SerialIsConnected.emit(self._master.UC2ConfigManager.isConnected())
 
     def closeConnection(self):
         self._master.UC2ConfigManager.closeSerial()
-        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Connection to ESP32 closed.")
 
     @APIExport(runOnUIThread=True)
     def moveToSampleMountingPosition(self):
@@ -670,10 +632,6 @@ class UC2ConfigController(ImConWidgetController):
     def reconnect(self):
         self._logger.debug('Reconnecting to ESP32 device.')
         baudrate = None
-        if not IS_HEADLESS:
-            self._widget.reconnectDeviceLabel.setText("Reconnecting to ESP32 device.")
-            if self._widget.getBaudRateGui() in (115200, 500000):
-                baudrate = self._widget.getBaudRateGui()
         mThread = threading.Thread(target=self.reconnectThread, args=(baudrate,))
         mThread.start()
 
@@ -691,7 +649,6 @@ class UC2ConfigController(ImConWidgetController):
         mThread = threading.Thread(target=self._master.UC2ConfigManager.pairBT)
         mThread.start()
         mThread.join()
-        if not IS_HEADLESS: self._widget.reconnectDeviceLabel.setText("Bring the PS controller into pairing mode")
 
     @APIExport(runOnUIThread=True)
     def restartCANDevice(self, device_id=0):

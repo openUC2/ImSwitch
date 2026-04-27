@@ -3,20 +3,13 @@ colour-science >= 0.3
 dataclasses-json >= 0.5
 h5py >= 3
 pyvisa-py==0.4.1
-lantzdev[qt] >= 0.5.2
 luddite >= 1
-napari[pyqt5] < 0.5.0
 nidaqmx >= 0.5.7
 numpy == 1.23.5
 packaging >= 19
 psutil >= 5.4.8
-PyQt5 >= 5.15.2
-pyqtgraph == 0.13.3
 microscope
 pyserial >= 3.4
-QDarkStyle >= 3
-QScintilla >= 2.12
-qtpy >= 1.9
 requests >= 2.25
 scikit-image >= 0.19.2
 Send2Trash >= 1.8

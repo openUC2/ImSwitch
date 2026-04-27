@@ -227,8 +227,9 @@ class DemoController(ImConWidgetController):
         """Get current stage position"""
         try:
             if self.stages:
-                pos_x = self.stages.position.get("X", 0.0)
-                pos_y = self.stages.position.get("Y", 0.0)
+                current_position = self.mStage.getPosition()
+                pos_x = current_position.get("X", 0)
+                pos_y = current_position.get("Y", 0)
                 return [pos_x, pos_y]
             else:
                 self._logger.warning("No stages available, using default position")

@@ -41,8 +41,6 @@ class CameraGXIPY:
         self.NBuffer = 3  # Match HIK camera buffer size
         self.frame_buffer = collections.deque(maxlen=self.NBuffer)
         self.frameid_buffer = collections.deque(maxlen=self.NBuffer)
-        self.flatfieldImage = None
-        self.isFlatfielding = False
         self.lastFrameFromBuffer = None
         self.lastFrameId = -1
         self.frameNumber = -1
@@ -203,11 +201,6 @@ class CameraGXIPY:
         except Exception as e:
             self.__logger.warning(f"Failed to close device: {e}")
 
-    def set_flatfielding(self, is_flatfielding):
-        self.isFlatfielding = is_flatfielding
-        # record the flatfield image if needed
-        if self.isFlatfielding:
-            self.recordFlatfieldImage()
 
     def set_exposure_time(self, exposure_time):
         """Set exposure time in milliseconds ."""
@@ -362,12 +355,6 @@ class CameraGXIPY:
         latest_frame = self.frame_buffer[-1]
         latest_frame_id = self.frameid_buffer[-1]
 
-        # Apply flatfielding if enabled
-        if self.isFlatfielding and self.flatfieldImage is not None:
-            try:
-                latest_frame = latest_frame / self.flatfieldImage
-            except Exception as e:
-                self.__logger.warning(f"Flatfielding failed: {e}")
 
         # Store as last frame from buffer for fallback scenarios
         self.lastFrameFromBuffer = latest_frame
@@ -463,8 +450,6 @@ class CameraGXIPY:
             self.set_exposure_mode(property_value)
         elif property_name == "blacklevel":
             self.set_blacklevel(property_value)
-        elif property_name == "flat_fielding":
-            self.set_flatfielding(property_value)
         elif property_name == "roi_size":
             self.roi_size = property_value
         elif property_name == "frame_rate":
@@ -738,21 +723,6 @@ class CameraGXIPY:
         except Exception as e:
             self.__logger.error(f"Error processing frame: {e}")
             return
-
-    def recordFlatfieldImage(self, nFrames=10, nGauss=5, nMedian=5):
-        # record a flatfield image and save it in the flatfield variable
-        flatfield = []
-        for iFrame in range(nFrames):
-            flatfield.append(self.getLast())
-        flatfield = np.mean(np.array(flatfield),0)
-        # normalize and smooth using scikit image
-        flatfield = gaussian(flatfield, sigma=nGauss)
-        flatfield = median(flatfield, selem=np.ones((nMedian, nMedian)))
-        self.flatfieldImage = flatfield
-
-    def setFlatfieldImage(self, flatfieldImage, isFlatfieldEnabeled=True):
-        self.flatfieldImage = flatfieldImage
-        self.isFlatfielding = isFlatfieldEnabeled
 
     # ── Context manager support  ──────────────────
     def __enter__(self):

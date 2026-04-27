@@ -2,8 +2,8 @@ from datetime import datetime
 import time
 from fastapi import HTTPException
 import numpy as np
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any
+
 import os
 import threading
 
@@ -30,282 +30,30 @@ from imswitch.imcontrol.model.io import OMEWriter, OMEWriterConfig, OMEFileStore
 from imswitch.imcontrol.controller.controllers.experiment_controller import (
     ExperimentPerformanceMode,
     ExperimentNormalMode,
+    ExecutionContext,
+    # Pydantic data models (single source of truth lives in
+    # ``experiment_controller/models.py``).  Re-imported here so external
+    # callers can keep doing
+    # ``from ...ExperimentController import Experiment`` etc.
+    CenterPosition,
+    Experiment,
+    ExperimentWorkflowParams,
+    FocusMapConfig,
+    FocusMapFromPointsRequest,
+    MDAChannelConfig,
+    MDASequenceInfo,
+    MDASequenceRequest,
+    NeighborPoint,
+    ParameterValue,
+    Point,
+    ScanArea,
+    ScanBounds,
+    ScanMetadata,
+    ScanPosition,
+    StartExperimentResponse,
 )
 from imswitch.imcontrol.model.focus_map import FocusMap, FocusMapManager, FocusMapResult
 from imswitch.imcontrol.model.overview_registration import OverviewRegistrationService, PixelPoint, StagePoint, SlotDefinition
-
-
-from pydantic import Field
-
-# -----------------------------------------------------------
-# Reuse the existing sub-models:
-# -----------------------------------------------------------
-
-
-class FocusMapFromPointsRequest(BaseModel):
-    """Request body for computeFocusMapFromPoints endpoint."""
-    points: List[Dict[str, float]]
-    group_id: str = "manual"
-    group_name: str = "Manual Points"
-    method: str = "rbf"
-    smoothing_factor: float = 0.1
-    z_offset: float = 0.0
-    clamp_enabled: bool = False
-    z_min: float = 0.0
-    z_max: float = 0.0
-
-
-class NeighborPoint(BaseModel):
-    x: float
-    y: float
-    z: Optional[float] = None
-    iX: int
-    iY: int
-
-class Point(BaseModel):
-    id: Optional[str] = None  # Allow string IDs from frontend
-    name: str
-    x: float
-    y: float
-    z: Optional[float] = None  # Per-point Z origin for Z-stacking/autofocus
-    iX: int = 0
-    iY: int = 0
-    neighborPointList: List[NeighborPoint] = Field(default_factory=list)
-    wellId: Optional[str] = None  # NEW: Well association
-    areaType: Optional[str] = None  # NEW: Area type (well, free_scan, etc.)
-
-# NEW: Models for pre-calculated scan coordinates
-class ScanPosition(BaseModel):
-    """Single position in a scan area"""
-    index: int
-    x: float
-    y: float
-    z: Optional[float] = None  # Per-position Z origin
-    iX: int
-    iY: int
-
-class ScanBounds(BaseModel):
-    """Bounding box for a scan area"""
-    minX: float
-    maxX: float
-    minY: float
-    maxY: float
-    width: float
-    height: float
-
-class CenterPosition(BaseModel):
-    """Center position of a scan area"""
-    x: float
-    y: float
-    z: Optional[float] = None
-
-class ScanArea(BaseModel):
-    """Pre-calculated scan area with ordered positions"""
-    areaId: str
-    areaName: str
-    areaType: str = "free_scan"  # well, free_scan, etc.
-    wellId: Optional[str] = None
-    centerPosition: CenterPosition
-    bounds: ScanBounds
-    scanPattern: str = "raster"  # snake or raster (calculated in frontend, positions already ordered)
-    positions: List[ScanPosition]
-
-class ScanMetadata(BaseModel):
-    """Metadata for the entire scan"""
-    totalPositions: int
-    fovX: float
-    fovY: float
-    overlapWidth: float = 0.0  # Used by frontend for coordinate calculation
-    overlapHeight: float = 0.0  # Used by frontend for coordinate calculation
-    scanPattern: str = "raster"  # Positions are already ordered per this pattern from frontend
-
-class ParameterValue(BaseModel):
-    illumination: Union[List[str], str] = None # X, Y, nX, nY
-    illuIntensities: Union[List[Optional[int]], Optional[int]] = None
-    brightfield: bool = 0,
-    darkfield: bool = 0,
-    differentialPhaseContrast: bool = 0,
-    timeLapsePeriod: float
-    numberOfImages: int
-    autoFocus: bool
-    autoFocusMin: float
-    autoFocusMax: float
-    autoFocusStepSize: float
-    autoFocusIlluminationChannel: str = "" # Selected illumination channel for autofocus
-    autoFocusMode: str = "software" # "software" (Z-sweep) or "hardware" (one-shot using FocusLock)
-    autoFocusSoftwareMethod: str = "scan" # "scan" (Z-sweep) or "hillClimbing" (gradient ascent)
-    autoFocusHillClimbingInitialStep: float = 20.0
-    autoFocusHillClimbingMinStep: float = 1.0
-    autoFocusHillClimbingStepReduction: float = 0.5
-    autoFocusHillClimbingMaxIterations: int = 50
-    autofocus_target_focus_setpoint: float = None
-    autofocus_max_attempts: int = 2
-    zStack: bool
-    zStackMin: float
-    zStackMax: float
-    zStackStepSize: Union[List[float], float] = 1.
-    exposureTimes: Union[List[float], float] = None
-    gains: Union[List[float], float] = None
-    speed: float = 20000.0
-    performanceMode: bool = False
-    # Performance mode advanced settings
-    performanceTriggerMode: str = Field("hardware", description="Trigger mode: 'hardware' (external TTL) or 'software' (callback-based)")
-    performanceTPreMs: float = Field(90.0, description="Pre-exposure settle time in milliseconds")
-    performanceTPostMs: float = Field(50.0, description="Post-exposure/acquisition time in milliseconds")
-    ome_write_tiff: bool = Field(False, description="Whether to write OME-TIFF files")
-    ome_write_zarr: bool = Field(True, description="Whether to write OME-Zarr files")
-    ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
-    ome_write_individual_tiffs: bool = Field(False, description="Whether to write individual TIFF files per frame")
-    keepIlluminationOn: str = Field("auto", description="Illumination mode: 'auto' (single channel stays on), 'on' (always on), 'off' (per-frame toggle)")
-
-class FocusMapConfig(BaseModel):
-    """Configuration for optional focus mapping (Z surface estimation over XY)."""
-    enabled: bool = Field(False, description="Enable focus mapping before acquisition")
-
-    # Grid generation
-    rows: int = Field(3, description="Number of grid rows for focus measurement")
-    cols: int = Field(3, description="Number of grid columns for focus measurement")
-    add_margin: bool = Field(False, description="Shrink grid inward to avoid edge effects")
-
-    # Fit strategy
-    fit_by_region: bool = Field(True, description="Fit per well / scan region (True) or global (False)")
-    use_manual_map: bool = Field(False, description="Reuse a pre-existing manual/global map for all groups via interpolation instead of measuring per group")
-    method: str = Field("spline", description="Fit method: spline, rbf, or constant")
-    smoothing_factor: float = Field(0.1, description="Smoothing factor for surface fit")
-
-    # Runtime behavior
-    apply_during_scan: bool = Field(True, description="Move Z per XY using focus map during acquisition")
-    z_offset: float = Field(0.0, description="Global Z offset applied to interpolated values")
-    clamp_enabled: bool = Field(False, description="Clamp interpolated Z to min/max range")
-    z_min: float = Field(0.0, description="Minimum allowed Z value when clamping")
-    z_max: float = Field(0.0, description="Maximum allowed Z value when clamping")
-
-    # Autofocus integration
-    autofocus_profile: Optional[str] = Field(None, description="Reference to AF controller preset")
-    settle_ms: int = Field(0, description="Extra settle time in ms after Z move")
-    store_debug_artifacts: bool = Field(True, description="Store focus points + fit stats as JSON")
-    channel_offsets: Optional[Dict[str, float]] = Field(default=None, description="Per-illumination-channel Z offset (µm)")
-
-    # Autofocus parameters – passed through to doAutofocusBackground
-    af_range: float = Field(100.0, description="Autofocus Z range (±µm from current Z)")
-    af_resolution: float = Field(10.0, description="Autofocus step size (µm)")
-    af_cropsize: int = Field(2048, description="Crop size for focus quality algorithm")
-    af_algorithm: str = Field("LAPE", description="Focus quality algorithm: LAPE, GLVA, JPEG")
-    af_settle_time: float = Field(0.1, description="Settle time (s) after each Z step")
-    af_static_offset: float = Field(0.0, description="Static Z offset applied after autofocus (µm)")
-    af_two_stage: bool = Field(False, description="Use two-stage autofocus (coarse + fine)")
-    af_n_gauss: int = Field(0, description="Gaussian kernel size for focus algorithm")
-    af_illumination_channel: str = Field("", description="Illumination channel for autofocus")
-    af_mode: str = Field("software", description="Autofocus mode: software (Z-sweep) or hardware (FocusLock)")
-    af_software_method: str = Field("scan", description="Software AF method: scan (Z-sweep) or hillClimbing")
-    af_hc_initial_step: float = Field(20.0, description="Hill climbing initial step size (µm)")
-    af_hc_min_step: float = Field(1.0, description="Hill climbing minimum step size (µm)")
-    af_hc_step_reduction: float = Field(0.5, description="Hill climbing step reduction factor")
-    af_hc_max_iterations: int = Field(50, description="Hill climbing max iterations")
-    af_max_attempts: int = Field(2, description="Max retry attempts for hardware autofocus")
-    af_target_setpoint: Optional[float] = Field(None, description="Target focus setpoint for hardware AF")
-
-    # Scan areas – passed from the frontend so that computeFocusMap knows the
-    # correct XY bounds even when no experiment has been started yet.
-    scan_areas: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="List of scan area dicts with areaId, areaName, bounds (minX/maxX/minY/maxY)"
-    )
-
-
-class Experiment(BaseModel):
-    # From your old "Experiment" BaseModel:
-    name: str
-    parameterValue: ParameterValue
-    pointList: List[Point] = Field(default_factory=list)
-
-    # NEW: Pre-calculated scan data from frontend
-    scanAreas: Optional[List[ScanArea]] = None
-    scanMetadata: Optional[ScanMetadata] = None
-
-    # Focus mapping configuration (disabled by default)
-    focusMap: Optional[FocusMapConfig] = Field(default=None, description="Optional focus mapping configuration")
-
-    # From your old "ExperimentModel":
-    timepoints: int = Field(1, description="Number of timepoints for time-lapse")
-
-    # -----------------------------------------------------------
-    # A helper to produce the "configuration" dict
-    # -----------------------------------------------------------
-    def to_configuration(self) -> dict:
-        """
-        Convert this Experiment into a dict structure that your Zarr writer or
-        scanning logic can easily consume.
-        """
-        config = {
-            "experiment": {
-                "MicroscopeState": {
-                    "timepoints": self.timepoints,
-                },
-                # TODO: Complete it again
-            },
-        }
-        return config
-
-
-# MDA-related models for useq-schema integration
-class MDAChannelConfig(BaseModel):
-    """Configuration for an MDA channel."""
-    name: str = Field(..., description="Channel name/identifier")
-    exposure: Optional[float] = Field(100.0, description="Exposure time in milliseconds")
-    power: Optional[float] = Field(100.0, description="Laser/illumination power")
-
-class MDASequenceRequest(BaseModel):
-    """Request to start an MDA experiment using useq-schema."""
-    channels: List[MDAChannelConfig] = Field(..., description="List of channel configurations")
-    z_range: Optional[float] = Field(None, description="Total Z range to scan (µm)")
-    z_step: Optional[float] = Field(None, description="Z step size (µm)")
-    time_points: int = Field(1, description="Number of time points")
-    time_interval: float = Field(1.0, description="Interval between time points (seconds)")
-    save_directory: Optional[str] = Field(None, description="Directory to save data")
-    experiment_name: str = Field("MDA_Experiment", description="Name of the experiment")
-
-class MDASequenceInfo(BaseModel):
-    """Information about an MDA sequence."""
-    total_events: int
-    channels: List[str]
-    z_positions: List[float]
-    time_points: List[int]
-    axis_order: tuple
-    estimated_duration_minutes: float
-
-class ExperimentWorkflowParams(BaseModel):
-    """Parameters for the experiment workflow."""
-
-    # Illumination parameters
-    illuSources: List[str] = Field(default_factory=list, description="List of illumination sources")
-    illuSourceMinIntensities: List[float] = Field(default_factory=list, description="Minimum intensities for each source")
-    illuSourceMaxIntensities: List[float] = Field(default_factory=list, description="Maximum intensities for each source")
-    illuIntensities: List[float] = Field(default_factory=list, description="Intensities for each source")
-
-    # Camera parameters
-    exposureTimes: List[float] = Field(default_factory=list, description="Exposure times for each source")
-    gains: List[float] = Field(default_factory=list, description="gains settings for each source")
-
-    # Feature toggles
-    isDPCpossible: bool = Field(False, description="Whether DPC is possible")
-    isDarkfieldpossible: bool = Field(False, description="Whether darkfield is possible")
-
-    # timelapse parameters
-    timeLapsePeriodMin: float = Field(0, description="Minimum time for a timelapse series")
-    timeLapsePeriodMax: float = Field(100000000, description="Maximum time for a timelapse series in seconds")
-    numberOfImagesMin: int = Field(0, description="Minimum time for a timelapse series")
-    numberOfImagesMax: int = Field(0, description="Minimum time for a timelapse series")
-    autofocusMinFocusPosition: float = Field(-10000, description="Minimum autofocus position")
-    autofocusMaxFocusPosition: float = Field(10000, description="Maximum autofocus position")
-    autofocusStepSizeMin: float = Field(1, description="Minimum autofocus position")
-    autofocusStepSizeMax: float = Field(1000, description="Maximum autofocus position")
-    zStackMinFocusPosition: float = Field(0, description="Minimum Z-stack position")
-    zStackMaxFocusPosition: float = Field(10000, description="Maximum Z-stack position")
-    zStackStepSizeMin: float = Field(1, description="Minimum Z-stack position")
-    zStackStepSizeMax: float = Field(1000, description="Maximum Z-stack position")
-    performanceMode: bool = Field(False, description="Whether to use performance mode for the experiment - this would be executing the scan on the Cpp hardware directly, not on the Python side.")
-
 
 
 class ExperimentController(ImConWidgetController):
@@ -347,7 +95,7 @@ class ExperimentController(ImConWidgetController):
         self.allPositionerNames = self._master.positionersManager.getAllDeviceNames()[0]
         try:
             self.mStage = self._master.positionersManager[self._master.positionersManager.getAllDeviceNames()[0]]
-        except:
+        except (KeyError, IndexError):
             self.mStage = None
 
         # stop if some external signal (e.g. memory full is triggered)
@@ -376,7 +124,7 @@ class ExperimentController(ImConWidgetController):
         save_dir = dirtools.UserFileDirs.getValidatedDataPath()
         self.save_dir  = os.path.join(save_dir, "ExperimentController")
         # ensure all subfolders are generated:
-        os.makedirs(self.save_dir) if not os.path.exists(self.save_dir) else None
+        os.makedirs(self.save_dir, exist_ok=True)
 
         # writer thread control -------------------------------------------------
         self._writer_thread   = None
@@ -744,7 +492,6 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="POST")
     def startWellplateExperiment(self, mExperiment: Experiment):
-        # Extract key parameters
         exp_name = mExperiment.name
         p = mExperiment.parameterValue
 
@@ -758,40 +505,38 @@ class ExperimentController(ImConWidgetController):
         zStackMax = p.zStackMax
         zStackStepSize = p.zStackStepSize
 
-        # Illumination-related
-        illuSources = p.illumination
-        illuminationIntensities = p.illuIntensities
-        if type(illuminationIntensities) is not List  and type(illuminationIntensities) is not list: illuminationIntensities = [p.illuIntensities]
-        if type(illuSources) is not List  and type(illuSources) is not list: illuSources = [p.illumination]
-        isDarkfield = p.darkfield # TODO: Needs to be implemented
+        # Illumination-related (validators on the model guarantee these are
+        # lists – or None for `illumination`/`illuIntensities` when not set).
+        illuSources = p.illumination or []
+        illuminationIntensities = p.illuIntensities or []
+        isDarkfield = p.darkfield  # TODO: Needs to be implemented
         isBrightfield = p.brightfield
         isDPC = p.differentialPhaseContrast
 
-        # check if any of the illumination sources is turned on, if not, return error
-        if not any(illuminationIntensities):
-            return HTTPException(status_code=400, detail="No illumination sources are turned on. Please set at least one illumination source intensity.")
+        # Detect passthrough mode: no illumination channels configured.
+        # In this mode we acquire frames without touching the current
+        # illumination, exposure, or gain settings on the device.
+        _passthrough_illumination = p.passthrough_illumination
+        if _passthrough_illumination:
+            self._logger.info(
+                "No illumination intensities set – entering passthrough mode: "
+                "current illumination/camera settings will not be changed."
+            )
 
-        # Resolve keepIlluminationOn mode:
-        #  "auto" → True when exactly 1 active channel, False otherwise
-        #  "on"   → True always
-        #  "off"  → False always
-        keepIlluminationOnSetting = getattr(p, 'keepIlluminationOn', 'auto')
-        nActiveChannels = sum(1 for v in illuminationIntensities if v > 0)
-        if keepIlluminationOnSetting == "auto":
-            keepIlluminationOn = (nActiveChannels == 1)
-        elif keepIlluminationOnSetting == "on":
-            keepIlluminationOn = True
-        else:
-            keepIlluminationOn = False
-        self._logger.info(f"Illumination mode: setting={keepIlluminationOnSetting}, activeChannels={nActiveChannels}, keepOn={keepIlluminationOn}")
+        # Resolve keepIlluminationOn (auto/on/off → bool) on the model.
+        keepIlluminationOn = p.resolve_keep_illumination_on()
+        self._logger.info(
+            f"Illumination mode: setting={p.keepIlluminationOn}, "
+            f"activeChannels={p.n_active_channels}, keepOn={keepIlluminationOn}"
+        )
 
         # check if we want to use performance mode
         self.ExperimentParams.performanceMode = p.performanceMode
         performanceMode = p.performanceMode
 
-        # camera-related
-        gains = p.gains
-        exposures = p.exposureTimes
+        # camera-related (validators ensure list shape)
+        gains = list(p.gains or [])
+        exposures = list(p.exposureTimes or [])
         if p.speed <= 0:
             self.SPEED_X = self.SPEED_X_default
             self.SPEED_Y = self.SPEED_Y_default
@@ -801,27 +546,29 @@ class ExperimentController(ImConWidgetController):
             self.SPEED_Y = p.speed
             self.SPEED_Z = p.speed
 
-        # Autofocus Related
-        isAutoFocus = p.autoFocus
-        autofocusMax = p.autoFocusMax
-        autofocusMin = p.autoFocusMin
-        autofocusStepSize = p.autoFocusStepSize
-        autofocusIlluminationChannel = getattr(p, 'autoFocusIlluminationChannel', "") or ""
-        autofocusMode = getattr(p, 'autoFocusMode', 'software')  # Default to software if not specified
-        autofocusSoftwareMethod = getattr(p, 'autoFocusSoftwareMethod', 'scan')
-        autofocusHCInitialStep = getattr(p, 'autoFocusHillClimbingInitialStep', 20.0)
-        autofocusHCMinStep = getattr(p, 'autoFocusHillClimbingMinStep', 1.0)
-        autofocusHCStepReduction = getattr(p, 'autoFocusHillClimbingStepReduction', 0.5)
-        autofocusHCMaxIterations = getattr(p, 'autoFocusHillClimbingMaxIterations', 50)
-        autofocus_target_focus_setpoint = getattr(p, 'autofocus_target_focus_setpoint', None)
-        autofocus_max_attempts = getattr(p, 'autofocus_max_attempts', 2)
+        # Autofocus and timepoint values are read from `p` (ParameterValue)
+        # directly via ExecutionContext.to_kwargs(); no local aliases needed.
 
-        # pre-check gains/exposures  if they are lists and have same lengths as illuminationsources
-        if type(gains) is not List and type(gains) is not list: gains = [gains]
-        if type(exposures) is not List and type(exposures) is not list: exposures = [exposures]
-        if len(gains) != len(illuSources): gains = [-1]*len(illuSources)
-        if len(exposures) != len(illuSources): exposures = [exposures[0]]*len(illuSources)
+        # Pad gains/exposures to match the number of illumination sources.
+        if len(gains) != len(illuSources):
+            gains = [-1] * len(illuSources)
+        if len(exposures) != len(illuSources):
+            first_exposure = exposures[0] if exposures else 0
+            exposures = [first_exposure] * len(illuSources)
 
+        # Passthrough-mode overrides: use a single sentinel channel so the
+        # acquisition loop runs exactly once per position without modifying
+        # illumination, exposure, or gain.
+        if _passthrough_illumination:
+            illuSources = [illuSources[0]] if illuSources else ["default"]
+            illuminationIntensities = [1]  # sentinel: passes >0 gate; never sent to device
+            gains = [-1]   # set_exposure_time_gain skips when gain < 0
+            exposures = [0]  # set_exposure_time_gain skips when exposure_time <= 0
+            keepIlluminationOn = True  # never send set_laser_power commands
+            self._logger.info(
+                f"Passthrough mode: using channel '{illuSources[0]}' as sentinel, "
+                "illumination/exposure/gain unchanged."
+            )
 
         # Check if another workflow is running
         if self.workflow_manager.get_status()["status"] in ["running", "paused"]:
@@ -887,19 +634,18 @@ class ExperimentController(ImConWidgetController):
         timeStamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         drivePath = dirtools.UserFileDirs.getValidatedDataPath()
         dirPath = os.path.join(drivePath, 'ExperimentController', timeStamp)
-        if not os.path.exists(dirPath):
-            os.makedirs(dirPath)
+        os.makedirs(dirPath, exist_ok=True)
         mFileName = f"{timeStamp}_{exp_name}"
 
         workflowSteps = []
         file_writers = []  # Initialize outside the loop for context storage
 
-        # OME writer-related
+        # OME writer-related (model defaults guarantee fields exist)
         self._ome_write_tiff = p.ome_write_tiff
         self._ome_write_zarr = p.ome_write_zarr
         self._ome_write_stitched_tiff = p.ome_write_stitched_tiff
-        self._ome_write_single_tiff = getattr(p, 'ome_write_single_tiff', False)  # Default to False if not specified
-        self._ome_write_individual_tiffs = getattr(p, 'ome_write_individual_tiffs', False)  # Default to False if not specified
+        self._ome_write_single_tiff = p.ome_write_single_tiff
+        self._ome_write_individual_tiffs = p.ome_write_individual_tiffs
 
         # determine if each sub scan in snake_tiles is a single tile or a multi-tile scan - if single image we should squah them in a single TIF (e.g. by appending )
         is_single_tile_scan = all(len(tile) == 1 for tile in snake_tiles)
@@ -912,17 +658,31 @@ class ExperimentController(ImConWidgetController):
 
         # Decide which execution mode to use
         if performanceMode and self.performance_mode.is_hardware_capable():
-            # Execute in performance mode
-            experiment_params = {
-                'mExperiment': mExperiment,
-                'tPeriod': tPeriod,
-                'nTimes': nTimes
+            # Get the initial Z position at the start of each timepoint
+            initial_z_position = self.mStage.getPosition()["Z"]
+            initial_position = self.mStage.getPosition()
+            self._initial_experiment_position = {
+                "X": initial_position.get("X", 0),
+                "Y": initial_position.get("Y", 0),
+                "Z": initial_z_position,
             }
-            result = self.performance_mode.execute_experiment(
+
+            ctx = ExecutionContext(
+                experiment=mExperiment,
                 snake_tiles=snake_tiles,
+                z_positions=z_positions,
+                illumination_sources=illuSources,
                 illumination_intensities=illuminationIntensities,
-                experiment_params=experiment_params
+                exposures=exposures,
+                gains=gains,
+                exp_name=exp_name,
+                dir_path=dirPath,
+                file_name=mFileName,
+                initial_xyz=self._initial_experiment_position,
+                keep_illumination_on=keepIlluminationOn,
+                is_rgb=self.isRGB,
             )
+            result = self.performance_mode.execute_experiment(ctx=ctx)
             return {"status": "running", "mode": "performance"}
         else:
             # Execute in normal mode using workflow
@@ -940,45 +700,26 @@ class ExperimentController(ImConWidgetController):
                 "Z": initial_z_position,
             }
 
-            for t in range(nTimes):
-                experiment_params = {
-                    'mExperiment': mExperiment,
-                    'tPeriod': tPeriod,
-                    'nTimes': nTimes
-                }
+            # Build the typed execution context once and re-use across timepoints.
+            ctx = ExecutionContext(
+                experiment=mExperiment,
+                snake_tiles=snake_tiles,
+                z_positions=z_positions,
+                illumination_sources=illuSources,
+                illumination_intensities=illuminationIntensities,
+                exposures=exposures,
+                gains=gains,
+                exp_name=exp_name,
+                dir_path=dirPath,
+                file_name=mFileName,
+                initial_xyz=self._initial_experiment_position,
+                keep_illumination_on=keepIlluminationOn,
+                is_rgb=self.isRGB,
+            )
 
-                result = self.normal_mode.execute_experiment(
-                    snake_tiles=snake_tiles,
-                    illumination_intensities=illuminationIntensities,
-                    illumination_sources=illuSources,
-                    z_positions=z_positions,
-                    initial_z_position=initial_z_position,
-                    exposures=exposures,
-                    gains=gains,
-                    exp_name=exp_name,
-                    dir_path=dirPath,
-                    m_file_name=mFileName,
-                    t=t,
-                    n_times=nTimes,  # Pass total number of time points
-                    is_auto_focus=isAutoFocus,
-                    autofocus_min=autofocusMin,
-                    autofocus_max=autofocusMax,
-                    autofocus_step_size=autofocusStepSize,
-                    autofocus_illumination_channel=autofocusIlluminationChannel,
-                    autofocus_mode=autofocusMode,  # Pass autofocus mode
-                    autofocus_software_method=autofocusSoftwareMethod,
-                    autofocus_hc_initial_step=autofocusHCInitialStep,
-                    autofocus_hc_min_step=autofocusHCMinStep,
-                    autofocus_hc_step_reduction=autofocusHCStepReduction,
-                    autofocus_hc_max_iterations=autofocusHCMaxIterations,
-                    autofocus_target_focus_setpoint=autofocus_target_focus_setpoint,
-                    autofocus_max_attempts=autofocus_max_attempts,
-                    t_period=tPeriod,
-                    isRGB=self.mDetector._isRGB,
-                    t_pre_s=p.performanceTPreMs / 1000.0,  # Convert ms to seconds
-                    t_post_s=p.performanceTPostMs / 1000.0,  # Convert ms to seconds
-                    keep_illumination_on=keepIlluminationOn,
-                )
+            for t in range(nTimes):
+                ctx.timepoint_index = t
+                result = self.normal_mode.execute_experiment(ctx=ctx)
 
                 # Append workflow steps and file writers to the accumulated lists
                 all_workflow_steps.extend(result["workflow_steps"])
@@ -1026,27 +767,34 @@ class ExperimentController(ImConWidgetController):
     ########################################
     # Hardware-related functions
     ########################################
-    def acquire_frame(self, channel: str, frameSync: int = 3):
+    def acquire_frame(self, channel: str, frameSync: int = 2):
         self._logger.debug(f"Acquiring frame on channel {channel}")
 
-        # ensure we get a fresh frame (frameSync=3 to account for exposure/gain register latency)
-        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        # Make timeout dependent on exposure time so long exposures don't
+        # prematurely abort.  The camera needs at least (frameSync+1) frame
+        # periods to deliver a fresh frame after an illumination / gain change.
+        try:
+            exposure_s = self.mDetector.getLatestFrame.__self__._camera.exposure_time / 1e6
+        except Exception:
+            exposure_s = 0.1
+        timeoutFrameRequest = max(1.0, (frameSync + 2) * exposure_s + 0.5)
         cTime = time.time()
 
-        lastFrameNumber=-1
-        while(1):
+        lastFrameNumber = -1
+        mFrame = None
+        while True:
             # get frame and frame number to get one that is newer than the one with illumination off eventually
             mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
-            if lastFrameNumber==-1:
+            if lastFrameNumber == -1:
                 # first round
                 lastFrameNumber = currentFrameNumber
-            if time.time()-cTime> timeoutFrameRequest:
+            if time.time() - cTime > timeoutFrameRequest:
                 # in case exposure time is too long we need break at one point
                 if mFrame is None:
                     mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
                 break
-            if currentFrameNumber <= lastFrameNumber+frameSync:
-                time.sleep(0.01) # off-load CPU
+            if currentFrameNumber <= lastFrameNumber + frameSync:
+                time.sleep(0.01)  # off-load CPU
             else:
                 break
         return mFrame
@@ -1469,6 +1217,12 @@ class ExperimentController(ImConWidgetController):
             self._logger.error(f"Error saving OME frame: {e}")
             metadata["frame_saved"] = False
 
+        # Release the frame reference now that it has been saved (or failed).
+        # Without this, the numpy array stays alive in the metadata dict which
+        # is stored in WorkflowContext.data for every step, causing unbounded
+        # RAM growth during long wellplate experiments.
+        metadata.pop("result", None)
+
         '''
         if tiff_writer is None:
             self._logger.debug("No TIFF writer found in context!")
@@ -1544,6 +1298,22 @@ class ExperimentController(ImConWidgetController):
         time.sleep(0.04)  # Short delay to ensure power is set before next acquisition # TODO: Necessary?
         return power
 
+
+    def home_axis(self, axis: str, isBlocking: bool = True):
+        if axis not in ["X", "Y", "Z"]:
+            self._logger.error(f"Invalid axis '{axis}' specified for movement")
+            return None
+        self._logger.debug(f"Moving axis {axis} to home position with blocking={isBlocking}")
+        self.mStage.doHome(axis=axis, isBlocking=isBlocking)
+
+    @APIExport(requestType="POST")
+    def homeAllAxes(self):
+        """Home all stage axes (X, Y, Z) sequentially. Blocks until complete."""
+        self._logger.info("Homing all axes before experiment...")
+        for axis in ["X", "Y", "Z"]:
+            self.home_axis(axis=axis, isBlocking=True)
+        self._logger.info("All axes homed successfully.")
+        return {"status": "ok", "message": "All axes homed"}
 
 
     def move_stage_xy(self, posX: float = None, posY: float = None, relative: bool = False):
@@ -2164,8 +1934,7 @@ class ExperimentController(ImConWidgetController):
                 drivePath = dirtools.UserFileDirs.Data
                 dirPath = os.path.join(drivePath, 'MDAExperiments', timeStamp)
 
-            if not os.path.exists(dirPath):
-                os.makedirs(dirPath)
+            os.makedirs(dirPath, exist_ok=True)
 
             # Create workflow progress handler
             def sendProgress(payload):
@@ -2299,8 +2068,9 @@ class ExperimentController(ImConWidgetController):
             drivePath = dirtools.UserFileDirs.Data
             dirPath = os.path.join(drivePath, 'NativeMDA', experiment_name, timeStamp)
 
-            if not os.path.exists(dirPath):
-                os.makedirs(dirPath)
+            created_new = not os.path.exists(dirPath)
+            os.makedirs(dirPath, exist_ok=True)
+            if created_new:
                 self._logger.info(f"Created output directory: {dirPath}")
 
             # Run the MDA sequence using the native engine

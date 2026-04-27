@@ -7,12 +7,20 @@ from mikro_next.api.schema import (
     create_stage,
     PartialAffineTransformationViewInput,
 )
+from arkitekt_next import model
 from typing import Generator
 import os
 import datetime
 import tifffile as tif
 import time
 import numpy as np
+
+
+@model
+class Position:
+    x: int
+    y: int
+    z: int
 
 # =========================
 # Controller
@@ -48,6 +56,12 @@ class ArkitektController(ImConWidgetController):
         self.arkitekt_app.register(self.moveToSampleLoadingPosition)
         self.arkitekt_app.register(self.runTileScan)
         self.arkitekt_app.register(self.goToPosition)
+        self.arkitekt_app.register(self.acquireFrame)
+        self.arkitekt_app.register(self.getStagePosition)
+        self.arkitekt_app.register(self.homeStageAxis)
+        self.arkitekt_app.register(self.setLaserState)
+        self.arkitekt_app.register(self.moveStage)
+        
         self.arkitekt_app.run_detached()
 
     def moveToSampleLoadingPosition(
@@ -67,6 +81,107 @@ class ArkitektController(ImConWidgetController):
         self._master.positionersManager[positionerName].moveToSampleLoadingPosition(
             speed=speed, is_blocking=is_blocking
         )
+        
+    
+    @APIExport(runOnUIThread=False)
+    def getStagePosition(self, positionerName: str | None = None) -> Position:
+        """Get current stage position."""
+        if positionerName is None:
+            positionerNames = self._master.positionersManager.getAllDeviceNames()
+            if len(positionerNames) == 0:
+                self._logger.warning("No positioners available to get stage position.")
+                return None
+            positionerName = positionerNames[0]
+        mStage = self._master.positionersManager[positionerName]
+        currentPositions = mStage.getPosition()
+        return Position(x=currentPositions["x"], y=currentPositions["y"], z=currentPositions["z"])
+    
+    @APIExport(runOnUIThread=False)
+    def homeStageAxis(self, positionerName: str | None = None, axis: str = "X", is_blocking: bool = False):
+        """Home stage axis."""
+        if positionerName is None:
+            positionerNames = self._master.positionersManager.getAllDeviceNames()
+            if len(positionerNames) == 0:
+                self._logger.warning("No positioners available to home stage axis.")
+                return None
+            positionerName = positionerNames[0]
+        mStage = self._master.positionersManager[positionerName]
+        if axis == "X":
+            mStage.home_x(is_blocking=is_blocking)
+        elif axis == "Y":
+            mStage.home_y(is_blocking=is_blocking)
+        elif axis == "Z":
+            mStage.home_z(is_blocking=is_blocking)
+
+        
+    @APIExport(runOnUIThread=False) 
+    def setLaserState(self, laserName: str, isActive: bool, value: float = 100):
+        """Set laser state."""
+        if laserName not in self._master.lasersManager.getAllDeviceNames():
+            self._logger.warning(f"Laser {laserName} not available to set state.")
+            return
+        mLaser = self._master.lasersManager[laserName]
+        mLaser.setEnabled(isActive)
+        mLaser.setValue(value)
+        
+    @APIExport(runOnUIThread=False)
+    def moveStage(self, positionerName: str | None = None, axis: str = "X", distance: float = 100, is_absolute: bool = True, is_blocking: bool = True, speed: float = 10000):
+        """Move stage."""
+        if positionerName is None:
+            positionerNames = self._master.positionersManager.getAllDeviceNames()
+            if len(positionerNames) == 0:
+                self._logger.warning("No positioners available to move stage.")
+                return None
+            positionerName = positionerNames[0]
+        mStage = self._master.positionersManager[positionerName]
+        mStage.move(value=distance, axis=axis, is_absolute=is_absolute, is_blocking=is_blocking, speed=speed)  
+    
+    
+    @APIExport(runOnUIThread=False)
+    def acquireFrame(self, frameSync: int = 3) -> Generator[Image, None, None]:
+        """Acquire a single frame from the detector.
+
+        Args:
+            frameSync (int): Number of frames to skip to ensure a fresh frame is acquired.
+                Default is 3.
+        Returns:
+            numpy.ndarray: Acquired image frame as a NumPy array.
+        """
+        # ensure we get a fresh frame
+        timeoutFrameRequest = 1 # seconds # TODO: Make dependent on exposure time
+        cTime = time.time()
+        lastFrameNumber=-1
+        while(1):
+            # get frame and frame number to get one that is newer than the one with illumination off eventually
+            mFrame, currentFrameNumber = self.mDetector.getLatestFrame(returnFrameNumber=True)
+            if lastFrameNumber==-1:
+                # first round
+                lastFrameNumber = currentFrameNumber
+            if time.time()-cTime> timeoutFrameRequest:
+                # in case exposure time is too long we need break at one point
+                if mFrame is None:
+                    mFrame = self.mDetector.getLatestFrame(returnFrameNumber=False)
+                break
+            if currentFrameNumber <= lastFrameNumber+frameSync:
+                time.sleep(0.01) # off-load CPU
+            else:
+                break
+        # in order to be compatible with the from_array_like function we need to ensure we have a channel axis
+        if len(mFrame.shape) == 2:
+            mFrame = np.expand_dims(mFrame, axis=-1)
+        # now convert it to arkitekt format 
+        image = from_array_like(
+            xr.DataArray(
+                mFrame,
+                dims=["y", "x", "c"],
+                attrs={
+                    "frame_number": currentFrameNumber,
+                }
+            ),
+            name=f"Frame_{currentFrameNumber}",
+        )
+        yield image
+
 
     @APIExport(runOnUIThread=False)
     def goToPosition(

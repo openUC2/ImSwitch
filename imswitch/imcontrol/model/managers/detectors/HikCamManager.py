@@ -138,9 +138,6 @@ class HikCamManager(DetectorManager):
             pass
         return 255  # 8-bit default
 
-    def setFlatfieldImage(self, flatfieldImage, isFlatfielding):
-        self._camera.setFlatfieldImage(flatfieldImage, isFlatfielding)
-
     def getLatestFrame(self, is_resize=True, returnFrameNumber=False):
         return self._camera.getLast(returnFrameNumber=returnFrameNumber)
 
@@ -304,12 +301,6 @@ class HikCamManager(DetectorManager):
 
     def closeEvent(self):
         self._camera.close()
-
-    def recordFlatfieldImage(self):
-        '''
-        record n images and average them before subtracting from the latest frame
-        '''
-        self._camera.recordFlatfieldImage()
 
     def getCameraStatus(self):
         """ Returns comprehensive HIK camera status information. """

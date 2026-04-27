@@ -287,6 +287,8 @@ class RecordingController(ImConWidgetController):
             for detectorName in detectorNames
         }
         
+        # TODO: We have to check if the camera is actually running - if not, start the camera loop 
+        
         return self.recording_service.snap_numpy(
             detector_names=detectorNames,
             attrs=attrs

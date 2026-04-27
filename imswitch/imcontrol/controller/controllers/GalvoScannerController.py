@@ -6,7 +6,6 @@ exposing scan parameters and control functions via REST API.
 """
 
 from typing import Dict, List, Optional, Any
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.model import APIExport, initLogger
 from ..basecontrollers import ImConWidgetController
 import json
@@ -46,17 +45,7 @@ class GalvoScannerController(ImConWidgetController):
         
         self.__logger.info(f"GalvoScannerController initialized with devices: "
                           f"{self._master.galvoScannersManager.getAllDeviceNames()}")
-        
-        # Set up widget if not headless
-        if not IS_HEADLESS:
-            self._setupWidget()
 
-    def _setupWidget(self):
-        """Set up widget connections if available."""
-        if self._widget is None:
-            return
-        # Connect widget signals here when widget is implemented
-        pass
 
     # ========================
     # API Export Methods

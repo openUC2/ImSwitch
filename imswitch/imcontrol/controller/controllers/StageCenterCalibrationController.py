@@ -5,7 +5,6 @@ from datetime import datetime
 
 import numpy as np
 
-from imswitch import IS_HEADLESS
 from imswitch.imcommon.framework import Signal, Mutex
 from imswitch.imcommon.model import initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
@@ -182,21 +181,7 @@ class StageCenterCalibrationController(ImConWidgetController):
         np.savetxt(path, np.array(self._positions), delimiter=",", header="X(µm),Y(µm)")
         self._logger.info(f"Positions saved to {path}")
 
-    # ─────────────────────── GUI convenience ───────────────────────────────
 
-    def _startCalibrationFromGui(self):
-        if IS_HEADLESS:
-            return
-        w = self._widget
-        pos = self.performCalibration(w.spinStartX.value(), w.spinStartY.value(),
-                                       w.spinExposure.value(), w.spinSpeed.value(),
-                                       w.spinPitch.value())
-        w.showPositions(pos)
-
-    def displayImage(self, frame):
-        if IS_HEADLESS:
-            return
-        self._widget.setImage(np.uint16(frame), colormap="gray", name="Calib", pixelsize=(1, 1))
 
 
 class MovementController:

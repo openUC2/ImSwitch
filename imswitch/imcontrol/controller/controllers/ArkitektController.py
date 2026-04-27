@@ -94,7 +94,11 @@ class ArkitektController(ImConWidgetController):
             positionerName = positionerNames[0]
         mStage = self._master.positionersManager[positionerName]
         currentPositions = mStage.getPosition()
-        return Poistion(x=currentPositions["x"], y=currentPositions["y"], z=currentPositions["z"])
+        return Position(
+            x=currentPositions["x"],
+            y=currentPositions["y"],
+            z=currentPositions["z"],
+        )
     
     @APIExport(runOnUIThread=False)
     def homeStageAxis(self, positionerName: str | None = None, axis: str = "X", is_blocking: bool = False):

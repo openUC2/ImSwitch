@@ -1,8 +1,17 @@
 import { createSlice } from "@reduxjs/toolkit";
 
+let nextNotificationId = 1;
+
 const initialState = {
   message: "",
   type: "info", // "info", "success", "warning", "error"
+  notifications: [],
+};
+
+const syncLegacyFields = (state) => {
+  const latest = state.notifications[state.notifications.length - 1];
+  state.message = latest?.message || "";
+  state.type = latest?.type || "info";
 };
 
 const notificationSlice = createSlice({
@@ -10,12 +19,39 @@ const notificationSlice = createSlice({
   initialState,
   reducers: {
     setNotification: (state, action) => {
-      state.message = action.payload.message || "";
-      state.type = action.payload.type || "info";
+      const message = action.payload?.message || "";
+      const type = action.payload?.type || "info";
+
+      if (!message) {
+        return;
+      }
+
+      state.notifications.push({
+        id: nextNotificationId++,
+        message,
+        type,
+      });
+
+      // Keep queue bounded.
+      if (state.notifications.length > 30) {
+        state.notifications.shift();
+      }
+
+      syncLegacyFields(state);
     },
-    clearNotification: (state) => {
-      state.message = "";
-      state.type = "info";
+    clearNotification: (state, action) => {
+      const notificationId = action.payload;
+
+      if (typeof notificationId === "number") {
+        state.notifications = state.notifications.filter(
+          (item) => item.id !== notificationId,
+        );
+      } else {
+        // Backward-compatible default behavior for existing callers.
+        state.notifications.shift();
+      }
+
+      syncLegacyFields(state);
     },
   },
 });

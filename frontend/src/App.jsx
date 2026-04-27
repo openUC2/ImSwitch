@@ -1,5 +1,5 @@
 /* global __webpack_init_sharing__, __webpack_share_scopes__ */
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 // ImSwitch Themes
 import { darkTheme, lightTheme } from "./themes";
@@ -56,7 +56,6 @@ import CompositeComponent from "./axon/CompositeComponent";
 
 //redux
 import { useDispatch, useSelector } from "react-redux";
-import StatusMessage from "./components/StatusMessage.js";
 import * as connectionSettingsSlice from "./state/slices/ConnectionSettingsSlice.js";
 import * as vizarrViewerSlice from "./state/slices/VizarrViewerSlice.js";
 import {
@@ -65,6 +64,7 @@ import {
   setNotification,
 } from "./state/slices/NotificationSlice.js";
 import { getThemeState } from "./state/slices/ThemeSlice.js";
+import { SnackbarProvider, useSnackbar } from "notistack";
 
 // Filemanager
 import { api } from "./FileManager/api/api.js";
@@ -78,11 +78,72 @@ import "./FileManager/App.scss";
 import FileManager from "./FileManager/FileManager/FileManager.jsx";
 
 import { Box, CssBaseline } from "@mui/material";
+import IconButton from "@mui/material/IconButton";
+import CloseIcon from "@mui/icons-material/Close";
 import { ThemeProvider } from "@mui/material/styles";
+
+function ReduxNotificationBridge() {
+  const notification = useSelector(getNotificationState);
+  const dispatch = useDispatch();
+  const { enqueueSnackbar, closeSnackbar } = useSnackbar();
+  const enqueuedIdsRef = useRef(new Set());
+  const keysByIdRef = useRef(new Map());
+
+  useEffect(() => {
+    const notifications = notification.notifications || [];
+
+    notifications.forEach((item) => {
+      if (enqueuedIdsRef.current.has(item.id)) {
+        return;
+      }
+
+      const key = `notification-${item.id}`;
+      enqueuedIdsRef.current.add(item.id);
+      keysByIdRef.current.set(item.id, key);
+
+      enqueueSnackbar(item.message, {
+        key,
+        variant: item.type || "info",
+        autoHideDuration: item.type === "error" ? 10000 : 6000,
+        anchorOrigin: { vertical: "top", horizontal: "center" },
+        action: (snackbarKey) => (
+          <IconButton
+            size="small"
+            aria-label="close notification"
+            color="inherit"
+            onClick={() => closeSnackbar(snackbarKey)}
+          >
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        ),
+        onExited: () => {
+          enqueuedIdsRef.current.delete(item.id);
+          keysByIdRef.current.delete(item.id);
+          dispatch(clearNotification(item.id));
+        },
+      });
+    });
+  }, [notification.notifications, enqueueSnackbar, closeSnackbar, dispatch]);
+
+  useEffect(() => {
+    const activeIds = new Set(
+      (notification.notifications || []).map((n) => n.id),
+    );
+
+    for (const [id, key] of keysByIdRef.current.entries()) {
+      if (!activeIds.has(id)) {
+        closeSnackbar(key);
+        keysByIdRef.current.delete(id);
+        enqueuedIdsRef.current.delete(id);
+      }
+    }
+  }, [notification.notifications, closeSnackbar]);
+
+  return null;
+}
 
 function App() {
   // Notification state
-  const notification = useSelector(getNotificationState);
   const dispatch = useDispatch();
 
   // Access global Redux state
@@ -380,194 +441,194 @@ function App() {
 
   return (
     <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
-      <WebSocketHandler />
-      <CssBaseline />
+      <SnackbarProvider maxSnack={6} dense>
+        <ReduxNotificationBridge />
+        <WebSocketHandler />
+        <CssBaseline />
 
-      {/* Global Status/Notification Message */}
-      <StatusMessage
-        message={notification.message}
-        type={notification.type}
-        onClose={() => dispatch(clearNotification())}
-      />
+        <Box sx={{ display: "flex" }}>
+          <NavigationDrawer
+            sidebarVisible={sidebarVisible}
+            setSidebarVisible={setSidebarVisible}
+            isMobile={isMobile}
+            drawerWidth={drawerWidth}
+            selectedPlugin={selectedPlugin}
+            handlePluginChange={handlePluginChange}
+            plugins={plugins}
+          />
 
-      <Box sx={{ display: "flex" }}>
-        <NavigationDrawer
-          sidebarVisible={sidebarVisible}
-          setSidebarVisible={setSidebarVisible}
-          isMobile={isMobile}
-          drawerWidth={drawerWidth}
-          selectedPlugin={selectedPlugin}
-          handlePluginChange={handlePluginChange}
-          plugins={plugins}
-        />
+          <TopBar
+            isMobile={isMobile}
+            sidebarVisible={sidebarVisible}
+            setSidebarVisible={setSidebarVisible}
+            selectedPlugin={selectedPlugin}
+            onSettingsNavigate={handlePluginChange} // Pass existing navigation handler
+            onStorageChange={handleStorageChange}
+          />
 
-        <TopBar
-          isMobile={isMobile}
-          sidebarVisible={sidebarVisible}
-          setSidebarVisible={setSidebarVisible}
-          selectedPlugin={selectedPlugin}
-          onSettingsNavigate={handlePluginChange} // Pass existing navigation handler
-          onStorageChange={handleStorageChange}
-        />
-
-        <Box
-          component="main"
-          sx={{
-            top: 64,
-            flexGrow: 1,
-            display: "flex",
-            position: "absolute",
-            p:
-              selectedPlugin === "JupyterNotebook" || selectedPlugin === "ImJoy"
-                ? 0
-                : isMobile
-                  ? 1
-                  : 3,
-            left: drawerWidth,
-            width: "calc(100% - " + drawerWidth + "px)",
-            height: "calc(100vh - 64px)",
-            marginLeft: !isMobile && sidebarVisible ? 0 : 0,
-            transition: (theme) =>
-              theme.transitions.create(["margin", "padding"], {
-                easing: theme.transitions.easing.sharp,
-                duration: theme.transitions.duration.leavingScreen,
-              }),
-            minHeight: "calc(100vh - 64px)",
-            overflow:
-              selectedPlugin === "JupyterNotebook" || selectedPlugin === "ImJoy"
-                ? "hidden"
-                : "auto",
-          }}
-        >
-          {selectedPlugin === "LiveView" && (
-            <LiveView
-              // pass down a setter or context for the image if needed
-              setFileManagerInitialPath={handleFileManagerInitialPathChange} // pass function
-            />
-          )}
-
-          {selectedPlugin === "WellPlate" && <AxonTabComponent />}
-          {selectedPlugin === "GalvoScannerController" && (
-            <GalvoScannerController />
-          )}
-          {selectedPlugin === "ShitScope" && (
-            <ShitScopeComponent
-              onOpenFileManager={handleFileManagerInitialPathChange}
-            />
-          )}
-          {selectedPlugin === "ImJoy" && (
-            <ImJoyView sharedImage={sharedImage} />
-          )}
-          {selectedPlugin === "STORMLocal" && <STORMControllerLocal />}
-          {selectedPlugin === "STORMArkitekt" && <STORMControllerArkitekt />}
-          {selectedPlugin === "FRAMESettings" && <FRAMESettingsController />}
-          {selectedPlugin === "Stresstest" && <StresstestController />}
-          {selectedPlugin === "FocusLock" && <FocusLockController />}
-          {selectedPlugin === "AcceptanceTest" && <AcceptanceTestComponent />}
-          {selectedPlugin === "StageCenterCalibration" && (
-            <StageCenterCalibrationWizard />
-          )}
-          {selectedPlugin === "HoloController" && <HoloController />}
-          {selectedPlugin === "OffAxisHoloController" && (
-            <OffAxisHoloController />
-          )}
-          {selectedPlugin === "DPCController" && <DPCController />}
-          {selectedPlugin === "JupyterNotebook" && (
-            <Box sx={{ width: "100%", height: "100%", minHeight: 0 }}>
-              <JupyterProvider>
-                <JupyterExecutor />
-              </JupyterProvider>
-            </Box>
-          )}
-          {selectedPlugin === "Infinity Scanning" && <LargeFovScanController />}
-          {selectedPlugin === "Blockly" && <BlocklyController />}
-          {selectedPlugin === "Objective" && <ObjectiveController />}
-          {selectedPlugin === "About" && <AboutPage />}
-          {selectedPlugin === "SystemSettings" && <SystemSettings />}
-          {selectedPlugin === "MotorSettings" && <MotorSettingsController />}
-          {selectedPlugin === "FileManager" && (
-            <div className="app" style={{ width: "100%", maxWidth: "100%" }}>
-              <div
-                className="file-manager-container"
-                style={{ width: "100%", maxWidth: "100%" }}
-              >
-                <FileManager
-                  key={`fm-${storageRefreshKey}`} // Force remount on storage change
-                  baseUrl={`${hostIP}:${apiPort}/imswitch/api`}
-                  files={files}
-                  fileUploadConfig={fileUploadConfig}
-                  isLoading={isLoading}
-                  onCreateFolder={handleCreateFolder}
-                  onFileUploading={handleFileUploading}
-                  onFileUploaded={handleFileUploaded}
-                  onPaste={handlePaste}
-                  onRename={handleRename}
-                  onDownload={handleDownload}
-                  onFileOpen={handleOpenWithImJoy}
-                  onOpenWithVizarr={handleOpenWithVizarr}
-                  onDelete={handleDelete}
-                  onRefresh={handleRefresh}
-                  layout="list"
-                  enableFilePreview
-                  maxFileSize={10485760}
-                  filePreviewPath={`${hostIP}:${apiPort}/imswitch/api`}
-                  acceptedFileTypes=".txt, .png, .jpg, .jpeg, .pdf, .doc, .docx, .exe, .js, .csv"
-                  initialPath={fileManagerInitialPath}
-                />
-              </div>
-            </div>
-          )}
-          {selectedPlugin === "VizarrViewer" && (
-            <Box sx={{ width: "100%", height: "calc(100vh - 64px)" }}>
-              <VizarrViewer
-                zarrUrl={vizarrViewerState.currentUrl}
-                onClose={handleCloseVizarr}
-                height="100%"
-                width="100%"
+          <Box
+            component="main"
+            sx={{
+              top: 64,
+              flexGrow: 1,
+              display: "flex",
+              position: "absolute",
+              p:
+                selectedPlugin === "JupyterNotebook" ||
+                selectedPlugin === "ImJoy"
+                  ? 0
+                  : isMobile
+                    ? 1
+                    : 3,
+              left: drawerWidth,
+              width: "calc(100% - " + drawerWidth + "px)",
+              height: "calc(100vh - 64px)",
+              marginLeft: !isMobile && sidebarVisible ? 0 : 0,
+              transition: (theme) =>
+                theme.transitions.create(["margin", "padding"], {
+                  easing: theme.transitions.easing.sharp,
+                  duration: theme.transitions.duration.leavingScreen,
+                }),
+              minHeight: "calc(100vh - 64px)",
+              overflow:
+                selectedPlugin === "JupyterNotebook" ||
+                selectedPlugin === "ImJoy"
+                  ? "hidden"
+                  : "auto",
+            }}
+          >
+            {selectedPlugin === "LiveView" && (
+              <LiveView
+                // pass down a setter or context for the image if needed
+                setFileManagerInitialPath={handleFileManagerInitialPathChange} // pass function
               />
-            </Box>
-          )}
-          {selectedPlugin === "AppManager" && (
-            <AppManagerPage onNavigateToApp={handlePluginChange} />
-          )}
-          {selectedPlugin === "LightSheet" && <LightsheetController />}
-          {selectedPlugin === "WiFi" && <WiFiController />}
-          {plugins.map(
-            (p) =>
-              selectedPlugin === p.name && (
-                <Suspense fallback={<div>loading…</div>} key={p.name}>
-                  <p.Component hostIP={hostIP} hostPort={apiPort} />
-                </Suspense>
-              ),
-          )}
-          {selectedPlugin === "DemoController" && <DemoController />}
-          {selectedPlugin === "CompositeAcquisition" && (
-            <CompositeAcquisitionComponent />
-          )}
-          {selectedPlugin === "CompositeStreamViewer" && (
-            <CompositeStreamViewer />
-          )}
-          {selectedPlugin === "CompositeComponent" && <CompositeComponent />}
-          {selectedPlugin === "FlowStop" && <FlowStopController />}
-          {selectedPlugin === "StageOffsetCalibration" && (
-            <StageOffsetCalibration />
-          )}
-          {selectedPlugin === "UC2" && <UC2ConfigurationController />}
-          {selectedPlugin === "SerialDebug" && <SerialDebugController />}
-          {selectedPlugin === "DetectorTrigger" && (
-            <DetectorTriggerController />
-          )}
-          {selectedPlugin === "ExtendedLEDMatrix" && (
-            <ExtendedLEDMatrixController />
-          )}
-          {selectedPlugin === "Lepmon" && <LepMonController />}
-          {selectedPlugin === "MazeGame" && <MazeGameController />}
-          {selectedPlugin === "SocketView" && <SocketView />}
-          {selectedPlugin === "SystemUpdate" && <SystemUpdateController />}
-          {selectedPlugin === "Connections" && <ConnectionSettings />}
-          {selectedPlugin === "Logging" && <LoggingController />}
+            )}
+
+            {selectedPlugin === "WellPlate" && <AxonTabComponent />}
+            {selectedPlugin === "GalvoScannerController" && (
+              <GalvoScannerController />
+            )}
+            {selectedPlugin === "ShitScope" && (
+              <ShitScopeComponent
+                onOpenFileManager={handleFileManagerInitialPathChange}
+              />
+            )}
+            {selectedPlugin === "ImJoy" && (
+              <ImJoyView sharedImage={sharedImage} />
+            )}
+            {selectedPlugin === "STORMLocal" && <STORMControllerLocal />}
+            {selectedPlugin === "STORMArkitekt" && <STORMControllerArkitekt />}
+            {selectedPlugin === "FRAMESettings" && <FRAMESettingsController />}
+            {selectedPlugin === "Stresstest" && <StresstestController />}
+            {selectedPlugin === "FocusLock" && <FocusLockController />}
+            {selectedPlugin === "AcceptanceTest" && <AcceptanceTestComponent />}
+            {selectedPlugin === "StageCenterCalibration" && (
+              <StageCenterCalibrationWizard />
+            )}
+            {selectedPlugin === "HoloController" && <HoloController />}
+            {selectedPlugin === "OffAxisHoloController" && (
+              <OffAxisHoloController />
+            )}
+            {selectedPlugin === "DPCController" && <DPCController />}
+            {selectedPlugin === "JupyterNotebook" && (
+              <Box sx={{ width: "100%", height: "100%", minHeight: 0 }}>
+                <JupyterProvider>
+                  <JupyterExecutor />
+                </JupyterProvider>
+              </Box>
+            )}
+            {selectedPlugin === "Infinity Scanning" && (
+              <LargeFovScanController />
+            )}
+            {selectedPlugin === "Blockly" && <BlocklyController />}
+            {selectedPlugin === "Objective" && <ObjectiveController />}
+            {selectedPlugin === "About" && <AboutPage />}
+            {selectedPlugin === "SystemSettings" && <SystemSettings />}
+            {selectedPlugin === "MotorSettings" && <MotorSettingsController />}
+            {selectedPlugin === "FileManager" && (
+              <div className="app" style={{ width: "100%", maxWidth: "100%" }}>
+                <div
+                  className="file-manager-container"
+                  style={{ width: "100%", maxWidth: "100%" }}
+                >
+                  <FileManager
+                    key={`fm-${storageRefreshKey}`} // Force remount on storage change
+                    baseUrl={`${hostIP}:${apiPort}/imswitch/api`}
+                    files={files}
+                    fileUploadConfig={fileUploadConfig}
+                    isLoading={isLoading}
+                    onCreateFolder={handleCreateFolder}
+                    onFileUploading={handleFileUploading}
+                    onFileUploaded={handleFileUploaded}
+                    onPaste={handlePaste}
+                    onRename={handleRename}
+                    onDownload={handleDownload}
+                    onFileOpen={handleOpenWithImJoy}
+                    onOpenWithVizarr={handleOpenWithVizarr}
+                    onDelete={handleDelete}
+                    onRefresh={handleRefresh}
+                    layout="list"
+                    enableFilePreview
+                    maxFileSize={10485760}
+                    filePreviewPath={`${hostIP}:${apiPort}/imswitch/api`}
+                    acceptedFileTypes=".txt, .png, .jpg, .jpeg, .pdf, .doc, .docx, .exe, .js, .csv"
+                    initialPath={fileManagerInitialPath}
+                  />
+                </div>
+              </div>
+            )}
+            {selectedPlugin === "VizarrViewer" && (
+              <Box sx={{ width: "100%", height: "calc(100vh - 64px)" }}>
+                <VizarrViewer
+                  zarrUrl={vizarrViewerState.currentUrl}
+                  onClose={handleCloseVizarr}
+                  height="100%"
+                  width="100%"
+                />
+              </Box>
+            )}
+            {selectedPlugin === "AppManager" && (
+              <AppManagerPage onNavigateToApp={handlePluginChange} />
+            )}
+            {selectedPlugin === "LightSheet" && <LightsheetController />}
+            {selectedPlugin === "WiFi" && <WiFiController />}
+            {plugins.map(
+              (p) =>
+                selectedPlugin === p.name && (
+                  <Suspense fallback={<div>loading…</div>} key={p.name}>
+                    <p.Component hostIP={hostIP} hostPort={apiPort} />
+                  </Suspense>
+                ),
+            )}
+            {selectedPlugin === "DemoController" && <DemoController />}
+            {selectedPlugin === "CompositeAcquisition" && (
+              <CompositeAcquisitionComponent />
+            )}
+            {selectedPlugin === "CompositeStreamViewer" && (
+              <CompositeStreamViewer />
+            )}
+            {selectedPlugin === "CompositeComponent" && <CompositeComponent />}
+            {selectedPlugin === "FlowStop" && <FlowStopController />}
+            {selectedPlugin === "StageOffsetCalibration" && (
+              <StageOffsetCalibration />
+            )}
+            {selectedPlugin === "UC2" && <UC2ConfigurationController />}
+            {selectedPlugin === "SerialDebug" && <SerialDebugController />}
+            {selectedPlugin === "DetectorTrigger" && (
+              <DetectorTriggerController />
+            )}
+            {selectedPlugin === "ExtendedLEDMatrix" && (
+              <ExtendedLEDMatrixController />
+            )}
+            {selectedPlugin === "Lepmon" && <LepMonController />}
+            {selectedPlugin === "MazeGame" && <MazeGameController />}
+            {selectedPlugin === "SocketView" && <SocketView />}
+            {selectedPlugin === "SystemUpdate" && <SystemUpdateController />}
+            {selectedPlugin === "Connections" && <ConnectionSettings />}
+            {selectedPlugin === "Logging" && <LoggingController />}
+          </Box>
         </Box>
-      </Box>
+      </SnackbarProvider>
     </ThemeProvider>
   );
 }

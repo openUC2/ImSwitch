@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from pathlib import Path
 from imswitch.imcontrol.model import Options
 from imswitch.imcommon.model import ostools
-from imswitch.imcontrol.view.guitools import ViewSetupInfo
+from imswitch.imcontrol.view.guitools.ViewSetupInfo import ViewSetupInfo
 import dataclasses
 from typing import List
 import os

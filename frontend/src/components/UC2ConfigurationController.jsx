@@ -850,7 +850,7 @@ const UC2ConfigurationController = () => {
                     <LinearProgress />
                   </Box>
                   <Typography variant="body2">
-                    {restartSoftware
+                    {restartSoftware || restartAfterSave
                       ? "ImSwitch is restarting..."
                       : "Processing configuration..."}
                   </Typography>
@@ -1006,6 +1006,19 @@ const UC2ConfigurationController = () => {
                 For advanced users: directly edit JSON configuration files with
                 syntax validation and preview
               </Typography>
+
+              {isRestarting && (
+                <Alert severity="info" sx={{ mb: 3 }}>
+                  <Box sx={{ mb: 1 }}>
+                    <LinearProgress />
+                  </Box>
+                  <Typography variant="body2">
+                    {restartSoftware || restartAfterSave
+                      ? "ImSwitch is restarting..."
+                      : "Processing configuration..."}
+                  </Typography>
+                </Alert>
+              )}
 
               {(isLoadingFile || isSavingFile) && (
                 <Alert severity="info" sx={{ mb: 3 }}>

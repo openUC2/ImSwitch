@@ -455,7 +455,7 @@ class PixelCalibrationController(LiveUpdatedController):
 
 
     # API Methods for web interface
-    @APIExport(runOnUIThread=True)  # Run in background thread
+    @APIExport(runOnUIThread=True, requestType="POST")  # Run in background thread
     def calibrateStageAffine(self, objectiveId: int = None, stepSizeUm: float = 100.0,
                              pattern: str = "cross", nSteps: int = 1, validate: bool = False,
                              crop_size: int = 1024, isDEBUG: bool = False):

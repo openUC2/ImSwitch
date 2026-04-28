@@ -63,7 +63,7 @@ dependencies = [
     "zarr>=3.0.0a0",
     "numcodecs>=0.13.1",
     "aiohttp>=3.9.4",
-    "arkitekt-next[all]>=0.39.5",
+    "arkitekt-next[all]==0.40.3",
     "koil>=2.0.5",
     "msgpack>=1.0.4",
     "esptool",

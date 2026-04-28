@@ -20,6 +20,7 @@ import {
   Divider,
   Grid,
   IconButton,
+  InputAdornment,
   LinearProgress,
   Paper,
   Slider,
@@ -32,6 +33,7 @@ import {
   TableRow,
   Tabs,
   Tab,
+  TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -74,6 +76,8 @@ import apiGoniometerControllerClearMeasurements from "../backendapi/apiGoniomete
 import apiGoniometerControllerSetCrop from "../backendapi/apiGoniometerControllerSetCrop";
 import apiGoniometerControllerResetCrop from "../backendapi/apiGoniometerControllerResetCrop";
 import apiGoniometerControllerGetFocusMetric from "../backendapi/apiGoniometerControllerGetFocusMetric";
+import apiGoniometerControllerGetCameraSettings from "../backendapi/apiGoniometerControllerGetCameraSettings";
+import apiGoniometerControllerSetCameraSettings from "../backendapi/apiGoniometerControllerSetCameraSettings";
 
 // ────────────────────────────────────────────
 // Helpers
@@ -157,7 +161,12 @@ const GoniometerController = () => {
 
   // Crop drag refs & display state
   const cropDragStartRef = useRef(null); // {x,y} in container display px
-  const [cropOverlayRect, setCropOverlayRect] = useState(null); // {x,y,w,h}
+  const [cropOverlayRect, setCropOverlayRect] = useState(null); // {x,y,w,h} — live drag
+  const [committedCropFrac, setCommittedCropFrac] = useState(null); // {x,y,w,h} fractional
+
+  // Camera settings
+  const [exposureTime, setExposureTime] = useState("");
+  const [gain, setGain] = useState("");
 
   // Ref for the live stream container (crop coordinate measurements)
   const liveContainerRef = useRef(null);
@@ -170,6 +179,15 @@ const GoniometerController = () => {
         dispatch(goniometerSlice.setConfig(cfg));
       } catch (e) {
         console.error("Failed to load goniometer config", e);
+      }
+      try {
+        const camCfg = await apiGoniometerControllerGetCameraSettings();
+        if (camCfg.success) {
+          if (camCfg.exposure_time != null) setExposureTime(String(camCfg.exposure_time));
+          if (camCfg.gain != null) setGain(String(camCfg.gain));
+        }
+      } catch (_) {
+        // camera settings are optional
       }
     })();
   }, [dispatch]);
@@ -335,6 +353,21 @@ const GoniometerController = () => {
     }
   }, [dispatch]);
 
+  // ─── Camera settings (exposure / gain) ───
+  const handleCameraSettingsSet = useCallback(async () => {
+    const exp = parseFloat(exposureTime);
+    const g   = parseFloat(gain);
+    const params = {};
+    if (!isNaN(exp) && exp > 0) params.exposure_time = exp;
+    if (!isNaN(g)   && g  >= 0) params.gain = g;
+    if (Object.keys(params).length === 0) return;
+    try {
+      await apiGoniometerControllerSetCameraSettings(params);
+    } catch (e) {
+      console.error("Camera settings failed", e);
+    }
+  }, [exposureTime, gain]);
+
   // ─── Crop drag on live stream ───
   const handleCropMouseDown = useCallback((e) => {
     e.preventDefault();
@@ -377,6 +410,15 @@ const GoniometerController = () => {
       if (Math.abs(endX - startX) < 5 || Math.abs(endY - startY) < 5) {
         return; // too small to be intentional
       }
+
+      // Persist the crop rectangle as fractional coordinates so it stays
+      // visible on the live stream after the drag overlay is cleared.
+      setCommittedCropFrac({
+        x: Math.min(startX, endX) / containerRect.width,
+        y: Math.min(startY, endY) / containerRect.height,
+        w: Math.abs(endX - startX) / containerRect.width,
+        h: Math.abs(endY - startY) / containerRect.height,
+      });
 
       // Find the actual rendered stream element (canvas for WebGL/JPEG, img or video for others)
       // to correctly account for CSS scaling (browser scales JPEG to fit container) and
@@ -441,6 +483,7 @@ const GoniometerController = () => {
     try {
       await apiGoniometerControllerResetCrop();
       dispatch(goniometerSlice.setCropRoi(null));
+      setCommittedCropFrac(null);
     } catch (e) {
       console.error("Reset crop failed", e);
     }
@@ -655,8 +698,8 @@ const GoniometerController = () => {
                 sx={{
                   position: "relative",
                   width: "100%",
-                  minHeight: 200,
-                  maxHeight: "50vh",
+                  height: "55vh",
+                  minHeight: 300,
                   backgroundColor: "#111",
                   borderRadius: 1,
                   overflow: "hidden",
@@ -666,6 +709,30 @@ const GoniometerController = () => {
                 }}
               >
                 <LiveViewControlWrapper enableStageMovement={false} />
+
+                {/* Persistent crop rectangle – visible after crop selection */}
+                {committedCropFrac && (
+                  <svg
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      width: "100%",
+                      height: "100%",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    <rect
+                      x={`${committedCropFrac.x * 100}%`}
+                      y={`${committedCropFrac.y * 100}%`}
+                      width={`${committedCropFrac.w * 100}%`}
+                      height={`${committedCropFrac.h * 100}%`}
+                      fill="rgba(255,200,0,0.06)"
+                      stroke="#ffd700"
+                      strokeWidth={2}
+                      strokeDasharray="8 4"
+                    />
+                  </svg>
+                )}
 
                 {gState.isCropMode && (
                   <Box
@@ -704,6 +771,32 @@ const GoniometerController = () => {
                   </Box>
                 )}
               </Box>
+
+              {/* Camera settings: exposure time and gain */}
+              <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+                <TextField
+                  label="Exposure (ms)"
+                  size="small"
+                  type="number"
+                  value={exposureTime}
+                  onChange={(e) => setExposureTime(e.target.value)}
+                  onBlur={handleCameraSettingsSet}
+                  onKeyDown={(e) => e.key === "Enter" && handleCameraSettingsSet()}
+                  InputProps={{ inputProps: { min: 0, step: 0.1 } }}
+                  sx={{ flex: 1 }}
+                />
+                <TextField
+                  label="Gain"
+                  size="small"
+                  type="number"
+                  value={gain}
+                  onChange={(e) => setGain(e.target.value)}
+                  onBlur={handleCameraSettingsSet}
+                  onKeyDown={(e) => e.key === "Enter" && handleCameraSettingsSet()}
+                  InputProps={{ inputProps: { min: 0, step: 0.1 } }}
+                  sx={{ flex: 1 }}
+                />
+              </Stack>
 
               <Box sx={{ mt: 1 }}>
                 <Button
@@ -786,7 +879,8 @@ const GoniometerController = () => {
                 sx={{
                   position: "relative",
                   width: "100%",
-                  height: 350,
+                  height: "42vh",
+                  minHeight: 250,
                   backgroundColor: "#222",
                   borderRadius: 1,
                   overflow: "hidden",

@@ -18,26 +18,40 @@ const notificationSlice = createSlice({
   name: "notification",
   initialState,
   reducers: {
-    setNotification: (state, action) => {
-      const message = action.payload?.message || "";
-      const type = action.payload?.type || "info";
+    setNotification: {
+      reducer: (state, action) => {
+        const { id, message, type, autoHideDuration } = action.payload;
 
-      if (!message) {
-        return;
-      }
+        if (!message) {
+          return;
+        }
 
-      state.notifications.push({
-        id: nextNotificationId++,
-        message,
-        type,
-      });
+        state.notifications.push({
+          id,
+          message,
+          type,
+          autoHideDuration,
+        });
 
-      // Keep queue bounded.
-      if (state.notifications.length > 30) {
-        state.notifications.shift();
-      }
+        // Keep queue bounded.
+        if (state.notifications.length > 30) {
+          state.notifications.shift();
+        }
 
-      syncLegacyFields(state);
+        syncLegacyFields(state);
+      },
+      prepare: (payload = {}) => {
+        const message = payload.message || "";
+        const type = payload.type || "info";
+        return {
+          payload: {
+            id: nextNotificationId++,
+            message,
+            type,
+            autoHideDuration: payload.autoHideDuration,
+          },
+        };
+      },
     },
     clearNotification: (state, action) => {
       const notificationId = action.payload;
@@ -46,10 +60,11 @@ const notificationSlice = createSlice({
         state.notifications = state.notifications.filter(
           (item) => item.id !== notificationId,
         );
-      } else {
-        // Backward-compatible default behavior for existing callers.
-        state.notifications.shift();
       }
+
+      // NOTE: clearNotification() without an ID is intentionally a no-op.
+      // Legacy timer-based clear calls would otherwise remove unrelated items
+      // from the queue now that multiple notifications can be visible.
 
       syncLegacyFields(state);
     },

@@ -104,7 +104,8 @@ function ReduxNotificationBridge() {
       enqueueSnackbar(item.message, {
         key,
         variant: item.type || "info",
-        autoHideDuration: item.type === "error" ? 10000 : 6000,
+        autoHideDuration:
+          item.autoHideDuration ?? (item.type === "error" ? 10000 : 6000),
         anchorOrigin: { vertical: "top", horizontal: "center" },
         action: (snackbarKey) => (
           <IconButton

@@ -1,6 +1,6 @@
 {
   "name": "microscope-app",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "private": true,
   "homepage": "/imswitch/ui",
   "dependencies": {
@@ -28,6 +28,7 @@
     "eslint-config-react-app": "^7.0.1",
     "json-edit-react": "^1.23.1",
     "lz4js": "^0.2.0",
+    "notistack": "^3.0.2",
     "ol": "^10.3.1",
     "plotly.js": "^2.35.3",
     "prop-types": "^15.8.1",

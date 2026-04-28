@@ -27,10 +27,7 @@ import AceEditor from "react-ace";
 import "ace-builds/src-noconflict/mode-json";
 import "ace-builds/src-noconflict/theme-github";
 import * as uc2Slice from "../state/slices/UC2Slice.js";
-import {
-  setNotification,
-  clearNotification,
-} from "../state/slices/NotificationSlice";
+import { setNotification } from "../state/slices/NotificationSlice";
 import ConfigurationPreviewDialog from "./ConfigurationPreviewDialog";
 import ConfigurationWizard from "./ConfigurationWizard";
 import {
@@ -70,7 +67,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
   const fetchCurrentActiveFilename = useCallback(() => {
     const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/getCurrentSetupFilename`;
     dispatch(uc2Slice.setIsLoadingCurrentFilename(true));
-    
+
     fetch(url)
       .then((response) => {
         if (!response.ok) {
@@ -81,29 +78,33 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
       .then((data) => {
         // Handle different possible response formats
         let filename = null;
-        
-        if (typeof data === 'string') {
+
+        if (typeof data === "string") {
           filename = data;
-        } else if (data && typeof data === 'object') {
-          filename = data.current_setup || data.currentSetupFilename || data.setupFileName || JSON.stringify(data);
+        } else if (data && typeof data === "object") {
+          filename =
+            data.current_setup ||
+            data.currentSetupFilename ||
+            data.setupFileName ||
+            JSON.stringify(data);
         } else {
           filename = String(data);
         }
-        
+
         // Extract just the filename from full path if needed
-        if (filename && filename.includes('/')) {
-          filename = filename.split('/').pop();
-        } else if (filename && filename.includes('\\')) {
+        if (filename && filename.includes("/")) {
+          filename = filename.split("/").pop();
+        } else if (filename && filename.includes("\\")) {
           // Handle Windows paths
-          filename = filename.split('\\').pop();
+          filename = filename.split("\\").pop();
         }
-        
-        const activeFilename = filename || 'current_config.json';
+
+        const activeFilename = filename || "current_config.json";
         dispatch(uc2Slice.setCurrentActiveFilename(activeFilename));
       })
       .catch((error) => {
         console.error("Error fetching current setup filename:", error);
-        dispatch(uc2Slice.setCurrentActiveFilename('current_config.json')); // fallback
+        dispatch(uc2Slice.setCurrentActiveFilename("current_config.json")); // fallback
       })
       .finally(() => {
         dispatch(uc2Slice.setIsLoadingCurrentFilename(false));
@@ -116,7 +117,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
       setNotification({
         message: "Loading available setups...",
         type: "info",
-      })
+      }),
     );
 
     fetch(url)
@@ -129,9 +130,9 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
               data.available_setups?.length || 0
             } configuration files`,
             type: "success",
-          })
+            autoHideDuration: 3000,
+          }),
         );
-        setTimeout(() => dispatch(clearNotification()), 3000);
       })
       .catch((error) => {
         console.error("Error fetching setups:", error);
@@ -139,9 +140,9 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           setNotification({
             message: "Failed to load configuration files",
             type: "error",
-          })
+            autoHideDuration: 3000,
+          }),
         );
-        setTimeout(() => dispatch(clearNotification()), 3000);
       });
   }, [hostIP, hostPort, dispatch]);
 
@@ -152,59 +153,75 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
 
   // Auto-select the current active file when both are available
   useEffect(() => {
-    if (currentActiveFilename && availableSetups.includes(currentActiveFilename) && !selectedFileForEdit) {
+    if (
+      currentActiveFilename &&
+      availableSetups.includes(currentActiveFilename) &&
+      !selectedFileForEdit
+    ) {
       dispatch(uc2Slice.setSelectedFileForEdit(currentActiveFilename));
     }
   }, [currentActiveFilename, availableSetups, selectedFileForEdit, dispatch]);
 
-  const loadConfigurationFile = useCallback((fileName) => {
-    if (!fileName) return;
+  const loadConfigurationFile = useCallback(
+    (fileName) => {
+      if (!fileName) return;
 
-    dispatch(uc2Slice.setIsLoadingFile(true));
-    dispatch(uc2Slice.setUseAceEditor(false));
-    dispatch(
-      setNotification({
-        message: `Loading ${fileName}...`,
-        type: "info",
-      })
-    );
+      dispatch(uc2Slice.setIsLoadingFile(true));
+      dispatch(uc2Slice.setUseAceEditor(false));
+      dispatch(
+        setNotification({
+          message: `Loading ${fileName}...`,
+          type: "info",
+        }),
+      );
 
-    const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/readSetupFile?setupFileName=${encodeURIComponent(
-      fileName
-    )}`;
+      const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/readSetupFile?setupFileName=${encodeURIComponent(
+        fileName,
+      )}`;
 
-    fetch(url)
-      .then((res) => res.json())
-      .then((data) => {
-        dispatch(uc2Slice.setEditorJson(data));
-        dispatch(
-          setNotification({
-            message: `${fileName} loaded successfully`,
-            type: "success",
-          })
-        );
-        setTimeout(() => dispatch(clearNotification()), 3000);
-      })
-      .catch((error) => {
-        console.error("Error loading setup file:", error);
-        dispatch(
-          setNotification({
-            message: `Failed to load ${fileName}`,
-            type: "error",
-          })
-        );
-      })
-      .finally(() => {
-        dispatch(uc2Slice.setIsLoadingFile(false));
-      });
-  }, [hostIP, hostPort, dispatch]);
+      fetch(url)
+        .then((res) => res.json())
+        .then((data) => {
+          dispatch(uc2Slice.setEditorJson(data));
+          dispatch(
+            setNotification({
+              message: `${fileName} loaded successfully`,
+              type: "success",
+              autoHideDuration: 3000,
+            }),
+          );
+        })
+        .catch((error) => {
+          console.error("Error loading setup file:", error);
+          dispatch(
+            setNotification({
+              message: `Failed to load ${fileName}`,
+              type: "error",
+            }),
+          );
+        })
+        .finally(() => {
+          dispatch(uc2Slice.setIsLoadingFile(false));
+        });
+    },
+    [hostIP, hostPort, dispatch],
+  );
 
   // Auto-load current active file when it becomes available
   useEffect(() => {
-    if (currentActiveFilename && availableSetups.includes(currentActiveFilename) && !editorJson) {
+    if (
+      currentActiveFilename &&
+      availableSetups.includes(currentActiveFilename) &&
+      !editorJson
+    ) {
       loadConfigurationFile(currentActiveFilename);
     }
-  }, [currentActiveFilename, availableSetups, editorJson, loadConfigurationFile]);
+  }, [
+    currentActiveFilename,
+    availableSetups,
+    editorJson,
+    loadConfigurationFile,
+  ]);
 
   const handleNewConfig = () => {
     dispatch(uc2Slice.setUseAceEditor(true));
@@ -219,7 +236,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
         setNotification({
           message: "Please select a file to load",
           type: "warning",
-        })
+        }),
       );
       return;
     }
@@ -233,7 +250,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
         setNotification({
           message: "Please provide a filename",
           type: "warning",
-        })
+        }),
       );
       return;
     }
@@ -247,7 +264,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           setNotification({
             message: "No JSON content to preview",
             type: "warning",
-          })
+          }),
         );
         return;
       }
@@ -258,7 +275,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           setNotification({
             message: `Invalid JSON: ${jsonValidation.error}`,
             type: "error",
-          })
+          }),
         );
         return;
       }
@@ -269,7 +286,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           setNotification({
             message: "No JSON content to preview",
             type: "warning",
-          })
+          }),
         );
         return;
       }
@@ -299,7 +316,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
         setNotification({
           message: "Please provide a filename",
           type: "warning",
-        })
+        }),
       );
       return;
     }
@@ -311,7 +328,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           setNotification({
             message: "No JSON content to save",
             type: "warning",
-          })
+          }),
         );
         return;
       }
@@ -322,7 +339,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           setNotification({
             message: `Invalid JSON: ${jsonValidation.error}`,
             type: "error",
-          })
+          }),
         );
         return;
       }
@@ -333,7 +350,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           setNotification({
             message: "No JSON content to save",
             type: "warning",
-          })
+          }),
         );
         return;
       }
@@ -345,11 +362,11 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
       setNotification({
         message: "Saving configuration file...",
         type: "info",
-      })
+      }),
     );
 
     const url = `${hostIP}:${hostPort}/imswitch/api/UC2ConfigController/writeNewSetupFile?setupFileName=${encodeURIComponent(
-      newFileName
+      newFileName,
     )}&setAsCurrentConfig=${setAsCurrentConfig}&restart=${restartAfterSave}&overwrite=${overwriteFile}`;
 
     fetch(url, {
@@ -364,7 +381,8 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           setNotification({
             message: "Configuration file saved successfully",
             type: "success",
-          })
+            autoHideDuration: 3000,
+          }),
         );
 
         // Refresh available setups
@@ -375,11 +393,9 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
             setNotification({
               message: "ImSwitch is restarting with new configuration...",
               type: "info",
-            })
+            }),
           );
           // Note: Monitor restart status logic would be here if needed
-        } else {
-          setTimeout(() => dispatch(clearNotification()), 3000);
         }
       })
       .catch((error) => {
@@ -388,7 +404,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           setNotification({
             message: "Failed to save configuration file",
             type: "error",
-          })
+          }),
         );
       })
       .finally(() => {
@@ -403,7 +419,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           <Typography variant="h4" gutterBottom>
             Configuration Editor
           </Typography>
-          
+
           {/* Wizard Launch Section */}
           <Paper
             elevation={2}
@@ -446,45 +462,46 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
           </Typography>
 
           {/* Current Active Configuration Display */}
-          <Paper 
-            elevation={1} 
-            sx={{ 
-              p: 2, 
-              mb: 3, 
-            backgroundColor: "primary.light",
+          <Paper
+            elevation={1}
+            sx={{
+              p: 2,
+              mb: 3,
+              backgroundColor: "primary.light",
               color: "primary.contrastText",
               border: "1px solid",
-              borderColor: "grey.300"
+              borderColor: "grey.300",
             }}
           >
             <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
               <Typography variant="subtitle1" fontWeight="bold">
                 Current Active Configuration:
               </Typography>
-              {isLoadingCurrentFilename && (
-                <CircularProgress size={16} />
-              )}
+              {isLoadingCurrentFilename && <CircularProgress size={16} />}
             </Box>
-            <Typography 
-              variant="body1" 
-              sx={{ 
+            <Typography
+              variant="body1"
+              sx={{
                 fontFamily: "monospace",
                 color: currentActiveFilename ? "text.primary" : "text.primary",
-                fontStyle: currentActiveFilename ? "normal" : "italic"
+                fontStyle: currentActiveFilename ? "normal" : "italic",
               }}
             >
               {currentActiveFilename || "Loading..."}
             </Typography>
-            {currentActiveFilename && availableSetups.includes(currentActiveFilename) && (
-              <Typography variant="body2" color="success.main" sx={{ mt: 1 }}>
-                ✓ This file is available for editing and has been automatically selected below
-              </Typography>
-            )}
-            {currentActiveFilename && !availableSetups.includes(currentActiveFilename) && (
-              <Typography variant="body2" color="warning.main" sx={{ mt: 1 }}>
-                ⚠ This file is not found in available setups list
-              </Typography>
-            )}
+            {currentActiveFilename &&
+              availableSetups.includes(currentActiveFilename) && (
+                <Typography variant="body2" color="success.main" sx={{ mt: 1 }}>
+                  ✓ This file is available for editing and has been
+                  automatically selected below
+                </Typography>
+              )}
+            {currentActiveFilename &&
+              !availableSetups.includes(currentActiveFilename) && (
+                <Typography variant="body2" color="warning.main" sx={{ mt: 1 }}>
+                  ⚠ This file is not found in available setups list
+                </Typography>
+              )}
           </Paper>
 
           {(isLoadingFile || isSavingFile) && (
@@ -615,7 +632,7 @@ const ConfigurationEditorController = ({ hostIP, hostPort }) => {
                       checked={setAsCurrentConfig}
                       onChange={(e) =>
                         dispatch(
-                          uc2Slice.setSetAsCurrentConfig(e.target.checked)
+                          uc2Slice.setSetAsCurrentConfig(e.target.checked),
                         )
                       }
                       disabled={isLoadingFile || isSavingFile}

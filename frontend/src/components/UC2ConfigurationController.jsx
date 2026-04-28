@@ -40,10 +40,7 @@ import "ace-builds/src-noconflict/theme-github";
 import { JsonEditor } from "json-edit-react";
 import React, { useCallback, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import {
-  clearNotification,
-  setNotification,
-} from "../state/slices/NotificationSlice";
+import { setNotification } from "../state/slices/NotificationSlice";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 import * as uc2Slice from "../state/slices/UC2Slice.js";
 import {
@@ -127,9 +124,9 @@ const UC2ConfigurationController = () => {
               data.available_setups?.length || 0
             } configuration files`,
             type: "success",
+            autoHideDuration: 3000,
           }),
         );
-        setTimeout(() => dispatch(clearNotification()), 3000);
       })
       .catch((error) => {
         console.error("Error fetching setups:", error);
@@ -137,9 +134,9 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "Failed to load configuration files",
             type: "error",
+            autoHideDuration: 3000,
           }),
         );
-        setTimeout(() => dispatch(clearNotification()), 3000);
       });
   }, [hostIP, hostPort, dispatch]);
 
@@ -169,9 +166,9 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "Failed to load current configuration",
             type: "warning",
+            autoHideDuration: 3000,
           }),
         );
-        setTimeout(() => dispatch(clearNotification()), 3000);
       })
       .finally(() => {
         dispatch(uc2Slice.setIsLoadingCurrentFilename(false));
@@ -207,10 +204,10 @@ const UC2ConfigurationController = () => {
             setNotification({
               message: "ImSwitch backend is back online!",
               type: "success",
+              autoHideDuration: 3000,
             }),
           );
           dispatch(uc2Slice.setIsRestarting(false));
-          setTimeout(() => dispatch(clearNotification()), 3000);
           fetchAvailableSetups();
           fetchCurrentSetup();
         })
@@ -341,10 +338,10 @@ const UC2ConfigurationController = () => {
             setNotification({
               message: "Configuration updated successfully",
               type: "success",
+              autoHideDuration: 3000,
             }),
           );
           dispatch(uc2Slice.setIsRestarting(false));
-          setTimeout(() => dispatch(clearNotification()), 3000);
         }
       })
       .catch((error) => {
@@ -419,9 +416,9 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "Configuration file loaded successfully",
             type: "success",
+            autoHideDuration: 3000,
           }),
         );
-        setTimeout(() => dispatch(clearNotification()), 3000);
       })
       .catch((error) => {
         console.error("Error loading setup file:", error);
@@ -620,6 +617,7 @@ const UC2ConfigurationController = () => {
           setNotification({
             message: "Configuration file saved successfully",
             type: "success",
+            autoHideDuration: 3000,
           }),
         );
 
@@ -634,8 +632,6 @@ const UC2ConfigurationController = () => {
             }),
           );
           monitorRestartStatus();
-        } else {
-          setTimeout(() => dispatch(clearNotification()), 3000);
         }
       })
       .catch((error) => {

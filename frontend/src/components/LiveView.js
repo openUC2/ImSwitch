@@ -9,7 +9,6 @@ import {
   IconButton,
   Drawer,
   useMediaQuery,
-  useTheme,
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
@@ -27,10 +26,7 @@ import ObjectiveSwitcher from "./ObjectiveSwitcher";
 import DetectorTriggerController from "./DetectorTriggerController";
 import * as liveViewSlice from "../state/slices/LiveViewSlice.js";
 import * as liveStreamSlice from "../state/slices/LiveStreamSlice.js";
-import {
-  setNotification,
-  clearNotification,
-} from "../state/slices/NotificationSlice";
+import { setNotification } from "../state/slices/NotificationSlice";
 import LiveViewControlWrapper from "../axon/LiveViewControlWrapper.js";
 import ExtendedLEDMatrixController from "./ExtendedLEDMatrixController.jsx";
 
@@ -94,37 +90,15 @@ export default function LiveView({ setFileManagerInitialPath }) {
   const [stageControlTab, setStageControlTab] = useState(0); // 0 = Multiple Axis View, 1 = Joystick Control
 
   // Responsive design: collapsible right panel for mobile
-  const theme = useTheme();
   const isMobile = useMediaQuery("(max-width:600px)");
   const [rightPanelOpen, setRightPanelOpen] = useState(!isMobile);
 
   // Track previous activeTab to detect changes
   const prevActiveTabRef = React.useRef(activeTab);
 
-  // Track notification timeout for proper cleanup
-  const notificationTimeoutRef = React.useRef(null);
-
   const showNotification = (message, type = "success") => {
-    // Clear any existing timeout to prevent premature clearing of new notifications
-    if (notificationTimeoutRef.current) {
-      clearTimeout(notificationTimeoutRef.current);
-    }
-
-    dispatch(setNotification({ message, type }));
-    notificationTimeoutRef.current = setTimeout(() => {
-      dispatch(clearNotification());
-      notificationTimeoutRef.current = null;
-    }, 3000);
+    dispatch(setNotification({ message, type, autoHideDuration: 3000 }));
   };
-
-  // Cleanup notification timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (notificationTimeoutRef.current) {
-        clearTimeout(notificationTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const formatLabels = {
     1: "TIFF",

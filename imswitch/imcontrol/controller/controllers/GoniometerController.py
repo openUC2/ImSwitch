@@ -33,7 +33,6 @@ except ImportError:
 from imswitch.imcommon.model import initLogger, APIExport
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from ..basecontrollers import LiveUpdatedController
-from imswitch import IS_HEADLESS
 
 
 # ──────────────────────────────────────────────
@@ -190,8 +189,23 @@ def measure_contact_angles(gray, config=None, return_debug=False):
     return (result, debug) if return_debug else result
 
 
+def _resize_to_max(frame, max_dim=800):
+    """Resize frame so its longest edge does not exceed max_dim, preserving aspect ratio."""
+    h, w = frame.shape[:2]
+    if max(h, w) <= max_dim:
+        return frame
+    scale = max_dim / max(h, w)
+    return cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+
+
 def draw_result(frame, result, debug, config=None, crop_offset=None):
-    """Overlay measurement annotations.
+    """Overlay measurement annotations on *frame* and return a resized display image.
+
+    Annotations are drawn at the native frame resolution so all coordinates
+    (contour, contact points, polynomial curves) remain pixel-accurate.
+    Annotation thicknesses and font sizes scale proportionally with the image size
+    (reference: 500 px). The image is down-scaled to max 800 px at the end.
+
     crop_offset = (ox, oy) shifts contour/curve points from cropped into full-frame coords.
     """
     if config is None:
@@ -200,43 +214,48 @@ def draw_result(frame, result, debug, config=None, crop_offset=None):
     vis = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     h, w = vis.shape[:2]
 
+    # Annotation scale factor: 1.0 at 500 px reference, larger for higher-res images.
+    ann = max(h, w) / 500.0
+
     ox, oy = crop_offset if crop_offset else (0, 0)
 
     if 'contour' in debug:
         shifted = debug['contour'].copy()
         shifted[:, 0, 0] += ox
         shifted[:, 0, 1] += oy
-        cv2.drawContours(vis, [shifted], -1, (0, 0, 180), 1)
+        cv2.drawContours(vis, [shifted], -1, (0, 0, 180), max(1, round(ann)))
 
     if not result.get('success', False):
-        cv2.putText(vis, "Detection failed", (30, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-        return vis
+        cv2.putText(vis, "Detection failed",
+                    (round(30 * ann), round(40 * ann)),
+                    cv2.FONT_HERSHEY_SIMPLEX, max(0.5, 0.9 * ann),
+                    (0, 0, 255), max(1, round(2 * ann)))
+        return _resize_to_max(vis)
 
     slope = debug['baseline_slope']
     intercept = debug['baseline_intercept']
-    left_pt = result['left_contact']   # already in full-frame coords
+    left_pt  = result['left_contact']
     right_pt = result['right_contact']
 
     # Baseline across full image
-    y_left = int(slope * (0 - ox) + intercept + oy)
+    y_left  = int(slope * (0 - ox) + intercept + oy)
     y_right = int(slope * (w - ox) + intercept + oy)
-    cv2.line(vis, (0, y_left), (w, y_right), (0, 255, 0), 2)
+    cv2.line(vis, (0, y_left), (w, y_right), (0, 255, 0), max(1, round(2 * ann)))
 
-    cv2.circle(vis, left_pt, 6, (0, 255, 255), -1)
-    cv2.circle(vis, right_pt, 6, (0, 255, 255), -1)
+    cv2.circle(vis, left_pt,  max(3, round(6 * ann)), (0, 255, 255), -1)
+    cv2.circle(vis, right_pt, max(3, round(6 * ann)), (0, 255, 255), -1)
 
-    fit_radius = debug.get('fit_radius', 60)
-    tangent_len = max(80, int(fit_radius * 1.5))
+    fit_radius  = debug.get('fit_radius', 60)
+    tangent_len = max(round(80 * ann), round(fit_radius * 1.5))
 
     for side, poly, contact, angle in [
-        ('left', debug.get('poly_left'), left_pt, result['left_angle']),
+        ('left',  debug.get('poly_left'),  left_pt,  result['left_angle']),
         ('right', debug.get('poly_right'), right_pt, result['right_angle']),
     ]:
         if poly is None or angle is None:
             continue
 
-        cx = contact[0] - ox  # contact x in cropped space
+        cx = contact[0] - ox  # contact x in the polynomial's coordinate space
         if side == 'left':
             xs = np.linspace(cx, cx + fit_radius, 200)
         else:
@@ -244,33 +263,39 @@ def draw_result(frame, result, debug, config=None, crop_offset=None):
         ys = np.polyval(poly, xs)
         curve = np.column_stack((xs + ox, ys + oy)).astype(np.int32)
         for i in range(len(curve) - 1):
-            cv2.line(vis, tuple(curve[i]), tuple(curve[i + 1]), (0, 255, 255), 2)
+            cv2.line(vis, tuple(curve[i]), tuple(curve[i + 1]),
+                     (0, 255, 255), max(1, round(2 * ann)))
 
         delta = config['tangent_delta']
-        dy = np.polyval(poly, cx + delta) - np.polyval(poly, cx - delta)
-        tvec = np.array([2 * delta, dy])
-        tvec = tvec / (np.linalg.norm(tvec) + 1e-10)
-        pt = np.array([float(contact[0]), float(contact[1])])
+        dy    = np.polyval(poly, cx + delta) - np.polyval(poly, cx - delta)
+        tvec  = np.array([2 * delta, dy])
+        tvec  = tvec / (np.linalg.norm(tvec) + 1e-10)
+        pt    = np.array([float(contact[0]), float(contact[1])])
         cv2.line(vis,
                  tuple((pt - tvec * tangent_len).astype(int)),
                  tuple((pt + tvec * tangent_len).astype(int)),
-                 (255, 0, 255), 2)
+                 (255, 0, 255), max(1, round(2 * ann)))
 
         text = f"{angle:.1f} deg"
         if side == 'left':
-            tx, ty = contact[0] + 12, contact[1] - 15
+            tx, ty = contact[0] + round(12 * ann), contact[1] - round(15 * ann)
         else:
-            tx, ty = contact[0] - 120, contact[1] - 15
-        cv2.putText(vis, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            tx, ty = contact[0] - round(120 * ann), contact[1] - round(15 * ann)
+        cv2.putText(vis, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
+                    max(0.4, 0.7 * ann), (255, 255, 255), max(1, round(2 * ann)))
 
     tilt = result.get('baseline_tilt_deg', 0) or 0
-    cv2.putText(vis, f"Tilt: {tilt:+.2f} deg", (15, 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    left_a = result['left_angle'] or 0
+    cv2.putText(vis, f"Tilt: {tilt:+.2f} deg",
+                (round(15 * ann), round(25 * ann)),
+                cv2.FONT_HERSHEY_SIMPLEX, max(0.4, 0.6 * ann),
+                (0, 255, 0), max(1, round(2 * ann)))
+    left_a  = result['left_angle']  or 0
     right_a = result['right_angle'] or 0
-    cv2.putText(vis, f"Avg: {(left_a + right_a) / 2:.1f} deg", (15, 50),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-    return vis
+    cv2.putText(vis, f"Avg: {(left_a + right_a) / 2:.1f} deg",
+                (round(15 * ann), round(50 * ann)),
+                cv2.FONT_HERSHEY_SIMPLEX, max(0.4, 0.6 * ann),
+                (255, 255, 255), max(1, round(2 * ann)))
+    return _resize_to_max(vis)
 
 
 def compute_manual_angle(baseline_pt1, baseline_pt2, tangent_pt):
@@ -499,7 +524,13 @@ class GoniometerController(LiveUpdatedController):
                 self._snapped_gray, self._config, return_debug=True
             )
 
-            # Shift contact points into full-frame coords if crop was active
+            # Draw on the snapped (cropped) image BEFORE shifting contact points,
+            # so all coordinates remain in the snapped-image coordinate space.
+            self._result_image = draw_result(
+                self._snapped_image, result, debug, self._config, crop_offset=None
+            )
+
+            # Shift contact points into full-frame coords for the returned data.
             crop_offset = (self._crop_roi['x1'], self._crop_roi['y1']) if self._crop_roi else None
             if crop_offset and result.get('left_contact') is not None:
                 result['left_contact'] = (
@@ -510,12 +541,6 @@ class GoniometerController(LiveUpdatedController):
                     result['right_contact'][0] + crop_offset[0],
                     result['right_contact'][1] + crop_offset[1],
                 )
-
-            # Draw on snapped image (already cropped so offset=None for contour coords,
-            # but we need the full frame for display if no crop)
-            self._result_image = draw_result(
-                self._snapped_image, result, debug, self._config, crop_offset=None
-            )
 
             return {
                 "success": result.get("success", False),
@@ -548,18 +573,23 @@ class GoniometerController(LiveUpdatedController):
             annotated_b64 = None
             if self._snapped_image is not None:
                 vis = self._snapped_image.copy()
+                mh, mw = vis.shape[:2]
+                ann = max(mh, mw) / 500.0
                 b1 = (int(baseline_x1), int(baseline_y1))
                 b2 = (int(baseline_x2), int(baseline_y2))
                 tp = (int(tangent_x), int(tangent_y))
                 d1 = np.linalg.norm(np.array(tp) - np.array(b1, dtype=float))
                 d2 = np.linalg.norm(np.array(tp) - np.array(b2, dtype=float))
                 contact = b1 if d1 < d2 else b2
-                cv2.line(vis, b1, b2, (0, 255, 0), 2)
-                cv2.line(vis, contact, tp, (255, 0, 255), 2)
-                cv2.circle(vis, contact, 6, (255, 255, 0), -1)
-                cv2.circle(vis, tp, 6, (0, 255, 255), -1)
-                cv2.putText(vis, f"{angle:.1f} deg", (contact[0] + 10, contact[1] - 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                cv2.line(vis, b1, b2, (0, 255, 0), max(1, round(2 * ann)))
+                cv2.line(vis, contact, tp, (255, 0, 255), max(1, round(2 * ann)))
+                cv2.circle(vis, contact, max(3, round(6 * ann)), (255, 255, 0), -1)
+                cv2.circle(vis, tp, max(3, round(6 * ann)), (0, 255, 255), -1)
+                cv2.putText(vis, f"{angle:.1f} deg",
+                            (contact[0] + round(10 * ann), contact[1] - round(20 * ann)),
+                            cv2.FONT_HERSHEY_SIMPLEX, max(0.4, 0.8 * ann),
+                            (255, 255, 255), max(1, round(2 * ann)))
+                vis = _resize_to_max(vis)
                 self._result_image = vis
                 annotated_b64 = self._image_to_base64(vis)
 
@@ -627,6 +657,61 @@ class GoniometerController(LiveUpdatedController):
         """Clear all stored measurements."""
         self._measurements = []
         return {"success": True, "total": 0}
+
+    # ───────── API: camera settings ─────────
+
+    @APIExport(runOnUIThread=True)
+    def get_camera_settings_goniometer(self) -> Dict[str, Any]:
+        """Return current camera exposure time and gain."""
+        if self.camera is None:
+            return {"success": False, "exposure_time": None, "gain": None}
+        try:
+            det = self._master.detectorsManager[self.camera]
+            exposure = None
+            gain = None
+            for attr in ('getExposureTime', 'exposureTime', 'exposure_time'):
+                if hasattr(det, attr):
+                    val = getattr(det, attr)
+                    exposure = val() if callable(val) else val
+                    break
+            for attr in ('getGain', 'gain'):
+                if hasattr(det, attr):
+                    val = getattr(det, attr)
+                    gain = val() if callable(val) else val
+                    break
+            return {"success": True, "exposure_time": exposure, "gain": gain}
+        except Exception as e:
+            return {"success": False, "exposure_time": None, "gain": None, "error": str(e)}
+
+    @APIExport(runOnUIThread=True, requestType="POST")
+    def set_camera_settings_goniometer(self,
+                                        exposure_time: float = None,
+                                        gain: float = None) -> Dict[str, Any]:
+        """Set camera exposure time and/or gain via the detector manager."""
+        if self.camera is None:
+            return {"success": False, "error": "No camera configured"}
+        try:
+            det = self._master.detectorsManager[self.camera]
+            if exposure_time is not None:
+                for method in ('setExposureTime', 'setParameter'):
+                    if hasattr(det, method):
+                        if method == 'setParameter':
+                            det.setParameter('exposure', float(exposure_time))
+                        else:
+                            getattr(det, method)(float(exposure_time))
+                        break
+            if gain is not None:
+                for method in ('setGain', 'setParameter'):
+                    if hasattr(det, method):
+                        if method == 'setParameter':
+                            det.setParameter('gain', float(gain))
+                        else:
+                            getattr(det, method)(float(gain))
+                        break
+            return {"success": True}
+        except Exception as e:
+            self._logger.error("set_camera_settings_goniometer failed: %s", e)
+            return {"success": False, "error": str(e)}
 
     # ───────── API: download result image ─────────
 

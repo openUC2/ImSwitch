@@ -664,31 +664,37 @@ const UC2ConfigurationController = () => {
       body: JSON.stringify(finalJson),
     })
       .then(async (response) => {
+        const text = await response.text();
+        let data = null;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = text;
+        }
+
         if (!response.ok) {
           // Try to get error message from response
           let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-          try {
-            const text = await response.text();
-            // Check if it's JSON error
-            try {
-              const errorData = JSON.parse(text);
+          if (data && typeof data === "object") {
+            errorMessage =
+              data.detail || data.message || data.error || errorMessage;
+          } else if (typeof data === "string") {
+            if (data.includes("Internal Server Error")) {
               errorMessage =
-                errorData.message || errorData.error || errorMessage;
-            } catch {
-              // Not JSON, might be HTML error page
-              if (text.includes("Internal Server Error")) {
-                errorMessage =
-                  "Backend Internal Server Error - Check backend logs for details";
-              } else if (text.length < 200) {
-                errorMessage = text;
-              }
+                "Backend Internal Server Error - Check backend logs for details";
+            } else if (data.length < 200) {
+              errorMessage = data;
             }
-          } catch {
-            // Ignore text parsing errors
           }
-          throw new Error(errorMessage);
+
+          const httpError = new Error(errorMessage);
+          httpError.isHttpError = true;
+          httpError.status = response.status;
+          throw httpError;
         }
-        return response.json();
+
+        // Backend can return plain text for success responses.
+        return data;
       })
       .then((data) => {
         console.log("File saved:", data);
@@ -720,10 +726,14 @@ const UC2ConfigurationController = () => {
       .catch((error) => {
         console.error("Error saving file:", error);
 
+        const isNetworkError =
+          error?.name === "TypeError" && !error?.isHttpError;
+
         // During expected restart, transient network and gateway errors are normal.
         if (
           restartAfterSave &&
-          (!error.isHttpError || isExpectedRestartHttpStatus(error.status))
+          (isNetworkError ||
+            (error.isHttpError && isExpectedRestartHttpStatus(error.status)))
         ) {
           dispatch(uc2Slice.setIsRestarting(true));
           dispatch(

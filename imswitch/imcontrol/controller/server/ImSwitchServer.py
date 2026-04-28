@@ -742,7 +742,7 @@ class ImSwitchServer(Worker):
             options = dataclasses.replace(options, setupFileName=setupFileName)
             configfiletools.saveOptions(options)
         if restart:
-            ostools.restartSoftware(forceConfigFile=setAsCurrentConfig)
+            ostools.restartSoftware(forceConfigFile=not setAsCurrentConfig)
         return f"Setup file {setupFileName} written successfully."
 
     @api_router.get("/UC2ConfigController/setSetupFileName")

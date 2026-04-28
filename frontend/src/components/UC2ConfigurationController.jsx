@@ -14,7 +14,6 @@ import {
   Button,
   Card,
   CardContent,
-  Checkbox,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -74,7 +73,15 @@ const UC2ConfigurationController = () => {
   const hostPort = connectionSettings.apiPort || "8000";
 
   const [showConfigWizard, setShowConfigWizard] = React.useState(false);
-  const [isApplyWarningOpen, setIsApplyWarningOpen] = React.useState(false);
+  const [warningDialog, setWarningDialog] = React.useState({
+    open: false,
+    title: "",
+    content: null,
+    confirmLabel: "Confirm",
+    onConfirm: null,
+  });
+  const closeWarningDialog = () =>
+    setWarningDialog((prev) => ({ ...prev, open: false }));
   const hasAutoSelectedRef = React.useRef(false);
 
   // Access global Redux state
@@ -270,11 +277,83 @@ const UC2ConfigurationController = () => {
       return;
     }
 
-    setIsApplyWarningOpen(true);
+    setWarningDialog({
+      open: true,
+      title: "Apply Configuration?",
+      content: (
+        <>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            A wrong configuration can prevent the system from starting
+            correctly. In this case, the device may become temporarily
+            unreachable and require manual recovery on the system.
+          </Alert>
+          <Typography variant="body2">
+            Selected configuration: <strong>{selectedSetup}</strong>
+          </Typography>
+          {restartSoftware && (
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              Restart is enabled. A temporary disconnect during restart is
+              expected.
+            </Typography>
+          )}
+        </>
+      ),
+      confirmLabel: "Apply Anyway",
+      onConfirm: handleSetSetup,
+    });
   };
 
-  const handleCloseApplyWarning = () => {
-    setIsApplyWarningOpen(false);
+  const handleOpenAdvancedSaveWarning = () => {
+    if (!newFileName) {
+      dispatch(
+        setNotification({
+          message: "Please provide a filename",
+          type: "warning",
+        }),
+      );
+      return;
+    }
+
+    if (!editorJson && !editorJsonText.trim()) {
+      dispatch(
+        setNotification({
+          message: "No JSON content to save",
+          type: "warning",
+        }),
+      );
+      return;
+    }
+
+    setWarningDialog({
+      open: true,
+      title: "Save Configuration?",
+      content: (
+        <>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            A wrong configuration can prevent the system from starting
+            correctly. In this case, the device may become temporarily
+            unreachable and require manual recovery on the system.
+          </Alert>
+          <Typography variant="body2">
+            Save as: <strong>{newFileName}</strong>
+          </Typography>
+          {setAsCurrentConfig && (
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              This configuration will be set as the current active
+              configuration.
+            </Typography>
+          )}
+          {restartAfterSave && (
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              Restart is enabled. A temporary disconnect during restart is
+              expected.
+            </Typography>
+          )}
+        </>
+      ),
+      confirmLabel: "Save Anyway",
+      onConfirm: handleSaveFile,
+    });
   };
 
   const handleSetSetup = () => {
@@ -585,63 +664,96 @@ const UC2ConfigurationController = () => {
       body: JSON.stringify(finalJson),
     })
       .then(async (response) => {
+        const text = await response.text();
+        let data = null;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = text;
+        }
+
         if (!response.ok) {
           // Try to get error message from response
           let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-          try {
-            const text = await response.text();
-            // Check if it's JSON error
-            try {
-              const errorData = JSON.parse(text);
+          if (data && typeof data === "object") {
+            errorMessage =
+              data.detail || data.message || data.error || errorMessage;
+          } else if (typeof data === "string") {
+            if (data.includes("Internal Server Error")) {
               errorMessage =
-                errorData.message || errorData.error || errorMessage;
-            } catch {
-              // Not JSON, might be HTML error page
-              if (text.includes("Internal Server Error")) {
-                errorMessage =
-                  "Backend Internal Server Error - Check backend logs for details";
-              } else if (text.length < 200) {
-                errorMessage = text;
-              }
+                "Backend Internal Server Error - Check backend logs for details";
+            } else if (data.length < 200) {
+              errorMessage = data;
             }
-          } catch {
-            // Ignore text parsing errors
           }
-          throw new Error(errorMessage);
+
+          const httpError = new Error(errorMessage);
+          httpError.isHttpError = true;
+          httpError.status = response.status;
+          throw httpError;
         }
-        return response.json();
+
+        // Backend can return plain text for success responses.
+        return data;
       })
       .then((data) => {
         console.log("File saved:", data);
-        dispatch(
-          setNotification({
-            message: "Configuration file saved successfully",
-            type: "success",
-            autoHideDuration: 3000,
-          }),
-        );
 
         // Refresh available setups
         fetchAvailableSetups();
 
         if (restartAfterSave) {
+          dispatch(uc2Slice.setIsRestarting(true));
           dispatch(
             setNotification({
-              message: "ImSwitch is restarting with new configuration...",
+              message:
+                "ImSwitch is restarting with new configuration... Please wait",
               type: "info",
             }),
           );
           monitorRestartStatus();
+        } else {
+          dispatch(
+            setNotification({
+              message: "Configuration file saved successfully",
+              type: "success",
+              autoHideDuration: 3000,
+            }),
+          );
+          dispatch(uc2Slice.setIsRestarting(false));
         }
       })
       .catch((error) => {
         console.error("Error saving file:", error);
+
+        const isNetworkError =
+          error?.name === "TypeError" && !error?.isHttpError;
+
+        // During expected restart, transient network and gateway errors are normal.
+        if (
+          restartAfterSave &&
+          (isNetworkError ||
+            (error.isHttpError && isExpectedRestartHttpStatus(error.status)))
+        ) {
+          dispatch(uc2Slice.setIsRestarting(true));
+          dispatch(
+            setNotification({
+              message:
+                "ImSwitch is restarting with new configuration... Please wait",
+              type: "info",
+            }),
+          );
+          monitorRestartStatus();
+          return;
+        }
+
         dispatch(
           setNotification({
             message: `Failed to save configuration: ${error.message}`,
             type: "error",
           }),
         );
+        dispatch(uc2Slice.setIsRestarting(false));
       })
       .finally(() => {
         dispatch(uc2Slice.setIsSavingFile(false));
@@ -649,7 +761,7 @@ const UC2ConfigurationController = () => {
   };
 
   const isTemporarilyRestarting =
-    isRestarting && restartSoftware && !uc2Connected;
+    isRestarting && (restartSoftware || restartAfterSave) && !uc2Connected;
 
   return (
     <Box sx={{ p: 3, maxWidth: 1200, mx: "auto" }}>
@@ -738,7 +850,7 @@ const UC2ConfigurationController = () => {
                     <LinearProgress />
                   </Box>
                   <Typography variant="body2">
-                    {restartSoftware
+                    {restartSoftware || restartAfterSave
                       ? "ImSwitch is restarting..."
                       : "Processing configuration..."}
                   </Typography>
@@ -811,46 +923,6 @@ const UC2ConfigurationController = () => {
               >
                 {isRestarting ? "Processing..." : "Apply Configuration"}
               </Button>
-
-              <Dialog
-                open={isApplyWarningOpen}
-                onClose={handleCloseApplyWarning}
-                maxWidth="sm"
-                fullWidth
-              >
-                <DialogTitle>Apply Configuration?</DialogTitle>
-                <DialogContent>
-                  <Alert severity="warning" sx={{ mb: 2 }}>
-                    A wrong configuration can prevent the system from starting
-                    correctly. In this case, the device may become temporarily
-                    unreachable and require manual recovery on the system.
-                  </Alert>
-                  <Typography variant="body2">
-                    Selected configuration: <strong>{selectedSetup}</strong>
-                  </Typography>
-                  {restartSoftware && (
-                    <Typography variant="body2" sx={{ mt: 1 }}>
-                      Restart is enabled. A temporary disconnect during restart
-                      is expected.
-                    </Typography>
-                  )}
-                </DialogContent>
-                <DialogActions>
-                  <Button onClick={handleCloseApplyWarning} color="inherit">
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      handleCloseApplyWarning();
-                      handleSetSetup();
-                    }}
-                    color="warning"
-                    variant="contained"
-                  >
-                    Apply Anyway
-                  </Button>
-                </DialogActions>
-              </Dialog>
 
               {/* Confirmation Dialog */}
               <Dialog open={isDialogOpen} onClose={handleDialogClose}>
@@ -934,6 +1006,19 @@ const UC2ConfigurationController = () => {
                 For advanced users: directly edit JSON configuration files with
                 syntax validation and preview
               </Typography>
+
+              {isRestarting && (
+                <Alert severity="info" sx={{ mb: 3 }}>
+                  <Box sx={{ mb: 1 }}>
+                    <LinearProgress />
+                  </Box>
+                  <Typography variant="body2">
+                    {restartSoftware || restartAfterSave
+                      ? "ImSwitch is restarting..."
+                      : "Processing configuration..."}
+                  </Typography>
+                </Alert>
+              )}
 
               {(isLoadingFile || isSavingFile) && (
                 <Alert severity="info" sx={{ mb: 3 }}>
@@ -1076,7 +1161,7 @@ const UC2ConfigurationController = () => {
                   <Grid item xs={12} sm={4}>
                     <FormControlLabel
                       control={
-                        <Checkbox
+                        <Switch
                           checked={setAsCurrentConfig}
                           onChange={(e) =>
                             dispatch(
@@ -1088,11 +1173,18 @@ const UC2ConfigurationController = () => {
                       }
                       label="Set as Current Config"
                     />
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      display="block"
+                    >
+                      Make this configuration the active one after saving
+                    </Typography>
                   </Grid>
                   <Grid item xs={12} sm={4}>
                     <FormControlLabel
                       control={
-                        <Checkbox
+                        <Switch
                           checked={restartAfterSave}
                           onChange={(e) =>
                             dispatch(
@@ -1104,11 +1196,19 @@ const UC2ConfigurationController = () => {
                       }
                       label="Restart After Save"
                     />
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      display="block"
+                    >
+                      Automatically restart ImSwitch to apply the new
+                      configuration
+                    </Typography>
                   </Grid>
                   <Grid item xs={12} sm={4}>
                     <FormControlLabel
                       control={
-                        <Checkbox
+                        <Switch
                           checked={overwriteFile}
                           onChange={(e) =>
                             dispatch(
@@ -1120,6 +1220,14 @@ const UC2ConfigurationController = () => {
                       }
                       label="Overwrite if exists"
                     />
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      display="block"
+                    >
+                      Replace existing file if a configuration with the same
+                      name already exists
+                    </Typography>
                   </Grid>
                 </Grid>
 
@@ -1139,7 +1247,7 @@ const UC2ConfigurationController = () => {
                   </Button>
                   <Button
                     variant="contained"
-                    onClick={handleSaveFile}
+                    onClick={handleOpenAdvancedSaveWarning}
                     disabled={
                       !newFileName ||
                       isLoadingFile ||
@@ -1173,6 +1281,32 @@ const UC2ConfigurationController = () => {
           </Card>
         </TabPanel>
       </Paper>
+
+      {/* Shared Warning Dialog */}
+      <Dialog
+        open={warningDialog.open}
+        onClose={closeWarningDialog}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>{warningDialog.title}</DialogTitle>
+        <DialogContent>{warningDialog.content}</DialogContent>
+        <DialogActions>
+          <Button onClick={closeWarningDialog} color="inherit">
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              closeWarningDialog();
+              warningDialog.onConfirm?.();
+            }}
+            color="warning"
+            variant="contained"
+          >
+            {warningDialog.confirmLabel}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Configuration Wizard */}
       <ConfigurationWizard

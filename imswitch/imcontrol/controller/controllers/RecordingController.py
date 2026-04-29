@@ -372,7 +372,7 @@ class RecordingController(ImConWidgetController):
             try:
                 normalized_relative = os.path.relpath(full_path, data_root).replace("\\", "/")
                 relative_file_path = f"/{normalized_relative}"
-                relative_path = f"/{os.path.dirname(normalized_relative)}" if os.path.dirname(normalized_relative) else "/"
+                relative_path = os.path.dirname(normalized_relative)
             except Exception:
                 relative_file_path = None
                 relative_path = None

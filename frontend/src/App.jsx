@@ -539,6 +539,7 @@ function App() {
                 </JupyterProvider>
               </Box>
             )}
+            {selectedPlugin === "GoniometerController" && <GoniometerController />}  
             {selectedPlugin === "Infinity Scanning" && (
               <LargeFovScanController />
             )}

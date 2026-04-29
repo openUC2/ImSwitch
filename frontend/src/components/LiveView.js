@@ -324,6 +324,23 @@ export default function LiveView({ setFileManagerInitialPath }) {
     showNotification(`Image downloaded (${label})`, "success");
   }
 
+  function triggerDownload(filePath, fallbackFileName = "capture") {
+    if (!filePath) return false;
+    const normalizedFilePath = `/${String(filePath).replace(/^\/+/, "")}`;
+    const downloadUrl = `${hostIP}:${hostPort}/imswitch/api/FileManager/download${encodeURI(normalizedFilePath)}`;
+    const downloadedFileName =
+      normalizedFilePath.split("/").pop() || fallbackFileName;
+
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = downloadedFileName;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    return true;
+  }
+
   function getFolderPath(path) {
     if (!path) return "/";
     const normalized = String(path).replace(/\\/g, "/");
@@ -365,11 +382,47 @@ export default function LiveView({ setFileManagerInitialPath }) {
       if (!response.ok) {
         throw new Error(`Stop recording failed: ${response.status}`);
       }
+
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+
       setIsRecording(false);
+
+      const recordedPath = data?.relativeFilePath || data?.fullPath || null;
+      if (recordedPath) {
+        const { filePath } = deriveCapturePaths(data);
+        dispatch(liveViewSlice.setLastCapturePath(filePath));
+      }
+
       showNotification("Recording saved", "success");
+      return data;
     } catch (error) {
       console.error("Stop recording failed:", error);
       showNotification("Recording stop failed", "error");
+      return null;
+    }
+  };
+
+  const stopRecAndDownload = async () => {
+    const data = await stopRec();
+    if (!data) return;
+
+    const filePath = data.relativeFilePath || null;
+    if (!filePath) {
+      showNotification(
+        "Recording stopped, but no downloadable file was returned",
+        "warning",
+      );
+      return;
+    }
+
+    const downloaded = triggerDownload(filePath, "recording.mp4");
+    if (downloaded) {
+      showNotification("Recording downloaded", "success");
     }
   };
 
@@ -466,6 +519,7 @@ export default function LiveView({ setFileManagerInitialPath }) {
             isRecording={isRecording}
             onStartRecord={startRec}
             onStopRecord={stopRec}
+            onStopRecordAndDownload={stopRecAndDownload}
             onGoToFolder={handleGoToFolder}
             lastCapturePath={lastCapturePath}
           />

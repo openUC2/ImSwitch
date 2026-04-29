@@ -13,6 +13,7 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
+  Tooltip,
   Switch,
   FormControlLabel,
 } from "@mui/material";
@@ -42,6 +43,7 @@ export default function StreamControls({
   isRecording,
   onStartRecord,
   onStopRecord,
+  onStopRecordAndDownload,
   onGoToFolder,
   lastCapturePath,
 }) {
@@ -436,7 +438,7 @@ export default function StreamControls({
             display: "flex",
             gap: 1,
             alignItems: "center",
-            flexWrap: "wrap",
+            flexWrap: "nowrap",
           }}
         >
           <Typography
@@ -503,6 +505,30 @@ export default function StreamControls({
               Stop
             </Button>
           )}
+
+          <Tooltip
+            title={isRecording ? "" : "Please start a recording first"}
+            arrow
+          >
+            <span>
+              <Button
+                variant="contained"
+                color="warning"
+                size="small"
+                onClick={onStopRecordAndDownload}
+                startIcon={<GetApp />}
+                disabled={!isRecording}
+                sx={{
+                  whiteSpace: "nowrap",
+                  height: 40,
+                  minHeight: 40,
+                  width: 160,
+                }}
+              >
+                Stop & Download
+              </Button>
+            </span>
+          </Tooltip>
         </Box>
       </Box>
 

@@ -355,6 +355,36 @@ class RecordingController(ImConWidgetController):
             self.stop_streaming_recording()
         self._commChannel.sigRecordingEnded.emit()
 
+    def _build_recording_response(self) -> Dict[str, Any]:
+        """Build path metadata for the current/last recording output."""
+        save_format = self.recordingArgs.get("saveFormat") if isinstance(self.recordingArgs, dict) else None
+        data_root = dirtools.UserFileDirs.getValidatedDataPath()
+
+        full_path: Optional[str] = None
+        if save_format == SaveFormat.MP4:
+            full_path = f"{self.savename}.mp4"
+        elif self.savename:
+            full_path = self.savename
+
+        relative_file_path = None
+        relative_path = None
+        if full_path:
+            try:
+                normalized_relative = os.path.relpath(full_path, data_root).replace("\\", "/")
+                relative_file_path = f"/{normalized_relative}"
+                relative_path = os.path.dirname(normalized_relative)
+            except Exception:
+                relative_file_path = None
+                relative_path = None
+
+        return {
+            "fullPath": full_path,
+            "relativePath": relative_path,
+            "relativeFilePath": relative_file_path,
+            "saveFormat": int(save_format.value) if isinstance(save_format, SaveFormat) else None,
+            "isDownloadableFile": bool(relative_file_path and save_format == SaveFormat.MP4),
+        }
+
 
     def recordingStarted(self):
         pass
@@ -598,7 +628,7 @@ class RecordingController(ImConWidgetController):
         return Response(im_bytes, headers=headers, media_type="image/png")
 
     @APIExport(runOnUIThread=True)
-    def startRecording(self, mSaveFormat: int = SaveFormat.TIFF, fileName: Optional[str] = None) -> None:
+    def startRecording(self, mSaveFormat: int = SaveFormat.TIFF, fileName: Optional[str] = None) -> Dict[str, Any]:
         """Starts recording with the set settings to the set file path using RecordingService.
         
         Parameters:
@@ -619,7 +649,7 @@ class RecordingController(ImConWidgetController):
 
         # we probably call from the FASTAPI server
         if self.recording:  # Already recording
-            return
+            return self._build_recording_response()
 
         # Use ISO 8601 date format, consistent with snap() method
         timeStampDay = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -650,13 +680,16 @@ class RecordingController(ImConWidgetController):
         self._start_continuous_recording(mSaveFormat)
         self.recording = True
         self.endedRecording = False
+        return self._build_recording_response()
 
     @APIExport(runOnUIThread=True)
-    def stopRecording(self) -> None:
+    def stopRecording(self) -> Dict[str, Any]:
         """Stops recording using RecordingService."""
+        recording_result = self._build_recording_response()
         self.recording = False
         self.endedRecording = True
         self._stop_recording()
+        return recording_result
 
     @APIExport(runOnUIThread=False)
     def isRecording(self) -> bool:

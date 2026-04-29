@@ -473,6 +473,28 @@ export const APP_REGISTRY = {
     pluginId: "DPCController",
   },
 
+  goniometerController: {
+    id: "goniometerController",
+    name: "Goniometer",
+    description:
+      "Contact angle measurement for sessile drops. Automated Canny-based analysis and manual 3-point annotation with measurement history and export.",
+    category: APP_CATEGORIES.APPS,
+    icon: VisibilityIcon,
+    enabled: false,
+    essential: false,
+    keywords: [
+      "goniometer",
+      "contact",
+      "angle",
+      "droplet",
+      "sessile",
+      "wetting",
+      "surface",
+      "measurement",
+    ],
+    pluginId: "GoniometerController",
+  },
+
   serialDebug: {
     id: "serialDebug",
     name: "Serial Debug",

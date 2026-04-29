@@ -14,6 +14,7 @@ import FocusLockController from "./components/FocusLockController.js";
 import HoloController from "./components/HoloController.js";
 import OffAxisHoloController from "./components/OffAxisHoloController.js";
 import DPCController from "./components/DPCController.js";
+import GoniometerController from "./components/GoniometerController.js";
 import ImJoyView from "./components/ImJoyView.js";
 import JupyterExecutor from "./components/JupyterExecutor.js";
 import LepMonController from "./components/LepmonController.js";
@@ -538,6 +539,7 @@ function App() {
                 </JupyterProvider>
               </Box>
             )}
+            {selectedPlugin === "GoniometerController" && <GoniometerController />}  
             {selectedPlugin === "Infinity Scanning" && (
               <LargeFovScanController />
             )}

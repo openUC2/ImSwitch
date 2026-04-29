@@ -73,6 +73,8 @@ dependencies = [
     "unitelabs-cdk",
     "opencv-python>=4.13.0.92",
     "mikro-next>=1",
+    "pip>=26.1",
+    "opencv-contrib-python-headless>=4.13.0.92",
 ]
 
 [project.optional-dependencies]

@@ -15,6 +15,16 @@
             "python": "${workspaceFolder}/.venv/bin/python"
         },
         {
+            "name": "Python: Aktuelle Datei x86",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false, 
+            "subProcess": true,
+            "python": "${workspaceFolder}/.venv_x86_311//bin/python"
+        },
+        {
             "name": "Python: Pytest",
             "type": "python",
             "request": "launch",

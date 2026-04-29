@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from pathlib import Path
 from imswitch.imcontrol.model import Options
 from imswitch.imcommon.model import ostools
-from imswitch.imcontrol.view.guitools import ViewSetupInfo
+from imswitch.imcontrol.view.guitools.ViewSetupInfo import ViewSetupInfo
 import dataclasses
 from typing import List
 import os
@@ -719,7 +719,7 @@ class ImSwitchServer(Worker):
             setupFileName = options.setupFileName
         if setupFileName.split("/")[-1] not in configfiletools.getSetupList():
             print(f"Setup file {setupFileName} does not exist.")
-            return f"Setup file {setupFileName} does not exist."
+            raise HTTPException(status_code=404, detail=f"Setup file {setupFileName} does not exist.")
         mOptions = Options(setupFileName=setupFileName)
         setup_dict = configfiletools.loadSetupInfo(mOptions, ViewSetupInfo)
         return setup_dict.to_dict()
@@ -728,10 +728,10 @@ class ImSwitchServer(Worker):
     def writeNewSetupFile(setupFileName: str, setupDict: dict, setAsCurrentConfig: bool = True, restart: bool = False, overwrite: bool = False) -> str:
         '''Writes a new setup file. and set as new setup file if needed on next boot.'''
         if setupFileName is None:
-            return "No setup file name provided."
+            raise HTTPException(status_code=400, detail="No setup file name provided.")
         if setupFileName in configfiletools.getSetupList() and not overwrite:
             print(f"Setup file {setupFileName} already exists.")
-            return f"Setup file {setupFileName} already exists."
+            raise HTTPException(status_code=409, detail=f"Setup file {setupFileName} already exists.")
         mOptions = Options(
             setupFileName=setupFileName
         )
@@ -742,10 +742,7 @@ class ImSwitchServer(Worker):
             options = dataclasses.replace(options, setupFileName=setupFileName)
             configfiletools.saveOptions(options)
         if restart:
-            ostools.restartSoftware()
-
-        if restart:
-            ostools.restartSoftware(forceConfigFile=setAsCurrentConfig)
+            ostools.restartSoftware(forceConfigFile=not setAsCurrentConfig)
         return f"Setup file {setupFileName} written successfully."
 
     @api_router.get("/UC2ConfigController/setSetupFileName")

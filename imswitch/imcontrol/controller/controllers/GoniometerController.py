@@ -152,7 +152,8 @@ def measure_contact_angles(gray, config=None, return_debug=False):
     left_tip, right_tip = _find_tips(contour)
     result['left_contact'] = (int(left_tip[0]), int(left_tip[1]))
     result['right_contact'] = (int(right_tip[0]), int(right_tip[1]))
-
+    result['gray'] =  None
+    
     slope, intercept, tilt = _compute_baseline(left_tip, right_tip)
     result['baseline_tilt_deg'] = tilt
     debug['baseline_slope'] = slope
@@ -186,6 +187,7 @@ def measure_contact_angles(gray, config=None, return_debug=False):
         result['right_angle'] = right_angle
 
     result['success'] = (result['left_angle'] is not None and result['right_angle'] is not None)
+    result['gray'] = gray  # include the (possibly resized) grayscale image for debugging/visualization
     return (result, debug) if return_debug else result
 
 
@@ -211,6 +213,7 @@ def draw_result(frame, result, debug, config=None, crop_offset=None):
     if config is None:
         config = DEFAULT_CONFIG
 
+    frame = result['gray'] if 'gray' in result and result['gray'] is not None else frame    
     vis = frame.copy() if len(frame.shape) == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     h, w = vis.shape[:2]
 

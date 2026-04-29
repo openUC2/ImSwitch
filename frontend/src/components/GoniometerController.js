@@ -321,13 +321,15 @@ const GoniometerController = () => {
 
   const handleDownloadResult = useCallback(() => {
     if (gState.resultImage) {
-      downloadDataUri(gState.resultImage, "contact_angle_result.jpg");
+      // add timestamp to filename to avoid browser caching issues when downloading multiple results in a row
+      downloadDataUri(gState.resultImage, "contact_angle_result_" + Date.now() + ".jpg");
     }
   }, [gState.resultImage]);
 
   const handleDownloadSnapped = useCallback(() => {
     if (gState.snappedImage) {
-      downloadDataUri(gState.snappedImage, "goniometer_snap.jpg");
+      // add timestamp to filename to avoid browser caching issues when downloading multiple results in a row
+      downloadDataUri(gState.snappedImage, "goniometer_snap_" + Date.now() + ".jpg");
     }
   }, [gState.snappedImage]);
 

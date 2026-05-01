@@ -286,7 +286,7 @@ const PixelCalibrationTab = () => {
           </Paper>
 
           {/* Information Box */}
-          <Paper sx={{ p: 2, mb: 2, backgroundColor: '#f0f7ff' }}>
+          <Paper sx={{ p: 2, mb: 2, backgroundColor: "secondary.main" }}>
             <Typography variant="subtitle2" gutterBottom>
               Calibration Process
             </Typography>
@@ -301,7 +301,7 @@ const PixelCalibrationTab = () => {
 
           {/* Results Display */}
           {result && (
-            <Paper sx={{ p: 2, backgroundColor: '#f5f5f5' }}>
+            <Paper sx={{ p: 2, backgroundColor: "secondary" }}>
               <Typography variant="h6" gutterBottom>
                 Calibration Results
               </Typography>

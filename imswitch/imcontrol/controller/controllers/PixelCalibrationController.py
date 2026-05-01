@@ -40,7 +40,7 @@ class PixelCalibrationController(LiveUpdatedController):
         self.currentObjective = self._getCurrentObjectiveId()
         self._loadAffineCalibrations()
 
-        # Load the observation Camera
+        # Load the observation Camera # TODO: we should remove this and distribute the information among the detectors automatically 
         if hasattr(self._setupInfo.PixelCalibration, 'ObservationCamera') and self._setupInfo.PixelCalibration.ObservationCamera is not None:
             self.observationCameraName = self._setupInfo.PixelCalibration.ObservationCamera
             # load detector from name

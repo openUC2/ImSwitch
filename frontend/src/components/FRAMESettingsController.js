@@ -38,20 +38,20 @@ const FRAMESettings = () => {
         scrollButtons="auto"
         sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}
       >
-        <Tab label="Track Motion" />
-        <Tab label="Set Lasers" />
-        <Tab label="Test Homing" />
-        <Tab label="Pixel Calibration" />
+        <Tab label="Automatic Pixel Calibration" />
         <Tab label="Manual Pixel Calibration" />
+        <Tab label="Set Lasers" />
+        <Tab label="Track Motion" />
+        <Tab label="Test Homing" />
         <Tab label="Objective Controller" />
       </Tabs>
 
       <Box sx={{ mt: 2 }}>
-        {selectedTab === 0 && <TrackMotionTab />}
-        {selectedTab === 1 && <SetLasersTab />}
-        {selectedTab === 2 && <TestHomingTab />}
-        {selectedTab === 3 && <PixelCalibrationTab />}
-        {selectedTab === 4 && <ManualPixelCalibrationTab />}
+        {selectedTab === 0 && <PixelCalibrationTab />}
+        {selectedTab === 1 && <ManualPixelCalibrationTab />}
+        {selectedTab === 2 && <SetLasersTab />}
+        {selectedTab === 3 && <TrackMotionTab />}
+        {selectedTab === 4 && <TestHomingTab />}
         {selectedTab === 5 && <ObjectiveControllerTab />}
       </Box>
     </Paper>

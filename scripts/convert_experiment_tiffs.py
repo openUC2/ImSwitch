@@ -1241,8 +1241,8 @@ def main():
 
 # standalone test call for build_ashlar_stitched
 def test_build_ashlar_stitched():
-    tiles_dir = "/Users/bene/ImSwitchConfig/data/ExperimentController/20260426_144145/20260426_144145_experiment0_0_experiment_0_/tiles/"
-    json_file = "/Users/bene/ImSwitchConfig/data/ExperimentController/20260426_144145/20260426_144145_experiment_t0000_protocol.json"
+    tiles_dir = "/Users/bene/ImSwitchConfig/data/ExperimentController/20260501_134257/20260501_134257_experiment0_0_experiment_0_/tiles/"
+    json_file = "/Users/bene/ImSwitchConfig/data/ExperimentController/20260501_134257/20260501_134257_experiment_t0000_protocol.json"
     
     # load pixelsize from json_file 
     with open(json_file, "r") as f: protocolDict = json.load(f)

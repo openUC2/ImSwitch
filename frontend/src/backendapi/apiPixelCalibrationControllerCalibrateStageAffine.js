@@ -1,15 +1,19 @@
-// Perform stage affine calibration (per-detector)
+// Start an affine stage/camera calibration in the background (per detector + objective)
 import createAxiosInstance from './createAxiosInstance';
 
 const apiPixelCalibrationControllerCalibrateStageAffine = async ({
   detectorName = null,
+  objectiveId = null,
   stepSizeUm = 100.0,
-  pattern = "cross",
+  pattern = 'cross',
   nSteps = 4,
 }) => {
   const axiosInstance = createAxiosInstance();
   const params = { stepSizeUm, pattern, nSteps };
   if (detectorName) params.detectorName = detectorName;
+  if (objectiveId !== null && objectiveId !== undefined && objectiveId !== '') {
+    params.objectiveId = String(objectiveId);
+  }
   const response = await axiosInstance.post(
     '/PixelCalibrationController/calibrateStageAffine',
     null,

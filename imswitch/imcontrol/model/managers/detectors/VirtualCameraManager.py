@@ -19,15 +19,11 @@ class VirtualCameraManager(DetectorManager):
 
         self._camera = self.VirtualMicroscope._camera
 
-        try:
-            flipX = detectorInfo.managerProperties['virtcam']['flipX']
-        except:
-            flipX = False
-
-        try:
-            flipY = detectorInfo.managerProperties['virtcam']['flipY']
-        except:
-            flipY = False
+        # Pixel size and flip are owned by PixelCalibrationController; the
+        # values are injected via setPixelSizeUm() / setFlipImage() at startup
+        # and on objective change. Use neutral defaults here.
+        flipX = False
+        flipY = False
         self.setFlipImage(flipY, flipX)
 
         # assign the camera from the Virtual Microscope

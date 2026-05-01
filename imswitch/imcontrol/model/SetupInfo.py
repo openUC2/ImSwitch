@@ -485,6 +485,11 @@ class ExperimentInfo:
     omeroUploadTimeout: int = 300
     """ Upload timeout for OMERO in seconds. """
 
+    overviewCameraName: Optional[str] = None
+    """ Name of the detector to use as overview camera. If ``None``, the
+    ExperimentController will look for a detector named ``"overviewcamera"``
+    and otherwise leave the overview feature disabled. """
+
 
 @dataclass(frozen=False)
 class ISMInfo:

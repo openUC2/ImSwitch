@@ -151,11 +151,30 @@ class ExperimentController(ImConWidgetController):
 
         # Initialize overview camera registration service
         self._overview_registration = OverviewRegistrationService()
-        # Overview camera is no longer wired through PixelCalibration; the
-        # ExperimentController works without it. Future integrations should
-        # consume detector instances directly from the DetectorManager.
+        # Overview camera is resolved through the DetectorManager, using the
+        # detector name configured in setup (experiment.overviewCameraName).
+        # Falls back to a detector literally named "overviewcamera" if any.
         self._overview_camera = None
         self._overview_camera_name = None
+        try:
+            preferred = getattr(self._master.experimentManager, "overviewCameraName", None)
+            allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
+            candidates = []
+            if preferred:
+                candidates.append(preferred)
+            candidates.append("overviewcamera")
+            for name in candidates:
+                if name and name in allDetectorNames:
+                    self._overview_camera_name = name
+                    self._overview_camera = self._master.detectorsManager[name]
+                    self._logger.info(f"Overview camera resolved to detector '{name}'")
+                    break
+            if self._overview_camera is None:
+                self._logger.info(
+                    "No overview camera configured; overview features will return errors"
+                )
+        except Exception as exc:
+            self._logger.warning(f"Failed to resolve overview camera: {exc}")
 
         # Initialize omero  parameters  # TODO: Maybe not needed!
         self.omero_url = self._master.experimentManager.omeroServerUrl

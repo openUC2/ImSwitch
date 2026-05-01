@@ -36,6 +36,8 @@ import apiPixelCalibrationControllerDiscardPendingCalibration from '../../backen
 const PixelCalibrationTab = () => {
   // --- selection / parameters ---
   const [detectorName, setDetectorName] = useState('');
+  // Objective: '' = current, '0', '1' (string so it survives the round-trip).
+  const [objectiveId, setObjectiveId] = useState('');
   const [stepSizeUm, setStepSizeUm] = useState(100.0);
   const [pattern, setPattern] = useState('cross');
   const [nSteps, setNSteps] = useState(4);
@@ -80,7 +82,10 @@ const PixelCalibrationTab = () => {
     if (!loading || !detectorName) return undefined;
     pollRef.current = setInterval(async () => {
       try {
-        const resp = await apiPixelCalibrationControllerGetPendingCalibration(detectorName);
+        const resp = await apiPixelCalibrationControllerGetPendingCalibration(
+          detectorName,
+          objectiveId,
+        );
         const data = resp?.pending ?? resp;
         if (data && (data.affine_matrix || data.metrics)) {
           setPending(data);
@@ -94,7 +99,7 @@ const PixelCalibrationTab = () => {
       }
     }, 2000);
     return stopPolling;
-  }, [loading, detectorName]);
+  }, [loading, detectorName, objectiveId]);
 
   // --- actions ---------------------------------------------------------------
 
@@ -111,6 +116,7 @@ const PixelCalibrationTab = () => {
 
       await apiPixelCalibrationControllerCalibrateStageAffine({
         detectorName,
+        objectiveId,
         stepSizeUm,
         pattern,
         nSteps,
@@ -146,6 +152,7 @@ const PixelCalibrationTab = () => {
 
       const resp = await apiPixelCalibrationControllerApplyPendingCalibration({
         detectorName,
+        objectiveId,
         affineMatrix,
         metrics,
       });
@@ -160,7 +167,7 @@ const PixelCalibrationTab = () => {
   const handleDiscard = async () => {
     try {
       setError('');
-      await apiPixelCalibrationControllerDiscardPendingCalibration(detectorName);
+      await apiPixelCalibrationControllerDiscardPendingCalibration(detectorName, objectiveId);
       setPending(null);
       setStatus('Pending calibration discarded.');
     } catch (err) {
@@ -228,6 +235,19 @@ const PixelCalibrationTab = () => {
               sx={{ mb: 2 }}
               helperText="Name of the detector as configured in setup (e.g. 'WidefieldCamera')"
             />
+
+            <FormControl fullWidth sx={{ mb: 2 }}>
+              <InputLabel>Objective</InputLabel>
+              <Select
+                value={objectiveId}
+                label="Objective"
+                onChange={(e) => setObjectiveId(e.target.value)}
+              >
+                <MenuItem value="">Current</MenuItem>
+                <MenuItem value="0">Objective 0</MenuItem>
+                <MenuItem value="1">Objective 1</MenuItem>
+              </Select>
+            </FormControl>
 
             <TextField
               label="Step size (µm)"

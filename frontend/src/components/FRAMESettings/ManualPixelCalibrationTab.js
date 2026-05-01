@@ -387,14 +387,18 @@ const ManualPixelCalibrationTab = () => {
               </Select>
             </FormControl>
 
-            <TextField
-              label="Objective ID (optional, take current objective if empty)"
-              value={objectiveId}
-              onChange={(e) => setObjectiveId(e.target.value)}
-              fullWidth
-              sx={{ mb: 1 }}
-              helperText="Leave empty to use the current objective"
-            />
+            <FormControl fullWidth sx={{ mb: 1 }}>
+              <InputLabel>Objective</InputLabel>
+              <Select
+                value={objectiveId}
+                label="Objective"
+                onChange={(e) => setObjectiveId(e.target.value)}
+              >
+                <MenuItem value="">Current</MenuItem>
+                <MenuItem value="0">Objective 0</MenuItem>
+                <MenuItem value="1">Objective 1</MenuItem>
+              </Select>
+            </FormControl>
           </Paper>
 
           {/* Stepper workflow */}

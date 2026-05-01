@@ -6,64 +6,30 @@ installed or when no device adapter library can be located.
 
 from __future__ import annotations
 
-import glob
 import os
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-import os
-import sys
+
 
 pymmcore_plus = pytest.importorskip("pymmcore_plus")
 
 
 def _adapters_available() -> bool:
-    # differentitate based on OS 
-    if sys.platform.startswith("win"):
-        candidates = [
-            os.environ.get("MICROMANAGER_PATH", ""),
-            r"C:\Program Files\Micro-Manager\DeviceAdapters",
-            r"C:\Program Files (x86)\Micro-Manager\DeviceAdapters",
-        ]
-    elif sys.platform.startswith("darwin"):
-        candidates = [
-            os.environ.get("MICROMANAGER_PATH", ""),
-            "/Applications/Micro-Manager.app/Contents/DeviceAdapters",
-        ]
-    else:
-        candidates = [
-            os.environ.get("MICROMANAGER_PATH", ""),
-            "/opt/micro-manager/lib/micro-manager",
-            os.path.expanduser(
-                "~/mm-venv/lib/python3.*/site-packages/pymmcore_plus/install/Micro-Manager-*"
-            ),
-        os.path.expanduser(
-            "~/.local/share/pymmcore-plus/mm/Micro-Manager-*"
-        ),
-    ]
-    # pymmcore-plus also ships a helper to locate installed adapters.
-    try:
-        from pymmcore_plus import find_micromanager  # type: ignore
+    """Cross-platform check that delegates to the production discovery code."""
+    from imswitch.imcontrol.model.managers import MMCoreManager
 
-        path = find_micromanager()
-        if path and os.path.isdir(path):
-            return True
-    except Exception:
-        pass
-
-    for candidate in candidates:
-        if not candidate:
-            continue
-        for expanded in glob.glob(candidate):
-            if os.path.isdir(expanded):
-                return True
-    return False
+    return bool(MMCoreManager.discover_adapter_paths())
 
 
 pytestmark = pytest.mark.skipif(
     not _adapters_available(),
-    reason="No Micro-Manager device adapters found (set MICROMANAGER_PATH)",
+    reason=(
+        "No Micro-Manager 2.0 device adapters found. Install via "
+        "`pip install pymmcore-plus[cli] && mmcore install`, or set "
+        "MICROMANAGER_PATH to your MM 2.0 install directory."
+    ),
 )
 
 
@@ -134,16 +100,12 @@ class TestMMCoreManager:
     def test_get_available_adapters(self):
         from imswitch.imcontrol.model.managers import MMCoreManager
 
-        try:
-            from pymmcore_plus import find_micromanager
-        except Exception:
-            find_micromanager = None
-        path = find_micromanager() if find_micromanager else None
-        path = path or os.environ.get("MICROMANAGER_PATH")
-        if not path:
-            pytest.skip("Cannot locate Micro-Manager adapter directory")
-        adapters = MMCoreManager.get_available_adapters(path)
-        assert "DemoCamera" in adapters
+        # No explicit path → discover_adapter_paths() handles platform fallbacks.
+        adapters = MMCoreManager.get_available_adapters()
+        assert "DemoCamera" in adapters, (
+            f"DemoCamera adapter not found. Discovered paths: "
+            f"{MMCoreManager.discover_adapter_paths()}"
+        )
 
 
 # ---------------------------------------------------------------------------

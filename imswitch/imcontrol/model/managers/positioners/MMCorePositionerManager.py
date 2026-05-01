@@ -108,22 +108,32 @@ class MMCorePositionerManager(PositionerManager):
     # ------------------------------------------------------------------
     # Movement
     # ------------------------------------------------------------------
-    def move(self, dist, axis):
-        dist = float(dist)
+    def move(self, value=0, axis="X", is_absolute=False, is_blocking=True, acceleration=None, speed=None, isEnable=None, timeout=0, is_reduced=True):    
+        dist = float(value)
+        # For relative moves, the distance is as given. For absolute moves, we need to calculate the distance to move from the current position.
+        if not is_absolute:
+            pass
+        else:
+            current_pos = self.getPosition(axis)
+            dist = dist - current_pos
         if axis in ("X", "Y") and self._xy_label:
             dx = dist if axis == "X" else 0.0
             dy = dist if axis == "Y" else 0.0
             self._core.setRelativeXYPosition(dx, dy)
-            self._core.waitForDevice(self._xy_label)
+            if is_blocking:
+                self._core.waitForDevice(self._xy_label)
         elif axis == "Z" and self._z_label:
             self._core.setRelativePosition(dist)
-            self._core.waitForDevice(self._z_label)
+            if is_blocking:
+                self._core.waitForDevice(self._z_label)
         else:
             self._logger.warning(f"Ignoring move on unsupported axis '{axis}'")
             return self._position[axis]
 
         new_pos = self.getPosition(axis)
         self._position[axis] = new_pos
+        self._commChannel.sigUpdateMotorPosition.emit() # TODO: This is a hacky workaround to force Imswitch to update the motor positions in the gui..
+
         return new_pos
 
     def setPosition(self, position, axis):

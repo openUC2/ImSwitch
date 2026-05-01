@@ -123,6 +123,10 @@ class MMCoreDetectorManager(DetectorManager):
             valueUnits="ms",
         )
 
+        # additional flags
+        self._running = False
+        self._frameNunber = 0
+
         super().__init__(
             detectorInfo,
             name,
@@ -203,7 +207,7 @@ class MMCoreDetectorManager(DetectorManager):
     # ------------------------------------------------------------------
     # Frame access
     # ------------------------------------------------------------------
-    def getLatestFrame(self) -> np.ndarray:
+    def getLatestFrame(self, returnFrameNumber=False) -> np.ndarray:
         try:
             if self._core.getRemainingImageCount() > 0:
                 return self._core.getLastImage()
@@ -211,9 +215,14 @@ class MMCoreDetectorManager(DetectorManager):
             pass
         try:
             self._core.snap()
+            self._frameNunber += 1
+            if returnFrameNumber:
+                return self._core.getImage(), self._frameNunber
             return self._core.getImage()
         except Exception:
             self._logger.error("Failed to snap a frame from MMCore", exc_info=True)
+            if returnFrameNumber:
+                return np.zeros(self._shape, dtype=np.uint16), -1
             return np.zeros(self._shape, dtype=np.uint16)
 
     def getChunk(self) -> np.ndarray:
@@ -240,11 +249,13 @@ class MMCoreDetectorManager(DetectorManager):
     def startAcquisition(self) -> None:
         if not self._core.isSequenceRunning():
             self._core.startContinuousSequenceAcquisition(0)
+            self._running = True
 
     def stopAcquisition(self) -> None:
         try:
             if self._core.isSequenceRunning():
                 self._core.stopSequenceAcquisition()
+                self._running = False
         except Exception:
             self._logger.warning("Failed to stop MMCore acquisition", exc_info=True)
 

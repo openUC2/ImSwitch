@@ -1,31 +1,49 @@
 {
     "detectors": {
-        "AndorCamera": {
+        "Andor": {
             "analogChannel": null,
             "digitalLine": null,
             "managerName": "MMCoreDetectorManager",
             "managerProperties": {
-                "cfgPath_": "/home/pi/micro-manager-configs/Andor_ASI.cfg",
-                "cfgPath": "C:\\Users\\benir\\Desktop\\andor.cfg",
-                "deviceLabel": "Andor sCMOS Camera"
+                "adapterName": "Andor",
+                "deviceName": "Andor",
+                "deviceLabel": "Andor"
             },
             "forAcquisition": true,
             "forFocusLock": false
         }
     },
-    "lasers": {},
+    "lasers": {
+        "MMShutter": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "MMCoreLaserManager",
+            "managerProperties": {
+                "adapterName": "DemoCamera",
+                "deviceName": "DShutter",
+                "deviceLabel": "Shutter",
+                "mode": "shutter"
+            },
+            "wavelength": 488,
+            "valueRangeMin": 0,
+            "valueRangeMax": 1,
+            "valueRangeStep": 1.0
+        }
+    },
     "LEDs": {},
     "LEDMatrixs": {},
     "positioners": {
-        "ASIStage": {
+        "MMStage": {
             "analogChannel": null,
             "digitalLine": null,
             "managerName": "MMCorePositionerManager",
             "managerProperties": {
-                "cfgPath_": "/home/pi/micro-manager-configs/Andor_ASI.cfg",
-                "cfgPath": "C:\\Users\\benir\\Desktop\\andor.cfg",
-                "xyDeviceLabel": "XYStage:XY:31",
-                "zDeviceLabel": "ZStage:Z:32"
+                "xyAdapterName": "DemoCamera",
+                "xyDeviceName": "DXYStage",
+                "xyDeviceLabel": "XY",
+                "zAdapterName": "DemoCamera",
+                "zDeviceName": "DStage",
+                "zDeviceLabel": "Z"
             },
             "axes": ["X", "Y", "Z"],
             "isPositiveDirection": true,
@@ -86,6 +104,7 @@
         "View",
         "Recording",
         "Image",
+        "Laser",
         "Positioner"
     ],
     "nonAvailableWidgets": [],

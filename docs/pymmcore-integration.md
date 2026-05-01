@@ -26,31 +26,52 @@ so a single `.cfg` file drives every device without USB conflicts.
 
 ## Installation
 
+> **Micro-Manager 2.0 is required** (Device API ≥ 70). The `pymmcore` /
+> `pymmcore-plus` Python wheels are built against the MM 2.0 device
+> interface; MM 1.4 adapters will fail with an *“interface version
+> mismatch”* error on load.
+
 ```bash
 pip install "ImSwitchUC2[pymmcore]"
 # or, in a dev checkout:
 pip install -e ".[pymmcore]"
 ```
 
-To make device adapters available, install the Micro-Manager binaries:
+To install the Micro-Manager 2.0 device adapters themselves, choose the
+option that matches your platform:
 
-```bash
-# x86_64 / arm64 macOS / x86_64 Linux: download via pymmcore-plus CLI
-pip install "pymmcore-plus[cli]"
-mmcore install      # downloads adapters under ~/.local/share/pymmcore-plus
-```
+| Platform | Recommended install                                                                 |
+|----------|--------------------------------------------------------------------------------------|
+| Windows  | Download MM 2.0 from <https://micro-manager.org/Micro-Manager_Nightly_Builds> – the installer drops adapters in `C:\Program Files\Micro-Manager-2.0` and ImSwitch picks them up automatically. |
+| macOS    | Download the MM 2.0 nightly `.dmg`; drag to `/Applications/Micro-Manager-2.0`. |
+| Linux x86_64 | `pip install "pymmcore-plus[cli]"` then `mmcore install` – downloads the official MM 2.0 adapters into pymmcore-plus' managed directory. |
+| Raspberry Pi (arm64) | Build from source via [`install_micromanager_raspi.sh`](../install_micromanager_raspi.sh) or use the prebuilt tarball from the [`build-mm-arm64`](../.github/workflows/build-mm-arm64.yml) workflow. |
 
-On a **Raspberry Pi (arm64)** there is no published binary build, so use
-either:
+### Adapter path discovery
 
-* The provided helper script
-  [`install_micromanager_raspi.sh`](../install_micromanager_raspi.sh), or
-* The prebuilt tarball published by the
-  [`build-mm-arm64`](../.github/workflows/build-mm-arm64.yml) GitHub
-  Actions workflow on every tagged release.
+`MMCoreManager.discover_adapter_paths()` resolves adapter directories in
+the following order:
 
-Set `MICROMANAGER_PATH` to the directory containing
-`libmmgr_dal_*.so` if it is not auto-discovered.
+1. `MICROMANAGER_PATH` environment variable (override).
+2. `pymmcore_plus.find_micromanager()` – knows about `mmcore install`
+   managed installs and any system installs it can find.
+3. Platform-specific MM 2.0 install locations:
+   * **Windows:** `C:\Program Files\Micro-Manager-2.0*`,
+     `C:\Program Files (x86)\Micro-Manager-2.0*`
+   * **macOS:** `/Applications/Micro-Manager-2.0*`,
+     `/Applications/Micro-Manager.app/Contents/Resources`
+   * **Linux:** `/opt/micro-manager/lib/micro-manager`,
+     `/opt/Micro-Manager-2.0*`, `/usr/local/lib/micro-manager`
+4. pymmcore-plus' managed install dir on every platform
+   (`~/.local/share/pymmcore-plus/mm/Micro-Manager-*` and OS-specific
+   equivalents).
+
+On **Windows**, every resolved directory is also added to the Python
+DLL search path via `os.add_dll_directory`, so vendor SDK DLLs co-located
+with the adapter (e.g. Andor, Hamamatsu) are found automatically.
+
+You can override the search at any time by setting `MICROMANAGER_PATH`,
+or per-device via the `adapterPath` key in the setup JSON.
 
 ## Quick start: the DemoCamera setup
 

@@ -1,0 +1,112 @@
+{
+    "detectors": {
+        "MMCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "MMCoreDetectorManager",
+            "managerProperties": {
+                "adapterName": "DemoCamera",
+                "deviceName": "DCam",
+                "deviceLabel": "Camera"
+            },
+            "forAcquisition": true,
+            "forFocusLock": false
+        }
+    },
+    "lasers": {
+        "MMShutter": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "MMCoreLaserManager",
+            "managerProperties": {
+                "adapterName": "DemoCamera",
+                "deviceName": "DShutter",
+                "deviceLabel": "Shutter",
+                "mode": "shutter"
+            },
+            "wavelength": 488,
+            "valueRangeMin": 0,
+            "valueRangeMax": 1,
+            "valueRangeStep": 1.0
+        }
+    },
+    "LEDs": {},
+    "LEDMatrixs": {},
+    "positioners": {
+        "MMStage": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "MMCorePositionerManager",
+            "managerProperties": {
+                "xyAdapterName": "DemoCamera",
+                "xyDeviceName": "DXYStage",
+                "xyDeviceLabel": "XY",
+                "zAdapterName": "DemoCamera",
+                "zDeviceName": "DStage",
+                "zDeviceLabel": "Z"
+            },
+            "axes": ["X", "Y", "Z"],
+            "isPositiveDirection": true,
+            "forPositioning": true,
+            "forScanning": true,
+            "resetOnClose": false,
+            "stageOffsets": {
+                "stageOffsetPositionX": 0.0,
+                "stageOffsetPositionY": 0.0,
+                "stageOffsetPositionZ": 0.0
+            }
+        }
+    },
+    "rs232devices": {},
+    "slm": null,
+    "sim": null,
+    "dpc": null,
+    "objective": null,
+    "mct": null,
+    "nidaq": {
+        "timerCounterChannel": null,
+        "startTrigger": false
+    },
+    "roiscan": null,
+    "lightsheet": null,
+    "webrtc": null,
+    "hypha": null,
+    "Stresstest": {},
+    "HistoScan": null,
+    "Workflow": null,
+    "FlowStop": null,
+    "Lepmon": null,
+    "Flatfield": null,
+    "PixelCalibration": null,
+    "experiment": null,
+    "uc2Config": null,
+    "ism": null,
+    "focusLock": null,
+    "fovLock": null,
+    "autofocus": null,
+    "scan": null,
+    "etSTED": null,
+    "rotators": null,
+    "microscopeStand": null,
+    "storage": null,
+    "pulseStreamer": {
+        "ipAddress": null
+    },
+    "pyroServerInfo": null,
+    "rois": {},
+    "ledPresets": {},
+    "defaultLEDPresetForScan": null,
+    "laserPresets": {},
+    "stageOffsets": {},
+    "defaultLaserPresetForScan": null,
+    "availableWidgets": [
+        "Settings",
+        "View",
+        "Recording",
+        "Image",
+        "Laser",
+        "Positioner"
+    ],
+    "nonAvailableWidgets": [],
+    "designerId": null
+}

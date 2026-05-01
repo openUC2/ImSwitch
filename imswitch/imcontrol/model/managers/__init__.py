@@ -37,3 +37,4 @@ from .PixelCalibrationManager import PixelCalibrationManager
 from .ArkitektManager import ArkitektManager
 from .SiLA2Manager import SiLA2Manager
 from .InstrumentMetadataManager import InstrumentMetadataManager
+from . import MMCoreManager  # shared pymmcore-plus singleton (optional dependency)

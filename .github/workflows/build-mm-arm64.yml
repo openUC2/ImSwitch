@@ -1,0 +1,108 @@
+name: Build Micro-Manager adapters (arm64) & test pymmcore-plus integration
+
+on:
+  push:
+    branches: [feat/pymmcore-integration]
+    tags: ["mm-v*"]
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Run the Python integration tests on x86_64 with the DemoCamera adapter
+  # downloaded by `mmcore install`.
+  # ---------------------------------------------------------------------
+  test-x86:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ImSwitch (no heavy extras) + pymmcore-plus
+        run: |
+          python -m pip install --upgrade pip
+          # Install only what the MMCore tests touch – avoids pulling the full
+          # ImSwitch dependency chain on CI.
+          pip install pytest numpy "pymmcore-plus[cli]>=0.10"
+
+      - name: Download Micro-Manager DemoCamera adapter
+        run: |
+          mmcore install
+          mmcore list
+
+      - name: Make repo importable as a package
+        run: |
+          pip install -e . --no-deps || true
+
+      - name: Run MMCore manager tests
+        env:
+          MICROMANAGER_PATH: ""
+        run: |
+          pytest imswitch/imcontrol/_test/unit/test_mmcore_managers.py -v
+
+  # ---------------------------------------------------------------------
+  # Build mmCoreAndDevices for arm64 in an emulated container, then
+  # publish the resulting .so files as a workflow artifact / GH release.
+  # ---------------------------------------------------------------------
+  build-arm64:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU for arm64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Determine Micro-Manager source ref
+        id: mm
+        run: |
+          # Pin to a known-good tag so device interface version stays stable.
+          echo "ref=main" >> "$GITHUB_OUTPUT"
+
+      - name: Build inside arm64 container
+        uses: uraimo/run-on-arch-action@v3
+        with:
+          arch: aarch64
+          distro: ubuntu22.04
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          dockerRunArgs: |
+            --volume "${{ github.workspace }}:/work"
+          install: |
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -qq -y \
+              git build-essential autoconf automake libtool pkg-config \
+              swig python3-dev libboost-all-dev curl ca-certificates
+          run: |
+            set -euxo pipefail
+            cd /work
+            git clone --depth 1 --branch ${{ steps.mm.outputs.ref }} \
+              https://github.com/micro-manager/mmCoreAndDevices.git mm-src
+            cd mm-src
+            ./autogen.sh
+            ./configure --prefix=/work/mm-out --without-java
+            make -j"$(nproc)"
+            make install
+            cd /work
+            mkdir -p artifact/micro-manager/lib/micro-manager
+            cp -a /work/mm-out/lib/micro-manager/. artifact/micro-manager/lib/micro-manager/
+            tar -C artifact -czf micro-manager-arm64.tar.gz micro-manager
+            ls -lh micro-manager-arm64.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: micro-manager-arm64
+          path: micro-manager-arm64.tar.gz
+          if-no-files-found: error
+
+      - name: Publish as GitHub Release
+        if: startsWith(github.ref, 'refs/tags/mm-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: micro-manager-arm64.tar.gz
+          fail_on_unmatched_files: true

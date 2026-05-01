@@ -65,6 +65,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         # If a typed ExecutionContext was provided, flatten it onto kwargs
         # so the existing body below stays unchanged.  Caller-supplied
         # kwargs win over ctx values to keep the override path open.
+        # TODO: We should probably use this to always use the experiment object?
         if ctx is not None:
             ctx_kwargs = ctx.to_kwargs()
             snake_tiles = ctx_kwargs.pop("snake_tiles")

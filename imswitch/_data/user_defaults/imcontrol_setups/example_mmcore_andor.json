@@ -1,0 +1,91 @@
+{
+    "detectors": {
+        "AndorCamera": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "MMCoreDetectorManager",
+            "managerProperties": {
+                "cfgPath": "/home/pi/micro-manager-configs/Andor_ASI.cfg",
+                "deviceLabel": "Andor sCMOS Camera"
+            },
+            "forAcquisition": true,
+            "forFocusLock": false
+        }
+    },
+    "lasers": {},
+    "LEDs": {},
+    "LEDMatrixs": {},
+    "positioners": {
+        "ASIStage": {
+            "analogChannel": null,
+            "digitalLine": null,
+            "managerName": "MMCorePositionerManager",
+            "managerProperties": {
+                "cfgPath": "/home/pi/micro-manager-configs/Andor_ASI.cfg",
+                "xyDeviceLabel": "XYStage:XY:31",
+                "zDeviceLabel": "ZStage:Z:32"
+            },
+            "axes": ["X", "Y", "Z"],
+            "isPositiveDirection": true,
+            "forPositioning": true,
+            "forScanning": true,
+            "resetOnClose": false,
+            "stageOffsets": {
+                "stageOffsetPositionX": 0.0,
+                "stageOffsetPositionY": 0.0,
+                "stageOffsetPositionZ": 0.0
+            }
+        }
+    },
+    "rs232devices": {},
+    "slm": null,
+    "sim": null,
+    "dpc": null,
+    "objective": null,
+    "mct": null,
+    "nidaq": {
+        "timerCounterChannel": null,
+        "startTrigger": false
+    },
+    "roiscan": null,
+    "lightsheet": null,
+    "webrtc": null,
+    "hypha": null,
+    "Stresstest": {},
+    "HistoScan": null,
+    "Workflow": null,
+    "FlowStop": null,
+    "Lepmon": null,
+    "Flatfield": null,
+    "PixelCalibration": null,
+    "experiment": null,
+    "uc2Config": null,
+    "ism": null,
+    "focusLock": null,
+    "fovLock": null,
+    "autofocus": null,
+    "scan": null,
+    "etSTED": null,
+    "rotators": null,
+    "microscopeStand": null,
+    "storage": null,
+    "pulseStreamer": {
+        "ipAddress": null
+    },
+    "pyroServerInfo": null,
+    "rois": {},
+    "ledPresets": {},
+    "defaultLEDPresetForScan": null,
+    "laserPresets": {},
+    "stageOffsets": {},
+    "defaultLaserPresetForScan": null,
+    "availableWidgets": [
+        "Settings",
+        "View",
+        "Recording",
+        "Image",
+        "Positioner"
+    ],
+    "nonAvailableWidgets": [],
+    "designerId": null
+}

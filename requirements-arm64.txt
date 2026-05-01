@@ -2,7 +2,7 @@ coloredlogs >= 15
 colour-science >= 0.3
 dataclasses-json >= 0.5
 h5py >= 3
-pyvisa-py==0.4.1
+pyvisa-py==0.8.1
 luddite >= 1
 nidaqmx >= 0.5.7
 numpy >= 1.19
@@ -14,13 +14,13 @@ requests >= 2.25
 scikit-image >= 0.18
 Send2Trash >= 1.8
 tifffile >= 2020.11.26
-ome_zarr >= 0.6.1
-Pyro5 >= 5.14
+ome_zarr >= 0.16.0
+Pyro5 >= 5.16
 fastAPI >= 0.86.0
 uvicorn[standard] >= 0.19.0
 matplotlib >= 3.6
-websockets >= 10.0
-websocket-client >= 1.2
+websockets >= 16.0
+websocket-client >= 1.9.0
 opencv-python
 imjoy_rpc
 imjoy
@@ -29,8 +29,8 @@ juliacall
 UC2-REST
 python-multipart >= 0.0.5
 jupyter 
-rpyc >= 5.0.0
+rpyc >= 6.0.2
 tk >= 0.1.0
-NanoImagingPack==2.1.3.dev1
+NanoImagingPack==2.1.4
 ashlarUC2
 imjoy-rpc==0.5.59

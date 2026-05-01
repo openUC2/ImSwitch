@@ -952,7 +952,7 @@ def build_timelapse(grid: ExperimentGrid, out_dir: str, use_mip: bool = False):
 # ---------------------------------------------------------------------------
 
 def build_ashlar_stitched(grid: ExperimentGrid, out_dir: str,
-                          pixel_size: float = 1.0,
+                          pixel_size: float = None,
                           maximum_shift: float = 50.0,
                           align_channel: int = 0):
     """
@@ -1009,7 +1009,10 @@ def build_ashlar_stitched(grid: ExperimentGrid, out_dir: str,
 
         out_file = os.path.join(out_dir, f"ashlar_stitched_t{tp:04d}.ome.tif")
         print(f"  Timepoint {tp}: {len(tile_paths)} tiles → {os.path.basename(out_file)}")
-
+        
+        # try to read the pixel_size from the image metadata
+        
+        
         reader = build_imswitch_reader(tile_paths, pixel_size=pixel_size)
 
         result = process_images(
@@ -1236,5 +1239,53 @@ def main():
     print(f"\nAll outputs written to: {out_dir}")
 
 
+# standalone test call for build_ashlar_stitched
+def test_build_ashlar_stitched():
+    tiles_dir = "/Users/bene/ImSwitchConfig/data/ExperimentController/20260426_144145/20260426_144145_experiment0_0_experiment_0_/tiles/"
+    json_file = "/Users/bene/ImSwitchConfig/data/ExperimentController/20260426_144145/20260426_144145_experiment_t0000_protocol.json"
+    
+    # load pixelsize from json_file 
+    with open(json_file, "r") as f: protocolDict = json.load(f)
+    # search for "pixel_size" in protocolDict and use it if found, otherwise default to 1.0
+    pixel_size = next(step["post_params"]["pixel_size"] for step in protocolDict["workflow_steps"] if "pixel_size" in step.get("post_params", {}))
+    if pixel_size is None:
+        pixel_size = 1.0
+    print(f"Using pixel size: {pixel_size} microns")
+    mode = "ashlar"
+    maximum_shift = 50
+    align_channel =  0
+    protol = None
+    tiles_dir = os.path.abspath(tiles_dir)
+    if not os.path.isdir(tiles_dir):
+        sys.exit(f"Not a directory: {tiles_dir}")
+
+    out_dir = os.path.join(tiles_dir, "converted")
+    os.makedirs(out_dir, exist_ok=True)
+
+    modes = set([mode])
+    if "all" in modes:
+        modes = set(ALL_MODES)
+
+    # Auto-detect layout: base dir with experiment subdirs vs plain tiles dir
+    if _is_multi_experiment_dir(tiles_dir):
+        print(f"Detected multi-experiment timelapse layout under: {tiles_dir}")
+        tiles = discover_tiles_from_base_dir(tiles_dir, protocol_json=protol)
+    else:
+        tiles = discover_tiles(tiles_dir, protocol_json=protol)
+    if not tiles:
+        sys.exit(1)
+
+    grid = ExperimentGrid.from_tiles(tiles)
+
+
+    build_ashlar_stitched(
+        grid,
+        os.path.join(out_dir, "ashlar"),
+        pixel_size=pixel_size,
+        maximum_shift=maximum_shift,
+        align_channel=align_channel,
+    )
+
 if __name__ == "__main__":
-    main()
+    #main()
+    test_build_ashlar_stitched()

@@ -598,7 +598,7 @@ class GoniometerController(LiveUpdatedController):
 
             return {
                 "success": True,
-                "angle": angle,
+                "angle": 180-angle,
                 "annotated_image": annotated_b64,
                 "timestamp": time.time(),
             }

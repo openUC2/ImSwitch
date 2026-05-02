@@ -44,8 +44,9 @@ Usage examples:
     python convert_experiment_tiffs.py     /Users/bene/Downloads/20260408_140128/
 
     
-    python /Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/MicronController/ImSwitch/scripts/convert_experiment_tiffs.py /Users/bene/ImSwitchConfig/data/ExperimentController/20260426_144145/20260426_144145_experiment0_0_experiment_0_/tiles/ --mode ashlar \
-    --pixel-size 0.5 --maximum-shift 50 --align-channel 0
+    python /Users/bene/Dropbox/Dokumente/Promotion/PROJECTS/MicronController/ImSwitch/scripts/convert_experiment_tiffs.py /Users/bene/ImSwitchConfig/data/ExperimentController/20260502_130052/20260502_130052_experiment0_0_experiment_0_/tiles --mode ashlar  --maximum-shift 50 --align-channel 0
+    
+   
 """
 
 from __future__ import annotations
@@ -986,6 +987,7 @@ def build_ashlar_stitched(grid: ExperimentGrid, out_dir: str,
                   "Install with: pip install ashlarUC2")
             return
 
+
     print("\n=== Building ashlar-stitched OME-TIFFs ===")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1228,10 +1230,32 @@ def main():
         build_timelapse(grid, os.path.join(out_dir, "timelapse_mip"), use_mip=True)
         
     if "ashlar" in modes:
+        
+        # get parent-parent dir and find json file
+        parent_dir = os.path.dirname(os.path.dirname(tiles_dir))
+        print("Looking for protocol JSON file in parent directory: ", parent_dir)
+        json_file = None
+        for f in os.listdir(parent_dir):
+            if f.endswith("_protocol.json"):
+                json_file = os.path.join(parent_dir, f)
+                print("Found protocol JSON file: ", json_file)
+                break
+        if json_file is None:
+            print(f"  WARNING: No protocol JSON file found in {parent_dir}. "
+                    "Using default pixel size of 1.0 micron for ashlar.")
+            pixel_size = 1.0
+        else:
+            with open(json_file, "r") as f: protocolDict = json.load(f)
+            # search for "pixel_size" in protocolDict and use it if found, otherwise default to 1.0
+            pixel_size = next(step["post_params"]["pixel_size"] for step in protocolDict["workflow_steps"] if "pixel_size" in step.get("post_params", {}))
+            print(f"Using pixel size from protocol: {pixel_size} microns")
+            if pixel_size is None:
+                pixel_size = 1.0
+
         build_ashlar_stitched(
             grid,
             os.path.join(out_dir, "ashlar"),
-            pixel_size=args.pixel_size,
+            pixel_size=pixel_size,
             maximum_shift=args.maximum_shift,
             align_channel=args.align_channel,
         )
@@ -1287,5 +1311,4 @@ def test_build_ashlar_stitched():
     )
 
 if __name__ == "__main__":
-    #main()
-    test_build_ashlar_stitched()
+    main()

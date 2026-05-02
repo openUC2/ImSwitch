@@ -22,21 +22,15 @@ Design
 * AprilTag / overview-camera helpers have been removed; this controller is now
   a focused addon for the DetectorManager.
 """
-
 import threading
 import time
 
-import cv2  # noqa: F401  — kept as transitive runtime dep
 import numpy as np
 import NanoImagingPack as nip
 
 from imswitch.imcommon.framework import Signal
 from imswitch.imcommon.model import APIExport, initLogger
-from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import (
-    compute_affine_matrix,
-    measure_pixel_shift,
-    validate_calibration,  # noqa: F401  — re-exported for downstream callers
-)
+from imswitch.imcontrol.controller.controllers.camera_stage_mapping.affine_stage_calibration import compute_affine_matrix, measure_pixel_shift
 
 from ..basecontrollers import LiveUpdatedController
 

@@ -15,7 +15,7 @@ import { processUC2FPacket, processUC2FPacketWithMetadata, checkFeatureSupport }
  * @param {function} onHudDataUpdate - Callback for HUD data updates
  * @param {React.ReactNode} overlayContent - Optional overlay content to render on top of the canvas
  */
-const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, overlayContent }) => {
+const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, overlayContent, enableViewportControls = true }) => {
   const dispatch = useDispatch();
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   
@@ -484,6 +484,10 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
 
   // Mouse event handlers for zoom and pan
   const handleMouseDown = useCallback((e) => {
+    if (!enableViewportControls) {
+      return;
+    }
+
     // Only handle left mouse button for panning
     if (e.button === 0) {
       setIsDragging(true);
@@ -491,9 +495,10 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
       e.preventDefault();
     }
     console.log('Mouse down, xy:', e.clientX, e.clientY);
-  }, []);
+  }, [enableViewportControls]);
 
   const handleMouseMove = useCallback((e) => {
+    if (!enableViewportControls) return;
     if (!isDragging) return;
     
     const canvas = canvasRef.current;
@@ -515,13 +520,17 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
     
     setLastMousePos({ x: e.clientX, y: e.clientY });
     e.preventDefault();
-  }, [isDragging, lastMousePos]);
+  }, [enableViewportControls, isDragging, lastMousePos]);
 
   const handleMouseUp = useCallback((e) => {
+    if (!enableViewportControls) {
+      return;
+    }
+
     console.log('Mouse up');
     setIsDragging(false);
     e.preventDefault();
-  }, []);
+  }, [enableViewportControls]);
 
   // Canvas2D fallback rendering
   const renderCanvas2D = useCallback((u16Data, width, height) => {
@@ -803,6 +812,10 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
 
   // Handle mouse interactions for zoom/pan
   const handleWheel = useCallback((event) => {
+    if (!enableViewportControls) {
+      return;
+    }
+
     event.preventDefault();
     
     const canvas = canvasRef.current;
@@ -829,7 +842,7 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
         translateY: newTranslateY
       };
     });
-  }, []);
+  }, [enableViewportControls]);
 
   const handleDoubleClick = useCallback((event) => {
     const canvas = canvasRef.current;
@@ -940,7 +953,7 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
       }
     };
 
-    if (isDragging) {
+    if (enableViewportControls && isDragging) {
       document.addEventListener('mousemove', handleGlobalMouseMove);
       document.addEventListener('mouseup', handleGlobalMouseUp);
       // Prevent context menu during drag
@@ -952,7 +965,7 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
       document.removeEventListener('mouseup', handleGlobalMouseUp);
       document.removeEventListener('contextmenu', handleGlobalMouseUp);
     };
-  }, [isDragging, lastMousePos]);
+  }, [enableViewportControls, isDragging, lastMousePos]);
 
   // Calculate display dimensions to maximize width while maintaining aspect ratio
   const getDisplayDimensions = useCallback(() => {
@@ -1000,7 +1013,6 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
         height={imageSize.height || 600}
         style={{
           cursor: isDragging ? 'grabbing' : (onClick ? 'crosshair' : 'grab'),
-          border: '2px solid red',
           zIndex: 1,
           display: 'block',
           width: displayDimensions.width,
@@ -1035,28 +1047,29 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
         </Box>
       )}
       
-      {/* Reset view button */}
-      <Box 
-        sx={{ 
-          position: 'absolute', 
-          bottom: 10, 
-          right: 10,
-          opacity: 0.8,
-          '&:hover': { opacity: 1 },
-          cursor: 'pointer',
-          bgcolor: 'primary.main',
-          color: 'primary.contrastText',
-          px: 2,
-          py: 1,
-          borderRadius: 1,
-          boxShadow: 2, 
-          zIndex: 3,
+      {enableViewportControls && (
+        <Box 
+          sx={{ 
+            position: 'absolute', 
+            bottom: 10, 
+            right: 10,
+            opacity: 0.8,
+            '&:hover': { opacity: 1 },
+            cursor: 'pointer',
+            bgcolor: 'primary.main',
+            color: 'primary.contrastText',
+            px: 2,
+            py: 1,
+            borderRadius: 1,
+            boxShadow: 2, 
+            zIndex: 3,
 
-        }}
-        onClick={resetView}
-      >
-        <Typography variant="body2" fontWeight="bold">Reset View (1:1)</Typography>
-      </Box>
+          }}
+          onClick={resetView}
+        >
+          <Typography variant="body2" fontWeight="bold">Reset View (1:1)</Typography>
+        </Box>
+      )}
     </Box>
   );
 };

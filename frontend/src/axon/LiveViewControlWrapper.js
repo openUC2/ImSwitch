@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
   IconButton,
   Tooltip,
@@ -61,11 +61,16 @@ const LiveViewControlWrapper = ({
   const objectiveState = useSelector(objectiveSlice.getObjectiveState);
   const liveStreamState = useSelector(liveStreamSlice.getLiveStreamState);
   const liveViewState = useSelector(liveViewSlice.getLiveViewState);
+  const transformFrameRef = useRef(null);
+  const pendingTransformRef = useRef({
+    scale: 1,
+    positionX: 0,
+    positionY: 0,
+  });
 
   // Get persistent position controller visibility from Redux
   const showPositionController = liveViewState.showPositionController || false;
   const [isHovering, setIsHovering] = useState(false);
-  const [zoomPercent, setZoomPercent] = useState(100);
   const [transformState, setTransformState] = useState({
     scale: 1,
     positionX: 0,
@@ -88,6 +93,45 @@ const LiveViewControlWrapper = ({
     window.matchMedia("(hover: hover)").matches;
   const showInteractiveControls =
     showPositionController || (isHovering && canHover);
+  const zoomPercent = Math.round(transformState.scale * 100);
+
+  useEffect(() => {
+    return () => {
+      if (transformFrameRef.current !== null) {
+        cancelAnimationFrame(transformFrameRef.current);
+      }
+    };
+  }, []);
+
+  const handleTransformed = useCallback((_, state) => {
+    pendingTransformRef.current = {
+      scale: state.scale,
+      positionX: state.positionX,
+      positionY: state.positionY,
+    };
+
+    if (transformFrameRef.current !== null) {
+      return;
+    }
+
+    transformFrameRef.current = requestAnimationFrame(() => {
+      transformFrameRef.current = null;
+
+      setTransformState((prevState) => {
+        const nextState = pendingTransformRef.current;
+
+        if (
+          Math.abs(prevState.scale - nextState.scale) < 0.001 &&
+          Math.abs(prevState.positionX - nextState.positionX) < 0.001 &&
+          Math.abs(prevState.positionY - nextState.positionY) < 0.001
+        ) {
+          return prevState;
+        }
+
+        return nextState;
+      });
+    });
+  }, []);
 
   // Handle double-click for stage movement
   const handleImageDoubleClick = async (
@@ -402,14 +446,7 @@ const LiveViewControlWrapper = ({
             panning={{
               velocityDisabled: true,
             }}
-            onTransformed={(_, state) => {
-              setZoomPercent(Math.round(state.scale * 100));
-              setTransformState({
-                scale: state.scale,
-                positionX: state.positionX,
-                positionY: state.positionY,
-              });
-            }}
+            onTransformed={handleTransformed}
           >
             {({ zoomIn, zoomOut, resetTransform }) => {
               const hasTransform =
@@ -504,7 +541,6 @@ const LiveViewControlWrapper = ({
                           </Tooltip>
                         </Stack>
                       </Stack>
-
                     </>
                   )}
                 </>

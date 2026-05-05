@@ -39,7 +39,7 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
 
   // Mouse interaction state
   const [isDragging, setIsDragging] = useState(false);
-  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
+  const lastMousePosRef = useRef({ x: 0, y: 0 });
   
   // FPS counter
   const fpsCounterRef = useRef({
@@ -492,7 +492,7 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
     // Only handle left mouse button for panning
     if (e.button === 0) {
       setIsDragging(true);
-      setLastMousePos({ x: e.clientX, y: e.clientY });
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
       e.preventDefault();
     }
     console.log('Mouse down, xy:', e.clientX, e.clientY);
@@ -505,8 +505,8 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const deltaX = e.clientX - lastMousePos.x;
-    const deltaY = e.clientY - lastMousePos.y;
+    const deltaX = e.clientX - lastMousePosRef.current.x;
+    const deltaY = e.clientY - lastMousePosRef.current.y;
     
     // Convert pixel movement to normalized coordinates
     const rect = canvas.getBoundingClientRect();
@@ -519,9 +519,9 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
       translateY: prev.translateY + normalizedDeltaY / prev.scale
     }));
     
-    setLastMousePos({ x: e.clientX, y: e.clientY });
+    lastMousePosRef.current = { x: e.clientX, y: e.clientY };
     e.preventDefault();
-  }, [enableViewportControls, isDragging, lastMousePos]);
+  }, [enableViewportControls, isDragging]);
 
   const handleMouseUp = useCallback((e) => {
     if (!enableViewportControls) {
@@ -929,8 +929,8 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
       const canvas = canvasRef.current;
       if (!canvas) return;
 
-      const deltaX = e.clientX - lastMousePos.x;
-      const deltaY = e.clientY - lastMousePos.y;
+      const deltaX = e.clientX - lastMousePosRef.current.x;
+      const deltaY = e.clientY - lastMousePosRef.current.y;
       
       // Convert pixel movement to normalized coordinates
       const rect = canvas.getBoundingClientRect();
@@ -943,7 +943,7 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
         translateY: prev.translateY + normalizedDeltaY / prev.scale
       }));
       
-      setLastMousePos({ x: e.clientX, y: e.clientY });
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
       e.preventDefault();
     };
 
@@ -966,7 +966,7 @@ const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, ov
       document.removeEventListener('mouseup', handleGlobalMouseUp);
       document.removeEventListener('contextmenu', handleGlobalMouseUp);
     };
-  }, [enableViewportControls, isDragging, lastMousePos]);
+  }, [enableViewportControls, isDragging]);
 
   // Calculate display dimensions to maximize width while maintaining aspect ratio
   const getDisplayDimensions = useCallback(() => {

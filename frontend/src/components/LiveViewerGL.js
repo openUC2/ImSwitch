@@ -14,6 +14,7 @@ import { processUC2FPacket, processUC2FPacketWithMetadata, checkFeatureSupport }
  * @param {function} onImageLoad - Callback when image dimensions change: (width, height)
  * @param {function} onHudDataUpdate - Callback for HUD data updates
  * @param {React.ReactNode} overlayContent - Optional overlay content to render on top of the canvas
+ * @param {boolean} enableViewportControls - Whether internal viewport interaction is enabled. When false, internal wheel/pan handlers and the reset button are disabled.
  */
 const LiveViewerGL = ({ onClick, onDoubleClick, onImageLoad, onHudDataUpdate, overlayContent, enableViewportControls = true }) => {
   const dispatch = useDispatch();

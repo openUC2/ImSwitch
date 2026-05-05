@@ -82,9 +82,12 @@ const LiveViewControlWrapper = ({
     liveStreamState.backendCapabilities.webglSupported &&
     !liveStreamState.isLegacyBackend &&
     liveStreamState.imageFormat !== "jpeg";
+  const canHover =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(hover: hover)").matches;
   const showInteractiveControls =
-    showPositionController ||
-    (isHovering && window.matchMedia("(hover: hover)").matches);
+    showPositionController || (isHovering && canHover);
 
   // Handle double-click for stage movement
   const handleImageDoubleClick = async (

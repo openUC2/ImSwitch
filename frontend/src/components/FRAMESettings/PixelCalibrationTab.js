@@ -22,6 +22,7 @@ import apiPixelCalibrationControllerCalibrateStageAffine from '../../backendapi/
 import apiPixelCalibrationControllerGetPendingCalibration from '../../backendapi/apiPixelCalibrationControllerGetPendingCalibration';
 import apiPixelCalibrationControllerApplyPendingCalibration from '../../backendapi/apiPixelCalibrationControllerApplyPendingCalibration';
 import apiPixelCalibrationControllerDiscardPendingCalibration from '../../backendapi/apiPixelCalibrationControllerDiscardPendingCalibration';
+import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi/apiPixelCalibrationControllerGetAvailableDetectors';
 
 /**
  * PixelCalibrationTab - Per-detector stage <-> camera affine calibration.
@@ -36,11 +37,31 @@ import apiPixelCalibrationControllerDiscardPendingCalibration from '../../backen
 const PixelCalibrationTab = () => {
   // --- selection / parameters ---
   const [detectorName, setDetectorName] = useState('');
+  const [availableDetectors, setAvailableDetectors] = useState([]);
   // Objective: '' = current, '0', '1' (string so it survives the round-trip).
   const [objectiveId, setObjectiveId] = useState('');
   const [stepSizeUm, setStepSizeUm] = useState(100.0);
   const [pattern, setPattern] = useState('cross');
   const [nSteps, setNSteps] = useState(4);
+
+  // Load the list of available detectors once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await apiPixelCalibrationControllerGetAvailableDetectors();
+        if (cancelled) return;
+        const names = resp?.detectorNames || [];
+        setAvailableDetectors(names);
+        if (names.length > 0) {
+          setDetectorName((prev) => prev || names[0]);
+        }
+      } catch (_e) {
+        // leave list empty; user can still type by selecting from an empty dropdown.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // --- run state ---
   const [loading, setLoading] = useState(false);
@@ -227,14 +248,23 @@ const PixelCalibrationTab = () => {
               Calibrates the camera ↔ stage transform for one detector.
             </Typography>
 
-            <TextField
-              label="Detector name"
-              value={detectorName}
-              onChange={(e) => setDetectorName(e.target.value)}
-              fullWidth
-              sx={{ mb: 2 }}
-              helperText="Name of the detector as configured in setup (e.g. 'WidefieldCamera')"
-            />
+            <FormControl fullWidth sx={{ mb: 2 }}>
+              <InputLabel>Detector</InputLabel>
+              <Select
+                value={detectorName}
+                label="Detector"
+                onChange={(e) => setDetectorName(e.target.value)}
+              >
+                {availableDetectors.length === 0 && (
+                  <MenuItem value="" disabled>
+                    <em>(no detectors available)</em>
+                  </MenuItem>
+                )}
+                {availableDetectors.map((name) => (
+                  <MenuItem key={name} value={name}>{name}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
 
             <FormControl fullWidth sx={{ mb: 2 }}>
               <InputLabel>Objective</InputLabel>

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import {
   Box,
@@ -26,12 +26,16 @@ import {
   Calculate as CalcIcon,
   CheckCircle as DoneIcon,
   Replay as ResetIcon,
+  Save as SaveIcon,
 } from '@mui/icons-material';
 
 import LiveViewControlWrapper from '../../axon/LiveViewControlWrapper';
 import * as liveStreamSlice from '../../state/slices/LiveStreamSlice';
 import apiPositionerControllerMovePositioner from '../../backendapi/apiPositionerControllerMovePositioner';
 import apiPixelCalibrationControllerManualPixelSizeCalibration from '../../backendapi/apiPixelCalibrationControllerManualPixelSizeCalibration';
+import apiPixelCalibrationControllerGetAvailableDetectors from '../../backendapi/apiPixelCalibrationControllerGetAvailableDetectors';
+import apiPixelCalibrationControllerGetCalibrationData from '../../backendapi/apiPixelCalibrationControllerGetCalibrationData';
+import apiPixelCalibrationControllerSetCalibrationData from '../../backendapi/apiPixelCalibrationControllerSetCalibrationData';
 
 /**
  * ManualPixelCalibrationTab – Interactive two-point pixel-size calibration
@@ -66,14 +70,65 @@ const ManualPixelCalibrationTab = () => {
   const [movementDistanceUm, setMovementDistanceUm] = useState(100);
   const [movementAxis, setMovementAxis] = useState('X');
   const [backlashDistanceUm, setBacklashDistanceUm] = useState(50); // Backlash pre-move distance
+  const [detectorName, setDetectorName] = useState('');             // empty = backend default
+  const [availableDetectors, setAvailableDetectors] = useState([]);
   const [objectiveId, setObjectiveId] = useState('');     // empty = auto-detect
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
 
+  // Editable per-(detector, objective) calibration state
+  const [editPixelSizeUm, setEditPixelSizeUm] = useState('');
+  const [existingCalib, setExistingCalib] = useState(null);
+  const [editLoading, setEditLoading] = useState(false);
+
   // Reference for overlay SVG dimensions
   const overlayRef = useRef(null);
+
+  // Load available detectors on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await apiPixelCalibrationControllerGetAvailableDetectors();
+        if (cancelled) return;
+        const names = resp?.detectorNames || [];
+        setAvailableDetectors(names);
+        if (names.length > 0) setDetectorName((prev) => prev || names[0]);
+      } catch (_e) { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Reload the persisted calibration whenever the (detector, objective) selection changes
+  useEffect(() => {
+    let cancelled = false;
+    if (!detectorName) { setExistingCalib(null); setEditPixelSizeUm(''); return undefined; }
+    (async () => {
+      try {
+        const resp = await apiPixelCalibrationControllerGetCalibrationData(
+          detectorName,
+          objectiveId,
+        );
+        if (cancelled) return;
+        if (resp?.success) {
+          setExistingCalib(resp);
+          const sx = Number(resp?.metrics?.scale_x_um_per_pixel ?? 0);
+          const sy = Number(resp?.metrics?.scale_y_um_per_pixel ?? 0);
+          const avg = (Math.abs(sx) + Math.abs(sy)) / 2;
+          setEditPixelSizeUm(avg ? avg.toFixed(4) : '');
+        } else {
+          setExistingCalib(null);
+          setEditPixelSizeUm('');
+        }
+      } catch (_e) {
+        setExistingCalib(null);
+        setEditPixelSizeUm('');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [detectorName, objectiveId]);
 
   // ---- helper: reset everything ----
   const handleReset = () => {
@@ -160,18 +215,19 @@ const ManualPixelCalibrationTab = () => {
       setError('');
       setStatus('Calculating pixel size…');
 
-      // Scale preview-pixel coordinates to full-sensor pixels.
-      // The live stream may be subsampled (e.g. factor 4), so 1 preview px
-      // corresponds to `subsamplingFactor` sensor px.
-      const sf = subsamplingFactor;
+      // Send raw preview-pixel coords plus the subsampling factor; the backend
+      // does the multiplication. (We used to scale here, which double-scaled
+      // when the backend also applied the factor.)
       const res = await apiPixelCalibrationControllerManualPixelSizeCalibration({
-        point1X: point1.x * sf,
-        point1Y: point1.y * sf,
-        point2X: point2.x * sf,
-        point2Y: point2.y * sf,
+        point1X: point1.x,
+        point1Y: point1.y,
+        point2X: point2.x,
+        point2Y: point2.y,
         movementDistanceUm,
         movementAxis,
+        detectorName: detectorName || undefined,
         objectiveId: objectiveId || undefined,
+        previewSubsamplingFactor: subsamplingFactor,
       });
 
       if (res.success) {
@@ -365,6 +421,24 @@ const ManualPixelCalibrationTab = () => {
               Calibration Parameters
             </Typography>
 
+            <FormControl fullWidth sx={{ mb: 2 }}>
+              <InputLabel>Detector</InputLabel>
+              <Select
+                value={detectorName}
+                label="Detector"
+                onChange={(e) => setDetectorName(e.target.value)}
+              >
+                {availableDetectors.length === 0 && (
+                  <MenuItem value="" disabled>
+                    <em>(no detectors available)</em>
+                  </MenuItem>
+                )}
+                {availableDetectors.map((name) => (
+                  <MenuItem key={name} value={name}>{name}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
             <TextField
               label="Movement Distance (µm)"
               type="number"
@@ -399,6 +473,75 @@ const ManualPixelCalibrationTab = () => {
                 <MenuItem value="1">Objective 1</MenuItem>
               </Select>
             </FormControl>
+          </Paper>
+
+          {/* Editable per-(detector, objective) calibration */}
+          <Paper sx={{ p: 2, mb: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              Edit Calibration
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              {existingCalib
+                ? `Current value for '${detectorName}' @ '${existingCalib.objectiveId}'.`
+                : `No calibration stored yet for '${detectorName || '(none)'}' @ '${objectiveId || 'current'}'.`}
+            </Typography>
+            <TextField
+              label="Pixel Size (µm / pixel)"
+              type="number"
+              value={editPixelSizeUm}
+              onChange={(e) => setEditPixelSizeUm(e.target.value)}
+              fullWidth
+              size="small"
+              sx={{ mb: 1 }}
+              inputProps={{ step: 0.001, min: 0 }}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={editLoading ? <CircularProgress size={16} /> : <SaveIcon />}
+              disabled={editLoading || !detectorName || !editPixelSizeUm}
+              onClick={async () => {
+                const px = parseFloat(editPixelSizeUm);
+                if (!isFinite(px) || px <= 0) {
+                  setError('Pixel size must be a positive number');
+                  return;
+                }
+                setEditLoading(true);
+                setError('');
+                try {
+                  const resp = await apiPixelCalibrationControllerSetCalibrationData({
+                    detectorName,
+                    objectiveId: objectiveId || undefined,
+                    affineMatrix: [[px, 0.0, 0.0], [0.0, px, 0.0]],
+                    metrics: {
+                      scale_x_um_per_pixel: px,
+                      scale_y_um_per_pixel: px,
+                      rotation_deg: 0.0,
+                      method: 'manual_edit',
+                      quality: 'manual',
+                    },
+                  });
+                  if (resp?.success) {
+                    setStatus(resp.message || 'Calibration saved');
+                    setExistingCalib({
+                      success: true,
+                      detectorName,
+                      objectiveId: resp.objectiveId,
+                      metrics: resp.metrics,
+                      affineMatrix: resp.affineMatrix,
+                    });
+                  } else {
+                    setError(resp?.error || 'Failed to save calibration');
+                  }
+                } catch (e) {
+                  setError(`Save failed: ${e.message}`);
+                } finally {
+                  setEditLoading(false);
+                }
+              }}
+            >
+              Save calibration
+            </Button>
           </Paper>
 
           {/* Stepper workflow */}

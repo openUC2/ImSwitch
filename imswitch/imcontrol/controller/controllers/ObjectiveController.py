@@ -139,7 +139,15 @@ class ObjectiveController(LiveUpdatedController):
 
         # Legacy fallback (deprecated): static config-driven pixel sizes.
         if 0 <= self._currentObjective < len(self._pixelsizes):
-            return self._pixelsizes[self._currentObjective]
+            value = self._pixelsizes[self._currentObjective]
+            if not getattr(self, "_warnedLegacyPixelsize", False):
+                self._logger.warning(
+                    "ObjectiveInfo.pixelsizes is DEPRECATED - use the PixelCalibration "
+                    "controller as the single source of truth. Falling back to the "
+                    "value from the setup file (this warning is shown once)."
+                )
+                self._warnedLegacyPixelsize = True
+            return value
         return None
 
     def _getCurrentNA(self) -> Optional[float]:

@@ -22,6 +22,7 @@ Design
 * AprilTag / overview-camera helpers have been removed; this controller is now
   a focused addon for the DetectorManager.
 """
+import math
 import threading
 import time
 
@@ -36,13 +37,20 @@ from ..basecontrollers import LiveUpdatedController
 
 
 def _convert_to_native(obj):
-    """Recursively convert numpy types to plain Python so values are JSON-safe."""
+    """Recursively convert numpy types to plain Python so values are JSON-safe.
+
+    Also replaces NaN / +-Inf with ``None`` so that FastAPI / json.dumps does not
+    raise ``ValueError: Out of range float values are not JSON compliant``.
+    """
     if isinstance(obj, np.ndarray):
-        return obj.tolist()
+        return _convert_to_native(obj.tolist())
     if isinstance(obj, (np.integer,)):
         return int(obj)
     if isinstance(obj, (np.floating,)):
-        return float(obj)
+        v = float(obj)
+        return None if (math.isnan(v) or math.isinf(v)) else v
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
     if isinstance(obj, dict):
         return {k: _convert_to_native(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -373,8 +381,9 @@ class PixelCalibrationController(LiveUpdatedController):
                     "success": False,
                     "message": f"No pending calibration for '{detectorName}' @ '{objectiveId}'",
                 }
-            return {"success": True, **data}
-        return {"success": True, "pending": self._pendingCalibration}
+            # Always sanitise: stored payloads may carry NaN/Inf from numpy math.
+            return _convert_to_native({"success": True, **data})
+        return _convert_to_native({"success": True, "pending": self._pendingCalibration})
 
     @APIExport(requestType="POST")
     def applyPendingCalibration(
@@ -425,14 +434,14 @@ class PixelCalibrationController(LiveUpdatedController):
 
         del self._pendingCalibration[key]
 
-        return {
+        return _convert_to_native({
             "success": True,
             "detectorName": detectorName,
             "objectiveId": objectiveId,
             "message": f"Calibration applied and saved for '{detectorName}' @ '{objectiveId}'",
             "affineMatrix": final_matrix,
             "metrics": final_metrics,
-        }
+        })
 
     @APIExport(requestType="POST")
     def discardPendingCalibration(self, detectorName: str, objectiveId: str = None):
@@ -468,6 +477,32 @@ class PixelCalibrationController(LiveUpdatedController):
         }
 
     @APIExport()
+    def getAvailableDetectors(self):
+        """List every detector known to the system plus its per-objective calibration status.
+
+        Used by the frontend to populate detector dropdowns in both the automatic
+        and manual calibration tabs.
+        """
+        names = list(self._master.detectorsManager.getAllDeviceNames())
+        out = []
+        for name in names:
+            calibrated_objectives = []
+            for key in self.affineCalibrations.keys():
+                det, obj = self._splitKey(key)
+                if det == name:
+                    calibrated_objectives.append(obj)
+            out.append({
+                "detectorName": name,
+                "calibratedObjectives": sorted(set(calibrated_objectives)),
+            })
+        return {
+            "success": True,
+            "detectors": out,
+            "detectorNames": names,
+            "currentObjective": self.currentObjective,
+        }
+
+    @APIExport()
     def getCalibrationData(self, detectorName: str = "default", objectiveId: str = None):
         """Return persisted calibration data for the given (detector, objective) pair."""
         objectiveId = self._resolveObjectiveId(objectiveId)
@@ -477,14 +512,14 @@ class PixelCalibrationController(LiveUpdatedController):
                 "success": False,
                 "error": f"No calibration found for '{detectorName}' @ '{objectiveId}'",
             }
-        return {
+        return _convert_to_native({
             "success": True,
             "detectorName": detectorName,
             "objectiveId": objectiveId,
             "affineMatrix": calib.get("affine_matrix", [[1, 0, 0], [0, 1, 0]]),
             "metrics": calib.get("metrics", {}),
             "timestamp": calib.get("timestamp", "unknown"),
-        }
+        })
 
     @APIExport(requestType="POST")
     def setCalibrationData(
@@ -528,12 +563,24 @@ class PixelCalibrationController(LiveUpdatedController):
         self.affineCalibrations[key] = calib_data
         if objectiveId == self.currentObjective:
             self._applyCalibrationToDetector(detectorName, calib_data)
-        return {
+        # Surface common derived values so the frontend can render them directly.
+        m = calib_data["metrics"] or {}
+        sx = float(m.get("scale_x_um_per_pixel", 1.0))
+        sy = float(m.get("scale_y_um_per_pixel", 1.0))
+        return _convert_to_native({
             "success": True,
             "detectorName": detectorName,
             "objectiveId": objectiveId,
             "message": f"Calibration data saved for '{detectorName}' @ '{objectiveId}'",
-        }
+            "pixelSizeUm": (abs(sx) + abs(sy)) / 2.0,
+            "scaleXUmPerPixel": sx,
+            "scaleYUmPerPixel": sy,
+            "affineMatrix": calib_data["affine_matrix"],
+            "metrics": calib_data["metrics"],
+            "displacementPx": m.get("displacement_px"),
+            "movementDistanceUm": m.get("movement_distance_um"),
+            "movementAxis": m.get("movement_axis"),
+        })
 
     @APIExport()
     def deleteCalibration(self, detectorName: str, objectiveId: str = None):
@@ -595,8 +642,17 @@ class PixelCalibrationController(LiveUpdatedController):
         movementAxis: str = "X",
         detectorName: str = None,
         objectiveId: str = None,
+        previewSubsamplingFactor: float = 1.0,
     ):
-        """Compute and store a pixel size from two image points and a known stage move."""
+        """Compute and store a pixel size from two image points and a known stage move.
+
+        ``previewSubsamplingFactor`` is the ratio ``sensor_pixels / preview_pixels``
+        of the live stream that the user clicked on. If the frontend already scaled
+        the click coordinates up to full sensor resolution, leave it at ``1.0``.
+        Otherwise pass the live-stream subsampling factor and the controller will
+        scale the displacement accordingly so the pixel size refers to *sensor*
+        pixels (which is what every other controller expects).
+        """
         if detectorName is None or detectorName == "":
             detectorName = self._defaultDetectorName()
         objectiveId = self._resolveObjectiveId(objectiveId)
@@ -606,8 +662,15 @@ class PixelCalibrationController(LiveUpdatedController):
         if movementAxis not in ("X", "Y"):
             return {"success": False, "error": "movementAxis must be 'X' or 'Y'"}
 
-        dx = point2X - point1X
-        dy = point2Y - point1Y
+        try:
+            sub = float(previewSubsamplingFactor) if previewSubsamplingFactor else 1.0
+        except (TypeError, ValueError):
+            sub = 1.0
+        if sub <= 0:
+            sub = 1.0
+
+        dx = (point2X - point1X) * sub
+        dy = (point2Y - point1Y) * sub
         displacement_px = float(np.sqrt(dx * dx + dy * dy))
         if displacement_px < 1.0:
             return {
@@ -616,7 +679,6 @@ class PixelCalibrationController(LiveUpdatedController):
             }
 
         pixel_size_um = abs(movementDistanceUm) / displacement_px
-        # TODO: We need to ensure we take the downscaling of the liveview into account
         # Preserve previous rotation/flip if a calibration already exists for this (detector, objective).
         existing_calib = self._resolveCalibration(detectorName, objectiveId) or {}
         existing = existing_calib.get("affine_matrix")

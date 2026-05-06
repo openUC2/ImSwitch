@@ -52,7 +52,7 @@ dependencies = [
     "jupyter",
     "python-multipart >= 0.0.5",
     "piexif >= 1.1.3",
-    "NanoImagingPack==2.1.4",
+    "NanoImagingPack==2.1.5",
     # Pin below 0.1.7: that PyPI release added imswitchuc2 as a dep, creating a
     # circular dependency and an av==17 conflict with our aiortc-compatible av==13.
     "imswitchclient>=0.1.2",

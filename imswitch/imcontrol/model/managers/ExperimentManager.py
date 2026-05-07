@@ -21,6 +21,7 @@ class ExperimentManager(SignalInterface):
             self.omeroEnabled = getattr(experimentInfo, 'omeroEnabled', False)
             self.omeroConnectionTimeout = getattr(experimentInfo, 'omeroConnectionTimeout', 30)
             self.omeroUploadTimeout = getattr(experimentInfo, 'omeroUploadTimeout', 300)
+            self.overviewCameraName = getattr(experimentInfo, 'overviewCameraName', None)
             self.__logger.info("OMERO configuration loaded from setup info")
         else:
             # Default values if no experimentInfo provided
@@ -34,6 +35,7 @@ class ExperimentManager(SignalInterface):
             self.omeroEnabled = False
             self.omeroConnectionTimeout = 30
             self.omeroUploadTimeout = 300
+            self.overviewCameraName = None
             self.__logger.info("OMERO configuration initialized with defaults")
 
         # General timing parameter (similar to MCTManager's tWait)

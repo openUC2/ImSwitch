@@ -413,65 +413,41 @@ class StorageInfo:
 class PixelCalibrationInfo:
     """
     Configuration for stage-to-camera affine calibration.
-    
-    Stores per-objective affine transformation matrices that map pixel coordinates
+
+    Stores per-detector affine transformation matrices that map pixel coordinates
     to stage micron coordinates. The affine matrix handles rotation, scaling, shear,
     and translation between camera and stage coordinate systems.
+
+    PixelCalibration is the single source of truth for pixel size and flip
+    settings of each detector. On startup, PixelCalibrationController reads the
+    stored calibration for each detector by name and applies the derived flip
+    and pixel size to the matching DetectorManager via setFlipImage() and
+    setPixelSizeUm(). DetectorManagers must NOT read flip / pixelsize from their
+    own managerProperties any more.
     """
 
     affineCalibrations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    """ Per-objective affine calibration data. 
+    """ Per-detector affine calibration data, keyed by detector name.
     Format: {
-        "objectiveId": {
+        "<detectorName>": {
             "affine_matrix": [[a11, a12, tx], [a21, a22, ty]],  # 2x3 matrix
-            "metrics": {...},
+            "metrics": {...},                                    # scale_x_um_per_pixel, scale_y_um_per_pixel, ...
             "timestamp": "...",
-            "objective_info": {...}
+            "detector_name": "<detectorName>"
         }
     }
-    
+
     The affine matrix transforms pixel coordinates to stage coordinates:
     [stage_x]   [a11 a12 tx]   [pixel_x]
     [stage_y] = [a21 a22 ty] × [pixel_y]
                                [   1   ]
-    
-    Common transformations:
-    - Rotation: off-diagonal elements (a12, a21)
-    - Scaling: diagonal elements (a11, a22)
-    - Flip X: a11 = -1
-    - Flip Y: a22 = -1
-    - Translation: tx, ty (usually 0 for displacement-based calibration)
+
+    Sign of metrics.scale_x_um_per_pixel / scale_y_um_per_pixel encodes flip
+    (negative => flip on that axis).
     """
-    # TODO: We should only have one affine transfomration as the rotation/flip is the same for all objective lenses, only the scaling changes
+
     defaultAffineMatrix: List[List[float]] = field(default_factory=lambda: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-    """ Default identity transformation when no calibration is available.
-    [[1, 0, 0], [0, 1, 0]] means 1:1 mapping with no rotation. """
-
-    ObservationCamera: str = None
-    """ Name of the observation/overview camera used for calibration. """
-
-    overviewCalibration: Dict[str, Any] = field(default_factory=dict)
-    """ Overview camera calibration data.
-    Format: {
-        "axes": {
-            "mapping": {"stageX_to_cam": "width"|"height", "stageY_to_cam": "width"|"height"},
-            "sign": {"X": +1|-1, "Y": +1|-1}
-        },
-        "homing": {
-            "X": {"inverted": bool, "lastCheck": "ISO8601"},
-            "Y": {"inverted": bool, "lastCheck": "ISO8601"}
-        },
-        "illuminationMap": [
-            {"channel": str, "wavelength_nm": float, "color": str},
-            ...
-        ],
-        "objectiveImages": {
-            "slot1": "path/to/image.png",
-            ...
-        }
-    }
-    """
-    ObservationCameraFlip: Dict[str, bool] = field(default_factory=lambda: {"flipX": True, "flipY": True}) # should be True for the ESP32 Xiao camera used as overview camera in FRAME
+    """ Default identity transformation when no calibration is available. """
 
 
 @dataclass(frozen=False)
@@ -508,6 +484,11 @@ class ExperimentInfo:
 
     omeroUploadTimeout: int = 300
     """ Upload timeout for OMERO in seconds. """
+
+    overviewCameraName: Optional[str] = None
+    """ Name of the detector to use as overview camera. If ``None``, the
+    ExperimentController will look for a detector named ``"overviewcamera"``
+    and otherwise leave the overview feature disabled. """
 
 
 @dataclass(frozen=False)
@@ -945,37 +926,33 @@ class SetupInfo:
 
         return devices
 
-    def setAffineCalibration(self, objectiveId: str, calibrationData: dict):
+    def setAffineCalibration(self, key: str, calibrationData: dict):
         """
-        Save affine calibration data for a specific objective to the setup configuration.
-        
+        Save affine calibration data for a specific detector to the setup configuration.
+
         Args:
-            objectiveId: Identifier for the objective (e.g., "10x", "20x", "default")
+            key: Detector name (e.g., "WidefieldCamera", "HikCam0"). Legacy callers
+                may also pass an objective id; the value is used verbatim as the
+                dictionary key in ``affineCalibrations``.
             calibrationData: Dictionary containing:
                 - affine_matrix: 2x3 transformation matrix
-                - metrics: Quality metrics
+                - metrics: Quality metrics (incl. signed scale_x/y_um_per_pixel)
                 - timestamp: ISO format timestamp
-                - objective_info: Additional objective information
+                - detector_name: Detector this calibration belongs to
         """
         if self.PixelCalibration is None:
             self.PixelCalibration = PixelCalibrationInfo()
 
-        self.PixelCalibration.affineCalibrations[objectiveId] = calibrationData
+        self.PixelCalibration.affineCalibrations[key] = calibrationData
 
-    def getAffineCalibration(self, objectiveId: str = "default"):
+    def getAffineCalibration(self, key: str = "default"):
         """
-        Get affine calibration data for a specific objective.
-        
-        Args:
-            objectiveId: Identifier for the objective
-            
-        Returns:
-            Calibration data dictionary or None if not found
+        Get affine calibration data for a specific detector (or legacy objective id).
         """
         if self.PixelCalibration is None:
             return None
 
-        return self.PixelCalibration.affineCalibrations.get(objectiveId, None)
+        return self.PixelCalibration.affineCalibrations.get(key, None)
 
     def getAffineMatrix(self, objectiveId: str = "default"):
         """

@@ -73,7 +73,7 @@ setup(
         "jupyter",
         "python-multipart >= 0.0.5",
         "piexif >= 1.1.3",
-        "NanoImagingPack==2.1.4",
+        "NanoImagingPack==2.1.5",
         "imswitchclient>=0.1.7",
         "psygnal",
         "python-socketio[asyncio]==5.11.4",

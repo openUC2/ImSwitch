@@ -30,21 +30,12 @@ class GXPIPYManager(DetectorManager):
         except:
             self.cameraId = 1
 
-        try:
-            pixelSize = detectorInfo.managerProperties['cameraEffPixelsize'] # mum
-        except:
-            # returning back to default pixelsize
-            pixelSize = 1
-
-        try:
-            self.flipX = detectorInfo.managerProperties['gxipycam']['flipX']
-        except:
-            self.flipX = False
-
-        try:
-            self.flipY = detectorInfo.managerProperties['gxipycam']['flipY']
-        except:
-            self.flipY = False
+        # Pixel size and flip are owned by PixelCalibrationController; the
+        # values are injected via setPixelSizeUm() / setFlipImage() at startup
+        # and on objective change. Use neutral defaults here.
+        pixelSize = 1.0
+        self.flipX = False
+        self.flipY = False
 
 
         try:

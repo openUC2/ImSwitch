@@ -161,10 +161,13 @@ class MasterController:
             self.FlowStopManager = FlowStopManager(self.__setupInfo.FlowStop)
         if "Lepmon" in self.__setupInfo.availableWidgets:
             self.LepmonManager = LepmonManager(self.__setupInfo.Lepmon)
-        if "PixelCalibration" in self.__setupInfo.availableWidgets:
-            self.PixelCalibrationManager = PixelCalibrationManager(
-                self.__setupInfo.PixelCalibration
-            )
+        # PixelCalibration is the single source of truth for per-detector
+        # affine calibration (pixel size + flip). Always instantiate so that
+        # downstream code can rely on its presence regardless of the setup
+        # JSON having a "PixelCalibration" entry.
+        self.PixelCalibrationManager = PixelCalibrationManager(
+            self.__setupInfo.PixelCalibration
+        )
         if "AutoFocus" in self.__setupInfo.availableWidgets:
             self.AutoFocusManager = AutofocusManager(self.__setupInfo.autofocus)
         if "FOV" in self.__setupInfo.availableWidgets:

@@ -42,8 +42,9 @@ import * as uc2Slice from "../state/slices/UC2Slice.js";
 import { getConnectionSettingsState } from "../state/slices/ConnectionSettingsSlice";
 
 /**
- * Firmware Update Controller
- * Handles firmware flashing for connected devices
+ * System Update Controller
+ * Handles firmware flashing as well as related UC2 device control and
+ * status actions, including hardware control and LED matrix status updates.
  */
 const SystemUpdateController = () => {
   const uc2State = useSelector(uc2Slice.getUc2State);

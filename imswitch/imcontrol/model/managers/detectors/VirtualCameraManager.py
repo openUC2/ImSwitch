@@ -17,9 +17,16 @@ class VirtualCameraManager(DetectorManager):
         except:
             self.__logger.error("VirtualMicroscope not found in lowLevelManagers, cannot initialize VirtualCameraManager")
 
+        self._camera = self.VirtualMicroscope._camera
+
+        # Pixel size and flip are owned by PixelCalibrationController; the
+        # values are injected via setPixelSizeUm() / setFlipImage() at startup
+        # and on objective change. Use neutral defaults here.
+        flipX = False
+        flipY = False
+        self.setFlipImage(flipY, flipX)
 
         # assign the camera from the Virtual Microscope
-        self._camera = self.VirtualMicroscope._camera
 
         # get the pixel size from the camera
         fullShape = (self._camera.SensorWidth,
@@ -58,7 +65,9 @@ class VirtualCameraManager(DetectorManager):
                                         'External trigger'],
                             editable=True),
             'Camera pixel size': DetectorNumberParameter(group='Miscellaneous', value=pixelSize,
-                                                valueUnits='µm', editable=True)
+                                                valueUnits='µm', editable=True),
+            'flipX': DetectorBooleanParameter(group='Misc', value=flipX, editable=True),
+            'flipY': DetectorBooleanParameter(group='Misc', value=flipY, editable=True)
             }
 
         # reading parameters from disk and write them to camrea
@@ -162,9 +171,6 @@ class VirtualCameraManager(DetectorManager):
             flipX: Whether to flip horizontally
         """
         self._camera.flipImage = (flipY, flipX)
-        self._camera.flipY = flipY
-        self._camera.flipX = flipX
-        self.__logger.info(f"Updated flip settings: flipY={flipY}, flipX={flipX}")
 
     def _performSafeCameraAction(self, function):
         pass

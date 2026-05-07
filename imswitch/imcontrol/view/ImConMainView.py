@@ -23,7 +23,14 @@ class ImConMainViewNoQt(object):
 
         # Dock area
         # add widgets that are enabled but not in allDockKeys
-        enabledDockKeys = self.viewSetupInfo.availableWidgets
+        enabledDockKeys = list(self.viewSetupInfo.availableWidgets) \
+            if isinstance(self.viewSetupInfo.availableWidgets, list) \
+            else self.viewSetupInfo.availableWidgets
+        # PixelCalibration is mandatory: it is the single source of truth for
+        # per-detector pixel size and flip. Always load it regardless of
+        # whether the setup config opted in.
+        if isinstance(enabledDockKeys, list) and "PixelCalibration" not in enabledDockKeys:
+            enabledDockKeys.append("PixelCalibration")
         disabledKeys = ["Image"]
         widget_keys = {key: _DockInfo(name=key, yPosition=1) for key in enabledDockKeys if key not in disabledKeys}
         self._addWidgetNoQt(widget_keys)

@@ -24,7 +24,9 @@ const apiPixelCalibrationControllerManualPixelSizeCalibration = async ({
   point2Y,
   movementDistanceUm,
   movementAxis,
+  detectorName,
   objectiveId,
+  previewSubsamplingFactor,
 }) => {
   const axiosInstance = createAxiosInstance();
   const response = await axiosInstance.post(
@@ -38,7 +40,9 @@ const apiPixelCalibrationControllerManualPixelSizeCalibration = async ({
         point2Y,
         movementDistanceUm,
         movementAxis,
+        ...(detectorName != null && detectorName !== '' && { detectorName }),
         ...(objectiveId != null && { objectiveId }),
+        ...(previewSubsamplingFactor != null && { previewSubsamplingFactor }),
       },
     }
   );

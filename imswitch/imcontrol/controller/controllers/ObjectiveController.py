@@ -116,9 +116,38 @@ class ObjectiveController(LiveUpdatedController):
     # === State Property Accessors ===
 
     def _getCurrentPixelSize(self) -> Optional[float]:
-        """Get the pixel size for the current objective."""
-        if self._currentObjective is not None and 0 <= self._currentObjective < len(self._pixelsizes):
-            return self._pixelsizes[self._currentObjective]
+        """Get the pixel size for the current objective.
+
+        PixelCalibration is the single source of truth: ask it first for a
+        per-(detector, objective) calibration. Fall back to the legacy
+        ``ObjectiveInfo.pixelsizes`` list only for migration of old setups.
+        """
+        if self._currentObjective is None:
+            return None
+
+        # Try PixelCalibrationController first.
+        try:
+            pix_ctrl = self._master._controllersRegistry.get("PixelCalibration", None)
+            if pix_ctrl is not None and hasattr(pix_ctrl, "getPixelSize"):
+                detector_name = self._master.detectorsManager.getAllDeviceNames()[0]
+                sx, sy = pix_ctrl.getPixelSize(detector_name, str(self._currentObjective))
+                avg = (abs(sx) + abs(sy)) / 2.0
+                if avg > 0 and avg != 1.0:
+                    return avg
+        except Exception:
+            pass
+
+        # Legacy fallback (deprecated): static config-driven pixel sizes.
+        if 0 <= self._currentObjective < len(self._pixelsizes):
+            value = self._pixelsizes[self._currentObjective]
+            if not getattr(self, "_warnedLegacyPixelsize", False):
+                self._logger.warning(
+                    "ObjectiveInfo.pixelsizes is DEPRECATED - use the PixelCalibration "
+                    "controller as the single source of truth. Falling back to the "
+                    "value from the setup file (this warning is shown once)."
+                )
+                self._warnedLegacyPixelsize = True
+            return value
         return None
 
     def _getCurrentNA(self) -> Optional[float]:

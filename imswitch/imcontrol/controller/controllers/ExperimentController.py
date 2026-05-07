@@ -151,17 +151,30 @@ class ExperimentController(ImConWidgetController):
 
         # Initialize overview camera registration service
         self._overview_registration = OverviewRegistrationService()
+        # Overview camera is resolved through the DetectorManager, using the
+        # detector name configured in setup (experiment.overviewCameraName).
+        # Falls back to a detector literally named "overviewcamera" if any.
         self._overview_camera = None
         self._overview_camera_name = None
         try:
-            if hasattr(self._setupInfo, 'PixelCalibration') and hasattr(self._setupInfo.PixelCalibration, 'ObservationCamera'):
-                obs_cam_name = self._setupInfo.PixelCalibration.ObservationCamera
-                if obs_cam_name and obs_cam_name in allDetectorNames:
-                    self._overview_camera = self._master.detectorsManager[obs_cam_name]
-                    self._overview_camera_name = obs_cam_name
-                    self._logger.info(f"Overview camera initialized: {obs_cam_name}")
-        except Exception as e:
-            self._logger.warning(f"Could not initialize overview camera: {e}")
+            preferred = getattr(self._master.experimentManager, "overviewCameraName", None)
+            allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
+            candidates = []
+            if preferred:
+                candidates.append(preferred)
+            candidates.append("overviewcamera")
+            for name in candidates:
+                if name and name in allDetectorNames:
+                    self._overview_camera_name = name
+                    self._overview_camera = self._master.detectorsManager[name]
+                    self._logger.info(f"Overview camera resolved to detector '{name}'")
+                    break
+            if self._overview_camera is None:
+                self._logger.info(
+                    "No overview camera configured; overview features will return errors"
+                )
+        except Exception as exc:
+            self._logger.warning(f"Failed to resolve overview camera: {exc}")
 
         # Initialize omero  parameters  # TODO: Maybe not needed!
         self.omero_url = self._master.experimentManager.omeroServerUrl
@@ -2805,17 +2818,9 @@ class ExperimentController(ImConWidgetController):
         if frame is None:
             raise HTTPException(status_code=500, detail="No frame from overview camera")
 
-        # Apply flip settings if available
-        try:
-            if hasattr(self._setupInfo, 'PixelCalibration'):
-                flip = getattr(self._setupInfo.PixelCalibration, 'ObservationCameraFlip', {})
-                if isinstance(flip, dict):
-                    if flip.get('flipY', False):
-                        frame = np.flip(frame, 0)
-                    if flip.get('flipX', False):
-                        frame = np.flip(frame, 1)
-        except Exception:
-            pass
+        # Apply flip settings if available (legacy ObservationCameraFlip is
+        # no longer used; overview flip should be set on the detector via
+        # PixelCalibrationController.applyPendingCalibration).
 
         # Get current stage position for traceability
         stage_x, stage_y, stage_z = 0.0, 0.0, 0.0
@@ -2965,17 +2970,8 @@ class ExperimentController(ImConWidgetController):
         if frame is None:
             raise HTTPException(status_code=500, detail="No frame from overview camera")
 
-        # Apply flips
-        try:
-            if hasattr(self._setupInfo, 'PixelCalibration'):
-                flip = getattr(self._setupInfo.PixelCalibration, 'ObservationCameraFlip', {})
-                if isinstance(flip, dict):
-                    if flip.get('flipY', False):
-                        frame = np.flip(frame, 0)
-                    if flip.get('flipX', False):
-                        frame = np.flip(frame, 1)
-        except Exception:
-            pass
+        # Apply flips (legacy ObservationCameraFlip removed; flip is now
+        # handled inside the DetectorManager via PixelCalibrationController).
 
         frame = np.ascontiguousarray(frame)
 

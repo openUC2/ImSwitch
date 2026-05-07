@@ -20,10 +20,10 @@ class HikCamManager(DetectorManager):
 
         binning = 1
         cameraId = detectorInfo.managerProperties['cameraListIndex']
-        try:
-            pixelSize = detectorInfo.managerProperties['cameraEffPixelsize'] # mum
-        except:
-            pixelSize = 1
+        # NOTE: pixel size and flip are owned by PixelCalibrationController and
+        # injected via setPixelSizeUm() / setFlipImage() during startup. We only
+        # use defaults here so the camera can come up before calibration is loaded.
+        pixelSize = 1.0
 
         try:
             self._mockstackpath = detectorInfo.managerProperties['mockstackpath']
@@ -40,18 +40,9 @@ class HikCamManager(DetectorManager):
         except:
             self._mocktype = "normal"
 
-        # Get flip settings from affine calibration if available
-        try:
-            flipX = detectorInfo.managerProperties['hikcam']['flipX']
-        except:
-            flipX = False
-
-        try:
-            flipY = detectorInfo.managerProperties['hikcam']['flipY']
-        except:
-            flipY = False
-
-        flipImage = (flipY, flipX)
+        # Flip is set by PixelCalibrationController via setFlipImage() once the
+        # per-detector affine calibration has been loaded from the setup config.
+        flipImage = (False, False)
 
         self._camera = self._getHikObj(cameraId, isRGB, binning, flipImage)
 

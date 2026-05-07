@@ -306,137 +306,6 @@ const AutofocusController = ({ hostIP, hostPort }) => {
   return (
     <Paper style={{ padding: "20px" }}>
       <Grid container spacing={2}>
-        {/* ── Live Focus Monitoring (placed first so it stays visible while adjusting Z) ── */}
-        <Grid item xs={12}>
-          <Typography variant="h6" gutterBottom>
-            Live Focus Monitoring
-          </Typography>
-        </Grid>
-
-        <Grid item xs={4}>
-          <TextField
-            label="Update Period (s)"
-            type="number"
-            value={liveMonitoringPeriod}
-            onChange={(e) => handlePeriodChange(parseFloat(e.target.value))}
-            inputProps={{ step: 0.1, min: 0.1, max: 10 }}
-            fullWidth
-            disabled={isLiveMonitoring}
-          />
-        </Grid>
-
-        <Grid item xs={4}>
-          <FormControl fullWidth disabled={isLiveMonitoring}>
-            <InputLabel>Focus Method</InputLabel>
-            <Select
-              value={liveMonitoringMethod}
-              onChange={(e) => handleMethodChange(e.target.value)}
-              label="Focus Method"
-            >
-              <MenuItem value="LAPE">LAPE (Laplacian)</MenuItem>
-              <MenuItem value="GLVA">GLVA (Variance)</MenuItem>
-              <MenuItem value="JPEG">JPEG (Compression)</MenuItem>
-            </Select>
-          </FormControl>
-        </Grid>
-
-        <Grid item xs={4}>
-          <TextField
-            label="Crop Size"
-            type="number"
-            value={liveMonitoringCropsize}
-            onChange={(e) =>
-              dispatch(
-                autofocusSlice.setLiveMonitoringCropsize(
-                  parseInt(e.target.value),
-                ),
-              )
-            }
-            inputProps={{ step: 128, min: 256, max: 4096 }}
-            fullWidth
-            disabled={isLiveMonitoring}
-          />
-        </Grid>
-
-        <Grid item xs={12}>
-          <Box display="flex" alignItems="center" height="100%">
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={isLiveMonitoring}
-                  onChange={
-                    isLiveMonitoring
-                      ? handleStopLiveMonitoring
-                      : handleStartLiveMonitoring
-                  }
-                  color="primary"
-                />
-              }
-              label={
-                isLiveMonitoring ? "Monitoring Active" : "Start Monitoring"
-              }
-            />
-          </Box>
-        </Grid>
-
-        {/* Live focus value + rolling-window plot */}
-        {isLiveMonitoring && (
-          <Grid item xs={12}>
-            <Box display="flex" alignItems="center" gap={2} mb={1}>
-              <Typography variant="h4" color="primary">
-                {liveFocusValue ? liveFocusValue.focus_value.toFixed(2) : "---"}
-              </Typography>
-              <Box>
-                <Typography variant="body2" color="textSecondary">
-                  Current Focus Value ({liveMonitoringMethod})
-                </Typography>
-                {liveFocusValue && (
-                  <Typography
-                    variant="caption"
-                    color="textSecondary"
-                    display="block"
-                  >
-                    Last updated:{" "}
-                    {new Date(
-                      liveFocusValue.timestamp * 1000,
-                    ).toLocaleTimeString()}
-                  </Typography>
-                )}
-              </Box>
-            </Box>
-            {focusHistory.length > 1 && (
-              <Plot
-                data={[
-                  {
-                    x: focusHistory.map((p) =>
-                      new Date(p.t * 1000).toLocaleTimeString(),
-                    ),
-                    y: focusHistory.map((p) => p.v),
-                    type: "scatter",
-                    mode: "lines+markers",
-                    marker: { color: "blue", size: 5 },
-                    line: { color: "blue" },
-                    name: liveMonitoringMethod,
-                  },
-                ]}
-                layout={{
-                  margin: { t: 20, r: 20, b: 40, l: 50 },
-                  xaxis: { title: "Time" },
-                  yaxis: { title: "Focus Value" },
-                  height: 180,
-                }}
-                style={{ width: "100%" }}
-                config={{ displayModeBar: false }}
-              />
-            )}
-          </Grid>
-        )}
-
-        {/* Divider separating live monitoring from scan controls */}
-        <Grid item xs={12}>
-          <Divider style={{ margin: "10px 0" }} />
-        </Grid>
-
         {/* ── Autofocus Scan Controls ── */}
         <Grid item xs={12}>
           <FormControl fullWidth>
@@ -582,11 +451,150 @@ const AutofocusController = ({ hostIP, hostPort }) => {
         {/* Advanced Parameters Section */}
         <Grid item xs={12}>
           <Accordion sx={{ mt: 1 }}>
-            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <AccordionSummary
+              expandIcon={<ExpandMoreIcon />}
+              id="autofocus-advanced-parameters-header"
+              aria-controls="autofocus-advanced-parameters-content"
+            >
               <Typography variant="subtitle2">Advanced Parameters</Typography>
             </AccordionSummary>
-            <AccordionDetails>
+            <AccordionDetails id="autofocus-advanced-parameters-content">
               <Grid container spacing={2}>
+                {/* ── Live Focus Monitoring ── */}
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Live Focus Monitoring
+                  </Typography>
+                </Grid>
+
+                <Grid item xs={4}>
+                  <TextField
+                    label="Update Period (s)"
+                    type="number"
+                    value={liveMonitoringPeriod}
+                    onChange={(e) =>
+                      handlePeriodChange(parseFloat(e.target.value))
+                    }
+                    inputProps={{ step: 0.1, min: 0.1, max: 10 }}
+                    fullWidth
+                    disabled={isLiveMonitoring}
+                  />
+                </Grid>
+
+                <Grid item xs={4}>
+                  <FormControl fullWidth disabled={isLiveMonitoring}>
+                    <InputLabel>Focus Method</InputLabel>
+                    <Select
+                      value={liveMonitoringMethod}
+                      onChange={(e) => handleMethodChange(e.target.value)}
+                      label="Focus Method"
+                    >
+                      <MenuItem value="LAPE">LAPE (Laplacian)</MenuItem>
+                      <MenuItem value="GLVA">GLVA (Variance)</MenuItem>
+                      <MenuItem value="JPEG">JPEG (Compression)</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
+                <Grid item xs={4}>
+                  <TextField
+                    label="Crop Size (Monitoring)"
+                    type="number"
+                    value={liveMonitoringCropsize}
+                    onChange={(e) =>
+                      dispatch(
+                        autofocusSlice.setLiveMonitoringCropsize(
+                          parseInt(e.target.value),
+                        ),
+                      )
+                    }
+                    inputProps={{ step: 128, min: 256, max: 4096 }}
+                    fullWidth
+                    disabled={isLiveMonitoring}
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <Box display="flex" alignItems="center" height="100%">
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={isLiveMonitoring}
+                          onChange={
+                            isLiveMonitoring
+                              ? handleStopLiveMonitoring
+                              : handleStartLiveMonitoring
+                          }
+                          color="primary"
+                        />
+                      }
+                      label={
+                        isLiveMonitoring
+                          ? "Monitoring Active"
+                          : "Start Monitoring"
+                      }
+                    />
+                  </Box>
+                </Grid>
+
+                {/* Live focus value + rolling-window plot */}
+                {isLiveMonitoring && (
+                  <Grid item xs={12}>
+                    <Box display="flex" alignItems="center" gap={2} mb={1}>
+                      <Typography variant="h4" color="primary">
+                        {liveFocusValue
+                          ? liveFocusValue.focus_value.toFixed(2)
+                          : "---"}
+                      </Typography>
+                      <Box>
+                        <Typography variant="body2" color="textSecondary">
+                          Current Focus Value ({liveMonitoringMethod})
+                        </Typography>
+                        {liveFocusValue && (
+                          <Typography
+                            variant="caption"
+                            color="textSecondary"
+                            display="block"
+                          >
+                            Last updated:{" "}
+                            {new Date(
+                              liveFocusValue.timestamp * 1000,
+                            ).toLocaleTimeString()}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                    {focusHistory.length > 1 && (
+                      <Plot
+                        data={[
+                          {
+                            x: focusHistory.map((p) =>
+                              new Date(p.t * 1000).toLocaleTimeString(),
+                            ),
+                            y: focusHistory.map((p) => p.v),
+                            type: "scatter",
+                            mode: "lines+markers",
+                            marker: { color: "blue", size: 5 },
+                            line: { color: "blue" },
+                            name: liveMonitoringMethod,
+                          },
+                        ]}
+                        layout={{
+                          margin: { t: 20, r: 20, b: 40, l: 50 },
+                          xaxis: { title: "Time" },
+                          yaxis: { title: "Focus Value" },
+                          height: 180,
+                        }}
+                        style={{ width: "100%" }}
+                        config={{ displayModeBar: false }}
+                      />
+                    )}
+                  </Grid>
+                )}
+
+                <Grid item xs={12}>
+                  <Divider />
+                </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <TextField
                     label="Settle Time (s)"

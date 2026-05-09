@@ -49,6 +49,7 @@ def generate_sbs_wellplate(
     well_shape: str = "circular",
     well_x_dim_mm: Optional[float] = None,
     well_y_dim_mm: Optional[float] = None,
+    format_override: Optional[str] = None,
 ) -> dict:
     """Build an Opentrons-format labware dict for an SBS-style wellplate.
 
@@ -108,7 +109,9 @@ def generate_sbs_wellplate(
             wells[wid] = well_obj
         ordering.append(col_well_ids)
 
-    if rows == 8 and cols == 12:
+    if format_override is not None:
+        fmt = format_override
+    elif rows == 8 and cols == 12:
         fmt = "96Standard"
     elif rows == 16 and cols == 24:
         fmt = "384Standard"
@@ -202,6 +205,70 @@ _BUILTIN_SPECS = [
         brand="Greiner Bio-One",
         tags=["SBS", "wellPlate", "cell-painting", "colony-counting",
               "hematopoietic-stem-cells", "_generated"],
+    ),
+    # Corning 6-well 16.8 mL flat — SBS standard, 2x3 layout.
+    dict(
+        rows=2, cols=3,
+        well_diameter_mm=34.8,
+        well_depth_mm=17.4,
+        total_volume_uL=16800.0,
+        well_spacing_x_mm=39.12,
+        well_spacing_y_mm=39.12,
+        a1_x_offset_mm=24.55,
+        a1_y_offset_mm=23.16,
+        load_name="corning_6_wellplate_16.8ml_flat",
+        display_name="Corning 6 Well Plate 16.8 mL Flat",
+        brand="Corning",
+        format_override="6Standard",
+        tags=["SBS", "wellPlate", "_generated"],
+    ),
+    # Corning 12-well 6.9 mL flat — 3x4 layout.
+    dict(
+        rows=3, cols=4,
+        well_diameter_mm=22.11,
+        well_depth_mm=17.53,
+        total_volume_uL=6900.0,
+        well_spacing_x_mm=26.01,
+        well_spacing_y_mm=26.01,
+        a1_x_offset_mm=24.94,
+        a1_y_offset_mm=16.79,
+        load_name="corning_12_wellplate_6.9ml_flat",
+        display_name="Corning 12 Well Plate 6.9 mL Flat",
+        brand="Corning",
+        format_override="12Standard",
+        tags=["SBS", "wellPlate", "_generated"],
+    ),
+    # Corning 24-well 3.4 mL flat — 4x6 layout.
+    dict(
+        rows=4, cols=6,
+        well_diameter_mm=16.26,
+        well_depth_mm=17.4,
+        total_volume_uL=3400.0,
+        well_spacing_x_mm=19.3,
+        well_spacing_y_mm=19.3,
+        a1_x_offset_mm=17.48,
+        a1_y_offset_mm=13.67,
+        load_name="corning_24_wellplate_3.4ml_flat",
+        display_name="Corning 24 Well Plate 3.4 mL Flat",
+        brand="Corning",
+        format_override="24Standard",
+        tags=["SBS", "wellPlate", "_generated"],
+    ),
+    # Corning 48-well 1.6 mL flat — 6x8 layout.
+    dict(
+        rows=6, cols=8,
+        well_diameter_mm=11.56,
+        well_depth_mm=17.4,
+        total_volume_uL=1600.0,
+        well_spacing_x_mm=13.0,
+        well_spacing_y_mm=13.0,
+        a1_x_offset_mm=18.16,
+        a1_y_offset_mm=10.08,
+        load_name="corning_48_wellplate_1.6ml_flat",
+        display_name="Corning 48 Well Plate 1.6 mL Flat",
+        brand="Corning",
+        format_override="48Standard",
+        tags=["SBS", "wellPlate", "_generated"],
     ),
 ]
 

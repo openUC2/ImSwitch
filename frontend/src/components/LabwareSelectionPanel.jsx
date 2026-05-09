@@ -18,6 +18,11 @@ import {
   Box,
   Button,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   FormControl,
   FormControlLabel,
   InputLabel,
@@ -84,9 +89,57 @@ function labwareDefinitionToWellLayout(def) {
   };
 }
 
+/**
+ * Small SVG preview of the sub-position pattern inside a single well.
+ * Renders the first well of the labware (circle or rectangle) and overlays
+ * the dot offsets so the user sees exactly what will be applied.
+ */
+function SubPositionPreview({ labwareDef, offsets }) {
+  if (!labwareDef || !labwareDef.wells) return null;
+  const firstId = (labwareDef.well_names_flat && labwareDef.well_names_flat[0]) ||
+    Object.keys(labwareDef.wells)[0];
+  const w = labwareDef.wells[firstId];
+  if (!w) return null;
+  const g = w.geometry || {};
+  const isCircle = g.shape === "circle";
+  const halfW = isCircle ? (g.radius || 0) : (g.width || 0) / 2;
+  const halfH = isCircle ? (g.radius || 0) : (g.height || 0) / 2;
+  const maxOffX = offsets.reduce((m, o) => Math.max(m, Math.abs(o.dx)), 0);
+  const maxOffY = offsets.reduce((m, o) => Math.max(m, Math.abs(o.dy)), 0);
+  const viewHalfW = Math.max(halfW, maxOffX + 50) * 1.15;
+  const viewHalfH = Math.max(halfH, maxOffY + 50) * 1.15;
+  const size = 120;
+  return (
+    <Box sx={{ ml: "auto" }}>
+      <Typography variant="caption" sx={{ display: "block", textAlign: "center" }}>
+        Preview ({firstId})
+      </Typography>
+      <svg
+        width={size}
+        height={size}
+        viewBox={`${-viewHalfW} ${-viewHalfH} ${2 * viewHalfW} ${2 * viewHalfH}`}
+        style={{ border: "1px solid #ccc", background: "#fff" }}
+      >
+        {isCircle ? (
+          <circle cx={0} cy={0} r={halfW} fill="#e3f2fd" stroke="#1976d2" strokeWidth={viewHalfW * 0.01} />
+        ) : (
+          <rect
+            x={-halfW} y={-halfH} width={2 * halfW} height={2 * halfH}
+            fill="#e3f2fd" stroke="#1976d2" strokeWidth={viewHalfW * 0.01}
+          />
+        )}
+        {offsets.map((o, i) => (
+          <circle key={i} cx={o.dx} cy={o.dy} r={Math.max(viewHalfW, viewHalfH) * 0.04} fill="#d32f2f" />
+        ))}
+      </svg>
+    </Box>
+  );
+}
+
 const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
   const dispatch = useDispatch();
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
+  const experimentState = useSelector(experimentSlice.getExperimentState);
 
   const [labwareList, setLabwareList] = useState([]);
   const [labwareDef, setLabwareDef] = useState(null);
@@ -99,6 +152,16 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
   const [applyMode, setApplyMode] = useState("append"); // "append" | "replace"
   const [pointNameTemplate, setPointNameTemplate] = useState("{well_id}");
   const [busyApply, setBusyApply] = useState(false);
+
+  // Sub-position generation (per-well): "center" | "grid"
+  const [subPosMode, setSubPosMode] = useState("center");
+  const [subNx, setSubNx] = useState(2);
+  const [subNy, setSubNy] = useState(2);
+  const [subSpacingX, setSubSpacingX] = useState(500); // µm
+  const [subSpacingY, setSubSpacingY] = useState(500); // µm
+
+  // Pending labware change awaiting user confirmation
+  const [pendingLoadName, setPendingLoadName] = useState(null);
 
   const loadName = wellSelectorState.labwareLoadName;
   const selectedWellIds = useMemo(
@@ -170,10 +233,34 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
   }, [labwareDef]);
 
   const handleLabwareChange = (event) => {
-    dispatch(wellSelectorSlice.setLabwareLoadName(event.target.value));
+    const newName = event.target.value;
+    if (newName === loadName) return;
+    const hasPoints = (experimentState?.pointList?.length || 0) > 0;
+    const hasSelection = (selectedWellIds?.length || 0) > 0;
+    if (hasPoints || hasSelection) {
+      setPendingLoadName(newName);
+      return;
+    }
+    applyLabwareChange(newName);
+  };
+
+  const applyLabwareChange = (newName) => {
+    dispatch(wellSelectorSlice.setLabwareLoadName(newName));
     dispatch(wellSelectorSlice.clearSelectedWellIds());
     dispatch(wellSelectorSlice.clearConditionLabels());
   };
+
+  const handleConfirmLabwareChange = () => {
+    const target = pendingLoadName;
+    setPendingLoadName(null);
+    if (target == null) return;
+    // Also clear the experiment's pointList — the previous wells are no
+    // longer meaningful in the new plate's coordinate system.
+    dispatch(experimentSlice.setPointList([]));
+    applyLabwareChange(target);
+  };
+
+  const handleCancelLabwareChange = () => setPendingLoadName(null);
 
   const handleToggleWell = (wellId) => {
     dispatch(wellSelectorSlice.toggleSelectedWellId(wellId));
@@ -230,6 +317,44 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
     dispatch(wellSelectorSlice.clearConditionLabels());
   };
 
+  // Compute sub-position offsets (µm) relative to a well centre.
+  const subOffsets = useMemo(() => {
+    if (subPosMode !== "grid") return [{ dx: 0, dy: 0, ix: 0, iy: 0 }];
+    const nx = Math.max(1, Math.floor(Number(subNx) || 1));
+    const ny = Math.max(1, Math.floor(Number(subNy) || 1));
+    const sx = Number(subSpacingX) || 0;
+    const sy = Number(subSpacingY) || 0;
+    const out = [];
+    for (let iy = 0; iy < ny; iy++) {
+      for (let ix = 0; ix < nx; ix++) {
+        const dx = (ix - (nx - 1) / 2) * sx;
+        const dy = (iy - (ny - 1) / 2) * sy;
+        out.push({ dx, dy, ix, iy });
+      }
+    }
+    return out;
+  }, [subPosMode, subNx, subNy, subSpacingX, subSpacingY]);
+
+  const expandPointsWithSubPositions = useCallback(
+    (points) => {
+      if (subPosMode !== "grid" || subOffsets.length <= 1) return points;
+      const expanded = [];
+      for (const p of points) {
+        for (const off of subOffsets) {
+          const suffix = `_r${off.iy}c${off.ix}`;
+          expanded.push({
+            ...p,
+            x: (p.x || 0) + off.dx,
+            y: (p.y || 0) + off.dy,
+            name: (p.name || "") + suffix,
+          });
+        }
+      }
+      return expanded;
+    },
+    [subPosMode, subOffsets]
+  );
+
   const handleApply = async () => {
     if (!loadName) return;
     setError(null);
@@ -243,7 +368,7 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
         conditionLabels,
         pointNameTemplate: pointNameTemplate || "{well_id}",
       });
-      const points = result?.points || [];
+      const points = expandPointsWithSubPositions(result?.points || []);
       if (applyMode === "replace") {
         dispatch(experimentSlice.replacePoints(points));
       } else {
@@ -374,6 +499,56 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
                 </Button>
               </Box>
 
+              {/* Per-well sub-positions */}
+              <Box sx={{ display: "flex", gap: 2, alignItems: "flex-start", flexWrap: "wrap" }}>
+                <FormControl size="small">
+                  <Typography variant="caption">Per-well points</Typography>
+                  <RadioGroup
+                    row
+                    value={subPosMode}
+                    onChange={(e) => setSubPosMode(e.target.value)}
+                  >
+                    <FormControlLabel value="center" control={<Radio size="small" />} label="Center" />
+                    <FormControlLabel value="grid" control={<Radio size="small" />} label="N×M grid" />
+                  </RadioGroup>
+                </FormControl>
+                {subPosMode === "grid" && (
+                  <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+                    <TextField
+                      size="small" type="number" label="Nx"
+                      value={subNx}
+                      onChange={(e) => setSubNx(Math.max(1, parseInt(e.target.value || "1", 10)))}
+                      sx={{ width: 70 }}
+                    />
+                    <TextField
+                      size="small" type="number" label="Ny"
+                      value={subNy}
+                      onChange={(e) => setSubNy(Math.max(1, parseInt(e.target.value || "1", 10)))}
+                      sx={{ width: 70 }}
+                    />
+                    <TextField
+                      size="small" type="number" label="Δx (µm)"
+                      value={subSpacingX}
+                      onChange={(e) => setSubSpacingX(parseFloat(e.target.value || "0"))}
+                      sx={{ width: 100 }}
+                    />
+                    <TextField
+                      size="small" type="number" label="Δy (µm)"
+                      value={subSpacingY}
+                      onChange={(e) => setSubSpacingY(parseFloat(e.target.value || "0"))}
+                      sx={{ width: 100 }}
+                    />
+                    <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                      = {subOffsets.length} pt/well
+                    </Typography>
+                  </Box>
+                )}
+                <SubPositionPreview
+                  labwareDef={labwareDef}
+                  offsets={subOffsets}
+                />
+              </Box>
+
               {/* Apply controls */}
               <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap" }}>
                 <FormControl>
@@ -408,6 +583,28 @@ const LabwareSelectionPanel = ({ defaultExpanded = true }) => {
           )}
         </Stack>
       </AccordionDetails>
+      <Dialog
+        open={pendingLoadName != null}
+        onClose={handleCancelLabwareChange}
+      >
+        <DialogTitle>Switch labware?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Switching to <strong>{pendingLoadName}</strong> will clear the
+            current well selection
+            {(experimentState?.pointList?.length || 0) > 0 && (
+              <> and remove all {experimentState.pointList.length} point(s) from the experiment</>
+            )}
+            . This cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelLabwareChange}>Cancel</Button>
+          <Button onClick={handleConfirmLabwareChange} color="error" variant="contained">
+            Switch and clear
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Accordion>
   );
 };

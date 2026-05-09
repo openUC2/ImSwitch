@@ -35,6 +35,11 @@ import {
   AccordionSummary,
   AccordionDetails,
   Slider,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
 } from "@mui/material";
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 
@@ -45,6 +50,9 @@ const WellSelectorComponent = () => {
     "image/test.json",//TODO remove test
     "image/test1.json",//TODO remove test
   ]);
+
+  // Pending layout switch awaiting user confirmation when pointList is non-empty
+  const [pendingLayoutEvent, setPendingLayoutEvent] = useState(null);
 
   //child ref
   const childRef = useRef();//canvas 
@@ -121,6 +129,33 @@ const WellSelectorComponent = () => {
   //##################################################################################
   const handleLayoutChange = (event) => {
     console.log("handleLayoutChange");
+    // Warn the user before swapping layouts when there are existing points,
+    // since their well coordinates will not match the new plate.
+    const newName = event?.target?.value;
+    if (
+      newName &&
+      newName !== experimentState?.wellLayout?.name &&
+      (experimentState?.pointList?.length || 0) > 0
+    ) {
+      setPendingLayoutEvent({ target: { value: newName } });
+      return;
+    }
+    applyLayoutChange(event);
+  };
+
+  const handleConfirmLayoutChange = () => {
+    const evt = pendingLayoutEvent;
+    setPendingLayoutEvent(null);
+    if (!evt) return;
+    dispatch(experimentSlice.setPointList([]));
+    dispatch(wellSelectorSlice.clearSelectedWellIds());
+    dispatch(wellSelectorSlice.clearConditionLabels());
+    applyLayoutChange(evt);
+  };
+
+  const handleCancelLayoutChange = () => setPendingLayoutEvent(null);
+
+  const applyLayoutChange = (event) => {
     //select layout
     let wellLayout; // = wsUtils.wellLayoutDefault;
 
@@ -441,6 +476,28 @@ const WellSelectorComponent = () => {
 
       {/* Overview Registration Wizard Dialog */}
       <OverviewRegistrationWizard />
+
+      {/* Confirm before swapping layout (clears existing points) */}
+      <Dialog
+        open={pendingLayoutEvent != null}
+        onClose={handleCancelLayoutChange}
+      >
+        <DialogTitle>Switch layout?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Switching to <strong>{pendingLayoutEvent?.target?.value}</strong> will
+            remove all {experimentState?.pointList?.length || 0} point(s) from the
+            current experiment, since their coordinates are tied to the old
+            layout. Continue?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelLayoutChange}>Cancel</Button>
+          <Button onClick={handleConfirmLayoutChange} color="error" variant="contained">
+            Switch and clear
+          </Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 };

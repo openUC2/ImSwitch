@@ -99,7 +99,7 @@
       "type": "object",
       "required": ["format", "isTiprack", "loadName", "isMagneticModuleCompatible"],
       "properties": {
-        "format": {"type": "string", "enum": ["96Standard", "384Standard", "trough", "irregular", "trash"]},
+        "format": {"type": "string"},
         "isTiprack": {"type": "boolean"},
         "loadName": {"type": "string", "pattern": "^[a-z0-9._]+$"},
         "isMagneticModuleCompatible": {"type": "boolean"}

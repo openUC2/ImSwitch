@@ -37,7 +37,12 @@ class _LabwareMetadata(BaseModel):
 
 
 class _LabwareParameters(BaseModel):
-    format: Literal["96Standard", "384Standard", "trough", "irregular", "trash"]
+    # Opentrons' canonical formats are "96Standard", "384Standard", "trough",
+    # "irregular", "trash", but third-party JSONs (e.g. older Opentrons
+    # community defs for 6/12/24/48-well plates) use other strings such as
+    # "6Standard", "24Standard". Accept any string and let downstream code
+    # treat unknown values as "irregular".
+    format: str
     isTiprack: bool
     loadName: str
     isMagneticModuleCompatible: bool = False

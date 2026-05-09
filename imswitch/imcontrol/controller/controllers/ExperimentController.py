@@ -12,7 +12,6 @@ from imswitch.imcontrol.model.managers.WorkflowManager import WorkflowContext, W
 from imswitch.imcontrol.model.managers.MDASequenceManager import MDASequenceManager
 from imswitch.imcommon.model import dirtools, initLogger, APIExport
 from ..basecontrollers import ImConWidgetController
-from .wellplate_layouts import get_predefined_layouts, get_layout_by_name
 
 try:
     IS_ASHLAR_AVAILABLE = True
@@ -198,24 +197,21 @@ class ExperimentController(ImConWidgetController):
     # ------------------------------------------------------------------
     # Wellplate / labware endpoints
     #
-    # The legacy ``getAvailableWellplateLayouts`` / ``getWellplateLayout`` /
-    # ``generateCustomWellplateLayout`` endpoints are kept as thin wrappers
-    # over the new Opentrons-style ``LabwareManager`` (see
-    # ``imswitch.imcontrol.model.labware``).  New clients should prefer the
-    # ``getLabwareList`` / ``getLabwareDefinition`` / ``selectWellsByPattern``
-    # / ``applyWellSelectionToExperiment`` endpoints.
+    # All layouts are now served by the Opentrons-style ``LabwareManager``
+    # (see ``imswitch.imcontrol.model.labware``).  The historical
+    # ``getAvailableWellplateLayouts`` / ``getWellplateLayout`` endpoints are
+    # kept as thin compatibility wrappers that forward to the manager and
+    # return the legacy dict shape the frontend canvas understands.  The
+    # ``generateCustomWellplateLayout`` endpoint and the
+    # ``wellplate_layouts`` module have been removed — drop a JSON into
+    # ``imswitch/imcontrol/model/labware/definitions/`` (see
+    # ``docs/labware_opentrons.md``) to add a new plate.
     # ------------------------------------------------------------------
 
     @staticmethod
     def _labware_to_legacy_layout(lab, offset_x: float = 0.0, offset_y: float = 0.0) -> dict:
-        """Convert a ``LabwareDefinition`` to the historical wellplate-layout
-        dict shape used by the existing frontend.  µm everywhere.
-
-        Each well's ``name`` is its well ID (``A1``, ``B12``, …) so existing
-        canvas rendering immediately surfaces the well coordinate.
-        """
-        # Spacing — derived defensively from the first two wells along each
-        # axis (irregular labware is allowed).
+        """Convert a ``LabwareDefinition`` to the legacy wellplate-layout dict
+        the frontend canvas consumes.  µm everywhere."""
         spacing_x = 0.0
         spacing_y = 0.0
         if len(lab.columns) >= 2:
@@ -262,7 +258,6 @@ class ExperimentController(ImConWidgetController):
             "unit": "um",
             "width": lab.dimensions.x,
             "height": lab.dimensions.y,
-            # Forward labware identification so newer clients can pick it up.
             "labwareLoadName": lab.load_name,
         }
 
@@ -270,74 +265,45 @@ class ExperimentController(ImConWidgetController):
     def getAvailableWellplateLayouts(self):
         """Return summaries of available wellplate layouts.
 
-        Backwards-compatible wrapper: prefers the new ``LabwareManager`` and
-        falls back to the legacy ``wellplate_layouts`` module if the manager
-        is unavailable or empty.
+        Compatibility wrapper: prefer ``getLabwareList`` for new clients.
         """
         try:
-            if self.labware_manager and self.labware_manager.list_load_names():
-                out = {}
-                for s in self.labware_manager.list_summaries():
-                    out[s["load_name"]] = {
-                        "name": s["display_name"],
-                        "description": ", ".join(s.get("tags", [])),
-                        "rows": s["rows"],
-                        "cols": s["cols"],
-                        "well_count": s["well_count"],
-                        "well_spacing_x": 0,  # filled in via getWellplateLayout
-                        "well_spacing_y": 0,
-                    }
-                return out
-            layouts = get_predefined_layouts()
-            return {
-                name: {
-                    "name": layout.name,
-                    "description": layout.description,
-                    "rows": layout.rows,
-                    "cols": layout.cols,
-                    "well_count": len(layout.wells),
-                    "well_spacing_x": layout.well_spacing_x,
-                    "well_spacing_y": layout.well_spacing_y,
+            if not self.labware_manager:
+                return {}
+            out = {}
+            for s in self.labware_manager.list_summaries():
+                out[s["load_name"]] = {
+                    "name": s["display_name"],
+                    "description": ", ".join(s.get("tags", [])),
+                    "rows": s["rows"],
+                    "cols": s["cols"],
+                    "well_count": s["well_count"],
+                    "well_spacing_x": 0,  # filled in via getWellplateLayout
+                    "well_spacing_y": 0,
                 }
-                for name, layout in layouts.items()
-            }
+            return out
         except Exception as e:
             self._logger.error(f"Failed to get wellplate layouts: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     @APIExport(requestType="GET")
     def getWellplateLayout(self, layout_name: str, offset_x: float = 0, offset_y: float = 0):
-        """Get a specific wellplate layout in the legacy format (µm)."""
+        """Get a specific wellplate layout in the legacy format (µm).
+
+        Compatibility wrapper: prefer ``getLabwareDefinition`` for new clients.
+        """
         try:
-            if self.labware_manager:
-                try:
-                    lab = self.labware_manager.get(layout_name)
-                except KeyError:
-                    lab = None
-                if lab is not None:
-                    return self._labware_to_legacy_layout(lab, offset_x, offset_y)
-            layout = get_layout_by_name(layout_name, offset_x=offset_x, offset_y=offset_y)
-            if not layout:
+            if not self.labware_manager:
+                raise HTTPException(status_code=503, detail="LabwareManager unavailable")
+            try:
+                lab = self.labware_manager.get(layout_name)
+            except KeyError:
                 raise HTTPException(status_code=404, detail=f"Layout '{layout_name}' not found")
-            return layout.dict()
+            return self._labware_to_legacy_layout(lab, offset_x, offset_y)
         except HTTPException:
             raise
         except Exception as e:
             self._logger.error(f"Failed to get wellplate layout '{layout_name}': {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @APIExport(requestType="POST")
-    def generateCustomWellplateLayout(self, layout_params: dict):
-        """Generate a custom wellplate layout (legacy format)."""
-        try:
-            layout = get_layout_by_name("custom", **layout_params)
-            if not layout:
-                raise HTTPException(status_code=400, detail="Invalid layout parameters")
-            return layout.dict()
-        except HTTPException:
-            raise
-        except Exception as e:
-            self._logger.error(f"Failed to generate custom wellplate layout: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     # ------------------------------------------------------------------
@@ -2976,21 +2942,18 @@ class ExperimentController(ImConWidgetController):
             layout_dict = layout_data
             layout_name = layout_data.get("name", layout_name)
         else:
-            # 2. Try backend lookup
-            try:
-                layout = get_layout_by_name(layout_name)
-                if layout is None:
-                    raise ValueError(f"Layout '{layout_name}' not found")
-                if hasattr(layout, 'model_dump'):
-                    layout_dict = layout.model_dump()
-                elif hasattr(layout, 'dict'):
-                    layout_dict = layout.dict()
-                else:
-                    layout_dict = layout
-            except Exception:
+            # 2. Try the labware manager (Opentrons defs by load_name)
+            layout_dict = None
+            if self.labware_manager:
+                try:
+                    lab = self.labware_manager.get(layout_name)
+                    layout_dict = self._labware_to_legacy_layout(lab)
+                except KeyError:
+                    layout_dict = None
+            if layout_dict is None:
                 # 3. Last-resort hardcoded Heidstar fallback
                 self._logger.warning(
-                    "No layout_data from frontend and backend lookup failed. "
+                    "No layout_data from frontend and labware lookup failed. "
                     "Using hardcoded Heidstar fallback – coordinates may not match canvas!"
                 )
                 layout_dict = {

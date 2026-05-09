@@ -176,6 +176,15 @@ class ExperimentController(ImConWidgetController):
         except Exception as exc:
             self._logger.warning(f"Failed to resolve overview camera: {exc}")
 
+        # Initialize Opentrons-style labware manager. A single bad labware file
+        # must never block controller startup, so we swallow exceptions.
+        try:
+            from imswitch.imcontrol.model.labware import LabwareManager as _LabwareManager
+            self.labware_manager = _LabwareManager()
+        except Exception as exc:
+            self._logger.warning(f"LabwareManager init failed: {exc}")
+            self.labware_manager = None
+
         # Initialize omero  parameters  # TODO: Maybe not needed!
         self.omero_url = self._master.experimentManager.omeroServerUrl
         self.omero_username = self._master.experimentManager.omeroUsername
@@ -186,15 +195,99 @@ class ExperimentController(ImConWidgetController):
     def getHardwareParameters(self):
         return self.ExperimentParams
 
+    # ------------------------------------------------------------------
+    # Wellplate / labware endpoints
+    #
+    # The legacy ``getAvailableWellplateLayouts`` / ``getWellplateLayout`` /
+    # ``generateCustomWellplateLayout`` endpoints are kept as thin wrappers
+    # over the new Opentrons-style ``LabwareManager`` (see
+    # ``imswitch.imcontrol.model.labware``).  New clients should prefer the
+    # ``getLabwareList`` / ``getLabwareDefinition`` / ``selectWellsByPattern``
+    # / ``applyWellSelectionToExperiment`` endpoints.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _labware_to_legacy_layout(lab, offset_x: float = 0.0, offset_y: float = 0.0) -> dict:
+        """Convert a ``LabwareDefinition`` to the historical wellplate-layout
+        dict shape used by the existing frontend.  µm everywhere.
+
+        Each well's ``name`` is its well ID (``A1``, ``B12``, …) so existing
+        canvas rendering immediately surfaces the well coordinate.
+        """
+        # Spacing — derived defensively from the first two wells along each
+        # axis (irregular labware is allowed).
+        spacing_x = 0.0
+        spacing_y = 0.0
+        if len(lab.columns) >= 2:
+            r = lab.rows[0]
+            w_a = lab.wells.get(f"{r}{lab.columns[0]}")
+            w_b = lab.wells.get(f"{r}{lab.columns[1]}")
+            if w_a and w_b:
+                spacing_x = abs(w_b.x - w_a.x)
+        if len(lab.rows) >= 2:
+            c = lab.columns[0]
+            w_a = lab.wells.get(f"{lab.rows[0]}{c}")
+            w_b = lab.wells.get(f"{lab.rows[1]}{c}")
+            if w_a and w_b:
+                spacing_y = abs(w_b.y - w_a.y)
+
+        legacy_wells = []
+        for wid in lab.well_names_flat:
+            w = lab.wells[wid]
+            entry = {
+                "id": wid,
+                "name": wid,
+                "x": w.x + offset_x,
+                "y": w.y + offset_y,
+                "shape": w.geometry.shape,
+                "row": lab.rows.index(w.row),
+                "col": lab.columns.index(w.column),
+            }
+            if w.geometry.shape == "circle":
+                entry["radius"] = w.geometry.radius
+            else:
+                entry["width"] = w.geometry.width
+                entry["height"] = w.geometry.height
+            legacy_wells.append(entry)
+        return {
+            "name": lab.display_name,
+            "description": ", ".join(lab.tags) if lab.tags else "",
+            "rows": len(lab.rows),
+            "cols": len(lab.columns),
+            "well_spacing_x": spacing_x,
+            "well_spacing_y": spacing_y,
+            "offset_x": offset_x,
+            "offset_y": offset_y,
+            "wells": legacy_wells,
+            "unit": "um",
+            "width": lab.dimensions.x,
+            "height": lab.dimensions.y,
+            # Forward labware identification so newer clients can pick it up.
+            "labwareLoadName": lab.load_name,
+        }
+
     @APIExport(requestType="GET")
     def getAvailableWellplateLayouts(self):
-        """
-        Get list of available pre-defined wellplate layouts.
+        """Return summaries of available wellplate layouts.
 
-        Returns:
-            Dict with layout names as keys and layout metadata as values
+        Backwards-compatible wrapper: prefers the new ``LabwareManager`` and
+        falls back to the legacy ``wellplate_layouts`` module if the manager
+        is unavailable or empty.
         """
         try:
+            if self.labware_manager and self.labware_manager.list_load_names():
+                out = {}
+                for s in self.labware_manager.list_summaries():
+                    out[s["load_name"]] = {
+                        "name": s["display_name"],
+                        "description": ", ".join(s.get("tags", [])),
+                        "rows": s["rows"],
+                        "cols": s["cols"],
+                        "well_count": s["well_count"],
+                        "well_spacing_x": 0,  # filled in via getWellplateLayout
+                        "well_spacing_y": 0,
+                    }
+                return out
             layouts = get_predefined_layouts()
             return {
                 name: {
@@ -204,7 +297,7 @@ class ExperimentController(ImConWidgetController):
                     "cols": layout.cols,
                     "well_count": len(layout.wells),
                     "well_spacing_x": layout.well_spacing_x,
-                    "well_spacing_y": layout.well_spacing_y
+                    "well_spacing_y": layout.well_spacing_y,
                 }
                 for name, layout in layouts.items()
             }
@@ -214,18 +307,15 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="GET")
     def getWellplateLayout(self, layout_name: str, offset_x: float = 0, offset_y: float = 0):
-        """
-        Get a specific wellplate layout with optional offset parameters.
-
-        Args:
-            layout_name: Name of the layout (e.g., '96-well-standard', '384-well-standard')
-            offset_x: X offset in micrometers (default: 0)
-            offset_y: Y offset in micrometers (default: 0)
-
-        Returns:
-            Complete wellplate layout definition including all wells
-        """
+        """Get a specific wellplate layout in the legacy format (µm)."""
         try:
+            if self.labware_manager:
+                try:
+                    lab = self.labware_manager.get(layout_name)
+                except KeyError:
+                    lab = None
+                if lab is not None:
+                    return self._labware_to_legacy_layout(lab, offset_x, offset_y)
             layout = get_layout_by_name(layout_name, offset_x=offset_x, offset_y=offset_y)
             if not layout:
                 raise HTTPException(status_code=404, detail=f"Layout '{layout_name}' not found")
@@ -238,27 +328,7 @@ class ExperimentController(ImConWidgetController):
 
     @APIExport(requestType="POST")
     def generateCustomWellplateLayout(self, layout_params: dict):
-        """
-        Generate a custom wellplate layout with specified parameters.
-
-        Args:
-            layout_params: Dictionary with layout parameters:
-                - name: str (required)
-                - rows: int (required)
-                - cols: int (required)
-                - well_spacing_x: float (required, micrometers)
-                - well_spacing_y: float (required, micrometers)
-                - well_shape: str ('circle' or 'rectangle', default: 'circle')
-                - well_radius: float (micrometers, for circular wells)
-                - well_width: float (micrometers, for rectangular wells)
-                - well_height: float (micrometers, for rectangular wells)
-                - offset_x: float (default: 0)
-                - offset_y: float (default: 0)
-                - description: str (default: '')
-
-        Returns:
-            Complete wellplate layout definition
-        """
+        """Generate a custom wellplate layout (legacy format)."""
         try:
             layout = get_layout_by_name("custom", **layout_params)
             if not layout:
@@ -269,6 +339,144 @@ class ExperimentController(ImConWidgetController):
         except Exception as e:
             self._logger.error(f"Failed to generate custom wellplate layout: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    # ------------------------------------------------------------------
+    # New Opentrons-style endpoints
+    # ------------------------------------------------------------------
+    @APIExport(requestType="GET")
+    def getLabwareList(self) -> List[dict]:
+        """List summaries of all loaded labware definitions (µm dimensions)."""
+        if not self.labware_manager:
+            return []
+        return self.labware_manager.list_summaries()
+
+    @APIExport(requestType="GET")
+    def getLabwareDefinition(
+        self,
+        load_name: str,
+        offset_x_um: float = 0.0,
+        offset_y_um: float = 0.0,
+    ) -> dict:
+        """Return a full ``LabwareDefinition`` (µm). Optional offsets shift
+        every well's x/y to map plate -> stage coordinates."""
+        if not self.labware_manager:
+            raise HTTPException(status_code=503, detail="LabwareManager unavailable")
+        try:
+            lab = self.labware_manager.get_with_offset(load_name, offset_x_um, offset_y_um)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return lab.model_dump()
+
+    @APIExport(requestType="POST")
+    def selectWellsByPattern(self, request: dict) -> dict:
+        """Resolve a ``WellSelectionPattern`` against a labware. Pure function;
+        does not mutate experiment state.
+
+        Request shape:
+            {
+              "load_name": "corning_96_wellplate_360ul_flat",
+              "pattern": {"ranges": ["A1:H12"], "rows": ["A"], ...},
+              "offset_x_um": 0.0,
+              "offset_y_um": 0.0
+            }
+        """
+        if not self.labware_manager:
+            raise HTTPException(status_code=503, detail="LabwareManager unavailable")
+        from imswitch.imcontrol.model.labware import (
+            WellSelectionPattern, resolve_pattern,
+        )
+        load_name = request.get("load_name")
+        pattern_raw = request.get("pattern") or {}
+        offset_x = float(request.get("offset_x_um") or 0.0)
+        offset_y = float(request.get("offset_y_um") or 0.0)
+        try:
+            lab = self.labware_manager.get(load_name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            pattern = WellSelectionPattern.model_validate(pattern_raw)
+            wells = resolve_pattern(lab, pattern)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        resolved = []
+        for w in wells:
+            entry = {
+                "well_id": w.id,
+                "row": w.row,
+                "column": w.column,
+                "x_um": w.x + offset_x,
+                "y_um": w.y + offset_y,
+                "z_um": w.z,
+                "shape": w.geometry.shape,
+            }
+            if w.geometry.shape == "circle":
+                entry["radius_um"] = w.geometry.radius
+            else:
+                entry["width_um"] = w.geometry.width
+                entry["height_um"] = w.geometry.height
+            resolved.append(entry)
+        return {"load_name": load_name, "count": len(resolved), "wells": resolved}
+
+    @APIExport(requestType="POST")
+    def applyWellSelectionToExperiment(self, request: dict) -> dict:
+        """Resolve a pattern and return ``Point`` dicts ready for the
+        experiment's pointList.
+
+        Request shape:
+            {
+              "load_name": "...",
+              "pattern": {...},
+              "offset_x_um": 0,
+              "offset_y_um": 0,
+              "condition_labels": {"A1": "Donor1+DMSO", ...},
+              "point_name_template": "{well_id}"
+            }
+        """
+        if not self.labware_manager:
+            raise HTTPException(status_code=503, detail="LabwareManager unavailable")
+        from imswitch.imcontrol.model.labware import (
+            WellSelectionPattern, resolve_pattern,
+        )
+        load_name = request.get("load_name")
+        pattern_raw = request.get("pattern") or {}
+        offset_x = float(request.get("offset_x_um") or 0.0)
+        offset_y = float(request.get("offset_y_um") or 0.0)
+        condition_labels: Dict[str, str] = dict(request.get("condition_labels") or {})
+        template: str = request.get("point_name_template") or "{well_id}"
+        try:
+            lab = self.labware_manager.get(load_name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            pattern = WellSelectionPattern.model_validate(pattern_raw)
+            wells = resolve_pattern(lab, pattern)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        points: List[dict] = []
+        for w in wells:
+            label = condition_labels.get(w.id)
+            try:
+                name = template.format(
+                    well_id=w.id, row=w.row, column=w.column, label=label or ""
+                )
+            except (KeyError, IndexError):
+                name = w.id
+            points.append({
+                "name": name,
+                "x": w.x + offset_x,
+                "y": w.y + offset_y,
+                "z": w.z if w.z != 0 else None,
+                "iX": 0,
+                "iY": 0,
+                "neighborPointList": [],
+                "wellId": w.id,
+                "wellRow": w.row,
+                "wellColumn": w.column,
+                "labwareLoadName": load_name,
+                "conditionLabel": label,
+                "areaType": "well",
+            })
+        return {"load_name": load_name, "count": len(points), "points": points}
 
     @APIExport(requestType="GET")
     def getOMEROConfig(self):
@@ -407,6 +615,10 @@ class ExperimentController(ImConWidgetController):
                         "y": pos.y,
                         "z": pos.z if pos.z is not None else (area.centerPosition.z if area.centerPosition.z is not None else None),
                         "wellId": area.wellId,
+                        "wellRow": area.wellRow,
+                        "wellColumn": area.wellColumn,
+                        "labwareLoadName": area.labwareLoadName,
+                        "conditionLabel": area.conditionLabel,
                         "areaName": area.areaName,
                         "areaType": area.areaType
                     })
@@ -433,6 +645,10 @@ class ExperimentController(ImConWidgetController):
                         "y": centerPoint.y,
                         "z": centerPoint.z,
                         "wellId": centerPoint.wellId,
+                        "wellRow": centerPoint.wellRow,
+                        "wellColumn": centerPoint.wellColumn,
+                        "labwareLoadName": centerPoint.labwareLoadName,
+                        "conditionLabel": centerPoint.conditionLabel,
                         "areaName": centerPoint.name,
                         "areaType": centerPoint.areaType or 'free_scan'
                     }]
@@ -449,6 +665,10 @@ class ExperimentController(ImConWidgetController):
                             "y": neighbor.y,
                             "z": neighbor.z if neighbor.z is not None else centerPoint.z,
                             "wellId": centerPoint.wellId,
+                            "wellRow": centerPoint.wellRow,
+                            "wellColumn": centerPoint.wellColumn,
+                            "labwareLoadName": centerPoint.labwareLoadName,
+                            "conditionLabel": centerPoint.conditionLabel,
                             "areaName": centerPoint.name,
                             "areaType": centerPoint.areaType or 'free_scan'
                         })
@@ -475,6 +695,10 @@ class ExperimentController(ImConWidgetController):
                 "x": current_x,
                 "y": current_y,
                 "wellId": None,
+                "wellRow": None,
+                "wellColumn": None,
+                "labwareLoadName": None,
+                "conditionLabel": None,
                 "areaName": "Current Position",
                 "areaType": "free_scan"
             }]
@@ -2818,9 +3042,7 @@ class ExperimentController(ImConWidgetController):
         if frame is None:
             raise HTTPException(status_code=500, detail="No frame from overview camera")
 
-        # Apply flip settings if available (legacy ObservationCameraFlip is
-        # no longer used; overview flip should be set on the detector via
-        # PixelCalibrationController.applyPendingCalibration).
+
 
         # Get current stage position for traceability
         stage_x, stage_y, stage_z = 0.0, 0.0, 0.0
@@ -2970,8 +3192,6 @@ class ExperimentController(ImConWidgetController):
         if frame is None:
             raise HTTPException(status_code=500, detail="No frame from overview camera")
 
-        # Apply flips (legacy ObservationCameraFlip removed; flip is now
-        # handled inside the DetectorManager via PixelCalibrationController).
 
         frame = np.ascontiguousarray(frame)
 

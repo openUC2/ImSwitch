@@ -17,6 +17,10 @@ const initialWellSelectorState = {
   // Cup select settings
   cupSelectShape: 'circle',    // string: 'circle' or 'rectangle' for well select shape
   cupSelectOverlap: 0.0,       // float: overlap percentage (0.0 = no overlap, 0.1 = 10% overlap)
+  // Labware (Opentrons-style) selection state
+  labwareLoadName: null,       // string|null: currently selected labware loadName
+  selectedWellIds: [],         // array<string>: currently selected well IDs (e.g. ["A1","B3"])
+  conditionLabels: {},         // object<string,string>: well_id -> free-text condition label
 };
 
 // Create wellSelectorState slice
@@ -102,6 +106,39 @@ const wellSelectorSlice = createSlice({
         state.cupSelectOverlap = 0;
       }
     },
+    // ── Labware selection actions ──────────────────────────────────────
+    setLabwareLoadName: (state, action) => {
+      state.labwareLoadName = action.payload || null;
+    },
+    setSelectedWellIds: (state, action) => {
+      state.selectedWellIds = Array.isArray(action.payload) ? action.payload : [];
+    },
+    toggleSelectedWellId: (state, action) => {
+      const id = action.payload;
+      if (!id) return;
+      const i = state.selectedWellIds.indexOf(id);
+      if (i >= 0) state.selectedWellIds.splice(i, 1);
+      else state.selectedWellIds.push(id);
+    },
+    clearSelectedWellIds: (state) => {
+      state.selectedWellIds = [];
+    },
+    setConditionLabel: (state, action) => {
+      const { wellId, label } = action.payload || {};
+      if (!wellId) return;
+      if (label == null || label === "") {
+        delete state.conditionLabels[wellId];
+      } else {
+        state.conditionLabels[wellId] = String(label);
+      }
+    },
+    setConditionLabels: (state, action) => {
+      state.conditionLabels =
+        action.payload && typeof action.payload === "object" ? { ...action.payload } : {};
+    },
+    clearConditionLabels: (state) => {
+      state.conditionLabels = {};
+    },
   },
 });
 
@@ -120,7 +157,14 @@ export const {
   setAreaSelectSnakescan,
   setAreaSelectOverlap,
   setCupSelectShape,
-  setCupSelectOverlap
+  setCupSelectOverlap,
+  setLabwareLoadName,
+  setSelectedWellIds,
+  toggleSelectedWellId,
+  clearSelectedWellIds,
+  setConditionLabel,
+  setConditionLabels,
+  clearConditionLabels,
 } = wellSelectorSlice.actions;
 
 // Selector helper

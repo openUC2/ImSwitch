@@ -64,6 +64,7 @@ from .ome_tiff_metadata import (
     OMEInstrumentTemplate,
     OME_TYPES_AVAILABLE,
 )
+from .plate_metadata import build_plate_metadata, write_plate_metadata_sidecar
 
 __all__ = [
     # Primary unified writer
@@ -84,6 +85,9 @@ __all__ = [
     'OMEMetadataParams',
     'OMEInstrumentTemplate',
     'OME_TYPES_AVAILABLE',
+    # OME-NGFF plate metadata sidecar
+    'build_plate_metadata',
+    'write_plate_metadata_sidecar',
     # OMERO uploader
     'OMEROUploader',
     'OMEROConnectionParams',

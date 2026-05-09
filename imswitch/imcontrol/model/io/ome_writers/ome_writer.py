@@ -249,6 +249,7 @@ class OMEWriter:
         isRGB: bool = False,
         omero_connection_params: Optional[OMEROConnectionParams] = None,
         shared_omero_key: Optional[str] = None,
+        well_metadata: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the OME writer.
@@ -264,6 +265,10 @@ class OMEWriter:
             omero_connection_params: OMERO connection parameters (required if write_omero=True)
             shared_omero_key: Key for shared OMERO uploader (for timelapse experiments).
                              If provided, reuses an existing uploader or creates one to share.
+            well_metadata: Optional dict describing the labware well backing this image.
+                Recognised keys: ``wellRow`` (str, e.g. "A"), ``wellColumn`` (int, 1-based),
+                ``labwareLoadName`` (str), ``conditionLabel`` (str). When provided, the OME-NGFF
+                ``well`` group attrs and a custom ``imswitch_well`` block are emitted.
         """
         self.file_paths = file_paths
         self.tile_h, self.tile_w = tile_shape
@@ -274,6 +279,7 @@ class OMEWriter:
         self.isRGB = isRGB
         self.omero_connection_params = omero_connection_params
         self.shared_omero_key = shared_omero_key
+        self.well_metadata = well_metadata or None
 
         # Zarr components
         self.store = None
@@ -396,6 +402,22 @@ class OMEWriter:
                 "model": "color"
             }
         }
+
+        # OME-NGFF "well" group attrs + ImSwitch labware metadata.
+        # Emitted only when the caller passed structured well metadata, so the
+        # plain (non-plate) acquisition path stays byte-identical.
+        if self.well_metadata:
+            wm = self.well_metadata
+            self.root.attrs["well"] = {
+                "version": "0.4",
+                "images": [{"path": "0", "acquisition": 0}],
+            }
+            self.root.attrs["imswitch_well"] = {
+                "wellRow": wm.get("wellRow"),
+                "wellColumn": wm.get("wellColumn"),
+                "labwareLoadName": wm.get("labwareLoadName"),
+                "conditionLabel": wm.get("conditionLabel"),
+            }
 
     def _setup_tiff_stitcher(self):
         """Set up the TIFF stitcher for creating stitched OME-TIFF files."""

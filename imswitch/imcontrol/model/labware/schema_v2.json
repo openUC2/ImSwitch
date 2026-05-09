@@ -1,0 +1,122 @@
+{
+  "$id": "opentronsLabwareSchemaV2",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "Vendored subset of Opentrons labware schema v2 (https://raw.githubusercontent.com/Opentrons/opentrons/edge/shared-data/labware/schemas/2.json). Reduced for ImSwitch's loader-side validation needs: only the fields we actively consume are constrained. Unknown fields are tolerated to keep upstream forward-compatibility.",
+  "definitions": {
+    "positiveNumber": {"type": "number", "minimum": 0},
+    "vector": {
+      "type": "object",
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "z": {"type": "number"}
+      }
+    },
+    "brandData": {
+      "type": "object",
+      "required": ["brand"],
+      "properties": {
+        "brand": {"type": "string"},
+        "brandId": {"type": "array", "items": {"type": "string"}},
+        "links": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "wellCommon": {
+      "properties": {
+        "depth": {"$ref": "#/definitions/positiveNumber"},
+        "totalLiquidVolume": {"$ref": "#/definitions/positiveNumber"},
+        "x": {"$ref": "#/definitions/positiveNumber"},
+        "y": {"$ref": "#/definitions/positiveNumber"},
+        "z": {"$ref": "#/definitions/positiveNumber"}
+      }
+    },
+    "rectangularWell": {
+      "type": "object",
+      "required": ["shape", "depth", "totalLiquidVolume", "x", "y", "z", "xDimension", "yDimension"],
+      "properties": {
+        "shape": {"const": "rectangular"},
+        "xDimension": {"$ref": "#/definitions/positiveNumber"},
+        "yDimension": {"$ref": "#/definitions/positiveNumber"}
+      },
+      "allOf": [{"$ref": "#/definitions/wellCommon"}]
+    },
+    "circularWell": {
+      "type": "object",
+      "required": ["shape", "depth", "totalLiquidVolume", "x", "y", "z", "diameter"],
+      "properties": {
+        "shape": {"const": "circular"},
+        "diameter": {"$ref": "#/definitions/positiveNumber"}
+      },
+      "allOf": [{"$ref": "#/definitions/wellCommon"}]
+    },
+    "well": {
+      "anyOf": [
+        {"$ref": "#/definitions/rectangularWell"},
+        {"$ref": "#/definitions/circularWell"}
+      ]
+    },
+    "dimensions": {
+      "type": "object",
+      "required": ["xDimension", "yDimension", "zDimension"],
+      "properties": {
+        "xDimension": {"$ref": "#/definitions/positiveNumber"},
+        "yDimension": {"$ref": "#/definitions/positiveNumber"},
+        "zDimension": {"$ref": "#/definitions/positiveNumber"}
+      }
+    }
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "version",
+    "namespace",
+    "metadata",
+    "brand",
+    "parameters",
+    "cornerOffsetFromSlot",
+    "ordering",
+    "dimensions",
+    "wells",
+    "groups"
+  ],
+  "properties": {
+    "schemaVersion": {"type": "number", "enum": [2]},
+    "version": {"type": "integer", "minimum": 1},
+    "namespace": {"type": "string", "pattern": "^[a-z0-9._]+$"},
+    "metadata": {
+      "type": "object",
+      "required": ["displayName", "displayCategory", "displayVolumeUnits"],
+      "properties": {
+        "displayName": {"type": "string"},
+        "displayCategory": {"type": "string"},
+        "displayVolumeUnits": {"type": "string", "enum": ["µL", "mL", "L"]},
+        "tags": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "brand": {"$ref": "#/definitions/brandData"},
+    "parameters": {
+      "type": "object",
+      "required": ["format", "isTiprack", "loadName", "isMagneticModuleCompatible"],
+      "properties": {
+        "format": {"type": "string", "enum": ["96Standard", "384Standard", "trough", "irregular", "trash"]},
+        "isTiprack": {"type": "boolean"},
+        "loadName": {"type": "string", "pattern": "^[a-z0-9._]+$"},
+        "isMagneticModuleCompatible": {"type": "boolean"}
+      }
+    },
+    "ordering": {
+      "type": "array",
+      "items": {"type": "array", "items": {"type": "string"}}
+    },
+    "cornerOffsetFromSlot": {"$ref": "#/definitions/vector"},
+    "dimensions": {"$ref": "#/definitions/dimensions"},
+    "wells": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Z]+[0-9]+$": {"$ref": "#/definitions/well"}
+      }
+    },
+    "groups": {"type": "array"}
+  }
+}

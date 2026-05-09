@@ -78,6 +78,11 @@ class Point(BaseModel):
     neighborPointList: List[NeighborPoint] = Field(default_factory=list)
     wellId: Optional[str] = None
     areaType: Optional[str] = None  # well, free_scan, etc.
+    # Opentrons-style labware identification (all optional for back-compat)
+    wellRow: Optional[str] = None
+    wellColumn: Optional[int] = None
+    labwareLoadName: Optional[str] = None
+    conditionLabel: Optional[str] = None  # free-text per-well condition tag
 
 
 class ScanPosition(BaseModel):
@@ -113,6 +118,11 @@ class ScanArea(BaseModel):
     areaName: str
     areaType: str = "free_scan"
     wellId: Optional[str] = None
+    # Opentrons-style labware identification (all optional for back-compat)
+    wellRow: Optional[str] = None
+    wellColumn: Optional[int] = None
+    labwareLoadName: Optional[str] = None
+    conditionLabel: Optional[str] = None
     centerPosition: CenterPosition
     bounds: ScanBounds
     scanPattern: ScanPattern = "raster"

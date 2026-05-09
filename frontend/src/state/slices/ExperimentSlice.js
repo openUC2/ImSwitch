@@ -346,6 +346,68 @@ const experimentSlice = createSlice({
       console.log("addPoint");
       state.pointList.push(action.payload);
     },
+    appendPoints: (state, action) => {
+      // Append a batch of points (e.g. from labware well-selection apply).
+      // Skips duplicates by exact (x, y, name) match to avoid double-adding
+      // the same well twice.
+      const incoming = Array.isArray(action.payload) ? action.payload : [];
+      const seen = new Set(
+        state.pointList.map((p) => `${p.x}|${p.y}|${p.name || ""}`)
+      );
+      for (const p of incoming) {
+        const newPoint = {
+          id: p.id || uuidv4(),
+          name: p.name || "",
+          x: p.x,
+          y: p.y,
+          z: p.z != null ? p.z : 0,
+          shape: p.shape || "",
+          rectPlusX: p.rectPlusX || 0,
+          rectPlusY: p.rectPlusY || 0,
+          rectMinusX: p.rectMinusX || 0,
+          rectMinusY: p.rectMinusY || 0,
+          circleRadiusX: p.circleRadiusX || 0,
+          circleRadiusY: p.circleRadiusY || 0,
+          // Labware metadata pass-through
+          wellId: p.wellId,
+          wellRow: p.wellRow,
+          wellColumn: p.wellColumn,
+          labwareLoadName: p.labwareLoadName,
+          conditionLabel: p.conditionLabel,
+          areaType: p.areaType,
+        };
+        const key = `${newPoint.x}|${newPoint.y}|${newPoint.name}`;
+        if (!seen.has(key)) {
+          state.pointList.push(newPoint);
+          seen.add(key);
+        }
+      }
+    },
+    replacePoints: (state, action) => {
+      // Replace the entire pointList with a new batch (well-selection apply
+      // in "replace" mode).
+      const incoming = Array.isArray(action.payload) ? action.payload : [];
+      state.pointList = incoming.map((p) => ({
+        id: p.id || uuidv4(),
+        name: p.name || "",
+        x: p.x,
+        y: p.y,
+        z: p.z != null ? p.z : 0,
+        shape: p.shape || "",
+        rectPlusX: p.rectPlusX || 0,
+        rectPlusY: p.rectPlusY || 0,
+        rectMinusX: p.rectMinusX || 0,
+        rectMinusY: p.rectMinusY || 0,
+        circleRadiusX: p.circleRadiusX || 0,
+        circleRadiusY: p.circleRadiusY || 0,
+        wellId: p.wellId,
+        wellRow: p.wellRow,
+        wellColumn: p.wellColumn,
+        labwareLoadName: p.labwareLoadName,
+        conditionLabel: p.conditionLabel,
+        areaType: p.areaType,
+      }));
+    },
     removePoint: (state, action) => {
       console.log("removePoint");
       //return state.filter(point => point.id !== action.payload);
@@ -424,6 +486,8 @@ export const {
   setKeepIlluminationOn,
   createPoint,
   addPoint,
+  appendPoints,
+  replacePoints,
   removePoint,
   setPointList,
   replacePoint,

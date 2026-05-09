@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 2,
+  "version": 1,
+  "namespace": "openuc2",
+  "metadata": {
+    "displayName": "HeidStar 4x Histology Slide",
+    "displayCategory": "wellPlate",
+    "displayVolumeUnits": "µL",
+    "tags": ["histology", "slide", "uc2"]
+  },
+  "brand": {"brand": "HeidStar", "brandId": [], "links": []},
+  "parameters": {
+    "format": "irregular",
+    "isTiprack": false,
+    "loadName": "slide_4x_histosample_heidstar",
+    "isMagneticModuleCompatible": false,
+    "quirks": [],
+    "isDeckSlotCompatible": true
+  },
+  "ordering": [["A1"], ["A2"], ["A3"], ["A4"]],
+  "cornerOffsetFromSlot": {"x": 0.0, "y": 0.0, "z": 0.0},
+  "dimensions": {
+    "xDimension": 75.0,
+    "yDimension": 25.0,
+    "zDimension": 1.0
+  },
+  "wells": {
+    "A1": {"shape": "rectangular", "depth": 0.1, "totalLiquidVolume": 50.0, "x": 9.0, "y": 12.5, "z": 0.0, "xDimension": 12.0, "yDimension": 18.0},
+    "A2": {"shape": "rectangular", "depth": 0.1, "totalLiquidVolume": 50.0, "x": 27.0, "y": 12.5, "z": 0.0, "xDimension": 12.0, "yDimension": 18.0},
+    "A3": {"shape": "rectangular", "depth": 0.1, "totalLiquidVolume": 50.0, "x": 45.0, "y": 12.5, "z": 0.0, "xDimension": 12.0, "yDimension": 18.0},
+    "A4": {"shape": "rectangular", "depth": 0.1, "totalLiquidVolume": 50.0, "x": 63.0, "y": 12.5, "z": 0.0, "xDimension": 12.0, "yDimension": 18.0}
+  },
+  "groups": [
+    {
+      "wells": ["A1", "A2", "A3", "A4"],
+      "metadata": {"displayCategory": "wellPlate", "displayName": "Histology samples"}
+    }
+  ]
+}

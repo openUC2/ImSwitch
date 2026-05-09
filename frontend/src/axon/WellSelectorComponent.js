@@ -16,6 +16,7 @@ import * as overviewRegSlice from '../state/slices/OverviewRegistrationSlice.js'
 import apiDownloadJson from "../backendapi/apiDownloadJson.js";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 import OverviewRegistrationWizard from "./OverviewRegistrationWizard.js";
+import LabwareSelectionPanel from "../components/LabwareSelectionPanel.jsx";
 
 import {
   Button,
@@ -249,7 +250,10 @@ const WellSelectorComponent = () => {
   //##################################################################################
   return (
     <div style={{ border: "0px solid #eee", padding: "10px" }}>
-      
+
+        {/* Opentrons-style labware selection (loadName + well chips + condition labels) */}
+        <LabwareSelectionPanel defaultExpanded={false} />
+
         {/* LAYOUT */}
             {/* WellSelectorComponent with mode passed as prop width: "100%", height: "100%", display: "block"*/}
             <WellSelectorCanvas ref={childRef} style={{}} />
@@ -271,7 +275,7 @@ const WellSelectorComponent = () => {
           >
             {/* current layout */}
             <MenuItem
-              style={{ backgroundColor: "lightblue" }}
+              style={{ backgroundColor: "primary.main" }}
               value={experimentState.wellLayout.name}
             >
               {experimentState.wellLayout.name}
